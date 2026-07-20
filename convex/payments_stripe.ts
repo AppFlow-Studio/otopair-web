@@ -69,6 +69,13 @@ export const _getBookingForPayment = internalQuery({
   },
 });
 
+export const _getShopForPayment = internalQuery({
+  args: { shopId: v.id("shops") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.shopId);
+  },
+});
+
 export const _getPaymentByBookingId = internalQuery({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -311,6 +318,10 @@ export const handlePaymentIntentEvent = internalMutation({
     // reflects reality even if the action-side _patchBookingCaptured didn't
     // run (e.g. capture call retried, webhook landed first).
     amountReceived: v.optional(v.number()),
+    // Card network + last-4 pulled from the charge's payment_method_details
+    // on payment_intent.succeeded — persisted so ops can show "Visa ···· 4242".
+    cardBrand: v.optional(v.string()),
+    cardLast4: v.optional(v.string()),
     livemode: v.optional(v.boolean()),
     stripeAccountId: v.optional(v.string()),
   },
@@ -350,6 +361,22 @@ export const handlePaymentIntentEvent = internalMutation({
         .unique();
     }
     if (!payment) return { matched: false };
+
+    // Persist card brand/last4 as soon as we have it (payment_intent.succeeded),
+    // independent of the status transition below — the action-side capture may
+    // have already moved the row to `completed`, which would short-circuit the
+    // no-op guard before we ever stamp the card. Only write when missing so
+    // replays and later events don't churn the row.
+    if (
+      (args.cardBrand != null || args.cardLast4 != null) &&
+      payment.card_last4 == null &&
+      payment.card_brand == null
+    ) {
+      await ctx.db.patch(payment._id, {
+        ...(args.cardBrand != null ? { card_brand: args.cardBrand } : {}),
+        ...(args.cardLast4 != null ? { card_last4: args.cardLast4 } : {}),
+      });
+    }
 
     // Idempotent no-op on same-state.
     if (payment.status === args.newStatus) return { matched: true, noop: true };
@@ -496,6 +523,15 @@ function computeApplicationFeeCents(subtotalCents: number): number {
     Math.round(subtotalCents * APPLICATION_FEE_RATE),
     APPLICATION_FEE_FLOOR_CENTS,
   );
+}
+
+function assertShopReadyForPayments(shop: any) {
+  if (!shop?.stripe_connect_account_id) {
+    throw new Error("Shop is not ready to accept payments yet.");
+  }
+  if (shop.stripe_charges_enabled !== true) {
+    throw new Error("Shop is not ready to accept payments yet.");
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -660,6 +696,102 @@ export const setDefaultPaymentMethod = action({
 // PaymentIntent — authorize on booking confirm
 // ─────────────────────────────────────────────────────────────
 
+export const preauthorizePaymentForBooking = action({
+  args: {
+    shopId: v.id("shops"),
+    paymentMethodId: v.string(),
+    confirmationAttemptId: v.string(),
+    paymentOrigin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    paymentIntentId: string;
+    clientSecret: string;
+    status: string;
+    requiresAction: boolean;
+    idempotencyKey: string;
+    holdAmountCents: number;
+  }> => {
+    const { user } = await requireAuthedUser(ctx);
+    const shop: any = await ctx.runQuery(
+      internal.payments_stripe._getShopForPayment,
+      { shopId: args.shopId },
+    );
+    if (!shop) throw new Error("Booking has no shop assigned.");
+    assertShopReadyForPayments(shop);
+
+    if (!user.stripe_customer_id) {
+      throw new Error("Add a payment method before confirming.");
+    }
+
+    const stripe = getStripe();
+    const pm = await stripe.paymentMethods.retrieve(args.paymentMethodId);
+    if (pm.customer != null && pm.customer !== user.stripe_customer_id) {
+      throw new Error("This card doesn't belong to you.");
+    }
+
+    const idempotencyKey = `booking_preauth:${args.confirmationAttemptId}`;
+    const pi = await stripe.paymentIntents.create(
+      {
+        amount: BOOKING_DEPOSIT_CENTS,
+        currency: "usd",
+        customer: user.stripe_customer_id,
+        payment_method: args.paymentMethodId,
+        confirm: true,
+        off_session: false,
+        capture_method: "manual",
+        application_fee_amount: 0,
+        transfer_data: { destination: shop.stripe_connect_account_id },
+        automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+        metadata: {
+          prebooking: "true",
+          userId: String(user._id),
+          shopId: String(shop._id),
+          confirmationAttemptId: args.confirmationAttemptId,
+        },
+      },
+      { idempotencyKey },
+    );
+
+    return {
+      paymentIntentId: pi.id,
+      clientSecret: pi.client_secret!,
+      status: pi.status,
+      requiresAction: pi.status === "requires_action",
+      idempotencyKey,
+      holdAmountCents: BOOKING_DEPOSIT_CENTS,
+    };
+  },
+});
+
+export const cancelPreauthorizedPaymentIntent = action({
+  args: { paymentIntentId: v.string() },
+  handler: async (ctx, args): Promise<{ ok: true }> => {
+    const { user } = await requireAuthedUser(ctx);
+    const stripe = getStripe();
+    const pi = await stripe.paymentIntents.retrieve(args.paymentIntentId);
+    if (pi.metadata?.userId !== String(user._id)) {
+      throw new Error("Not your payment authorization.");
+    }
+    if (
+      pi.status !== "canceled" &&
+      pi.status !== "succeeded" &&
+      pi.status !== "processing"
+    ) {
+      await stripe.paymentIntents.cancel(args.paymentIntentId);
+    }
+    return { ok: true };
+  },
+});
+
 /**
  * Authorizes a charge against the customer's saved card for the booking
  * total. Uses manual capture so funds aren't moved until the shop accepts.
@@ -703,12 +835,7 @@ export const createPaymentIntentForBooking = action({
       throw new Error("Not your booking.");
     }
     if (!shop) throw new Error("Booking has no shop assigned.");
-    if (!shop.stripe_connect_account_id) {
-      throw new Error("Shop is not ready to accept payments yet.");
-    }
-    if (shop.stripe_charges_enabled !== true) {
-      throw new Error("Shop is not ready to accept payments yet.");
-    }
+    assertShopReadyForPayments(shop);
 
     const totalDollars = booking.total_cost ?? 0;
     if (!(totalDollars > 0)) {
@@ -1704,8 +1831,8 @@ export const finalizeAndChargeForBooking = internalAction({
       const tax = computeBookingTax({
         laborDollars: laborCents / 100,
         partsDollars: partsSubtotalCents / 100,
-        state: (shop?.address_state as string | undefined) ?? null,
-        zip: (shop?.address_zip as string | undefined) ?? null,
+        state: shop?.state ?? null,
+        zip: shop?.zip ?? null,
       });
       const taxCents = Math.round((tax.taxDollars ?? 0) * 100);
       const feeCents = Math.round(
@@ -1746,8 +1873,8 @@ export const finalizeAndChargeForBooking = internalAction({
     const tax = computeBookingTax({
       laborDollars: laborCents / 100,
       partsDollars: partsSubtotalCents / 100,
-      state: (shop?.address_state as string | undefined) ?? null,
-      zip: (shop?.address_zip as string | undefined) ?? null,
+      state: shop?.state ?? null,
+      zip: shop?.zip ?? null,
     });
     const taxCents = Math.round((tax.taxDollars ?? 0) * 100);
     const feeCents = Math.round(

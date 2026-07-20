@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -37,16 +37,18 @@ function hhmmToMinutes(hhmm: string): number {
 }
 
 function conflictMessage(
-  conflict: "booking" | "blocked" | "outside_shop_hours" | null,
+  conflict: "booking" | "blocked" | "outside_shop_hours" | "ends_outside_shop_hours" | null,
 ): string | null {
   if (conflict === "booking") return "Another booking blocks this slot on the mechanic's lane.";
   if (conflict === "blocked") return "A blocked slot covers this window for the mechanic.";
   if (conflict === "outside_shop_hours") return "The proposed start is outside the shop's hours.";
+  if (conflict === "ends_outside_shop_hours") return "The job will end outside the shop's hours.";
   return null;
 }
 
 function MiniLane({
   scheduledDate,
+  originalScheduledDate,
   durationMinutes,
   originalStart,
   proposedStart,
@@ -55,6 +57,7 @@ function MiniLane({
   selfBookingId,
 }: {
   scheduledDate: string;
+  originalScheduledDate: string;
   durationMinutes: number;
   originalStart: string;
   proposedStart: string;
@@ -73,7 +76,13 @@ function MiniLane({
 
   const proposedStartMin = hhmmToMinutes(proposedStart);
   const proposedEndMin = hhmmToMinutes(proposedEnd);
-  const originalStartMin = hhmmToMinutes(originalStart);
+  // If the original booking is on a later calendar day, offset its minutes
+  // so it renders to the right of the proposed slot on the same axis.
+  const dayDeltaMin =
+    originalScheduledDate > scheduledDate ? 24 * 60
+    : originalScheduledDate < scheduledDate ? -24 * 60
+    : 0;
+  const originalStartMin = hhmmToMinutes(originalStart) + dayDeltaMin;
   const originalEndMin = originalStartMin + durationMinutes;
 
   const sameDayBounds = sameDay.map((b) => ({
@@ -89,14 +98,11 @@ function MiniLane({
       ...sameDayBounds.map((b) => b.start),
     ) - 30,
   );
-  const maxMinute = Math.min(
-    24 * 60,
-    Math.max(
-      proposedEndMin,
-      originalEndMin,
-      ...sameDayBounds.map((b) => b.end),
-    ) + 30,
-  );
+  const maxMinute = Math.max(
+    proposedEndMin,
+    originalEndMin,
+    ...sameDayBounds.map((b) => b.end),
+  ) + 30;
   const span = Math.max(60, maxMinute - minMinute);
 
   const pct = (minute: number) =>
@@ -109,7 +115,7 @@ function MiniLane({
       <div className="mb-2 flex items-center justify-between text-[11px] text-muted-foreground">
         <span>{formatTimeLabel(`${String(Math.floor(minMinute / 60)).padStart(2, "0")}:${String(minMinute % 60).padStart(2, "0")}`)}</span>
         <span className="font-medium text-foreground">Mechanic&apos;s lane · {scheduledDate}</span>
-        <span>{formatTimeLabel(`${String(Math.floor(maxMinute / 60)).padStart(2, "0")}:${String(maxMinute % 60).padStart(2, "0")}`)}</span>
+        <span>{formatTimeLabel(`${String(Math.floor((maxMinute % (24 * 60)) / 60)).padStart(2, "0")}:${String(maxMinute % 60).padStart(2, "0")}`)}</span>
       </div>
       <div className="relative h-10 rounded-md bg-card">
         {sameDayBounds.map((b, i) => (
@@ -177,6 +183,8 @@ export default function EarlyArrivalConfirmDialog({
   const pushEarlier = useMutation(api.bookings.pushBookingEarlierAndArrive);
   const [actioning, setActioning] = useState(false);
   const [error, setError] = useState("");
+  const [showShopHoursOverride, setShowShopHoursOverride] = useState(false);
+  const [showBackfillChoice, setShowBackfillChoice] = useState(false);
 
   const durationMinutes = estimatedLaborMinutes ?? 60;
 
@@ -185,15 +193,30 @@ export default function EarlyArrivalConfirmDialog({
     preview?.proposedEndTime ??
     (proposedTime ? addMinutesToHHMM(proposedTime, durationMinutes) : null);
   const conflict = preview?.conflict ?? null;
+  const isShopHoursConflict =
+    conflict === "outside_shop_hours" || conflict === "ends_outside_shop_hours";
   const conflictText = useMemo(() => conflictMessage(conflict), [conflict]);
 
-  async function handlePush() {
-    if (!preview || !preview.eligible || conflict) return;
+  useEffect(() => {
+    if (!open) {
+      setShowShopHoursOverride(false);
+      setShowBackfillChoice(false);
+    }
+  }, [open]);
+
+  async function pushAndArrive(overrideShopHours = false, mechanicIdOverride?: string) {
+    if (!preview || !preview.eligible) return;
     setError("");
     setActioning(true);
     try {
-      await pushEarlier({ bookingId });
+      await pushEarlier({
+        bookingId,
+        overrideShopHours,
+        mechanicId: mechanicIdOverride ? (mechanicIdOverride as Id<"mechanics">) : undefined,
+      });
       onPushed?.();
+      setShowShopHoursOverride(false);
+      setShowBackfillChoice(false);
       onClose();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not push the booking earlier.");
@@ -202,8 +225,32 @@ export default function EarlyArrivalConfirmDialog({
     }
   }
 
+  async function handlePush() {
+    if (!preview || !preview.eligible) return;
+    if (isShopHoursConflict) {
+      setShowShopHoursOverride(true);
+      return;
+    }
+    if (conflict) return;
+    if (preview.backfillConflict) {
+      setShowBackfillChoice(true);
+      return;
+    }
+    await pushAndArrive(false);
+  }
+
+  function keepOriginalMechanic() {
+    void pushAndArrive(false, mechanicId ? String(mechanicId) : undefined);
+  }
+
+  function swapToAlternateMechanic() {
+    if (!preview?.backfillConflict) return;
+    void pushAndArrive(false, String(preview.backfillConflict.alternateMechanicId));
+  }
+
   function handleKeepOriginal() {
     setError("");
+    setShowShopHoursOverride(false);
     onKept?.();
     onClose();
   }
@@ -211,11 +258,12 @@ export default function EarlyArrivalConfirmDialog({
   const canPush =
     !!preview &&
     preview.eligible &&
-    !conflict &&
+    (!conflict || isShopHoursConflict) &&
     !!proposedTime &&
     !actioning;
 
   return (
+    <>
     <ConfirmationDialog
       open={open}
       onClose={onClose}
@@ -258,7 +306,15 @@ export default function EarlyArrivalConfirmDialog({
                     <span className="font-semibold">{formatTimeLabel(proposedTime)}</span>{" "}
                     (ends {formatTimeLabel(proposedEnd)}, {durationMinutes} min).
                   </p>
-                  {mechanicId ? (
+                  {preview.alternateMechanicId ? (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Mechanic changes to{" "}
+                      <span className="font-medium text-foreground">
+                        {preview.alternateMechanicName ?? "another mechanic"}
+                      </span>{" "}
+                      — {mechanicName ?? "the original mechanic"} isn&apos;t free then.
+                    </p>
+                  ) : mechanicId ? (
                     <p className="mt-1 text-xs text-muted-foreground">
                       Mechanic stays the same.
                     </p>
@@ -266,16 +322,21 @@ export default function EarlyArrivalConfirmDialog({
                 </div>
                 <MiniLane
                   scheduledDate={preview.proposedScheduledDate}
+                  originalScheduledDate={scheduledDate}
                   durationMinutes={durationMinutes}
                   originalStart={scheduledTime}
                   proposedStart={proposedTime}
                   proposedEnd={proposedEnd}
-                  bookings={dayBookings}
+                  bookings={preview.proposedDateBookings}
                   selfBookingId={String(bookingId)}
                 />
                 {conflictText ? (
                   <div className="rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">
-                    {conflictText} Choose &ldquo;Keep original time&rdquo; or resolve the conflict first.
+                    {isShopHoursConflict
+                      ? conflictText
+                      : preview.specificConflictAlternateName
+                        ? `Another booking blocks this slot on the mechanic's lane, and the customer specified this mechanic. Choose "Keep original time" or resolve the conflict first.`
+                        : `${conflictText} Choose "Keep original time" or resolve the conflict first.`}
                   </div>
                 ) : null}
               </>
@@ -299,5 +360,71 @@ export default function EarlyArrivalConfirmDialog({
         ) : null}
       </div>
     </ConfirmationDialog>
+    <ConfirmationDialog
+      open={showShopHoursOverride}
+      onClose={() => setShowShopHoursOverride(false)}
+      title="Push outside shop hours?"
+      description={`${conflictText ?? "The proposed job is outside the shop's hours."} Are you sure you want to push earlier and check in anyway?`}
+      maxWidthClassName="max-w-md"
+      primaryAction={{
+        label: actioning ? "Workingâ€¦" : "Push earlier & check in anyway",
+        onAction: () => pushAndArrive(true),
+        disabled: actioning,
+        variant: "primary",
+        leading: actioning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null,
+      }}
+      secondaryAction={{
+        label: "Cancel",
+        onAction: () => setShowShopHoursOverride(false),
+        disabled: actioning,
+        variant: "outline",
+      }}
+    />
+    <ConfirmationDialog
+      open={showBackfillChoice}
+      onClose={() => setShowBackfillChoice(false)}
+      title="Backfilled booking during this time"
+      description={
+        preview?.backfillConflict?.alternateMechanicId
+          ? `There's a backfilled booking on ${mechanicName ?? "this mechanic"}'s schedule during this window. Do you want to schedule with a different mechanic instead?`
+          : `There's a backfilled booking on ${mechanicName ?? "this mechanic"}'s schedule during this window. No other mechanic is free to move it to. Do you still want to push earlier anyway and keep this booking assigned to ${mechanicName ?? "this mechanic"}?`
+      }
+      maxWidthClassName="max-w-md"
+      primaryAction={
+        preview?.backfillConflict?.alternateMechanicId
+          ? {
+              label: actioning
+                ? "Working…"
+                : `Yes, assign to ${preview.backfillConflict.alternateMechanicName ?? "another mechanic"}`,
+              onAction: swapToAlternateMechanic,
+              disabled: actioning,
+              variant: "primary",
+              leading: actioning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null,
+            }
+          : {
+              label: actioning ? "Working…" : "Push earlier anyway",
+              onAction: keepOriginalMechanic,
+              disabled: actioning,
+              variant: "primary",
+              leading: actioning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null,
+            }
+      }
+      secondaryAction={
+        preview?.backfillConflict?.alternateMechanicId
+          ? {
+              label: `No, keep assigned to ${mechanicName ?? "this mechanic"}`,
+              onAction: keepOriginalMechanic,
+              disabled: actioning,
+              variant: "outline",
+            }
+          : {
+              label: "Cancel",
+              onAction: () => setShowBackfillChoice(false),
+              disabled: actioning,
+              variant: "outline",
+            }
+      }
+    />
+    </>
   );
 }

@@ -30,7 +30,7 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
-import { detectTier, resolveLaborHours } from "./lib/quoteEngine";
+import { detectTier, isHighQualityVdb, resolveLaborHours } from "./lib/quoteEngine";
 
 export type LaborHoursForService = {
   serviceId: Id<"services">;
@@ -147,8 +147,11 @@ export const getLaborHoursForServices = query({
           } else if (
             engineResult.source === "vdb" ||
             engineResult.source === "vdb_camry_baseline" ||
-            engineResult.source === "sibling"
+            engineResult.source === "sibling" ||
+            engineResult.source === "aggregated"
           ) {
+            // `aggregated` is the standard multi-source weighted-median book
+            // value — real vehicle-grounded data, NOT a tier estimate.
             resolvedSource = "vehicle_specific_book";
           } else {
             // "tier_estimate" — Camry baseline × multiplier
@@ -161,6 +164,11 @@ export const getLaborHoursForServices = query({
       // back to the legacy direct-row path, then catalog default. Preserves
       // behavior for shops/vehicles that pre-date Pricing v2.
       if (resolvedHours == null) {
+        // NOTE: this legacy fallback (reached only when no tier resolves — a rare
+        // pre-Pricing-v2 / unclassified-make path) trusts the upstream WRITE gate:
+        // empirical_hours is only non-zero once >= LABOR_EMPIRICAL_MIN_SAMPLES (3),
+        // so it deliberately does NOT re-apply the stricter quote gate (5) the
+        // engine path uses. See the "upstream-gated empirical" test.
         if (
           directRow &&
           typeof directRow.empirical_hours === "number" &&
@@ -168,12 +176,8 @@ export const getLaborHoursForServices = query({
         ) {
           resolvedHours = directRow.empirical_hours;
           resolvedSource = "vehicle_specific_empirical";
-        } else if (
-          directRow &&
-          typeof directRow.book_hours === "number" &&
-          directRow.book_hours > 0
-        ) {
-          resolvedHours = directRow.book_hours;
+        } else if (directRow && isHighQualityVdb(directRow)) {
+          resolvedHours = directRow.book_hours!;
           resolvedSource = "vehicle_specific_book";
         } else {
           resolvedHours = defaultHours;

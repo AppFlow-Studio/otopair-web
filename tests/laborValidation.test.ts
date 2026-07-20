@@ -2,20 +2,18 @@
  * devOnly/laborValidation:report — the read-only "data-good" labor grading
  * (Notion: Labor-time validation + data-good signal, freeze Jun 10).
  *
- * Grades every RepairPal-MAPPED service per config with the SAME gate the
+ * Grades every OLP-MAPPED service per config with the SAME gate the
  * quote engine uses (isHighQualityVdb): a config is labor_data_good only when
  * every mapped service has a quote-grade labor_times row backed by at least
- * one repairpal_motor observation. LLM-only services fall to tier_estimate by
+ * one olp_labor observation. Unmapped services fall to tier_estimate by
  * design and don't count against the rollup.
  */
 import { describe, test, expect } from "vitest";
 import { internal } from "../convex/_generated/api";
 import { makeT } from "./helpers";
-import { LABOR_SERVICE_CONFIG } from "../convex/services/laborDeterminant";
+import { OLP_JOB_MAP } from "../convex/vehicleEnrichment/olpLabor";
 
-const MAPPED_SLUGS = Object.entries(LABOR_SERVICE_CONFIG)
-  .filter(([, c]) => c.repairpal_slug)
-  .map(([slug]) => slug);
+const MAPPED_SLUGS = Object.keys(OLP_JOB_MAP);
 
 async function seedConfigWithLabor(
   t: ReturnType<typeof makeT>,
@@ -73,7 +71,7 @@ async function seedConfigWithLabor(
           vehicle_config_id: configId,
           service_id: serviceId,
           hours: 1.5,
-          source: "repairpal_motor",
+          source: "olp_labor",
           weight: 0.8,
           tier: "catalog",
           observed_at: now,
@@ -85,7 +83,7 @@ async function seedConfigWithLabor(
 }
 
 describe("devOnly/laborValidation report", () => {
-  test("all mapped services quote-grade + repairpal-backed → labor_data_good", async () => {
+  test("all mapped services quote-grade + olp-backed → labor_data_good", async () => {
     const t = makeT();
     await seedConfigWithLabor(t, { allGood: true });
 
@@ -110,8 +108,8 @@ describe("devOnly/laborValidation report", () => {
 
   test("timing_belt missing on a CHAIN engine doesn't count against data-good", async () => {
     const t = makeT();
-    // Chain car: no timing_belt labor anywhere (RepairPal correctly has no
-    // page) — the service is not applicable, so the rollup must skip it.
+    // Chain car: no timing_belt labor anywhere (OLP correctly has no belt job
+    // for a chain engine) — the service is not applicable, so the rollup skips it.
     await seedConfigWithLabor(t, {
       allGood: true,
       timingSystem: "chain",

@@ -219,6 +219,14 @@ export const SERVICE_PARTS_REFERENCE: Record<string, ServicePartsSpec> = {
         serviceRole: "core",
         primary: true,
         quantity: { kind: "fluid", capacity: "oil_capacity_qts", packageSize: 1, unit: "qt" },
+        // OEM oil-bottle SKUs are the most hallucination-prone extraction in
+        // the pipeline (stress fleet 2026-07-11: 5 of 8 vehicles ended with
+        // the SKU rejected or null — "GC555401QDSP"-style fabrications and
+        // truncated MB numbers). Without a fallback the WHOLE oil change is
+        // unquotable until a real SKU lands; with it, quoting proceeds at a
+        // market per-quart synthetic price and the enriched SKU wins the
+        // moment it exists.
+        universalFallback: { name: "Engine oil (per quart)", defaultPriceUsd: 11 },
       },
       {
         roleKey: "oil_filter",
@@ -357,7 +365,14 @@ export const SERVICE_PARTS_REFERENCE: Record<string, ServicePartsSpec> = {
       },
       {
         roleKey: "thermostat",
-        label: "Thermostat + gasket (only if found bad)",
+        label: "Thermostat (only if found bad)",
+        serviceRole: "as_needed",
+        condition: "if_found_bad",
+        quantity: { kind: "fixed", n: 1 },
+      },
+      {
+        roleKey: "thermostat_gasket",
+        label: "Thermostat gasket / seal (with thermostat)",
         serviceRole: "as_needed",
         condition: "if_found_bad",
         quantity: { kind: "fixed", n: 1 },
@@ -402,8 +417,22 @@ export const SERVICE_PARTS_REFERENCE: Record<string, ServicePartsSpec> = {
         serviceRole: "kit",
         quantity: { kind: "fixed", n: 1 },
       },
+      {
+        roleKey: "cvt_internal_filter",
+        label: "CVT internal filter / mesh screen (CVT pan service)",
+        serviceRole: "as_needed",
+        condition: "where_equipped",
+        quantity: { kind: "fixed", n: 1 },
+      },
+      {
+        roleKey: "cvt_external_filter",
+        label: "CVT external (cooler line) filter",
+        serviceRole: "as_needed",
+        condition: "where_equipped",
+        quantity: { kind: "fixed", n: 1 },
+      },
     ],
-    notes: "Two variants: drain & fill (core) vs full pan service (kit adds filter + gasket). CVT internal mesh screen deferred.",
+    notes: "Two variants: drain & fill (core) vs full pan service (kit adds filter + gasket). CVT filters are where_equipped as_needed roles — enriched only on CVT transmissions.",
   },
 
   tire_balance: {

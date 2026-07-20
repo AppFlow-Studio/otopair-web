@@ -1,5 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { sanitizePartNumber } from "./vehicleEnrichment/contentSanitization";
+import { normalizeOemNumber } from "./vehicleEnrichment/priceParser";
 
 /**
  * oemParts.ts - Normalized OEM part catalog access layer
@@ -28,6 +30,12 @@ export const upsert = mutation({
   handler: async (ctx, args) => {
     const oem_part_number = normalizePartNumber(args.oem_part_number);
     if (!oem_part_number) throw new Error("oem_part_number is required");
+    // Public surface — same plausibility validation as the enrichment write
+    // path (no make context here, so make-specific format checks don't apply,
+    // but prose/URLs/garbage are rejected instead of becoming catalog rows).
+    if (!sanitizePartNumber(oem_part_number)) {
+      throw new Error(`"${args.oem_part_number}" is not a plausible OEM part number`);
+    }
 
     const existing = await ctx.db
       .query("oem_parts")
@@ -49,6 +57,7 @@ export const upsert = mutation({
 
     const partId = await ctx.db.insert("oem_parts", {
       oem_part_number,
+      oem_part_number_normalized: normalizeOemNumber(oem_part_number),
       // TODO(ts-fix): oem_parts.name is required by schema but upsert accepts optional name — verify intent (require at API level or migrate schema)
       name: args.name ?? "",
       category: normalizeCategory(args.category),

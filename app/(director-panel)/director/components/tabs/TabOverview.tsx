@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useContext, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import {
   Badge, Button, Card, Select, StatusBadge, tableStyles, Avatar,
   IconBolt, IconStar, IconBug, IconMessage, IconShop,
@@ -26,15 +27,17 @@ const SectionTitle = ({ label, right }: { label: string; right?: React.ReactNode
 )
 
 export const TabOverview = () => {
+  const session = useContext(DirectorSessionCtx)
+  const token = session?.token ?? ''
   const [period, setPeriod] = useState<Period>('30d')
 
-  const metrics    = useQuery(api.directorOverview.overviewMetrics, { period })
-  const chart      = useQuery(api.directorOverview.overviewRevenueChart, { days: period === '7d' ? 14 : period === '30d' ? 30 : period === '90d' ? 60 : 14 })
-  const topShops   = useQuery(api.directorOverview.overviewTopShops,    { period, limit: 8 }) as TopShopRow[] | undefined
-  const topMechs   = useQuery(api.directorOverview.overviewTopMechanics,{ period, limit: 8 }) as TopMechanicRow[] | undefined
-  const serviceMix = useQuery(api.directorOverview.overviewServiceMix,  { period, limit: 10 }) as ServiceMixRow[] | undefined
-  const today      = useQuery(api.directorOverview.overviewBookingsToday, { period, limit: 30 }) as TodayRow[] | undefined
-  const triage     = useQuery(api.directorOverview.overviewTriageQueues, {}) as TriageData | undefined
+  const metrics    = useQuery(api.directorOverview.overviewMetrics, { token, period })
+  const chart      = useQuery(api.directorOverview.overviewRevenueChart, { token, days: period === '7d' ? 14 : period === '30d' ? 30 : period === '90d' ? 60 : 14 })
+  const topShops   = useQuery(api.directorOverview.overviewTopShops,    { token, period, limit: 8 }) as TopShopRow[] | undefined
+  const topMechs   = useQuery(api.directorOverview.overviewTopMechanics,{ token, period, limit: 8 }) as TopMechanicRow[] | undefined
+  const serviceMix = useQuery(api.directorOverview.overviewServiceMix,  { token, period, limit: 10 }) as ServiceMixRow[] | undefined
+  const today      = useQuery(api.directorOverview.overviewBookingsToday, { token, period, limit: 30 }) as TodayRow[] | undefined
+  const triage     = useQuery(api.directorOverview.overviewTriageQueues, { token }) as TriageData | undefined
 
   return (
     <SectionAnchor id="overview" title="Overview"

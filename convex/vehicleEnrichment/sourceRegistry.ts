@@ -35,6 +35,61 @@ export const BLOCKED_DOMAINS = [
   "chargerforums.com",              // Wrong make entirely (used for BMW in R6)
 ];
 
+/**
+ * Marketplaces — never valid OEM part-price sources. Listings mix third-party
+ * sellers, variants, and "frequently bought together" prices on one page, and
+ * pages rarely echo the OEM number cleanly, so extraction cannot positively
+ * tie a price to the target part (Jul 2026: a rear-brake-pad row was priced
+ * $31.78 from an Amazon FRONT-pad listing). Enforced at every price choke
+ * point: Batch-2 URL ingest, priceAllSources/reextract spend, and the
+ * upsertPartPrice write boundary.
+ */
+export const MARKETPLACE_DOMAINS = [
+  "ebay.com",
+  "amazon.com",
+  "walmart.com",
+  "alibaba.com",
+  "aliexpress.com",
+  "wish.com",
+  "temu.com",
+  "facebook.com",
+  "craigslist.org",
+  "offerup.com",
+  "mercari.com",
+];
+
+/** www-stripped hostname of a URL, or null if unparseable. */
+export function domainOfUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return null;
+  }
+}
+
+/** Brand labels of the marketplace list — used to catch country-TLD variants
+ *  (ebay.ca, amazon.co.uk) that the exact-domain match missed (a $20.60
+ *  ebay.ca brake-fluid row landed on the A4, Jul 2026). */
+const MARKETPLACE_BRANDS = new Set(MARKETPLACE_DOMAINS.map((m) => m.split(".")[0]));
+
+export function isMarketplaceDomain(domain: string | null | undefined): boolean {
+  if (!domain) return false;
+  const d = domain.replace(/^www\./, "");
+  if (MARKETPLACE_DOMAINS.some((m) => d === m || d.endsWith("." + m))) return true;
+  // TLD-variant check: compare the registrable brand label (ebay.ca → "ebay",
+  // amazon.co.uk → "amazon"). Subdomains of unrelated sites don't match
+  // because only the label at the registrable position is inspected.
+  const labels = d.split(".");
+  let brandIdx = labels.length - 2;
+  if (brandIdx > 0 && ["co", "com", "net", "org", "ac"].includes(labels[brandIdx])) brandIdx--;
+  return brandIdx >= 0 && MARKETPLACE_BRANDS.has(labels[brandIdx]);
+}
+
+export function isMarketplaceUrl(url: string | null | undefined): boolean {
+  return isMarketplaceDomain(domainOfUrl(url));
+}
+
 // ─── Interface ────────────────────────────────────────────────────
 
 export interface MakeSourceConfig {
@@ -146,6 +201,15 @@ const OEM_PARTS_ONLINE_SLUGS: Record<string, string> = {
   rear_brake_pad_oem:    "brake_pads",
   drain_plug_gasket_oem: "drain_plug",
   wiper_blade_set_oem:   "wiper_blade",
+  // Battery + fluids, mirrored from BMW_PART_SLUGS — same RevolutionParts
+  // platform, same slug conventions. battery_oem was absent here, so no OLP
+  // subdomain make could EVER price a battery deterministically (Jul 2026 A4:
+  // battery at 0 prices while the oil filter, which IS listed, got priced).
+  // A slug the site doesn't serve just yields an empty scrape — fail-safe.
+  battery_group:         "battery",
+  battery_oem:           "battery",      // deduped — same page as battery_group
+  coolant_oem:           "coolant",
+  engine_oil_oem:        "engine_oil",
 };
 
 /** Maps make name → oempartsonline.com subdomain. */

@@ -6,7 +6,7 @@ import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/ph
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useEntityLabel } from "@/lib/use-entity-label";
-import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, MessageSquare, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
+import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, MessageSquare, Package, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
 import {
   Select,
   SelectItem,
@@ -18,14 +18,19 @@ import {
 import {
   drawerInputClassName,
   drawerSelectTriggerClassName,
+  drawerCardClassName,
+  DrawerCardSectionHeader,
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
+import { cn } from "@/lib/utils";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import ServiceOptionsPicker, { type SelectedServiceOption } from "@/components/booking/service-options-picker";
 import TireSpecPicker, { type TireSpecs } from "@/components/booking/tire-spec-picker";
 import DatePicker from "@/components/ui/date-picker";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 import VehicleYMMTPicker from "./vehicle-ymmt-picker";
+import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
+import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -126,6 +131,7 @@ function CollapsibleSection({
   open,
   onToggle,
   required,
+  meta,
   children,
 }: {
   sectionKey: string;
@@ -134,32 +140,29 @@ function CollapsibleSection({
   open: boolean;
   onToggle: (key: string) => void;
   required?: boolean;
+  meta?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
-    <section>
+    <section className={cn(drawerCardClassName, "overflow-hidden")}>
       <button
         type="button"
         onClick={() => onToggle(sectionKey)}
         aria-expanded={open}
-        className="mb-4 flex w-full items-center justify-between gap-2 text-left"
+        className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
       >
-        <span className="flex items-center gap-2">
-          <Icon className="h-4 w-4 text-primary" />
-          <h3 className="text-[11px] font-bold tracking-wider text-muted-foreground">
-            {label}
-            {required ? (
-              <span className="ml-1 text-destructive normal-case tracking-normal font-normal">
-                *
-              </span>
-            ) : null}
-          </h3>
-        </span>
+        <DrawerCardSectionHeader
+          icon={Icon}
+          label={label}
+          required={required}
+          meta={meta}
+          className="flex-1"
+        />
         <ChevronDown
-          className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`}
         />
       </button>
-      {open ? children : null}
+      {open ? <div className="px-4 pb-4">{children}</div> : null}
     </section>
   );
 }
@@ -373,6 +376,7 @@ export default function CreateBookingDrawer({
     "vehicle",
     "services",
     "mechanic_estimate",
+    "catalog_parts",
     "diagnostic",
     "notes",
     "scheduling",
@@ -404,6 +408,9 @@ export default function CreateBookingDrawer({
   // (shop, service, engine, chassis).
   const [mechanicEstimateMinutes, setMechanicEstimateMinutes] = useState<number | null>(null);
   const [mechanicQuotedPrice, setMechanicQuotedPrice] = useState<number | null>(null);
+  // Once the mechanic types in the quoted price we stop auto-prefilling it from
+  // the tier rate, so we never clobber a hand-entered quote.
+  const [quotedPriceTouched, setQuotedPriceTouched] = useState(false);
 
   /* ---- Diagnostic system ---- */
   type DiagnosticSystem =
@@ -465,6 +472,41 @@ export default function CreateBookingDrawer({
   const [showOptionsPicker, setShowOptionsPicker] = useState(false);
   const [showTirePicker, setShowTirePicker] = useState(false);
   const [pendingSubmitOutsideHours, setPendingSubmitOutsideHours] = useState<boolean | null>(null);
+
+  /* ---- Parts declaration + editor (walk-in confirmed flow) ----
+     The mechanic declares whether this job has parts. "Add parts" reveals the
+     editor, prefilled from quotes.previewCatalogPartsByVin (OEM catalog) and
+     freely editable / extendable. Declared parts become the booking's
+     priced_parts_snapshot + parts_cost — feeding the job scope, pre-job and
+     post-job — and are ALSO recorded in parts_quote_snapshots for catalog
+     accuracy analytics. */
+  type MechanicPartEdit = {
+    key: string; // role_key || oem_number || part_name (within a service)
+    service_id: string;
+    part_name: string;
+    oem_number: string;
+    brand: string;
+    quantity: string;
+    unit_price: string; // dollars (string input)
+    catalog_origin: boolean;
+    price_unknown: boolean;
+    // Catalog identity, threaded through to the snapshot so pre/post-job
+    // seeding + part-preference accrual work. Present only on kept catalog rows.
+    part_id?: string;
+    role_key?: string;
+    quantity_basis?: string;
+  };
+  const [catalogPartEdits, setCatalogPartEdits] = useState<
+    Record<string, MechanicPartEdit[]>
+  >({});
+  // How the mechanic chose to handle parts on this walk-in. null = undecided
+  // (soft-gated at submit). "add" reveals the editor and bills the parts;
+  // "none" = labor-only; "skip" = defer to pre-job.
+  const [partsDeclaration, setPartsDeclaration] = useState<
+    "none" | "add" | "skip" | null
+  >(null);
+  const dirtyPartKeysRef = useRef<Set<string>>(new Set());
+  const addedPartSeqRef = useRef(0);
 
   const shopData = useQuery(api.schedule.getShopServicesWithCategories);
   const createBooking = useMutation(api.bookings.createByShop);
@@ -528,6 +570,162 @@ export default function CreateBookingDrawer({
   const TIRE_PART_PREFIX = "Tires — ";
 
   const categories = useMemo(() => shopData?.categories ?? [], [shopData?.categories]);
+
+  // Reactive OEM-catalog prefill for the parts editor (seeds the "Add parts"
+  // rows for the chosen services + options).
+  const catalogPartsPreview = useQuery(
+    api.quotes.previewCatalogPartsByVin,
+    validVin && selectedIds.size > 0
+      ? {
+          vin: validVin,
+          serviceIds: Array.from(selectedIds) as Id<"services">[],
+          selectedServiceOptions:
+            selectedServiceOptions.length > 0
+              ? selectedServiceOptions.map((o) => ({
+                  service_id: o.service_id,
+                  option_label: o.option_label,
+                  option_type: o.option_type,
+                }))
+              : undefined,
+        }
+      : "skip",
+  );
+
+  // Seed editable rows from the catalog preview without clobbering the
+  // mechanic's edits (tracked in dirtyPartKeysRef) or any manually-added rows.
+  // Rebuilds for the currently-selected services so deselected ones drop out.
+  useEffect(() => {
+    if (catalogPartsPreview === undefined) return;
+    const previewBySvc = new Map<string, any>();
+    if (catalogPartsPreview.hasConfig) {
+      for (const svc of catalogPartsPreview.services) {
+        previewBySvc.set(String(svc.service_id), svc);
+      }
+    }
+    setCatalogPartEdits((prev) => {
+      const next: Record<string, MechanicPartEdit[]> = {};
+      for (const sid of Array.from(selectedIds).map(String)) {
+        const existing = prev[sid] ?? [];
+        const svc = previewBySvc.get(sid);
+        const catalogRows: MechanicPartEdit[] = (svc?.rows ?? []).map(
+          (r: any) => {
+            const key = r.role_key || r.oem_number || r.part_name;
+            const composite = `${sid}::${key}`;
+            if (dirtyPartKeysRef.current.has(composite)) {
+              const edited = existing.find((e) => e.key === key);
+              if (edited) return edited;
+            }
+            return {
+              key,
+              service_id: sid,
+              part_name: r.part_name,
+              oem_number: r.oem_number,
+              brand: r.brand ?? "",
+              quantity: String(r.quantity),
+              unit_price: r.price_unknown
+                ? "0.00"
+                : formatFixedCentCurrency(r.unit_price_cents / 100),
+              catalog_origin: true,
+              price_unknown: r.price_unknown === true,
+              part_id: r.part_id ?? undefined,
+              role_key: r.role_key ?? undefined,
+              quantity_basis: r.quantity_basis ?? undefined,
+            };
+          },
+        );
+        const added = existing.filter((e) => !e.catalog_origin);
+        next[sid] = [...catalogRows, ...added];
+      }
+      return next;
+    });
+  }, [catalogPartsPreview, selectedIds]);
+
+  // Reset the parts declaration when the service selection is cleared.
+  useEffect(() => {
+    if (selectedIds.size === 0) setPartsDeclaration(null);
+  }, [selectedIds]);
+
+  const setCatalogPartField = (
+    sid: string,
+    idx: number,
+    field: "part_name" | "oem_number" | "brand" | "quantity" | "unit_price",
+    value: string,
+  ) =>
+    setCatalogPartEdits((prev) => {
+      const rows = prev[sid] ?? [];
+      const row = rows[idx];
+      if (row) dirtyPartKeysRef.current.add(`${sid}::${row.key}`);
+      return {
+        ...prev,
+        [sid]: rows.map((r, i) => (i === idx ? { ...r, [field]: value } : r)),
+      };
+    });
+
+  const addCatalogPartRow = (sid: string) =>
+    setCatalogPartEdits((prev) => {
+      const rows = prev[sid] ?? [];
+      const key = `manual-${addedPartSeqRef.current++}`;
+      dirtyPartKeysRef.current.add(`${sid}::${key}`);
+      return {
+        ...prev,
+        [sid]: [
+          ...rows,
+          {
+            key,
+            service_id: sid,
+            part_name: "",
+            oem_number: "",
+            brand: "",
+            quantity: "1",
+            unit_price: "0.00",
+            catalog_origin: false,
+            price_unknown: false,
+          },
+        ],
+      };
+    });
+
+  const removeCatalogPartRow = (sid: string, idx: number) =>
+    setCatalogPartEdits((prev) => {
+      const rows = prev[sid] ?? [];
+      const row = rows[idx];
+      if (row) dirtyPartKeysRef.current.delete(`${sid}::${row.key}`);
+      return { ...prev, [sid]: rows.filter((_, i) => i !== idx) };
+    });
+
+  // Selected standard services (with names) for the catalog-parts section.
+  const catalogPartServices = useMemo(() => {
+    const all = categories.flatMap((c: any) => c.services as any[]);
+    return Array.from(selectedIds)
+      .map((sid) => {
+        const svc = all.find((s: any) => s._id === sid);
+        return svc
+          ? { service_id: String(sid), name: svc.name as string }
+          : null;
+      })
+      .filter(Boolean) as Array<{ service_id: string; name: string }>;
+  }, [categories, selectedIds]);
+
+  // Sum of declared part line totals (dollars) for selected services — drives
+  // the "parts exceed quote" warning. Only meaningful when declaration === "add".
+  const declaredPartsTotal = useMemo(() => {
+    let sum = 0;
+    for (const sid of Array.from(selectedIds).map(String)) {
+      for (const r of catalogPartEdits[sid] ?? []) {
+        const qty = Number(r.quantity);
+        const price = Number(r.unit_price);
+        if (
+          Number.isFinite(qty) &&
+          Number.isFinite(price) &&
+          qty > 0 &&
+          price > 0
+        ) {
+          sum += qty * price;
+        }
+      }
+    }
+    return sum;
+  }, [catalogPartEdits, selectedIds]);
 
   const isDiagnostic = useMemo(() => {
     const matchesDiagnostic = (text: string | undefined | null) =>
@@ -684,6 +882,42 @@ export default function CreateBookingDrawer({
     [mechanicEstimateMinutes, catalogEstimateMinutes],
   );
 
+  /* ---- Suggested quoted price (tier labor rate × time + parts) ---- */
+  // Tier-aware $/hr labor rate for this vehicle at this shop. Falls back to the
+  // shop's flat rate server-side when the vehicle has no resolvable tier.
+  const suggestedRate = useQuery(
+    api.bookings.getWalkInSuggestedLaborRate,
+    shopData?.shopId
+      ? {
+          shopId: shopData.shopId as Id<"shops">,
+          vin: validVin || undefined,
+        }
+      : "skip",
+  );
+  // labor = rate × hours; total = labor + declared parts. Rounded to a whole
+  // dollar so the prefill reads like a clean quote. null when we can't price it.
+  const suggestedQuotedPrice = useMemo(() => {
+    const rate = suggestedRate?.ratePerHour;
+    if (rate == null) return null;
+    const mins = effectiveEstimateMinutes || 0;
+    if (mins <= 0) return null;
+    const labor = (rate * mins) / 60;
+    const total = labor + declaredPartsTotal;
+    return total > 0 ? Math.round(total) : null;
+  }, [suggestedRate, effectiveEstimateMinutes, declaredPartsTotal]);
+
+  // Prefill the quoted price from the suggestion and keep it in sync as the
+  // service/time/parts change — until the mechanic edits the field themselves.
+  // Backfill captures actuals, not estimates, so it's left untouched there.
+  useEffect(() => {
+    if (isBackfill) return;
+    if (quotedPriceTouched) return;
+    if (suggestedQuotedPrice == null) return;
+    setMechanicQuotedPrice((prev) =>
+      prev === suggestedQuotedPrice ? prev : suggestedQuotedPrice,
+    );
+  }, [isBackfill, quotedPriceTouched, suggestedQuotedPrice]);
+
   /* ---- Overlap check ---- */
   const overlapError = useMemo(() => {
     if (isBackfill) return null;
@@ -824,6 +1058,43 @@ export default function CreateBookingDrawer({
         (mechanicEstimateMinutes ?? catalogEstimateMinutes) || undefined;
       const finalVin = vin.trim() || `SHOP${Date.now()}`;
 
+      // The mechanic's declared parts (catalog-prefilled + manually added).
+      // When partsDeclaration === "add" the server bills these
+      // (priced_parts_snapshot + parts_cost); they're also recorded for
+      // catalog-accuracy analytics (parts_quote_snapshots).
+      const toPartNum = (s: string) => {
+        const n = Number(s);
+        return s.trim() !== "" && Number.isFinite(n) ? n : undefined;
+      };
+      const mechanicPartEntries = Object.values(catalogPartEdits)
+        .flat()
+        .filter(
+          (r) =>
+            selectedIds.has(r.service_id) &&
+            (r.part_name.trim() !== "" || r.oem_number.trim() !== ""),
+        )
+        .map((r) => {
+          const priceDollars = toPartNum(r.unit_price);
+          return {
+            service_id: r.service_id as Id<"services">,
+            key: r.key,
+            part_name: r.part_name.trim(),
+            oem_number: r.oem_number.trim().toUpperCase(),
+            brand: r.brand.trim() || undefined,
+            quantity: toPartNum(r.quantity),
+            unit_price_cents:
+              priceDollars != null ? Math.round(priceDollars * 100) : undefined,
+            catalog_origin: r.catalog_origin,
+            // Catalog identity (kept catalog rows only) so the bill snapshot
+            // carries part_id/role_key for pre/post-job seeding + preferences.
+            part_id: r.catalog_origin
+              ? (r.part_id as Id<"oem_parts"> | undefined)
+              : undefined,
+            role_key: r.catalog_origin ? r.role_key : undefined,
+            quantity_basis: r.catalog_origin ? r.quantity_basis : undefined,
+          };
+        });
+
       await createBooking({
         shopId: shopData.shopId as Id<"shops">,
         customerEmail: email.trim() || undefined,
@@ -843,6 +1114,9 @@ export default function CreateBookingDrawer({
         diagnosticSystem: isDiagnostic && diagnosticSystem ? diagnosticSystem : undefined,
         mechanicId: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
         assignmentPreference,
+        // Walk-ins quote a single all-in price. The server derives the split:
+        // parts_cost from the declared parts (when partsDeclaration === "add"),
+        // labor_cost = quoted − parts. These legacy split inputs stay 0.
         laborCost: 0,
         partsCost: 0,
         estimatedLaborMinutes: estMinutes,
@@ -863,6 +1137,9 @@ export default function CreateBookingDrawer({
         catalogEstimatedMinutes: catalogMinutes,
         mechanicQuotedPrice: mechanicQuotedPrice ?? undefined,
         catalogQuotedPrice: 0,
+        mechanicPartEntries:
+          mechanicPartEntries.length > 0 ? mechanicPartEntries : undefined,
+        partsDeclaration: partsDeclaration ?? undefined,
       });
 
       onToast("Booking created");
@@ -1048,6 +1325,12 @@ export default function CreateBookingDrawer({
       return;
     }
 
+    if (selectedIds.size > 0 && partsDeclaration === null) {
+      openSection("catalog_parts");
+      onToast("Choose how to handle parts (No parts / Add parts / Skip).");
+      return;
+    }
+
     const preflightError = overlapError ?? blockingHoursError;
     if (preflightError) {
       onToast(preflightError);
@@ -1087,7 +1370,7 @@ export default function CreateBookingDrawer({
       </div>
 
       {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4">
 
         {isBackfill && (
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -1200,6 +1483,9 @@ export default function CreateBookingDrawer({
           open={openSections.has("services")}
           onToggle={toggleSection}
           required
+          meta={
+            selectedIds.size > 0 ? `${selectedIds.size} selected` : undefined
+          }
         >
 
           {/* Selected chips */}
@@ -1508,6 +1794,7 @@ export default function CreateBookingDrawer({
                 placeholder="e.g. 250"
                 value={mechanicQuotedPrice ?? ""}
                 onChange={(e) => {
+                  if (!isBackfill) setQuotedPriceTouched(true);
                   const raw = e.target.value;
                   if (raw === "") {
                     setMechanicQuotedPrice(null);
@@ -1521,7 +1808,9 @@ export default function CreateBookingDrawer({
               <p className="mt-1 text-xs text-muted-foreground">
                 {isBackfill
                   ? "What you actually charged the customer."
-                  : "What you quoted this walk-in."}
+                  : !quotedPriceTouched && suggestedQuotedPrice != null
+                    ? `Prefilled from ${suggestedRate?.tier ?? "shop"} labor rate × time + parts. Editable.`
+                    : "What you quoted this walk-in."}
               </p>
             </div>
           </div>
@@ -1722,6 +2011,203 @@ export default function CreateBookingDrawer({
             </div>
           )}
         </CollapsibleSection>
+
+        {/* ── Parts (declaration → editor; feeds the bill + job scope) ──
+            "Add parts" itemizes the parts on this bill (prefilled from the OEM
+            catalog, fully editable). They become priced_parts_snapshot +
+            parts_cost and feed the job scope, pre-job and post-job. */}
+        {!isBackfill && selectedIds.size > 0 && (
+          <CollapsibleSection
+            sectionKey="catalog_parts"
+            icon={Package}
+            label="Parts"
+            open={openSections.has("catalog_parts")}
+            onToggle={toggleSection}
+            required
+            meta={
+              partsDeclaration
+                ? { add: "Add parts", none: "No parts", skip: "Skip" }[
+                    partsDeclaration
+                  ]
+                : undefined
+            }
+          >
+            <DrawerFieldLabel>Does this job have parts?</DrawerFieldLabel>
+            <div className="space-y-1.5">
+              {([
+                { value: "add", label: "Add parts", hint: "List the parts on this bill — prefilled from our catalog" },
+                { value: "none", label: "No parts", hint: "Labor-only job — nothing to install" },
+                { value: "skip", label: "Skip for now", hint: "Decide later — pre-job will suggest from the catalog" },
+              ] as Array<{ value: "add" | "none" | "skip"; label: string; hint: string }>).map((opt) => {
+                const selected = partsDeclaration === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => {
+                      setPartsDeclaration(opt.value);
+                      if (opt.value === "add") openSection("catalog_parts");
+                    }}
+                    className={`w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${
+                      selected
+                        ? "border-primary bg-primary/5"
+                        : "border-border hover:bg-muted/40"
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium text-foreground">{opt.label}</div>
+                      <div className="text-xs text-muted-foreground truncate">{opt.hint}</div>
+                    </div>
+                    <div
+                      className={`w-4 h-4 rounded-full border-2 shrink-0 ${
+                        selected ? "border-primary bg-primary" : "border-border"
+                      }`}
+                    />
+                  </button>
+                );
+              })}
+            </div>
+
+            {partsDeclaration === "none" && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                Labor-only — no parts will be billed.
+              </p>
+            )}
+
+            {partsDeclaration === "add" && (
+              <div className="mt-4 space-y-4">
+                {catalogPartsPreview && !catalogPartsPreview.hasConfig && (
+                  <p className="text-xs text-amber-700">
+                    No catalog match for this VIN yet — add the parts manually below.
+                  </p>
+                )}
+                {mechanicQuotedPrice != null &&
+                  mechanicQuotedPrice > 0 &&
+                  declaredPartsTotal > mechanicQuotedPrice && (
+                    <p className="text-xs text-amber-700">
+                      {`Parts ($${declaredPartsTotal.toFixed(2)}) exceed the quoted price ($${mechanicQuotedPrice.toFixed(2)}) — labor will show as $0.`}
+                    </p>
+                  )}
+                {catalogPartServices.map(({ service_id: sid, name }) => {
+                  const rows = catalogPartEdits[sid] ?? [];
+                  return (
+                    <div
+                      key={sid}
+                      className="rounded-lg border border-border bg-background/40 p-3"
+                    >
+                      <DrawerFieldLabel>{name} — parts</DrawerFieldLabel>
+                      <div className="space-y-3">
+                        {rows.length === 0 && (
+                          <p className="text-xs text-muted-foreground">
+                            No catalog parts for this service — add one below.
+                          </p>
+                        )}
+                        {rows.map((p, idx) => (
+                          <div
+                            key={p.key}
+                            className="relative rounded-lg border border-border/70 bg-muted/30 p-3 space-y-3"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => removeCatalogPartRow(sid, idx)}
+                              className="absolute right-2 top-2 text-muted-foreground hover:text-destructive"
+                              aria-label="Remove part"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                            <div className="pr-6">
+                              <DrawerFieldLabel>Part name</DrawerFieldLabel>
+                              <input
+                                type="text"
+                                placeholder="e.g. Front brake pad set"
+                                value={p.part_name}
+                                onChange={(e) =>
+                                  setCatalogPartField(sid, idx, "part_name", e.target.value)
+                                }
+                                className={drawerInputClassName}
+                              />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <DrawerFieldLabel>OEM #</DrawerFieldLabel>
+                                <input
+                                  type="text"
+                                  placeholder="OEM #"
+                                  value={p.oem_number}
+                                  onChange={(e) =>
+                                    setCatalogPartField(sid, idx, "oem_number", e.target.value)
+                                  }
+                                  className={`${drawerInputClassName} font-mono uppercase`}
+                                />
+                              </div>
+                              <div>
+                                <DrawerFieldLabel>Brand</DrawerFieldLabel>
+                                <input
+                                  type="text"
+                                  placeholder="Brand"
+                                  value={p.brand}
+                                  onChange={(e) =>
+                                    setCatalogPartField(sid, idx, "brand", e.target.value)
+                                  }
+                                  className={drawerInputClassName}
+                                />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <DrawerFieldLabel>Qty</DrawerFieldLabel>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  step={1}
+                                  placeholder="Qty"
+                                  value={p.quantity}
+                                  onChange={(e) =>
+                                    setCatalogPartField(sid, idx, "quantity", e.target.value)
+                                  }
+                                  className={drawerInputClassName}
+                                />
+                              </div>
+                              <div>
+                                <DrawerFieldLabel>Unit price ($)</DrawerFieldLabel>
+                                <FixedCentCurrencyInput
+                                  placeholder="0.00"
+                                  value={p.unit_price}
+                                  onValueChange={(value) =>
+                                    setCatalogPartField(
+                                      sid,
+                                      idx,
+                                      "unit_price",
+                                      value,
+                                    )
+                                  }
+                                  className={drawerInputClassName}
+                                />
+                                {p.price_unknown && (
+                                  <p className="mt-1 text-[11px] text-amber-700">
+                                    Catalog had no price — enter what you charge.
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => addCatalogPartRow(sid)}
+                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Add part
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CollapsibleSection>
+        )}
 
         {/* ── Diagnostic system (only when a diagnostic service is selected) ── */}
         {isDiagnostic && (

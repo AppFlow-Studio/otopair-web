@@ -207,6 +207,34 @@ function packageRenderDirective(toolUse: ToolUseBlock): ToolResultBlock {
         }),
       );
 
+    case "render_vehicle_update":
+      // Trigger-only: pass the vehicle-truth inputs Oto captured. The mobile
+      // component renders a one-tap confirm card; on confirm it calls
+      // vehicleTruth.applyVehicleTruth with the supplied mileage,
+      // service_claims, and fault_lights. All three inputs are optional —
+      // pass only what the user actually stated.
+      // Sanitize every arg — Haiku emits malformed numerics ("" / NaN) that
+      // would render blank on the card and throw at applyVehicleTruth's
+      // v.optional(v.number()) validator. Drop non-finite numbers, non-string
+      // fault lights, and structurally-invalid claims here at the choke point.
+      {
+        const mileage = toFiniteNumber(toolUse.input.mileage);
+        const serviceClaims = sanitizeServiceClaims(toolUse.input.service_claims);
+        const faultLights = Array.isArray(toolUse.input.fault_lights)
+          ? toolUse.input.fault_lights.filter(
+              (x): x is string => typeof x === "string" && x.trim().length > 0,
+            )
+          : undefined;
+        return ok(
+          toolUse.id,
+          renderD("showVehicleUpdate", {
+            ...(mileage !== undefined ? { mileage } : {}),
+            ...(serviceClaims !== undefined ? { service_claims: serviceClaims } : {}),
+            ...(faultLights && faultLights.length ? { fault_lights: faultLights } : {}),
+          }),
+        );
+      }
+
     case "render_link_button":
       // Sprint 3 §14.1 — terminal app-nav redirect surface. Trigger-only: pass
       // `destination` (one of 8 enum values: terms_of_service / privacy_policy
@@ -269,6 +297,41 @@ function packageRenderDirective(toolUse: ToolUseBlock): ToolResultBlock {
 
 function renderD<T>(field: string, value: T): RenderDirective<T> {
   return { type: "render", field, value };
+}
+
+// Anthropic tool schemas are advisory, not enforced — Haiku can emit a numeric
+// field as "" / null / NaN. These sanitizers drop malformed values at the render
+// packaging layer so they never reach the mobile card or the Convex
+// v.optional(v.number()) validators downstream (which THROW on a non-number).
+function toFiniteNumber(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+const VEHICLE_TRUTH_CLAIM_KINDS = new Set(["due", "light_on", "completed"]);
+
+function sanitizeServiceClaims(
+  raw: unknown,
+): Array<Record<string, unknown>> | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: Array<Record<string, unknown>> = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const claim = entry as Record<string, unknown>;
+    if (typeof claim.service_slug !== "string") continue;
+    if (typeof claim.kind !== "string" || !VEHICLE_TRUTH_CLAIM_KINDS.has(claim.kind)) continue;
+    const clean: Record<string, unknown> = {
+      service_slug: claim.service_slug,
+      kind: claim.kind,
+    };
+    const serviceMileage = toFiniteNumber(claim.service_mileage);
+    if (serviceMileage !== undefined) clean.service_mileage = serviceMileage;
+    const serviceAgeDays = toFiniteNumber(claim.service_age_days);
+    if (serviceAgeDays !== undefined) clean.service_age_days = serviceAgeDays;
+    const serviceDate = toFiniteNumber(claim.service_date);
+    if (serviceDate !== undefined) clean.service_date = serviceDate;
+    out.push(clean);
+  }
+  return out.length ? out : undefined;
 }
 
 // =============================================================================

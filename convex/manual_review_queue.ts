@@ -12,7 +12,15 @@ export const list = query({
   args: {},
   handler: async (ctx) => {
     const runs = await ctx.db.query("enrichment_runs").collect();
-    return runs.filter((r) => r.status === "pending" || r.status === "needs_review");
+    // Runs carrying structured sanity/OEM flags surface here too — they
+    // finished (status stays terminal so force-unstick/retry logic is
+    // untouched) but a human should eyeball the flagged fields.
+    return runs.filter(
+      (r) =>
+        r.status === "pending" ||
+        r.status === "needs_review" ||
+        (r.sanity_flags?.length ?? 0) > 0,
+    );
   },
 });
 

@@ -156,10 +156,12 @@ export const runTier2Enrichment = internalAction({
     );
     const modelName = modelDoc?.name ?? "Unknown";
 
-    const engine = await ctx.runQuery(
-      internal.vehicleEnrichment.v3queries.getEngine,
-      { engineId: vc.engine_id },
-    );
+    const engine = vc.engine_id
+      ? await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getEngine,
+          { engineId: vc.engine_id },
+        )
+      : null;
 
     // 2. FIND FIELDS NEEDING MORE EVIDENCE
     const allExistingEvidence: Array<{ source_domain?: string; field_name: string }> = [];
@@ -291,7 +293,7 @@ export const runTier2Enrichment = internalAction({
               vc.year,
               makeName,
               modelName,
-              vc.trim_name,
+              vc.trim_name ?? "",
             );
             if (extracted && Object.keys(extracted).length > 0) {
               console.log(`[tier2] ${domain}: Haiku extracted ${Object.keys(extracted).length} fields`);

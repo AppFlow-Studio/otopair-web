@@ -191,7 +191,7 @@ export const updateStatus = mutation({
     token: v.string(),
   },
   handler: async (ctx, { id, status, token }) => {
-    const actor = await requireDirector(ctx, token);
+    const actor = await requireDirector(ctx, token, "ai.write");
     const fb = await ctx.db.get(id);
     if (!fb) return;
     const prev = normalizeStatus(fb.review_status);
@@ -216,7 +216,7 @@ export const archive = mutation({
     token: v.string(),
   },
   handler: async (ctx, { id, archived, token }) => {
-    const actor = await requireDirector(ctx, token);
+    const actor = await requireDirector(ctx, token, "ai.write");
     const fb = await ctx.db.get(id);
     if (!fb) return;
     await ctx.db.patch(id, { archived, updated_at: Date.now() });

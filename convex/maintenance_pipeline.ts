@@ -42,6 +42,8 @@ import {
   type ServiceAnchor,
   type QuickReadFlags,
 } from "./lib/intervals";
+import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
+import { canonicalWarningLights } from "../lib/warningLightVocab";
 
 // ============================================================================
 // INTERNAL QUERIES
@@ -69,6 +71,81 @@ export const getModifierWeights = internalQuery({
   },
 });
 
+// Latest observed vehicle condition (populated by the multi-point inspection /
+// prejob). Feeds an urgency override so VHS reflects what the mechanic actually
+// measured — not just OEM interval math.
+export const getPassportForVin = internalQuery({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("vehicle_passports")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin))
+      .unique()
+      .catch(() => null);
+  },
+});
+
+const URGENCY_RANK: Record<string, number> = {
+  none: 0,
+  low: 1,
+  moderate: 2,
+  high: 3,
+  critical: 4,
+};
+
+function maxUrgency(a: string, b: string): string {
+  return (URGENCY_RANK[a] ?? 0) >= (URGENCY_RANK[b] ?? 0) ? a : b;
+}
+
+/**
+ * Derive an observed urgency per maintenance category from the passport's
+ * measured condition (brake pad mm, rotor condition, tire condition). Only
+ * raises urgency — never lowers it.
+ */
+function observedUrgencyByCategory(
+  passport: any,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!passport) return out;
+
+  // Brakes — pad thickness + rotor condition.
+  const brakes = passport.brakes ?? {};
+  const pads = [brakes.front_pad_mm, brakes.rear_pad_mm].filter(
+    (n: unknown) => typeof n === "number" && Number.isFinite(n),
+  ) as number[];
+  let brakeUrg = "none";
+  if (pads.length) {
+    const min = Math.min(...pads);
+    if (min < 3) brakeUrg = "critical";
+    else if (min < 4) brakeUrg = "high";
+    else if (min <= 6) brakeUrg = "moderate";
+  }
+  if (brakes.rotor_condition === "needs_attention")
+    brakeUrg = maxUrgency(brakeUrg, "high");
+  else if (brakes.rotor_condition === "scored")
+    brakeUrg = maxUrgency(brakeUrg, "moderate");
+  if (brakeUrg !== "none") out.brakes = brakeUrg;
+
+  // Tires — worst of overall/front/rear condition.
+  const tires = passport.tires ?? {};
+  const condToUrg: Record<string, string> = {
+    good: "none",
+    fair: "moderate",
+    replace_soon: "high",
+  };
+  let tireUrg = "none";
+  for (const c of [
+    tires.overall_condition,
+    tires.front_condition,
+    tires.rear_condition,
+  ]) {
+    if (c && condToUrg[c]) tireUrg = maxUrgency(tireUrg, condToUrg[c]);
+  }
+  if (tireUrg !== "none") out.tires = tireUrg;
+
+  return out;
+}
+
 export const getServiceSpecs = internalQuery({
   args: { engineId: v.id("engines") },
   handler: async (ctx, args) => {
@@ -77,8 +154,39 @@ export const getServiceSpecs = internalQuery({
       .withIndex("by_engine_id", (q) => q.eq("engine_id", args.engineId))
       .collect();
 
-    // Resolve MI category for each spec by joining services → service_categories
+    // Resolve the MI bucket for each spec. The 7→4 category consolidation
+    // (Jul 13: Routine / Tires & Brakes / Scheduled Service / Inspections)
+    // made category names too coarse for MI buckets — "Tires & Brakes" can't
+    // distinguish a brake spec from a tire spec — so the bucket now derives
+    // from the service SLUG first, with category names (new AND legacy, for
+    // deployments that haven't run migrations/categoryConsolidation) as the
+    // fallback.
+    const MI_SLUG_MAP: Record<string, string> = {
+      brake_pad_replacement: "brakes",
+      rotor_replacement: "brakes",
+      brake_fluid_flush: "brakes",
+      tire_rotation: "tires",
+      tire_balance: "tires",
+      tire_replacement: "tires",
+      wheel_alignment: "tires",
+      battery_test: "battery",
+      battery_replacement: "battery",
+      coolant_flush: "fluids",
+      power_steering_flush: "fluids",
+      differential_service: "fluids",
+      transmission_service: "fluids",
+      diagnostic_scan: "diagnostics",
+      check_engine_light: "diagnostics",
+      pre_purchase_inspection: "diagnostics",
+      state_inspection: "compliance",
+      emissions_test: "compliance",
+    };
     const MI_CATEGORY_MAP: Record<string, string> = {
+      "Routine": "routine",
+      "Tires & Brakes": "tires",
+      "Scheduled Service": "routine",
+      "Inspections": "diagnostics",
+      // Legacy 7-category names (pre-consolidation deployments)
       "Routine Maintenance": "routine",
       "Maintenance": "routine",
       "Tires": "tires",
@@ -95,13 +203,18 @@ export const getServiceSpecs = internalQuery({
     for (const spec of specs) {
       let miCategory = "routine";
       const service = await ctx.db.get(spec.service_id);
-      if (service && service.service_category_id) {
-        const category = await ctx.db.get(
-          service.service_category_id as Id<"service_categories">
-        );
-        if (category) {
-          miCategory =
-            MI_CATEGORY_MAP[(category as { name: string }).name] ?? "routine";
+      if (service) {
+        const bySlug = service.slug ? MI_SLUG_MAP[service.slug] : undefined;
+        if (bySlug) {
+          miCategory = bySlug;
+        } else if (service.service_category_id) {
+          const category = await ctx.db.get(
+            service.service_category_id as Id<"service_categories">
+          );
+          if (category) {
+            miCategory =
+              MI_CATEGORY_MAP[(category as { name: string }).name] ?? "routine";
+          }
         }
       }
       enriched.push({ ...spec, service_category: miCategory });
@@ -335,6 +448,15 @@ export const runPipeline = internalAction({
     }
     const { owner, vehicle } = data;
 
+    // Observed condition from the latest inspection/prejob — used below to raise
+    // brake/tire urgency above the interval-derived value when measured wear
+    // demands it.
+    const passport = await ctx.runQuery(
+      internal.maintenance_pipeline.getPassportForVin,
+      { vin: owner.vin },
+    );
+    const observedUrgency = observedUrgencyByCategory(passport);
+
     const weights = await ctx.runQuery(
       internal.maintenance_pipeline.getModifierWeights,
       {}
@@ -344,7 +466,9 @@ export const runPipeline = internalAction({
       return;
     }
 
-    // Determine scope: "full" for onboarding/checkin, "intervals_only" for mileage/quick_read/booking
+    // Determine scope: "full" for onboarding/checkin, "intervals_only" for
+    // mileage/quick_read/booking/oto_chat (Oto vehicle-truth re-runs intervals
+    // after writing knownIssues — it must NOT re-onboard).
     const isFullPipeline = args.triggeredBy === "onboarding" || args.triggeredBy === "checkin";
 
     let raw: RawModifiers;
@@ -429,7 +553,14 @@ export const runPipeline = internalAction({
     // Step 3: Calculate composites per category
     const weightsByCategory = new Map<string, WeightProfile>();
     for (const w of weights) {
-      weightsByCategory.set(w.category_name, w);
+      weightsByCategory.set(w.category_name, {
+        dcm_weight: w.dcm_weight ?? 0,
+        vam_weight: w.vam_weight ?? 0,
+        mtm_weight: w.mtm_weight ?? 0,
+        pum_weight: w.pum_weight ?? 0,
+        hcm_weight: w.hcm_weight ?? 0,
+        is_fixed: w.is_fixed ?? false,
+      });
     }
 
     const getComp = (cat: string) =>
@@ -520,41 +651,36 @@ export const runPipeline = internalAction({
     // Then build a secondary map keyed by service_id for lookup during interval calc
     const anchorsByType = new Map<string, ServiceAnchor>();
     for (const r of records) {
+      // lastServiceDate is stored as either a Unix-ms number or a date string;
+      // ServiceAnchor.last_service_date expects Unix ms.
+      const lastServiceDateMs =
+        typeof r.lastServiceDate === "number"
+          ? r.lastServiceDate
+          : typeof r.lastServiceDate === "string" &&
+              !Number.isNaN(Date.parse(r.lastServiceDate))
+            ? Date.parse(r.lastServiceDate)
+            : undefined;
       anchorsByType.set(r.type, {
         last_service_mileage: r.lastServiceMileage ?? undefined,
-        last_service_date: r.lastServiceDate ?? undefined,
+        last_service_date: lastServiceDateMs,
         last_service_source: (r as any).serviceSource ?? "user_reported",
       });
     }
 
-    // Map maintenance_record types → service slugs
-    const TYPE_TO_SLUGS: Record<string, string[]> = {
-      oil: ["oil-change"],
-      brakes: ["brake-pads", "brake-rotors"],
-      tires: ["tire-replacement", "tire-rotation", "tire-balance", "wheel-alignment"],
-      battery: ["battery-replacement", "battery-test"],
-      fluids: ["brake-fluid-flush", "coolant-flush", "transmission-fluid", "power-steering-flush"],
-      filters: ["engine-air-filter", "cabin-air-filter"],
-      wipers: ["wiper-blades"],
-      engine_parts: ["spark-plugs", "serpentine-belt"],
-      diagnostics: ["check-engine-diagnostic", "general-diagnostic"],
-      inspection: ["state-inspection", "emissions-test"],
-    };
-
-    // Invert to slug → type for fast lookup
-    const SLUG_TO_TYPE: Record<string, string> = {};
-    for (const [type, slugs] of Object.entries(TYPE_TO_SLUGS)) {
-      for (const slug of slugs) SLUG_TO_TYPE[slug] = type;
-    }
-
-    // Resolve all services once, then build service_id → anchor mapping
+    // Resolve each spec's service → its maintenance record type and attach the
+    // matching last-service anchor. Uses the canonical snake_case resolver:
+    // the prior inline TYPE_TO_SLUGS map keyed on KEBAB slugs ("oil-change")
+    // while services.slug is snake_case ("oil_change"), so the lookup was always
+    // undefined → anchors never matched → the pipeline ignored service history
+    // (same kebab-vs-snake bug class as #90). Shared with the completion
+    // write-back so both halves of the loop agree on slug → type.
     const anchorsByServiceId = new Map<string, ServiceAnchor>();
     for (const spec of specs) {
       const service = await ctx.runQuery(internal.maintenance_pipeline.getServiceById, {
         serviceId: spec.service_id,
       });
-      if (!service) continue;
-      const recordType = SLUG_TO_TYPE[service.slug];
+      if (!service?.slug) continue;
+      const recordType = recordTypeForServiceSlug(service.slug);
       if (recordType && anchorsByType.has(recordType)) {
         anchorsByServiceId.set(spec.service_id.toString(), anchorsByType.get(recordType)!);
       }
@@ -629,13 +755,24 @@ export const runPipeline = internalAction({
         vehicleAgeYears
       );
 
-      const urgencyResult = classifyUrgency(
+      let urgencyResult = classifyUrgency(
         interval,
         currentMileage,
         velocity.rate,
         qrFlags,
         serviceCategory
       );
+
+      // Observed-condition override — raise urgency to match measured wear from
+      // the latest inspection (brakes/tires). Only ever increases urgency.
+      const observed = observedUrgency[serviceCategory];
+      if (
+        observed &&
+        interval.is_applicable &&
+        (URGENCY_RANK[observed] ?? 0) > (URGENCY_RANK[urgencyResult.urgency] ?? 0)
+      ) {
+        urgencyResult = { urgency: observed as any, source: "inspection_override" };
+      }
 
       serviceStates.push({
         service_id: spec.service_id.toString(),
@@ -741,9 +878,12 @@ export const runPipeline = internalAction({
           lastServiceSource: s.anchor.last_service_source,
           urgency: s.urgencyResult.urgency,
           urgencyScore: s.urgencyResult.urgency_score,
-          quickReadFlag: s.urgencyResult.source === "quick_read_override" || s.urgencyResult.source === "symptom_override"
-            ? s.urgencyResult.source
-            : undefined,
+          quickReadFlag:
+            s.urgencyResult.source === "quick_read_override" ||
+            s.urgencyResult.source === "symptom_override" ||
+            s.urgencyResult.source === "inspection_override"
+              ? s.urgencyResult.source
+              : undefined,
           quickReadUrgency: s.urgencyResult.source?.includes("override")
             ? s.urgencyResult.urgency
             : undefined,
@@ -834,18 +974,15 @@ const LIGHT_PENALTY: Record<string, number> = {
   not_sure_which: 6,
 };
 
+// Kept in lockstep with utils/healthScore.ts:warningLightPenalty — reads via
+// canonicalWarningLights so the server-persisted pipeline score reacts to a
+// warning light logged in EITHER knownIssues shape and EITHER vocabulary. The
+// old knownIssues[0]-as-sentinel logic scored the flat/symptom-vocab arrays that
+// Oto and the check-in actually write at zero.
 function warningLightPenalty(knownIssues?: string[]): number {
-  if (!knownIssues || knownIssues.length === 0) return 0;
-
-  const status = knownIssues[0];
-  if (status === "no_all_clear") return 0;
-  if (status === "not_sure") return 5;
-  if (status === "check_engine") return LIGHT_PENALTY.check_engine;
-
-  // "other" / "different_light" — sum individual penalties (capped)
   let penalty = 0;
-  for (let i = 1; i < knownIssues.length; i++) {
-    penalty += LIGHT_PENALTY[knownIssues[i]] ?? 6;
+  for (const light of canonicalWarningLights(knownIssues)) {
+    penalty += LIGHT_PENALTY[light] ?? 6;
   }
   return Math.min(penalty, 25);
 }

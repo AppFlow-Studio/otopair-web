@@ -1,0 +1,322 @@
+{
+  "config_key": "2022_volkswagen_jetta_s_ea211",
+  "make": "Volkswagen",
+  "model": "Jetta",
+  "olp_labor_count": 566,
+  "olp_url": "https://openlaborproject.com/portal/volkswagen/jetta/2022/1.4l-i4-tsi/",
+  "olp_vehicle": {
+    "displayYear": "2022",
+    "engine": "1.4L I4 TSI",
+    "engineSlug": "1.4l-i4-tsi",
+    "forcedInduction": "turbo",
+    "fuelType": "gas",
+    "jobCount": 566,
+    "timingType": "chain",
+    "vehicleId": "45325718-1238-4495-aeae-be5a9ebb2330",
+    "yearRange": "2022"
+  },
+  "resolved": true,
+  "services": [
+    {
+      "delta_pct": -50,
+      "olp_hours": 0.3,
+      "olp_jobs": [
+        {
+          "hours": 0.3,
+          "name": "Oil Change - Synthetic",
+          "sane": true,
+          "slug": "oil-change-synthetic"
+        },
+        {
+          "hours": 0.5,
+          "name": "Oil Change",
+          "sane": true,
+          "slug": "oil-change"
+        },
+        {
+          "hours": 0.7,
+          "name": "Oil Change - Diesel",
+          "sane": true,
+          "slug": "oil-change-diesel"
+        }
+      ],
+      "our_confidence": 0.9,
+      "our_hours": 0.6,
+      "our_source": "aggregated",
+      "repairpal_hours": 0.58,
+      "slug": "oil_change",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 0,
+      "olp_hours": 0.3,
+      "olp_jobs": [
+        {
+          "hours": 0.3,
+          "name": "Air Filter",
+          "sane": true,
+          "slug": "air-filter"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 0.3,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "filter_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -44,
+      "olp_hours": 0.9,
+      "olp_jobs": [
+        {
+          "hours": 0.9,
+          "name": "Spark Plugs",
+          "sane": true,
+          "slug": "spark-plugs"
+        },
+        {
+          "hours": 1.7,
+          "name": "Spark Plugs - V6",
+          "sane": true,
+          "slug": "spark-plugs-v6"
+        },
+        {
+          "hours": 1.7,
+          "name": "Spark Plugs - V8",
+          "sane": true,
+          "slug": "spark-plugs-v8"
+        }
+      ],
+      "our_confidence": 0.8,
+      "our_hours": 1.6,
+      "our_source": "aggregated",
+      "repairpal_hours": 1.62,
+      "slug": "spark_plugs",
+      "status": "matched"
+    },
+    {
+      "delta_pct": null,
+      "olp_hours": null,
+      "olp_jobs": [],
+      "our_confidence": 0.8,
+      "our_hours": 7,
+      "our_source": "aggregated",
+      "repairpal_hours": 7.02,
+      "slug": "timing_belt",
+      "status": "no_olp_job"
+    },
+    {
+      "delta_pct": -10,
+      "olp_hours": 0.9,
+      "olp_jobs": [
+        {
+          "hours": 0.9,
+          "name": "Coolant Flush",
+          "sane": true,
+          "slug": "coolant-flush"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 1,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "coolant_flush",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 13,
+      "olp_hours": 1.7,
+      "olp_jobs": [
+        {
+          "hours": 1.7,
+          "name": "Transmission Service",
+          "sane": true,
+          "slug": "transmission-service"
+        },
+        {
+          "hours": 1.7,
+          "name": "Transmission Filter and Fluid",
+          "sane": true,
+          "slug": "trans-filter-fluid"
+        },
+        {
+          "hours": 1.7,
+          "name": "Automatic Transmission Fluid and Filter Change",
+          "sane": true,
+          "slug": "automatic-transmission-fluid-filter-change"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 1.5,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "transmission_service",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -29,
+      "olp_hours": 1.2,
+      "olp_jobs": [
+        {
+          "hours": 1.2,
+          "name": "Wheel Alignment",
+          "sane": true,
+          "slug": "wheel-alignment"
+        }
+      ],
+      "our_confidence": 0.8,
+      "our_hours": 1.7,
+      "our_source": "aggregated",
+      "repairpal_hours": 1.74,
+      "slug": "wheel_alignment",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 8,
+      "olp_hours": 1.4,
+      "olp_jobs": [
+        {
+          "hours": 1.4,
+          "name": "Brake Pads - Front",
+          "sane": true,
+          "slug": "brake-pads-front"
+        },
+        {
+          "hours": 1.4,
+          "name": "Brake Pads - Rear",
+          "sane": true,
+          "slug": "brake-pads-rear"
+        }
+      ],
+      "our_confidence": 0.9,
+      "our_hours": 1.3,
+      "our_source": "aggregated",
+      "repairpal_hours": 1.27,
+      "slug": "brake_pad_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -10,
+      "olp_hours": 1.8,
+      "olp_jobs": [
+        {
+          "hours": 1.8,
+          "name": "Brake Rotors - Front Pair",
+          "sane": true,
+          "slug": "brake-rotors-front-pair"
+        },
+        {
+          "hours": 2.2,
+          "name": "Brake Rotors - Rear Pair",
+          "sane": true,
+          "slug": "brake-rotors-rear-pair"
+        },
+        {
+          "hours": 2.1,
+          "name": "Brake Pads and Rotors - Front",
+          "sane": true,
+          "slug": "brake-pads-rotors-front"
+        },
+        {
+          "hours": 2.1,
+          "name": "Brake Pads and Rotors - Rear",
+          "sane": true,
+          "slug": "brake-pads-rotors-rear"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 2,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "rotor_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 12,
+      "olp_hours": 0.9,
+      "olp_jobs": [
+        {
+          "hours": 0.9,
+          "name": "Brake Fluid Flush",
+          "sane": true,
+          "slug": "brake-fluid-flush"
+        }
+      ],
+      "our_confidence": 0.4,
+      "our_hours": 0.8,
+      "our_source": "aggregated",
+      "repairpal_hours": null,
+      "slug": "brake_fluid_flush",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -17,
+      "olp_hours": 0.5,
+      "olp_jobs": [
+        {
+          "hours": 0.5,
+          "name": "Battery",
+          "sane": true,
+          "slug": "battery"
+        }
+      ],
+      "our_confidence": 0.9,
+      "our_hours": 0.6,
+      "our_source": "aggregated",
+      "repairpal_hours": 0.58,
+      "slug": "battery_replacement",
+      "status": "matched"
+    },
+    {
+      "delta_pct": -20,
+      "olp_hours": 0.6,
+      "olp_jobs": [
+        {
+          "hours": 0.6,
+          "name": "Power Steering Fluid Flush",
+          "sane": true,
+          "slug": "power-steering-fluid-flush"
+        },
+        {
+          "hours": 0.6,
+          "name": "Power Steering Service",
+          "sane": true,
+          "slug": "power-steering-service"
+        }
+      ],
+      "our_confidence": 0.45,
+      "our_hours": 0.75,
+      "our_source": "training_data",
+      "repairpal_hours": null,
+      "slug": "power_steering_flush",
+      "status": "matched"
+    },
+    {
+      "delta_pct": 422,
+      "olp_hours": 1.2,
+      "olp_jobs": [
+        {
+          "hours": 1.2,
+          "name": "Differential Service",
+          "sane": true,
+          "slug": "differential-service"
+        },
+        {
+          "hours": 0.7,
+          "name": "Differential Fluid Change",
+          "sane": true,
+          "slug": "differential-fluid-change"
+        }
+      ],
+      "our_confidence": 0.87,
+      "our_hours": 0.23,
+      "our_source": "chassis_clone",
+      "repairpal_hours": null,
+      "slug": "differential_service",
+      "status": "matched"
+    }
+  ],
+  "trim": "S",
+  "year": 2022
+}

@@ -96,7 +96,7 @@ describe("human writers stamp verified_fields", () => {
     const { engineId, token } = await t.run(async (ctx) => {
       const directorId = await ctx.db.insert("director_users", {
         name: "Real Director",
-        role: "superadmin",
+        role: "super_admin",
         totp_secret: "JBSWY3DPEHPK3PXP",
         created_at: now,
       });

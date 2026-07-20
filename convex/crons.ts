@@ -161,6 +161,30 @@ crons.interval(
   (internal as any).lib.push_dispatcher.dispatchPendingPush,
 );
 
+// Part prices: nightly re-verification of parts whose newest price row is
+// stale (default > 30 days). Spends Firecrawl credits, so the action no-ops
+// unless PARTS_PRICE_REFRESH_BUDGET (parts per night) is set > 0 in env.
+crons.daily(
+  "refresh-stale-part-prices",
+  { hourUTC: 9, minuteUTC: 0 },
+  internal.vehicleEnrichment.priceRefresh.refreshStalePrices,
+  {},
+);
+
+// Cross-make fitment quarantine: nightly sweep marking contaminated fitments
+// (wrong-make part on a config, or a foreign brand-signature number stamped
+// with the config's own make) as data_quality: cross_make_quarantined, plus
+// normalized-number dedupe. DB-only — no Firecrawl/LLM spend. The write-time
+// guards should make this a no-op; it exists because contamination was
+// observed REGENERATING on re-enrich (Jul 2026) and a durable net beats
+// chasing every vector.
+crons.daily(
+  "quarantine-cross-make-fitments",
+  { hourUTC: 9, minuteUTC: 30 },
+  internal.vehicleEnrichment.fitmentQuarantine.runQuarantineScan,
+  { dryRun: false },
+);
+
 // Labor times: fold freshly-recorded shop data into the labor median every 6h.
 // Job finalize already recomputes inline; this catches (config, service) pairs
 // touched by labor_quote_snapshots so empirical accrues continuously without a
@@ -169,6 +193,30 @@ crons.interval(
   "recompute-recent-labor",
   { hours: 6 },
   internal.vehicleEnrichment.v3mutations.recomputeRecentLabor,
+  {},
+);
+
+// Portal KPI materialization (decision #3, R2 class). Cheap windowed stats
+// every 15 min; the self-chaining enrichment_evidence sweep (28k+ rows)
+// daily — each chain link paginates 4k docs, so no single mutation
+// approaches the read limit. SLO breaches land in notification_outbox
+// (deduped per key per day) for the Slack dispatcher.
+crons.interval("portal-stats-cheap", { minutes: 15 }, internal.portalStats.recomputeCheapStats, {});
+// review_queue materialization sweep (decision #4) — idempotent per-stream
+// backfills keyed on source doc id, so repeat runs insert zero duplicates.
+crons.interval("review-queue-sweep", { minutes: 30 }, internal.reviewQueue.sweepAllStreams, {});
+crons.daily(
+  "portal-stats-evidence-sweep",
+  { hourUTC: 6, minuteUTC: 30 },
+  internal.portalStats.recomputeEvidenceStats,
+  {},
+);
+// Daily cost snapshots for /data/costs — recomputes the last 3 UTC days so
+// late-arriving run stamps self-heal (each day one bounded window read).
+crons.daily(
+  "portal-stats-cost-day",
+  { hourUTC: 6, minuteUTC: 45 },
+  internal.portalStats.recomputeCostDays,
   {},
 );
 

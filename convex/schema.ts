@@ -25,6 +25,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
+  customerInspectionSnapshotValidator,
   postjobPartValidator,
   postjobPhotoValidator,
   postjobReportValidator,
@@ -33,6 +34,7 @@ import {
   vehiclePassportFluidsValidator,
   vehiclePassportInspectionValidator,
   vehiclePassportModificationsValidator,
+  legacyModificationsShapeValidator,
   vehiclePassportTiresValidator,
   vehicleUpdateValuesValidator,
 } from "./lib/vehicle_passports";
@@ -374,6 +376,10 @@ export default defineSchema({
   // compatibility but new rows should default to "oem".
   oem_parts: defineTable({
     oem_part_number: v.string(),
+    // normalizeOemNumber(oem_part_number) — uppercase, alphanumeric only.
+    // Canonical identity for upserts so "5Q0 698 451 A" and "5Q0698451A"
+    // resolve to one row. Legacy rows lack it; upsert lazily backfills.
+    oem_part_number_normalized: v.optional(v.string()),
     name: v.string(),
     brand: v.optional(v.string()),
     // "oem" | "aftermarket" | "performance" | "economy" | "unknown".
@@ -394,6 +400,7 @@ export default defineSchema({
     data_quality: v.optional(v.string()),
   })
     .index("by_part_number", ["oem_part_number"])
+    .index("by_part_number_normalized", ["oem_part_number_normalized"])
     .index("by_category", ["category"])
     .index("by_subcategory", ["subcategory"])
     .index("by_make_category", ["make_id", "category"])
@@ -418,6 +425,10 @@ export default defineSchema({
     service_role: v.optional(v.string()),
     confidence: v.optional(v.number()),
     source_count: v.optional(v.number()),
+    // Distinct domains that independently attested this fitment (corroboration
+    // signal — ≥2 distinct domains means cross-source agreement, not re-runs
+    // of the same page). Appended on each upsert re-confirmation.
+    source_domains: v.optional(v.array(v.string())),
     first_confirmed_at: v.optional(v.number()),
     last_confirmed_at: v.optional(v.number()),
     mechanic_verified: v.optional(v.boolean()),
@@ -436,11 +447,57 @@ export default defineSchema({
     price_type: v.optional(v.string()),
     source_url: v.optional(v.string()),
     source_domain: v.optional(v.string()),
+    msrp: v.optional(v.number()),
+    discount: v.optional(v.number()),
     refreshed_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
     .index("by_part", ["part_id"])
     .index("by_part_source", ["part_id", "source_domain"]),
+
+  // Raw per-config RepairPal estimate-endpoint cache — one row per (config,
+  // service), storing the whole endpoint response at its natural granularity so
+  // `part_prices` stays SKU-only. Labor is ALSO projected into labor_observations
+  // (source repairpal_endpoint, weight 0.9).
+  // Parts: each endpoint part's averaged per-unit price (total_price avg ÷
+  // quantity) is ALSO projected into part_prices as a fallback POINT
+  // (source_domain="repairpal_endpoint", a price_type excluded from the pooled
+  // SKU aggregate). resolvePartsCost (flag PARTS_SOURCE_REAL_PRIMARY) pools SKU
+  // prices WITH this endpoint point per role, falling back to it when a part has
+  // no SKU price, then to Camry×multiplier. See
+  // docs/superpowers/plans/2026-06-23-parts-real-primary-endpoint-point.md.
+  repairpal_endpoint_estimates: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    base_vehicle_id: v.number(),               // resolved RepairPal baseVehicleId
+    variant_label: v.optional(v.string()),     // matched engine/position variant
+    labor_minutes: v.optional(v.number()),
+    labor_hours: v.optional(v.number()),
+    labor_low: v.optional(v.number()),         // labor $ band (unrounded)
+    labor_high: v.optional(v.number()),
+    total_independent_low: v.optional(v.number()),
+    total_independent_high: v.optional(v.number()),
+    total_dealer_low: v.optional(v.number()),
+    total_dealer_high: v.optional(v.number()),
+    parts: v.optional(
+      v.array(
+        v.object({
+          role: v.optional(v.string()),        // oem_parts.subcategory (+position) via endpointPartCategory
+          name: v.string(),                    // RepairPal part name (verbatim)
+          quantity: v.optional(v.number()),
+          price_low: v.optional(v.number()),
+          price_high: v.optional(v.number()),
+          position: v.optional(v.string()),    // "front" | "rear" for brakes
+        }),
+      ),
+    ),
+    zip: v.optional(v.string()),
+    match_quality: v.optional(v.string()),   // "exact" | "engine_sibling"
+    matched_via: v.optional(v.string()),     // RP modelName substituted when engine_sibling
+    fetched_at: v.number(),
+  })
+    .index("by_config_service", ["vehicle_config_id", "service_id"])
+    .index("by_config", ["vehicle_config_id"]),
 
   // Materialized view of "which part does this shop reach for on this
   // service+vehicle_config?" Built from observation: every shop-supplied
@@ -608,6 +665,63 @@ export default defineSchema({
     .index("by_service_chassis", ["service_id", "chassis_id"])
     .index("by_recorded_at", ["recorded_at"]),
 
+  // Per-PART observation rows capturing the catalog's parts/price/quantity
+  // guess (what the customer-facing app would have shown) alongside whatever
+  // the mechanic corrected on the shop "Create booking" drawer. Pure
+  // data-gathering: nothing here changes the booking's charged price. Mirrors
+  // labor_quote_snapshots' denormalized shop+service+engine+chassis shape so
+  // catalog-vs-reality aggregations don't need joins. One row per catalog part;
+  // mechanic-added parts the catalog missed get a row with catalog_* unset.
+  // Raw values only — diffs are computed at query time (no precomputed deltas).
+  parts_quote_snapshots: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    mechanic_id: v.optional(v.id("mechanics")),
+
+    vehicle_id: v.id("vehicles"),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    engine_id: v.optional(v.id("engines")),
+    chassis_id: v.optional(v.id("chassis_variants")),
+    trim_id: v.optional(v.id("trims")),
+
+    service_id: v.optional(v.id("services")),
+    custom_service_name: v.optional(v.string()),
+
+    // Selector metadata (for grouping/analysis).
+    role_key: v.optional(v.string()),
+    quantity_basis: v.optional(v.string()),
+    price_unknown: v.optional(v.boolean()),
+
+    // Catalog side (the app's guess). Undefined when the mechanic added a part
+    // the catalog never surfaced.
+    catalog_part_id: v.optional(v.id("oem_parts")),
+    catalog_oem_number: v.optional(v.string()),
+    catalog_part_name: v.optional(v.string()),
+    catalog_brand: v.optional(v.string()),
+    catalog_part_tier: v.optional(v.string()),
+    catalog_quantity: v.optional(v.number()),
+    catalog_unit_price_cents: v.optional(v.number()),
+    catalog_line_total_cents: v.optional(v.number()),
+
+    // Mechanic side. Undefined when the mechanic left the catalog row untouched.
+    mechanic_oem_number: v.optional(v.string()),
+    mechanic_part_name: v.optional(v.string()),
+    mechanic_brand: v.optional(v.string()),
+    mechanic_quantity: v.optional(v.number()),
+    mechanic_unit_price_cents: v.optional(v.number()),
+
+    source: v.string(),
+    recorded_at: v.number(),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_vehicle", ["vehicle_id"])
+    .index("by_shop_service", ["shop_id", "service_id"])
+    .index("by_shop_service_config", ["shop_id", "service_id", "vehicle_config_id"])
+    .index("by_service_engine", ["service_id", "engine_id"])
+    .index("by_service_chassis", ["service_id", "chassis_id"])
+    .index("by_part", ["catalog_part_id"])
+    .index("by_recorded_at", ["recorded_at"]),
+
   // ===== ENRICHMENT PIPELINE (all Waleed unique) =====
 
   enrichment_evidence: defineTable({
@@ -650,9 +764,61 @@ export default defineSchema({
     duration_ms: v.optional(v.number()),
     fields_filled: v.optional(v.number()),
     fields_total: v.optional(v.number()),
+    // Applicable-fill headline: fields the applicability rules stamped
+    // not_applicable drop out of the denominator (a RWD sedan isn't
+    // penalized for lacking a transfer case). fill_rate keeps the legacy
+    // all-fields semantics for comparability.
+    fields_not_applicable: v.optional(v.number()),
+    applicable_fill_rate: v.optional(v.number()),
     fill_rate: v.optional(v.number()),
     fields_changed: v.optional(v.array(v.string())),
     errors: v.optional(v.array(v.string())),
+    // Structured sanity/OEM-validation flags from the finalize pass. Unlike
+    // the free-string `errors` above (kept for back-compat), these are
+    // queryable — manual_review_queue.list surfaces runs that carry any.
+    sanity_flags: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          severity: v.string(), // "reject" | "flag"
+          reason: v.string(),
+          value: v.optional(v.string()),
+        }),
+      ),
+    ),
+    // Per-field ledger of WHY each V4 field ended the run empty — the
+    // completion counterpart to sanity_flags (which only covers fields that
+    // HAD a value). Reasons: never_asked | llm_null | not_applicable |
+    // validation_dropped:<flag_reason>. Feeds the gap-fill pass and the
+    // director run detail.
+    field_gaps: v.optional(
+      v.array(
+        v.object({
+          field: v.string(),
+          reason: v.string(),
+        }),
+      ),
+    ),
+    // Parts-side quotability: per applicable parts-bearing service, do all
+    // CORE roles have a fitment AND a trusted price? fill_rate's blind spot —
+    // a 93% run can still carry an unquotable oil change (Jul 2026 A4).
+    quotability: v.optional(
+      v.object({
+        pct: v.number(),
+        services: v.array(
+          v.object({
+            slug: v.string(),
+            core_total: v.number(),
+            core_with_fitment: v.number(),
+            core_with_price: v.number(),
+          }),
+        ),
+      }),
+    ),
+    // Stamped when the post-run price backfill / nightly cron reconciles the
+    // quotability snapshot + part_price gaps after healing prices — without
+    // it a healed config read its finalize-time quotability forever.
+    quotability_updated_at: v.optional(v.number()),
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
     created_at: v.optional(v.number()),
@@ -712,6 +878,9 @@ export default defineSchema({
     // scrape action to the price-write step. `format_version` lets the price
     // path treat older markdown-only rows as a miss so they re-fetch HTML.
     part_prices_json: v.optional(v.string()),
+    // Part replacement chains parsed from the same raw HTML ("replaced by",
+    // "supersedes"), serialized as ParsedSupersession[].
+    supersessions_json: v.optional(v.string()),
     format_version: v.optional(v.number()),
   })
     .index("by_cache_key", ["cache_key"])
@@ -766,6 +935,23 @@ export default defineSchema({
     .index("by_job", ["job_id"])
     .index("by_service", ["service_id"])
     .index("by_status", ["status"]),
+
+  // A mechanic/director assertion that a parts-requiring service does NOT apply
+  // to this vehicle config (e.g. sealed transmission → no transmission filter).
+  // Lets the pre-job "fill in missing parts" gate stop demanding a part the car
+  // will never need, without inventing a fitment. One row per (config, service,
+  // role); presence means "excluded — don't gate on this".
+  config_service_exclusions: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_slug: v.string(),
+    role_key: v.optional(v.string()),
+    reason: v.optional(v.string()),
+    marked_by_mechanic_id: v.optional(v.id("mechanics")),
+    booking_id: v.optional(v.id("bookings")),
+    created_at: v.number(),
+  })
+    .index("by_config", ["vehicle_config_id"])
+    .index("by_config_service", ["vehicle_config_id", "service_slug"]),
 
   vin_queue: defineTable({
     vin: v.string(),
@@ -986,6 +1172,13 @@ export default defineSchema({
     source: v.optional(v.string()),
     confidence: v.optional(v.number()),
     data_quality: v.optional(v.string()),
+    // [Phase 1] Multi-source guardrail flags (spec 2026-06-13). book_hours is
+    // > 15 min from the Pricing-v2 tier fallback (suspicious single source):
+    labor_outside_fallback_band: v.optional(v.boolean()),
+    // ≥2 strong sources disagreed beyond the agreement band before MAD:
+    labor_sources_disagree: v.optional(v.boolean()),
+    // |book_hours − fallback| in whole minutes (for the director panel):
+    fallback_gap_minutes: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])
@@ -1047,6 +1240,8 @@ export default defineSchema({
     nickname: v.optional(v.string()),
     is_primary: v.optional(v.boolean()),
     mileage: v.optional(v.number()),
+    mileage_source: v.optional(v.string()),      // e.g. "chat_self_reported" | "onboarding" | "verified"
+    mileage_updated_at: v.optional(v.number()),  // ms epoch of the last mileage write
     added_at: v.optional(v.number()),
     removed_at: v.optional(v.number()),
     ownershipType: v.optional(v.string()),
@@ -1179,7 +1374,8 @@ export default defineSchema({
     fluids: v.optional(vehiclePassportFluidsValidator),
     brakes: v.optional(vehiclePassportBrakesValidator),
     inspection: v.optional(vehiclePassportInspectionValidator),
-    modifications: v.optional(vehiclePassportModificationsValidator),
+    // TODO: remove legacy branch after running fixLegacyPassportModifications migration
+    modifications: v.optional(v.union(vehiclePassportModificationsValidator, legacyModificationsShapeValidator)),
     created_at: v.optional(v.number()),
     updated_at: v.optional(v.number()),
     first_shop_confirmed_at: v.optional(v.number()),
@@ -1187,6 +1383,46 @@ export default defineSchema({
   })
     .index("by_vin", ["vin"])
     .index("by_updated_at", ["updated_at"]),
+
+  // Gamified multi-point inspection record — the new pre-job flow. One row per
+  // booking (upserted as the mechanic fills zones). Stores the full zone-by-zone
+  // state so the inspection can be resumed and rendered to a downloadable PDF.
+  // The derived PreJobSurveyPayload still drives prejob_report + passport, so
+  // this table is additive and never the source of truth for pricing.
+  vehicle_inspections: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.optional(v.id("job_actuals")),
+    vin: v.string(),
+    shop_id: v.optional(v.id("shops")),
+    mechanic_id: v.optional(v.id("mechanics")),
+    template_version: v.string(),
+    zones: v.array(
+      v.object({
+        zone_id: v.string(),
+        done: v.boolean(),
+        // Free-form per-field maps keyed by the template field keys. `v.any()`
+        // because the template owns the shape and it evolves with the template
+        // version (recorded above) rather than the schema.
+        measures: v.optional(v.any()),
+        tri: v.optional(v.any()),
+        descriptors: v.optional(v.any()),
+        text: v.optional(v.any()),
+        select: v.optional(v.any()),
+        photo_ids: v.optional(v.array(v.id("_storage"))),
+      }),
+    ),
+    findings_attention: v.array(
+      v.object({ label: v.string(), zone: v.string() }),
+    ),
+    findings_monitor: v.array(
+      v.object({ label: v.string(), zone: v.string() }),
+    ),
+    pdf_storage_id: v.optional(v.id("_storage")),
+    created_at: v.float64(),
+    updated_at: v.float64(),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_vin", ["vin"]),
 
   // [I] Daniel/Waleed
   vehicle_tiers: defineTable({
@@ -1425,6 +1661,12 @@ export default defineSchema({
     profile_photo_url: v.optional(v.string()),
     profile_photo_storage_id: v.optional(v.string()),
     auth_provider: v.optional(v.string()),
+    // First-touch acquisition attribution captured at account creation:
+    // the entry surface / campaign the user arrived from (e.g. "referral",
+    // "web_signup", "ios_app", or a raw utm_source). Null = unknown/direct
+    // (older accounts, or a signup that carried no entry context). Never
+    // overwritten once set — first touch wins.
+    acquisition_source: v.optional(v.string()),
     onboardingCompleted: v.optional(v.boolean()),
     essentialOnboardingCompleted: v.optional(v.boolean()),
     tellUsAboutCompleted: v.optional(v.boolean()),
@@ -1577,6 +1819,7 @@ export default defineSchema({
     owner_user_id: v.optional(v.id("users")),
     description: v.optional(v.string()),
     logo: v.optional(v.string()),
+    logo_storage_id: v.optional(v.id("_storage")),
     stripe_connect_account_id: v.optional(v.string()),
     stripe_charges_enabled: v.optional(v.boolean()),
     stripe_payouts_enabled: v.optional(v.boolean()),
@@ -1617,7 +1860,8 @@ export default defineSchema({
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
-    .index("by_stripe_connect_account_id", ["stripe_connect_account_id"]),
+    .index("by_stripe_connect_account_id", ["stripe_connect_account_id"])
+    .index("by_logo_storage_id", ["logo_storage_id"]),
 
   // [I]
   shops_hours: defineTable({
@@ -2023,6 +2267,17 @@ export default defineSchema({
           // priced at the mechanic's post-job confirmation. Pairs with
           // bookings.low_confidence_parts. (Jun-9 review, item 10.)
           price_unknown: v.optional(v.boolean()),
+          // TRUE when the winner's freshest price row was older than
+          // PARTS_PRICE_MAX_AGE_DAYS at quote time — price still used, line
+          // renders as an estimate.
+          price_stale: v.optional(v.boolean()),
+          // Stamped by the snapshotRevalidation sweep when the frozen row
+          // fails the I1 make guard / brand-signature check ("cross_make" |
+          // "foreign_signature"). The row is KEPT — the frozen price is the
+          // customer's contract — but display/itemization surfaces filter on
+          // it. Reversible + auditable, mirroring fitmentQuarantine's
+          // data_quality stamp.
+          integrity_flag: v.optional(v.string()),
         })
       )
     ),
@@ -2147,6 +2402,7 @@ export default defineSchema({
     .index("by_created_at", ["created_at"])
     .index("by_source_recommendation", ["source_recommendation_id"])
     .index("by_payment_approval_state", ["payment_approval_state"])
+    .index("by_vin", ["vin"])
     .index("by_sla_expires_at", ["sla_expires_at_ms"]),
 
   // Tire quote responses — one row per shop response to a quote-stage
@@ -2287,6 +2543,15 @@ export default defineSchema({
       ),
     ),
 
+    // Card network + last-4, resolved from the charge's
+    // payment_method_details.card at capture time (and backfilled for
+    // historical rows). Present for card + wallet payments alike (wallets
+    // resolve the underlying network card). Display-only — operators see
+    // "Visa ···· 4242" instead of a bare "card" origin. Absent on rows that
+    // never reached a successful charge or predate collection.
+    card_brand: v.optional(v.string()),
+    card_last4: v.optional(v.string()),
+
     // Invoice PDF (generated server-side after capture). Identical layout to
     // the email attachment, stored once in Convex file storage and reused for
     // both the email send and the mobile "View Receipt PDF" link.
@@ -2395,7 +2660,10 @@ export default defineSchema({
     .index("by_user_id_created_at", ["user_id", "created_at"])
     .index("by_user_id_type", ["user_id", "transaction_type"])
     .index("by_user_id_type_created_at", ["user_id", "transaction_type", "created_at"])
-    .index("by_payment_id", ["payment_id"]),
+    .index("by_payment_id", ["payment_id"])
+    // Global time index — the Ops ledger (/ops/transactions) reads the whole
+    // network's ledger newest-first; every prior index is user-scoped.
+    .index("by_created_at", ["created_at"]),
 
   // [I] Daniel/Waleed
   ownership_credit_transactions: defineTable({
@@ -2433,6 +2701,12 @@ export default defineSchema({
     rating: v.number(),
     comment: v.optional(v.string()),
     created_at: v.optional(v.number()),
+    // Moderation (Ops portal /ops/reviews — hide = ceremony, never delete).
+    // Hidden reviews stay in the table for the audit trail; consumer reads
+    // must filter hidden_at == undefined.
+    hidden_at: v.optional(v.number()),
+    hidden_reason: v.optional(v.string()),
+    hidden_by: v.optional(v.string()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_id", ["shop_id"])
@@ -2895,9 +3169,143 @@ export default defineSchema({
     .index("by_created_at", ["created_at"])
     .index("by_actor_id", ["actor_id"]),
 
+  // External data-API keys (Data spec §12). Only the SHA-256 hash of a key is
+  // stored — the plaintext (otp_live_…) is shown exactly once at creation.
+  api_keys: defineTable({
+    name: v.string(),
+    key_hash: v.string(),
+    // First 12 chars of the plaintext ("otp_live_ab…") for display/support.
+    prefix: v.string(),
+    scopes: v.array(
+      v.union(
+        v.literal("maintenance:read"),
+        v.literal("labor:read"),
+        v.literal("media:read"),
+        v.literal("enrich:write"),
+        v.literal("service_history:read"),
+      ),
+    ),
+    rate_limit_per_min: v.number(),
+    // Team-minted keys carry the director who created them; self-serve dev
+    // keys (the /developers dashboard) carry owner_user_id instead — a key
+    // has exactly one of the two.
+    created_by: v.optional(v.id("director_users")),
+    owner_user_id: v.optional(v.id("users")),
+    created_at: v.number(),
+    revoked_at: v.optional(v.number()),
+    last_used_at: v.optional(v.number()),
+    request_count: v.number(),
+  })
+    .index("by_key_hash", ["key_hash"])
+    .index("by_created_at", ["created_at"])
+    .index("by_owner", ["owner_user_id"]),
+
+  // Per-request usage metering for api_keys (the future billing meter) and
+  // the rate-limit window source.
+  api_usage: defineTable({
+    api_key_id: v.id("api_keys"),
+    endpoint: v.string(),
+    status: v.number(),
+    config_key: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_key_and_time", ["api_key_id", "created_at"])
+    .index("by_created_at", ["created_at"]),
+
+  // Thin review-queue materialization over the four real streams (decision
+  // #4, Data spec §13): consensus needs_review, mechanic corrections,
+  // report-wrong-data, survey disconfirmations. Rows are created ONLY by the
+  // idempotent per-stream backfills in reviewQueue.ts, keyed on
+  // (source_stream, source_id) so re-running a backfill never duplicates.
+  review_queue: defineTable({
+    source_stream: v.union(
+      v.literal("consensus"),
+      v.literal("correction"),
+      v.literal("report"),
+      v.literal("survey"),
+    ),
+    // _id of the source document (enrichment_run, mechanic_verification, …)
+    source_id: v.string(),
+    entity_type: v.string(),
+    entity_id: v.string(),
+    vin: v.optional(v.string()),
+    title: v.string(),
+    priority: v.union(v.literal("low"), v.literal("normal"), v.literal("high")),
+    status: v.union(
+      v.literal("open"),
+      v.literal("claimed"),
+      v.literal("resolved"),
+      v.literal("dismissed"),
+    ),
+    assignee: v.optional(v.id("director_users")),
+    resolution_note: v.optional(v.string()),
+    created_at: v.number(),
+    resolved_at: v.optional(v.number()),
+  })
+    .index("by_status", ["status"])
+    .index("by_source_stream", ["source_stream", "status"])
+    .index("by_assignee", ["assignee", "status"])
+    .index("by_source", ["source_stream", "source_id"]),
+
+  // Data incidents — institutional memory for data-quality events (Data spec
+  // §10.4/§13). Seeded with the two historical incidents (Ford-on-Alfa, VD
+  // labor under-read) by migrations/seedDataIncidents.ts; new rows come from
+  // the Provenance page's declare ceremony only.
+  data_incidents: defineTable({
+    // Display number ("#1") — assigned at declare time, monotonic.
+    number: v.number(),
+    // Stable slug — the seed migration's idempotency key.
+    slug: v.string(),
+    title: v.string(),
+    severity: v.union(v.literal("sev1"), v.literal("sev2"), v.literal("sev3")),
+    status: v.union(v.literal("open"), v.literal("monitoring"), v.literal("resolved")),
+    summary: v.string(),
+    root_cause: v.optional(v.string()),
+    // Deployment-scope caveat (Incident #1: backfill scope is per-deployment).
+    scope_note: v.optional(v.string()),
+    affected_entity_type: v.optional(v.string()),
+    affected_count: v.optional(v.number()),
+    // Pre-filled context when declared from another page (reserved).
+    source_context: v.optional(v.string()),
+    declared_by: v.string(),
+    declared_by_id: v.optional(v.id("director_users")),
+    declared_at: v.number(),
+    resolved_by: v.optional(v.string()),
+    resolved_at: v.optional(v.number()),
+    resolution_note: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_slug", ["slug"])
+    .index("by_number", ["number"]),
+
+  // Materialized KPI counters for the internal portals (decision #3, R2
+  // class). Written only by portalStats.ts summarizers on cron; read via the
+  // gated portalStats.getStats. Realtime (R1) metrics never land here — they
+  // stay indexed window queries.
+  portal_stats: defineTable({
+    key: v.string(),
+    value: v.number(),
+    // Free-form context: sample sizes, breakdowns, threshold used, etc.
+    meta: v.optional(v.any()),
+    computed_at: v.number(),
+  }).index("by_key", ["key"]),
+
   director_users: defineTable({
     name: v.string(),
-    role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    // The six portal roles (decision #2). Legacy superadmin/admin/viewer rows
+    // must be converted by migrations/directorRoles.ts BEFORE this schema can
+    // push to a deployment that still holds them — the validator rejects
+    // legacy values on write and the push-time schema check rejects legacy
+    // rows at rest.
+    role: v.union(
+      v.literal("super_admin"),
+      v.literal("ops_admin"),
+      v.literal("support"),
+      v.literal("readonly"),
+      v.literal("data_admin"),
+      v.literal("shop_success"),
+    ),
     totp_secret: v.string(),
     email: v.optional(v.string()),
     created_at: v.number(),
@@ -3201,6 +3609,14 @@ export default defineSchema({
     ),
     // Backlink to the scheduled reminder we created for this rec.
     followup_id: v.optional(v.id("follow_ups")),
+    // Where this recommendation originated: "post_job" (default/legacy, mechanic
+    // entered it in the post-job survey), "inspection" (auto-derived from a
+    // multi-point inspection's measurements), or "diagnostic".
+    source: v.optional(v.string()),
+    // Denormalized attribution shown to the driver, e.g.
+    // "Based on last inspection @ Temur Auto & Motor". Set at creation so every
+    // consumer can render it without re-joining shop/source.
+    author_label: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.optional(v.number()),
   })
@@ -4261,6 +4677,7 @@ export default defineSchema({
     labor_hours: v.optional(v.number()),
     labor_rate_cents: v.optional(v.number()),
     notes: v.optional(v.string()),
+    inspection_snapshot: v.optional(customerInspectionSnapshotValidator),
 
     // Gating context: the ceiling the submission was evaluated against.
     // For pre_job this is disclosed_range_high_cents; for mid/post it's

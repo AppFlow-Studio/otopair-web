@@ -19,7 +19,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { resolveWinningPartForService } from "./serviceParts";
-import { quoteUnitPrice } from "./part_prices";
+import { quoteUnitPrice, isPriceDataStale } from "./part_prices";
 import type { TraceEntry } from "./partSelector";
 import { detectTier, resolveQuoteSeries } from "./lib/quoteEngine";
 import type { VehicleTier } from "./lib/vehicleTiers";
@@ -405,6 +405,15 @@ export type PricedPartSnapshotRow = {
    *  instead of a silent claim that the part costs $0 (Jun-9 review, item 10).
    *  Also flips the result's low_confidence → bookings.low_confidence_parts. */
   price_unknown?: boolean;
+  /** TRUE when the winner's freshest price row is older than
+   *  PARTS_PRICE_MAX_AGE_DAYS (default 45). The price is still used — better
+   *  than the multiplier fallback — but the line renders as an estimate. */
+  price_stale?: boolean;
+  /** Stamped by the snapshotRevalidation sweep when this frozen row fails the
+   *  I1 make guard / brand-signature check ("cross_make" |
+   *  "foreign_signature"). Row is kept (frozen price = customer contract);
+   *  display/itemization surfaces filter on it. */
+  integrity_flag?: string;
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -610,6 +619,14 @@ export function snapshotRowsForResolution(
       Math.round(quantity * unit_price_dollars * 100) / 100;
     const price_unknown = priceSummary.sample_size === 0 ? true : undefined;
     if (price_unknown) low_confidence = true;
+    // Aged price: still used (better than the multiplier fallback) but marked
+    // so the line renders as an estimate. Does NOT flip low_confidence — the
+    // price is real, just old.
+    const price_stale =
+      priceSummary.sample_size > 0 &&
+      isPriceDataStale(priceSummary.most_recent_refreshed_at)
+        ? true
+        : undefined;
     rows.push({
       service_id: serviceId,
       part_id: part._id,
@@ -624,6 +641,7 @@ export function snapshotRowsForResolution(
       role_key: rw.roleKey,
       quantity_basis: rw.quantityBasis,
       price_unknown,
+      price_stale,
     });
   }
   return { rows, trace, low_confidence };

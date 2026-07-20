@@ -23,6 +23,7 @@
  * unit-testable without spinning up a Convex env.
  */
 import type { Id } from "./_generated/dataModel";
+import { matchesForeignBrandSignature } from "./vehicleEnrichment/contentSanitization";
 
 export type DataQuality = "oem" | "dealer" | "aftermarket" | "generic";
 
@@ -43,6 +44,57 @@ export function normalizeDataQuality(raw: string | undefined | null): DataQualit
   if (lower === "medium") return "aftermarket";
   if (lower === "low") return "generic";
   return "generic";
+}
+
+/**
+ * I1 make guard — does an OEM part belong on a vehicle of this make?
+ *
+ * A part fits when EITHER it carries no make at all (universal consumables —
+ * generic oil filters, engine oil, wiper blades legitimately have
+ * `make_id == null`), OR the config's make is unknown (we can't prove a
+ * mismatch, so we don't filter), OR the part's make equals the config's make.
+ *
+ * A part with a SET `make_id` that disagrees with the config's make is a
+ * cross-make contaminant — e.g. a Ford brake pad cloned onto an Alfa Romeo
+ * config by the chassis/engine sibling-clone path — and must be dropped before
+ * it can enter the 7-layer selector (where it could win on confidence or
+ * price-source count). Pure + Convex-free so it stays unit-testable; callers in
+ * serviceParts.ts apply it at candidate-hydration time.
+ */
+export function partFitsConfigMake(
+  partMakeId: Id<"makes"> | null | undefined,
+  configMakeId: Id<"makes"> | null | undefined,
+): boolean {
+  if (partMakeId == null) return true; // universal consumable — no make to clash
+  if (configMakeId == null) return true; // config make unknown — don't filter
+  return partMakeId === configMakeId;
+}
+
+export type I1GuardInput = {
+  partMakeId: Id<"makes"> | null | undefined;
+  configMakeId: Id<"makes"> | null | undefined;
+  oemPartNumber: string;
+  configMakeName: string | null | undefined;
+  /**
+   * part_fitments.mechanic_verified — a human physically confirmed this part on
+   * this vehicle, so it overrides BOTH heuristics below (make-id provenance can
+   * be wrong, and corporate families legitimately share foreign-formatted
+   * numbers). Mirrors fitmentQuarantine, which never quarantines verified rows;
+   * without this exemption the read path dropped what quarantine spared.
+   */
+  mechanicVerified?: boolean;
+};
+
+/**
+ * Combined I1 read guard: the strict make-id check plus the brand-signature
+ * backstop, with a mechanic-verified escape hatch. Deliberately NOT
+ * family-aware — I1 stays strict for MVP (an Audi-stamped part is dropped from
+ * a VW config unless a mechanic verified it).
+ */
+export function passesI1ReadGuard(input: I1GuardInput): boolean {
+  if (input.mechanicVerified === true) return true;
+  if (!partFitsConfigMake(input.partMakeId, input.configMakeId)) return false;
+  return matchesForeignBrandSignature(input.oemPartNumber, input.configMakeName) === null;
 }
 
 export type CandidatePrice = {

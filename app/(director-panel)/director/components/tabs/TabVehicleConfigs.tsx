@@ -144,6 +144,54 @@ const Row = ({ k, v }: { k: string; v: React.ReactNode }) => (
   </div>
 )
 
+const GapPartAdder = ({
+  gap,
+  onAdd,
+}: {
+  gap: { serviceSlug: string; serviceName: string; roleKey: string; roleLabel: string }
+  onAdd: (oemNumber: string, partName: string) => Promise<void>
+}) => {
+  const [oem, setOem] = useState('')
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async () => {
+    if (!oem.trim() || busy) return
+    setBusy(true)
+    try { await onAdd(oem.trim(), name.trim()); setOem(''); setName('') }
+    finally { setBusy(false) }
+  }
+  const inputStyle: React.CSSProperties = {
+    border:'1px solid var(--slate-200)', borderRadius:6, padding:'6px 8px',
+    fontSize:12, color:'var(--slate-800)', background:'#fff', minWidth:0,
+  }
+  return (
+    <div style={{ border:'1px solid var(--amber-200, #fde68a)', background:'var(--amber-25, #fffbeb)', borderRadius:8, padding:'10px 12px' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:8 }}>
+        <span style={{ fontSize:11, fontWeight:600, color:'var(--slate-700)', textTransform:'uppercase', letterSpacing:'0.06em' }}>
+          {gap.serviceName} · {gap.roleLabel}
+        </span>
+        <Badge tone="yellow">no part on file</Badge>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'minmax(0,1.4fr) minmax(0,1.6fr) 88px', gap:8, alignItems:'center' }}>
+        <input value={oem} onChange={e => setOem(e.target.value)} placeholder="OEM part number" className="mono" style={inputStyle} />
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Part name (optional)" style={inputStyle} />
+        <button
+          onClick={submit}
+          disabled={busy || !oem.trim()}
+          style={{
+            border:'none', borderRadius:6, padding:'7px 10px', fontSize:12, fontWeight:600,
+            cursor: busy || !oem.trim() ? 'default' : 'pointer',
+            background: busy || !oem.trim() ? 'var(--slate-200)' : 'var(--blue-600, #2563eb)',
+            color: busy || !oem.trim() ? 'var(--slate-500)' : '#fff',
+          }}
+        >
+          {busy ? 'Adding…' : 'Add part'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 const SpecsBlock = ({ title, rows, empty }: { title: string; rows: [string, unknown][]; empty?: boolean }) => {
   const filled = rows.filter(([, v]) => v !== undefined && v !== null && v !== '')
   if (empty || filled.length === 0) {
@@ -190,6 +238,13 @@ type ServiceIntervalRow = {
   display?: string
 }
 
+type LaborTimeRow = {
+  serviceName: string
+  hours: number | null
+  source: string | null
+  confidence: number | null
+}
+
 type FitmentSummaryRow = { service: string; count: number }
 
 // Shapes returned by directorCars.vehicleConfigFitments / partFitmentDetail.
@@ -219,6 +274,8 @@ type PartPriceRow = {
   sourceUrl: string | null
   sourceDomain: string | null
   refreshedAt: number | null
+  msrp: number | null
+  discount: number | null
 }
 type PartEvidenceRow = {
   field: string | null
@@ -245,6 +302,7 @@ type EnrichmentRunRow = {
   createdAt?: number
   scrapeCacheHit?: boolean
   errors?: string[]
+  fieldGaps?: { field: string; reason: string }[]
   totalTokensIn?: number
   totalTokensOut?: number
   estimatedCostUsd?: number
@@ -325,6 +383,11 @@ const PartFitmentDrawerBody = ({ partId, configId, onClose }: {
                     <div key={i} style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:6, padding:'8px 10px' }}>
                       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:4 }}>
                         <span className="mono" style={{ fontSize:13, fontWeight:600, color:'var(--slate-900)' }}>${p.price.toFixed(2)}</span>
+                        {p.msrp != null && p.discount != null ? (
+                          <span style={{ color:'var(--slate-500)', fontSize:11, marginLeft:6 }}>
+                            (was ${p.msrp.toFixed(2)} · save ${p.discount.toFixed(2)})
+                          </span>
+                        ) : null}
                         {p.priceType && <Badge tone="slate">{p.priceType}</Badge>}
                       </div>
                       {(p.sourceDomain || p.sourceUrl) && (
@@ -405,6 +468,9 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     configId ? { id: configId } : 'skip')
   const fitments = useQuery(api.directorCars.vehicleConfigFitments,
     configId ? { vehicle_config_id: configId } : 'skip')
+  const serviceGaps = useQuery(api.serviceParts.getServiceGapsForConfig,
+    configId ? { vehicleConfigId: configId } : 'skip')
+  const addConfigFitment = useMutation(api.directorConfigActions.addConfigFitment)
   const updateBasics       = useMutation(api.directorConfigActions.updateConfigBasics)
   const updateEngine       = useMutation(api.directorConfigActions.updateEngineFields)
   const updateTransmission = useMutation(api.directorConfigActions.updateTransmissionFields)
@@ -697,6 +763,71 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                 </div>
               )}
 
+              {/* Labor times — per-service book hours + source + confidence.
+                  Confidence chip is colored by the 0.75 quote gate so it's
+                  obvious which services have real (OLP-backed) labor vs the
+                  tier-estimate fallback. */}
+              {detail.laborTimes && detail.laborTimes.length > 0 && (
+                <div style={{ marginBottom:18 }}>
+                  <SectionTitle label={`Labor times (${detail.laborTimes.length})`} />
+                  <div style={{ border:'1px solid var(--slate-200)', borderRadius:8, overflow:'hidden' }}>
+                    <div style={{ display:'grid', gridTemplateColumns:'1.6fr 80px 1fr 80px', padding:'8px 12px', background:'var(--slate-25)', borderBottom:'1px solid var(--slate-200)', fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
+                      <span>Service</span>
+                      <span style={{ textAlign:'right' }}>Hours</span>
+                      <span>Source</span>
+                      <span style={{ textAlign:'right' }}>Conf.</span>
+                    </div>
+                    {(detail.laborTimes as LaborTimeRow[]).map((r, i) => (
+                      <div key={i} style={{
+                        display:'grid', gridTemplateColumns:'1.6fr 80px 1fr 80px',
+                        padding:'8px 12px', alignItems:'center',
+                        borderBottom: i < detail.laborTimes.length - 1 ? '1px solid var(--slate-100)' : 'none',
+                        fontSize:12, color:'var(--slate-700)',
+                      }}>
+                        <span style={{ fontWeight:500, color:'var(--slate-900)' }}>{r.serviceName}</span>
+                        <span className="mono" style={{ textAlign:'right' }}>{r.hours != null ? `${r.hours.toFixed(1)} h` : '—'}</span>
+                        <span style={{ fontSize:11, color:'var(--slate-500)' }}>{r.source ?? '—'}</span>
+                        <span style={{ textAlign:'right' }}>
+                          {r.confidence != null
+                            ? <Badge tone={r.confidence >= 0.75 ? 'green' : 'yellow'}>{r.confidence.toFixed(2)}</Badge>
+                            : <span style={{ color:'var(--slate-400)' }}>—</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Missing parts — parts-requiring services this config has NO
+                  usable OEM part for (dropped by OEM-strict enrichment, e.g. the
+                  2001 740iA battery). Add the OEM number to make the service
+                  available for booking + the mechanic pre-job flow. */}
+              {configId && serviceGaps && serviceGaps.gaps.length > 0 && (
+                <div style={{ marginBottom:18 }}>
+                  <SectionTitle label={`Missing parts (${serviceGaps.gaps.length})`} />
+                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                    {serviceGaps.gaps.map((gap) => (
+                      <GapPartAdder
+                        key={`${gap.serviceSlug}:${gap.roleKey}`}
+                        gap={gap}
+                        onAdd={async (oemNumber, partName) => {
+                          const res = await addConfigFitment({
+                            vehicleConfigId: configId,
+                            serviceSlug: gap.serviceSlug,
+                            roleKey: gap.roleKey,
+                            oemNumber,
+                            partName: partName || undefined,
+                            token: sessionToken,
+                          })
+                          if (res?.ok) setToast(`Added ${gap.roleLabel} — ${gap.serviceName} is now available`)
+                          else setToast('Could not add part')
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Fitments — collapsible accordion per service. Default state
                   is compact (just headers + counts). Click a service header to
                   expand its parts inline; click a part row to open the right
@@ -846,6 +977,18 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                         </div>
                         {run.errors && run.errors.length > 0 && (
                           <div style={{ fontSize:10, color:'var(--red-700)', marginTop:3 }}>{run.errors.slice(0, 2).join(' · ')}{run.errors.length > 2 ? ` (+${run.errors.length - 2})` : ''}</div>
+                        )}
+                        {run.fieldGaps && run.fieldGaps.filter(g => g.reason !== 'not_applicable').length > 0 && (
+                          <details style={{ marginTop:3 }}>
+                            <summary style={{ fontSize:10, color:'var(--amber-700, #B45309)', cursor:'pointer' }}>
+                              {run.fieldGaps.filter(g => g.reason !== 'not_applicable').length} field gaps
+                            </summary>
+                            <div style={{ fontSize:10, color:'var(--slate-600)', marginTop:2, display:'flex', flexDirection:'column', gap:1 }}>
+                              {run.fieldGaps.filter(g => g.reason !== 'not_applicable').map(g => (
+                                <span key={g.field} className="mono">{g.field} — {g.reason}</span>
+                              ))}
+                            </div>
+                          </details>
                         )}
                       </div>
                     ))}

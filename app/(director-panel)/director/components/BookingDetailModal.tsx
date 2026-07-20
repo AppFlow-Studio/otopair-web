@@ -96,7 +96,7 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
   const actorId   = session?.userId as Id<'director_users'> | undefined
   const [auditOpen, setAuditOpen] = useState(false)
   const logView = useMutation(api.director.logView)
-  const detail  = useQuery(api.director.bookingDetail, bookingId ? { id: bookingId } : 'skip')
+  const detail  = useQuery(api.director.bookingDetail, bookingId ? { id: bookingId, token: session?.token ?? '' } : 'skip')
 
   useEffect(() => {
     if (bookingId) logView({ entity_type: 'booking', entity_id: String(bookingId), actorName, actorId })

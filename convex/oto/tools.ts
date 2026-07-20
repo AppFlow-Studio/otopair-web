@@ -108,22 +108,14 @@ const DATA_TOOLS: OtoToolSchema[] = [
   {
     name: "list_services_for_vehicle",
     description:
-      "List the services Otopair offers FOR THIS SPECIFIC VEHICLE, after applying compatibility filters (engine type, drivetrain, steering type, model year, tire fitment, state). Use this — not a generic catalog dump — whenever you're suggesting services or showing a service picker. The filter eliminates impossible recommendations (e.g. timing-belt service on a chain-driven engine, oil-change on an EV, emissions-test on an EV, state-inspection in a state that doesn't require one). Returns each service with its canonical snake_case slug, name, description (quote this text when explaining services), default labor hours, and a parts cost band when known. Pass `category` to scope to one of: Diagnostics, Compliance, Routine Maintenance, Tires, Brakes, Battery, Fluids.",
+      "List the services Otopair offers FOR THIS SPECIFIC VEHICLE, after applying compatibility filters (engine type, drivetrain, steering type, model year, tire fitment, state). Use this — not a generic catalog dump — whenever you're suggesting services or showing a service picker. The filter eliminates impossible recommendations (e.g. timing-belt service on a chain-driven engine, oil-change on an EV, emissions-test on an EV, state-inspection in a state that doesn't require one). Returns each service with its canonical snake_case slug, name, description (quote this text when explaining services), default labor hours, and a parts cost band when known. Pass `category` to scope to one of: Routine, Tires & Brakes, Scheduled Service, Inspections.",
     input_schema: {
       type: "object",
       properties: {
         vehicle_id: { type: "string", description: "VIN of the vehicle." },
         category: {
           type: "string",
-          enum: [
-            "Diagnostics",
-            "Compliance",
-            "Routine Maintenance",
-            "Tires",
-            "Brakes",
-            "Battery",
-            "Fluids",
-          ],
+          enum: ["Routine", "Tires & Brakes", "Scheduled Service", "Inspections"],
           description: "Optional category filter.",
         },
       },
@@ -608,7 +600,7 @@ const RENDER_TOOLS: OtoToolSchema[] = [
   {
     name: "render_record_confirmation",
     description:
-      "Surface a self_reported maintenance record to the user and ask them to confirm it's still correct, OR update it with new details. Call this when a user-described symptom contradicts an item from get_vehicle_health whose `record_provenance` is `self_reported` — the record itself may be wrong (data form hallucination is common during onboarding). The component shows the user what we have on file (last service date and mileage) with two buttons: [Yes, that's right] and [No, update it]. On confirm: the record gets stamped confirmedHealthyAt: now (locks status to on_time for 90 days). On update: an inline date+mileage form appears, the user submits new values, and the record is rewritten. Either way the user's decision is pushed back into conversation_state, so on your NEXT turn you can react to it (e.g., if they updated the record showing it was actually overdue, route to the relevant service or diagnostic). Trigger-only: do not call for `verified` items — those are backed by completed bookings or uploaded receipts, you can trust them. Do not call for `inferred` items — there's no record to confirm. Terminal render tool — calling it ends your turn.",
+      "Surface a self_reported maintenance record to the user and ask them to confirm it's still correct, OR update it with new details. Call this when a user-described symptom contradicts an item from get_vehicle_health whose `record_provenance` is `self_reported` — the record itself may be wrong (data form hallucination is common during onboarding). The component shows the user what we have on file (last service date and mileage) with two buttons: [Yes, that's right] and [No, update it]. On confirm: the record gets stamped confirmedHealthyAt: now (locks status to on_time for 90 days). On update: an inline date+mileage form appears, the user submits new values, and the record is rewritten. Either way the user's decision is pushed back into conversation_state, so on your NEXT turn you can react to it (e.g., if they updated the record showing it was actually overdue, route to the relevant service or diagnostic). Trigger-only: do not call for `verified` items — those are backed by completed bookings or uploaded receipts, you can trust them. Do not call for `inferred` items — there's no record to confirm. DO NOT call this when the user REPORTS a service they DID (\"I did a brake service\", \"log the brakes as complete\", \"just changed the oil\", \"mark it as done\") — that is a completed-service LOG that must go to render_vehicle_update with a service_claim of kind:\"completed\" (which records the new completion AND clears the flag/light). This tool only stamps confirmedHealthyAt on the EXISTING record; it does NOT log a new completion, so using it for a \"I did the service\" report leaves the flag/light uncleared. An existing self_reported record for the same maintenance type does NOT turn a completed-service report into a record-confirmation. Terminal render tool — calling it ends your turn.",
     input_schema: {
       type: "object",
       properties: {
@@ -623,6 +615,77 @@ const RENDER_TOOLS: OtoToolSchema[] = [
         },
       },
       required: ["vehicle_id", "maintenance_type"],
+    },
+  },
+
+  {
+    name: "render_vehicle_update",
+    description:
+      "Surface a one-tap confirm card that lets the user approve pending vehicle-truth updates (odometer reading, service claims, and/or warning lights Oto captured during the conversation). Call this when you have gathered one or more of: a user-stated mileage, service-due claims, or active fault lights — and you want the user to confirm before writing them to the vehicle record. On confirm the mobile component calls vehicleTruth.applyVehicleTruth with the supplied inputs. Terminal render tool — calling it ends your turn.",
+    input_schema: {
+      type: "object",
+      properties: {
+        mileage: {
+          type: "number",
+          description:
+            "Optional. User-stated odometer reading in miles. Set only when the user explicitly mentioned their current mileage.",
+        },
+        service_claims: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              service_slug: {
+                type: "string",
+                description: "Canonical snake_case service slug from OTOPAIR_SERVICE_SLUGS.",
+              },
+              kind: {
+                type: "string",
+                enum: ["due", "light_on", "completed"],
+                description:
+                  "\"due\" = the user says this service is past-due; \"light_on\" = a dashboard light flagged it; \"completed\" = the user says they ALREADY HAD this service done (e.g. \"I did my brakes\", \"just changed the oil\", \"replaced the battery last week\"). \"completed\" clears the flag and records the service done — NEVER use \"due\" for a service the user reports as finished.",
+              },
+              service_mileage: {
+                type: "number",
+                description:
+                  "Optional, kind:\"completed\" only. The odometer at which THIS service was performed when the user states a PAST mileage (e.g. \"oil change at 89,000\" while currently at 90,000). This is the service's OWN mileage — do NOT put it in the top-level current-odometer `mileage` field. Omit if the user gave no service mileage.",
+              },
+              service_age_days: {
+                type: "number",
+                description:
+                  "Optional, kind:\"completed\" only. How many days ago the service was done, for relative phrasing — \"a week ago\" → 7, \"2 weeks ago\" → 14, \"last month\" → 30, \"yesterday\" → 1. The server resolves it to (now − days). Use this for relative time; omit if the user gave no time.",
+              },
+              service_date: {
+                type: "number",
+                description:
+                  "Optional, kind:\"completed\" only. Absolute Unix ms timestamp the service was performed — use ONLY when the user names a concrete date. Prefer service_age_days for relative phrases. Wins over service_age_days if both are set.",
+              },
+            },
+            required: ["service_slug", "kind"],
+          },
+          description:
+            "Optional. Array of service claims the user stated. Each entry has a service_slug + a kind: \"due\"/\"light_on\" FLAG a service that needs attention; \"completed\" RECORDS a service the user says they already had done (clears the flag, improves health). For a \"completed\" service done in the PAST, attach service_mileage (\"at 89,000\") and/or service_age_days (\"a week ago\" → 7) so the maintenance schedule re-anchors to WHEN it was actually done, not to today. e.g. overdue oil change → {oil_change, due}; \"I did my brakes 2 weeks ago\" → {brake_pad_replacement, completed, service_age_days: 14}; \"changed the oil at 89k, I'm at 90k now\" → mileage:90000 + {oil_change, completed, service_mileage: 89000}.",
+        },
+        fault_lights: {
+          type: "array",
+          items: {
+            type: "string",
+            enum: [
+              "check_engine",
+              "oil_pressure",
+              "battery_charging",
+              "temperature",
+              "abs",
+              "tpms",
+              "airbag_srs",
+              "transmission",
+            ],
+          },
+          description:
+            "Optional. Array of dashboard warning-light ids the user reported. Use ONLY these canonical ids: check_engine, oil_pressure, battery_charging, temperature, abs (brakes/ABS), tpms (tire pressure), airbag_srs, transmission. E.g. [\"check_engine\", \"tpms\"].",
+        },
+      },
+      required: [],
     },
   },
 
@@ -867,6 +930,7 @@ export const OTO_TOOL_CATEGORY: Record<string, OtoToolCategory> = {
   // handles every sub-stage internally including pay-screen redirect.
   render_book_service: "render",
   render_record_confirmation: "render",
+  render_vehicle_update: "render",
   render_link_button: "render",
   // Booking Status — Sprint 3 Day 5 §14.3 (single + list booking surfaces)
   render_booking_card: "render",
@@ -937,16 +1001,15 @@ export type OtopairServiceSlug = (typeof OTOPAIR_SERVICE_SLUGS)[number];
 //   "general-diagnostic", "check-engine-light", "brake-system-inspection",
 // ];
 
-// Canonical service categories — production has 7. Names come from the live
-// `service_categories` table seeded by `convex/seeds/seedServices.ts`.
+// Canonical service categories — the four locked Jul 13 (7→4 consolidation;
+// names match the mobile app's tabs). Live names come from the
+// `service_categories` table (seeded by `convex/seeds/seedServices.ts`,
+// migrated by `convex/migrations/categoryConsolidation.ts`).
 export const OTOPAIR_SERVICE_CATEGORIES = [
-  "Diagnostics",
-  "Compliance",
-  "Routine Maintenance",
-  "Tires",
-  "Brakes",
-  "Battery",
-  "Fluids",
+  "Routine",
+  "Tires & Brakes",
+  "Scheduled Service",
+  "Inspections",
 ] as const;
 
 export type OtopairServiceCategory = (typeof OTOPAIR_SERVICE_CATEGORIES)[number];

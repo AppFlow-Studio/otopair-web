@@ -50,7 +50,10 @@ export const retrigger = action({
       year: vehicle.year ?? 2020,
       trim: trim?.name ?? "Base",
       engineCode: engine.engine_code ?? "Unknown",
-      displacement: engine.displacement_liters ?? "2.0",
+      displacement:
+        engine.displacement_liters != null
+          ? String(engine.displacement_liters)
+          : "2.0",
       cylinders: engine.cylinders ?? 4,
       fuelType: engine.fuel_type ?? "Gasoline",
     });

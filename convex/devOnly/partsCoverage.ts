@@ -26,6 +26,7 @@ import {
 } from "../lib/servicePartsReference";
 import { resolveWinningPartForService } from "../serviceParts";
 import { quoteUnitPrice } from "../part_prices";
+import { isServiceApplicable } from "../services/applicability";
 
 export const coverage = internalQuery({
   args: { configKey: v.string() },
@@ -58,15 +59,40 @@ export const coverage = internalQuery({
     const timingSystem = String((engine as any)?.timing_system ?? "").toLowerCase();
     const isChainEngine = timingSystem.includes("chain");
 
+    // Full structural applicability — same gate the booking/quote surfaces
+    // use (services/applicability.ts). Before Jul 2026 this tool only
+    // special-cased timing_belt, so it graded PS flush on EPS cars and diff
+    // service on FWD transaxles as real coverage (5-VIN test).
+    const [chassisSpecs, drivetrainConfig, trimSpecs] = await Promise.all([
+      (cfg as any).chassis_code
+        ? ctx.db
+            .query("chassis_specs")
+            .withIndex("by_chassis_code", (q: any) => q.eq("chassis_code", (cfg as any).chassis_code))
+            .first()
+        : null,
+      ctx.db
+        .query("drivetrain_configs")
+        .withIndex("by_vehicle_config", (q: any) => q.eq("vehicle_config_id", (cfg as any)._id))
+        .first(),
+      ctx.db
+        .query("trim_specs")
+        .withIndex("by_vehicle_config", (q: any) => q.eq("vehicle_config_id", (cfg as any)._id))
+        .first(),
+    ]);
+
     for (const spec of Object.values(SERVICE_PARTS_REFERENCE)) {
       if (spec.laborOnly || spec.handledByDedicatedFlow) continue;
-      const serviceNotApplicable = spec.slug === "timing_belt" && isChainEngine;
 
       const svc = serviceBySlug.get(spec.slug);
       if (!svc) {
         services.push({ slug: spec.slug, error: "no services row for slug" });
         continue;
       }
+
+      const serviceNotApplicable =
+        (spec.slug === "timing_belt" && isChainEngine) ||
+        (engine != null &&
+          !isServiceApplicable(svc, engine as any, chassisSpecs as any, drivetrainConfig as any, trimSpecs as any, cfg as any));
 
       const res = await resolveWinningPartForService(ctx, {
         vin: "", // no VIN-sticky preference in a config-level report

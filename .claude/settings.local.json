@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1"
+  },
   "permissions": {
     "allow": [
       "Bash(ls \"g:\\\\GitHub\\\\otopair-web\\\\app\\\\\\(portal\\)\\\\jobs\"\")",
@@ -10,11 +13,9 @@
       "Bash(npx convex *)",
       "Bash(dir \"C:\\\\Users\\\\manso\\\\Desktop\\\\otopair-web\\\\app\")",
       "Bash(dir \"C:\\\\Users\\\\manso\\\\Desktop\\\\otopair-web\\\\app\\\\\\(director-panel\\)\")",
-      "Bash(dir \"C:\\\\Users\\\\manso\\\\Desktop\\\\otopair-web\\\\convex\")"
+      "Bash(dir \"C:\\\\Users\\\\manso\\\\Desktop\\\\otopair-web\\\\convex\")",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
-  },
-
-  "env": {
-    "CLAUDE_CODE_USE_POWERSHELL_TOOL": "1"
   }
 }

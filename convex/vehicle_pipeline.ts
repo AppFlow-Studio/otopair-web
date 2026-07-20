@@ -22,6 +22,8 @@ import { advancedVinDecode, extractVDBFields } from "./lib/vehicleDatabases";
 import { findHaloVariant } from "./lib/haloVariantRules";
 import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
+import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
+import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -52,6 +54,11 @@ type ProcessVinResult = {
    *  Surfaced to the review screen so the loading-state silhouette can
    *  pick SUV vs sedan. */
   bodyClass: string;
+  /** NHTSA "VehicleType" — high-level category (PASSENGER CAR,
+   *  MULTIPURPOSE PASSENGER VEHICLE (MPV), TRUCK, MOTORCYCLE, BUS,
+   *  TRAILER, INCOMPLETE VEHICLE, LOW SPEED VEHICLE (LSV)). Surfaced
+   *  so the client can gate add-vehicle on supported types. */
+  vehicleType: string;
   nhtsaVinKey: string;
   // Raw NHTSA decode passthrough — downstream VDB image/color lookups
   // use these to discover the catalog's canonical model designation.
@@ -277,22 +284,47 @@ export const processVin = internalAction({
         return null;
       }
 
+      // ── Identity consistency: trim vs engine (batch-2 audit, Jul 2026) ──
+      // The cross-source merge can build a chimera: VDB's trim string embeds
+      // an engine qualifier that contradicts the engine NHTSA won (a real
+      // 3.6L Atlas decoded as trim "2.0T SE" + engine 3.6 FSI, and the
+      // contradiction then poisoned the config key, the trim label users
+      // see, and the engine-code verifier's input). When the trim's embedded
+      // displacement or cylinder token disagrees with the merged engine,
+      // strip the token — the rest of the trim ("SE") is still right.
+      {
+        const dispNum = parseFloat(merged.displacement || "");
+        const cyl = merged.cylinders || 0;
+        let trim = merged.trim;
+        const dispTok = trim.match(/(\d\.\d)\s*T?(?:SI|FSI|DI)?L?\b/i);
+        if (dispTok && dispNum && Math.abs(parseFloat(dispTok[1]) - dispNum) > 0.15) {
+          trim = trim.replace(dispTok[0], "").replace(/\s{2,}/g, " ").trim();
+          console.warn(
+            `[decode] Trim/engine contradiction — trim "${merged.trim}" embeds ${dispTok[1]}L but engine is ${dispNum}L; using trim "${trim || "Base"}"`,
+          );
+        }
+        const cylTok = trim.match(/\b[VvIiHh](\d{1,2})\b/);
+        if (cylTok && cyl && parseInt(cylTok[1]) !== cyl) {
+          trim = trim.replace(cylTok[0], "").replace(/\s{2,}/g, " ").trim();
+          console.warn(
+            `[decode] Trim/engine contradiction — trim "${merged.trim}" says ${cylTok[0]} but engine has ${cyl} cylinders; using trim "${trim || "Base"}"`,
+          );
+        }
+        merged.trim = trim || "Base";
+      }
+
       // ════════════════════════════════════════════════════════════
       // ENGINE CODE RESOLUTION
       // Priority: VDB code → NHTSA code (filtered) → Claude norm → web search + Haiku → synthetic
       // ════════════════════════════════════════════════════════════
 
-      // Marketing terms that are NOT real engine codes
-      const ENGINE_MARKETING_TERMS = new Set([
-        "tsi", "tfsi", "tdi", "fsi", "ecoboost", "coyote", "powerboost",
-        "vtec", "ivtec", "earth dreams", "skyactiv-g", "skyactiv-d",
-        "ecotec", "duramax", "vortec", "hemi", "pentastar", "hurricane",
-        "boxer", "fa", "fb", "gdi", "mpi", "t-gdi",
-        "hr", "mr", "vr", "sr", "qr", "hybrid", "phev", "bev", "ev",
-      ]);
-
+      // Marketing/synthetic codes are filtered by the shared classifier
+      // (utils/engineLookup.isSyntheticEngineCode) — previously only the NHTSA
+      // code was screened (against a drifted local copy) and VDB codes passed
+      // through unfiltered, which is how "TFSI" got stored as the 2012 Audi A4
+      // engine_code and poisoned every engine-pinned downstream query.
       const nhtsaEngineRaw = nhtsa.engineModel?.trim() || "";
-      const nhtsaEngineClean = ENGINE_MARKETING_TERMS.has(nhtsaEngineRaw.toLowerCase()) ? "" : nhtsaEngineRaw;
+      const nhtsaEngineClean = isSyntheticEngineCode(nhtsaEngineRaw) ? "" : nhtsaEngineRaw;
       if (nhtsaEngineRaw && !nhtsaEngineClean) {
         console.log(`[decode] NHTSA EngineModel "${nhtsaEngineRaw}" is marketing term — ignored`);
       }
@@ -301,11 +333,14 @@ export const processVin = internalAction({
       const VDB_PLACEHOLDER_CODES = new Set([
         "STDEN", "STD", "STDE", "STDN", "BASE", "STANDARD", "N/A", "NA", "NONE",
       ]);
-      const vdbCode = vdb?.engineCode && !VDB_PLACEHOLDER_CODES.has(vdb.engineCode.toUpperCase())
-        ? vdb.engineCode
-        : "";
+      const vdbCode =
+        vdb?.engineCode &&
+        !VDB_PLACEHOLDER_CODES.has(vdb.engineCode.toUpperCase()) &&
+        !isSyntheticEngineCode(vdb.engineCode)
+          ? vdb.engineCode
+          : "";
       if (vdb?.engineCode && !vdbCode) {
-        console.log(`[decode] VDB engine code "${vdb.engineCode}" is a placeholder — ignored`);
+        console.log(`[decode] VDB engine code "${vdb.engineCode}" is a placeholder/marketing term — ignored`);
       }
 
       let finalEngineCode = vdbCode || nhtsaEngineClean || "";
@@ -334,7 +369,9 @@ export const processVin = internalAction({
         if (normalized) {
           if (normalized.model) finalModel = normalized.model;
           if (normalized.trim) finalTrim = normalized.trim;
-          if (normalized.engine_code && !vdbCode) finalEngineCode = normalized.engine_code;
+          if (normalized.engine_code && !vdbCode && !isSyntheticEngineCode(normalized.engine_code)) {
+            finalEngineCode = normalized.engine_code;
+          }
           if (normalized.drivetrain_type) drivetrainType = normalized.drivetrain_type;
         }
       }
@@ -360,7 +397,7 @@ export const processVin = internalAction({
 
       // Web search + Haiku fallback when still no real engine code
       if (
-        (!finalEngineCode || finalEngineCode.includes("_")) &&
+        (!finalEngineCode || finalEngineCode.includes("_") || isSyntheticEngineCode(finalEngineCode)) &&
         merged.cylinders && merged.displacement
       ) {
         try {
@@ -385,12 +422,12 @@ export const processVin = internalAction({
               temperature: 0,
               messages: [{
                 role: "user",
-                content: `Based on the following search results, what is the FULL manufacturer engine code including the complete variant suffix for a ${merged.year} ${merged.make} ${finalModel} ${finalTrim} with ${merged.cylinders} cylinders and ${merged.displacement}L displacement? For example, BMW uses codes like B48B20M2 or N63B44O2, not just B48 or N63. Mercedes uses M176DE40 not just M176. Include the full displacement and variant designation.\n\nSearch results:\n${searchContent.slice(0, 15000)}\n\nReply with ONLY the engine code. Nothing else.`,
+                content: `Based on the following search results, what is the FULL manufacturer engine code including the complete variant suffix for a ${merged.year} ${merged.make} ${finalModel} ${finalTrim} with ${merged.cylinders} cylinders and ${merged.displacement}L displacement? For example, BMW uses codes like B48B20M2 or N63B44O2, not just B48 or N63. Mercedes uses M176DE40 not just M176. Include the full displacement and variant designation.\n\nCRITICAL — model generation: the SAME model name often carries a DIFFERENT engine across generations even at the same displacement (the 2019+ Nissan Altima 2.5 is PR25DD, NOT the 2007-2018 QR25DE). Return the code used in the ${merged.year} model year specifically; if the results only show a code from another generation and you cannot confirm it applies to ${merged.year}, reply null.\n\nSearch results:\n${searchContent.slice(0, 15000)}\n\nReply with ONLY the engine code (or null). Nothing else.`,
               }],
             });
             const code = (resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "")
               .replace(/[^a-zA-Z0-9\-_.]/g, "");
-            if (code && code.length >= 2 && code.length <= 20) {
+            if (code && code.toLowerCase() !== "null" && code.length >= 2 && code.length <= 20) {
               console.log(`[decode] Search + Haiku resolved engine code: ${code} (was "${finalEngineCode}")`);
               finalEngineCode = code;
             }
@@ -415,11 +452,16 @@ export const processVin = internalAction({
         modelId, name: finalTrim, year: merged.year,
       });
 
-      // Drivetrain: AI normalized > NHTSA mapped > VDB > unknown
-      const nhtsaDrivetrain = mapNhtsaDriveType(merged.driveType);
-      const canonicalDrivetrain = drivetrainType
+      // Drivetrain: NHTSA VIN-decoded axle count is authoritative (2WD vs 4WD);
+      // the AI only refines within that class. Prevents the batch-3 failure
+      // where a "4x2" VIN (dropped by the old mapNhtsaDriveType) let the LLM's
+      // AWD guess win and phantom transfer-case/diff services shipped.
+      const aiCanonicalDrivetrain = drivetrainType
         ? toCanonicalDrivetrain(drivetrainType)
-        : nhtsaDrivetrain;
+        : undefined;
+      const canonicalDrivetrain =
+        reconcileDrivetrain(merged.driveType, aiCanonicalDrivetrain, merged.bodyClass) ??
+        mapNhtsaDriveType(merged.driveType);
       if (canonicalDrivetrain && canonicalDrivetrain !== "unknown") {
         await ctx.runMutation(api.chassis_variants.upsertChassisVariant, {
           trim_id: trimId,
@@ -518,6 +560,7 @@ export const processVin = internalAction({
         fuelType: merged.fuelType,
         drivetrain: canonicalDrivetrain ?? "unknown",
         bodyClass: merged.bodyClass || "",
+        vehicleType: merged.vehicleType || "",
         // Specs-card fields (flat, for router param forwarding).
         ...specsForCard,
         // NHTSA-only base key (deterministic per VIN, computed before
@@ -604,7 +647,7 @@ export const enrichVehicleSpecs = internalAction({
     let effectiveEngineCode = args.engineCode?.trim() ?? "";
     if (!effectiveEngineCode) {
       const engine = await ctx.runQuery(internal.vehicle_mutations.getEngine, { engineId: args.engineId });
-      if (engine) {
+      if (engine?.trim_id) {
         const trimEngines = await ctx.runQuery(internal.vehicle_mutations.getEnginesByTrim, {
           trimId: engine.trim_id,
         });
@@ -702,7 +745,7 @@ export const enrichVehicleSpecs = internalAction({
               internal.vehicle_mutations.getEngine,
               { engineId: args.engineId }
             );
-            if (engine) {
+            if (engine?.trim_id) {
               await ctx.runMutation(internal.vehicle_mutations.patchTrim, {
                 trimId: engine.trim_id,
                 steeringType,
@@ -777,13 +820,14 @@ export const enrichVehicleSpecs = internalAction({
               engineId: args.engineId,
               specs: validatedSpecs,
               confidenceScore: specs.overall_confidence ?? 0.70,
+              make: args.make,
             });
             flatVehicleSpecs = validatedSpecs;
           }
           if (specs.trim_specs) {
             const { flat: trimFlat } = flattenPerFieldSpecs(specs.trim_specs);
             const engine = await ctx.runQuery(internal.vehicle_mutations.getEngine, { engineId: args.engineId });
-            if (engine) {
+            if (engine?.trim_id) {
               await ctx.runMutation(internal.vehicle_mutations.storeTrimSpecs, {
                 trimId: engine.trim_id,
                 specs: trimFlat,
@@ -872,14 +916,22 @@ export const enrichVehicleSpecs = internalAction({
       // Base specs already exist — pull values for pricing prompt context
       oilViscosity = existingSpecs.oil_viscosity || "N/A";
       oilCapacityQts = existingSpecs.oil_capacity_qts || 0;
-      confidenceScore = existingSpecs.confidence_score || 0.75;
+      // engines docs don't store a confidence score — use the same default the
+      // fresh-enrichment path falls back to.
+      confidenceScore = 0.75;
+      // Reverse of updateEngineAttributes' column mapping: has_turbocharger is
+      // persisted as `aspiration`, fuel_injection_type as `fuel_injection`;
+      // power_steering / transmission / drivetrain are not stored on engines.
       vehicleAttributes = {
-        power_steering_type: existingSpecs.power_steering_type ?? null,
+        power_steering_type: null,
         timing_system: existingSpecs.timing_system ?? null,
-        has_turbocharger: existingSpecs.has_turbocharger ?? null,
-        fuel_injection_type: existingSpecs.fuel_injection_type ?? null,
-        transmission_type: existingSpecs.transmission_type ?? null,
-        drivetrain_type: existingSpecs.drivetrain_type ?? null,
+        has_turbocharger:
+          existingSpecs.aspiration != null
+            ? existingSpecs.aspiration === "turbocharged"
+            : null,
+        fuel_injection_type: existingSpecs.fuel_injection ?? null,
+        transmission_type: null,
+        drivetrain_type: null,
       };
       const existingVehicleSpecs = await ctx.runQuery(internal.vehicle_mutations.getVehicleSpecs, {
         engineId: args.engineId,
@@ -1050,7 +1102,7 @@ export const enrichVehicleSpecs = internalAction({
         // Build slug → service ID map
         const slugToService = new Map<string, any>();
         for (const svc of services) {
-          slugToService.set(svc.slug, svc);
+          if (svc.slug) slugToService.set(svc.slug, svc);
         }
 
         // Loop through results and upsert
@@ -1166,6 +1218,10 @@ type DecodeVinResult =
        *  "Sedan/Saloon"). Used by the review screen's loading-state
        *  silhouette to pick SUV vs sedan. */
       bodyClass: string;
+      /** NHTSA "VehicleType" — high-level class. Used by the client's
+       *  eligibility gate (we don't service motorcycles, semis,
+       *  buses, trailers). */
+      vehicleType: string;
     };
 
 export const decodeVin = action({
@@ -1230,6 +1286,7 @@ export const decodeVin = action({
       transSpeeds: result.transSpeeds,
       drivetrain: result.drivetrain,
       bodyClass: result.bodyClass,
+      vehicleType: result.vehicleType,
     };
   },
 });

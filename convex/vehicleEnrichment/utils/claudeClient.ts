@@ -124,13 +124,22 @@ async function waitForGate(_usesWebSearch: boolean, estimatedInputTokens = 50_00
   let waitUntil = _gate.apiReadyAt;
 
   // ── Token replenishment gate ──────────────────────────────────
+  // Fresh gate (no response headers seen yet in this isolate): let the first
+  // call through. The old behavior clamped the optimistic remaining to the
+  // hardcoded 30k Tier-1 default and stalled every run 143s before its first
+  // post-batch call (observed on all 5 runs, Jul 2026 test) — on the actual
+  // deployment the real limit is orders of magnitude higher. If the account
+  // truly is Tier 1, the 429 retry path below waits the authoritative
+  // retry-after, which is strictly better than always paying a guessed stall.
   const refillRatePerMs = _gate.inputTokensLimit / 60_000;
   const elapsedMs = _gate.lastResponseMs > 0 ? now - _gate.lastResponseMs : 0;
   const replenishedSince = elapsedMs * refillRatePerMs;
-  const tokensAvailable = Math.min(
-    _gate.inputTokensRemaining + replenishedSince,
-    _gate.inputTokensLimit,
-  );
+  const tokensAvailable = _gate.lastResponseMs === 0
+    ? estimatedInputTokens
+    : Math.min(
+        _gate.inputTokensRemaining + replenishedSince,
+        _gate.inputTokensLimit,
+      );
 
   if (tokensAvailable < estimatedInputTokens) {
     const stillNeeded = estimatedInputTokens - tokensAvailable;

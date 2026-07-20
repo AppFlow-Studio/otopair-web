@@ -23,21 +23,28 @@ import type {
   CallLogEntry,
   VehicleIdentity,
 } from "./types";
-import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS } from "./types";
+import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS, ON_DEMAND_SERVICE_SLUGS } from "./types";
 import { submitBatch, getBatchStatus, getBatchResults } from "./utils/batchClient";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
-import { repairpalUrlCandidates, repairpalModelCandidates } from "./repairpalLabor";
-import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
+import { GAP_FILL_SYSTEM, buildGapFillPrompt } from "./prompts/gapFillPrompt";
+import { callClaudeWithWebSearch } from "./utils/claudeClient";
 import { deriveEngineFamily } from "./laborSibling";
-import { runSanityChecks } from "./validation/sanityChecks";
+import { runSanityChecks, normalizeOilViscosity, aggregateFieldConfidence } from "./validation/sanityChecks";
+import { resolveCapacities } from "./capacityResolver";
 import { validateAllOemParts } from "./validation/oemValidation";
-import { BLOCKED_DOMAINS } from "./sourceRegistry";
-import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts } from "./applicabilityRules";
+import { BLOCKED_DOMAINS, isMarketplaceUrl } from "./sourceRegistry";
+import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts, applyFinalizeApplicability, IDENTITY_DEPENDENT_FIELDS } from "./applicabilityRules";
+import { deriveIdentityFromTrim, mergeIdentity } from "./identityResolution";
+import { computeEnrichmentStatus, explainGateDecision } from "./completionGate";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
-import { reextractPartPrice, isAffirmativeRejection } from "./priceReextract";
+import { reextractPartPrice, isAffirmativeRejection, priceAllSources } from "./priceReextract";
+import { extractPriceFirecrawl } from "./firecrawl";
+import { discoverPriceUrls, prioritizeDiscoveryQueue, type DiscoveryQueueItem } from "./priceDiscovery";
+import { computeQuotability, type QuotabilityResult } from "./quotability";
+import { SERVICE_PARTS_REFERENCE, type PartRoleSpec } from "../lib/servicePartsReference";
 import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
 import {
@@ -52,13 +59,42 @@ import {
 import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
+import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/partFitmentVerifier";
+import { reconcileDrivetrain } from "./drivetrainReconcile";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
+import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
+import { laborFlagsFromEnv } from "./laborResearch";
 import type { Id } from "../_generated/dataModel";
+
+// ─── Authored return types ─────────────────────────────────────────
+// Explicit handler return types are load-bearing (see convex/backfillTires.ts
+// _listCandidates): this module references `internal.*` (a barrel
+// self-reference) inside its handlers, so without authored annotations TS must
+// infer each handler while resolving the whole ApiFromModules barrel — a
+// circular resolution that silently degrades api.* / internal.* types to `any`
+// for every file checked afterwards (the @ts-nocheck above hides the TS2589
+// that would otherwise surface here).
+
+export type EnrichVehicleBatchV3Result =
+  | { status: "already_enriching"; configId: Id<"vehicle_configs"> }
+  | { status: "cache_hit_validating"; configId: Id<"vehicle_configs"> }
+  | { status: "cache_hit"; configId: Id<"vehicle_configs"> }
+  | { status: "error"; reason: string }
+  | { status: "batch_submitted"; configKey: string; batchId: string };
 
 // ─── Constants ─────────────────────────────────────────────────────
 
 const MAX_POLL_ATTEMPTS = 180;
 const POLL_INTERVAL_MS = 1 * 60 * 1000;
+// Batch-1 slow-poll extension (5-VIN test, Jul 2026): a 3h Anthropic batch
+// queue is normal-tail, not dead — the Soul's batch completed after the old
+// 180-attempt cap had already abandoned the run, leaving a zombie "pending"
+// config and orphaned paid results. Batches resolve (or expire) within 24h,
+// so after the fast window we keep polling every 10 min out to ~24h total.
+// 10 min stays under the 15-min heartbeat-liveness window, so force-unstick
+// still treats the run as alive.
+const SLOW_POLL_INTERVAL_MS = 10 * 60 * 1000;
+const MAX_POLL_ATTEMPTS_TOTAL = MAX_POLL_ATTEMPTS + 126; // 3h fast + ~21h slow ≈ 24h
 
 const MAKES_WITH_BRAKE_PAD_SENSORS = new Set([
   "BMW", "Mercedes-Benz", "Porsche", "Audi", "Mini", "Rolls-Royce",
@@ -67,10 +103,21 @@ const MAKES_WITH_BRAKE_PAD_SENSORS = new Set([
 
 // ─── Field Parsing (copied from pipelineBatch.ts — same logic) ────
 
-function parseField(raw: any): FieldResult {
+/** Fields whose string values must survive verbatim — numeric coercion via
+ *  parseFloat destroys leading zeros, and OEM part numbers carry them (BMW
+ *  "07119963130" → 7119963130 → 10 digits → fails the 11-digit make pattern
+ *  → oem_part_rejected; found live on the 2001 740iA, Jul 11 2026).
+ *  battery_group values like "49" are catalog strings too. Exported for tests. */
+export function isVerbatimStringField(fieldKey: string | undefined): boolean {
+  if (!fieldKey) return false;
+  return fieldKey.endsWith("_oem") || fieldKey === "battery_group";
+}
+
+/** Exported for tests. */
+export function parseField(raw: any, fieldKey?: string): FieldResult {
   if (!raw || raw.value === undefined) return emptyField();
   let value = raw.value ?? null;
-  if (typeof value === "string") {
+  if (typeof value === "string" && !isVerbatimStringField(fieldKey)) {
     // Parse price strings "$45.00" → 45.00
     if (value.startsWith("$")) {
       const n = parseFloat(value.replace(/[$,]/g, ""));
@@ -116,10 +163,13 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
   f.coolant_capacity_qts = parseField(fluids.coolant_capacity_qts);
   f.brake_fluid_type = parseField(fluids.brake_fluid_type);
   f.power_steering_type = parseField(fluids.power_steering_type);
+  f.brake_fluid_capacity_oz = parseField(fluids.brake_fluid_capacity_oz);
+  f.ps_fluid_capacity_oz = parseField(fluids.ps_fluid_capacity_oz);
+  f.transmission_fluid_capacity_qts = parseField(fluids.transmission_fluid_capacity_qts);
 
   // Intervals
   const intervals = data.intervals ?? {};
-  for (const key of ["oil_change", "spark_plug", "transmission_service", "coolant_flush", "air_filter", "cabin_filter", "brake_fluid_flush", "serpentine_belt"]) {
+  for (const key of ["oil_change", "spark_plug", "transmission_service", "coolant_flush", "air_filter", "cabin_filter", "brake_fluid_flush", "serpentine_belt", "brake_pads", "tire_rotation"]) {
     const iv = parseInterval(intervals[key]);
     f[`${key}_miles`] = iv.miles;
     f[`${key}_months`] = iv.months;
@@ -147,8 +197,11 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
     "timing_kit_oem", "water_pump_oem", "atf_fluid_oem", "trans_filter_oem",
     "trans_pan_gasket_oem", "brake_fluid_oem", "ps_fluid_oem", "gear_oil_oem",
     "friction_modifier_oem", "brake_hardware_kit_front_oem", "brake_hardware_kit_rear_oem",
-    "brake_wear_sensor_front_oem", "brake_wear_sensor_rear_oem"]) {
-    f[k] = parseField(parts[k]);
+    "brake_wear_sensor_front_oem", "brake_wear_sensor_rear_oem",
+    // coolant_flush / transmission_service discovery (2026-07)
+    "thermostat_oem", "thermostat_gasket_oem",
+    "cvt_internal_filter_oem", "cvt_external_filter_oem"]) {
+    f[k] = parseField(parts[k], k);
   }
 
   // Pricing from parts pages
@@ -159,7 +212,7 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
 
   // Battery & electrical
   const battery = data.battery ?? {};
-  f.battery_group = parseField(battery.battery_group);
+  f.battery_group = parseField(battery.battery_group, "battery_group");
   f.battery_cca = parseField(battery.battery_cca);
   f.battery_type = parseField(battery.battery_type);
   f.battery_location = parseField(battery.battery_location);
@@ -208,6 +261,9 @@ function parsePackageParts(data: Record<string, any>): Map<string, Record<string
     "trans_pan_gasket_oem", "brake_fluid_oem", "ps_fluid_oem", "gear_oil_oem",
     "friction_modifier_oem", "brake_hardware_kit_front_oem", "brake_hardware_kit_rear_oem",
     "brake_wear_sensor_front_oem", "brake_wear_sensor_rear_oem",
+    // coolant_flush / transmission_service discovery (2026-07)
+    "thermostat_oem", "thermostat_gasket_oem",
+    "cvt_internal_filter_oem", "cvt_external_filter_oem",
   ];
 
   for (const [code, body] of Object.entries(packagesBlock)) {
@@ -216,7 +272,7 @@ function parsePackageParts(data: Record<string, any>): Map<string, Record<string
     const fields: Record<string, FieldResult> = {};
     let any = false;
     for (const k of partKeys) {
-      const parsed = parseField(parts[k]);
+      const parsed = parseField(parts[k], k);
       // Only carry through fields with a real value — null overrides aren't meaningful here.
       if (parsed.value != null) {
         fields[k] = parsed;
@@ -232,11 +288,13 @@ function parseBatch1b(data: Record<string, any>): Record<string, FieldResult> {
   const f = parseBatch1a(data);
   if (!data) return f;
 
-  // Additional 1B fields: new fluid types + intervals
+  // Additional 1B fields: new fluid types + capacities + intervals
   const fluids = data.fluids ?? {};
   f.trans_fluid_type = parseField(fluids.trans_fluid_type);
   f.diff_fluid_type = parseField(fluids.diff_fluid_type);
   f.transfer_case_fluid_type = parseField(fluids.transfer_case_fluid_type);
+  f.diff_fluid_capacity_qts = parseField(fluids.diff_fluid_capacity_qts);
+  f.transfer_case_fluid_capacity_qts = parseField(fluids.transfer_case_fluid_capacity_qts);
 
   const intervals = data.intervals ?? {};
   const diff = parseInterval(intervals.diff_fluid);
@@ -295,6 +353,78 @@ function calculateFlatFillRate(fields: Record<string, FieldResult>): number {
   const total = V4_FIELD_KEYS.length;
   const filled = V4_FIELD_KEYS.filter((k) => fields[k]?.value != null).length;
   return Math.round((filled / total) * 100);
+}
+
+/**
+ * Per-field empty-reason ledger, persisted to enrichment_runs.field_gaps.
+ * sanity_flags only explains fields that HAD a value and failed a rule; this
+ * covers the other side — every V4 field that ended the run null, and why —
+ * so completion work can be targeted instead of guessed at. Exported for
+ * tests. Pure.
+ *
+ * Reasons:
+ *   never_asked          — field key absent from the merged field map
+ *   not_applicable       — deliberately nulled by applicability rules (final)
+ *   validation_dropped:X — extracted, then nulled by sanity/authority/sanitize
+ *   blocked_on_identity:X — null AND its applicability rule couldn't run
+ *                           because identity input X is unknown (the field may
+ *                           be physically absent from the vehicle)
+ *   llm_null             — asked in every batch, no source produced a value
+ */
+export function classifyFieldGaps(
+  fields: Record<string, FieldResult>,
+  sanityFlags: Array<{ field: string; severity: string; reason: string }>,
+  identity?: {
+    drivetrain: string | null;
+    transmission_type: string | null;
+    body_class: string | null;
+  } | null,
+): Array<{ field: string; reason: string }> {
+  const rejectedBySanity = new Map<string, string>();
+  for (const f of sanityFlags) {
+    if (f.severity === "reject") rejectedBySanity.set(f.field, f.reason);
+  }
+  // Reverse map: field → the UNKNOWN identity input that would have decided
+  // its applicability. Field-level values take priority over the decode
+  // identity, mirroring applyApplicabilityRules' own input resolution.
+  const blockedBy = new Map<string, string>();
+  for (const [input, depFields] of Object.entries(IDENTITY_DEPENDENT_FIELDS)) {
+    const known =
+      (fields[input]?.value as string | null) ??
+      (identity ? (identity as any)[input] : null);
+    if (known == null) {
+      for (const df of depFields) blockedBy.set(df, input);
+    }
+  }
+  const gaps: Array<{ field: string; reason: string }> = [];
+  for (const k of V4_FIELD_KEYS) {
+    const f = fields[k];
+    if (f?.value != null) continue;
+    if (f == null) {
+      gaps.push({ field: k, reason: "never_asked" });
+      continue;
+    }
+    if (f.flag_reason === "not_applicable") {
+      gaps.push({ field: k, reason: "not_applicable" });
+      continue;
+    }
+    const sanityReason = rejectedBySanity.get(k);
+    if (sanityReason) {
+      gaps.push({ field: k, reason: `validation_dropped:${sanityReason}` });
+      continue;
+    }
+    if (f.flagged && f.flag_reason) {
+      gaps.push({ field: k, reason: `validation_dropped:${f.flag_reason}` });
+      continue;
+    }
+    const blockingInput = blockedBy.get(k);
+    if (blockingInput) {
+      gaps.push({ field: k, reason: `blocked_on_identity:${blockingInput}` });
+      continue;
+    }
+    gaps.push({ field: k, reason: "llm_null" });
+  }
+  return gaps;
 }
 
 /** V3 fill rate — counts actual data coverage across normalized tables. */
@@ -385,6 +515,7 @@ async function calculateV3FillRate(
   const intervalsFilled = intervals.filter(
     (si: any) => si.interval_miles != null || si.interval_months != null
       || si.status === "cbs_driven" || si.status === "not_applicable"
+      || si.status === "on_demand"
   ).length;
   total += expectedIntervals;
   filled += Math.min(intervalsFilled, expectedIntervals);
@@ -433,6 +564,13 @@ function isBlockedDomain(url: string | null | undefined): boolean {
   } catch { return false; }
 }
 
+/** Batch-2 URL rejection: spec-quality blocklist + marketplaces. A marketplace
+ *  entry keeps its price_low but loses the URL, so the part flows into the
+ *  discovery fallback instead of being scraped from an untrustable listing. */
+function isRejectedPriceUrl(url: string | null | undefined): boolean {
+  return isBlockedDomain(url) || isMarketplaceUrl(url);
+}
+
 function parseBatch2(
   data: Record<string, any>,
   nullFields: string[],
@@ -446,8 +584,8 @@ function parseBatch2(
   const gapData = data.gap_fields ?? {};
   for (const k of nullFields) {
     const raw = gapData[k];
-    if (raw && !isBlockedDomain(raw.source_url)) {
-      const f = parseField(raw);
+    if (raw && !isRejectedPriceUrl(raw.source_url)) {
+      const f = parseField(raw, k);
       if (f.value != null) {
         f.source_type = f.source_url ? "web_search" : "gap_fill";
         gapFields[k] = f;
@@ -465,7 +603,7 @@ function parseBatch2(
     const partsBreakdown = rawBreakdown
       .map((entry) => {
         const sanitizedSourceUrl = sanitizeUrl(entry?.source_url);
-        const blocked = isBlockedDomain(sanitizedSourceUrl);
+        const blocked = isRejectedPriceUrl(sanitizedSourceUrl);
         const priceLow  = sanitizeNumber(entry?.price_low);
         const priceHigh = sanitizeNumber(entry?.price_high);
         const oemNumber = sanitizeString(entry?.oem_part_number)?.trim();
@@ -535,6 +673,14 @@ const SERVICE_NAME_TO_SLUG: Record<string, string> = {
   "Tire Rotation": "tire_rotation",
   "Wheel Alignment (4-wheel)": "wheel_alignment",
   "Fuel System Cleaning": "fuel_system_cleaning",
+  // Batch-2's prompt SERVICE_LIST asks about this service, but the map had no
+  // entry — so `SERVICE_NAME_TO_SLUG[name]` returned undefined and the pricing
+  // + labor loops silently `continue`d: gear_oil / friction_modifier fitments
+  // were NEVER priced and differential labor estimates were dropped.
+  // ("Transfer Case Fluid Service" stays unmapped on purpose: there is no
+  // separate TC service in the 23 and conflating its labor into
+  // differential_service would skew the anchor.)
+  "Differential Fluid Service": "differential_service",
 };
 
 /**
@@ -549,7 +695,7 @@ const SERVICE_NAME_TO_SLUG: Record<string, string> = {
  * nor VehicleTier (pricing tier). serpentine_belt / wipers have no reference
  * service (not in the 23) — left "core" with their existing slugs.
  */
-const PART_FIELD_MAP: Record<string, {
+export const PART_FIELD_MAP: Record<string, {
   name: string;
   category: string;
   subcategory: string;
@@ -566,6 +712,12 @@ const PART_FIELD_MAP: Record<string, {
   rear_brake_pad_oem: { name: "Rear Brake Pads", category: "brake", subcategory: "rear_brake_pad", serviceSlug: "brake_pad_replacement", serviceRole: "core", position: "rear" },
   rotor_front_oem: { name: "Front Brake Rotor", category: "rotor", subcategory: "front_rotor", serviceSlug: "rotor_replacement", serviceRole: "core", position: "front" },
   rotor_rear_oem: { name: "Rear Brake Rotor", category: "rotor", subcategory: "rear_rotor", serviceSlug: "rotor_replacement", serviceRole: "core", position: "rear" },
+  // serviceSlug INTENTIONALLY null: the fitment lands as service_type
+  // "serpentine_belt" (serviceSlug ?? subcategory) — timing_belt borrows it
+  // via the reference role's fitmentService: "serpentine_belt", and Batch-2
+  // pricing looks it up under SERVICE_NAME_TO_SLUG["Serpentine Belt
+  // Replacement"] = "serpentine_belt". Pointing it at "timing_belt" would
+  // break both lookups.
   serpentine_belt_oem: { name: "Serpentine Belt", category: "belt", subcategory: "serpentine_belt", serviceSlug: null, serviceRole: "core" },
   timing_belt_oem: { name: "Timing Belt", category: "timing", subcategory: "timing_belt", serviceSlug: "timing_belt", serviceRole: "core" },
   // Front wipers ship as a set (driver + passenger as one part). Rear wiper is its own part.
@@ -594,6 +746,14 @@ const PART_FIELD_MAP: Record<string, {
   atf_fluid_oem: { name: "Transmission Fluid (ATF / CVT)", category: "fluid", subcategory: "atf_fluid", serviceSlug: "transmission_service", serviceRole: "core" },
   trans_filter_oem: { name: "Transmission Filter", category: "filter", subcategory: "trans_filter", serviceSlug: "transmission_service", serviceRole: "kit" },
   trans_pan_gasket_oem: { name: "Transmission Pan Gasket", category: "gasket", subcategory: "trans_pan_gasket", serviceSlug: "transmission_service", serviceRole: "kit" },
+  // CVT-only filters — applicabilityRules nulls these on known non-CVT
+  // transmissions; the prompt also hard-nulls them when transmission_type
+  // is known non-CVT.
+  cvt_internal_filter_oem: { name: "CVT Internal Filter", category: "filter", subcategory: "cvt_internal_filter", serviceSlug: "transmission_service", serviceRole: "as_needed" },
+  cvt_external_filter_oem: { name: "CVT External (Cooler Line) Filter", category: "filter", subcategory: "cvt_external_filter", serviceSlug: "transmission_service", serviceRole: "as_needed" },
+  // coolant_flush extras (discovery — if_found_bad)
+  thermostat_oem: { name: "Thermostat", category: "cooling", subcategory: "thermostat", serviceSlug: "coolant_flush", serviceRole: "as_needed" },
+  thermostat_gasket_oem: { name: "Thermostat Gasket", category: "gasket", subcategory: "thermostat_gasket", serviceSlug: "coolant_flush", serviceRole: "as_needed" },
   // brake_fluid_flush
   brake_fluid_oem: { name: "Brake Fluid", category: "fluid", subcategory: "brake_fluid", serviceSlug: "brake_fluid_flush", serviceRole: "core" },
   // power_steering_flush
@@ -608,6 +768,97 @@ const PART_FIELD_MAP: Record<string, {
   brake_wear_sensor_rear_oem: { name: "Brake Wear Sensor (Rear)", category: "brake", subcategory: "rear_brake_wear_sensor", serviceSlug: "brake_pad_replacement", serviceRole: "as_needed", position: "rear" },
 };
 
+/** roleKeys whose part field the applicability rules stamped not_applicable —
+ *  feeds computeQuotability so physically-absent roles (chain engine's timing
+ *  belt) leave the quotability denominator. Exported for tests. Pure. */
+export function naRoleKeysFromFields(
+  fields: Record<string, FieldResult>,
+): Set<string> {
+  const out = new Set<string>();
+  for (const [k, meta] of Object.entries(PART_FIELD_MAP)) {
+    if (fields[k]?.value == null && fields[k]?.flag_reason === "not_applicable") {
+      out.add(meta.subcategory);
+    }
+  }
+  return out;
+}
+
+// ─── Batch-3 gap-fill priority ───────────────────────────────────
+// The re-ask pass is capped (PARTS_GAPFILL_MAX_FIELDS, default 15) and used
+// to slice getNullFields() in V4_FIELD_KEYS declaration order — battery_oem
+// (a core role with no universalFallback: missing it singly zeroes
+// battery_replacement's quotability) competed with cosmetic fields for the
+// cap (2001 740iA: battery_oem stayed llm_null, service unbookable).
+
+/** roleKey (== oem_parts.subcategory) → reference role spec, first-declared wins. */
+const ROLE_SPEC_BY_KEY: Map<string, PartRoleSpec> = (() => {
+  const m = new Map<string, PartRoleSpec>();
+  for (const svc of Object.values(SERVICE_PARTS_REFERENCE)) {
+    for (const role of svc.roles) {
+      if (!m.has(role.roleKey)) m.set(role.roleKey, role);
+    }
+  }
+  return m;
+})();
+
+/** Capacity/spec fields that feed quantity resolution at quote time. */
+const QUANTITY_SPEC_FIELDS = new Set([
+  "oil_capacity_qts",
+  "coolant_capacity_qts",
+  "brake_fluid_capacity_oz",
+  "transmission_fluid_capacity_qts",
+  "diff_fluid_capacity_qts",
+  "transfer_case_fluid_capacity_qts",
+  "ps_fluid_capacity_oz",
+  "spark_plug_quantity",
+]);
+
+/**
+ * Order gap-fill candidates by quotability impact (stable within a tier):
+ *   P0 — core-role parts with NO universalFallback and no where_equipped /
+ *        if_found_bad condition: a miss singly zeroes a service's quotability
+ *   P1 — remaining core-role part fields
+ *   P2 — capacity/spec fields feeding quantity resolution
+ *   P3 — everything else
+ *   P4 — identity-blocked dependents while their identity input is unknown
+ *        (searching "transfer case fluid" for an unknown-drivetrain car burns
+ *        budget on a part the vehicle may not have)
+ * Exported for tests. Pure.
+ */
+export function rankGapFillFields(
+  nullFields: string[],
+  identity?: {
+    drivetrain: string | null;
+    transmission_type: string | null;
+    body_class: string | null;
+  } | null,
+): string[] {
+  const identityBlocked = new Set<string>();
+  for (const [input, depFields] of Object.entries(IDENTITY_DEPENDENT_FIELDS)) {
+    const known = identity ? (identity as any)[input] : null;
+    if (known == null) for (const df of depFields) identityBlocked.add(df);
+  }
+  const tier = (k: string): number => {
+    if (identityBlocked.has(k)) return 4;
+    const part = PART_FIELD_MAP[k];
+    if (part) {
+      if (part.serviceRole !== "core") return 3;
+      const role = ROLE_SPEC_BY_KEY.get(part.subcategory);
+      const hasEscape =
+        !!role?.universalFallback ||
+        role?.condition === "where_equipped" ||
+        role?.condition === "if_found_bad";
+      return hasEscape ? 1 : 0;
+    }
+    if (QUANTITY_SPEC_FIELDS.has(k)) return 2;
+    return 3;
+  };
+  return nullFields
+    .map((k, i) => ({ k, i, t: tier(k) }))
+    .sort((a, b) => a.t - b.t || a.i - b.i)
+    .map((e) => e.k);
+}
+
 /** Map interval field prefix to service slug. */
 const INTERVAL_TO_SERVICE: Record<string, string> = {
   oil_change: "oil_change",
@@ -617,9 +868,16 @@ const INTERVAL_TO_SERVICE: Record<string, string> = {
   air_filter: "filter_replacement",
   cabin_filter: "filter_replacement",
   brake_fluid_flush: "brake_fluid_flush",
+  serpentine_belt: "serpentine_belt",
   timing_service: "timing_belt",
   diff_fluid: "differential_service",
   transfer_case_fluid: "differential_service",
+  ps_fluid: "power_steering_flush",
+  // Wear/rotation guidance (2026-07): brake pads are wear-based — the value
+  // is the manufacturer's INSPECTION/typical-life guidance, not a hard
+  // replacement schedule. adversarialVerification bounds both.
+  brake_pads: "brake_pad_replacement",
+  tire_rotation: "tire_rotation",
 };
 
 function extractDomain(url: string | null | undefined): string | undefined {
@@ -715,9 +973,24 @@ async function writeNormalizedData(
   else if (turboVal === "twin-turbo") aspiration = "twin-turbo";
   else if (turboVal === false || turboVal === "No" || turboVal === "no") aspiration = "natural";
 
+  // Capacity fields that sanity checks / the capacity resolver REJECTED (value
+  // nulled AND flagged) must be actively erased from the engine row, else the
+  // old poison (e.g. coolant 16.9 qt) survives — asNumber(null) is undefined,
+  // and updateEngineSpecs skips undefined to preserve genuinely-absent data.
+  // A field that is merely absent (flagged === false) stays off this list.
+  const ENGINE_CAPACITY_KEYS = ["oil_capacity_qts", "coolant_capacity_qts"] as const;
+  const clear_fields = ENGINE_CAPACITY_KEYS.filter(
+    (k) => fields[k]?.value === null && fields[k]?.flagged === true,
+  );
+
   await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEngineSpecs, {
     engine_id: engineId,
-    oil_viscosity: asString(fields.oil_viscosity?.value),
+    clear_fields,
+    // Only ever store a clean SAE grade. runSanityChecks already normalized the
+    // common case in `fields`; re-assert here so an unparseable value (no grade)
+    // becomes undefined → the mutation skips it → a previously-stored good
+    // viscosity is kept rather than clobbered by garbage on re-enrich.
+    oil_viscosity: normalizeOilViscosity(fields.oil_viscosity?.value) ?? undefined,
     oil_capacity_qts: asNumber(fields.oil_capacity_qts?.value),
     coolant_type: asString(fields.coolant_type?.value),
     coolant_capacity_qts: asNumber(fields.coolant_capacity_qts?.value),
@@ -750,6 +1023,12 @@ async function writeNormalizedData(
       transmission_id: transmissionId,
       type: normalizedType,
       fluid_type: asString(fields.trans_fluid_type?.value),
+      // Drain-and-fill qts — the mutation always accepted this but nothing
+      // passed it, leaving both ATF quantity paths (partRoleQuantity's fluid
+      // role and serviceUnits' per_unit_spec count) with no enrichment feed.
+      fluid_capacity_drain_fill_qts: asNumber(
+        fields.transmission_fluid_capacity_qts?.value,
+      ),
       data_quality: "enriched",
     });
   }
@@ -766,19 +1045,33 @@ async function writeNormalizedData(
   );
   const existingDrivetrain = currentVc?.drivetrain;
 
-  // Priority: Batch 1B > existing (if real) > "FWD" as absolute last resort
+  // Priority: the NHTSA-decoded value stored on the config (existingDrivetrain)
+  // is authoritative on the 2WD-vs-4WD axle count; Batch-1B only refines within
+  // that axle class. Batch-3 audit: the Sienna (4x2 FWD) and F-150 (4x2) had
+  // their correct 2WD decode overwritten by a Batch-1B "AWD" guess, shipping
+  // phantom diff/transfer-case service. reconcileDrivetrain keeps NHTSA's axle
+  // count and takes Batch-1B's specific label only when they agree on the axle.
   const isResolved = (val: string | undefined | null): val is string =>
     !!val && val !== "unknown";
 
-  const resolvedDrivetrain = isResolved(batch1Drivetrain)
-    ? batch1Drivetrain
-    : isResolved(existingDrivetrain)
-      ? existingDrivetrain
-      : "FWD"; // last resort — all sources exhausted
+  const resolvedDrivetrain =
+    reconcileDrivetrain(existingDrivetrain, batch1Drivetrain) ??
+    (isResolved(batch1Drivetrain)
+      ? batch1Drivetrain
+      : isResolved(existingDrivetrain)
+        ? existingDrivetrain
+        : "FWD"); // last resort — all sources exhausted
 
-  if (batch1Drivetrain && batch1Drivetrain !== existingDrivetrain) {
-    console.log(`[v8] Drivetrain resolved by Batch 1B: "${existingDrivetrain}" → "${batch1Drivetrain}"`);
-    // Update vehicle_config with the real drivetrain
+  if (resolvedDrivetrain !== existingDrivetrain) {
+    const overrode =
+      isResolved(batch1Drivetrain) && resolvedDrivetrain !== batch1Drivetrain;
+    console.log(
+      `[v8] Drivetrain "${existingDrivetrain}" → "${resolvedDrivetrain}"` +
+        (overrode
+          ? ` (kept NHTSA axle over Batch-1B guess "${batch1Drivetrain}")`
+          : ` (Batch 1B)`),
+    );
+    // Update vehicle_config with the reconciled drivetrain
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
       vehicle_config_id: vehicleConfigId,
       drivetrain: resolvedDrivetrain,
@@ -800,8 +1093,17 @@ async function writeNormalizedData(
     drivetrain_type: resolvedDrivetrain,
     has_differential: hasDiff,
     diff_fluid_type: hasDiff ? diffFluid : undefined,
+    // Capacities (drain-and-fill qts) — the mutation always accepted these but
+    // the pipeline never passed them, which made differential_service
+    // structurally unquotable by real fluid volume.
+    diff_fluid_capacity_qts: hasDiff
+      ? asNumber(fields.diff_fluid_capacity_qts?.value)
+      : undefined,
     has_transfer_case: hasTC,
     tc_fluid_type: hasTC ? tcFluid : undefined,
+    tc_fluid_capacity_qts: hasTC
+      ? asNumber(fields.transfer_case_fluid_capacity_qts?.value)
+      : undefined,
   });
 
   // D. Trim specs — typed coercion
@@ -824,6 +1126,13 @@ async function writeNormalizedData(
     is_staggered: isStaggered,
     tire_options: wheelSizeOptions ?? undefined,
     tire_options_source: wheelSizeSource ?? undefined,
+    // Mean confidence over the trim fields written here — describes the
+    // latest enrichment (merge-semantics: a re-run overwrites it).
+    confidence_score: aggregateFieldConfidence(fields, [
+      "tire_pressure_front_psi", "tire_pressure_rear_psi",
+      "lug_nut_torque_ft_lbs", "front_wiper_size", "rear_wiper_size",
+      "battery_group", "battery_cca", "battery_type", "battery_location",
+    ]),
   });
 
   // E. Vehicle config fields — typed coercion
@@ -831,8 +1140,14 @@ async function writeNormalizedData(
   await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
     vehicle_config_id: vehicleConfigId,
     brake_fluid_type: asString(fields.brake_fluid_type?.value),
+    brake_fluid_capacity_oz: asNumber(fields.brake_fluid_capacity_oz?.value),
     has_brake_pad_sensor: MAKES_WITH_BRAKE_PAD_SENSORS.has(make),
     ps_fluid_type: psType && psType !== "electric" ? psType : undefined,
+    // Electric steering has no fluid — never accrete a capacity for it.
+    ps_fluid_capacity_oz:
+      psType && psType !== "electric"
+        ? asNumber(fields.ps_fluid_capacity_oz?.value)
+        : undefined,
   });
 
   // E2. chassis_specs — dual-write platform-level fields.
@@ -860,9 +1175,18 @@ async function writeNormalizedData(
         ...(asString(fields.battery_type?.value)     ? { battery_type: asString(fields.battery_type?.value)! } : {}),
         ...(asString(fields.battery_location?.value) ? { battery_location: asString(fields.battery_location?.value)! } : {}),
         ...(asString(fields.brake_fluid_type?.value) ? { brake_fluid_type: asString(fields.brake_fluid_type?.value)! } : {}),
+        ...(asNumber(fields.brake_fluid_capacity_oz?.value) !== undefined ? { brake_fluid_capacity_oz: asNumber(fields.brake_fluid_capacity_oz?.value) } : {}),
         ...(psType && psType !== "electric" ? { ps_fluid_type: psType } : {}),
+        ...(psType && psType !== "electric" && asNumber(fields.ps_fluid_capacity_oz?.value) !== undefined ? { ps_fluid_capacity_oz: asNumber(fields.ps_fluid_capacity_oz?.value) } : {}),
         ...(steeringType ? { steering_type: steeringType } : {}),
         ...(parkingBrake ? { parking_brake_type: parkingBrake } : {}),
+        // Mean confidence over the chassis fields written here (arg already
+        // existed on the mutation but was never populated).
+        confidence_score: aggregateFieldConfidence(fields, [
+          "lug_nut_torque_ft_lbs", "front_wiper_size", "rear_wiper_size",
+          "battery_group", "battery_type", "battery_location",
+          "brake_fluid_type", "power_steering_type", "parking_brake_type",
+        ]),
       });
       console.log(`[v8] chassis_specs written for ${chassisCfg.chassis_code}`);
     }
@@ -884,7 +1208,22 @@ async function writeNormalizedData(
     console.log(`[v8-parts] ${fieldKey}: raw=${rawVal} (type=${typeof rawVal}), sanitized=${val}, confidence=${conf}, source=${src}`);
 
     if (val == null || val.length === 0) {
-      console.log(`[v8-parts] SKIPPED ${fieldKey}: reason=${rawStr ? "failed_sanitization" : "null_or_empty"}`);
+      const skipReason = rawStr ? "failed_sanitization" : "null_or_empty";
+      console.log(`[v8-parts] SKIPPED ${fieldKey}: reason=${skipReason}`);
+      if (rawStr) {
+        // A rejected part number must NOT stay "filled" in the field map —
+        // that made the loss invisible: no field_gap entry, and batch-2
+        // gap-fill never re-asked because the field looked populated, while
+        // no fitment existed (how VAG fluids stayed missing across runs).
+        // Null+flag → batch-1 callers re-ask it in batch 2; finalize ledgers
+        // it as validation_dropped.
+        fields[fieldKey] = {
+          ...(fields[fieldKey] ?? {}),
+          value: null,
+          flagged: true,
+          flag_reason: `oem_part_rejected: ${rawStr}`,
+        } as any;
+      }
       continue;
     }
 
@@ -986,6 +1325,14 @@ async function writeNormalizedData(
     });
   }
 
+  // G2. On-demand services (inspections, diagnostics, alignment…) have no
+  // mileage schedule by nature — stamp them so they read as complete instead
+  // of permanently missing (they are inherently un-fillable by extraction).
+  await ctx.runMutation(internal.vehicleEnrichment.v3mutations.markOnDemandIntervals, {
+    vehicle_config_id: vehicleConfigId,
+    service_slugs: [...ON_DEMAND_SERVICE_SLUGS],
+  });
+
   // H. Evidence batch
   const evidenceRows: Array<{
     entity_type: string;
@@ -1007,9 +1354,21 @@ async function writeNormalizedData(
     // Task 17: Sanitize evidence values and URLs before storage
     const sanitizedValue = sanitizeString(f.value) ?? String(f.value);
     const sanitizedSourceUrl = sanitizeUrl(f.source_url);
+    const entityType = getEntityType(k);
+    // Key engine/transmission evidence by the actual entity doc id — rows were
+    // previously all keyed by vehicleConfigId, so provenance lookups by engine
+    // id (the key the capacity resolver writes under) returned nothing.
+    // drivetrain_config/part/interval rows have no doc id at this point and
+    // stay keyed by config (known limitation).
+    const entityId =
+      entityType === "engine"
+        ? String(engineId)
+        : entityType === "transmission"
+          ? String(transmissionId ?? vehicleConfigId)
+          : String(vehicleConfigId);
     evidenceRows.push({
-      entity_type: getEntityType(k),
-      entity_id: String(vehicleConfigId),
+      entity_type: entityType,
+      entity_id: entityId,
       field_name: k,
       observed_value: sanitizedValue,
       observed_type: typeof f.value === "number" ? "number" : typeof f.value === "boolean" ? "boolean" : "string",
@@ -1091,7 +1450,7 @@ export const enrichVehicleBatchV3 = internalAction({
     // Omitted on the signup path → behavior is byte-identical.
     targetConfigId: v.optional(v.id("vehicle_configs")),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<EnrichVehicleBatchV3Result> => {
     const startTime = Date.now();
     const scope = args.writeScope ?? "full";
     const vehicle: VehicleInput = {
@@ -1226,11 +1585,16 @@ export const enrichVehicleBatchV3 = internalAction({
         args.displacement, vPicData?.cylinders ?? 4,
         vPicData?.fuel_type ?? "Gasoline", args.engineCode,
       );
-      if (resolved.source === "haiku" && !isNhtsaDescriptor(resolved.engineCode)) {
-        console.log(`[v8] Engine code resolved: "${args.engineCode}" → "${resolved.engineCode}"`);
+      if (resolved.source === "verified" && !isNhtsaDescriptor(resolved.engineCode)) {
+        console.log(`[v8] Engine code resolved+verified: "${args.engineCode}" → "${resolved.engineCode}"`);
         vehicle.engineCode = resolved.engineCode;
         configKey = buildEngineKey(vehicle);
         resolvedEngineCodeForPersist = resolved.engineCode;
+        // Thread the verified code through the whole scheduler chain: the
+        // poll bodies rebuild `vehicle` from args.engineCode, so without
+        // this the finalize named/keyed the config by the stale placeholder
+        // (batch-2 audit: Soul verified "U" yet completed as "2l_4cyl").
+        (args as any).engineCode = resolved.engineCode;
         // Check if a complete config already exists under the resolved key
         const resolvedConfig = await ctx.runQuery(
           internal.vehicleEnrichment.v3queries.getVehicleConfigByKey,
@@ -1244,6 +1608,11 @@ export const enrichVehicleBatchV3 = internalAction({
           );
           return { status: "cache_hit" as const, configId: resolvedConfig._id };
         }
+      } else if (resolved.source === "unverified") {
+        // 5-VIN test (Jul 2026): unverified codes were how CZDA/ERG/G4FJ
+        // poisoned config keys and extraction prompts. Keep the displacement
+        // placeholder — it is honest and still unique enough to key on.
+        console.warn(`[v8] Engine code candidate "${resolved.engineCode}" failed verification — keeping placeholder "${args.engineCode}"`);
       } else if (resolved.source === "unknown") {
         console.log(`[v8] Engine code resolution returned unknown — keeping placeholder "${args.engineCode}"`);
       }
@@ -1299,6 +1668,18 @@ export const enrichVehicleBatchV3 = internalAction({
     const vdbRaw = vehicleDoc.vin ? await advancedVinDecode(vehicleDoc.vin) : null;
     const vdbFields = vdbRaw ? extractVDBFields(vdbRaw) : null;
 
+    // Identity gap-fill: the applicability rules fail OPEN when drivetrain /
+    // transmission_type / body_class are null (2001 740iA: no rule fired on a
+    // RWD sedan and 9 impossible fields ended as llm_null gaps). Fill nulls
+    // from the VDB decode and the trim string before vPicData flows anywhere.
+    {
+      const trimDerived = deriveIdentityFromTrim(args.trim);
+      vPicData = mergeIdentity(vPicData, vdbFields, trimDerived);
+      console.log(
+        `[v8] Identity after merge: drivetrain=${vPicData.drivetrain}, transmission=${vPicData.transmission_type}, body=${vPicData.body_class}`,
+      );
+    }
+
     // Package detection — flags packages available for this trim that affect 1+ of
     // the 23 services. Stored on vehicle_configs.packages_available (after the upsert
     // below) and passed into Batch 1 so Claude can return package-specific part numbers.
@@ -1318,12 +1699,52 @@ export const enrichVehicleBatchV3 = internalAction({
       );
     }
 
-    // STEP 3a: Ensure transmission record exists for ICE vehicles
+    // STEP 3a: Ensure a REAL transmission record is linked for ICE vehicles.
+    //
+    // upsertTransmission keys by (trim_id, type), so requesting "unknown" never
+    // matches a prior "automatic" row — it inserts a SECOND row and relinks the
+    // vehicle to it, orphaning the good value. That's how a re-enrich regressed
+    // the 2024 Alfa Stelvio from "Automatic" (conf 0.7) to "unknown" (conf 0.1),
+    // Jul 2026. So we (a) never create an "unknown" placeholder when a real row
+    // already exists for the trim, and (b) actively HEAL a link that already
+    // points at an "unknown"/placeholder row when a better real row exists — so
+    // a re-enrich REPAIRS previously-poisoned configs instead of pinning them.
     let transmissionId = vehicleDoc.transmission_id ?? null;
-    if (!transmissionId) {
-      console.log("[v8] No transmission_id on vehicle — creating placeholder");
-      const trimId = vehicleDoc.trim_id;
-      if (trimId) {
+    const trimId = vehicleDoc.trim_id;
+    if (trimId) {
+      const isReal = (t: string | undefined | null): t is string =>
+        !!t && t.trim().toLowerCase() !== "unknown";
+      const trimTransmissions = await ctx.runQuery(
+        api.transmissions.listByTrimId,
+        { trim_id: trimId },
+      );
+      const linked = transmissionId
+        ? (trimTransmissions ?? []).find(
+            (t: any) => String(t._id) === String(transmissionId),
+          )
+        : null;
+      const bestExisting = (trimTransmissions ?? [])
+        .filter((t: any) => isReal(t.transmission_type))
+        .sort(
+          (a: any, b: any) =>
+            (b.confidence_score ?? 0) - (a.confidence_score ?? 0),
+        )[0];
+      const linkIsMissingOrPlaceholder =
+        !transmissionId || !linked || !isReal((linked as any).transmission_type);
+
+      if (linkIsMissingOrPlaceholder && bestExisting?._id) {
+        // Link (or heal) to the best real row; abandon the placeholder link.
+        transmissionId = bestExisting._id;
+        await ctx.runMutation(api.vehicles.upsertVehicle, {
+          vin: vehicleDoc.vin,
+          transmission_id: transmissionId,
+        });
+        console.log(
+          `[v8] Linked transmission ${transmissionId} (${bestExisting.transmission_type}) for trim — skipped/healed "unknown" placeholder`,
+        );
+      } else if (!transmissionId && !bestExisting?._id) {
+        // No link AND no real row anywhere — only now create the placeholder.
+        console.log("[v8] No transmission for trim — creating placeholder");
         const transDoc = await ctx.runMutation(api.transmissions.upsertTransmission, {
           trim_id: trimId,
           transmission_type: "unknown",
@@ -1331,7 +1752,6 @@ export const enrichVehicleBatchV3 = internalAction({
         });
         if (transDoc?._id) {
           transmissionId = transDoc._id;
-          // Link to vehicle
           await ctx.runMutation(api.vehicles.upsertVehicle, {
             vin: vehicleDoc.vin,
             transmission_id: transmissionId,
@@ -1339,6 +1759,7 @@ export const enrichVehicleBatchV3 = internalAction({
           console.log(`[v8] Placeholder transmission created: ${transmissionId}`);
         }
       }
+      // else: link already points at a real row — leave it untouched.
     }
 
     // STEP 3b: Fuzzy dedup — if a config with the same engine+year+make exists
@@ -1380,6 +1801,7 @@ export const enrichVehicleBatchV3 = internalAction({
           config_key: configKey,
           drivetrain: drivetrainVal,
           nhtsa_vin_key: args.nhtsaVinKey,
+          transmission_id: transmissionId ?? undefined,
         },
       );
       vehicleConfigId = args.targetConfigId;
@@ -1578,6 +2000,19 @@ export const enrichVehicleBatchV3 = internalAction({
     // STEP 7: FireCrawl scrape — parts catalog + owner's manual
     const sources = await scrapeVehicleSources(ctx, vehicle);
 
+    // STEP 7b: Record deterministic supersession chains parsed from the same
+    // registry HTML (marks known-superseded oem_parts rows so fitment writes
+    // redirect to the successor and superseded numbers stop being priced).
+    if (sources.supersessions.length > 0) {
+      try {
+        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recordSupersessions, {
+          supersessions: sources.supersessions,
+        });
+      } catch (e) {
+        console.warn("[v8] recordSupersessions failed (non-fatal):", e);
+      }
+    }
+
     // STEP 8: Submit Batch [1A, 1B]
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
       run_id: runId,
@@ -1745,7 +2180,7 @@ export const _pollBatch1V3 = internalAction({
     // finalize after Batch-1 (no Batch-2). Defaults to "full".
     writeScope: v.optional(v.union(v.literal("full"), v.literal("parts"))),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<void> => {
     // Catch-all failure handler (Jun-9 review item 3): ANY unexpected throw in
     // the poll body must restore the config to a terminal status — 'pending'
     // before batch-1 data hit the normalized tables, 'partial' after — or the
@@ -1802,19 +2237,25 @@ async function runPollBatch1Body(
       console.warn(`[v8/_pollBatch1] getBatchStatus failed (attempt ${attempt}) — treating as not-ended:`, e);
     }
     if (status !== "ended") {
-      if (attempt >= MAX_POLL_ATTEMPTS) {
-        console.error(`[v8/_pollBatch1] Timed out after ${attempt} attempts`);
+      if (attempt >= MAX_POLL_ATTEMPTS_TOTAL) {
+        // ~24h: the batch should have ended or expired by now. Fail the run
+        // loudly (config back to retryable "pending"); this branch should be
+        // near-unreachable since Anthropic force-resolves batches at 24h.
+        console.error(`[v8/_pollBatch1] Batch not ended after ~24h (${attempt} attempts) — failing run`);
         await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
           run_id: args.runId,
           vehicle_config_id: args.vehicleConfigId,
           run_status: "failed",
-          errors: ["batch1_timeout"],
+          errors: ["batch1_timeout_24h"],
           config_status: "pending",
         });
         return;
       }
+      if (attempt === MAX_POLL_ATTEMPTS) {
+        console.warn(`[v8/_pollBatch1] Batch still queued after ${attempt} fast polls (~3h) — switching to 10-min slow poll (paid batch, will collect when it ends)`);
+      }
       await ctx.scheduler.runAfter(
-        POLL_INTERVAL_MS,
+        attempt >= MAX_POLL_ATTEMPTS ? SLOW_POLL_INTERVAL_MS : POLL_INTERVAL_MS,
         internal.vehicleEnrichment.v3pipeline._pollBatch1V3,
         { ...args, attempt: attempt + 1 },
       );
@@ -1865,7 +2306,7 @@ async function runPollBatch1Body(
           if (!svc) continue;
           // VDB labor is verified-bad (too generic per car) — kept at near-zero
           // weight as a last-resort tiebreaker only. The weighted median now
-          // honors weights (labor_aggregation.ts), so RepairPal/LLM dominate.
+          // honors weights (labor_aggregation.ts), so OLP/LLM dominate.
           // book_only skips the empirical job_actuals scan.
           await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
             vehicle_config_id: args.vehicleConfigId,
@@ -1971,6 +2412,20 @@ async function runPollBatch1Body(
     const filledCount = V4_FIELD_KEYS.filter((k) => fields[k]?.value != null).length;
     console.log(`[v8/_pollBatch1] ${filledCount}/${V4_FIELD_KEYS.length} fields after merge+applicability`);
 
+    // Sanity checks BEFORE the first write. Previously only the batch-2
+    // finalize ran these, but this write already persists batch-1 values and
+    // the merge-semantics mutations skip undefined — so a value rejected at
+    // finalize (nulled) could never un-write what batch-1 stored (the 16.9 qt
+    // coolant survival vector). Rejecting here also puts the field back in the
+    // batch-2 gap-fill set, giving the pipeline a second chance at a clean
+    // value. Finalize re-runs the checks over the merged map as before.
+    const batch1SanityFlags = runSanityChecks(fields, vPicData?.cylinders ?? 4);
+    if (batch1SanityFlags.length > 0) {
+      console.log(
+        `[v8/_pollBatch1] Sanity: ${batch1SanityFlags.length} flags applied before batch-1 write (${batch1SanityFlags.map((f) => f.field).join(", ")})`,
+      );
+    }
+
     // Write to normalized tables
     const serviceCache = new Map<string, Id<"services">>();
     await writeNormalizedData(
@@ -2021,9 +2476,30 @@ async function runPollBatch1Body(
         duration_ms: Date.now() - args.startTime,
         fill_rate: partsFillRate,
       });
+      // Quotability isn't computed on the parts-only path — reuse the latest
+      // full run's persisted snapshot so a parts refresh can't silently flip
+      // an unquotable config to complete on fill alone.
+      let priorQuotabilityPct: number | null = null;
+      let priorHadPriceGaps = false;
+      try {
+        const latestRun = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        priorQuotabilityPct = (latestRun as any)?.quotability?.pct ?? null;
+        priorHadPriceGaps = ((latestRun as any)?.field_gaps ?? []).some(
+          (g: any) => typeof g?.field === "string" && g.field.startsWith("part_price:"),
+        );
+      } catch (e) {
+        console.warn("[v8/_pollBatch1] prior quotability read failed (non-fatal):", e);
+      }
       await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
         vehicle_config_id: args.vehicleConfigId,
-        enrichment_status: partsFillRate >= 70 ? "complete" : "partial",
+        enrichment_status: computeEnrichmentStatus({
+          fillRate: partsFillRate,
+          quotabilityPct: priorQuotabilityPct,
+          hasPriceGaps: priorHadPriceGaps,
+        }),
         fill_rate: partsFillRate,
         last_enriched_at: Date.now(),
       });
@@ -2047,6 +2523,14 @@ async function runPollBatch1Body(
       total_web_searches: callLog.reduce((s, c) => s + c.webSearches, 0),
     });
 
+    // Give gap-fill more searches when numeric specs (capacities, CCA, gap) are
+    // missing — with the old flat maxSearchUses:1 a single part-number lookup
+    // consumed the whole budget and specs never got searched. Capped to bound cost.
+    const numericSpecGaps = nullFields.filter((k) =>
+      ["coolant_capacity_qts", "oil_capacity_qts", "battery_cca", "spark_plug_gap"].includes(k),
+    ).length;
+    const batch2SearchUses = Math.min(1 + numericSpecGaps, 5);
+
     let batch2Id: string;
     try {
       batch2Id = await submitBatch([
@@ -2056,7 +2540,7 @@ async function runPollBatch1Body(
           userPrompt: buildBatch2Prompt(vehicle, nullFields, oemParts),
           maxTokens: 16384,
           temperature: 0,
-          maxSearchUses: 1,
+          maxSearchUses: batch2SearchUses,
           blockedDomains: BLOCKED_DOMAINS,
         },
       ]);
@@ -2111,14 +2595,26 @@ export const _pollBatch2V3 = internalAction({
     transmissionId: v.optional(v.id("transmissions")),
     makeId: v.id("makes"),
     runId: v.id("enrichment_runs"),
+    // Late-collection mode (batch-2 audit, Jul 2026): after the 3h timeout
+    // finalizes with batch-1 data, the PAID batch keeps processing at
+    // Anthropic — this flag keeps slow-polling it and applies the gap-fill
+    // when it ends instead of orphaning the results (Challenger case).
+    lateCollect: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<void> => {
     // Catch-all failure handler (Jun-9 review item 3): batch-1 data is always
     // written by the time this action runs, so any unexpected throw restores
     // the config to 'partial' instead of leaving it stuck 'enriching'.
     try {
       return await runPollBatch2Body(ctx, args);
     } catch (e) {
+      if (args.lateCollect) {
+        // The run already finalized at the 3h timeout — a late-collection
+        // failure must not re-mark it failed; the config's terminal state
+        // stands and only the bonus gap-fill is lost.
+        console.error(`[v8/_pollBatch2] late-collection failure (non-fatal, config already finalized):`, e);
+        return;
+      }
       console.error(`[v8/_pollBatch2] UNEXPECTED failure — restoring terminal status:`, e);
       try {
         await ctx.runMutation(internal.vehicleEnrichment.v3mutations.failEnrichmentRun, {
@@ -2141,6 +2637,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     const attempt = args.attempt ?? 1;
     console.log(`[v8/_pollBatch2] Poll attempt ${attempt} for batchId=${args.batchId}`);
 
+    // Convex hard-kills an action at 600s — un-catchable, so the run gets
+    // stuck at status "batch2" (observed live 2026-07-10: capacity
+    // corroboration + a 24-part discovery budget pushed finalize past the
+    // limit; one 408-hanging PDF extraction alone ate ~3 min). Past this
+    // deadline no NEW Firecrawl price work is started; skipped parts land in
+    // the gap ledger and the nightly backfill picks them up. 360s leaves room
+    // for a worst-case ~3 min in-flight extraction plus the finalize writes.
+    const actionStartedAt = Date.now();
+    const priceWorkDeadline =
+      actionStartedAt + Number(process.env.PARTS_PRICE_PASS_DEADLINE_MS ?? "360000");
+
     // Liveness heartbeat for the STEP 0 force-unstick probe.
     try {
       await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
@@ -2162,12 +2669,37 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // Review item 6: on timeout the batch has NOT ended — reading its results
     // would throw (stuck config) or mis-mark the run 'complete'. Skip the
     // results entirely, finalize with batch-1 data only (r2 undefined), and
-    // record the run as 'timeout'.
+    // record the run as 'timeout'. NEW (batch-2 audit, Jul 2026): the paid
+    // batch keeps processing at Anthropic, so the timeout ALSO arms a
+    // late-collection chain that slow-polls to ~24h and applies the gap-fill
+    // through this same body when the batch finally ends (Challenger case:
+    // finalized thin at 3h while its batch completed into the void).
     let timedOut = false;
     if (status !== "ended") {
+      if (args.lateCollect) {
+        if (attempt >= MAX_POLL_ATTEMPTS_TOTAL) {
+          console.error("[v8/_pollBatch2] Late collection: batch never ended by ~24h — giving up (config already finalized)");
+          return;
+        }
+        await ctx.scheduler.runAfter(
+          SLOW_POLL_INTERVAL_MS,
+          internal.vehicleEnrichment.v3pipeline._pollBatch2V3,
+          { ...args, attempt: attempt + 1 },
+        );
+        return;
+      }
       if (attempt >= MAX_POLL_ATTEMPTS) {
-        console.error("[v8/_pollBatch2] Timed out — finalizing with batch-1 data only");
+        console.error("[v8/_pollBatch2] Timed out — finalizing with batch-1 data only; arming late collector for the paid batch");
         timedOut = true;
+        try {
+          await ctx.scheduler.runAfter(
+            SLOW_POLL_INTERVAL_MS,
+            internal.vehicleEnrichment.v3pipeline._pollBatch2V3,
+            { ...args, attempt: attempt + 1, lateCollect: true },
+          );
+        } catch (e) {
+          console.warn("[v8/_pollBatch2] failed to arm late collector (non-fatal):", e);
+        }
       } else {
         await ctx.scheduler.runAfter(
           POLL_INTERVAL_MS,
@@ -2176,6 +2708,8 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         );
         return;
       }
+    } else if (args.lateCollect) {
+      console.log("[v8/_pollBatch2] Late collection: paid batch ended — applying gap-fill to the finalized config");
     }
 
     const results = timedOut ? {} : await getBatchResults(args.batchId);
@@ -2214,6 +2748,62 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         }
       }
 
+      // Batch 3 (gap-fill re-ask): ONE bounded targeted pass over fields
+      // STILL null after Batch 2 (getNullFields excludes not_applicable —
+      // re-asking N/A fields resurrected impossible data, see comment above
+      // getNullFields). One synchronous web-search call, capped field count,
+      // values flow through the same parseBatch2 → sanity → sanitize gates as
+      // Batch-2 gap fills. No loop — a field that survives this stays in the
+      // run's field_gaps ledger instead.
+      if (process.env.PARTS_GAPFILL !== "off") {
+        const gapFillMax = Number(process.env.PARTS_GAPFILL_MAX_FIELDS ?? "15");
+        // Rank by quotability impact before slicing to the cap — core-role
+        // parts without a fallback (battery) must not lose their re-ask slot
+        // to cosmetic fields. Field-level identity wins over trim tokens.
+        const gfTrimIdentity = deriveIdentityFromTrim(args.trim);
+        const stillNull = rankGapFillFields(getNullFields(allFields), {
+          drivetrain:
+            (allFields.drivetrain?.value as string | null) ?? gfTrimIdentity.drivetrain,
+          transmission_type:
+            (allFields.transmission_type?.value as string | null) ??
+            gfTrimIdentity.transmission_type,
+          body_class: gfTrimIdentity.body_class,
+        }).slice(0, gapFillMax);
+        if (stillNull.length > 0) {
+          try {
+            const gfVehicle: VehicleInput = {
+              vehicleId: args.vehicleId,
+              year: args.year, make: args.make, model: args.model,
+              trim: args.trim, engineCode: args.engineCode, displacement: args.displacement,
+            };
+            const gfRes = await callClaudeWithWebSearch({
+              system: GAP_FILL_SYSTEM,
+              userPrompt: buildGapFillPrompt(gfVehicle, stillNull),
+              maxSearchUses: Math.min(stillNull.length * 2, 12),
+              maxTokens: 4000,
+              temperature: 0,
+            });
+            callLog.push({
+              call: "gapfill",
+              tokensIn: gfRes.usage.tokensIn,
+              tokensOut: gfRes.usage.tokensOut,
+              webSearches: gfRes.usage.webSearches,
+              durationMs: 0,
+            });
+            const gfParsed = parseBatch2(gfRes.data, stillNull);
+            let gfFilled = 0;
+            for (const [k, fv] of Object.entries(gfParsed.gapFields)) {
+              if (allFields[k]?.value == null) {
+                allFields[k] = fv;
+                gfFilled++;
+              }
+            }
+            console.log(`[v8/gapfill] re-asked ${stillNull.length} fields, filled ${gfFilled}`);
+          } catch (e) {
+            console.warn("[v8/gapfill] re-ask pass failed (non-fatal):", e);
+          }
+        }
+      }
     }
 
     // Validation — MUST run BEFORE writeNormalizedData so bad values get nulled first
@@ -2237,10 +2827,59 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       { vehicleId: args.vehicleId },
     );
     const cylinders = enginePicData?.cylinders ?? 4;
+
+    // Re-apply applicability with everything we know NOW: Batch 2/3 may have
+    // resolved drivetrain/transmission_type that Batch 1 didn't have, and the
+    // trim string carries body/transmission tokens the decode lacked (2001
+    // 740iA). Then convert residual N/A-by-elimination nulls (chain-engine
+    // timing service) so they ledger as not_applicable, not llm_null.
+    const finalIdentity = mergeIdentity(
+      enginePicData,
+      null,
+      deriveIdentityFromTrim(args.trim),
+    );
+    allFields = applyApplicabilityRules(allFields, finalIdentity);
+    allFields = applyFinalizeApplicability(allFields);
+
     const sanityFlags = runSanityChecks(allFields, cylinders);
     const oemFlags = validateAllOemParts(allFields, vehicle.make);
     if (sanityFlags.length > 0) console.log(`[v8] Sanity: ${sanityFlags.length} flags (applied before write)`);
     if (oemFlags.length > 0) console.log(`[v8] OEM: ${oemFlags.length} issues`);
+
+    // Authoritative capacity resolution — actively re-fetch coolant/oil capacity
+    // from OEM/service-manual sources when sanity checks nulled a bad value (e.g.
+    // the 16.9 qt forum coolant) or the batches found none. Mutates allFields in
+    // place; writeNormalizedData below persists accepted values and erases
+    // still-unresolved ones. Non-fatal — a failure never breaks enrichment.
+    if (process.env.SPECS_AUTHORITATIVE_REFETCH !== "off") {
+      try {
+        const engineRow = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getEngine,
+          { engineId: args.engineId },
+        );
+        const decisions = await resolveCapacities(ctx, {
+          vehicle, engineId: args.engineId, cylinders, fields: allFields,
+          runId: args.runId, verifiedFields: ((engineRow as any)?.verified_fields ?? []) as string[],
+        });
+        if (decisions.length > 0) {
+          console.log(
+            `[v8/cap] ${decisions.map((d) => `${d.field}=${d.value_qts ?? "review"}(${d.source_count}src${d.authoritative ? ",auth" : ""},${d.tier})`).join(" ")}`,
+          );
+        }
+      } catch (e) {
+        console.warn("[v8/cap] capacity resolver failed (non-fatal):", e);
+      }
+    }
+
+    // Price-gap ledger — merged into the run's field_gaps at finalize so
+    // unpriced parts are VISIBLE (and targetable by the nightly backfill)
+    // instead of silently absent. Reasons: price_budget_exhausted /
+    // price_no_source / price_unverified_sources / price_no_oem_anchor.
+    const priceGaps: Array<{ field: string; reason: string }> = [];
+
+    // Parts-side quotability — computed after pricing (below), persisted on
+    // the run so a "complete · 93%" can no longer hide an unquotable service.
+    let quotability: QuotabilityResult | undefined;
 
     // Write sanitized data to normalized tables
     if (r2) {
@@ -2296,46 +2935,52 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         console.log(`[v8] ${deterministicPrices.size} deterministic JSON-LD prices for ${args.make} ${args.model}`);
       }
 
-      // ── RepairPal labor setup (ONCE per car). Resolve the car's own nameplate
-      //    via an oil-change probe; cache per-determinant siblings so we don't
-      //    re-probe dead nameplates for every service. Dark behind the flag.
-      const rpEnabled = process.env.LABOR_SOURCE_REPAIRPAL === "on";
-      let rpOwnNameplate: string | null = null;
-      let rpEngineDoc: any = null;
-      let rpEngineFamily: string | undefined;
-      let rpChassisCode: string | undefined;
-      const rpSibling = new Map<string, { nameplate: string; match_key: string } | null>();
-      if (rpEnabled) {
-        rpEngineDoc = await ctx.runQuery(
-          internal.vehicleEnrichment.v3queries.getEngine,
-          { engineId: args.engineId },
-        );
-        // Engine family for sibling matching. The engine ROW can be a placeholder
-        // ("4.4l_8cyl") on a desynced config, so fall back to args.engineCode —
-        // the run's real input code ("N63B44O2") — which still derives the family.
-        rpEngineFamily =
-          rpEngineDoc?.engine_family ??
-          deriveEngineFamily(rpEngineDoc?.engine_code) ??
-          deriveEngineFamily(args.engineCode);
-        // runQuery serializes an undefined return to null — normalize, or the
-        // sibling resolver's v.optional(v.string()) validator throws for any
-        // car without a chassis code (latent stuck-config route, found via
-        // the Atlas relabor Jun-10).
-        rpChassisCode = (await ctx.runQuery(
-          internal.vehicleEnrichment.laborSibling.getConfigChassisCode,
-          { vehicleConfigId: args.vehicleConfigId },
-        )) ?? undefined;
-        for (const cand of repairpalModelCandidates(args.model, args.trim ?? "")) {
-          const probe = await ctx.runAction(
-            internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-            { urls: repairpalUrlCandidates(args.make, cand, "oil-change", args.year) },
-          );
-          if (probe) { rpOwnNameplate = cand; break; }
-        }
-        console.log(
-          `[v8/labor] RepairPal nameplate for ${args.make} ${args.model} ${args.trim ?? ""}: ${rpOwnNameplate ?? "(none → siblings)"}`,
-        );
-      }
+      // Fallback price-URL discovery for parts Batch-2 left without a source
+      // URL (the prompt tells the model to OMIT unpriced parts, so omission is
+      // routine — without this, those parts get zero fetch attempts). One
+      // Firecrawl search per part, capped per run to bound credit spend.
+      const priceDiscoveryEnabled = process.env.PARTS_PRICE_URL_DISCOVERY !== "off";
+      const priceDiscoveryMax = Number(process.env.PARTS_PRICE_DISCOVERY_MAX ?? "10");
+      let priceDiscoveryUsed = 0;
+      // URL-less parts are QUEUED here across all services (not discovered
+      // inline) so the budget above is spent by priority — core parts on
+      // otherwise-unpriced services first — instead of by fitment iteration
+      // order (which starved the battery/rear pads on the Jul 2026 A4 run).
+      const discoveryQueue: DiscoveryQueueItem[] = [];
+      const pricedPartsByService = new Map<string, number>();
+      const bumpPriced = (slug: string) =>
+        pricedPartsByService.set(slug, (pricedPartsByService.get(slug) ?? 0) + 1);
+
+      // ── Multi-source labor (ONCE per car). The `laborAllSources` orchestrator
+      //    fans out to OLP + RepairPal + open-web (each flag-gated), merges the
+      //    per-source hours into weighted `labor_observations`, and recomputes the
+      //    weighted-median labor_times row — all internally. It REPLACES the old
+      //    OLP-only resolution + write loop. The LLM book-time loop below (llm_web
+      //    / llm_training) is a SEPARATE source the orchestrator does NOT handle,
+      //    so it stays. Flags: OLP on-by-default; RepairPal/web opt-in (read from
+      //    env in ONE place via laborFlagsFromEnv so this path and the laborRelabor
+      //    backfill can never drift).
+      const laborFlags = laborFlagsFromEnv();
+
+      // Engine descriptors fetched ONCE for the orchestrator inputs (named
+      // distinctly from the LLM loop's per-service `engineDoc` to avoid clashing).
+      const laborEngineDoc: any = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getEngine,
+        { engineId: args.engineId },
+      );
+      const laborEngineFamily =
+        laborEngineDoc?.engine_family ??
+        deriveEngineFamily(laborEngineDoc?.engine_code) ??
+        deriveEngineFamily(args.engineCode);
+      const laborRawDisp = laborEngineDoc?.displacement_l ?? laborEngineDoc?.displacement_liters ?? null;
+      const laborDisplacementL = laborRawDisp == null ? null : Number(laborRawDisp) || null;
+      const laborCylinders = laborEngineDoc?.cylinders ?? null;
+      const laborTurbo =
+        laborEngineDoc?.aspiration != null ? /turbo|supercharg/i.test(laborEngineDoc.aspiration) : null;
+      const laborVc: any = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getVehicleConfigById,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
 
       // Write labor times from Batch 2 pricing
       for (const svc of services) {
@@ -2374,74 +3019,73 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           service_id: serviceId,
           book_only: true,
         });
+      }
 
-        // RepairPal (MOTOR) labor: own nameplate first, else a verified sibling
-        // (resolved ONCE per determinant, cached in rpSibling). Dark behind the
-        // flag. All scrapes safe-fail to null → service falls back to the LLM obs.
-        const laborCfg = LABOR_SERVICE_CONFIG[slug];
-        if (rpEnabled && laborCfg?.repairpal_slug) {
-          let rpHours: number | null = null;
-          let rpMatchKey = "exact";
-          let rpSiblingSlug: string | undefined;
+      // Multi-source labor — written independently of the LLM loop so that every
+      // APPLICABLE MAPPED service gets resolved (OLP + RepairPal + web) regardless
+      // of whether the LLM provided labor_hours (Phase-2 parity with the backfill
+      // in laborRelabor.ts). The orchestrator does the observation writes + recompute
+      // internally; olp_labor lands at weight 0.7 here (the multi-source SOURCE_WEIGHTS
+      // recalibration), NOT the single-source 0.8 of olpRelabor.ts. Replaces the old
+      // OLP-only resolution + write loop.
+      const laborServices: Array<{
+        slug: string;
+        serviceId: Id<"services">;
+        name: string;
+        repairpal_slug: string | null;
+      }> = [];
+      // resolveServiceId is serviceCache-memoized, so re-iterating `services` here
+      // (after the LLM book-time loop above already resolved these slugs) reads from
+      // the cache and does NOT double-query the DB.
+      for (const svc of services) {
+        if (!svc.is_applicable) continue;
+        const slug = SERVICE_NAME_TO_SLUG[svc.service_name];
+        if (!slug) continue;
+        const serviceId = await resolveServiceId(ctx, slug, serviceCache);
+        if (!serviceId) continue;
+        laborServices.push({
+          slug,
+          serviceId,
+          name: svc.service_name,
+          repairpal_slug: LABOR_SERVICE_CONFIG[slug]?.repairpal_slug ?? null,
+        });
+      }
 
-          if (rpOwnNameplate) {
-            const rp = await ctx.runAction(
-              internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-              { urls: repairpalUrlCandidates(args.make, rpOwnNameplate, laborCfg.repairpal_slug, args.year) },
-            );
-            if (rp) { rpHours = rp.hours; rpSiblingSlug = rpOwnNameplate; }
-          }
+      // Resolve the OLP Next.js buildId only when OLP is enabled (it's the one
+      // shared input across all OLP service pages); undefined if OLP off/unresolved.
+      let laborBuildId: string | undefined = undefined;
+      if (laborFlags.olp) {
+        const bid = await ctx.runAction(internal.vehicleEnrichment.olpLaborScrape.resolveBuildId, {});
+        laborBuildId = bid.buildId ?? undefined;
+      }
 
-          if (rpHours == null) {
-            const det = laborCfg.determinant;
-            if (!rpSibling.has(det)) {
-              rpSibling.set(
-                det,
-                await ctx.runAction(
-                  internal.vehicleEnrichment.laborSibling.resolveLaborSibling,
-                  {
-                    make: args.make,
-                    model: args.model,
-                    trim: args.trim,
-                    year: args.year,
-                    chassis_code: rpChassisCode,
-                    engine_family: rpEngineFamily,
-                    determinant: det,
-                  },
-                ),
-              );
-            }
-            const sib = rpSibling.get(det);
-            if (sib) {
-              // The sibling is a different nameplate; OUR year still selects
-              // its same-generation page (e.g. 2021 M550i → 750i/2021).
-              const rp = await ctx.runAction(
-                internal.vehicleEnrichment.repairpalLabor.scrapeRepairpalHours,
-                { urls: repairpalUrlCandidates(args.make, sib.nameplate, laborCfg.repairpal_slug, args.year) },
-              );
-              if (rp) { rpHours = rp.hours; rpMatchKey = sib.match_key; rpSiblingSlug = sib.nameplate; }
-            }
-          }
+      console.log(
+        `[v8/labor] laborAllSources for ${args.make} ${args.model} ${args.trim ?? ""}: ` +
+        `flags={olp:${laborFlags.olp},web:${laborFlags.web}}, ` +
+        `${laborServices.length} services, buildId=${laborBuildId ? "resolved" : "none"}`,
+      );
 
-          if (rpHours != null) {
-            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertLaborObservation, {
-              vehicle_config_id: args.vehicleConfigId,
-              service_id: serviceId,
-              hours: rpHours,
-              source: "repairpal_motor",
-              weight: 0.8,
-              tier: "catalog",
-              engine_family: rpEngineFamily,
-              match_key: rpMatchKey,
-              sibling_slug: rpSiblingSlug,
-            });
-            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.recomputeLaborTime, {
-              vehicle_config_id: args.vehicleConfigId,
-              service_id: serviceId,
-              book_only: true,
-            });
-          }
-        }
+      // Wrapped in try/catch so a total orchestrator failure NEVER aborts the
+      // downstream part-price writes (graceful degradation, like the old OLP block).
+      try {
+        await ctx.runAction(internal.vehicleEnrichment.laborResearch.laborAllSources, {
+          vehicleConfigId: args.vehicleConfigId,
+          make: args.make,
+          model: args.model,
+          trim: args.trim ?? "",
+          year: args.year,
+          engine: laborEngineDoc?.engine_code ?? null,
+          engine_family: laborEngineFamily,
+          displacementL: laborDisplacementL,
+          cylinders: laborCylinders,
+          drivetrain: laborVc?.drivetrain ?? null,
+          turbo: laborTurbo,
+          buildId: laborBuildId,
+          services: laborServices,
+          flags: laborFlags,
+        });
+      } catch (e) {
+        console.warn("[v3pipeline] laborAllSources failed (non-fatal):", e);
       }
 
       // Write part prices from Batch 2 pricing.
@@ -2471,130 +3115,418 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         );
         if (fitments.length === 0) continue;
 
-        // Authoritative: deterministic JSON-LD prices. Write the real per-SKU
-        // price for any fitment whose OEM number was parsed from the registry
-        // HTML, and mark it so the LLM breakdown below can't overwrite it.
-        for (const f of fitments) {
-          const num = (f as any).oem_part_number as string | null;
-          if (!num) continue;
-          const dp = deterministicPrices.get(normalizeOemNumber(num));
-          if (!dp) continue;
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
-            part_id:       f.part_id,
-            price:         dp.price,
-            price_type:    "sale",
-            source_url:    dp.source_url,
-            source_domain: dp.source_domain,
-          });
-          deterministicallyPriced.add(f.part_id);
-        }
+        if (process.env.PARTS_FIRECRAWL_PRICING === "off") {
+          // ===== LEGACY PATH (flag-off fallback) =====
 
-        // Preferred: itemized parts_breakdown — write each part's own price.
-        if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
-          // Build a quick oem_number → part_id lookup. Same OEM may have
-          // multiple fitments under one service (base + package variant) —
-          // every match gets the same per-unit price. Keys are NORMALIZED
-          // (mirrors the deterministic path above): the LLM frequently
-          // reformats numbers ("5Q0 698 451 A" vs stored "5Q0698451A"), and a
-          // raw-string match silently dropped those prices (Jun-9 review).
-          const numberToPartIds = new Map<string, Id<"oem_parts">[]>();
+          // Authoritative: deterministic JSON-LD prices. Write the real per-SKU
+          // price for any fitment whose OEM number was parsed from the registry
+          // HTML, and mark it so the LLM breakdown below can't overwrite it.
           for (const f of fitments) {
-            const num = (f as any).oem_part_number;
+            const num = (f as any).oem_part_number as string | null;
             if (!num) continue;
-            const key = normalizeOemNumber(num);
-            const arr = numberToPartIds.get(key) ?? [];
-            arr.push(f.part_id);
-            numberToPartIds.set(key, arr);
+            const dp = deterministicPrices.get(normalizeOemNumber(num));
+            if (!dp) continue;
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+              part_id:       f.part_id,
+              price:         dp.price,
+              price_type:    "sale",
+              source_url:    dp.source_url,
+              source_domain: dp.source_domain,
+            });
+            deterministicallyPriced.add(f.part_id);
           }
 
-          for (const entry of svc.parts_breakdown) {
-            if (entry.price_low == null) continue;
-            if (!entry.oem_part_number) continue;
-            const partIds = numberToPartIds.get(normalizeOemNumber(entry.oem_part_number));
-            if (!partIds || partIds.length === 0) continue;
-            const sourceDomain = entry.source_domain ?? extractDomain(entry.source_url ?? undefined) ?? "enrichment";
+          // Preferred: itemized parts_breakdown — write each part's own price.
+          if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
+            // Build a quick oem_number → part_id lookup. Same OEM may have
+            // multiple fitments under one service (base + package variant) —
+            // every match gets the same per-unit price. Keys are NORMALIZED
+            // (mirrors the deterministic path above): the LLM frequently
+            // reformats numbers ("5Q0 698 451 A" vs stored "5Q0698451A"), and a
+            // raw-string match silently dropped those prices (Jun-9 review).
+            const numberToPartIds = new Map<string, Id<"oem_parts">[]>();
+            for (const f of fitments) {
+              const num = (f as any).oem_part_number;
+              if (!num) continue;
+              const key = normalizeOemNumber(num);
+              const arr = numberToPartIds.get(key) ?? [];
+              arr.push(f.part_id);
+              numberToPartIds.set(key, arr);
+            }
 
-            // FIX AT SOURCE: verify the web-search LLM's price against its own
-            // cited page via the shared two-tier re-extraction (Tier 1 structured
-            // → Tier 2 LLM that excludes MSRP/"was"/"You Save"). When it confirms
-            // a real price we store the verified "sale" value instead of the raw
-            // estimate, so a fresh enrichment never persists a discount/MSRP
-            // figure. Flag-gated because it adds a fetch per itemized part; falls
-            // back to the unverified llm_estimate when off, unreachable, or
-            // neither tier can trust the page.
-            let verified: number | null = null;
-            // Affirmative rejection = the cited page itself testified AGAINST
-            // this number (price>=MSRP / wrong OEM / outside the median band).
-            // Persisting it as trusted 'llm_estimate' would feed a known-bad
-            // value into the customer median (Jun-9 review, item 8) — write it
-            // as UNVERIFIED instead (kept for audit, excluded from the median).
-            // Passive failures (empty page, no text, LLM error) keep the old
-            // fail-open llm_estimate behavior: we learned nothing new.
-            let affirmativeReject = false;
-            if (process.env.PARTS_REEXTRACT_BATCH2 === "on" && entry.source_url) {
-              try {
-                const outcome = await reextractPartPrice({
-                  oem: entry.oem_part_number,
-                  partName: (entry as any).part_name ?? null,
-                  source_url: entry.source_url,
-                  crossSourceMedian: null,
-                });
-                if (outcome.status === "sale") {
-                  verified = outcome.price;
-                } else if (
-                  outcome.status === "unverified" &&
-                  isAffirmativeRejection(outcome.reason)
-                ) {
-                  affirmativeReject = true;
-                  console.warn(
-                    `[v8] Batch-2 price affirmatively rejected (${outcome.reason}) for ` +
-                      `${entry.oem_part_number} @ ${sourceDomain} — storing as unverified`,
-                  );
+            for (const entry of svc.parts_breakdown) {
+              if (entry.price_low == null) continue;
+              if (!entry.oem_part_number) continue;
+              const partIds = numberToPartIds.get(normalizeOemNumber(entry.oem_part_number));
+              if (!partIds || partIds.length === 0) continue;
+              const sourceDomain = entry.source_domain ?? extractDomain(entry.source_url ?? undefined) ?? "enrichment";
+
+              // FIX AT SOURCE: verify the web-search LLM's price against its own
+              // cited page via the shared two-tier re-extraction (Tier 1 structured
+              // → Tier 2 LLM that excludes MSRP/"was"/"You Save"). When it confirms
+              // a real price we store the verified "sale" value instead of the raw
+              // estimate, so a fresh enrichment never persists a discount/MSRP
+              // figure. Flag-gated because it adds a fetch per itemized part; falls
+              // back to the unverified llm_estimate when off, unreachable, or
+              // neither tier can trust the page.
+              let verified: number | null = null;
+              // Affirmative rejection = the cited page itself testified AGAINST
+              // this number (price>=MSRP / wrong OEM / outside the median band).
+              // Persisting it as trusted 'llm_estimate' would feed a known-bad
+              // value into the customer median (Jun-9 review, item 8) — write it
+              // as UNVERIFIED instead (kept for audit, excluded from the median).
+              // Passive failures (empty page, no text, LLM error) keep the old
+              // fail-open llm_estimate behavior: we learned nothing new.
+              let affirmativeReject = false;
+              if (process.env.PARTS_REEXTRACT_BATCH2 === "on" && entry.source_url) {
+                try {
+                  const outcome = await reextractPartPrice({
+                    oem: entry.oem_part_number,
+                    partName: (entry as any).part_name ?? null,
+                    source_url: entry.source_url,
+                    crossSourceMedian: null,
+                  });
+                  if (outcome.status === "sale") {
+                    verified = outcome.price;
+                  } else if (
+                    outcome.status === "unverified" &&
+                    isAffirmativeRejection(outcome.reason)
+                  ) {
+                    affirmativeReject = true;
+                    console.warn(
+                      `[v8] Batch-2 price affirmatively rejected (${outcome.reason}) for ` +
+                        `${entry.oem_part_number} @ ${sourceDomain} — storing as unverified`,
+                    );
+                  }
+                } catch (e) {
+                  console.warn("[v8] Batch-2 Tier-2 reextract failed (non-fatal):", e);
                 }
-              } catch (e) {
-                console.warn("[v8] Batch-2 Tier-2 reextract failed (non-fatal):", e);
+              }
+
+              for (const partId of partIds) {
+                // Deterministic JSON-LD price already owns this part — the LLM
+                // estimate must not overwrite it or pollute the median.
+                if (deterministicallyPriced.has(partId)) continue;
+                await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+                  part_id:       partId,
+                  price:         verified ?? entry.price_low,
+                  price_type:
+                    verified != null
+                      ? "sale"
+                      : affirmativeReject
+                        ? UNVERIFIED_PRICE_TYPE
+                        : "llm_estimate",
+                  source_url:    entry.source_url ?? undefined,
+                  source_domain: sourceDomain,
+                });
+                if (verified != null) deterministicallyPriced.add(partId);
               }
             }
+            continue; // breakdown handled this service — don't fall through
+          }
 
-            for (const partId of partIds) {
-              // Deterministic JSON-LD price already owns this part — the LLM
-              // estimate must not overwrite it or pollute the median.
-              if (deterministicallyPriced.has(partId)) continue;
-              await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
-                part_id:       partId,
-                price:         verified ?? entry.price_low,
-                price_type:
-                  verified != null
-                    ? "sale"
-                    : affirmativeReject
-                      ? UNVERIFIED_PRICE_TYPE
-                      : "llm_estimate",
-                source_url:    entry.source_url ?? undefined,
-                source_domain: sourceDomain,
+          // Fallback: legacy service-level price. Store as per-unit on each
+          // fitment in the service (no division — the prompt contracts the
+          // service-level price as per-unit too).
+          const priceVal = asNumber(svc.parts_cost_low?.value);
+          if (priceVal == null) continue;
+          for (const fitment of fitments) {
+            // Skip parts the deterministic JSON-LD parser already priced.
+            if (deterministicallyPriced.has(fitment.part_id)) continue;
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+              part_id:       fitment.part_id,
+              price:         priceVal,
+              price_type:    "llm_estimate",
+              source_domain: extractDomain(svc.parts_cost_low?.source_url) ?? "enrichment",
+              source_url:    svc.parts_cost_low?.source_url ?? undefined,
+            });
+          }
+        } else {
+          // ===== Firecrawl structured pricing (default) =====
+          // Price each fitment across the UNION of its discovered source URLs
+          // (deterministic JSON-LD source + parts_breakdown entries). Every price
+          // is re-verified via Firecrawl json + gauge/guided-retry; only validated
+          // "sale" rows are written (msrp/discount included). Parts with no
+          // discovered product URL get no price here (better than an llm guess).
+          const urlsByPart = new Map<string, { urls: string[]; oem: string | null; name: string | null; subcategory: string | null }>();
+          const addUrl = (partId: any, url: string | undefined | null, oem: string | null, name: string | null, subcategory: string | null = null) => {
+            if (!url) return;
+            const k = String(partId);
+            const e = urlsByPart.get(k) ?? { urls: [], oem, name, subcategory };
+            if (!e.urls.includes(url)) e.urls.push(url);
+            if (!e.oem && oem) e.oem = oem;
+            if (!e.name && name) e.name = name;
+            if (!e.subcategory && subcategory) e.subcategory = subcategory;
+            urlsByPart.set(k, e);
+          };
+          const subcatByPartId = new Map<string, string | null>();
+          const roleByPartId = new Map<string, string | null>();
+          for (const f of fitments) {
+            subcatByPartId.set(String(f.part_id), ((f as any).part_subcategory as string | null) ?? null);
+            roleByPartId.set(String(f.part_id), ((f as any).service_role as string | null) ?? null);
+          }
+          // Seed EVERY fitment part into the map (empty urls) so a part the
+          // LLM omitted from parts_breakdown still reaches the discovery
+          // fallback below — addUrl alone only enters parts that have a URL.
+          for (const f of fitments) {
+            const k = String(f.part_id);
+            if (!urlsByPart.has(k)) {
+              urlsByPart.set(k, {
+                urls: [],
+                oem: ((f as any).oem_part_number as string | null) ?? null,
+                name: ((f as any).part_name as string | null) ?? null,
+                subcategory: ((f as any).part_subcategory as string | null) ?? null,
               });
-              if (verified != null) deterministicallyPriced.add(partId);
             }
           }
-          continue; // breakdown handled this service — don't fall through
-        }
-
-        // Fallback: legacy service-level price. Store as per-unit on each
-        // fitment in the service (no division — the prompt contracts the
-        // service-level price as per-unit too).
-        const priceVal = asNumber(svc.parts_cost_low?.value);
-        if (priceVal == null) continue;
-        for (const fitment of fitments) {
-          // Skip parts the deterministic JSON-LD parser already priced.
-          if (deterministicallyPriced.has(fitment.part_id)) continue;
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
-            part_id:       fitment.part_id,
-            price:         priceVal,
-            price_type:    "llm_estimate",
-            source_domain: extractDomain(svc.parts_cost_low?.source_url) ?? "enrichment",
-            source_url:    svc.parts_cost_low?.source_url ?? undefined,
-          });
+          for (const f of fitments) {
+            const num = (f as any).oem_part_number as string | null;
+            const dp = num ? deterministicPrices.get(normalizeOemNumber(num)) : null;
+            if (dp?.source_url) addUrl(f.part_id, dp.source_url, num ?? null, (f as any).part_name ?? null, (f as any).part_subcategory ?? null);
+          }
+          if (svc.parts_breakdown && svc.parts_breakdown.length > 0) {
+            const numToPartIds = new Map<string, any[]>();
+            for (const f of fitments) {
+              const num = (f as any).oem_part_number;
+              if (!num) continue;
+              const key = normalizeOemNumber(num);
+              const arr = numToPartIds.get(key) ?? [];
+              arr.push(f.part_id);
+              numToPartIds.set(key, arr);
+            }
+            for (const entry of svc.parts_breakdown) {
+              if (!entry.oem_part_number || !entry.source_url) continue;
+              for (const pid of numToPartIds.get(normalizeOemNumber(entry.oem_part_number)) ?? []) {
+                addUrl(pid, entry.source_url, entry.oem_part_number, (entry as any).part_name ?? null, subcatByPartId.get(String(pid)) ?? null);
+              }
+            }
+          }
+          for (const [partIdStr, e] of urlsByPart) {
+            if (e.urls.length === 0) {
+              // No Batch-2/deterministic URL: queue for the PRIORITIZED pass-2
+              // discovery after the service loop (was: inline first-come-first-
+              // served spend with a SILENT skip once the cap hit — no gap entry,
+              // no log; exactly how the A4 battery ended at 0 prices).
+              if (deterministicallyPriced.has(partIdStr as any)) {
+                bumpPriced(slug);
+                continue;
+              }
+              if (!e.oem) {
+                priceGaps.push({
+                  field: `part_price:${e.subcategory ?? partIdStr}`,
+                  reason: "price_no_oem_anchor",
+                });
+                continue;
+              }
+              if (!priceDiscoveryEnabled) continue;
+              discoveryQueue.push({
+                partId: partIdStr,
+                oem: e.oem,
+                name: e.name,
+                subcategory: e.subcategory,
+                serviceSlug: slug,
+                serviceRole: roleByPartId.get(partIdStr) ?? null,
+              });
+              continue;
+            }
+            if (Date.now() > priceWorkDeadline) {
+              priceGaps.push({
+                field: `part_price:${e.subcategory ?? e.oem ?? partIdStr}`,
+                reason: "price_deferred_timeout",
+              });
+              continue;
+            }
+            const rows = await priceAllSources(
+              e.urls,
+              { oem: e.oem, partName: e.name, subcategory: e.subcategory, requireOemEcho: false },
+              extractPriceFirecrawl,
+            );
+            let wroteSale = false;
+            for (const row of rows) {
+              if (row.outcome.status !== "sale") continue;
+              wroteSale = true;
+              await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+                part_id: partIdStr as any,
+                price: row.outcome.price,
+                price_type: "sale",
+                source_domain: row.source_domain,
+                source_url: row.source_url,
+                msrp: row.outcome.msrp ?? undefined,
+                discount: row.outcome.discount ?? undefined,
+              });
+            }
+            if (wroteSale) {
+              bumpPriced(slug);
+            } else {
+              // Observability: a part where NO source yielded a trusted price gets
+              // no row (better than an llm guess) — but log it so a degraded run
+              // (anti-bot blocks / Firecrawl outage) is diagnosable, not silent.
+              console.warn(
+                `[v8/price] no trusted price for part ${partIdStr} (oem=${e.oem ?? "?"}) from ${e.urls.length} source(s): ` +
+                  rows.map((r) => `${r.source_domain}:${r.outcome.status}${r.outcome.status === "unverified" ? `(${r.outcome.reason})` : ""}`).join(", "),
+              );
+              priceGaps.push({
+                field: `part_price:${e.subcategory ?? e.oem ?? partIdStr}`,
+                reason: "price_unverified_sources",
+              });
+            }
+          }
         }
       }
+      // ── Pass 2: prioritized price-URL discovery ─────────────────────────
+      // Spend the per-run discovery budget in priority order across ALL
+      // services: core parts on services with zero priced parts first, then
+      // other core parts, then as_needed/kit. Leftovers land in the gap
+      // ledger instead of vanishing.
+      if (discoveryQueue.length > 0) {
+        const ordered = prioritizeDiscoveryQueue(discoveryQueue, pricedPartsByService);
+        const attempted = new Set<string>(); // one attempt per part even if it serves 2 services
+        for (const item of ordered) {
+          if (attempted.has(item.partId)) continue;
+          attempted.add(item.partId);
+          if (Date.now() > priceWorkDeadline) {
+            priceGaps.push({
+              field: `part_price:${item.subcategory ?? item.oem}`,
+              reason: "price_deferred_timeout",
+            });
+            continue;
+          }
+          if (priceDiscoveryUsed >= priceDiscoveryMax) {
+            priceGaps.push({
+              field: `part_price:${item.subcategory ?? item.oem}`,
+              reason: "price_budget_exhausted",
+            });
+            continue;
+          }
+          priceDiscoveryUsed++;
+          const urls = await discoverPriceUrls({ oem: item.oem, make: args.make, name: item.name });
+          if (urls.length === 0) {
+            console.warn(`[v8/price] discovery found no usable source for part ${item.partId} (oem=${item.oem})`);
+            priceGaps.push({
+              field: `part_price:${item.subcategory ?? item.oem}`,
+              reason: "price_no_source",
+            });
+            continue;
+          }
+          const rows = await priceAllSources(
+            urls,
+            // Discovered pages must echo the OEM number — a search hit is a
+            // weaker tie to the part than an LLM/deterministic citation.
+            { oem: item.oem, partName: item.name, subcategory: item.subcategory, requireOemEcho: true },
+            extractPriceFirecrawl,
+          );
+          let wroteSale = false;
+          for (const row of rows) {
+            if (row.outcome.status !== "sale") continue;
+            wroteSale = true;
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartPrice, {
+              part_id: item.partId as any,
+              price: row.outcome.price,
+              price_type: "sale",
+              source_domain: row.source_domain,
+              source_url: row.source_url,
+              msrp: row.outcome.msrp ?? undefined,
+              discount: row.outcome.discount ?? undefined,
+            });
+          }
+          if (wroteSale) {
+            bumpPriced(item.serviceSlug);
+          } else {
+            console.warn(
+              `[v8/price] no trusted price for part ${item.partId} (oem=${item.oem}) from ${urls.length} discovered source(s): ` +
+                rows.map((r) => `${r.source_domain}:${r.outcome.status}${r.outcome.status === "unverified" ? `(${r.outcome.reason})` : ""}`).join(", "),
+            );
+            priceGaps.push({
+              field: `part_price:${item.subcategory ?? item.oem}`,
+              reason: "price_unverified_sources",
+            });
+          }
+        }
+        console.log(
+          `[v8/price] discovery budget: ${priceDiscoveryUsed}/${priceDiscoveryMax} spent, ` +
+            `${discoveryQueue.length} queued, ${priceGaps.filter((g) => g.reason === "price_budget_exhausted").length} deferred to backfill`,
+        );
+      }
+
+      // Quotability snapshot — after all price writes so it reflects what a
+      // customer could actually be quoted right now. Non-fatal.
+      try {
+        const applicableSlugs = services
+          .filter((s: any) => s.is_applicable)
+          .map((s: any) => SERVICE_NAME_TO_SLUG[s.service_name])
+          .filter((x: any): x is string => !!x);
+        const qFitments = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        quotability = computeQuotability(
+          qFitments,
+          applicableSlugs,
+          naRoleKeysFromFields(allFields),
+        );
+        console.log(
+          `[v8/quotability] ${Math.round(quotability.pct * 100)}% — ` +
+            quotability.services
+              .map((s) => `${s.slug}:${s.core_with_price}/${s.core_total}`)
+              .join(" "),
+        );
+      } catch (e) {
+        console.warn("[v8/quotability] compute failed (non-fatal):", e);
+      }
+    } else {
+      // Batch-2 timed out/errored → writeNormalizedData is skipped, but the
+      // capacity resolver may have produced a corrected or cleared value. Persist
+      // just the two capacity fields so the fix isn't lost on the degraded path.
+      const clear_fields = (["oil_capacity_qts", "coolant_capacity_qts"] as const).filter(
+        (k) => allFields[k]?.value === null && allFields[k]?.flagged === true,
+      );
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEngineSpecs, {
+        engine_id: args.engineId,
+        oil_capacity_qts: asNumber(allFields.oil_capacity_qts?.value),
+        coolant_capacity_qts: asNumber(allFields.coolant_capacity_qts?.value),
+        clear_fields,
+      });
+    }
+
+    // Deferred-pricing self-heal: the in-action price deadline (600s-kill
+    // guard) defers work to keep the run alive — but the nightly cron is too
+    // slow a healer for a fresh config (wave-1 stress fleet: 17-22 parts/run
+    // deferred, quotability cratered until the next morning). Schedule the
+    // TARGETED zero-price backfill for this config immediately, in its own
+    // action budget. The per-action cap keeps the backfill inside the 600s
+    // limit; leftovers re-chain (bounded) before falling to the nightly sweep.
+    // unverified-source parts count too — their poison rows hide them from
+    // the old any-row scan and they'd otherwise never be retried (740iA: 6).
+    const deferredPriceCount = priceGaps.filter(
+      (g) =>
+        g.reason === "price_deferred_timeout" ||
+        g.reason === "price_budget_exhausted" ||
+        g.reason === "price_unverified_sources",
+    ).length;
+    if (deferredPriceCount > 0) {
+      const immediateCap = Number(process.env.PARTS_PRICE_IMMEDIATE_BACKFILL_CAP ?? "12");
+      await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.priceRefresh.refreshStalePrices, {
+        budget: 0,
+        backfillBudget: Math.min(deferredPriceCount, immediateCap),
+        vehicleConfigId: args.vehicleConfigId,
+        maxChainDepth: Number(process.env.PARTS_PRICE_BACKFILL_CHAIN_DEPTH ?? "2"),
+      });
+      console.log(
+        `[v8/price] scheduled follow-up backfill for ${deferredPriceCount} deferred/budget-skipped part(s)`,
+      );
+    }
+
+    // Reverse fitment corroboration (flag-gated, PARTS_REVERSE_FITMENT=on):
+    // now that part_prices carry product-page URLs, verify each part's own
+    // fitment table lists this vehicle. Scheduled so it never eats this
+    // action's remaining budget; the action itself no-ops when the flag is off.
+    if (process.env.PARTS_REVERSE_FITMENT === "on") {
+      await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.reverseFitment.verifyConfigFitments, {
+        vehicleConfigId: args.vehicleConfigId,
+        year: args.year,
+        make: args.make,
+        model: args.model,
+      });
     }
 
     // Finalize
@@ -2635,6 +3567,114 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       console.log(`[v8] Confidence avg: ${confidenceAvg.toFixed(3)} from ${allEvidence.length} evidence rows`);
     }
 
+    // Applicable-fill headline metrics — not_applicable fields drop OUT of the
+    // denominator so a RWD sedan isn't penalized for lacking a transfer case
+    // (the 740iA read 72% when its applicable coverage was ~90%).
+    const fieldsFilledCount = V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null).length;
+    const fieldsNotApplicable = V4_FIELD_KEYS.filter(
+      (k) => allFields[k]?.value == null && allFields[k]?.flag_reason === "not_applicable",
+    ).length;
+    const applicableFillRate = Math.round(
+      (fieldsFilledCount / Math.max(1, V4_FIELD_KEYS.length - fieldsNotApplicable)) * 100,
+    );
+
+    // ── Fitment verification gate (Jul 2026, 5-VIN test) ──────────────
+    // Format sanitization can't catch a REAL part number from the WRONG
+    // vehicle (HEMI filter on the 3.6, Golf pads on the Atlas, Seltos filter
+    // on the Soul). One adversarial web-search call cross-examines the
+    // core-role parts written this run; refuted fitments are deleted so the
+    // role falls to its universal fallback or an honest gap. "uncertain"
+    // never deletes. Disable with PARTS_FITMENT_VERIFY=0.
+    let fitmentRefutedErrors: string[] = [];
+    if ((process.env.PARTS_FITMENT_VERIFY ?? "1") !== "0" && !timedOut) {
+      try {
+        const allFitments = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getPartFitments,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        // Batch-2 v2: every priced non-universal part is eligible (a Genesis
+        // V6 o-ring shipped on a Soul because only priority roles were
+        // sampled); priority roles are verified first when the cap bites.
+        const candidates: { roleKey: string; oem: string; name: string }[] = [];
+        const seenOem = new Set<string>();
+        for (const f of allFitments) {
+          const part: any = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getOemPartById,
+            { partId: (f as any).part_id },
+          );
+          const sub = part?.subcategory ?? "";
+          const oem = part?.oem_part_number ?? "";
+          if (!oem || oem.startsWith("OTOPAIR-UNIV") || seenOem.has(oem)) continue;
+          seenOem.add(oem);
+          candidates.push({ roleKey: sub, oem, name: part?.name ?? sub });
+        }
+        candidates.sort((a, b) =>
+          Number(VERIFY_ROLE_KEYS.has(b.roleKey)) - Number(VERIFY_ROLE_KEYS.has(a.roleKey)),
+        );
+        const toVerify = candidates.slice(0, VERIFY_MAX_PARTS);
+        if (candidates.length > toVerify.length) {
+          console.log(`[fitment-verify] ${candidates.length - toVerify.length} lower-priority part(s) beyond the ${VERIFY_MAX_PARTS}-part cap left unverified`);
+        }
+        if (toVerify.length > 0) {
+          const verdicts = await verifyPartFitments(
+            {
+              year: args.year,
+              make: args.make,
+              model: args.model,
+              trim: args.trim,
+              engineCode: vehicle.engineCode,
+              displacement: args.displacement,
+              // Aspiration + transmission family feed the batch-3 hardening
+              // (NA-plug-on-turbo, DCT-filter-on-torque-converter). turbo is the
+              // boolean the extractor writes; the verifier prompt still confirms
+              // via search, this is just the seed hint.
+              aspiration:
+                allFields.turbo?.value === true ? "turbocharged" : undefined,
+              transmissionType:
+                (allFields.transmission_type?.value as string | null) ?? undefined,
+            },
+            toVerify,
+          );
+          const refuted = verdicts.filter((vd) => vd.verdict === "refuted");
+          console.log(
+            `[fitment-verify] ${toVerify.length} core parts checked: ` +
+              `${verdicts.filter((vd) => vd.verdict === "confirmed").length} confirmed, ` +
+              `${refuted.length} refuted, ` +
+              `${verdicts.filter((vd) => vd.verdict === "uncertain").length} uncertain`,
+          );
+          if (refuted.length > 0) {
+            await ctx.runMutation(
+              internal.vehicleEnrichment.v3mutations.removeRefutedFitments,
+              {
+                vehicle_config_id: args.vehicleConfigId,
+                refuted: refuted.map((r) => ({ oem: r.oem, reason: r.reason })),
+              },
+            );
+            fitmentRefutedErrors = refuted.map((r) => `fitment_refuted:${r.roleKey}:${r.oem}`);
+          }
+        }
+      } catch (e) {
+        console.warn("[fitment-verify] pass failed (non-fatal):", e);
+      }
+    }
+
+    // Pattern-suspect sentinel: >=2 oem_part_rejected gaps in ONE run means
+    // the make's part pattern is probably wrong, not the data — every pattern
+    // gap found so far (BMW leading zeros, VAG G-numbers, Hyundai fluid SKUs)
+    // rejected multiple parts at once on its first vehicle. We can't predict
+    // what car arrives next, so the run self-reports instead of waiting for a
+    // human to read gap lists.
+    const finalGaps = [...classifyFieldGaps(allFields, sanityFlags, finalIdentity), ...priceGaps];
+    const partRejectCount = finalGaps.filter((g) =>
+      g.reason.startsWith("validation_dropped:oem_part_rejected"),
+    ).length;
+    if (partRejectCount >= 2) {
+      console.warn(
+        `[v8] PATTERN SUSPECT: ${partRejectCount} oem_part_rejected gaps for make=${args.make} — ` +
+          `likely a pattern gap, triage via devOnly/auditPartRejections:audit`,
+      );
+    }
+
     // Update enrichment run. A batch-2 timeout still finalizes (batch-1 data
     // is real and the config gets its normal terminal status below) but the
     // run records 'timeout' — not a fake 'complete' (review item 6).
@@ -2646,15 +3686,49 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       total_web_searches: totalWebSearches,
       completed_at: Date.now(),
       duration_ms: durationMs,
-      fields_filled: V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null).length,
+      fields_filled: fieldsFilledCount,
       fields_total: V4_FIELD_KEYS.length,
+      fields_not_applicable: fieldsNotApplicable,
+      applicable_fill_rate: applicableFillRate,
       fill_rate: fillRate,
       fields_changed: V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null),
       errors: [
         ...(timedOut ? ["batch2_timeout"] : []),
+        // The run finalized thin at the 3h timeout and this pass applied the
+        // paid batch's gap-fill afterwards — history marker, not an error.
+        ...(args.lateCollect ? ["late_collected"] : []),
+        // Weak parts coverage routes into the manual review queue without
+        // changing status semantics (a data-complete run stays "complete").
+        ...(quotability && quotability.pct < 0.8 ? [`quotability:${quotability.pct}`] : []),
+        // Repeated part rejections on one run = suspect make pattern, not bad
+        // data — routes to review so unknown formats on NEW makes surface.
+        ...(partRejectCount >= 2 ? [`part_pattern_suspect:${args.make}:${partRejectCount}`] : []),
+        // Fitment-verification refutations: wrong-vehicle parts removed at
+        // finalize (the fitment rows are already deleted; this is the audit
+        // trail + review-queue routing).
+        ...fitmentRefutedErrors,
         ...sanityFlags.map((f) => `sanity:${f.field}:${f.reason}`),
         ...oemFlags.map((f) => `oem:${f.field}:${f.reason}`),
       ],
+      // Structured mirror of the sanity/OEM strings above — queryable, so
+      // flagged-but-complete runs surface in manual_review_queue.list instead
+      // of dying in a write-only string array.
+      sanity_flags: [
+        ...sanityFlags.map((f) => ({
+          field: f.field,
+          severity: f.severity,
+          reason: f.reason,
+          value: f.value != null ? String(f.value) : undefined,
+        })),
+        ...oemFlags.map((f) => ({
+          field: f.field,
+          severity: "flag",
+          reason: f.reason,
+          value: f.value != null ? String(f.value) : undefined,
+        })),
+      ],
+      field_gaps: finalGaps,
+      quotability,
     });
 
     // Read current vehicle_config to get resolved drivetrain
@@ -2663,19 +3737,63 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       { vehicleConfigId: args.vehicleConfigId },
     );
 
-    // Update vehicle_config status — use the actual config_key from DB (may differ from
-    // buildEngineKey(vehicle) if the engine code was resolved from a NHTSA descriptor)
+    // Config-key migration (batch-2 audit, Jul 2026): when this run holds a
+    // REAL engine code (verified resolution threaded through args, or a
+    // clean decode) and the stored key differs — e.g. a reused row keyed by
+    // an old fabricated code — rename toward the correct key so future
+    // decodes cache-hit instead of spawning duplicates. Placeholder codes
+    // never migrate; conflicts keep the old key and self-report.
+    let finalConfigKey = currentVcForFinal?.config_key ?? buildEngineKey(vehicle);
+    {
+      const desiredKey = buildEngineKey(vehicle);
+      if (
+        currentVcForFinal &&
+        currentVcForFinal.config_key !== desiredKey &&
+        !isNhtsaDescriptor(vehicle.engineCode ?? "")
+      ) {
+        try {
+          const res: any = await ctx.runMutation(
+            internal.vehicleEnrichment.v3mutations.renameConfigKey,
+            { vehicle_config_id: args.vehicleConfigId, new_key: desiredKey },
+          );
+          if (res?.renamed) finalConfigKey = desiredKey;
+        } catch (e) {
+          console.warn("[v8] config_key migration failed (non-fatal):", e);
+        }
+      }
+    }
+
+    // Update vehicle_config status — use the (possibly migrated) key
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertVehicleConfig, {
-      config_key: currentVcForFinal?.config_key ?? buildEngineKey(vehicle),
+      config_key: finalConfigKey,
       year: args.year,
       make_id: args.makeId,
       model_id: (await ctx.runQuery(internal.vehicleEnrichment.v3queries.getModelByMakeAndName, { makeId: args.makeId, name: args.model }))?._id ?? args.makeId as any,
       engine_id: args.engineId,
       transmission_id: args.transmissionId,
-      drivetrain: (allFields.drivetrain?.value as string) ?? currentVcForFinal?.drivetrain ?? "FWD",
+      // The resolved config drivetrain (NHTSA axle-authoritative) wins over the
+      // raw LLM field here too — otherwise finalize re-overwrites the reconciled
+      // value with the same Batch-1B guess (batch-3 drivetrain fix).
+      drivetrain:
+        reconcileDrivetrain(
+          currentVcForFinal?.drivetrain,
+          allFields.drivetrain?.value as string | null,
+        ) ??
+        currentVcForFinal?.drivetrain ??
+        (allFields.drivetrain?.value as string) ??
+        "FWD",
       trim_name: args.trim,
       trim_slug: slugify(args.trim),
-      enrichment_status: fillRate >= 70 ? "complete" : "partial",
+      enrichment_status: (() => {
+        const gate = {
+          fillRate,
+          quotabilityPct: quotability?.pct,
+          hasPriceGaps: priceGaps.length > 0,
+        };
+        const status = computeEnrichmentStatus(gate);
+        console.log(`[v8] Completion gate → ${status}: ${explainGateDecision(gate)}`);
+        return status;
+      })(),
       fill_rate: fillRate,
       enrichment_version: "v8",
     });
@@ -2865,7 +3983,13 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
           vehicle_config_id: args.vehicleConfigId,
           fill_rate: finalFillRate,
-          enrichment_status: finalFillRate >= 70 ? "complete" : "partial",
+          // Same two-leg gate as the finalize upsert — a fill-only improvement
+          // must not flip an unquotable config to complete.
+          enrichment_status: computeEnrichmentStatus({
+            fillRate: finalFillRate,
+            quotabilityPct: quotability?.pct,
+            hasPriceGaps: priceGaps.length > 0,
+          }),
         });
       }
     } catch (e) {

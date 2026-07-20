@@ -1,11 +1,13 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { requireDirector } from "./directorGate";
 
-// All queries for the director panel. No auth — access-controlled at middleware level.
+// All queries for the director panel. Token-gated server-side via requireDirector.
 
 export const sidebarCounts = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    await requireDirector(ctx, token);
     const [bugs, feedback, otoFeedback, refunds, pendingVerifications] = await Promise.all([
       ctx.db.query("bugs").collect(),
       ctx.db.query("app_feedback").collect(),
@@ -27,8 +29,9 @@ export const sidebarCounts = query({
 });
 
 export const overviewCounters = query({
-  args: { period: v.optional(v.union(v.literal("today"), v.literal("7d"), v.literal("30d"))) },
-  handler: async (ctx, { period = "today" }) => {
+  args: { token: v.string(), period: v.optional(v.union(v.literal("today"), v.literal("7d"), v.literal("30d"))) },
+  handler: async (ctx, { token, period = "today" }) => {
+    await requireDirector(ctx, token);
     const todayStr = new Date().toISOString().split("T")[0];
     const periodMs = period === "30d" ? 30 * 24 * 60 * 60 * 1000 : period === "7d" ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
     const sinceStr = new Date(Date.now() - periodMs).toISOString().split("T")[0];
@@ -65,8 +68,9 @@ export const overviewCounters = query({
 });
 
 export const todaysBookingsList = query({
-  args: { period: v.optional(v.union(v.literal("today"), v.literal("7d"), v.literal("30d"))) },
-  handler: async (ctx, { period = "today" }) => {
+  args: { token: v.string(), period: v.optional(v.union(v.literal("today"), v.literal("7d"), v.literal("30d"))) },
+  handler: async (ctx, { token, period = "today" }) => {
+    await requireDirector(ctx, token);
     const todayStr = new Date().toISOString().split("T")[0];
     let bookings;
     if (period === "today") {
@@ -107,8 +111,9 @@ export const todaysBookingsList = query({
 });
 
 export const shopsList = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    await requireDirector(ctx, token);
     const shops = await ctx.db.query("shops").collect();
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
@@ -151,8 +156,9 @@ export const shopsList = query({
 });
 
 export const shopDetail = query({
-  args: { id: v.id("shops") },
-  handler: async (ctx, { id }) => {
+  args: { token: v.string(), id: v.id("shops") },
+  handler: async (ctx, { token, id }) => {
+    await requireDirector(ctx, token);
     const shop = await ctx.db.get(id);
     if (!shop) return null;
 
@@ -286,8 +292,9 @@ export const shopDetail = query({
 });
 
 export const userDetail = query({
-  args: { id: v.id("users") },
-  handler: async (ctx, { id }) => {
+  args: { token: v.string(), id: v.id("users") },
+  handler: async (ctx, { token, id }) => {
+    await requireDirector(ctx, token);
     const user = await ctx.db.get(id);
     if (!user) return null;
 
@@ -392,8 +399,9 @@ export const softDeleteUser = mutation({
 });
 
 export const usersList = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    await requireDirector(ctx, token);
     const users = await ctx.db.query("users").order("desc").take(100);
     return Promise.all(users.map(async (u) => {
       const [bookings, vehicles] = await Promise.all([
@@ -423,8 +431,9 @@ export const usersList = query({
 });
 
 export const recentBookingsList = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    await requireDirector(ctx, token);
     const bookings = await ctx.db
       .query("bookings")
       .withIndex("by_created_at")
@@ -494,8 +503,9 @@ export const recentBookingsList = query({
 });
 
 export const bookingDetail = query({
-  args: { id: v.id("bookings") },
-  handler: async (ctx, { id }) => {
+  args: { token: v.string(), id: v.id("bookings") },
+  handler: async (ctx, { token, id }) => {
+    await requireDirector(ctx, token);
     const booking = await ctx.db.get(id);
     if (!booking) return null;
 
@@ -696,8 +706,9 @@ export const bookingDetail = query({
 });
 
 export const refundedBookingsList = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    await requireDirector(ctx, token);
     const bookings = await ctx.db
       .query("bookings")
       .withIndex("by_status", (q) => q.eq("status", "refunded"))

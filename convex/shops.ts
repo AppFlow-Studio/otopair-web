@@ -279,7 +279,13 @@ export const list = query({
   handler: async (ctx) => {
     const shops = await ctx.db.query("shops").collect();
     const bookableShopIds = await getBookableShopIds(ctx, shops);
-    return shops.filter((shop) => bookableShopIds.has(shop._id));
+    const bookableShops = shops.filter((shop) => bookableShopIds.has(shop._id));
+    return await Promise.all(
+      bookableShops.map(async (shop) => ({
+        ...shop,
+        logoUrl: await resolveShopLogoUrl(ctx, shop),
+      }))
+    );
   },
 });
 

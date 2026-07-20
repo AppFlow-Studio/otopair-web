@@ -410,6 +410,10 @@ export const updateEngineSpecs = internalMutation({
     water_pump_timing_driven: v.optional(v.boolean()),
     engine_family: v.optional(v.string()),
     displacement_l: v.optional(v.float64()),
+    // NHTSA-decoded regulatory facts (round-4): GVWR upper-bound lbs → duty-class
+    // sanity bands; engine manufacturer → engine-maker fluid specs in the verifier.
+    gvwr_lbs: v.optional(v.float64()),
+    engine_manufacturer: v.optional(v.string()),
     data_quality: v.optional(v.string()),
     // Field names to actively ERASE (patch to undefined → Convex deletes the
     // column). A value that sanity-checks REJECTED as wrong must not linger:

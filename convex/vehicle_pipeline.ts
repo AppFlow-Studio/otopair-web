@@ -124,8 +124,17 @@ export const processVin = internalAction({
       const errorCode = getValue(nhtsaData, "ErrorCode");
       const errorCodes = errorCode.split(",").map((c: string) => c.trim());
       if (!errorCodes.includes("0")) {
-        console.error("NHTSA decode error:", errorCode, getValue(nhtsaData, "ErrorText"));
-        if (!vdb) return null; // both sources failed
+        console.warn("NHTSA decode non-zero error:", errorCode, getValue(nhtsaData, "ErrorText"));
+        // Batch-6 fix: a non-zero error code is NOT automatically fatal. Codes
+        // like 4 (VIN auto-corrected one position), 5/14 (incomplete manufacturer
+        // submission), and 8 (no detailed data) still yield Make/Year/Engine —
+        // the 2009 Escalade returns "4,14" with a blank Model but valid make/year/
+        // engine. Bail ONLY when the decode is truly unusable (no Make AND no VDB);
+        // otherwise proceed and let the model fallback + the make/model/year gate
+        // below recover it. (Previously any non-zero code with VDB down hard-failed
+        // a real vehicle.)
+        const nhtsaMake = getValue(nhtsaData, "Make");
+        if (!nhtsaMake && !vdb) return null; // both sources genuinely dead
       }
 
       const nhtsa = {
@@ -284,6 +293,30 @@ export const processVin = internalAction({
         cca: vdb?.cca || null,
         steeringType: vdb?.steeringType || null,
       };
+
+      // Batch-6 fix: NHTSA sometimes omits the Model for a VALID VIN (the 2009
+      // Escalade: ErrorCode 4,14 "manufacturer did not submit some fields")
+      // while Make + Year + Engine decode fine — and VDB may also be down/blank.
+      // Rather than hard-fail a real vehicle, resolve the model from the VIN via
+      // web search before giving up. Only fires when make+year are known but
+      // model is missing (rare), so it adds no cost to the normal path.
+      if (merged.make && merged.year && !merged.model) {
+        console.log(`[decode] Model blank for ${merged.year} ${merged.make} — attempting VIN web lookup fallback`);
+        const recovered = await resolveModelFromVin(
+          args.vin, merged.make, merged.year, nhtsa.series, nhtsa.bodyClass,
+          {
+            code: nhtsa.engineModel,
+            displacement: merged.displacement,
+            cylinders: merged.cylinders,
+            hp: nhtsa.engineHP,
+          },
+        );
+        console.log(`[decode] Model VIN lookup returned: ${recovered ? `"${recovered}"` : "null"}`);
+        if (recovered) {
+          console.log(`[decode] Model recovered via VIN web lookup: "${recovered}" (NHTSA+VDB were blank)`);
+          merged.model = recovered;
+        }
+      }
 
       if (!merged.make || !merged.model || !merged.year) {
         console.error("Decode: Missing critical fields", { make: merged.make, model: merged.model, year: merged.year });
@@ -1555,6 +1588,65 @@ function mapNhtsaDriveType(driveType: string): string | undefined {
 // Transmission style canonicalization moved to lib/transmissionTypeInference.ts
 // (Haiku-based with in-memory cache). No hardcoded marketing-term whitelist —
 // new transmission marketing names land automatically without code changes.
+
+/**
+ * Batch-6 fallback: when NHTSA (and VDB) can't supply the Model for an
+ * otherwise-valid VIN, resolve it from the VIN via a web-search Haiku call.
+ * The VIN's VDS uniquely encodes the model, so a search on "VIN <vin>" plus
+ * make/year/series reliably recovers it (e.g. the 2009 Escalade ESV whose
+ * NHTSA decode returned a blank Model). Returns null when it can't confirm one.
+ */
+async function resolveModelFromVin(
+  vin: string,
+  make: string,
+  year: number,
+  series?: string,
+  bodyClass?: string,
+  engine?: { code?: string; displacement?: string; cylinders?: number | string; hp?: string },
+): Promise<string | null> {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) return null;
+  try {
+    const haiku = new Anthropic({ apiKey: key });
+    const ctx = [
+      series ? `series "${series}"` : null,
+      bodyClass ? `body "${bodyClass}"` : null,
+      engine?.code ? `engine code ${engine.code}` : null,
+      engine?.displacement ? `${engine.displacement}L` : null,
+      engine?.cylinders ? `${engine.cylinders}-cyl` : null,
+      engine?.hp ? `${engine.hp} hp` : null,
+    ].filter(Boolean).join(", ");
+    const resp = await haiku.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 512,
+      temperature: 0,
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 3 } as any],
+      messages: [{
+        role: "user",
+        content: `NHTSA could not decode the MODEL for VIN ${vin} — a ${year} ${make}${ctx ? ` (${ctx})` : ""}. Identify the exact model line. Two approaches: (1) search VIN decoders/dealer listings for this VIN; (2) if that fails, INFER it from the make + year + engine — the engine code and displacement often uniquely identify one model line (e.g. the GM "L9H" 6.2L V8 in a 2009 Cadillac is the Escalade). Include any body sub-designation if known (e.g. "Escalade ESV", "Silverado 1500"). Respond with ONLY a JSON object on one line: {"model": "<model line>"} — use {"model": "unknown"} only if make+year+engine still don't identify a model.`,
+      }],
+    });
+    const text = resp.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as any).text)
+      .join("")
+      .trim();
+    console.log(`[decode] model VIN-lookup raw: ${text.slice(0, 200)}`);
+    // Prefer JSON; fall back to a bare-line if the model didn't wrap it.
+    let model = "";
+    const j = text.match(/\{[\s\S]*?\}/);
+    if (j) {
+      try { model = String(JSON.parse(j[0]).model ?? "").trim(); } catch { /* fall through */ }
+    }
+    if (!model) model = text.replace(/^["']+|["']+$/g, "").split("\n").pop()!.trim();
+    if (model && model.toLowerCase() !== "unknown" && model.length >= 2 && model.length <= 40) {
+      return model;
+    }
+  } catch (e) {
+    console.warn("[decode] model VIN-lookup failed (non-fatal):", e);
+  }
+  return null;
+}
 
 /**
  * Call Claude to normalize NHTSA model/trim/drivetrain/engine_code into canonical OEM naming.

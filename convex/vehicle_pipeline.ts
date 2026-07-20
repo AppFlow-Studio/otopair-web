@@ -24,6 +24,7 @@ import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
 import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
+import { parseGvwrUpperLbs } from "./vehicleEnrichment/validation/sanityChecks";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -151,6 +152,8 @@ export const processVin = internalAction({
         transStyle: getValue(nhtsaData, "TransmissionStyle"),
         transSpeeds: getValue(nhtsaData, "TransmissionSpeeds"),
         driveType: getValue(nhtsaData, "DriveType"),
+        gvwr: getValue(nhtsaData, "GVWR"),
+        engineManufacturer: getValue(nhtsaData, "EngineManufacturer"),
       };
 
       // ════════════════════════════════════════════════════════════
@@ -235,6 +238,9 @@ export const processVin = internalAction({
         bodyClass: nhtsa.bodyClass || vdb?.bodyType || "",
         doors: vdb?.doors || (parseInt(nhtsa.doors || "0") || null),
         vehicleType: nhtsa.vehicleType || "",
+        // NHTSA-only, regulatory: GVWR class + engine manufacturer (batch-5).
+        gvwr: nhtsa.gvwr || "",
+        engineManufacturer: nhtsa.engineManufacturer || "",
 
         // Engine — VDB wins, NHTSA fills gaps
         // Cylinders is the exception: NHTSA's EngineCylinders is the
@@ -479,6 +485,11 @@ export const processVin = internalAction({
 
       // Engine extras
       const enginePatch: Record<string, unknown> = { make_id: makeId };
+      // GVWR (upper-bound lbs, drives duty-class sanity bands) + engine
+      // manufacturer (engine-maker fluid specs in the fitment verifier). Batch-5.
+      const gvwrLbs = parseGvwrUpperLbs(merged.gvwr);
+      if (gvwrLbs != null) enginePatch.gvwr_lbs = gvwrLbs;
+      if (merged.engineManufacturer) enginePatch.engine_manufacturer = merged.engineManufacturer;
       const cfg = merged.engineConfiguration?.toLowerCase() ?? "";
       if (cfg.includes("v")) enginePatch.configuration = "V";
       else if (cfg.includes("in-line") || cfg.includes("inline")) enginePatch.configuration = "inline";

@@ -59,6 +59,9 @@ export interface FitmentToVerify {
   roleKey: string;
   oem: string;
   name: string;
+  /** For spark plugs and other per-cylinder parts: the stored total quantity,
+   *  so the verifier can judge dual-plug engines (2× cylinders). */
+  quantity?: number | null;
 }
 
 export interface FitmentVerdict {
@@ -80,6 +83,10 @@ A claim is REFUTED when the part number belongs to:
 - a fluid spec the vehicle must not use (e.g. an older-generation coolant on a car requiring the newer chemistry).
 
 A part is a phantom (REFUTED) when the vehicle's platform does not have that component at all (e.g. an electronic brake-pad WEAR SENSOR part on a platform that uses only mechanical wear indicators).
+
+**When the ENGINE or TRANSMISSION is built by a different company than the vehicle make, component-specific consumables follow the COMPONENT maker's spec, not the chassis brand.** E.g. a medium-duty Ford truck with a Cummins engine takes a Cummins-spec (Fleetguard) coolant/oil filter, NOT a Ford Motorcraft one; an Allison transmission takes Allison TES-spec fluid, not the chassis brand's ATF. If an engine/trans/coolant part is a chassis-brand part but the engine or transmission is a third-party unit, that is grounds for REFUTED.
+
+For a SPARK-PLUG line, also judge the QUANTITY. Some engines fire TWO plugs per cylinder (e.g. Chrysler HEMI, some twin-spark designs) — for those the correct total is 2× the cylinder count, not 1×. If the stated quantity equals the cylinder count but the engine is a known dual-plug design, the quantity is wrong (REFUTED) even if the part number itself is right; say the correct total in your reason.
 
 Rules:
 - Budget your searches: check the parts most likely to be wrong first; mark anything you could not check as "uncertain".
@@ -103,6 +110,13 @@ export async function verifyPartFitments(
     displacement?: string | null;
     aspiration?: string | null;
     transmissionType?: string | null;
+    /** NHTSA EngineManufacturer — surfaced so the checker can apply
+     *  engine-maker fluid/filter specs when it differs from the make
+     *  (batch-5: Cummins engine in a Ford F-650 → Cummins-spec coolant). */
+    engineManufacturer?: string | null;
+    /** Cylinder count — lets the checker judge spark-plug quantity for
+     *  dual-plug engines (correct total = 2× cylinders). */
+    cylinders?: number | null;
   },
   parts: FitmentToVerify[],
 ): Promise<FitmentVerdict[]> {
@@ -117,17 +131,25 @@ export async function verifyPartFitments(
   // them explicitly so the checker keys on family, not just displacement.
   const engineDesc = [
     vehicle.displacement ? `${vehicle.displacement}L` : null,
+    vehicle.cylinders ? `${vehicle.cylinders}-cyl` : null,
     vehicle.aspiration && vehicle.aspiration.toLowerCase() !== "naturally aspirated"
       ? vehicle.aspiration
       : null,
     vehicle.engineCode ? `engine code ${vehicle.engineCode}` : null,
+    vehicle.engineManufacturer &&
+    vehicle.engineManufacturer.toLowerCase() !== vehicle.make.toLowerCase()
+      ? `engine built by ${vehicle.engineManufacturer}`
+      : null,
   ].filter(Boolean).join(", ");
   const transDesc = vehicle.transmissionType
     ? `\nTransmission: ${vehicle.transmissionType}`
     : "";
 
   const partLines = parts
-    .map((p, i) => `${i + 1}. ${p.roleKey}: ${p.oem} (${p.name})`)
+    .map((p, i) => {
+      const qty = p.quantity != null && p.quantity > 1 ? ` [stored qty: ${p.quantity}]` : "";
+      return `${i + 1}. ${p.roleKey}: ${p.oem} (${p.name})${qty}`;
+    })
     .join("\n");
 
   try {

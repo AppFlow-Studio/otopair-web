@@ -30,6 +30,8 @@ export interface VehicleIdentity {
   cylinders: number | null;          // EngineCylinders
   displacement_l: number | null;     // DisplacementL
   fuel_type: string | null;          // FuelTypePrimary
+  gvwr_lbs: number | null;           // GVWR upper-bound lbs → duty-class sanity bands
+  engine_manufacturer: string | null; // EngineManufacturer → engine-maker fluid specs
   body_class: string | null;         // BodyClass
   engine_config: string | null;      // EngineConfiguration: "V", "Inline", "Flat"
   make: string | null;

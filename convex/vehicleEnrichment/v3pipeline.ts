@@ -96,6 +96,15 @@ const POLL_INTERVAL_MS = 1 * 60 * 1000;
 const SLOW_POLL_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_POLL_ATTEMPTS_TOTAL = MAX_POLL_ATTEMPTS + 126; // 3h fast + ~21h slow ≈ 24h
 
+// Fitment-refute proportional skepticism (batch-5 fix): a refuted fitment is
+// hard-deleted only when its independent corroboration is at or below this many
+// sources. Parts backed by MORE than this (multi-source consensus) are kept and
+// soft-flagged instead — one hallucinated "refuted" verdict must not erase a
+// part several sources agreed on (the G90 rear-pad false-positive). Env-tunable.
+const FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES = Number(
+  process.env.FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES ?? "1",
+);
+
 const MAKES_WITH_BRAKE_PAD_SENSORS = new Set([
   "BMW", "Mercedes-Benz", "Porsche", "Audi", "Mini", "Rolls-Royce",
   "Lexus", "Volvo", "Jaguar", "Land Rover", "Maserati", "Alfa Romeo", "Genesis",
@@ -2419,7 +2428,9 @@ async function runPollBatch1Body(
     // coolant survival vector). Rejecting here also puts the field back in the
     // batch-2 gap-fill set, giving the pipeline a second chance at a clean
     // value. Finalize re-runs the checks over the merged map as before.
-    const batch1SanityFlags = runSanityChecks(fields, vPicData?.cylinders ?? 4);
+    const batch1SanityFlags = runSanityChecks(fields, vPicData?.cylinders ?? 4, {
+      gvwrLbs: vPicData?.gvwr_lbs ?? null,
+    });
     if (batch1SanityFlags.length > 0) {
       console.log(
         `[v8/_pollBatch1] Sanity: ${batch1SanityFlags.length} flags applied before batch-1 write (${batch1SanityFlags.map((f) => f.field).join(", ")})`,
@@ -2841,7 +2852,9 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     allFields = applyApplicabilityRules(allFields, finalIdentity);
     allFields = applyFinalizeApplicability(allFields);
 
-    const sanityFlags = runSanityChecks(allFields, cylinders);
+    const sanityFlags = runSanityChecks(allFields, cylinders, {
+      gvwrLbs: enginePicData?.gvwr_lbs ?? null,
+    });
     const oemFlags = validateAllOemParts(allFields, vehicle.make);
     if (sanityFlags.length > 0) console.log(`[v8] Sanity: ${sanityFlags.length} flags (applied before write)`);
     if (oemFlags.length > 0) console.log(`[v8] OEM: ${oemFlags.length} issues`);
@@ -3595,7 +3608,13 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         // Batch-2 v2: every priced non-universal part is eligible (a Genesis
         // V6 o-ring shipped on a Soul because only priority roles were
         // sampled); priority roles are verified first when the cap bites.
-        const candidates: { roleKey: string; oem: string; name: string }[] = [];
+        const candidates: {
+          roleKey: string;
+          oem: string;
+          name: string;
+          sourceCount: number;
+          quantity: number | null;
+        }[] = [];
         const seenOem = new Set<string>();
         for (const f of allFitments) {
           const part: any = await ctx.runQuery(
@@ -3606,7 +3625,18 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           const oem = part?.oem_part_number ?? "";
           if (!oem || oem.startsWith("OTOPAIR-UNIV") || seenOem.has(oem)) continue;
           seenOem.add(oem);
-          candidates.push({ roleKey: sub, oem, name: part?.name ?? sub });
+          // sourceCount = how many independent sources corroborated this fitment.
+          // Carried so a single hallucinated "refuted" verdict can't hard-delete
+          // a well-corroborated part (batch-5: the gate wrongly deleted the
+          // correct G90 rear pad 58302-T4A10). Proportional skepticism below.
+          // quantity feeds the dual-plug count check (batch-5: HEMI = 2×cyl).
+          candidates.push({
+            roleKey: sub,
+            oem,
+            name: part?.name ?? sub,
+            sourceCount: (f as any).source_count ?? 1,
+            quantity: (f as any).quantity_needed ?? null,
+          });
         }
         candidates.sort((a, b) =>
           Number(VERIFY_ROLE_KEYS.has(b.roleKey)) - Number(VERIFY_ROLE_KEYS.has(a.roleKey)),
@@ -3632,8 +3662,19 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
                 allFields.turbo?.value === true ? "turbocharged" : undefined,
               transmissionType:
                 (allFields.transmission_type?.value as string | null) ?? undefined,
+              // Cylinder count lets the verifier judge dual-plug spark-plug
+              // totals (2× cyl); engine manufacturer lets it apply engine-maker
+              // fluid specs (Cummins-in-Ford, etc.). enginePicData is the
+              // finalize-scope identity (vPicData is first-action only).
+              cylinders: enginePicData?.cylinders ?? undefined,
+              engineManufacturer: enginePicData?.engine_manufacturer ?? undefined,
             },
-            toVerify,
+            toVerify.map((c) => ({
+              roleKey: c.roleKey,
+              oem: c.oem,
+              name: c.name,
+              quantity: c.quantity,
+            })),
           );
           const refuted = verdicts.filter((vd) => vd.verdict === "refuted");
           console.log(
@@ -3642,16 +3683,45 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               `${refuted.length} refuted, ` +
               `${verdicts.filter((vd) => vd.verdict === "uncertain").length} uncertain`,
           );
-          if (refuted.length > 0) {
+          // Proportional skepticism (batch-5 fix): deletion is destructive, so
+          // the evidence bar to delete scales with the part's independent
+          // support. A single Haiku verdict may delete a WEAKLY-supported part
+          // (sourceCount ≤ FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES), but a
+          // well-corroborated part (multiple independent sources) is only
+          // soft-flagged for review, not deleted — a lone hallucinated "refuted"
+          // must not erase a part that several sources agreed fits.
+          const supportByOem = new Map(
+            toVerify.map((c) => [c.oem.toUpperCase(), c.sourceCount]),
+          );
+          const hardDelete = refuted.filter(
+            (r) =>
+              (supportByOem.get(r.oem.toUpperCase()) ?? 1) <=
+              FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES,
+          );
+          const softFlag = refuted.filter(
+            (r) =>
+              (supportByOem.get(r.oem.toUpperCase()) ?? 1) >
+              FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES,
+          );
+          if (softFlag.length > 0) {
+            console.warn(
+              `[fitment-verify] ${softFlag.length} refuted part(s) KEPT (multi-source support > ${FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES}) — flagged for review, not deleted: ` +
+                softFlag.map((r) => `${r.roleKey}:${r.oem}`).join(", "),
+            );
+          }
+          if (hardDelete.length > 0) {
             await ctx.runMutation(
               internal.vehicleEnrichment.v3mutations.removeRefutedFitments,
               {
                 vehicle_config_id: args.vehicleConfigId,
-                refuted: refuted.map((r) => ({ oem: r.oem, reason: r.reason })),
+                refuted: hardDelete.map((r) => ({ oem: r.oem, reason: r.reason })),
               },
             );
-            fitmentRefutedErrors = refuted.map((r) => `fitment_refuted:${r.roleKey}:${r.oem}`);
           }
+          fitmentRefutedErrors = [
+            ...hardDelete.map((r) => `fitment_refuted:${r.roleKey}:${r.oem}`),
+            ...softFlag.map((r) => `fitment_refute_kept_multisource:${r.roleKey}:${r.oem}`),
+          ];
         }
       } catch (e) {
         console.warn("[fitment-verify] pass failed (non-fatal):", e);

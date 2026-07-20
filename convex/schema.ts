@@ -105,6 +105,12 @@ export default defineSchema({
     fuel_type: v.optional(v.string()),
     timing_type: v.optional(v.string()),
     engine_family: v.optional(v.string()),
+    // NHTSA-decoded at VIN-add time. gvwr_lbs (upper bound of the GVWR class)
+    // drives duty-class-aware sanity bands; engine_manufacturer lets the fitment
+    // verifier apply engine-maker fluid specs when it differs from the make
+    // (batch-5: Cummins engine in a Ford F-650).
+    gvwr_lbs: v.optional(v.number()),
+    engine_manufacturer: v.optional(v.string()),
     make_id: v.optional(v.id("makes")),
     displacement_l: v.optional(v.number()),
     configuration: v.optional(v.string()),

@@ -14,8 +14,10 @@ import {
 import {
   summarizeOtoActions,
   resolveBookingOutcome,
+  renderCardsFromToolCalls,
   type OtoAction,
   type OtoBookingOutcome,
+  type RenderCard,
 } from "./lib/otoActivity";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -130,6 +132,9 @@ export type TranscriptMessage = {
   timestamp: number;
   confidence: number | null;
   metadata: unknown;
+  // Render sheets (booking / vehicle-update) this bubble produced, reconstructed
+  // from the turn's tool_calls — so empty render bubbles show their contents.
+  render: RenderCard[];
 };
 
 export type TranscriptTurn = {
@@ -198,6 +203,35 @@ export const transcript = query({
     const actions = summarizeOtoActions(auditRows, telemetryRows);
     const bookingOutcome = await resolveBookingOutcome(ctx, convo, actions);
 
+    // Correlate each turn's render tool_calls to the (usually empty) assistant
+    // bubble it produced — nearest timestamp, each bubble claimed once, since
+    // the ai_message + conversation_audit rows are written in the same turn.
+    const assistantMsgs = messages
+      .filter((m) => m.role === "assistant")
+      .sort((a, b) => a.timestamp - b.timestamp);
+    const renderByMsgId = new Map<string, RenderCard[]>();
+    const claimedMsg = new Set<string>();
+    const auditRenders = auditRows
+      .map((a) => ({ ts: a.timestamp ?? 0, cards: renderCardsFromToolCalls(a.tool_calls) }))
+      .filter((x) => x.cards.length > 0)
+      .sort((a, b) => a.ts - b.ts);
+    for (const ar of auditRenders) {
+      let best: (typeof assistantMsgs)[number] | null = null;
+      let bestDelta = Infinity;
+      for (const m of assistantMsgs) {
+        if (claimedMsg.has(String(m._id))) continue;
+        const d = Math.abs((m.timestamp ?? 0) - ar.ts);
+        if (d < bestDelta) {
+          bestDelta = d;
+          best = m;
+        }
+      }
+      if (best) {
+        claimedMsg.add(String(best._id));
+        renderByMsgId.set(String(best._id), ar.cards);
+      }
+    }
+
     const turns: TranscriptTurn[] = telemetryRows
       .map((t) => {
         const cacheRead = t.cache_read_tokens ?? 0;
@@ -244,6 +278,7 @@ export const transcript = query({
           timestamp: m.timestamp,
           confidence: m.confidence_score ?? null,
           metadata: m.metadata ?? null,
+          render: renderByMsgId.get(String(m._id)) ?? [],
         }))
         .sort((a, b) => a.timestamp - b.timestamp),
       scenario: convo.scenario_detected ?? null,

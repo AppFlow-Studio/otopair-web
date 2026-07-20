@@ -169,7 +169,7 @@ export default function OpsUsersPage() {
             <table className="w-full text-[13px]">
               <thead>
                 <tr>
-                  {["Name", "Email", "Phone", "Vehicles", "Bookings", "Source", "Onboarding", "Created", "Last active", "Flags"].map((h) => (
+                  {["Name", "Email", "Phone", "Vehicles", "Bookings", "Spend", "Source", "Onboarding", "Created", "Last active", "Flags"].map((h) => (
                     <th
                       key={h}
                       className="border-b border-slate-200 pb-2 pr-4 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400"
@@ -204,8 +204,16 @@ export default function OpsUsersPage() {
                       {u.phone ?? "—"}
                       {u.phone && u.phoneVerified && <span className="ml-1 text-emerald-600" title="Phone verified">✓</span>}
                     </td>
-                    <td className="py-2.5 pr-4 tabular-nums text-slate-600">{u.vehicles}</td>
+                    <td className="py-2.5 pr-4 text-slate-600">
+                      <span className="tabular-nums">{u.vehicles}</span>
+                      {u.primaryVehicle && (
+                        <div className="text-[11px] text-slate-400">{u.primaryVehicle}</div>
+                      )}
+                    </td>
                     <td className="py-2.5 pr-4 tabular-nums text-slate-600">{u.bookings}</td>
+                    <td className="py-2.5 pr-4 tabular-nums text-slate-700">
+                      {u.spend > 0 ? `$${Math.round(u.spend).toLocaleString()}` : "—"}
+                    </td>
                     <td className="py-2.5 pr-4">
                       <span className="text-slate-700">{providerLabel(u.authProvider)}</span>
                       {sourceLabel(u.acquisitionSource) && (

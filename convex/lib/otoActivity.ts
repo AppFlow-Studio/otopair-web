@@ -305,3 +305,78 @@ export async function resolveBookingOutcome(
   if (actions.some((a) => a.kind === "booking")) return { state: "not_created" };
   return { state: "none" };
 }
+
+// A structured "sheet" the mobile app rendered (booking bottom-sheet / vehicle-
+// update confirm card) that shows as an EMPTY bubble in the read-only ops
+// transcript. Reconstructed from conversation_audit.tool_calls so the reviewer
+// sees what the sheet contained, not a blank bubble.
+export type RenderCard = {
+  kind: "booking" | "vehicle_update" | "record_confirm";
+  title: string;
+  fields: { label: string; value: string }[];
+};
+
+/** Reconstruct the render sheets a single assistant turn produced from its
+ *  captured tool_calls. Empty when the turn fired no render directives. */
+export function renderCardsFromToolCalls(
+  toolCalls: ReadonlyArray<{ name: string; input?: unknown }> | null | undefined,
+): RenderCard[] {
+  if (!toolCalls) return [];
+  const cards: RenderCard[] = [];
+  for (const tc of toolCalls) {
+    if (!tc || typeof tc.name !== "string") continue;
+    const i = (tc.input && typeof tc.input === "object" ? tc.input : {}) as Record<
+      string,
+      any
+    >;
+
+    if (tc.name === "render_book_service") {
+      const slugs: string[] = Array.isArray(i.service_slugs)
+        ? i.service_slugs.filter((x: unknown): x is string => typeof x === "string")
+        : [];
+      const fields: { label: string; value: string }[] = [];
+      if (slugs.length) fields.push({ label: "Services", value: slugs.map(humanize).join(", ") });
+      if (i.diagnostic_system && i.diagnostic_system !== "not_sure") {
+        fields.push({ label: "Diagnostic", value: humanize(String(i.diagnostic_system)) });
+      }
+      if (typeof i.recommended_priority === "string") {
+        fields.push({
+          label: "Priority",
+          value: String(i.recommended_priority).replace(/[_-]+/g, " "),
+        });
+      }
+      if (typeof i.customer_notes === "string" && i.customer_notes.trim()) {
+        fields.push({ label: "Notes", value: i.customer_notes.trim() });
+      }
+      cards.push({ kind: "booking", title: "Booking sheet", fields });
+    } else if (tc.name === "render_vehicle_update") {
+      const fields: { label: string; value: string }[] = [];
+      if (typeof i.mileage === "number" && Number.isFinite(i.mileage)) {
+        fields.push({ label: "Mileage", value: `${Math.round(i.mileage).toLocaleString()} mi` });
+      }
+      const claims = Array.isArray(i.service_claims) ? i.service_claims : [];
+      for (const c of claims) {
+        if (!c || typeof c.service_slug !== "string") continue;
+        const label =
+          c.kind === "completed"
+            ? "Completed"
+            : c.kind === "light_on"
+              ? "Warning light"
+              : "Due";
+        fields.push({ label, value: humanize(c.service_slug) });
+      }
+      const lights: string[] = Array.isArray(i.fault_lights)
+        ? i.fault_lights.filter((x: unknown): x is string => typeof x === "string")
+        : [];
+      if (lights.length) fields.push({ label: "Fault lights", value: lights.map(humanize).join(", ") });
+      cards.push({ kind: "vehicle_update", title: "Vehicle update", fields });
+    } else if (tc.name === "render_record_confirmation") {
+      const fields: { label: string; value: string }[] = [];
+      if (typeof i.maintenance_type === "string") {
+        fields.push({ label: "Record", value: humanize(i.maintenance_type) });
+      }
+      cards.push({ kind: "record_confirm", title: "Maintenance record", fields });
+    }
+  }
+  return cards;
+}

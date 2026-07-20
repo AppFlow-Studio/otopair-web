@@ -49,14 +49,57 @@ function AgePill({ days }: { days: number | null }) {
   );
 }
 
+const PROVIDER_LABEL: Record<string, string> = {
+  password: "Email + password",
+  oauth_google: "Google",
+  google: "Google",
+  oauth_apple: "Apple",
+  apple: "Apple",
+  phone: "Phone",
+};
+function providerLabel(p: string | null): string | null {
+  if (!p) return null;
+  return PROVIDER_LABEL[p] ?? p.replace(/_/g, " ");
+}
+
+// Days left in the 30-day compliance grace window before cleanup permanently
+// deletes the account — green with room, amber as it nears, red at the wire.
+function GracePill({ days }: { days: number | null }) {
+  if (days === null) return <span className="text-slate-400">—</span>;
+  const cls =
+    days <= 5
+      ? "bg-red-50 text-red-700"
+      : days <= 14
+        ? "bg-amber-50 text-amber-700"
+        : "bg-emerald-50 text-emerald-700";
+  return (
+    <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${cls}`}>
+      {days}d left
+    </span>
+  );
+}
+
+const fmtDate = (ms: number | null) =>
+  ms == null ? "—" : new Date(ms).toLocaleDateString();
+const fmtSpend = (n: number) => (n > 0 ? `$${Math.round(n).toLocaleString()}` : "—");
+
 type Row = {
   id: string;
   name: string;
   email: string | null;
+  phone: string | null;
   requested_at: number | null;
   survey_response: string | null;
   survey_skipped: boolean;
   open_bookings: number;
+  bookings_total: number;
+  vehicles: number;
+  primaryVehicle: string | null;
+  spend: number;
+  authProvider: string | null;
+  createdAt: number;
+  lastActive: number | null;
+  graceRemainingDays: number | null;
 };
 
 export default function DeletionQueuePage() {
@@ -131,8 +174,10 @@ export default function DeletionQueuePage() {
               <thead>
                 <tr className="border-b border-slate-200 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                   <th className="pb-2 pr-4">User</th>
+                  <th className="pb-2 pr-4">Account</th>
                   <th className="pb-2 pr-4">Requested</th>
                   <th className="pb-2 pr-4">Age</th>
+                  <th className="pb-2 pr-4">Grace left</th>
                   <th className="pb-2 pr-4">Survey response</th>
                   <th className="pb-2 pr-4">Open bookings</th>
                   <th className="pb-2" />
@@ -142,7 +187,7 @@ export default function DeletionQueuePage() {
                 {rows.map((r: Row) => {
                   const days = ageDays(r.requested_at);
                   return (
-                    <tr key={r.id} className="border-b border-slate-50 hover:bg-slate-50">
+                    <tr key={r.id} className="border-b border-slate-50 align-top hover:bg-slate-50">
                       <td className="py-2.5 pr-4">
                         <Link
                           href={`/ops/users/${r.id}`}
@@ -150,7 +195,32 @@ export default function DeletionQueuePage() {
                         >
                           {r.name}
                         </Link>
-                        {r.email && <div className="text-xs text-slate-500">{r.email}</div>}
+                        {r.email && (
+                          <div className="text-xs text-slate-500">
+                            <a href={`mailto:${r.email}`} className="hover:text-blue-700 hover:underline">
+                              {r.email}
+                            </a>
+                          </div>
+                        )}
+                        {r.phone && (
+                          <div className="text-xs text-slate-500">
+                            <a href={`tel:${r.phone}`} className="hover:text-blue-700 hover:underline">
+                              {r.phone}
+                            </a>
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-4 text-[12px] text-slate-500">
+                        {providerLabel(r.authProvider) && (
+                          <div className="text-slate-700">{providerLabel(r.authProvider)}</div>
+                        )}
+                        <div>
+                          {r.vehicles} veh · {fmtSpend(r.spend)} · {r.bookings_total} bkg
+                        </div>
+                        {r.primaryVehicle && (
+                          <div className="text-slate-400">🚗 {r.primaryVehicle}</div>
+                        )}
+                        <div className="text-slate-400">joined {fmtDate(r.createdAt)}</div>
                       </td>
                       <td className="py-2.5 pr-4 text-slate-600">
                         {r.requested_at == null
@@ -159,6 +229,9 @@ export default function DeletionQueuePage() {
                       </td>
                       <td className="py-2.5 pr-4">
                         <AgePill days={days} />
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        <GracePill days={r.graceRemainingDays} />
                       </td>
                       <td className="max-w-[280px] py-2.5 pr-4">
                         {r.survey_skipped ? (
@@ -183,14 +256,32 @@ export default function DeletionQueuePage() {
                         )}
                       </td>
                       <td className="py-2.5 text-right">
-                        {canWrite && (
-                          <button
-                            onClick={() => setRestoring(r)}
-                            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
-                          >
-                            Restore
-                          </button>
-                        )}
+                        <div className="flex items-center justify-end gap-1.5">
+                          {r.email && (
+                            <a
+                              href={`mailto:${r.email}`}
+                              className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                            >
+                              Email
+                            </a>
+                          )}
+                          {r.phone && (
+                            <a
+                              href={`tel:${r.phone}`}
+                              className="rounded-lg border border-slate-200 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                            >
+                              Call
+                            </a>
+                          )}
+                          {canWrite && (
+                            <button
+                              onClick={() => setRestoring(r)}
+                              className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+                            >
+                              Restore
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );

@@ -21,6 +21,16 @@ const shopsDirectoryApi = anyApi.shopsDirectory;
 // Types mirroring convex/shopsDirectory.ts return shapes (module is referenced
 // via anyApi until codegen runs, so shapes are pinned locally).
 // ---------------------------------------------------------------------------
+type TierRates = {
+  T1?: number;
+  T2a?: number;
+  T2b?: number;
+  T2c?: number;
+  T3a?: number;
+  T3b?: number;
+  T4?: number;
+};
+
 type Profile = {
   id: string;
   name: string;
@@ -36,14 +46,32 @@ type Profile = {
   lat: number | null;
   lng: number | null;
   description: string | null;
+  logo: string | null;
   laborRate: number | null;
+  laborRatesByTier: TierRates | null;
+  declinedTiers: string[];
+  laborRatesUpdatedAt: number | null;
   rating: number | null;
   reviewCount: number;
   isActive: boolean;
   isVerified: boolean;
+  onboardingComplete: boolean;
   stripeAccountId: string | null;
   stripeChargesEnabled: boolean;
   stripePayoutsEnabled: boolean;
+  stripeOnboardingCompletedAt: number | null;
+  stripeRequirementsDue: string[];
+  scheduling: {
+    bufferMinutes: number | null;
+    noShowThresholdMinutes: number | null;
+    maxBookingsPerMechanicRollingHour: number | null;
+    appointmentReminderLeadMinutes: number | null;
+    overrunDefaultExtensionPercent: number | null;
+    overrunExtensionFloorMinutes: number | null;
+    overrunEscalationMinutes: number | null;
+    overrunAutoApplyMinutes: number | null;
+    entityLabelMode: string | null;
+  };
   mechanicCount: number;
   createdAt: number;
   health: "green" | "amber";
@@ -69,6 +97,14 @@ type ServicesResult = {
     category: string;
     isOffered: boolean;
     defaultLaborHours: number | null;
+    description: string | null;
+    partsKind: string | null;
+    laborDeterminant: string | null;
+    minModelYear: number | null;
+    repairpalSlug: string | null;
+    isLaborOnly: boolean;
+    requiresParts: boolean;
+    hasOptions: boolean;
   }>;
 } | null;
 
@@ -101,28 +137,55 @@ type BookingRow = {
   id: string;
   user: string;
   user_id: string;
+  vehicle: string | null;
   services: string[];
   status: string;
   date: string | null;
   time: string | null;
   total: number | null;
+  laborCost: number | null;
+  partsCost: number | null;
+  estLaborMinutes: number | null;
+  actualDurationMinutes: number | null;
+  invoiceNumber: string | null;
+  customerNotes: string | null;
+  recommendationState: string | null;
+  rescheduled: boolean;
   createdAt: number;
 };
 
+type EnrichedReview = {
+  id: string;
+  rating: number;
+  comment: string | null;
+  reviewer: string | null;
+  reviewer_id: string;
+  mechanic: string | null;
+  mechanic_id: string | null;
+  booking_id: string;
+  vehicle: { ymm: string | null; imageUrl: string | null };
+  service_names: string[];
+  hidden: boolean;
+  hidden_reason: string | null;
+  hidden_by: string | null;
+  at: number;
+};
+
 type ShopInsights = {
-  reviews: {
-    id: string;
-    rating: number;
-    comment: string | null;
-    reviewer: string | null;
-    reviewerId: string;
-    mechanic: string | null;
-    hidden: boolean;
-    at: number;
-  }[];
+  reviews: EnrichedReview[];
   rateHistory: { actor: string; detail: string | null; at: number }[];
   fixedPrices: { service: string; tier: string; price: number }[];
   portfolio: { id: string; url: string; caption: string | null }[];
+  laborQa: { sampled: number; flagged: number; avgVariancePct: number | null };
+  disputes: {
+    id: string;
+    booking_id: string | null;
+    reason: string | null;
+    status: string;
+    amount: number;
+    openedAt: number;
+    closedAt: number | null;
+  }[];
   stats: {
     total: number;
     completed: number;
@@ -291,7 +354,16 @@ export default function ShopDetailPage() {
       {/* ---- Header card -------------------------------------------------- */}
       <Card className="mb-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+          <div className="flex items-start gap-3">
+            {profile.logo && (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={profile.logo}
+                alt=""
+                className="h-12 w-12 rounded-lg object-cover ring-1 ring-slate-200"
+              />
+            )}
+            <div>
             <div className="flex items-center gap-2.5">
               <span
                 className={`inline-block h-2.5 w-2.5 rounded-full ${
@@ -324,6 +396,7 @@ export default function ShopDetailPage() {
                 {profile.failingChecks.join(" · ")}
               </div>
             )}
+            </div>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex gap-5 text-right">
@@ -453,6 +526,28 @@ export default function ShopDetailPage() {
                   ? `${profile.stripeAccountId} · charges ${profile.stripeChargesEnabled ? "✓" : "✗"} · payouts ${profile.stripePayoutsEnabled ? "✓" : "✗"}`
                   : "Not connected",
               ],
+              [
+                "Onboarding",
+                profile.onboardingComplete ? (
+                  <span className="text-emerald-700">Complete</span>
+                ) : (
+                  <span className="text-amber-700">Incomplete</span>
+                ),
+              ],
+              [
+                "Stripe requirements due",
+                profile.stripeRequirementsDue.length > 0 ? (
+                  <span className="text-amber-700">{profile.stripeRequirementsDue.join(", ")}</span>
+                ) : (
+                  "None"
+                ),
+              ],
+              [
+                "Rates updated",
+                profile.laborRatesUpdatedAt
+                  ? new Date(profile.laborRatesUpdatedAt).toLocaleDateString()
+                  : "—",
+              ],
               ["Created", new Date(profile.createdAt).toLocaleDateString()],
             ].map(([label, value]) => (
               <div key={label as string}>
@@ -467,6 +562,58 @@ export default function ShopDetailPage() {
               <p className="mt-0.5 text-[13px] text-slate-700">{profile.description}</p>
             </div>
           )}
+
+          {/* Per-tier labor rates (falls back to the single legacy rate). */}
+          {(profile.laborRatesByTier || profile.declinedTiers.length > 0) && (
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                Labor rates by tier
+              </div>
+              <div className="mt-1.5 flex flex-wrap gap-2">
+                {(["T1", "T2a", "T2b", "T2c", "T3a", "T3b", "T4"] as const).map((t) => {
+                  const declined = profile.declinedTiers.includes(t);
+                  const rate = profile.laborRatesByTier?.[t];
+                  return (
+                    <span
+                      key={t}
+                      className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[12px] ${
+                        declined
+                          ? "border-red-200 bg-red-50 text-red-600"
+                          : "border-slate-200 bg-slate-50 text-slate-700"
+                      }`}
+                    >
+                      <span className="font-semibold">{t}</span>
+                      <span>{declined ? "declined" : rate != null ? `$${rate}/hr` : "—"}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Scheduling configuration — internal knobs. */}
+          <div className="mt-4 border-t border-slate-100 pt-3">
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              Scheduling configuration
+            </div>
+            <dl className="mt-1.5 grid grid-cols-2 gap-x-8 gap-y-1.5 sm:grid-cols-3 lg:grid-cols-4">
+              {[
+                ["Buffer", profile.scheduling.bufferMinutes != null ? `${profile.scheduling.bufferMinutes} min` : "—"],
+                ["No-show after", profile.scheduling.noShowThresholdMinutes != null ? `${profile.scheduling.noShowThresholdMinutes} min` : "—"],
+                ["Max/mech/hr", profile.scheduling.maxBookingsPerMechanicRollingHour ?? "—"],
+                ["Reminder lead", profile.scheduling.appointmentReminderLeadMinutes != null ? `${profile.scheduling.appointmentReminderLeadMinutes} min` : "—"],
+                ["Overrun ext %", profile.scheduling.overrunDefaultExtensionPercent != null ? `${profile.scheduling.overrunDefaultExtensionPercent}%` : "—"],
+                ["Overrun floor", profile.scheduling.overrunExtensionFloorMinutes != null ? `${profile.scheduling.overrunExtensionFloorMinutes} min` : "—"],
+                ["Overrun escalate", profile.scheduling.overrunEscalationMinutes != null ? `${profile.scheduling.overrunEscalationMinutes} min` : "—"],
+                ["Entity labels", profile.scheduling.entityLabelMode ?? "—"],
+              ].map(([label, value]) => (
+                <div key={label as string}>
+                  <dt className="text-[10px] uppercase tracking-wider text-slate-400">{label}</dt>
+                  <dd className="text-[12px] text-slate-700">{value}</dd>
+                </div>
+              ))}
+            </dl>
+          </div>
         </Card>
       )}
 
@@ -598,8 +745,47 @@ export default function ShopDetailPage() {
                         {servicesResult.services
                           .filter((s) => s.category === cat)
                           .map((s) => (
-                            <tr key={s.id} className="border-b border-slate-50">
-                              <td className="py-2 pr-4 font-medium text-slate-800">{s.name}</td>
+                            <tr key={s.id} className="border-b border-slate-50 align-top">
+                              <td className="py-2 pr-4">
+                                <div className="font-medium text-slate-800">{s.name}</div>
+                                {s.description && (
+                                  <div className="mt-0.5 max-w-md text-[12px] text-slate-400">
+                                    {s.description}
+                                  </div>
+                                )}
+                                <div className="mt-1 flex flex-wrap gap-1">
+                                  {s.isLaborOnly && (
+                                    <span className="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+                                      labor-only
+                                    </span>
+                                  )}
+                                  {s.requiresParts && (
+                                    <span className="inline-flex rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-600">
+                                      needs parts
+                                    </span>
+                                  )}
+                                  {s.hasOptions && (
+                                    <span className="inline-flex rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-600">
+                                      has options
+                                    </span>
+                                  )}
+                                  {s.partsKind && (
+                                    <span className="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+                                      {s.partsKind}
+                                    </span>
+                                  )}
+                                  {s.minModelYear != null && (
+                                    <span className="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+                                      {s.minModelYear}+
+                                    </span>
+                                  )}
+                                  {s.laborDeterminant && (
+                                    <span className="inline-flex rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+                                      {s.laborDeterminant}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
                               <td className="py-2 pr-4">
                                 {s.isOffered ? (
                                   <span className="inline-flex rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
@@ -844,44 +1030,110 @@ export default function ShopDetailPage() {
                   <tr className="border-b border-slate-200 text-left text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                     <th className="pb-2 pr-4">Booking</th>
                     <th className="pb-2 pr-4">Customer</th>
+                    <th className="pb-2 pr-4">Vehicle</th>
                     <th className="pb-2 pr-4">Services</th>
                     <th className="pb-2 pr-4">Scheduled</th>
+                    <th className="pb-2 pr-4">Labor est→act</th>
                     <th className="pb-2 pr-4">Status</th>
                     <th className="pb-2 pr-4">Total</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {bookings.map((b) => (
-                    <tr key={b.id} className="border-b border-slate-50 hover:bg-slate-50">
-                      <td className="py-2.5 pr-4">
-                        <Link
-                          href={`/ops/bookings/${b.id}`}
-                          className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
-                        >
-                          …{b.id.slice(-6)}
-                        </Link>
-                      </td>
-                      <td className="py-2.5 pr-4 text-slate-800">
-                        <Link
-                          href={`/ops/users/${b.user_id}`}
-                          className="hover:text-blue-700 hover:underline"
-                        >
-                          {b.user}
-                        </Link>
-                      </td>
-                      <td className="py-2.5 pr-4 text-slate-600">{b.services.join(", ") || "—"}</td>
-                      <td className="py-2.5 pr-4 text-slate-600">
-                        {b.date ?? "—"}
-                        {b.time ? ` ${b.time}` : ""}
-                      </td>
-                      <td className="py-2.5 pr-4">
-                        <span className={pill(b.status)}>{b.status}</span>
-                      </td>
-                      <td className="py-2.5 pr-4 text-slate-700">
-                        {b.total !== null ? `$${b.total.toFixed(2)}` : "—"}
-                      </td>
-                    </tr>
-                  ))}
+                  {bookings.map((b) => {
+                    const variance =
+                      b.estLaborMinutes != null &&
+                      b.actualDurationMinutes != null &&
+                      b.estLaborMinutes > 0
+                        ? (b.actualDurationMinutes - b.estLaborMinutes) / b.estLaborMinutes
+                        : null;
+                    return (
+                      <tr key={b.id} className="border-b border-slate-50 align-top hover:bg-slate-50">
+                        <td className="py-2.5 pr-4">
+                          <Link
+                            href={`/ops/bookings/${b.id}`}
+                            className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-blue-700 hover:bg-blue-100"
+                          >
+                            …{b.id.slice(-6)}
+                          </Link>
+                          {b.invoiceNumber && (
+                            <div className="mt-0.5 font-mono text-[10px] text-slate-400">
+                              #{b.invoiceNumber}
+                            </div>
+                          )}
+                          {b.rescheduled && (
+                            <div className="mt-0.5 text-[10px] text-amber-600">rescheduled</div>
+                          )}
+                        </td>
+                        <td className="py-2.5 pr-4 text-slate-800">
+                          <Link
+                            href={`/ops/users/${b.user_id}`}
+                            className="hover:text-blue-700 hover:underline"
+                          >
+                            {b.user}
+                          </Link>
+                        </td>
+                        <td className="py-2.5 pr-4 text-[12px] text-slate-600">{b.vehicle ?? "—"}</td>
+                        <td className="py-2.5 pr-4 text-slate-600">
+                          <div>{b.services.join(", ") || "—"}</div>
+                          {b.customerNotes && (
+                            <div
+                              className="mt-0.5 max-w-[16rem] truncate text-[11px] italic text-slate-400"
+                              title={b.customerNotes}
+                            >
+                              “{b.customerNotes}”
+                            </div>
+                          )}
+                          {b.recommendationState && b.recommendationState !== "none" && (
+                            <span className="mt-0.5 inline-flex rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-600">
+                              upsell: {b.recommendationState}
+                            </span>
+                          )}
+                        </td>
+                        <td className="py-2.5 pr-4 text-slate-600">
+                          {b.date ?? "—"}
+                          {b.time ? ` ${b.time}` : ""}
+                        </td>
+                        <td className="py-2.5 pr-4 text-[12px] text-slate-600">
+                          {b.estLaborMinutes != null || b.actualDurationMinutes != null ? (
+                            <span className="flex items-center gap-1.5">
+                              <span>
+                                {b.estLaborMinutes ?? "—"} → {b.actualDurationMinutes ?? "—"}
+                              </span>
+                              {variance != null && (
+                                <span
+                                  className={`inline-flex rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                                    Math.abs(variance) <= 0.1
+                                      ? "bg-emerald-50 text-emerald-700"
+                                      : Math.abs(variance) <= 0.25
+                                        ? "bg-amber-50 text-amber-700"
+                                        : "bg-red-50 text-red-700"
+                                  }`}
+                                >
+                                  {variance > 0 ? "+" : ""}
+                                  {Math.round(variance * 100)}%
+                                </span>
+                              )}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="py-2.5 pr-4">
+                          <span className={pill(b.status)}>{b.status}</span>
+                        </td>
+                        <td className="py-2.5 pr-4 text-slate-700">
+                          {b.total !== null ? `$${b.total.toFixed(2)}` : "—"}
+                          {(b.laborCost != null || b.partsCost != null) && (
+                            <div className="text-[10px] text-slate-400">
+                              {b.laborCost != null ? `L $${b.laborCost.toFixed(0)}` : ""}
+                              {b.laborCost != null && b.partsCost != null ? " · " : ""}
+                              {b.partsCost != null ? `P $${b.partsCost.toFixed(0)}` : ""}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               <div className="mt-2 text-[11px] text-slate-400">
@@ -926,6 +1178,72 @@ export default function ShopDetailPage() {
                 </Card>
               </div>
 
+              {/* Labor-estimate QA + dispute detail */}
+              <div className="grid gap-4 lg:grid-cols-2">
+                <Card>
+                  <h2 className="text-sm font-semibold text-slate-900">Labor-estimate accuracy</h2>
+                  <p className="mt-0.5 text-[11px] text-slate-400">
+                    Estimated vs actual labor over the recent bookings window; flagged = off by &gt;25%.
+                  </p>
+                  <div className="mt-3 flex gap-6">
+                    <div>
+                      <div className="text-lg font-bold text-slate-900">
+                        {insights.laborQa.avgVariancePct != null
+                          ? `${insights.laborQa.avgVariancePct > 0 ? "+" : ""}${Math.round(insights.laborQa.avgVariancePct * 100)}%`
+                          : "—"}
+                      </div>
+                      <div className="text-[11px] text-slate-400">avg variance</div>
+                    </div>
+                    <div>
+                      <div className="text-lg font-bold text-slate-900">{insights.laborQa.flagged}</div>
+                      <div className="text-[11px] text-slate-400">flagged jobs</div>
+                    </div>
+                    <div>
+                      <div className="text-lg font-bold text-slate-900">{insights.laborQa.sampled}</div>
+                      <div className="text-[11px] text-slate-400">sampled</div>
+                    </div>
+                  </div>
+                </Card>
+
+                <Card>
+                  <h2 className="text-sm font-semibold text-slate-900">
+                    Disputes ({insights.disputes.length})
+                  </h2>
+                  {insights.disputes.length === 0 ? (
+                    <p className="mt-2 text-[13px] text-slate-400">No payment disputes on record.</p>
+                  ) : (
+                    <div className="mt-3 max-h-72 space-y-2 overflow-auto">
+                      {insights.disputes.map((d) => (
+                        <div key={d.id} className="flex items-center gap-2 text-[12px]">
+                          <span
+                            className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                              d.closedAt != null
+                                ? "bg-slate-100 text-slate-600"
+                                : "bg-red-50 text-red-700"
+                            }`}
+                          >
+                            {d.status}
+                          </span>
+                          <span className="font-semibold text-slate-800">${d.amount.toFixed(2)}</span>
+                          {d.reason && <span className="text-slate-500">{d.reason}</span>}
+                          {d.booking_id && (
+                            <Link
+                              href={`/ops/bookings/${d.booking_id}`}
+                              className="text-blue-600 hover:underline"
+                            >
+                              booking →
+                            </Link>
+                          )}
+                          <span className="ml-auto text-[11px] text-slate-400">
+                            {new Date(d.openedAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Card>
+              </div>
+
               {/* Portfolio gallery */}
               {insights.portfolio.length > 0 && (
                 <Card>
@@ -954,16 +1272,37 @@ export default function ShopDetailPage() {
                           <div className="flex items-center gap-2">
                             <span style={{ color: "#F59E0B" }}>{"★".repeat(Math.round(r.rating))}</span>
                             {r.reviewer && (
-                              <Link href={`/ops/users/${r.reviewerId}`} className="text-[12px] font-medium text-blue-600 hover:underline">
+                              <Link href={`/ops/users/${r.reviewer_id}`} className="text-[12px] font-medium text-blue-600 hover:underline">
                                 {r.reviewer}
                               </Link>
                             )}
                             {r.mechanic && <span className="text-[11px] text-slate-400">· {r.mechanic}</span>}
-                            {r.hidden && <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500">hidden</span>}
+                            {r.hidden && (
+                              <span
+                                className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] text-slate-500"
+                                title={r.hidden_reason ?? undefined}
+                              >
+                                hidden
+                              </span>
+                            )}
                             <span className="ml-auto text-[11px] text-slate-400">
                               {new Date(r.at).toLocaleDateString()}
                             </span>
                           </div>
+                          {(r.vehicle.ymm || r.service_names.length > 0) && (
+                            <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                              {r.vehicle.ymm && <span>{r.vehicle.ymm}</span>}
+                              {r.service_names.length > 0 && (
+                                <span className="text-slate-400">· {r.service_names.join(", ")}</span>
+                              )}
+                              <Link
+                                href={`/ops/bookings/${r.booking_id}`}
+                                className="text-blue-600 hover:underline"
+                              >
+                                booking →
+                              </Link>
+                            </div>
+                          )}
                           {r.comment && <p className="mt-1 text-[12px] text-slate-600">{r.comment}</p>}
                         </div>
                       ))}

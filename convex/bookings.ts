@@ -42,6 +42,7 @@ import { mintClaimToken } from "./walkin_claims";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { metaMakeModel } from "./lib/bookingEnrichment";
 import {
   computeDisclosedRange,
   computePricedPartsSnapshot,
@@ -416,15 +417,19 @@ export const getByUserIdWithDetails = query({
         let licensePlate = booking.vin.slice(-4);
         let makeLogoUrl: string | undefined;
         if (vehicle) {
-          const parts: string[] = [];
+          let makeName = "";
+          let modelName = "";
+          let trimName = "";
           if (vehicle.trim_id) {
             const trim = await ctx.db.get(vehicle.trim_id);
             if (trim) {
+              trimName = trim.name ?? "";
               const model = await ctx.db.get(trim.model_id);
               if (model) {
+                modelName = model.name ?? "";
                 const make = await ctx.db.get(model.make_id);
                 if (make) {
-                  parts.push(make.name);
+                  makeName = make.name ?? "";
                   if (make.logo) {
                     // TODO(ts-fix): make.logo is schema-typed as string but code calls db.get on it.
                     // Either schema should be Id<"_storage"> or this should read make.logo_url directly.
@@ -432,12 +437,22 @@ export const getByUserIdWithDetails = query({
                     makeLogoUrl = (logoAsset as any)?.url;
                   }
                 }
-                parts.push(model.name);
               }
-              parts.push(trim.name);
             }
           }
-          if (vehicle.year != null) parts.push(String(vehicle.year));
+          // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+          if (!makeName || !modelName) {
+            const meta = metaMakeModel(vehicle.metadata);
+            if (!makeName) makeName = meta.make;
+            if (!modelName) modelName = meta.model;
+            if (!trimName) trimName = meta.trim;
+          }
+          const parts = [
+            makeName,
+            modelName,
+            trimName,
+            vehicle.year != null ? String(vehicle.year) : "",
+          ].filter(Boolean);
           if (parts.length > 0) vehicleDisplay = parts.join(" ");
         }
 

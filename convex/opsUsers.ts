@@ -15,6 +15,17 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
+import {
+  metaMakeModel,
+  resolveVehicleDisplay,
+  resolveVehicleDisplayById,
+} from "./lib/bookingEnrichment";
+import {
+  summarizeOtoActions,
+  resolveBookingOutcome,
+  type OtoAction,
+  type OtoBookingOutcome,
+} from "./lib/otoActivity";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 
@@ -107,12 +118,24 @@ export type OpsUserBookingRow = {
   status: string;
   shop: string;
   shop_id: string | null;
+  vehicleYmm: string | null;
   services: string[];
   scheduledDate: string | null;
   created: number;
   total: number | null;
   laborCost: number | null;
   partsCost: number | null;
+};
+
+export type OpsUserOtoConversation = {
+  id: string;
+  started_at: number;
+  message_count: number | null;
+  mood: string | null;
+  vehicleYmm: string | null;
+  led_to_booking: boolean;
+  bookingOutcome: OtoBookingOutcome;
+  actions: OtoAction[];
 };
 
 export type OpsUserEngagement = {
@@ -262,6 +285,13 @@ async function resolveSpecLine(
         makeName = make?.name;
       }
     }
+  }
+  // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+  if (!makeName || !modelName) {
+    const meta = metaMakeModel(vehicle.metadata);
+    if (!makeName) makeName = meta.make || undefined;
+    if (!modelName) modelName = meta.model || undefined;
+    if (!trimName) trimName = meta.trim || undefined;
   }
   let engine: string | null = null;
   if (vehicle.engine_id) {
@@ -431,6 +461,19 @@ export const bookings = query({
       .order("desc")
       .take(100);
 
+    // Resolve each DISTINCT vin once (a user reuses the same car across bookings)
+    // through the shared resolver — so the Bookings tab shows which car, with the
+    // manual-entry metadata fallback applied like every other ops surface.
+    const distinctVins = [
+      ...new Set(rows.map((b) => b.vin).filter((v): v is string => !!v)),
+    ];
+    const vehByVin = new Map<string, string | null>();
+    await Promise.all(
+      distinctVins.map(async (vin) => {
+        vehByVin.set(vin, (await resolveVehicleDisplay(ctx, vin)).ymm);
+      }),
+    );
+
     return Promise.all(
       rows.map(async (b) => {
         const shop = b.shop_id ? await ctx.db.get(b.shop_id) : null;
@@ -447,12 +490,66 @@ export const bookings = query({
           status: b.status,
           shop: shop?.name ?? "—",
           shop_id: b.shop_id ? String(b.shop_id) : null,
+          vehicleYmm: b.vin ? (vehByVin.get(b.vin) ?? null) : null,
           services,
           scheduledDate: b.scheduled_date ?? null,
           created: b.created_at ?? b._creationTime,
           total: b.total_cost ?? null,
           laborCost: b.labor_cost ?? null,
           partsCost: b.parts_cost ?? null,
+        };
+      }),
+    );
+  },
+});
+
+// Recent Oto conversations for this user, enriched with the vehicle display,
+// what Oto DID (summarizeOtoActions), and the booking outcome — the same
+// shared surfacing as /ops/oto-ai, so the user profile shows recent
+// conversations + actions in one place. Capped tight (per-conversation audit
+// + telemetry reads) since this is an on-demand profile tab.
+export const otoConversations = query({
+  args: { token: v.string(), id: v.id("users") },
+  handler: async (ctx, { token, id }): Promise<OpsUserOtoConversation[]> => {
+    await requireDirector(ctx, token);
+    const convos = await ctx.db
+      .query("ai_conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", id))
+      .order("desc")
+      .take(12);
+
+    const vehById = new Map<string, string | null>();
+    return Promise.all(
+      convos.map(async (c) => {
+        let vehicleYmm: string | null = null;
+        if (c.vehicle_id) {
+          const key = String(c.vehicle_id);
+          if (!vehById.has(key)) {
+            vehById.set(key, (await resolveVehicleDisplayById(ctx, c.vehicle_id)).ymm);
+          }
+          vehicleYmm = vehById.get(key) ?? null;
+        }
+        const [audit, telemetry] = await Promise.all([
+          ctx.db
+            .query("conversation_audit")
+            .withIndex("by_conversation_turn", (q) => q.eq("conversation_id", c._id))
+            .take(200),
+          ctx.db
+            .query("oto_telemetry")
+            .withIndex("by_conversation_id", (q) => q.eq("conversation_id", c._id))
+            .take(200),
+        ]);
+        const actions = summarizeOtoActions(audit, telemetry);
+        const bookingOutcome = await resolveBookingOutcome(ctx, c, actions);
+        return {
+          id: String(c._id),
+          started_at: c.started_at,
+          message_count: c.message_count ?? null,
+          mood: c.mood ?? null,
+          vehicleYmm,
+          led_to_booking: c.led_to_booking === true,
+          bookingOutcome,
+          actions,
         };
       }),
     );

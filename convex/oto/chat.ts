@@ -932,6 +932,13 @@ export async function sendMessageHandlerCore(
 
   const messages: AnthropicMessage[] = [{ role: "user", content: envelope }];
   const accumulatedResults: ToolResultBlock[] = [];
+  // Forensic tool-call trace for this turn's assistant conversation_audit row
+  // (Wave 5 wire-in). Accumulates {name, input} across ALL iterations of the
+  // loop for the non-data tools — the renders Oto surfaced and the state/memory
+  // writes it made. Data-tool READS are intentionally excluded (they stay in
+  // oto_telemetry.tools_called); this row is "what Oto DID". Readers (ops
+  // /oto-ai, director debug) summarize this into a human action timeline.
+  const accumulatedToolCalls: { name: string; input: unknown }[] = [];
 
   // B-P1: telemetry samples collected UNCONDITIONALLY (the debug trace only
   // exists on harness runs — production rows used to record 0 tokens).
@@ -1025,6 +1032,11 @@ export async function sendMessageHandlerCore(
         // trivial ack, don't gate the loop.
         stateToolUses.push(tu);
       } else terminalToolUses.push(tu); // render | navigation | unknown
+      // Capture the action-bearing tool uses (renders + state/memory/routing
+      // writes) for the assistant audit row. Data reads are excluded above.
+      if (cat !== "data") {
+        accumulatedToolCalls.push({ name: tu.name, input: tu.input });
+      }
     }
 
     const iterBranch =
@@ -1577,10 +1589,10 @@ export async function sendMessageHandlerCore(
 
     try {
       // Assistant-turn row — role-conditional invariant requires
-      // model_used + prompt_version. tool_calls are NOT plumbed here yet
-      // (Wave 5 telemetry-completion dispatch will wire that from
-      // accumulatedResults); omitting keeps the row schema-valid since
-      // tool_calls is optional.
+      // model_used + prompt_version. tool_calls carry the action-bearing tool
+      // uses this turn (renders + state/memory writes) accumulated across the
+      // loop; the conditional spread omits the field entirely on a text-only
+      // turn so the row stays schema-valid (tool_calls is optional).
       await ctx.runMutation(internal.oto.memoryEditing.recordTurn, {
         conversation_id: conversationId,
         turn_number: turnNumber,
@@ -1588,6 +1600,9 @@ export async function sendMessageHandlerCore(
         content: finalText,
         model_used: modelShortLiteral,
         prompt_version: SYSTEM_PROMPT_VERSION,
+        ...(accumulatedToolCalls.length
+          ? { tool_calls: accumulatedToolCalls }
+          : {}),
       });
     } catch (e: any) {
       console.error(

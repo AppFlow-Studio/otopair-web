@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requireDirector } from "./directorGate";
+import { metaMakeModel } from "./lib/bookingEnrichment";
 
 // All queries for the director panel. Token-gated server-side via requireDirector.
 
@@ -312,19 +313,27 @@ export const userDetail = query({
         .first();
       if (!vehicle) return { vehicleId: null, vin: o.vin, ymm: o.vin, nickname: o.nickname };
 
-      let ymm = o.vin;
+      let make = "";
+      let model = "";
       if (vehicle.trim_id) {
         const trim = await ctx.db.get(vehicle.trim_id);
         if (trim) {
-          const model = await ctx.db.get(trim.model_id);
-          if (model) {
-            const make = await ctx.db.get(model.make_id);
-            ymm = [vehicle.year, make?.name, model.name].filter(Boolean).join(" ");
+          const m = await ctx.db.get(trim.model_id);
+          if (m) {
+            model = m.name ?? "";
+            const mk = await ctx.db.get(m.make_id);
+            if (mk) make = mk.name ?? "";
           }
         }
-      } else if (vehicle.year) {
-        ymm = String(vehicle.year);
       }
+      // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+      if (!make || !model) {
+        const meta = metaMakeModel(vehicle.metadata);
+        if (!make) make = meta.make;
+        if (!model) model = meta.model;
+      }
+      const ymm =
+        [vehicle.year, make, model].filter(Boolean).join(" ") || o.vin;
 
       return { vehicleId: vehicle._id, vin: o.vin, ymm, nickname: o.nickname, mileage: o.mileage };
     }));
@@ -604,6 +613,12 @@ export const bookingDetail = query({
               if (mk) make = mk.name ?? "";
             }
           }
+        }
+        // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+        if (!make || !model) {
+          const meta = metaMakeModel(veh.metadata);
+          if (!make) make = meta.make;
+          if (!model) model = meta.model;
         }
         vehicleYmm = [veh.year, make, model].filter(Boolean).join(" ") || veh.vin;
       }

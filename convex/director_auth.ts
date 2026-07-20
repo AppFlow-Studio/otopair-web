@@ -164,13 +164,19 @@ export const _logFailedLogin = internalMutation({
 export const _insertUser = internalMutation({
   args: {
     name: v.string(),
+    // TEMP: mobile schema still uses the legacy 3-value role enum
+    // (superadmin/admin/viewer) — web's schema.ts has migrated to a
+    // 6-role model (super_admin, ops_admin, support, readonly,
+    // data_admin, shop_success) but that requires a data migration
+    // Convex's push-time check won't tolerate against Ahmad's
+    // existing bootstrap row. Pin this validator to the legacy enum
+    // until Temur + Ahmad coordinate the director_users role
+    // migration on adamant-guineapig-82. Runtime auth path is
+    // unaffected — requireDirector reads role string-comparison.
     role: v.union(
-      v.literal("super_admin"),
-      v.literal("ops_admin"),
-      v.literal("support"),
-      v.literal("readonly"),
-      v.literal("data_admin"),
-      v.literal("shop_success"),
+      v.literal("superadmin"),
+      v.literal("admin"),
+      v.literal("viewer"),
     ),
     totp_secret: v.string(),
     email: v.optional(v.string()),

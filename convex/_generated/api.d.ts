@@ -424,6 +424,7 @@ import type * as vehicleEnrichment_v3queries from "../vehicleEnrichment/v3querie
 import type * as vehicleEnrichment_validation_oemValidation from "../vehicleEnrichment/validation/oemValidation.js";
 import type * as vehicleEnrichment_validation_sanityChecks from "../vehicleEnrichment/validation/sanityChecks.js";
 import type * as vehicleEnrichment_validation_sourceAuthority from "../vehicleEnrichment/validation/sourceAuthority.js";
+import type * as vehicleEnrichment_variantFingerprint from "../vehicleEnrichment/variantFingerprint.js";
 import type * as vehicleEnrichment_verificationApi from "../vehicleEnrichment/verificationApi.js";
 import type * as vehicleTruth from "../vehicleTruth.js";
 import type * as vehicle_history from "../vehicle_history.js";
@@ -859,6 +860,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/validation/oemValidation": typeof vehicleEnrichment_validation_oemValidation;
   "vehicleEnrichment/validation/sanityChecks": typeof vehicleEnrichment_validation_sanityChecks;
   "vehicleEnrichment/validation/sourceAuthority": typeof vehicleEnrichment_validation_sourceAuthority;
+  "vehicleEnrichment/variantFingerprint": typeof vehicleEnrichment_variantFingerprint;
   "vehicleEnrichment/verificationApi": typeof vehicleEnrichment_verificationApi;
   vehicleTruth: typeof vehicleTruth;
   vehicle_history: typeof vehicle_history;

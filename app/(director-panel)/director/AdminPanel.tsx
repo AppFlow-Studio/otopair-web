@@ -24,25 +24,38 @@ import { TabServiceParts } from './components/tabs/TabServiceParts'
 import { TabRepairPalLabor } from './components/tabs/TabRepairPalLabor'
 import { TabOtoSim }    from './components/tabs/TabOtoSim'
 import { TabOtoConversations } from './components/tabs/TabOtoConversations'
+// Merged /ops surfaces (see plan: ops → director merge).
+import { TabReviews }       from './components/tabs/TabReviews'
+import { TabDeletionQueue } from './components/tabs/TabDeletionQueue'
+import { TabFollowUps }     from './components/tabs/TabFollowUps'
+import { TabSystemHealth }  from './components/tabs/TabSystemHealth'
+import { TabTransactions }  from './components/tabs/TabTransactions'
+import { TabAnalytics }     from './components/tabs/TabAnalytics'
 
 const SESSION_KEY = 'otopair_director_token'
 
 const TABS: Record<string, React.ComponentType> = {
   overview: TabOverview,
-  shops:    TabShops,
   users:    TabUsers,
+  deletionQueue: TabDeletionQueue,
+  shops:    TabShops,
   bookings: TabBookings,
+  reviews:  TabReviews,
+  stripe:      TabStripe,
+  transactions: TabTransactions,
   cars:        TabCars,
   configs:     TabVehicleConfigs,
   pricing:     TabPricing,
   serviceParts: TabServiceParts,
   repairpalLabor: TabRepairPalLabor,
+  otoConversations: TabOtoConversations,
+  followUps:   TabFollowUps,
+  otoSim:      TabOtoSim,
+  otoFeedback: TabOtoFeedback,
+  analytics:   TabAnalytics,
+  systemHealth: TabSystemHealth,
   bugs:        TabBugs,
   feedback:    TabFeedback,
-  otoFeedback: TabOtoFeedback,
-  otoSim:      TabOtoSim,
-  otoConversations: TabOtoConversations,
-  stripe:      TabStripe,
   audit:          TabAudit,
   mechanicEdits:  TabMechanicEdits,
   settings:       TabSettings,

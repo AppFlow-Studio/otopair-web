@@ -56,3 +56,4 @@ node_modules/
 
 # Agent browser-driving harness (local only — never committed)
 /.agent/
+.claude

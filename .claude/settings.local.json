@@ -17,5 +17,27 @@
       "Bash(git add *)",
       "Bash(git commit *)"
     ]
+  },
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/notify.js"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ~/.claude/notify.js"
+          }
+        ]
+      }
+    ]
   }
 }

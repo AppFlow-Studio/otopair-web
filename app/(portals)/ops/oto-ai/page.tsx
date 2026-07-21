@@ -26,6 +26,15 @@ const fmtDT = (ms: number) => new Date(ms).toLocaleString();
 const fmtTok = (n: number) =>
   n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
 
+// Action-kind → pill styling for the "Oto actions" timeline.
+const ACTION_KIND_STYLE: Record<string, string> = {
+  booking: "bg-emerald-50 text-emerald-700",
+  vehicle_update: "bg-blue-50 text-blue-700",
+  record_confirm: "bg-violet-50 text-violet-600",
+  memory: "bg-slate-100 text-slate-500",
+  other: "bg-slate-100 text-slate-500",
+};
+
 type ConversationRow = {
   id: string;
   user: string | null;
@@ -38,6 +47,12 @@ type ConversationRow = {
   vehicleYmm: string | null;
   message_count: number | null;
   led_to_booking: boolean;
+  booking_status: string | null;
+};
+type RenderCardShape = {
+  kind: string;
+  title: string;
+  fields: { label: string; value: string }[];
 };
 type TranscriptMessage = {
   id: string;
@@ -46,7 +61,43 @@ type TranscriptMessage = {
   timestamp: number;
   confidence: number | null;
   metadata: unknown;
+  render: RenderCardShape[];
 };
+
+// The mobile booking bottom-sheet / vehicle-update card that a render turn
+// produced — shown inline where the transcript would otherwise be an empty bubble.
+function RenderSheet({ card }: { card: RenderCardShape }) {
+  const accent =
+    card.kind === "booking"
+      ? "border-emerald-200 bg-emerald-50/50"
+      : card.kind === "vehicle_update"
+        ? "border-blue-200 bg-blue-50/50"
+        : "border-violet-200 bg-violet-50/50";
+  const icon = card.kind === "booking" ? "📋" : card.kind === "vehicle_update" ? "🚗" : "🧾";
+  return (
+    <div className={`max-w-[85%] rounded-xl border px-3.5 py-2.5 text-[12px] ${accent}`}>
+      <div className="mb-1 flex flex-wrap items-center gap-1.5 font-semibold text-slate-700">
+        <span>{icon}</span>
+        {card.title}
+        <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+          rendered in-app
+        </span>
+      </div>
+      {card.fields.length === 0 ? (
+        <div className="text-slate-400">(no details captured)</div>
+      ) : (
+        <dl className="space-y-0.5">
+          {card.fields.map((f, i) => (
+            <div key={i} className="flex gap-2">
+              <dt className="w-20 shrink-0 text-slate-400">{f.label}</dt>
+              <dd className="text-slate-700">{f.value}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
+  );
+}
 
 export default function OpsOtoAiPage() {
   const { token } = usePortalSession();
@@ -253,7 +304,9 @@ export default function OpsOtoAiPage() {
                     {c.user ?? "Unknown user"}
                   </Link>
                   {c.led_to_booking && (
-                    <span className={`${pill} bg-emerald-50 text-emerald-700`}>→ booking</span>
+                    <span className={`${pill} bg-emerald-50 text-emerald-700`}>
+                      → booking{c.booking_status ? ` · ${c.booking_status.replace(/_/g, " ")}` : ""}
+                    </span>
                   )}
                 </div>
                 {c.vehicleYmm && (
@@ -320,31 +373,115 @@ export default function OpsOtoAiPage() {
                   )}
                 </div>
               )}
+              {/* Booking outcome — did Oto's "it's booked" actually land? */}
+              {transcript.bookingOutcome.state === "created" && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-100 bg-emerald-50 px-3 py-2 text-[12px]">
+                  <span className="font-semibold text-emerald-800">✅ Booking created</span>
+                  {transcript.bookingOutcome.services.length > 0 && (
+                    <span className="text-emerald-700">
+                      {transcript.bookingOutcome.services.join(", ")}
+                    </span>
+                  )}
+                  <span className={`${pill} bg-white text-emerald-700`}>
+                    {transcript.bookingOutcome.status.replace(/_/g, " ")}
+                  </span>
+                  {(transcript.bookingOutcome.scheduledDate ||
+                    transcript.bookingOutcome.shopName) && (
+                    <span className="text-emerald-700">
+                      {[
+                        transcript.bookingOutcome.scheduledDate,
+                        transcript.bookingOutcome.scheduledTime,
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      {transcript.bookingOutcome.shopName
+                        ? ` · ${transcript.bookingOutcome.shopName}`
+                        : ""}
+                    </span>
+                  )}
+                  <Link
+                    href={`/ops/bookings/${transcript.bookingOutcome.bookingId}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="ml-auto font-medium text-emerald-800 underline"
+                  >
+                    open booking →
+                  </Link>
+                </div>
+              )}
+              {transcript.bookingOutcome.state === "not_created" && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] font-medium text-amber-800">
+                  ⚠️ Oto teed up a booking in this conversation, but none is linked —
+                  it may have over-claimed, or the user never finished the flow.
+                </div>
+              )}
+
+              {/* What Oto DID — action timeline (renders + data/memory writes). */}
+              {transcript.actions.length > 0 && (
+                <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                  <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">
+                    Oto actions
+                  </div>
+                  <ul className="mt-1.5 space-y-1">
+                    {transcript.actions.map((a, idx) => (
+                      <li key={idx} className="flex items-start gap-2 text-[12px]">
+                        <span
+                          className={`${pill} ${ACTION_KIND_STYLE[a.kind] ?? "bg-slate-100 text-slate-600"}`}
+                        >
+                          {a.kind.replace(/_/g, " ")}
+                        </span>
+                        <span className="text-slate-700">
+                          <span className="font-medium">{a.label}</span>
+                          {a.detail ? (
+                            <span className="text-slate-500"> — {a.detail}</span>
+                          ) : null}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {transcript.arc && (
                 <div className="rounded-lg bg-slate-50 px-3 py-2 text-[12px] italic text-slate-500">
                   arc: {transcript.arc}
                 </div>
               )}
-              {(transcript.messages as TranscriptMessage[]).map((m) =>
-                m.role === "system" ? (
-                  <details key={m.id} className="text-[11px] text-slate-400">
-                    <summary className="cursor-pointer">system message</summary>
-                    <div className="mt-1 rounded bg-slate-50 p-2">{m.content}</div>
-                  </details>
-                ) : (
-                  <button
+              {(transcript.messages as TranscriptMessage[]).map((m) => {
+                if (m.role === "system") {
+                  return (
+                    <details key={m.id} className="text-[11px] text-slate-400">
+                      <summary className="cursor-pointer">system message</summary>
+                      <div className="mt-1 rounded bg-slate-50 p-2">{m.content}</div>
+                    </details>
+                  );
+                }
+                const hasText = m.content.trim().length > 0;
+                const hasRender = m.render && m.render.length > 0;
+                return (
+                  <div
                     key={m.id}
-                    onClick={() => setFocusMsg(m)}
-                    className={`block max-w-[85%] rounded-xl border px-3.5 py-2 text-left text-[13px] leading-relaxed ${
-                      m.role === "user"
-                        ? "ml-auto border-blue-100 bg-[#EFF6FF] text-slate-800"
-                        : "border-slate-200 bg-white text-slate-800"
-                    } ${focusMsg?.id === m.id ? "ring-2 ring-blue-300" : ""}`}
+                    className={`flex flex-col gap-1.5 ${m.role === "user" ? "items-end" : "items-start"}`}
                   >
-                    {m.content}
-                  </button>
-                ),
-              )}
+                    {hasText && (
+                      <button
+                        onClick={() => setFocusMsg(m)}
+                        className={`block max-w-[85%] rounded-xl border px-3.5 py-2 text-left text-[13px] leading-relaxed ${
+                          m.role === "user"
+                            ? "border-blue-100 bg-[#EFF6FF] text-slate-800"
+                            : "border-slate-200 bg-white text-slate-800"
+                        } ${focusMsg?.id === m.id ? "ring-2 ring-blue-300" : ""}`}
+                      >
+                        {m.content}
+                      </button>
+                    )}
+                    {hasRender &&
+                      m.render.map((card, ci) => <RenderSheet key={ci} card={card} />)}
+                    {!hasText && !hasRender && m.role === "assistant" && (
+                      <div className="text-[11px] italic text-slate-300">(no text)</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>

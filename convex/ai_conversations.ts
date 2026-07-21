@@ -24,6 +24,8 @@ import {
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
+import { resolveVehicleDisplayById } from "./lib/bookingEnrichment";
+import { summarizeOtoActions, resolveBookingOutcome } from "./lib/otoActivity";
 
 /** Resolve the authed caller's users row, or throw. */
 async function requireUser(ctx: QueryCtx | MutationCtx): Promise<Doc<"users">> {
@@ -88,11 +90,56 @@ export const getByUserId = query({
       .unique();
     if (!user) return [];
 
-    return await ctx.db
+    const convos = await ctx.db
       .query("ai_conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
       .order("desc")
       .take(50);
+
+    // Enrich ADDITIVELY — existing mobile consumers keep reading the raw
+    // conversation fields; new consumers get a resolved vehicle label and the
+    // booking outcome. The full action timeline is per-conversation
+    // (getConversationActivity) — too heavy to fan audit/telemetry reads over 50.
+    const vehById = new Map<string, string | null>();
+    return await Promise.all(
+      convos.map(async (c) => {
+        let vehicleYmm: string | null = null;
+        if (c.vehicle_id) {
+          const key = String(c.vehicle_id);
+          if (!vehById.has(key)) {
+            vehById.set(key, (await resolveVehicleDisplayById(ctx, c.vehicle_id)).ymm);
+          }
+          vehicleYmm = vehById.get(key) ?? null;
+        }
+        // Light outcome (created | none) — no action fan-out; the "over-claimed"
+        // signal needs the action timeline and surfaces in getConversationActivity.
+        const bookingOutcome = await resolveBookingOutcome(ctx, c, []);
+        return { ...c, vehicleYmm, bookingOutcome };
+      }),
+    );
+  },
+});
+
+// Owner-gated per-conversation "what Oto did" + booking outcome, for the mobile
+// conversation-detail view. Rich (reads conversation_audit + oto_telemetry);
+// getByUserId intentionally omits the action timeline for list performance.
+export const getConversationActivity = query({
+  args: { conversationId: v.id("ai_conversations") },
+  handler: async (ctx, { conversationId }) => {
+    const { convo } = await requireConversationOwner(ctx, conversationId);
+    const [audit, telemetry] = await Promise.all([
+      ctx.db
+        .query("conversation_audit")
+        .withIndex("by_conversation_turn", (q) => q.eq("conversation_id", conversationId))
+        .take(500),
+      ctx.db
+        .query("oto_telemetry")
+        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
+        .take(500),
+    ]);
+    const actions = summarizeOtoActions(audit, telemetry);
+    const bookingOutcome = await resolveBookingOutcome(ctx, convo, actions);
+    return { actions, bookingOutcome };
   },
 });
 

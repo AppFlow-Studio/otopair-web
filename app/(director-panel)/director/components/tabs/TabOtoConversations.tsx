@@ -84,6 +84,37 @@ const DebugPane = ({ conversationId, token }: { conversationId: Id<'ai_conversat
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {(debug.actions.length > 0 || debug.bookingOutcome.state !== 'none') && (
+        <div>
+          {label('What Oto did')}
+          {debug.bookingOutcome.state === 'created' && (
+            <div style={{ border: '1px solid #a7f3d0', background: '#ecfdf5', borderRadius: 8, padding: '8px 10px', fontSize: 12, color: '#065f46', marginBottom: 8 }}>
+              ✅ Booking created — {debug.bookingOutcome.services.join(', ') || 'service'} · {debug.bookingOutcome.status.replace(/_/g, ' ')}
+              {debug.bookingOutcome.shopName ? ` · ${debug.bookingOutcome.shopName}` : ''}
+            </div>
+          )}
+          {debug.bookingOutcome.state === 'not_created' && (
+            <div style={{ border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 8, padding: '8px 10px', fontSize: 12, color: '#92400e', marginBottom: 8 }}>
+              ⚠️ Oto teed up a booking but none is linked to this conversation.
+            </div>
+          )}
+          {debug.actions.length === 0
+            ? <div style={{ fontSize: 12, color: 'var(--slate-400)', fontStyle: 'italic' }}>No data or booking actions.</div>
+            : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                {debug.actions.map((a, i) => (
+                  <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 12 }}>
+                    <Badge tone={a.kind === 'booking' ? 'green' : a.kind === 'vehicle_update' ? 'blue' : a.kind === 'record_confirm' ? 'purple' : 'slate'}>{a.kind.replace(/_/g, ' ')}</Badge>
+                    <span style={{ color: 'var(--slate-700)' }}>
+                      <span style={{ fontWeight: 600 }}>{a.label}</span>
+                      {a.detail ? <span style={{ color: 'var(--slate-500)' }}> — {a.detail}</span> : null}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+        </div>
+      )}
       <div>
         {label(`Telemetry (${debug.telemetry.length} turn${debug.telemetry.length === 1 ? '' : 's'})`)}
         {debug.telemetry.length === 0

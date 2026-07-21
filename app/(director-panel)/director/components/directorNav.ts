@@ -42,3 +42,22 @@ export const consumeStashedGoto = (tab: string): GotoTarget | null => {
     return null
   }
 }
+
+// ---------------------------------------------------------------------------
+// Shops sub-tab stash — redirect shims for /shops/capacity etc. land on the
+// right pane without needing an entityId.
+// ---------------------------------------------------------------------------
+
+const SHOPS_SUB_KEY = 'director_shops_subtab'
+
+export const stashShopsSubtab = (sub: string) => {
+  try { sessionStorage.setItem(SHOPS_SUB_KEY, sub) } catch { /* private mode */ }
+}
+
+export const consumeShopsSubtab = (): string | null => {
+  try {
+    const v = sessionStorage.getItem(SHOPS_SUB_KEY)
+    if (v) sessionStorage.removeItem(SHOPS_SUB_KEY)
+    return v
+  } catch { return null }
+}

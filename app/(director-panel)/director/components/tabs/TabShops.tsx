@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { SectionAnchor } from '../Shell'
-import { consumeGoto, consumeStashedGoto } from '../directorNav'
+import { consumeGoto, consumeStashedGoto, consumeShopsSubtab } from '../directorNav'
 import { ShopsDirectory } from './shops/ShopsDirectory'
 import { ShopsMapTab } from './shops/ShopsMapTab'
 import { MechanicsDirectory } from './shops/MechanicsDirectory'
@@ -10,19 +10,25 @@ import { NetworkReviews } from './shops/NetworkReviews'
 import { AttentionList } from './shops/AttentionList'
 import { ShopDetail } from './shops/ShopDetail'
 import { MechanicDetail } from './shops/MechanicDetail'
+import { CapacityHeatmap } from './shops/CapacityHeatmap'
+import { OfferingsMatrix } from './shops/OfferingsMatrix'
+import { PerformanceCalibration } from './shops/PerformanceCalibration'
+import { OnboardingPipeline } from './shops/OnboardingPipeline'
 
-// Shops — the merged /shops portal. Network SUB-TABS (Directory · Map ·
-// Mechanics · Reviews · Attention) plus a full-page 7-tab shop detail and a
-// mechanic detail. All data comes from the same requireDirector-gated
-// api.shops*.* queries the portal used — the director session token works
-// as-is, so no backend changes were needed.
+// Shops — the merged /shops portal. Network SUB-TABS plus a full-page 7-tab
+// shop detail and a mechanic detail. All data comes from the same
+// requireDirector-gated api.shops*.* queries.
 
 const SUBTABS = [
-  { id: 'directory', label: 'Directory' },
-  { id: 'map', label: 'Map' },
-  { id: 'mechanics', label: 'Mechanics' },
-  { id: 'reviews', label: 'Reviews' },
-  { id: 'attention', label: 'Attention' },
+  { id: 'directory',   label: 'Directory' },
+  { id: 'map',         label: 'Map' },
+  { id: 'mechanics',   label: 'Mechanics' },
+  { id: 'reviews',     label: 'Reviews' },
+  { id: 'attention',   label: 'Attention' },
+  { id: 'capacity',    label: 'Capacity' },
+  { id: 'offerings',   label: 'Offerings' },
+  { id: 'performance', label: 'Performance' },
+  { id: 'pipeline',    label: 'Pipeline' },
 ] as const
 type SubTab = (typeof SUBTABS)[number]['id']
 
@@ -37,7 +43,10 @@ export const TabShops = () => {
     const g = consumeGoto() ?? consumeStashedGoto('shops')
     if (g?.entityId) { setSelectedShopId(g.entityId); return }
     const gm = consumeStashedGoto('shops-mechanic')
-    if (gm?.entityId) setSelectedMechanicId(gm.entityId)
+    if (gm?.entityId) { setSelectedMechanicId(gm.entityId); return }
+    const subHint = consumeShopsSubtab()
+    const valid = SUBTABS.map(t => t.id) as string[]
+    if (subHint && valid.includes(subHint)) setSub(subHint as SubTab)
   }, [])
 
   const openShop = (id: string) => { setSelectedMechanicId(null); setSelectedShopId(id) }
@@ -75,11 +84,15 @@ export const TabShops = () => {
         })}
       </div>
 
-      {sub === 'directory' && <ShopsDirectory onOpenShop={openShop} />}
-      {sub === 'map' && <ShopsMapTab onOpenShop={openShop} onGoDirectory={() => setSub('directory')} />}
-      {sub === 'mechanics' && <MechanicsDirectory onOpenMechanic={openMechanic} onOpenShop={openShop} />}
-      {sub === 'reviews' && <NetworkReviews onOpenShop={openShop} onOpenMechanic={openMechanic} />}
-      {sub === 'attention' && <AttentionList onOpenShop={openShop} />}
+      {sub === 'directory'   && <ShopsDirectory onOpenShop={openShop} />}
+      {sub === 'map'         && <ShopsMapTab onOpenShop={openShop} onGoDirectory={() => setSub('directory')} />}
+      {sub === 'mechanics'   && <MechanicsDirectory onOpenMechanic={openMechanic} onOpenShop={openShop} />}
+      {sub === 'reviews'     && <NetworkReviews onOpenShop={openShop} onOpenMechanic={openMechanic} />}
+      {sub === 'attention'   && <AttentionList onOpenShop={openShop} />}
+      {sub === 'capacity'    && <CapacityHeatmap />}
+      {sub === 'offerings'   && <OfferingsMatrix />}
+      {sub === 'performance' && <PerformanceCalibration />}
+      {sub === 'pipeline'    && <OnboardingPipeline onOpenShop={openShop} />}
     </SectionAnchor>
   )
 }

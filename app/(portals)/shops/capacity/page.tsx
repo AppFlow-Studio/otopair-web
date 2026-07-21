@@ -1,8 +1,8 @@
 'use client'
 
-// Merged into /director#shops. (Capacity heatmap deferred to a later phase.)
+// Merged into /director#shops (Capacity sub-tab). See ../_redirect.
 import { ShopsRedirect } from '../_redirect'
 
 export default function Page() {
-  return <ShopsRedirect to="/director#shops" />
+  return <ShopsRedirect to="/director#shops" subtab="capacity" />
 }

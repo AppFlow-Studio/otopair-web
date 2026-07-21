@@ -7,13 +7,16 @@
 
 import { useEffect } from 'react'
 
-export function ShopsRedirect({ to = '/director#shops', stash }:
-  { to?: string; stash?: { tab: string; entityId: string } }) {
+export function ShopsRedirect({ to = '/director#shops', stash, subtab }:
+  { to?: string; stash?: { tab: string; entityId: string }; subtab?: string }) {
   useEffect(() => {
     if (stash) {
       try { sessionStorage.setItem('director_goto', JSON.stringify(stash)) } catch { /* private mode */ }
     }
+    if (subtab) {
+      try { sessionStorage.setItem('director_shops_subtab', subtab) } catch { /* private mode */ }
+    }
     window.location.replace(to)
-  }, [to, stash?.tab, stash?.entityId])
+  }, [to, stash?.tab, stash?.entityId, subtab])
   return null
 }

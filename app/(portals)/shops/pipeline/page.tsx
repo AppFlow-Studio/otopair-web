@@ -1,8 +1,8 @@
 'use client'
 
-// Merged into /director#shops. (Onboarding pipeline deferred to a later phase.)
+// Merged into /director#shops (Pipeline sub-tab). See ../_redirect.
 import { ShopsRedirect } from '../_redirect'
 
 export default function Page() {
-  return <ShopsRedirect to="/director#shops" />
+  return <ShopsRedirect to="/director#shops" subtab="pipeline" />
 }

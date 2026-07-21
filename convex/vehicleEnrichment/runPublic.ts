@@ -16,6 +16,7 @@ import { internal, api } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
 import { scrapeWheelSizeOptions } from "./utils/wheelSizeScraper";
 import { buildEngineKey } from "./types";
+import { coreSignature } from "./determinismGate";
 
 const TEST_CLERK_ID = "user_39FwQkrjpFYGOQ0gkPIk1DEf0FW";
 const POLL_MS = 30_000;
@@ -281,12 +282,32 @@ export const b8collect = internalAction({
     }
     const runs: any[] = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getEnrichmentRuns, { vehicleConfigId: vcId });
     const run = runs.find((r: any) => r.status === "complete") ?? runs[0];
+    const assembled = {
+      engine: eng
+        ? {
+            code: eng.engine_code,
+            oil_viscosity: eng.oil_viscosity,
+            oil_capacity_qts: eng.oil_capacity_qts,
+            coolant_type: eng.coolant_type,
+            spark_plug_quantity: eng.spark_plug_quantity,
+            fuel: eng.fuel_type,
+          }
+        : null,
+      transmission: trans
+        ? { type: trans.transmission_type ?? trans.type, fluid: trans.fluid_type, speeds: trans.speeds }
+        : null,
+      drivetrain: dt?.drivetrain_type ?? vc?.drivetrain,
+      parts,
+    };
     return {
       vin,
       vehicle: `${vc?.year ?? ""} ${vc?.config_key ?? ""}`,
       config_key: vc?.config_key,
       transmission_id: vDoc.transmission_id ?? null,
       status: vc?.enrichment_status,
+      // Determinism-gate signature (P5): stable, normalized fingerprint of the
+      // enriched config so N runs of one VIN can be diffed via compareSignatures.
+      core_signature: coreSignature(assembled),
       fill_rate: vc?.fill_rate,
       engine: eng
         ? {

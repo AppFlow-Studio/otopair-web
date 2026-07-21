@@ -11,6 +11,55 @@
 
 import type { VehicleInput, VehicleIdentity } from "../types";
 import type { DetectedPackage } from "../../lib/vehicleDatabases";
+import { assembleVariantFingerprint, renderVariantConstraints } from "../variantFingerprint";
+import { resolveFuelClass } from "../fuelTypeResolver";
+import { resolveBuildSource } from "../buildSourceResolver";
+
+/** Assemble the variant fingerprint synchronously from the identity available
+ *  at prompt-build time and render its high-consequence facets as an
+ *  authoritative constraints block (P5). All resolvers are pure/sync. Fail-open:
+ *  returns "" when no facet is confident enough to assert. */
+function variantConstraintsFor(vehicle: VehicleInput, vPicData: VehicleIdentity | null): string {
+  const engineCode =
+    vehicle.engineCode && !vehicle.engineCode.includes("_") ? vehicle.engineCode : null;
+  const fuel = resolveFuelClass({
+    nhtsa_fuel_type: vPicData?.fuel_type ?? null,
+    engine_code: vehicle.engineCode ?? null,
+    engine_manufacturer: vPicData?.engine_manufacturer ?? null,
+  });
+  const build = resolveBuildSource({
+    make: vehicle.make,
+    model: vehicle.model,
+    model_year: vehicle.year,
+    engine_manufacturer: vPicData?.engine_manufacturer ?? null,
+  });
+  const fp = assembleVariantFingerprint({
+    make: vehicle.make,
+    model: vehicle.model,
+    model_year: vehicle.year,
+    engine_code: engineCode,
+    raw_fuel_type: vPicData?.fuel_type ?? null,
+    aspiration: vPicData?.turbo ? "turbo" : null,
+    displacement_l:
+      vPicData?.displacement_l ??
+      (vehicle.displacement ? parseFloat(vehicle.displacement) || null : null),
+    cylinders: vPicData?.cylinders ?? null,
+    engine_manufacturer: vPicData?.engine_manufacturer ?? null,
+    // Transmission family is the raw (unreconciled) decode here — deliberately
+    // NOT constrained in the prompt (renderVariantConstraints ignores it).
+    transmission_family: null,
+    speeds: null,
+    drivetrain: (vPicData?.drivetrain as "FWD" | "RWD" | "AWD" | "4WD" | null) ?? null,
+    gvwr_lbs: vPicData?.gvwr_lbs ?? null,
+    resolved_fuel: { fuel_class: fuel.fuel_class, confidence: fuel.confidence, source: fuel.source },
+    resolved_build_source: {
+      build_source_make: build.build_source_make,
+      confidence: build.confidence,
+      source: build.source,
+    },
+  });
+  return renderVariantConstraints(fp);
+}
 
 export const BATCH_1_SYSTEM = `You are a data extraction specialist for Otopair. You will receive raw markdown scraped from OEM parts catalog pages (bmwpartsdeal.com or equivalent) and owner's manual / maintenance schedule pages for a specific vehicle.
 
@@ -128,8 +177,10 @@ If a package's part numbers are unknown or unavailable in the source documents, 
 `
     : "";
 
-  return `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim} — ${vehicle.engineCode} ${vehicle.displacement}L
+  const variantConstraints = variantConstraintsFor(vehicle, vPicData);
 
+  return `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim} — ${vehicle.engineCode} ${vehicle.displacement}L
+${variantConstraints ? `\n${variantConstraints}` : ""}
 ${vPicSection}
 
 ${partsSection}

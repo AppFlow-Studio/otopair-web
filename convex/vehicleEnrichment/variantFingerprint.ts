@@ -259,6 +259,62 @@ export function assembleVariantFingerprint(
   return fp;
 }
 
+function cap(s: string): string {
+  return s.length ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+/**
+ * Render the fingerprint's high-consequence facets as an AUTHORITATIVE
+ * constraints block for the extraction prompt (P5). Only CONFIDENT facets emit a
+ * line (fail-open — a null/low-confidence facet constrains nothing), and the
+ * block is GUIDANCE that the applicability rules + fitment verifier still net.
+ * Deliberately does NOT constrain transmission (its family is the raw,
+ * unreconciled decode value at prompt-build time). Returns "" when nothing is
+ * confident enough to assert.
+ */
+export function renderVariantConstraints(fp: VariantFingerprintV1): string {
+  const lines: string[] = [];
+
+  const engBits = [
+    fp.engine_code.value ? `engine code ${fp.engine_code.value}` : null,
+    fp.displacement_l.value ? `${fp.displacement_l.value}L` : null,
+    fp.cylinders.value ? `${fp.cylinders.value}-cyl` : null,
+    fp.aspiration.value && fp.aspiration.value !== "na" ? fp.aspiration.value : null,
+  ].filter(Boolean);
+  if (engBits.length) {
+    lines.push(
+      `- Engine: ${engBits.join(", ")}. Return ONLY parts that fit THIS exact engine — never a different engine, displacement, or model generation of ${fp.make ?? "this model"} that the scraped catalog may also list.`,
+    );
+  }
+
+  const fc = fp.fuel_class.value;
+  if (fc === "diesel" && fp.fuel_class.confidence >= 0.7) {
+    lines.push(
+      `- Fuel: DIESEL (compression-ignition). This engine has NO spark plugs and NO ignition coils — set spark_plug_oem, spark_plug_quantity, spark_plug_gap and ignition_coil_oem to null. The oil filter, air filter and other consumables are the DIESEL engine's parts, NOT a gasoline sibling of the same nameplate.`,
+    );
+  } else if (fc === "bev" && fp.fuel_class.confidence >= 0.7) {
+    lines.push(
+      `- Fuel: BATTERY-ELECTRIC. There is no combustion engine — set spark_plug_oem, spark_plug_quantity, spark_plug_gap, ignition_coil_oem, oil_filter_oem, engine_oil and fuel-system parts to null.`,
+    );
+  }
+
+  const bs = fp.build_source_make.value;
+  const makeDiffers = fp.make == null || bs == null || bs.toLowerCase() !== fp.make.toLowerCase();
+  if (bs && fp.build_source_make.confidence >= 0.7 && makeDiffers) {
+    lines.push(
+      `- Built by ${cap(bs)} (badge-engineered): this vehicle's OEM parts and fluids follow ${cap(bs)}'s specifications and part-number format, NOT ${fp.make ?? "the badge brand"}'s. Prefer genuine ${cap(bs)} OEM part numbers and ${cap(bs)} fluid specs (transmission fluid, coolant, filters).`,
+    );
+  }
+
+  if (lines.length === 0) return "";
+  const veh = [fp.model_year, fp.make, fp.model].filter(Boolean).join(" ");
+  return `=== AUTHORITATIVE VARIANT CONSTRAINTS (highest priority — override any conflicting catalog/scraped value) ===
+This vehicle is EXACTLY a ${veh}. Established facts about THIS specific variant:
+${lines.join("\n")}
+When the scraped parts catalog mixes multiple variants of this nameplate, choose ONLY the entries matching the constraints above; leave a field null rather than return a part from a different variant.
+`;
+}
+
 /** Mean confidence across the established (value != null) facets. */
 function meanFacetConfidence(fp: VariantFingerprintV1): number {
   const facets: Facet<unknown>[] = [

@@ -351,6 +351,7 @@ import type * as vehicleEnrichment_backfillNhtsaKey from "../vehicleEnrichment/b
 import type * as vehicleEnrichment_backfills from "../vehicleEnrichment/backfills.js";
 import type * as vehicleEnrichment_blockedDomains from "../vehicleEnrichment/blockedDomains.js";
 import type * as vehicleEnrichment_buildSearchQueries from "../vehicleEnrichment/buildSearchQueries.js";
+import type * as vehicleEnrichment_buildSourceResolver from "../vehicleEnrichment/buildSourceResolver.js";
 import type * as vehicleEnrichment_cacheValidation from "../vehicleEnrichment/cacheValidation.js";
 import type * as vehicleEnrichment_capacityResolver from "../vehicleEnrichment/capacityResolver.js";
 import type * as vehicleEnrichment_claudeExtractor from "../vehicleEnrichment/claudeExtractor.js";
@@ -788,6 +789,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/backfills": typeof vehicleEnrichment_backfills;
   "vehicleEnrichment/blockedDomains": typeof vehicleEnrichment_blockedDomains;
   "vehicleEnrichment/buildSearchQueries": typeof vehicleEnrichment_buildSearchQueries;
+  "vehicleEnrichment/buildSourceResolver": typeof vehicleEnrichment_buildSourceResolver;
   "vehicleEnrichment/cacheValidation": typeof vehicleEnrichment_cacheValidation;
   "vehicleEnrichment/capacityResolver": typeof vehicleEnrichment_capacityResolver;
   "vehicleEnrichment/claudeExtractor": typeof vehicleEnrichment_claudeExtractor;

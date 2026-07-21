@@ -165,6 +165,11 @@ export interface FingerprintInputs {
    *  carrying the resolver's confidence + source. When absent, the assembler
    *  falls back to classifying raw_fuel_type (P0 behavior). */
   resolved_fuel?: { fuel_class: FuelClass | null; confidence: number; source: string } | null;
+  /** Optional pre-resolved build source from buildSourceResolver (P2). When
+   *  present, it OVERRIDES the inline engine_manufacturer seed for the
+   *  build_source_make facet. When absent, the assembler falls back to the P0
+   *  seed (kept for behavior-compat + tests). */
+  resolved_build_source?: { build_source_make: string | null; confidence: number; source: string } | null;
 }
 
 /**
@@ -233,10 +238,16 @@ export function assembleVariantFingerprint(
 
     drivetrain: facet(input.drivetrain, input.drivetrain ? 0.9 : 0, "reconciled"),
     duty_class: facet(dutyClass, dutyClass ? 0.9 : 0, "derived"),
-    // Seed only; P2 replaces with a real badge/plant resolver + family logic.
-    build_source_make: buildSourceDiffers
-      ? facet(input.engine_manufacturer, 0.5, "seed_engine_mfr")
-      : facet<string>(null, 0, "none"),
+    // P2 resolver (buildSourceResolver) when wired; else the P0 inline seed.
+    build_source_make: input.resolved_build_source
+      ? facet(
+          input.resolved_build_source.build_source_make,
+          input.resolved_build_source.confidence,
+          input.resolved_build_source.source,
+        )
+      : buildSourceDiffers
+        ? facet(input.engine_manufacturer, 0.5, "seed_engine_mfr")
+        : facet<string>(null, 0, "none"),
 
     make: input.make,
     model: input.model,

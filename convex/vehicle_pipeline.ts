@@ -27,6 +27,7 @@ import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
 import { parseGvwrUpperLbs } from "./vehicleEnrichment/validation/sanityChecks";
 import { assembleVariantFingerprint, type TransmissionFamily } from "./vehicleEnrichment/variantFingerprint";
 import { resolveFuelClass } from "./vehicleEnrichment/fuelTypeResolver";
+import { resolveBuildSource } from "./vehicleEnrichment/buildSourceResolver";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -622,6 +623,12 @@ export const processVin = internalAction({
         canonTransRaw === "dct" || canonTransRaw === "manual"
           ? (canonTransRaw as TransmissionFamily)
           : null;
+      const buildSource = resolveBuildSource({
+        make: merged.make,
+        model: finalModel,
+        model_year: merged.year,
+        engine_manufacturer: merged.engineManufacturer || null,
+      });
       const variantFingerprint = assembleVariantFingerprint({
         make: merged.make,
         model: finalModel,
@@ -644,6 +651,11 @@ export const processVin = internalAction({
           fuel_class: fuelResolution.fuel_class,
           confidence: fuelResolution.confidence,
           source: fuelResolution.source,
+        },
+        resolved_build_source: {
+          build_source_make: buildSource.build_source_make,
+          confidence: buildSource.confidence,
+          source: buildSource.source,
         },
       });
       console.log(

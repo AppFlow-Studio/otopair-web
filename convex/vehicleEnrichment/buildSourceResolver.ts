@@ -97,23 +97,28 @@ interface BadgeRule {
   make: string;
   model: string;
   years?: [number, number]; // inclusive
-  source: string;           // canonical builder marque
+  source: string;           // canonical builder marque (lowercase, for family checks)
+  /** Builder make + model as they appear in the BUILDER's parts catalog — used
+   *  by resolveScrapeRedirect (P2.5) to point the parts scrape at the right car
+   *  (a "Yaris" doesn't exist in Mazda's catalog; the "Mazda2" does). */
+  source_make?: string;
+  source_model?: string;
   note: string;
 }
 const BADGE_MAP: readonly BadgeRule[] = [
   // 2016-2020 Yaris sedan (iA) + 2019-2020 hatch are the Mazda2 (Mazda-built,
   // Mexico). The 2006-2018 Toyota-built Yaris hatch is NOT this — year-gated.
-  { make: "toyota", model: "yaris", years: [2016, 2020], source: "mazda", note: "Mazda2-based Yaris iA/hatch" },
+  { make: "toyota", model: "yaris", years: [2016, 2020], source: "mazda", source_make: "Mazda", source_model: "Mazda2", note: "Mazda2-based Yaris iA/hatch" },
   // Toyota 86 / GR 86 / Scion FR-S — Subaru-built (BRZ twin).
-  { make: "toyota", model: "86", source: "subaru", note: "Subaru-built 86" },
-  { make: "toyota", model: "gr86", source: "subaru", note: "Subaru-built GR86" },
-  { make: "scion", model: "fr-s", source: "subaru", note: "Subaru-built FR-S" },
+  { make: "toyota", model: "86", source: "subaru", source_make: "Subaru", source_model: "BRZ", note: "Subaru-built 86" },
+  { make: "toyota", model: "gr86", source: "subaru", source_make: "Subaru", source_model: "BRZ", note: "Subaru-built GR86" },
+  { make: "scion", model: "fr-s", source: "subaru", source_make: "Subaru", source_model: "BRZ", note: "Subaru-built FR-S" },
   // 2020+ GR Supra — BMW Z4-based, built by Magna Steyr on BMW architecture.
-  { make: "toyota", model: "supra", years: [2020, 2099], source: "bmw", note: "BMW Z4-based Supra" },
+  { make: "toyota", model: "supra", years: [2020, 2099], source: "bmw", source_make: "BMW", source_model: "Z4", note: "BMW Z4-based Supra" },
   // Pontiac Vibe — Toyota-built (Matrix twin, NUMMI).
-  { make: "pontiac", model: "vibe", source: "toyota", note: "Toyota-built Vibe" },
+  { make: "pontiac", model: "vibe", source: "toyota", source_make: "Toyota", source_model: "Matrix", note: "Toyota-built Vibe" },
   // Chevrolet City Express — Nissan NV200 rebadge.
-  { make: "chevrolet", model: "city express", source: "nissan", note: "Nissan NV200 rebadge" },
+  { make: "chevrolet", model: "city express", source: "nissan", source_make: "Nissan", source_model: "NV200", note: "Nissan NV200 rebadge" },
 ];
 
 function normModel(s: string | null | undefined): string {
@@ -170,4 +175,37 @@ export function resolveBuildSource(input: BuildSourceInputs): BuildSourceResolut
   }
 
   return none;
+}
+
+export interface ScrapeRedirect {
+  /** Builder make + model to scrape parts against instead of the badge. */
+  make: string;
+  model: string;
+  note: string;
+}
+
+/**
+ * P2.5: for a known badge-engineered vehicle, return the BUILDER's make+model
+ * so the PARTS scrape reads the builder's catalog (the Mazda2), not the badge's
+ * (the Yaris). Only the curated BADGE_MAP entries with a source_make/source_model
+ * redirect — a bare engine-supplier difference does NOT (a Cummins RAM is still
+ * a RAM in the parts catalog). Returns null when there's nothing to redirect.
+ */
+export function resolveScrapeRedirect(input: {
+  make: string | null;
+  model: string | null;
+  model_year: number | null;
+}): ScrapeRedirect | null {
+  const mk = input.make?.trim().toLowerCase();
+  if (!mk) return null;
+  const model = normModel(input.model);
+  for (const rule of BADGE_MAP) {
+    if (rule.make !== mk) continue;
+    if (normModel(rule.model) !== model) continue;
+    if (rule.years && input.model_year != null &&
+        (input.model_year < rule.years[0] || input.model_year > rule.years[1])) continue;
+    if (!rule.source_make || !rule.source_model) continue;
+    return { make: rule.source_make, model: rule.source_model, note: rule.note };
+  }
+  return null;
 }

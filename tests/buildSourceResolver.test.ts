@@ -9,6 +9,7 @@ import { describe, expect, test } from "vitest";
 import {
   normalizeManufacturer,
   resolveBuildSource,
+  resolveScrapeRedirect,
 } from "../convex/vehicleEnrichment/buildSourceResolver";
 
 describe("normalizeManufacturer", () => {
@@ -93,5 +94,30 @@ describe("resolveBuildSource", () => {
       make: "Honda", model: "Civic", model_year: 2022, engine_manufacturer: "Honda Motor Co",
     });
     expect(r.build_source_make).toBe(null);
+  });
+});
+
+describe("resolveScrapeRedirect (P2.5) — point the PARTS scrape at the builder's car", () => {
+  test("the batch-8 Yaris → Mazda Mazda2", () => {
+    const r = resolveScrapeRedirect({ make: "Toyota", model: "Yaris", model_year: 2020 });
+    expect(r).toEqual(expect.objectContaining({ make: "Mazda", model: "Mazda2" }));
+  });
+
+  test("year-gated: 2010 Toyota-built Yaris → no redirect", () => {
+    expect(resolveScrapeRedirect({ make: "Toyota", model: "Yaris", model_year: 2010 })).toBe(null);
+  });
+
+  test("86 → Subaru BRZ; GR Supra → BMW Z4; Vibe → Toyota Matrix", () => {
+    expect(resolveScrapeRedirect({ make: "Toyota", model: "86", model_year: 2019 }))
+      .toEqual(expect.objectContaining({ make: "Subaru", model: "BRZ" }));
+    expect(resolveScrapeRedirect({ make: "Toyota", model: "Supra", model_year: 2021 }))
+      .toEqual(expect.objectContaining({ make: "BMW", model: "Z4" }));
+    expect(resolveScrapeRedirect({ make: "Pontiac", model: "Vibe", model_year: 2009 }))
+      .toEqual(expect.objectContaining({ make: "Toyota", model: "Matrix" }));
+  });
+
+  test("a normal car (Wrangler, Civic) → no redirect", () => {
+    expect(resolveScrapeRedirect({ make: "Jeep", model: "Wrangler", model_year: 2021 })).toBe(null);
+    expect(resolveScrapeRedirect({ make: "Honda", model: "Civic", model_year: 2022 })).toBe(null);
   });
 });

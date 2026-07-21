@@ -33,6 +33,7 @@ import { parsePartPrices, parseSupersessions, type ParsedPartPrice, type ParsedS
 import { CACHE_FORMAT_VERSION } from "./scraperQueries";
 import type { VehicleInput } from "./types";
 import { scrapeWheelSizeOptions, type WheelSizeResult } from "./utils/wheelSizeScraper";
+import { resolveScrapeRedirect } from "./buildSourceResolver";
 
 const TTL_PARTS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const MAX_MARKDOWN_CHARS = 40_000;
@@ -72,37 +73,64 @@ export async function scrapeVehicleSources(
   ctx: ActionCtx,
   vehicle: VehicleInput,
 ): Promise<ScrapedSources> {
+  // The MANUAL / maintenance-schedule scrape stays on the badge — the badge
+  // maker publishes the service schedule (Toyota's Yaris schedule is fine).
   const config = getSourceConfig(vehicle.make);
   const manualQueries = config
     ? getManualSearchQueries(config, vehicle)
     : buildDefaultManualQueries(vehicle);
 
+  // P2.5 SOURCE REDIRECTION: for a badge-engineered vehicle the PARTS live in
+  // the BUILDER's catalog, not the badge's — a "2020 Toyota Yaris" is really a
+  // Mazda2, and prompt-anchoring alone can't invent Mazda part numbers absent
+  // from a Toyota scrape (batch-8/P5 finding). Scrape parts against the builder
+  // (Mazda / Mazda2); if that comes back empty, fall back to the badge scrape so
+  // we never end up with LESS data than before.
+  const redirect = resolveScrapeRedirect({
+    make: vehicle.make, model: vehicle.model, model_year: vehicle.year,
+  });
+  const partsVehicle: VehicleInput = redirect
+    ? { ...vehicle, make: redirect.make, model: redirect.model }
+    : vehicle;
+  if (redirect) {
+    console.log(
+      `[scraper] BADGE REDIRECT — parts scrape for ${vehicle.year} ${vehicle.make} ${vehicle.model} ` +
+        `→ ${redirect.make} ${redirect.model} (${redirect.note})`,
+    );
+  }
+
   // Parts: ANY make with a registry template (the RevolutionParts family —
   // *partsdeal.com / {brand}.oempartsonline.com) gets the structured direct-URL
-  // fetch; makes with no template fall back to open-web search. Previously this
-  // path was gated to BMW only, so Toyota/Honda/oempartsonline makes never hit
-  // their own registry — fixed here so the structured (JSON-LD) price path runs
-  // for every registered make. Template pages that return nothing still fall
-  // back to search.
-  let partsPromise: Promise<PartsScrapeResult>;
-
-  if (config) {
-    const yearSpecificUrls = getPartsPageUrls(config, vehicle);
-    const genericUrls = getGenericPartsPageUrls(config, vehicle);
-    partsPromise = scrapePartsPages(ctx, vehicle, yearSpecificUrls, genericUrls).then(
-      async (result) => {
-        // If the registry template returned nothing, fall back to open-web search.
+  // fetch; makes with no template fall back to open-web search. Template pages
+  // that return nothing still fall back to search.
+  const scrapePartsFor = (v: VehicleInput): Promise<PartsScrapeResult> => {
+    const cfg = getSourceConfig(v.make);
+    if (cfg) {
+      const yearSpecificUrls = getPartsPageUrls(cfg, v);
+      const genericUrls = getGenericPartsPageUrls(cfg, v);
+      return scrapePartsPages(ctx, v, yearSpecificUrls, genericUrls).then(async (result) => {
         if (result.markdown.length === 0) {
-          console.log(`[scraper] ${vehicle.make} template returned 0 chars — falling back to search`);
-          return searchPartsPages(ctx, vehicle);
+          console.log(`[scraper] ${v.make} template returned 0 chars — falling back to search`);
+          return searchPartsPages(ctx, v);
         }
         return result;
-      },
-    );
-  } else {
-    // Makes with no registry template: search the open web directly.
-    partsPromise = searchPartsPages(ctx, vehicle);
-  }
+      });
+    }
+    return searchPartsPages(ctx, v);
+  };
+
+  const partsPromise: Promise<PartsScrapeResult> = scrapePartsFor(partsVehicle).then(
+    async (result) => {
+      // Redirected builder scrape found nothing → fall back to the badge scrape.
+      if (redirect && result.markdown.length === 0) {
+        console.log(
+          `[scraper] builder scrape (${redirect.make} ${redirect.model}) empty — falling back to badge ${vehicle.make} ${vehicle.model}`,
+        );
+        return scrapePartsFor(vehicle);
+      }
+      return result;
+    },
+  );
 
   const dispL = vehicle.displacement ? parseFloat(vehicle.displacement) || null : null;
   const wheelResult = await scrapeWheelSizeOptions(vehicle.year, vehicle.make, vehicle.model, vehicle.trim, dispL).catch(() => null);

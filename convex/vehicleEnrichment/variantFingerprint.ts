@@ -25,6 +25,7 @@
  */
 
 import { deriveDutyClass, type DutyClass } from "./validation/sanityChecks";
+import { makesSameFamily } from "./contentSanitization";
 
 /** A single resolved facet: its value, how confident we are, and where it came
  *  from. `value: null` means "not established" (fail-open) — never a guess. */
@@ -159,6 +160,11 @@ export interface FingerprintInputs {
   /** Drivetrain, ALREADY reconciled against NHTSA axle (drivetrainReconcile). */
   drivetrain: "FWD" | "RWD" | "AWD" | "4WD" | null;
   gvwr_lbs: number | null;
+  /** Optional pre-resolved fuel class from fuelTypeResolver (P1). When present,
+   *  it OVERRIDES the naive classifyFuelClass(raw_fuel_type) for the fuel facet,
+   *  carrying the resolver's confidence + source. When absent, the assembler
+   *  falls back to classifying raw_fuel_type (P0 behavior). */
+  resolved_fuel?: { fuel_class: FuelClass | null; confidence: number; source: string } | null;
 }
 
 /**
@@ -171,20 +177,34 @@ export interface FingerprintInputs {
 export function assembleVariantFingerprint(
   input: FingerprintInputs,
 ): VariantFingerprintV1 {
-  const fuelClass = classifyFuelClass(input.raw_fuel_type);
+  // Prefer the P1 resolver's authoritative fuel class (with its confidence +
+  // source); fall back to naive classification of the raw decode string (P0).
+  const resolved = input.resolved_fuel;
+  const fuelClass = resolved ? resolved.fuel_class : classifyFuelClass(input.raw_fuel_type);
+  const fuelConfidence = resolved ? resolved.confidence : fuelClass ? 0.85 : 0;
+  const fuelSource = resolved ? resolved.source : "derived";
   const dutyClass = input.gvwr_lbs != null ? deriveDutyClass(input.gvwr_lbs) : null;
 
   // build_source_make seed (P2 will replace with a real badge/plant resolver):
-  // only when engine_manufacturer is present AND clearly differs from the make
-  // string. Family-aware comparison is P2's job; here we keep it conservative —
-  // an exact case-insensitive difference only, so a "Toyota"/"Toyota Motor..."
-  // corporate string doesn't read as a foreign source.
+  // fire only when engine_manufacturer is present and belongs to a DIFFERENT
+  // corporate family than the make (Mazda-built Toyota Yaris → "Mazda"). Uses
+  // makesSameFamily so a brand-name parent (Chrysler on a Jeep, Lexus on a
+  // Toyota) is correctly suppressed. KNOWN P2 GAP: NHTSA sometimes returns a
+  // corporate-parent STRING ("FCA US LLC", "General Motors") that
+  // makesSameFamily doesn't map to a marque family, so those still seed a
+  // false source — harmless while this facet is observe-only; P2 normalizes
+  // those strings.
   const emfr = input.engine_manufacturer?.trim() ?? "";
   const mk = input.make?.trim() ?? "";
+  const el = emfr.toLowerCase();
+  const ml = mk.toLowerCase();
+  // Suppress when same corporate family (Lexus↔Toyota) OR one string contains
+  // the other ("Toyota Motor Manufacturing" ⊇ "Toyota") — the latter catches
+  // NHTSA's "<Make> Motor ..." forms that makesSameFamily's exact-key match misses.
   const buildSourceDiffers =
     emfr !== "" && mk !== "" &&
-    !emfr.toLowerCase().includes(mk.toLowerCase()) &&
-    !mk.toLowerCase().includes(emfr.toLowerCase());
+    !makesSameFamily(emfr, mk) &&
+    !el.includes(ml) && !ml.includes(el);
 
   const fp: VariantFingerprintV1 = {
     engine_code: facet(
@@ -192,7 +212,7 @@ export function assembleVariantFingerprint(
       input.engine_code_verified ? 0.95 : 0.7,
       input.engine_code_verified ? "verified" : "nhtsa",
     ),
-    fuel_class: facet(fuelClass, fuelClass ? 0.85 : 0, "derived"),
+    fuel_class: facet(fuelClass, fuelConfidence, fuelSource),
     aspiration: facet(input.aspiration, input.aspiration ? 0.75 : 0, "nhtsa"),
     displacement_l: facet(input.displacement_l, input.displacement_l ? 0.8 : 0, "nhtsa"),
     cylinders: facet(input.cylinders, input.cylinders ? 0.8 : 0, "nhtsa"),

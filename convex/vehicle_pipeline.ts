@@ -25,6 +25,8 @@ import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
 import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
 import { parseGvwrUpperLbs } from "./vehicleEnrichment/validation/sanityChecks";
+import { assembleVariantFingerprint, type TransmissionFamily } from "./vehicleEnrichment/variantFingerprint";
+import { resolveFuelClass } from "./vehicleEnrichment/fuelTypeResolver";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -51,6 +53,9 @@ type ProcessVinResult = {
   displacement: string;
   fuelType: string;
   drivetrain: string;
+  /** Variant fingerprint (P0/P1) — consolidated, confidence-scored identity.
+   *  Observe-only for now (logged; not yet anchoring extraction). */
+  variantFingerprint?: import("./vehicleEnrichment/variantFingerprint").VariantFingerprintV1;
   /** Merged body class (NHTSA "BodyClass" preferred, VDB bodyType fallback).
    *  Surfaced to the review screen so the loading-state silhouette can
    *  pick SUV vs sedan. */
@@ -596,10 +601,68 @@ export const processVin = internalAction({
           (nhtsa.transSpeeds ? parseInt(nhtsa.transSpeeds) : null),
       };
 
+      // ── Variant fingerprint (P0/P1) ──────────────────────────────
+      // Consolidate the decode signals just resolved above (engine code,
+      // reconciled drivetrain, canonicalized transmission, GVWR duty class) plus
+      // an AUTHORITATIVE fuel-class resolution (P1: cross-checks the fuel field
+      // against the engine — a Cummins/EcoDiesel/TDI engine is diesel no matter
+      // what the fuel field says) into one confidence-scored record. Currently
+      // OBSERVE-ONLY: produced + logged + returned, not yet anchoring extraction
+      // (that's P5). Fail-open — a null facet changes nothing downstream.
+      const fuelResolution = resolveFuelClass({
+        nhtsa_fuel_type: nhtsa.fuelType || null,
+        vdb_fuel_type: vdb?.fuelType ?? null,
+        engine_code: finalEngineCode,
+        engine_manufacturer: merged.engineManufacturer || null,
+        engine_description: vdb?.engineDescription ?? null,
+      });
+      const canonTransRaw = (await canonicalizeTransmissionType(transType))?.toLowerCase();
+      const canonTransFamily: TransmissionFamily | null =
+        canonTransRaw === "automatic" || canonTransRaw === "cvt" ||
+        canonTransRaw === "dct" || canonTransRaw === "manual"
+          ? (canonTransRaw as TransmissionFamily)
+          : null;
+      const variantFingerprint = assembleVariantFingerprint({
+        make: merged.make,
+        model: finalModel,
+        model_year: merged.year,
+        engine_code:
+          finalEngineCode && !finalEngineCode.includes("_") ? finalEngineCode : null,
+        raw_fuel_type: merged.fuelType || null,
+        aspiration: merged.turbo ? "turbo" : null,
+        displacement_l: merged.displacement ? parseFloat(merged.displacement) || null : null,
+        cylinders: merged.cylinders ?? null,
+        engine_manufacturer: merged.engineManufacturer || null,
+        transmission_family: canonTransFamily,
+        speeds: merged.transSpeeds ?? null,
+        drivetrain:
+          canonicalDrivetrain && canonicalDrivetrain !== "unknown"
+            ? (canonicalDrivetrain as "FWD" | "RWD" | "AWD" | "4WD")
+            : null,
+        gvwr_lbs: gvwrLbs,
+        resolved_fuel: {
+          fuel_class: fuelResolution.fuel_class,
+          confidence: fuelResolution.confidence,
+          source: fuelResolution.source,
+        },
+      });
+      console.log(
+        `[fingerprint] ${merged.year} ${merged.make} ${finalModel} | ` +
+          `fuel=${variantFingerprint.fuel_class.value ?? "?"}(${fuelResolution.source}` +
+          `${fuelResolution.conflict ? ",CONFLICT" : ""}) | ` +
+          `engine=${variantFingerprint.engine_code.value ?? "?"} | ` +
+          `trans=${variantFingerprint.transmission_family.value ?? "?"} | ` +
+          `drive=${variantFingerprint.drivetrain.value ?? "?"} | ` +
+          `duty=${variantFingerprint.duty_class.value ?? "?"} | ` +
+          `buildSrc=${variantFingerprint.build_source_make.value ?? "-"} | ` +
+          `idConf=${variantFingerprint.overall_identity_confidence.toFixed(2)}`,
+      );
+
       return {
         makeId, modelId, trimId, engineId, transmissionId,
         make: merged.make, model: finalModel, year: merged.year, trim: finalTrim,
         engineCode: finalEngineCode,
+        variantFingerprint,
         cylinders: merged.cylinders, displacement: merged.displacement,
         fuelType: merged.fuelType,
         drivetrain: canonicalDrivetrain ?? "unknown",

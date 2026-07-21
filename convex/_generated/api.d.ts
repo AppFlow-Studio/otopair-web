@@ -364,6 +364,7 @@ import type * as vehicleEnrichment_firecrawl from "../vehicleEnrichment/firecraw
 import type * as vehicleEnrichment_fitmentQuarantine from "../vehicleEnrichment/fitmentQuarantine.js";
 import type * as vehicleEnrichment_fleetEval from "../vehicleEnrichment/fleetEval.js";
 import type * as vehicleEnrichment_fluidBrandConsistency from "../vehicleEnrichment/fluidBrandConsistency.js";
+import type * as vehicleEnrichment_fuelTypeResolver from "../vehicleEnrichment/fuelTypeResolver.js";
 import type * as vehicleEnrichment_gapFill from "../vehicleEnrichment/gapFill.js";
 import type * as vehicleEnrichment_helpers from "../vehicleEnrichment/helpers.js";
 import type * as vehicleEnrichment_identityResolution from "../vehicleEnrichment/identityResolution.js";
@@ -800,6 +801,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/fitmentQuarantine": typeof vehicleEnrichment_fitmentQuarantine;
   "vehicleEnrichment/fleetEval": typeof vehicleEnrichment_fleetEval;
   "vehicleEnrichment/fluidBrandConsistency": typeof vehicleEnrichment_fluidBrandConsistency;
+  "vehicleEnrichment/fuelTypeResolver": typeof vehicleEnrichment_fuelTypeResolver;
   "vehicleEnrichment/gapFill": typeof vehicleEnrichment_gapFill;
   "vehicleEnrichment/helpers": typeof vehicleEnrichment_helpers;
   "vehicleEnrichment/identityResolution": typeof vehicleEnrichment_identityResolution;

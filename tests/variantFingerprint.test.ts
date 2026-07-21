@@ -104,6 +104,13 @@ describe("assembleVariantFingerprint — consolidation + fail-open", () => {
     expect(fp.build_source_make.value).toBe(null);
   });
 
+  test("same-FAMILY brand engine manufacturer does NOT seed (Lexus on a Toyota)", () => {
+    const fp = assembleVariantFingerprint(
+      baseInputs({ make: "Toyota", engine_manufacturer: "Lexus", raw_fuel_type: "Gasoline" }),
+    );
+    expect(fp.build_source_make.value).toBe(null);
+  });
+
   test("transmission_unit_code is fail-open null in P0 (filled by P3)", () => {
     const fp = assembleVariantFingerprint(baseInputs());
     expect(fp.transmission_unit_code.value).toBe(null);

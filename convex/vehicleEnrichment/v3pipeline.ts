@@ -65,6 +65,7 @@ import { reconcileDrivetrain } from "./drivetrainReconcile";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
 import { reconcileTransmissionType } from "./transmissionTypeReconcile";
 import { fluidNamesForeignChassisBrand, FLUID_TYPE_TO_PART_FIELD } from "./fluidBrandConsistency";
+import { resolveScrapeRedirect } from "./buildSourceResolver";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { laborFlagsFromEnv } from "./laborResearch";
 import type { Id } from "../_generated/dataModel";
@@ -973,9 +974,25 @@ async function writeNormalizedData(
    * parsed _oem fields (all passed in), so gating the others is safe.
    */
   writeScope: "full" | "parts" = "full",
+  /** P2.5: for a badge-engineered vehicle, the builder's brand (e.g. "Mazda"
+   *  for a Toyota Yaris) — so a part number from the builder's catalog passes
+   *  the OEM-format guard, which otherwise validates only against the badge make
+   *  and NULLs the correct Mazda parts the source-redirected scrape surfaced. */
+  partSanitizeBrand?: string | null,
 ) {
   const now = Date.now();
   const partsOnly = writeScope === "parts";
+  // Accept a part matching EITHER the badge make OR the builder brand (badge-
+  // engineered cars carry the builder's OEM numbers; the badge's re-box numbers
+  // still pass against `make`). Try the badge make first, then the builder.
+  const sanitizePart = (rawStr: string): string | null => {
+    const primary = sanitizePartNumber(rawStr, make);
+    if (primary != null && primary.length > 0) return primary;
+    if (partSanitizeBrand && partSanitizeBrand.toLowerCase() !== make.toLowerCase()) {
+      return sanitizePartNumber(rawStr, partSanitizeBrand);
+    }
+    return primary;
+  };
 
   if (!partsOnly) {
   // A. Engine specs — typed coercion
@@ -1245,7 +1262,7 @@ async function writeNormalizedData(
 
     // Task 17: Sanitize part numbers — strip HTML/markdown, validate against OEM patterns
     const rawStr = rawVal != null ? String(rawVal) : null;
-    const val = rawStr != null ? sanitizePartNumber(rawStr, make) : null;
+    const val = rawStr != null ? sanitizePart(rawStr) : null;
 
     console.log(`[v8-parts] ${fieldKey}: raw=${rawVal} (type=${typeof rawVal}), sanitized=${val}, confidence=${conf}, source=${src}`);
 
@@ -1291,6 +1308,7 @@ async function writeNormalizedData(
       service_role: meta.serviceRole,
       confidence: fields[fieldKey]?.confidence ?? 0.7,
       source_domain: extractDomain(fields[fieldKey]?.source_url),
+      build_source_make: partSanitizeBrand ?? undefined,
     });
   }
 
@@ -1304,7 +1322,7 @@ async function writeNormalizedData(
         if (rawVal == null) continue;
 
         const rawStr = String(rawVal);
-        const val = sanitizePartNumber(rawStr, make);
+        const val = sanitizePart(rawStr);
         if (val == null || val.length === 0) {
           console.log(`[v8-packages] SKIPPED ${packageCode}/${fieldKey}: failed sanitization (raw=${rawStr})`);
           continue;
@@ -1333,6 +1351,7 @@ async function writeNormalizedData(
           service_role: meta.serviceRole,
           confidence: pkgFields[fieldKey]?.confidence ?? 0.7,
           source_domain: extractDomain(pkgFields[fieldKey]?.source_url),
+          build_source_make: partSanitizeBrand ?? undefined,
         });
       }
     }
@@ -2480,6 +2499,9 @@ async function runPollBatch1Body(
       args.wheelSizeSource,
       packageParts,
       writeScope,
+      // P2.5: for a badge-engineered car, also accept the builder's OEM numbers
+      // (the source-redirected scrape pulls Mazda parts for a Toyota Yaris).
+      resolveScrapeRedirect({ make: args.make, model: args.model, model_year: args.year })?.make ?? null,
     );
     // Batch-1 data is now in the normalized tables — a failure from here on
     // restores 'partial', not 'pending' (see the catch-all in the handler).
@@ -2934,6 +2956,12 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         ctx, allFields,
         args.vehicleConfigId, args.engineId, args.transmissionId,
         args.makeId, args.runId, args.make, serviceCache,
+        undefined, // wheelSizeOptions
+        undefined, // wheelSizeSource
+        undefined, // packageParts
+        "full",    // writeScope
+        // P2.5: accept the builder's OEM numbers on a badge-engineered car.
+        resolveScrapeRedirect({ make: args.make, model: args.model, model_year: args.year })?.make ?? null,
       );
 
       // Deterministic per-SKU prices parsed from the registry HTML (JSON-LD) at

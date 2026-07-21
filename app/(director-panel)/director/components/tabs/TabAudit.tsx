@@ -6,9 +6,10 @@ import { api } from '@/convex/_generated/api'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import type { Id } from '@/convex/_generated/dataModel'
 import type { AuditEntry } from '../../data'
-import { Badge, Button, Input, Select, Modal, Avatar, StatusBadge, GlobalAuditTable, auditMeta, IconSearch, IconExternal, IconBolt } from '../Primitives'
+import { Badge, Button, Input, Select, Modal, Card, MicroH, Skeleton, Avatar, StatusBadge, GlobalAuditTable, auditMeta, IconSearch, IconExternal, IconBolt } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { gotoEntity } from '../directorNav'
+import { DailyBars, BarRow, fmtNumber } from '../Charts'
 
 const ACTION_LABELS: Record<string, string> = {
   refund_issued:    'Refund issued',
@@ -27,12 +28,16 @@ const ACTION_LABELS: Record<string, string> = {
   login_failed:     'Login failed',
 }
 
+// Entity → director tab for in-panel deep-links. Mirrors ops/audit's
+// entityHref(): booking→bookings, payment→stripe, user→users, shop→shops.
+// (bug/feedback keep their director destinations; api_key has none in-panel.)
 const ENTITY_TAB: Record<string, string> = {
   bug:      'bugs',
   feedback: 'feedback',
   shop:     'shops',
   user:     'users',
   booking:  'bookings',
+  payment:  'stripe',
 }
 
 const ENTITY_LABEL: Record<string, string> = {
@@ -41,6 +46,7 @@ const ENTITY_LABEL: Record<string, string> = {
   shop:     'Shop',
   user:     'User',
   booking:  'Booking',
+  payment:  'Payment',
 }
 
 // Audit rows can carry a non-document entity_id sentinel (e.g. "unknown" for a
@@ -102,7 +108,7 @@ const EntityPreview = ({ entityType, entityId }: { entityType: string; entityId:
   if (entityType === 'booking') {
     if (booking === undefined) return wrap('Booking', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
     if (!booking) return wrap('Booking', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
-    return wrap('Booking', <>{row('Services', booking.services.join(', '))}{row('Shop', booking.shop)}{row('User', booking.user)}{row('Date', `${booking.scheduled} ${booking.time}`.trim())}{row('Status', booking.status)}{row('Total', booking.total ? `$${booking.total.toFixed(2)}` : undefined)}</>)
+    return wrap('Booking', <>{row('Services', booking.services.map(s => s.name).join(', '))}{row('Shop', booking.shop)}{row('User', booking.user)}{row('Date', `${booking.scheduled} ${booking.time}`.trim())}{row('Status', booking.status)}{row('Total', booking.total ? `$${booking.total.toFixed(2)}` : undefined)}</>)
   }
   if (entityType === 'bug') {
     if (bug === undefined) return wrap('Bug', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
@@ -189,6 +195,72 @@ const AuditDetailModal = ({ entry, onClose }: { entry: AuditEntry | null; onClos
   )
 }
 
+// Local inner-section title (director has no ChartKit PageHeader for nested
+// zones — matches TabStripe's SectionTitle pattern).
+const SectionTitle = ({ label, right }: { label: string; right?: ReactNode }) => (
+  <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:10, marginBottom:10 }}>
+    <MicroH>{label}</MicroH>
+    {right}
+  </div>
+)
+
+// ---------------------------------------------------------------------------
+// Analytics header — 30d actions/day (DailyBars) + top actors (BarRow list).
+// Faithful port of ops/audit's analytics zone from api.portalSeries.auditDaily.
+// ---------------------------------------------------------------------------
+
+const AuditAnalytics = () => {
+  const session = useContext(DirectorSessionCtx)
+  const daily = useQuery(api.portalSeries.auditDaily, { token: session?.token ?? '', days: 30 })
+
+  const actions30d = daily?.days.reduce((s, d) => s + d.actions, 0)
+  const topActor   = daily?.top_actors[0]
+  const maxActor   = Math.max(...(daily?.top_actors.map(a => a.count) ?? [0]), 1)
+
+  // DailyBars reads valueKey/labelKey off each row; give it a short date label.
+  const bars = daily?.days.map(d => ({
+    label: new Date(`${d.date}T00:00:00`).toLocaleDateString('en-US', { month:'numeric', day:'numeric' }),
+    actions: d.actions,
+  }))
+
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:12, marginBottom:12 }}>
+      <Card>
+        <SectionTitle
+          label="Audit actions per day · last 30 days"
+          right={<span style={{ fontSize:12, color:'var(--slate-400)' }}>{actions30d == null ? '' : `${fmtNumber(actions30d)} total`}</span>}
+        />
+        <div style={{ marginTop:4 }}>
+          <DailyBars data={bars} valueKey="actions" color="#93c5fd" height={150} />
+        </div>
+      </Card>
+      <Card>
+        <MicroH>Top actors · 30d</MicroH>
+        <div style={{ marginTop:12 }}>
+          {daily === undefined ? (
+            <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+              {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} height={20} />)}
+            </div>
+          ) : daily.top_actors.length === 0 ? (
+            <p style={{ fontSize:13, color:'var(--slate-500)', margin:0 }}>No portal writes in the window.</p>
+          ) : (
+            <div style={{ display:'flex', flexDirection:'column', gap:2 }}>
+              {daily.top_actors.map(a => (
+                <BarRow key={a.actor} label={a.actor} value={a.count} max={maxActor} valueLabel={fmtNumber(a.count)} />
+              ))}
+            </div>
+          )}
+        </div>
+        {topActor && (
+          <p style={{ marginTop:12, marginBottom:0, fontSize:12, color:'var(--slate-400)' }}>
+            Most active: <span style={{ fontWeight:500, color:'var(--slate-600)' }}>{topActor.actor}</span> ({fmtNumber(topActor.count)} actions)
+          </p>
+        )}
+      </Card>
+    </div>
+  )
+}
+
 export const TabAudit = () => {
   const [q,            setQ]            = useState('')
   const [actionFilter, setActionFilter] = useState('all')
@@ -214,14 +286,32 @@ export const TabAudit = () => {
     if (actorFilter  !== 'all' && e.actor  !== actorFilter)  return false
     if (q) {
       const lq = q.toLowerCase()
-      if (!e.detail.toLowerCase().includes(lq) && !(e.entity || '').toLowerCase().includes(lq) && !e.actor.toLowerCase().includes(lq)) return false
+      // Mirror ops/audit's filter surface: detail, entity, actor AND action
+      // (raw key + human label) so typing an action name still matches.
+      const actionLabel = ACTION_LABELS[e.action] ?? ''
+      if (
+        !e.detail.toLowerCase().includes(lq) &&
+        !(e.entity || '').toLowerCase().includes(lq) &&
+        !e.actor.toLowerCase().includes(lq) &&
+        !e.action.toLowerCase().includes(lq) &&
+        !actionLabel.toLowerCase().includes(lq)
+      ) return false
     }
     return true
   })
 
+  // ops/audit distinguishes three table states: loading, genuinely-empty
+  // ("No audit entries yet…"), and filter-matched-nothing ("Nothing in the
+  // recent window matches…"). GlobalAuditTable collapses both empties into one
+  // message, so surface the filter-specific note here and only hand the table
+  // an actual result set.
+  const hasEntries   = entries !== undefined && entries.length > 0
+  const filterEmpty  = hasEntries && filtered.length === 0
+
   return (
     <SectionAnchor id="audit" title="Audit log" subtitle="Every admin action, system event, and PII access across the platform — immutable."
 >
+      <AuditAnalytics />
       <div style={{ display:'flex', alignItems:'center', gap:10, padding:12, background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, marginBottom:12, flexWrap:'wrap' }}>
         <Input icon={<IconSearch size={14} />} value={q} onChange={e => setQ(e.target.value)} placeholder="Search actions, entities, actors…" style={{ width:320 }} />
         <Select value={actionFilter} onChange={e => setActionFilter(e.target.value)}
@@ -233,7 +323,19 @@ export const TabAudit = () => {
           {entries === undefined ? 'Loading…' : `Showing ${filtered.length} of ${entries.length} entries`}
         </span>
       </div>
-      <GlobalAuditTable entries={filtered} loading={entries === undefined} onRowClick={e => setSelected(e)} />
+      {filterEmpty ? (
+        <div style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:8, padding:'28px 16px', textAlign:'center', fontSize:13, color:'var(--slate-500)' }}>
+          {q.trim()
+            ? <>Nothing in the recent window matches “{q.trim()}”.</>
+            : <>No audit entries match the selected filters.</>}
+        </div>
+      ) : (
+        <GlobalAuditTable
+          entries={filtered}
+          loading={entries === undefined}
+          onRowClick={e => setSelected(e)}
+        />
+      )}
       <AuditDetailModal entry={selected} onClose={() => setSelected(null)} />
     </SectionAnchor>
   )

@@ -73,13 +73,20 @@ const STATUS_MAP: Record<string, { tone: Tone; label: string }> = {
   confirmed:    { tone:'green',  label:'Confirmed' },
   pending:      { tone:'yellow', label:'Pending' },
   in_progress:  { tone:'blue',   label:'In progress' },
-  completed:    { tone:'slate',  label:'Completed' },
+  completed:    { tone:'green',  label:'Completed' },
   cancelled:    { tone:'red',    label:'Cancelled' },
   refunded:     { tone:'purple', label:'Refunded' },
   active:       { tone:'green',  label:'Active' },
+  inactive:     { tone:'slate',  label:'Inactive' },
   suspended:    { tone:'red',    label:'Suspended' },
   connected:    { tone:'green',  label:'Connected' },
   not_connected:{ tone:'slate',  label:'Not connected' },
+  // Ops/booking lifecycle statuses surfaced when porting /ops + /shops.
+  pending_quote:  { tone:'yellow', label:'Pending quote' },
+  quotes_ready:   { tone:'yellow', label:'Quotes ready' },
+  vehicle_at_shop:{ tone:'blue',   label:'At shop' },
+  no_show:        { tone:'red',    label:'No show' },
+  disputed:       { tone:'orange', label:'Disputed' },
 }
 
 export const StatusBadge = ({ status }: { status: string }) => {
@@ -180,6 +187,38 @@ export const SectionTitle = ({ title, subtitle, right }: { title: string; subtit
       {subtitle && <div style={{ fontSize:13, color:'var(--slate-500)', marginTop:2 }}>{subtitle}</div>}
     </div>
     {right}
+  </div>
+)
+
+/* ---------- MICRO HEADING ---------- */
+// The recurring 11px/600/uppercase/slate-500 label used across the panel.
+export const MicroH = ({ children, style }: { children: ReactNode; style?: CSSProperties }) => (
+  <div style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', ...style }}>
+    {children}
+  </div>
+)
+
+/* ---------- SKELETON ---------- */
+export const Skeleton = ({ width = '100%', height = 14, style }: { width?: number | string; height?: number | string; style?: CSSProperties }) => (
+  <span className="animate-pulse" style={{ display:'inline-block', width, height, borderRadius:6, background:'var(--slate-100)', ...style }} />
+)
+
+/* ---------- SEGMENTED CONTROL ---------- */
+// Inline-style port of ChartKit's period toggle (matches TabStripe's subtab strip).
+export const SegmentedControl = <T extends string>({ value, options, onChange, style }:
+  { value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; style?: CSSProperties }) => (
+  <div style={{ display:'inline-flex', gap:2, background:'#fff', border:'1px solid var(--slate-200)', borderRadius:8, padding:3, ...style }}>
+    {options.map(o => {
+      const isActive = value === o.value
+      return (
+        <button key={o.value} onClick={() => onChange(o.value)}
+          style={{ padding:'5px 11px', border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontWeight:500,
+            background: isActive ? 'var(--blue-50)' : 'transparent',
+            color: isActive ? 'var(--blue-700)' : 'var(--slate-600)', transition:'background 80ms', fontFamily:'inherit' }}>
+          {o.label}
+        </button>
+      )
+    })}
   </div>
 )
 

@@ -141,6 +141,8 @@ export function mergeIdentity(
     cylinders: null,
     displacement_l: null,
     fuel_type: null,
+    gvwr_lbs: null,
+    engine_manufacturer: null,
     body_class: null,
     engine_config: null,
     make: null,

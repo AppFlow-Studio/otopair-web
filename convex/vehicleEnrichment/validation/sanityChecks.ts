@@ -156,6 +156,42 @@ export interface CapacityBand {
   typicalMax: number;
 }
 
+/**
+ * Vehicle duty class, derived from GVWR. Batch-5 finding: passenger-car sanity
+ * ranges (lug 60-150 ft-lb, tire 28-44 psi, coolant 4-20 qt) false-flag or even
+ * false-REJECT legitimate heavy/medium-duty-truck values — the RAM 2500's 65 psi
+ * / 160 ft-lb / 16.6 qt coolant and the F-650's 475 ft-lb / 22.8 qt coolant.
+ * The bands must scale with the vehicle's duty class, exactly as they already
+ * scale with `diesel`. Duty class is the authoritative, GVWR-derived signal —
+ * not a hardcoded per-model rule.
+ */
+export type DutyClass = "light" | "medium" | "heavy";
+
+/** GVWR (lbs) → duty class. Thresholds chosen so 3/4- and 1-ton trucks land in
+ *  "medium" (they carry the HD lug-torque/tire-pressure/coolant values that were
+ *  false-flagged): DOT light-duty cutoff is 8,500 lb, so >8,500 is not light;
+ *  >19,500 (Class 6+) is heavy. Null GVWR → light (safe default: keep the strict
+ *  passenger bands when we don't know the vehicle's weight class). */
+export function deriveDutyClass(gvwrLbs?: number | null): DutyClass {
+  if (gvwrLbs == null || !Number.isFinite(gvwrLbs) || gvwrLbs <= 0) return "light";
+  if (gvwrLbs > 19500) return "heavy";
+  if (gvwrLbs > 8500) return "medium";
+  return "light";
+}
+
+/** Parse the NHTSA vPIC "GVWR" descriptor string (e.g. "Class 6: 19,501-26,000
+ *  lb (...)") to the UPPER-bound pounds — the value that determines the class.
+ *  Returns null when no lb figure is present. */
+export function parseGvwrUpperLbs(gvwr?: string | null): number | null {
+  if (!gvwr) return null;
+  // Grab all "N,NNN lb" / "NNNNN" numbers appearing before "lb"/"lbs"/"pound".
+  const nums = [...gvwr.matchAll(/([\d,]{3,})\s*(?:lb|pound)/gi)].map((m) =>
+    Number(m[1].replace(/,/g, "")),
+  ).filter((n) => Number.isFinite(n) && n > 0);
+  if (nums.length === 0) return null;
+  return Math.max(...nums);
+}
+
 /** Engine traits that move the physically-plausible capacity window. */
 export interface CapacityBandContext {
   /** True for diesel engines — HD diesel cooling systems (6.7 Power Stroke,
@@ -164,6 +200,9 @@ export interface CapacityBandContext {
    *  2020 F-350 6.7L was rejected by the old flat rejectMax=24 and the truck
    *  shipped with coolant_capacity_qts = null. */
   diesel?: boolean;
+  /** Vehicle duty class (GVWR-derived). Medium/heavy-duty trucks legitimately
+   *  hold far more coolant than the passenger band allows. */
+  dutyClass?: DutyClass;
 }
 
 export function getCapacityBand(
@@ -185,6 +224,16 @@ export function getCapacityBand(
     // HD diesel: dual cooling loops are common (engine + secondary/charge
     // cooling). Totals 25-36 qt are normal, not liters-as-quarts mixups.
     return { rejectMin: 8, rejectMax: 40, typicalMin: 18, typicalMax: 36 };
+  }
+  // Medium/heavy-duty GAS trucks (batch-5: RAM 2500 6.4 HEMI, 18.5 qt system —
+  // its 16.6 qt was false-REJECTED by the passenger V8 band). Big cooling
+  // systems are normal at high GVWR even without a diesel.
+  const duty = ctx.dutyClass ?? "light";
+  if (duty === "heavy") {
+    return { rejectMin: 4, rejectMax: 44, typicalMin: 12, typicalMax: 34 };
+  }
+  if (duty === "medium") {
+    return { rejectMin: 4, rejectMax: 32, typicalMin: 8, typicalMax: 26 };
   }
   return {
     rejectMin: 3,
@@ -289,17 +338,57 @@ const TRANSMISSION_CASE_CANON: Record<string, string> = {
 };
 
 /**
+ * Duty-class-scaled overrides for the light-duty base rules. Batch-5 fix: medium/
+ * heavy-duty trucks legitimately exceed the passenger-car ranges for lug torque,
+ * tire pressure, and coolant capacity. Returns replacement rules keyed by field;
+ * runSanityChecks swaps these in for the light-duty defaults when duty > light.
+ * Light-duty returns nothing (base rules unchanged — zero regression).
+ */
+function getDutyClassRules(dutyClass: DutyClass): SanityRule[] {
+  if (dutyClass === "light") return [];
+  // medium (Class 3-6) and heavy (Class 7-8) both need widened ceilings; heavy
+  // goes a step further (larger cooling systems, higher tire pressures).
+  const heavy = dutyClass === "heavy";
+  return [
+    // Lug torque: 3/4- and 1-ton and medium-duty trucks spec 130-175; medium-duty
+    // (F-650 class) hub-piloted wheels run 450-500 ft-lb.
+    { field: "lug_nut_torque_ft_lbs", type: "range", min: 60, max: heavy ? 600 : 550,
+      severity: "flag", reason: `Lug nut torque outside typical range for ${dutyClass}-duty (60-${heavy ? 600 : 550} ft-lbs)` },
+    // Tire pressure: HD/commercial tires run 60-90+ psi.
+    { field: "tire_pressure_front_psi", type: "range", min: 28, max: heavy ? 120 : 90,
+      severity: "flag", reason: `Tire pressure outside typical range for ${dutyClass}-duty (28-${heavy ? 120 : 90} psi)` },
+    { field: "tire_pressure_rear_psi", type: "range", min: 28, max: heavy ? 120 : 90,
+      severity: "flag", reason: `Tire pressure outside typical range for ${dutyClass}-duty (28-${heavy ? 120 : 90} psi)` },
+    // Base coolant flag: medium/heavy cooling systems hold well over the 20 qt
+    // passenger ceiling. (The engine-specific + diesel bands widen further.)
+    { field: "coolant_capacity_qts", type: "range", min: 4, max: heavy ? 60 : 40,
+      severity: "flag", reason: `Coolant capacity outside typical range for ${dutyClass}-duty (4-${heavy ? 60 : 40} qts)` },
+  ];
+}
+
+/**
  * Run sanity checks on a flat field map.
  * Returns list of flags. Fields with severity "reject" are nulled in place.
  */
 export function runSanityChecks(
   fields: Record<string, FieldResult>,
   cylinders: number = 4,
+  opts: { gvwrLbs?: number | null; dutyClass?: DutyClass } = {},
 ): SanityFlag[] {
+  // Duty class (GVWR-derived) widens the light-duty bands for HD/MD trucks.
+  const dutyClass = opts.dutyClass ?? deriveDutyClass(opts.gvwrLbs);
   // Diesel detection widens the capacity bands (HD diesel coolant 25-36 qt is
   // real, not a unit mixup) — derived from the same field map being checked.
-  const bandCtx: CapacityBandContext = { diesel: isDieselFromFields(fields) };
-  const allRules = [...SANITY_RULES, ...getEngineSpecificRules(cylinders, bandCtx)];
+  const bandCtx: CapacityBandContext = { diesel: isDieselFromFields(fields), dutyClass };
+  // Duty-scaled rules REPLACE the light-duty base rules for their fields, so a
+  // heavy truck's legit values don't trip passenger-car ranges.
+  const dutyRules = getDutyClassRules(dutyClass);
+  const dutyFields = new Set(dutyRules.map((r) => `${r.field}:${r.severity}`));
+  const baseRules =
+    dutyRules.length === 0
+      ? SANITY_RULES
+      : SANITY_RULES.filter((r) => !dutyFields.has(`${r.field}:${r.severity}`));
+  const allRules = [...baseRules, ...dutyRules, ...getEngineSpecificRules(cylinders, bandCtx)];
   const flags: SanityFlag[] = [];
 
   // Pre-normalize noisy-but-valid values BEFORE the rules run. The caller writes

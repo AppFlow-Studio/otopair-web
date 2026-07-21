@@ -351,11 +351,13 @@ import type * as vehicleEnrichment_backfillNhtsaKey from "../vehicleEnrichment/b
 import type * as vehicleEnrichment_backfills from "../vehicleEnrichment/backfills.js";
 import type * as vehicleEnrichment_blockedDomains from "../vehicleEnrichment/blockedDomains.js";
 import type * as vehicleEnrichment_buildSearchQueries from "../vehicleEnrichment/buildSearchQueries.js";
+import type * as vehicleEnrichment_buildSourceResolver from "../vehicleEnrichment/buildSourceResolver.js";
 import type * as vehicleEnrichment_cacheValidation from "../vehicleEnrichment/cacheValidation.js";
 import type * as vehicleEnrichment_capacityResolver from "../vehicleEnrichment/capacityResolver.js";
 import type * as vehicleEnrichment_claudeExtractor from "../vehicleEnrichment/claudeExtractor.js";
 import type * as vehicleEnrichment_completionGate from "../vehicleEnrichment/completionGate.js";
 import type * as vehicleEnrichment_contentSanitization from "../vehicleEnrichment/contentSanitization.js";
+import type * as vehicleEnrichment_determinismGate from "../vehicleEnrichment/determinismGate.js";
 import type * as vehicleEnrichment_drivetrainReconcile from "../vehicleEnrichment/drivetrainReconcile.js";
 import type * as vehicleEnrichment_endpointPartPriceMutations from "../vehicleEnrichment/endpointPartPriceMutations.js";
 import type * as vehicleEnrichment_evidenceConsensus from "../vehicleEnrichment/evidenceConsensus.js";
@@ -363,6 +365,8 @@ import type * as vehicleEnrichment_extractionPrompts from "../vehicleEnrichment/
 import type * as vehicleEnrichment_firecrawl from "../vehicleEnrichment/firecrawl.js";
 import type * as vehicleEnrichment_fitmentQuarantine from "../vehicleEnrichment/fitmentQuarantine.js";
 import type * as vehicleEnrichment_fleetEval from "../vehicleEnrichment/fleetEval.js";
+import type * as vehicleEnrichment_fluidBrandConsistency from "../vehicleEnrichment/fluidBrandConsistency.js";
+import type * as vehicleEnrichment_fuelTypeResolver from "../vehicleEnrichment/fuelTypeResolver.js";
 import type * as vehicleEnrichment_gapFill from "../vehicleEnrichment/gapFill.js";
 import type * as vehicleEnrichment_helpers from "../vehicleEnrichment/helpers.js";
 import type * as vehicleEnrichment_identityResolution from "../vehicleEnrichment/identityResolution.js";
@@ -406,6 +410,7 @@ import type * as vehicleEnrichment_sourceDiscovery from "../vehicleEnrichment/so
 import type * as vehicleEnrichment_sourceRegistry from "../vehicleEnrichment/sourceRegistry.js";
 import type * as vehicleEnrichment_sourceVerifier from "../vehicleEnrichment/sourceVerifier.js";
 import type * as vehicleEnrichment_tier2Enrichment from "../vehicleEnrichment/tier2Enrichment.js";
+import type * as vehicleEnrichment_transmissionTypeReconcile from "../vehicleEnrichment/transmissionTypeReconcile.js";
 import type * as vehicleEnrichment_types from "../vehicleEnrichment/types.js";
 import type * as vehicleEnrichment_utils_batchClient from "../vehicleEnrichment/utils/batchClient.js";
 import type * as vehicleEnrichment_utils_chassisLookup from "../vehicleEnrichment/utils/chassisLookup.js";
@@ -413,6 +418,7 @@ import type * as vehicleEnrichment_utils_claudeClient from "../vehicleEnrichment
 import type * as vehicleEnrichment_utils_engineCodeLookup from "../vehicleEnrichment/utils/engineCodeLookup.js";
 import type * as vehicleEnrichment_utils_engineLookup from "../vehicleEnrichment/utils/engineLookup.js";
 import type * as vehicleEnrichment_utils_partFitmentVerifier from "../vehicleEnrichment/utils/partFitmentVerifier.js";
+import type * as vehicleEnrichment_utils_transFluidVerifier from "../vehicleEnrichment/utils/transFluidVerifier.js";
 import type * as vehicleEnrichment_utils_wheelSizeScraper from "../vehicleEnrichment/utils/wheelSizeScraper.js";
 import type * as vehicleEnrichment_v3TestSuite from "../vehicleEnrichment/v3TestSuite.js";
 import type * as vehicleEnrichment_v3mutations from "../vehicleEnrichment/v3mutations.js";
@@ -421,6 +427,7 @@ import type * as vehicleEnrichment_v3queries from "../vehicleEnrichment/v3querie
 import type * as vehicleEnrichment_validation_oemValidation from "../vehicleEnrichment/validation/oemValidation.js";
 import type * as vehicleEnrichment_validation_sanityChecks from "../vehicleEnrichment/validation/sanityChecks.js";
 import type * as vehicleEnrichment_validation_sourceAuthority from "../vehicleEnrichment/validation/sourceAuthority.js";
+import type * as vehicleEnrichment_variantFingerprint from "../vehicleEnrichment/variantFingerprint.js";
 import type * as vehicleEnrichment_verificationApi from "../vehicleEnrichment/verificationApi.js";
 import type * as vehicleTruth from "../vehicleTruth.js";
 import type * as vehicle_history from "../vehicle_history.js";
@@ -783,11 +790,13 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/backfills": typeof vehicleEnrichment_backfills;
   "vehicleEnrichment/blockedDomains": typeof vehicleEnrichment_blockedDomains;
   "vehicleEnrichment/buildSearchQueries": typeof vehicleEnrichment_buildSearchQueries;
+  "vehicleEnrichment/buildSourceResolver": typeof vehicleEnrichment_buildSourceResolver;
   "vehicleEnrichment/cacheValidation": typeof vehicleEnrichment_cacheValidation;
   "vehicleEnrichment/capacityResolver": typeof vehicleEnrichment_capacityResolver;
   "vehicleEnrichment/claudeExtractor": typeof vehicleEnrichment_claudeExtractor;
   "vehicleEnrichment/completionGate": typeof vehicleEnrichment_completionGate;
   "vehicleEnrichment/contentSanitization": typeof vehicleEnrichment_contentSanitization;
+  "vehicleEnrichment/determinismGate": typeof vehicleEnrichment_determinismGate;
   "vehicleEnrichment/drivetrainReconcile": typeof vehicleEnrichment_drivetrainReconcile;
   "vehicleEnrichment/endpointPartPriceMutations": typeof vehicleEnrichment_endpointPartPriceMutations;
   "vehicleEnrichment/evidenceConsensus": typeof vehicleEnrichment_evidenceConsensus;
@@ -795,6 +804,8 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/firecrawl": typeof vehicleEnrichment_firecrawl;
   "vehicleEnrichment/fitmentQuarantine": typeof vehicleEnrichment_fitmentQuarantine;
   "vehicleEnrichment/fleetEval": typeof vehicleEnrichment_fleetEval;
+  "vehicleEnrichment/fluidBrandConsistency": typeof vehicleEnrichment_fluidBrandConsistency;
+  "vehicleEnrichment/fuelTypeResolver": typeof vehicleEnrichment_fuelTypeResolver;
   "vehicleEnrichment/gapFill": typeof vehicleEnrichment_gapFill;
   "vehicleEnrichment/helpers": typeof vehicleEnrichment_helpers;
   "vehicleEnrichment/identityResolution": typeof vehicleEnrichment_identityResolution;
@@ -838,6 +849,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/sourceRegistry": typeof vehicleEnrichment_sourceRegistry;
   "vehicleEnrichment/sourceVerifier": typeof vehicleEnrichment_sourceVerifier;
   "vehicleEnrichment/tier2Enrichment": typeof vehicleEnrichment_tier2Enrichment;
+  "vehicleEnrichment/transmissionTypeReconcile": typeof vehicleEnrichment_transmissionTypeReconcile;
   "vehicleEnrichment/types": typeof vehicleEnrichment_types;
   "vehicleEnrichment/utils/batchClient": typeof vehicleEnrichment_utils_batchClient;
   "vehicleEnrichment/utils/chassisLookup": typeof vehicleEnrichment_utils_chassisLookup;
@@ -845,6 +857,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/utils/engineCodeLookup": typeof vehicleEnrichment_utils_engineCodeLookup;
   "vehicleEnrichment/utils/engineLookup": typeof vehicleEnrichment_utils_engineLookup;
   "vehicleEnrichment/utils/partFitmentVerifier": typeof vehicleEnrichment_utils_partFitmentVerifier;
+  "vehicleEnrichment/utils/transFluidVerifier": typeof vehicleEnrichment_utils_transFluidVerifier;
   "vehicleEnrichment/utils/wheelSizeScraper": typeof vehicleEnrichment_utils_wheelSizeScraper;
   "vehicleEnrichment/v3TestSuite": typeof vehicleEnrichment_v3TestSuite;
   "vehicleEnrichment/v3mutations": typeof vehicleEnrichment_v3mutations;
@@ -853,6 +866,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/validation/oemValidation": typeof vehicleEnrichment_validation_oemValidation;
   "vehicleEnrichment/validation/sanityChecks": typeof vehicleEnrichment_validation_sanityChecks;
   "vehicleEnrichment/validation/sourceAuthority": typeof vehicleEnrichment_validation_sourceAuthority;
+  "vehicleEnrichment/variantFingerprint": typeof vehicleEnrichment_variantFingerprint;
   "vehicleEnrichment/verificationApi": typeof vehicleEnrichment_verificationApi;
   vehicleTruth: typeof vehicleTruth;
   vehicle_history: typeof vehicle_history;

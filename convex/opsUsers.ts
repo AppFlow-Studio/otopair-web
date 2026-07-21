@@ -13,7 +13,8 @@
 //    user on this deployment.
 // =============================================================================
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { query, action, internalQuery, internalMutation } from "./_generated/server";
+import { api, internal } from "./_generated/api";
 import { requireDirector } from "./directorGate";
 import {
   metaMakeModel,
@@ -53,6 +54,10 @@ export type OpsUserListRow = {
   isPendingDeletion: boolean;
   authProvider: string | null;
   acquisitionSource: string | null;
+  /** Lifetime captured spend (dollars). */
+  spend: number;
+  /** Primary vehicle "year make model" (or first active), for garage context. */
+  primaryVehicle: string | null;
 };
 
 export type OpsUserProfile = {
@@ -311,6 +316,26 @@ async function resolveSpecLine(
   return { ymm, trim: trimName ?? null, engine };
 }
 
+/**
+ * Lifetime captured spend (dollars) for a user — the money-tab `capturedTotal`
+ * rollup factored out so the Users list and the deletion queue can surface a
+ * spend figure. Prefers `captured_amount_cents`, else counts succeeded rows.
+ */
+export async function capturedTotalForUser(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+): Promise<number> {
+  const payments = await ctx.db
+    .query("payments")
+    .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+    .collect();
+  return payments.reduce((s, p) => {
+    if (p.captured_amount_cents != null) return s + p.captured_amount_cents / 100;
+    const isCaptured = ["succeeded", "captured", "paid", "completed"].includes(p.status);
+    return s + (isCaptured ? p.amount : 0);
+  }, 0);
+}
+
 // -----------------------------------------------------------------------------
 // List — /ops/users (T2). One row per user with vehicle/booking counts.
 // -----------------------------------------------------------------------------
@@ -332,6 +357,12 @@ export const list = query({
             .withIndex("by_user_id", (q) => q.eq("user_id", u._id))
             .collect(),
         ]);
+        // Spend + primary vehicle for garage/money context on the row.
+        const primaryOwner = owners.find((o) => o.is_primary) ?? owners[0] ?? null;
+        const [spend, primaryVeh] = await Promise.all([
+          capturedTotalForUser(ctx, u._id),
+          primaryOwner ? resolveVehicleDisplay(ctx, primaryOwner.vin) : Promise.resolve(null),
+        ]);
         return {
           id: u._id,
           name: fullName(u),
@@ -348,6 +379,8 @@ export const list = query({
           isPendingDeletion: u.isPendingDeletion ?? false,
           authProvider: u.auth_provider ?? null,
           acquisitionSource: u.acquisition_source ?? null,
+          spend,
+          primaryVehicle: primaryVeh?.ymm ?? null,
         };
       }),
     );
@@ -983,5 +1016,128 @@ export const vehicleRecords = query({
         completedAt: c.completed_at ?? null,
       })),
     };
+  },
+});
+
+// =============================================================================
+// Signup-method backfill — the Clerk webhook now persists auth_provider going
+// forward, but existing users predate that. This one-shot, director-gated
+// action fetches each user's Clerk record (raw Backend API + CLERK_SECRET_KEY,
+// the same access pattern as convex/cleanup.ts) and derives the provider.
+// =============================================================================
+
+/** Real-Clerk users still missing a signup method (stub ids are skipped — they
+ *  have no Clerk record to fetch). */
+export const usersMissingAuthProvider = internalQuery({
+  args: { limit: v.number() },
+  handler: async (
+    ctx,
+    { limit },
+  ): Promise<{ id: Id<"users">; clerkUserId: string }[]> => {
+    const users = await ctx.db.query("users").order("desc").take(2000);
+    return users
+      .filter(
+        (u) =>
+          !u.auth_provider &&
+          u.clerkUserId &&
+          !u.clerkUserId.startsWith("shop-created-") &&
+          !u.clerkUserId.startsWith("presignup-"),
+      )
+      .slice(0, limit)
+      .map((u) => ({ id: u._id, clerkUserId: u.clerkUserId }));
+  },
+});
+
+/** First-touch patch — only sets auth_provider if still empty. */
+export const setAuthProvider = internalMutation({
+  args: { id: v.id("users"), authProvider: v.string() },
+  handler: async (ctx, { id, authProvider }) => {
+    const u = await ctx.db.get(id);
+    if (u && !u.auth_provider) {
+      await ctx.db.patch(id, { auth_provider: authProvider });
+    }
+  },
+});
+
+export const logAuthProviderBackfill = internalMutation({
+  args: {
+    actorId: v.id("director_users"),
+    actorName: v.string(),
+    scanned: v.number(),
+    updated: v.number(),
+  },
+  handler: async (ctx, { actorId, actorName, scanned, updated }) => {
+    await ctx.db.insert("audit_log", {
+      entity_type: "system",
+      entity_id: "auth_provider_backfill",
+      action: "backfill_auth_providers",
+      actor: actorName,
+      actor_id: actorId,
+      detail: `Backfilled signup method for ${updated}/${scanned} users via Clerk API`,
+      created_at: Date.now(),
+    });
+  },
+});
+
+export const backfillAuthProviders = action({
+  args: { token: v.string(), limit: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    { token, limit },
+  ): Promise<{ scanned: number; updated: number; skipped: number }> => {
+    const session = await ctx.runQuery(api.director_auth.validateSession, { token });
+    if (!session) throw new Error("unauthorized: invalid or expired director session");
+    const secret = process.env.CLERK_SECRET_KEY;
+    if (!secret) throw new Error("CLERK_SECRET_KEY not set in Convex env");
+
+    const users = await ctx.runQuery(internal.opsUsers.usersMissingAuthProvider, {
+      limit: Math.min(500, Math.max(1, limit ?? 200)),
+    });
+
+    let updated = 0;
+    let skipped = 0;
+    for (const u of users) {
+      try {
+        const res = await fetch(`https://api.clerk.com/v1/users/${u.clerkUserId}`, {
+          headers: { Authorization: `Bearer ${secret}` },
+        });
+        if (!res.ok) {
+          skipped++;
+          continue;
+        }
+        const data = (await res.json()) as {
+          external_accounts?: { provider?: string }[];
+          password_enabled?: boolean;
+          phone_numbers?: unknown[];
+        };
+        const ext = data.external_accounts?.[0]?.provider;
+        const provider = ext
+          ? String(ext)
+          : data.password_enabled
+            ? "password"
+            : data.phone_numbers?.length
+              ? "phone"
+              : null;
+        if (!provider) {
+          skipped++;
+          continue;
+        }
+        await ctx.runMutation(internal.opsUsers.setAuthProvider, {
+          id: u.id,
+          authProvider: provider,
+        });
+        updated++;
+      } catch {
+        skipped++;
+      }
+    }
+
+    await ctx.runMutation(internal.opsUsers.logAuthProviderBackfill, {
+      actorId: session.userId,
+      actorName: session.name,
+      scanned: users.length,
+      updated,
+    });
+    return { scanned: users.length, updated, skipped };
   },
 });

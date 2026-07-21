@@ -41,6 +41,10 @@ export const getIdentity = internalQuery({
         ? parseFloat((engine as any).displacement_liters) || null
         : null,
       fuel_type: (engine as any)?.fuel_type ?? null,
+      // GVWR (duty-class sanity bands) + engine manufacturer (engine-maker fluid
+      // specs in the fitment verifier). Decoded at VIN-add time. Batch-5.
+      gvwr_lbs: (engine as any)?.gvwr_lbs ?? null,
+      engine_manufacturer: (engine as any)?.engine_manufacturer ?? null,
       body_class: null,
       engine_config: null,
       make: null,    // already in VehicleInput

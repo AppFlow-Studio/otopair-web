@@ -59,6 +59,9 @@ export interface FitmentToVerify {
   roleKey: string;
   oem: string;
   name: string;
+  /** For spark plugs and other per-cylinder parts: the stored total quantity,
+   *  so the verifier can judge dual-plug engines (2× cylinders). */
+  quantity?: number | null;
 }
 
 export interface FitmentVerdict {
@@ -75,16 +78,21 @@ A claim is REFUTED when the part number belongs to:
 - **a different TRANSMISSION family — also a top failure mode.** A dual-clutch (DCT / S-tronic / DSG / PDK) filter or pan part does NOT fit a torque-converter automatic (ZF 8HP, 6R80, 6T75, Aisin) and vice-versa; a CVT part does not fit a geared automatic. If the vehicle's transmission is stated, any trans part (filter, pan gasket, internal/external filter) that a source ties to a DIFFERENT transmission type/family is REFUTED — even if it contradicts another trans part in the same list.
 - a different engine variant of the same model (e.g. the V8 oil filter on the V6, a spin-on filter on a cartridge-filter engine),
 - a different model or platform from the same manufacturer (e.g. Golf pads listed for an Atlas, a Seltos air filter listed for a Soul, a full-size-TRUCK rotor/sensor listed for a crossover),
-- **a different GENERATION or year range of the SAME nameplate** — this is the sneakiest failure: the part number looks right because the model name matches, but its catalog fitment range ends before (or starts after) this model year. Example: pad kit 26296SC011 fits Subaru "WRX" only through 2014; on a 2015 WRX (new VA chassis) it is WRONG even though every listing says "WRX". This includes generation splits WITHIN one engine name (a "Gen-2 3.5 EcoBoost" plug on a Gen-1 3.5 EcoBoost truck). ALWAYS check the exact fitment YEAR RANGE against this vehicle's model year — "same model name" is not confirmation.
+- **a different GENERATION or year range of the SAME nameplate** — this is the sneakiest failure: the part number looks right because the model name matches, but its catalog fitment range ends before (or **starts after**) this model year. It fails in BOTH directions: an OLDER-generation part on a newer car (pad kit 26296SC011 fits Subaru "WRX" only through 2014 — wrong on a 2015 VA-chassis WRX), AND a NEWER-generation part on an older car (a 2012+ Skyactiv spin-on oil filter listed for "Mazda3" does NOT fit a 2008 Mazda3, whose MZR engine uses a cartridge filter). This includes generation splits WITHIN one engine name (a "Gen-2 3.5 EcoBoost" plug on a Gen-1 3.5 EcoBoost truck). ALWAYS check the exact fitment YEAR RANGE against this vehicle's model year — "same model name" is not confirmation.
 - the wrong axle or position (a front-axle pad set claimed as rear pads),
 - a fluid spec the vehicle must not use (e.g. an older-generation coolant on a car requiring the newer chemistry).
 
 A part is a phantom (REFUTED) when the vehicle's platform does not have that component at all (e.g. an electronic brake-pad WEAR SENSOR part on a platform that uses only mechanical wear indicators).
 
+**When the ENGINE or TRANSMISSION is built by a different company than the vehicle make, component-specific consumables follow the COMPONENT maker's spec, not the chassis brand.** E.g. a medium-duty Ford truck with a Cummins engine takes a Cummins-spec (Fleetguard) coolant/oil filter, NOT a Ford Motorcraft one; an Allison transmission takes Allison TES-spec fluid, not the chassis brand's ATF. If an engine/trans/coolant part is a chassis-brand part but the engine or transmission is a third-party unit, that is grounds for REFUTED.
+
+For a SPARK-PLUG line, also judge the QUANTITY. Some engines fire TWO plugs per cylinder (e.g. Chrysler HEMI, some twin-spark designs) — for those the correct total is 2× the cylinder count, not 1×. If the stated quantity equals the cylinder count but the engine is a known dual-plug design, the quantity is wrong (REFUTED) even if the part number itself is right; say the correct total in your reason.
+
 Rules:
 - Budget your searches: check the parts most likely to be wrong first; mark anything you could not check as "uncertain".
-- Only mark "refuted" when a source ties the part to a DIFFERENT vehicle/variant/engine/transmission/year-range and nothing credible ties it to this one.
-- Only mark "confirmed" when a source ties the part to this exact vehicle — model AND year within the part's fitment range, AND (for engine/trans parts) the matching engine family / transmission family. A listing that names the model but whose year range or engine/transmission excludes this vehicle is grounds for refuted, not confirmed. Beware supersession chains: an older superseded number that still physically fits is CONFIRMED, not refuted.
+- **"refuted" requires POSITIVELY placing the part on a DIFFERENT vehicle.** You must be able to name the specific other model / generation / engine / year-range the part actually fits. If you cannot name what it DOES fit — if your only signal is a fuzzy or gapped catalog year range, or the part number merely "looks off" — the verdict is "uncertain", NOT "refuted". Deleting a correct part is worse than keeping a suspect one, so refute only on positive evidence of misfit. Put the alternative fitment in your reason (e.g. "fits 2019-2024 X, not this 2013").
+- **Supersession is NOT misfit.** A part whose catalog year range skips this exact year, or that is the current replacement for an older number, or whose range spans years both before and after this vehicle, is almost always a supersession/consolidation artifact — treat as CONFIRMED or "uncertain", never "refuted". An older superseded number that still physically fits is CONFIRMED.
+- Only mark "confirmed" when a source ties the part to this exact vehicle — model AND year within the part's fitment range, AND (for engine/trans parts) the matching engine family / transmission family. A listing that names the model but whose year range or engine/transmission excludes this vehicle is grounds for refuted, not confirmed.
 - Respond with ONLY a JSON array, one object per input part, same order:
 [{"idx": 1, "verdict": "confirmed" | "refuted" | "uncertain", "reason": "<one short sentence>"}]`;
 
@@ -103,6 +111,13 @@ export async function verifyPartFitments(
     displacement?: string | null;
     aspiration?: string | null;
     transmissionType?: string | null;
+    /** NHTSA EngineManufacturer — surfaced so the checker can apply
+     *  engine-maker fluid/filter specs when it differs from the make
+     *  (batch-5: Cummins engine in a Ford F-650 → Cummins-spec coolant). */
+    engineManufacturer?: string | null;
+    /** Cylinder count — lets the checker judge spark-plug quantity for
+     *  dual-plug engines (correct total = 2× cylinders). */
+    cylinders?: number | null;
   },
   parts: FitmentToVerify[],
 ): Promise<FitmentVerdict[]> {
@@ -117,17 +132,25 @@ export async function verifyPartFitments(
   // them explicitly so the checker keys on family, not just displacement.
   const engineDesc = [
     vehicle.displacement ? `${vehicle.displacement}L` : null,
+    vehicle.cylinders ? `${vehicle.cylinders}-cyl` : null,
     vehicle.aspiration && vehicle.aspiration.toLowerCase() !== "naturally aspirated"
       ? vehicle.aspiration
       : null,
     vehicle.engineCode ? `engine code ${vehicle.engineCode}` : null,
+    vehicle.engineManufacturer &&
+    vehicle.engineManufacturer.toLowerCase() !== vehicle.make.toLowerCase()
+      ? `engine built by ${vehicle.engineManufacturer}`
+      : null,
   ].filter(Boolean).join(", ");
   const transDesc = vehicle.transmissionType
     ? `\nTransmission: ${vehicle.transmissionType}`
     : "";
 
   const partLines = parts
-    .map((p, i) => `${i + 1}. ${p.roleKey}: ${p.oem} (${p.name})`)
+    .map((p, i) => {
+      const qty = p.quantity != null && p.quantity > 1 ? ` [stored qty: ${p.quantity}]` : "";
+      return `${i + 1}. ${p.roleKey}: ${p.oem} (${p.name})${qty}`;
+    })
     .join("\n");
 
   try {

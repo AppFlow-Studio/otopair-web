@@ -60,8 +60,12 @@ import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
 import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/partFitmentVerifier";
+import { verifyTransFluid, decideTransFluidAction } from "./utils/transFluidVerifier";
 import { reconcileDrivetrain } from "./drivetrainReconcile";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
+import { reconcileTransmissionType } from "./transmissionTypeReconcile";
+import { fluidNamesForeignChassisBrand, FLUID_TYPE_TO_PART_FIELD } from "./fluidBrandConsistency";
+import { resolveScrapeRedirect } from "./buildSourceResolver";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { laborFlagsFromEnv } from "./laborResearch";
 import type { Id } from "../_generated/dataModel";
@@ -95,6 +99,15 @@ const POLL_INTERVAL_MS = 1 * 60 * 1000;
 // still treats the run as alive.
 const SLOW_POLL_INTERVAL_MS = 10 * 60 * 1000;
 const MAX_POLL_ATTEMPTS_TOTAL = MAX_POLL_ATTEMPTS + 126; // 3h fast + ~21h slow ≈ 24h
+
+// Fitment-refute proportional skepticism (batch-5 fix): a refuted fitment is
+// hard-deleted only when its independent corroboration is at or below this many
+// sources. Parts backed by MORE than this (multi-source consensus) are kept and
+// soft-flagged instead — one hallucinated "refuted" verdict must not erase a
+// part several sources agreed on (the G90 rear-pad false-positive). Env-tunable.
+const FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES = Number(
+  process.env.FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES ?? "1",
+);
 
 const MAKES_WITH_BRAKE_PAD_SENSORS = new Set([
   "BMW", "Mercedes-Benz", "Porsche", "Audi", "Mini", "Rolls-Royce",
@@ -961,9 +974,25 @@ async function writeNormalizedData(
    * parsed _oem fields (all passed in), so gating the others is safe.
    */
   writeScope: "full" | "parts" = "full",
+  /** P2.5: for a badge-engineered vehicle, the builder's brand (e.g. "Mazda"
+   *  for a Toyota Yaris) — so a part number from the builder's catalog passes
+   *  the OEM-format guard, which otherwise validates only against the badge make
+   *  and NULLs the correct Mazda parts the source-redirected scrape surfaced. */
+  partSanitizeBrand?: string | null,
 ) {
   const now = Date.now();
   const partsOnly = writeScope === "parts";
+  // Accept a part matching EITHER the badge make OR the builder brand (badge-
+  // engineered cars carry the builder's OEM numbers; the badge's re-box numbers
+  // still pass against `make`). Try the badge make first, then the builder.
+  const sanitizePart = (rawStr: string): string | null => {
+    const primary = sanitizePartNumber(rawStr, make);
+    if (primary != null && primary.length > 0) return primary;
+    if (partSanitizeBrand && partSanitizeBrand.toLowerCase() !== make.toLowerCase()) {
+      return sanitizePartNumber(rawStr, partSanitizeBrand);
+    }
+    return primary;
+  };
 
   if (!partsOnly) {
   // A. Engine specs — typed coercion
@@ -1016,13 +1045,43 @@ async function writeNormalizedData(
   // Claude didn't answer we keep the existing row state untouched.
   if (transmissionId) {
     const rawTransType = asString(fields.transmission_type?.value);
-    const normalizedType = rawTransType
+    let normalizedType = rawTransType
       ? (await canonicalizeTransmissionType(rawTransType)) ?? undefined
       : undefined;
+    const transFluid = asString(fields.trans_fluid_type?.value);
+    // Reconcile a wrong automatic-vs-manual decode against the trans fluid
+    // (batch-8: vPIC "6-speed manual" on a ZF-8HP diesel automatic). A 3-pedal
+    // manual never takes ATF, so an automatic fluid means the "manual" decode
+    // is wrong — correct it here so the bad type doesn't persist and poison
+    // downstream (fluid gate, CVT/manual applicability, director display).
+    const transRecon = reconcileTransmissionType(normalizedType, transFluid);
+    if (transRecon.corrected && transRecon.type) {
+      console.warn(
+        `[v8] Transmission type "${normalizedType}" reconciled → "${transRecon.type}" via fluid (${transRecon.flagReason})`,
+      );
+      normalizedType = transRecon.type;
+      if (fields.transmission_type) {
+        fields.transmission_type = {
+          ...fields.transmission_type,
+          value: transRecon.type,
+          flagged: true,
+          flag_reason: transRecon.flagReason ?? "transmission_type_reconciled",
+        };
+      }
+    } else if (transRecon.flagReason && fields.transmission_type) {
+      // A weaker contradiction (automatic decode, manual-reading fluid) — flag
+      // for review, keep the decoded value (do not overwrite a likely-correct
+      // automatic on a possibly-misslotted gear-oil string).
+      fields.transmission_type = {
+        ...fields.transmission_type,
+        flagged: true,
+        flag_reason: transRecon.flagReason,
+      };
+    }
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs, {
       transmission_id: transmissionId,
       type: normalizedType,
-      fluid_type: asString(fields.trans_fluid_type?.value),
+      fluid_type: transFluid,
       // Drain-and-fill qts — the mutation always accepted this but nothing
       // passed it, leaving both ATF quantity paths (partRoleQuantity's fluid
       // role and serviceUnits' per_unit_spec count) with no enrichment feed.
@@ -1203,7 +1262,7 @@ async function writeNormalizedData(
 
     // Task 17: Sanitize part numbers — strip HTML/markdown, validate against OEM patterns
     const rawStr = rawVal != null ? String(rawVal) : null;
-    const val = rawStr != null ? sanitizePartNumber(rawStr, make) : null;
+    const val = rawStr != null ? sanitizePart(rawStr) : null;
 
     console.log(`[v8-parts] ${fieldKey}: raw=${rawVal} (type=${typeof rawVal}), sanitized=${val}, confidence=${conf}, source=${src}`);
 
@@ -1249,6 +1308,7 @@ async function writeNormalizedData(
       service_role: meta.serviceRole,
       confidence: fields[fieldKey]?.confidence ?? 0.7,
       source_domain: extractDomain(fields[fieldKey]?.source_url),
+      build_source_make: partSanitizeBrand ?? undefined,
     });
   }
 
@@ -1262,7 +1322,7 @@ async function writeNormalizedData(
         if (rawVal == null) continue;
 
         const rawStr = String(rawVal);
-        const val = sanitizePartNumber(rawStr, make);
+        const val = sanitizePart(rawStr);
         if (val == null || val.length === 0) {
           console.log(`[v8-packages] SKIPPED ${packageCode}/${fieldKey}: failed sanitization (raw=${rawStr})`);
           continue;
@@ -1291,6 +1351,7 @@ async function writeNormalizedData(
           service_role: meta.serviceRole,
           confidence: pkgFields[fieldKey]?.confidence ?? 0.7,
           source_domain: extractDomain(pkgFields[fieldKey]?.source_url),
+          build_source_make: partSanitizeBrand ?? undefined,
         });
       }
     }
@@ -2419,7 +2480,9 @@ async function runPollBatch1Body(
     // coolant survival vector). Rejecting here also puts the field back in the
     // batch-2 gap-fill set, giving the pipeline a second chance at a clean
     // value. Finalize re-runs the checks over the merged map as before.
-    const batch1SanityFlags = runSanityChecks(fields, vPicData?.cylinders ?? 4);
+    const batch1SanityFlags = runSanityChecks(fields, vPicData?.cylinders ?? 4, {
+      gvwrLbs: vPicData?.gvwr_lbs ?? null,
+    });
     if (batch1SanityFlags.length > 0) {
       console.log(
         `[v8/_pollBatch1] Sanity: ${batch1SanityFlags.length} flags applied before batch-1 write (${batch1SanityFlags.map((f) => f.field).join(", ")})`,
@@ -2436,6 +2499,9 @@ async function runPollBatch1Body(
       args.wheelSizeSource,
       packageParts,
       writeScope,
+      // P2.5: for a badge-engineered car, also accept the builder's OEM numbers
+      // (the source-redirected scrape pulls Mazda parts for a Toyota Yaris).
+      resolveScrapeRedirect({ make: args.make, model: args.model, model_year: args.year })?.make ?? null,
     );
     // Batch-1 data is now in the normalized tables — a failure from here on
     // restores 'partial', not 'pending' (see the catch-all in the handler).
@@ -2841,7 +2907,9 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     allFields = applyApplicabilityRules(allFields, finalIdentity);
     allFields = applyFinalizeApplicability(allFields);
 
-    const sanityFlags = runSanityChecks(allFields, cylinders);
+    const sanityFlags = runSanityChecks(allFields, cylinders, {
+      gvwrLbs: enginePicData?.gvwr_lbs ?? null,
+    });
     const oemFlags = validateAllOemParts(allFields, vehicle.make);
     if (sanityFlags.length > 0) console.log(`[v8] Sanity: ${sanityFlags.length} flags (applied before write)`);
     if (oemFlags.length > 0) console.log(`[v8] OEM: ${oemFlags.length} issues`);
@@ -2888,6 +2956,12 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         ctx, allFields,
         args.vehicleConfigId, args.engineId, args.transmissionId,
         args.makeId, args.runId, args.make, serviceCache,
+        undefined, // wheelSizeOptions
+        undefined, // wheelSizeSource
+        undefined, // packageParts
+        "full",    // writeScope
+        // P2.5: accept the builder's OEM numbers on a badge-engineered car.
+        resolveScrapeRedirect({ make: args.make, model: args.model, model_year: args.year })?.make ?? null,
       );
 
       // Deterministic per-SKU prices parsed from the registry HTML (JSON-LD) at
@@ -3595,7 +3669,13 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         // Batch-2 v2: every priced non-universal part is eligible (a Genesis
         // V6 o-ring shipped on a Soul because only priority roles were
         // sampled); priority roles are verified first when the cap bites.
-        const candidates: { roleKey: string; oem: string; name: string }[] = [];
+        const candidates: {
+          roleKey: string;
+          oem: string;
+          name: string;
+          sourceCount: number;
+          quantity: number | null;
+        }[] = [];
         const seenOem = new Set<string>();
         for (const f of allFitments) {
           const part: any = await ctx.runQuery(
@@ -3606,7 +3686,18 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           const oem = part?.oem_part_number ?? "";
           if (!oem || oem.startsWith("OTOPAIR-UNIV") || seenOem.has(oem)) continue;
           seenOem.add(oem);
-          candidates.push({ roleKey: sub, oem, name: part?.name ?? sub });
+          // sourceCount = how many independent sources corroborated this fitment.
+          // Carried so a single hallucinated "refuted" verdict can't hard-delete
+          // a well-corroborated part (batch-5: the gate wrongly deleted the
+          // correct G90 rear pad 58302-T4A10). Proportional skepticism below.
+          // quantity feeds the dual-plug count check (batch-5: HEMI = 2×cyl).
+          candidates.push({
+            roleKey: sub,
+            oem,
+            name: part?.name ?? sub,
+            sourceCount: (f as any).source_count ?? 1,
+            quantity: (f as any).quantity_needed ?? null,
+          });
         }
         candidates.sort((a, b) =>
           Number(VERIFY_ROLE_KEYS.has(b.roleKey)) - Number(VERIFY_ROLE_KEYS.has(a.roleKey)),
@@ -3632,8 +3723,19 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
                 allFields.turbo?.value === true ? "turbocharged" : undefined,
               transmissionType:
                 (allFields.transmission_type?.value as string | null) ?? undefined,
+              // Cylinder count lets the verifier judge dual-plug spark-plug
+              // totals (2× cyl); engine manufacturer lets it apply engine-maker
+              // fluid specs (Cummins-in-Ford, etc.). enginePicData is the
+              // finalize-scope identity (vPicData is first-action only).
+              cylinders: enginePicData?.cylinders ?? undefined,
+              engineManufacturer: enginePicData?.engine_manufacturer ?? undefined,
             },
-            toVerify,
+            toVerify.map((c) => ({
+              roleKey: c.roleKey,
+              oem: c.oem,
+              name: c.name,
+              quantity: c.quantity,
+            })),
           );
           const refuted = verdicts.filter((vd) => vd.verdict === "refuted");
           console.log(
@@ -3642,19 +3744,163 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               `${refuted.length} refuted, ` +
               `${verdicts.filter((vd) => vd.verdict === "uncertain").length} uncertain`,
           );
-          if (refuted.length > 0) {
+          // Proportional skepticism (batch-5 fix): deletion is destructive, so
+          // the evidence bar to delete scales with the part's independent
+          // support. A single Haiku verdict may delete a WEAKLY-supported part
+          // (sourceCount ≤ FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES), but a
+          // well-corroborated part (multiple independent sources) is only
+          // soft-flagged for review, not deleted — a lone hallucinated "refuted"
+          // must not erase a part that several sources agreed fits.
+          const supportByOem = new Map(
+            toVerify.map((c) => [c.oem.toUpperCase(), c.sourceCount]),
+          );
+          const hardDelete = refuted.filter(
+            (r) =>
+              (supportByOem.get(r.oem.toUpperCase()) ?? 1) <=
+              FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES,
+          );
+          const softFlag = refuted.filter(
+            (r) =>
+              (supportByOem.get(r.oem.toUpperCase()) ?? 1) >
+              FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES,
+          );
+          if (softFlag.length > 0) {
+            console.warn(
+              `[fitment-verify] ${softFlag.length} refuted part(s) KEPT (multi-source support > ${FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES}) — flagged for review, not deleted: ` +
+                softFlag.map((r) => `${r.roleKey}:${r.oem}`).join(", "),
+            );
+          }
+          if (hardDelete.length > 0) {
             await ctx.runMutation(
               internal.vehicleEnrichment.v3mutations.removeRefutedFitments,
               {
                 vehicle_config_id: args.vehicleConfigId,
-                refuted: refuted.map((r) => ({ oem: r.oem, reason: r.reason })),
+                refuted: hardDelete.map((r) => ({ oem: r.oem, reason: r.reason })),
               },
             );
-            fitmentRefutedErrors = refuted.map((r) => `fitment_refuted:${r.roleKey}:${r.oem}`);
           }
+          fitmentRefutedErrors = [
+            ...hardDelete.map((r) => `fitment_refuted:${r.roleKey}:${r.oem}`),
+            ...softFlag.map((r) => `fitment_refute_kept_multisource:${r.roleKey}:${r.oem}`),
+          ];
         }
       } catch (e) {
         console.warn("[fitment-verify] pass failed (non-fatal):", e);
+      }
+    }
+
+    // ── Transmission-fluid family gate (round-6, FLAG-ONLY) ───────────
+    // The fitment verifier above cross-examines OEM PART numbers, but the
+    // transmission fluid SPEC ("Dexron VI", "NS-2", "Mercon LV") lives in the
+    // trans_fluid_type FIELD, never in a part row — so it reached quotes
+    // unchecked (batch-7: NS-2-vs-NS-3, Dexron-VI-vs-ULV, wet-Mercon in a dry
+    // DCT; a wrong trans fluid DESTROYS the unit).
+    //
+    // BATCH-8 (Jul 21 2026) changed this from a CORRECTOR to a FLAGGER. The
+    // original design overwrote the stored fluid on a "mismatch" — and live
+    // validation showed the web-search verifier falls into the SAME unit-mis-ID
+    // trap it was built to catch, overwriting TWO correct values (Corolla ATF
+    // WS→T-IV via a U341E-vs-U240E mix-up; Wrangler ZF ATF→ATF+4 off a bad vPIC
+    // "manual" decode). An autonomous LLM verifier is not reliable enough to
+    // overwrite a damaging-consequence value. So a positively-supported
+    // "mismatch" now only FLAGS for review + caps the field confidence — it
+    // never changes the stored value. Disable with TRANS_FLUID_VERIFY=0.
+    let transFluidErrors: string[] = [];
+    const transmissionId = args.transmissionId;
+    if (
+      (process.env.TRANS_FLUID_VERIFY ?? "1") !== "0" &&
+      !timedOut &&
+      transmissionId != null &&
+      allFields.trans_fluid_type?.value != null
+    ) {
+      try {
+        const trans: any = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getTransmission,
+          { transmissionId },
+        );
+        const storedFluid = String(allFields.trans_fluid_type.value);
+        const verdict = await verifyTransFluid(
+          {
+            year: args.year,
+            make: args.make,
+            model: args.model,
+            trim: args.trim,
+            engineCode: vehicle.engineCode,
+            displacement: args.displacement,
+            aspiration:
+              allFields.turbo?.value === true ? "turbocharged" : undefined,
+            transmissionType:
+              (allFields.transmission_type?.value as string | null) ??
+              (trans?.type as string | null) ??
+              undefined,
+            transmissionSpeeds: (trans?.speeds as number | null) ?? undefined,
+          },
+          storedFluid,
+        );
+        console.log(
+          `[trans-fluid-verify] ${verdict.verdict} — unit=${verdict.transUnit ?? "?"}, ` +
+            `stored="${storedFluid}", claimed_correct="${verdict.correctFluid ?? "?"}"`,
+        );
+        const action = decideTransFluidAction(verdict, storedFluid);
+        if (action.action === "flag") {
+          // FLAG ONLY — never overwrite. Cap the field confidence (0.55: below
+          // the 0.75 quote/consensus gates) so a suspected-wrong fluid can't
+          // ship as high-confidence, and record the suspicion for review. The
+          // stored fluid_type is left untouched (the verifier is not trusted to
+          // replace it).
+          allFields.trans_fluid_type = {
+            ...allFields.trans_fluid_type,
+            flagged: true,
+            flag_reason: `trans_fluid_suspect:${action.suspectUnit}: stored "${storedFluid}", verifier expected "${action.claimedCorrect}"`,
+            confidence: Math.min(
+              allFields.trans_fluid_type.confidence ?? 0.55,
+              0.55,
+            ),
+          };
+          transFluidErrors = [
+            `trans_fluid_suspect:${action.suspectUnit}:stored=${storedFluid}:expected=${action.claimedCorrect}`,
+          ];
+          console.warn(
+            `[trans-fluid-verify] FLAGGED (not changed) trans_fluid_type "${storedFluid}" — ` +
+              `verifier expected "${action.claimedCorrect}" for ${action.suspectUnit} (${action.reason})`,
+          );
+        }
+      } catch (e) {
+        console.warn("[trans-fluid-verify] pass failed (non-fatal):", e);
+      }
+    }
+
+    // ── Fluid brand-consistency gate (round-7, batch-8) ───────────────
+    // The fluid TYPE field and the orderable fluid PART are independent LLM
+    // extractions with no cross-check; the part's brand is only ever validated
+    // against the CHASSIS make. On a badge-engineered car that lets a
+    // chassis-brand fluid PN ride under a correct foreign-brand spec (batch-8:
+    // a Mazda-built Yaris had trans_fluid_type "Mazda ATF FZ" but part
+    // 00289-ATFWS = Toyota ATF WS; coolant "Mazda FL22" but part 00272-SLLC2 =
+    // Toyota SLLC). When the fluid SPEC names a different marque than the make,
+    // flag the PART for brand review. FLAG ONLY (batch-8 doctrine — never
+    // rewrite a fluid part). Disable with FLUID_BRAND_VERIFY=0.
+    if ((process.env.FLUID_BRAND_VERIFY ?? "1") !== "0") {
+      for (const [typeKey, partKey] of FLUID_TYPE_TO_PART_FIELD) {
+        const typeVal = allFields[typeKey]?.value;
+        if (typeVal == null) continue;
+        const foreign = fluidNamesForeignChassisBrand(String(typeVal), args.make);
+        if (!foreign) continue;
+        transFluidErrors.push(
+          `fluid_brand_mismatch:${typeKey}:names_${foreign}_on_${args.make.toLowerCase()}`,
+        );
+        const pf = allFields[partKey];
+        if (pf && pf.value != null) {
+          allFields[partKey] = {
+            ...pf,
+            flagged: true,
+            flag_reason: `fluid_brand_mismatch:spec_names_${foreign}_but_make_is_${args.make.toLowerCase()}`,
+            confidence: Math.min(pf.confidence ?? 0.55, 0.55),
+          };
+        }
+        console.warn(
+          `[fluid-brand] ${typeKey} spec names "${foreign}" on a ${args.make} — ${partKey} flagged for brand review`,
+        );
       }
     }
 
@@ -3707,6 +3953,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         // finalize (the fitment rows are already deleted; this is the audit
         // trail + review-queue routing).
         ...fitmentRefutedErrors,
+        // Transmission-fluid suspicions: a fluid the round-6 gate believes may
+        // be the wrong family/generation for this unit — FLAGGED for review,
+        // value left unchanged (the verifier isn't trusted to overwrite).
+        ...transFluidErrors,
         ...sanityFlags.map((f) => `sanity:${f.field}:${f.reason}`),
         ...oemFlags.map((f) => `oem:${f.field}:${f.reason}`),
       ],

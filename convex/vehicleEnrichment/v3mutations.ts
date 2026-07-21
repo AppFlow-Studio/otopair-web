@@ -410,6 +410,10 @@ export const updateEngineSpecs = internalMutation({
     water_pump_timing_driven: v.optional(v.boolean()),
     engine_family: v.optional(v.string()),
     displacement_l: v.optional(v.float64()),
+    // NHTSA-decoded regulatory facts (round-4): GVWR upper-bound lbs → duty-class
+    // sanity bands; engine manufacturer → engine-maker fluid specs in the verifier.
+    gvwr_lbs: v.optional(v.float64()),
+    engine_manufacturer: v.optional(v.string()),
     data_quality: v.optional(v.string()),
     // Field names to actively ERASE (patch to undefined → Convex deletes the
     // column). A value that sanity-checks REJECTED as wrong must not linger:
@@ -600,6 +604,11 @@ export const upsertPartAndFitment = internalMutation({
     service_role: v.optional(v.string()),
     confidence: v.float64(),
     source_domain: v.optional(v.string()),
+    /** P2.5: builder brand for a badge-engineered vehicle (e.g. "Mazda" for a
+     *  Toyota Yaris) — the choke-point sanitizer below accepts a part matching
+     *  EITHER the config make OR this builder brand, so the correct builder OEM
+     *  numbers aren't rejected as "foreign" to the badge make. */
+    build_source_make: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -624,10 +633,21 @@ export const upsertPartAndFitment = internalMutation({
     // sanitize at extraction (better logging/context there) — this is the
     // guarantee that no NEW path can ever skip it.
     const configMakeDoc = config?.make_id ? await ctx.db.get(config.make_id) : null;
-    const cleanNumber = sanitizePartNumber(args.oem_part_number, configMakeDoc?.name);
+    const badgeMake = configMakeDoc?.name;
+    // Accept a part matching EITHER the config make OR the builder brand (P2.5:
+    // badge-engineered cars carry the builder's OEM numbers — a Mazda part on a
+    // Toyota Yaris must not be rejected as "foreign").
+    let cleanNumber = sanitizePartNumber(args.oem_part_number, badgeMake);
+    if (
+      !cleanNumber &&
+      args.build_source_make &&
+      args.build_source_make.toLowerCase() !== (badgeMake ?? "").toLowerCase()
+    ) {
+      cleanNumber = sanitizePartNumber(args.oem_part_number, args.build_source_make);
+    }
     if (!cleanNumber) {
       console.log(
-        `[v8-parts] REJECTED part number at write: "${args.oem_part_number}" (${args.subcategory}) failed sanitization for make=${configMakeDoc?.name ?? "?"}`,
+        `[v8-parts] REJECTED part number at write: "${args.oem_part_number}" (${args.subcategory}) failed sanitization for make=${badgeMake ?? "?"}${args.build_source_make ? `/${args.build_source_make}` : ""}`,
       );
       return { part_id: null, fitment_id: null, rejected: "invalid_number" as const };
     }

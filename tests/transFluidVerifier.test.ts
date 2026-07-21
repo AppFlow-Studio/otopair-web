@@ -41,8 +41,11 @@ describe("fluidSpecEquivalent", () => {
   });
 });
 
-describe("decideTransFluidAction — the batch-7 damaging-fluid cases correct", () => {
-  test("Rogue T32: NS-2 → NS-3 (positive evidence) corrects", () => {
+describe("decideTransFluidAction — batch-7 suspect-fluid cases FLAG (never overwrite)", () => {
+  // Batch-8 changed round-6 from a corrector to a flagger: the verifier is not
+  // trusted to overwrite a damaging-consequence value (it corrupted two correct
+  // fluids in live validation). A positively-supported mismatch now FLAGS.
+  test("Rogue T32: NS-2 with a named NS-3 expectation → flag", () => {
     const a = decideTransFluidAction(
       verdict({
         verdict: "mismatch",
@@ -52,27 +55,23 @@ describe("decideTransFluidAction — the batch-7 damaging-fluid cases correct", 
       }),
       "Nissan CVT NS-2",
     );
-    expect(a.action).toBe("correct");
-    if (a.action === "correct") {
-      expect(a.value).toBe("Nissan CVT NS-3");
-      expect(a.transUnit).toContain("JF017E");
+    expect(a.action).toBe("flag");
+    if (a.action === "flag") {
+      expect(a.claimedCorrect).toBe("Nissan CVT NS-3");
+      expect(a.suspectUnit).toContain("JF017E");
     }
   });
 
-  test("Tahoe 10L80: Dexron-VI → Dexron-ULV corrects", () => {
+  test("Tahoe 10L80: Dexron-VI vs a named Dexron-ULV expectation → flag", () => {
     const a = decideTransFluidAction(
-      verdict({
-        verdict: "mismatch",
-        transUnit: "GM 10L80",
-        correctFluid: "DEXRON-ULV",
-      }),
+      verdict({ verdict: "mismatch", transUnit: "GM 10L80", correctFluid: "DEXRON-ULV" }),
       "DEXRON VI",
     );
-    expect(a.action).toBe("correct");
-    if (a.action === "correct") expect(a.value).toBe("DEXRON-ULV");
+    expect(a.action).toBe("flag");
+    if (a.action === "flag") expect(a.claimedCorrect).toBe("DEXRON-ULV");
   });
 
-  test("Focus DPS6: wet Mercon-LV in a dry DCT → dry-DCT fluid corrects", () => {
+  test("Focus DPS6: wet Mercon-LV vs dry-DCT expectation → flag", () => {
     const a = decideTransFluidAction(
       verdict({
         verdict: "mismatch",
@@ -81,11 +80,39 @@ describe("decideTransFluidAction — the batch-7 damaging-fluid cases correct", 
       }),
       "Mercon LV",
     );
-    expect(a.action).toBe("correct");
+    expect(a.action).toBe("flag");
   });
 });
 
-describe("decideTransFluidAction — positive-evidence bar (never overwrite without it)", () => {
+describe("decideTransFluidAction — the batch-8 regression cases must only FLAG, never overwrite", () => {
+  // These are the two live cases where OVERWRITING corrupted a correct value.
+  // Flag-only keeps the (correct) stored value; a human resolves the flag.
+  test("Corolla: verifier claims T-IV vs correct WS → flag (value not changed)", () => {
+    const a = decideTransFluidAction(
+      verdict({
+        verdict: "mismatch",
+        transUnit: "Toyota U240E (4-speed automatic)", // verifier's WRONG unit ID
+        correctFluid: "Toyota ATF Type T-IV (JWS 3309)", // verifier's WRONG fluid
+      }),
+      "Toyota ATF WS (World Standard)", // the CORRECT stored value
+    );
+    expect(a.action).toBe("flag"); // must NOT overwrite the correct WS
+  });
+
+  test("Wrangler: verifier claims ATF+4 off a bad manual decode → flag (value not changed)", () => {
+    const a = decideTransFluidAction(
+      verdict({
+        verdict: "mismatch",
+        transUnit: "Aisin AL6 6-speed manual transmission", // confabulated from bad decode
+        correctFluid: "Mopar ATF+4",
+      }),
+      "ZF Lifeguard 8 / Mopar 8 & 9 Speed ATF (68218925AB)", // the CORRECT stored value
+    );
+    expect(a.action).toBe("flag"); // must NOT overwrite the correct ZF ATF
+  });
+});
+
+describe("decideTransFluidAction — positive-evidence bar (never flag without it)", () => {
   test("match → keep", () => {
     expect(
       decideTransFluidAction(
@@ -136,13 +163,13 @@ describe("decideTransFluidAction — positive-evidence bar (never overwrite with
     ).toBe("keep");
   });
 
-  test("corrects even when stored fluid is blank but checker has positive evidence", () => {
+  test("flags even when stored fluid is blank but checker has positive evidence", () => {
     // Defensive: the wiring skips a null field, but if a whitespace value slips
     // through the decision still requires only the positive-evidence bar.
     const a = decideTransFluidAction(
       verdict({ verdict: "mismatch", transUnit: "ZF 8HP", correctFluid: "ZF LifeguardFluid 8" }),
       "  ",
     );
-    expect(a.action).toBe("correct");
+    expect(a.action).toBe("flag");
   });
 });

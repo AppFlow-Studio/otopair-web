@@ -239,6 +239,76 @@ export const refreshTireOptions = internalAction({
   },
 });
 
+/**
+ * Batch-8 audit collector — reads the CURRENT enriched state for a VIN with NO
+ * polling (go's 20-min poll loop exceeds the Convex action time limit and the
+ * CLI wrapper reports a bare "Error" even though enrichment finished server-
+ * side). Returns the fields an audit needs, incl. run errors so round-6
+ * `trans_fluid_corrected:*` / fitment refutations are visible.
+ * Usage: npx convex run vehicleEnrichment/runPublic:b8collect '{"vin":"..."}'
+ */
+export const b8collect = internalAction({
+  args: { vin: v.string() },
+  handler: async (ctx, args): Promise<any> => {
+    const vin = args.vin.toUpperCase().trim();
+    const vDoc: any = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleByVin, { vin });
+    if (!vDoc) return { vin, status: "no_vehicle" };
+    const vcId = vDoc.vehicle_config_id;
+    if (!vcId) return { vin, status: "no_config" };
+    const vc: any = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfigById, {
+      vehicleConfigId: vcId,
+    });
+    const eng: any = vDoc.engine_id
+      ? await ctx.runQuery(internal.vehicleEnrichment.v3queries.getEngine, { engineId: vDoc.engine_id })
+      : null;
+    const trans: any = vDoc.transmission_id
+      ? await ctx.runQuery(internal.vehicleEnrichment.v3queries.getTransmission, {
+          transmissionId: vDoc.transmission_id,
+        })
+      : null;
+    const dt: any = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getDrivetrainConfig, { vehicleConfigId: vcId });
+    const fits: any[] = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getPartFitments, { vehicleConfigId: vcId });
+    const parts: any[] = [];
+    for (const f of fits) {
+      const p: any = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getOemPartById, { partId: f.part_id });
+      parts.push({
+        role: p?.subcategory ?? null,
+        oem: p?.oem_part_number ?? null,
+        name: p?.name ?? null,
+        qty: f.quantity_needed ?? null,
+        sources: f.source_count ?? null,
+      });
+    }
+    const runs: any[] = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getEnrichmentRuns, { vehicleConfigId: vcId });
+    const run = runs.find((r: any) => r.status === "complete") ?? runs[0];
+    return {
+      vin,
+      vehicle: `${vc?.year ?? ""} ${vc?.config_key ?? ""}`,
+      config_key: vc?.config_key,
+      transmission_id: vDoc.transmission_id ?? null,
+      status: vc?.enrichment_status,
+      fill_rate: vc?.fill_rate,
+      engine: eng
+        ? {
+            code: eng.engine_code,
+            oil_viscosity: eng.oil_viscosity,
+            oil_capacity_qts: eng.oil_capacity_qts,
+            coolant_type: eng.coolant_type,
+            spark_plug_quantity: eng.spark_plug_quantity,
+            fuel: eng.fuel_type,
+          }
+        : null,
+      transmission: trans
+        ? { type: trans.transmission_type ?? trans.type, fluid: trans.fluid_type, speeds: trans.speeds }
+        : null,
+      drivetrain: dt?.drivetrain_type ?? vc?.drivetrain,
+      parts,
+      run_errors: run?.errors ?? [],
+      run_status: run?.status ?? null,
+    };
+  },
+});
+
 /** Insert a minimal user row for the test Clerk ID. */
 /** Purge all enrichment data for a VIN and re-run from scratch. */
 export const purgeAndRerun = internalAction({

@@ -52,7 +52,7 @@ export interface TransFluidVerdict {
 
 export type TransFluidAction =
   | { action: "keep" }
-  | { action: "correct"; value: string; transUnit: string; reason: string };
+  | { action: "flag"; suspectUnit: string; claimedCorrect: string; reason: string };
 
 /** Case/whitespace/punctuation-insensitive fluid-spec comparison. "Dexron VI",
  *  "DEXRON-VI" and "dexron vi" are the same spec; only a genuine family/
@@ -64,20 +64,33 @@ export function fluidSpecEquivalent(a: string, b: string): boolean {
 }
 
 /**
- * Pure decision: given a verdict and the stored fluid, decide whether to
- * correct the persisted value. Factored out of the network call so it is
- * unit-testable and so the positive-evidence bar is explicit.
+ * Pure decision: given a verdict and the stored fluid, decide whether to FLAG
+ * the value for review. Factored out of the network call so it is unit-testable
+ * and so the evidence bar is explicit.
  *
- * A correction fires ONLY when ALL hold:
+ * ── FLAG-ONLY, never overwrite (batch-8, Jul 21 2026) ──────────────────────
+ * The original round-6 design OVERWROTE the stored fluid on a "mismatch". Live
+ * validation killed that: batch-8's extraction got all 5 trans fluids RIGHT on
+ * its own, and the web-search verifier — asked to "correct" — fell into the
+ * SAME unit-misidentification trap it was built to catch and overwrote TWO
+ * correct values with damaging wrong ones:
+ *   - Corolla: correct ATF WS → wrong Type T-IV (verifier mis-ID'd the U341E as
+ *     a U240E and pulled that older unit's fluid).
+ *   - Wrangler: correct ZF 8&9 ATF → wrong ATF+4 (verifier swallowed a bad
+ *     vPIC "6-speed manual" decode and confabulated an "Aisin AL6 manual").
+ * An autonomous LLM verifier is NOT reliable enough to overwrite a
+ * damaging-consequence fluid: when it is wrong it destroys a correct value,
+ * which is exactly the harm the gate was meant to prevent. So a "mismatch" now
+ * only FLAGS for human review (and caps the field's confidence upstream) — it
+ * never changes the stored value. The real fix for wrong fluids is upstream
+ * variant/decode correctness (P1), not a bolt-on autocorrect.
+ *
+ * A flag fires ONLY when ALL hold (unchanged positive-evidence bar — keeps the
+ * review queue signal-rich rather than noisy):
  *   - verdict is "mismatch" (never on "match"/"uncertain"), AND
  *   - the checker POSITIVELY named the transmission unit, AND
  *   - it POSITIVELY named the required fluid for that unit, AND
  *   - that required fluid is genuinely a different spec than the stored one.
- * This mirrors the fitment verifier's "refuted requires positively placing the
- * part on a DIFFERENT vehicle" rule: a bare "this looks wrong" with no named
- * unit + correct fluid is NOT enough to overwrite a value — that stays "keep".
- * We CORRECT (not drop) because a damaging fluid's whole value is the right
- * replacement, and we only get here when the checker supplied it.
  */
 export function decideTransFluidAction(
   verdict: TransFluidVerdict,
@@ -88,16 +101,18 @@ export function decideTransFluidAction(
   const correct = verdict.correctFluid?.trim();
   if (!unit || !correct) return { action: "keep" };
   const stored = (storedFluid ?? "").trim();
-  // Nothing to correct toward if the checker's "correct" fluid is the same spec
-  // we already stored (guards a hallucinated mismatch that names our own value).
+  // Nothing suspect if the checker's "correct" fluid is the same spec we already
+  // stored (guards a hallucinated mismatch that names our own value back at us).
   if (stored && fluidSpecEquivalent(stored, correct)) return { action: "keep" };
-  return { action: "correct", value: correct, transUnit: unit, reason: verdict.reason };
+  return { action: "flag", suspectUnit: unit, claimedCorrect: correct, reason: verdict.reason };
 }
 
 const SYSTEM = `You are an automotive transmission-fluid fact-checker. You are given ONE vehicle and the transmission fluid a pipeline claims it uses. A wrong transmission fluid DESTROYS the unit, and the most common error is a fluid of the RIGHT TYPE but the WRONG GENERATION/CHEMISTRY for this vehicle's specific transmission — so verify against the exact unit, not just "it's a CVT / it's an automatic".
 
+The "claimed family" line below (automatic / CVT / manual / N-speed) comes from a VIN decode that is SOMETIMES WRONG — decoders routinely mis-report automatic-vs-manual and the speed count (e.g. a diesel with a ZF 8-speed automatic that vPIC labels "6-speed manual"). Treat it as a weak hint, NOT ground truth: independently establish the real transmission from the YEAR + MODEL + ENGINE. If your web research contradicts the claimed family, trust your research and say so.
+
 Work in this order and SEARCH THE WEB:
-1. Identify the SPECIFIC transmission UNIT fitted to THIS exact year + model + engine + trim/variant. Name the maker's unit code, e.g. "Jatco JF017E CVT", "GM 10L80 10-speed", "Ford DPS6 dry dual-clutch", "ZF 8HP45", "Aisin AWF8F35". Many nameplates have MULTIPLE units in the SAME model year across trims/generations (e.g. a 2015 Nissan Rogue is the T32 with a JF017E, NOT the older "Rogue Select" S35 with a JF011E) — pin the one that matches THIS vehicle.
+1. Identify the SPECIFIC transmission UNIT fitted to THIS exact year + model + engine + trim/variant. Name the maker's unit code, e.g. "Jatco JF017E CVT", "GM 10L80 10-speed", "Ford DPS6 dry dual-clutch", "ZF 8HP45", "Aisin AWF8F35". Many nameplates have MULTIPLE units in the SAME model year across trims/generations (e.g. a 2015 Nissan Rogue is the T32 with a JF017E, NOT the older "Rogue Select" S35 with a JF011E; a 2011 Corolla is the U341E using ATF WS, NOT the older U240E that used Type T-IV) — pin the one that matches THIS vehicle, and do NOT let a superseded/older unit's fluid stand in for the current one.
 2. State the OEM-required fluid family/spec for THAT unit (e.g. "Nissan CVT NS-3", "DEXRON-ULV", "Ford XT-11-QDC dry-DCT fluid", "ZF LifeguardFluid 8 / Shell M-1375.4").
 3. Compare it to the claimed fluid.
 

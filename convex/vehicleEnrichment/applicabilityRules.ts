@@ -196,6 +196,43 @@ export function applyApplicabilityRules(
     }
   }
 
+  // ── Diesel / battery-electric: no spark-ignition system ───────
+  // Compression-ignition diesels use glow plugs, not spark plugs; BEVs have no
+  // plugs or coils at all. Nothing was ever fuel_type-keyed here, so the only
+  // thing keeping plugs off a diesel was the LLM — which fails when a
+  // same-nameplate GAS sibling contaminates the scrape (batch-8: a 2021
+  // Wrangler EcoDiesel picked up the gas 3.6 Pentastar plug SP149125AF + coil
+  // 68223569AD + quantity 6; the F-650's clean result was incidental — it's a
+  // diesel-only nameplate with no gas twin). Suppress deterministically: a
+  // diesel/BEV definitively has no spark plugs, exactly like FWD has no transfer
+  // case. HYBRIDS are NOT suppressed — their ICE side has real spark plugs, so
+  // this fires only on an exact "electric"/BEV or a "diesel" fuel type.
+  const fuelType =
+    (fields.fuel_type?.value as string | null) ??
+    vPicData?.fuel_type ?? null;
+  if (fuelType) {
+    const f = fuelType.toLowerCase();
+    const isDiesel = f.includes("diesel");
+    // BEV only: a fuel type that also names gas/hybrid keeps its plugs.
+    const isBev =
+      (f.includes("electric") || f.includes("bev")) &&
+      !f.includes("hybrid") &&
+      !f.includes("gasol") &&
+      !f.includes("diesel") &&
+      !f.includes("flex") &&
+      !f.includes("cng") &&
+      !f.includes("plug-in");
+    if (isDiesel || isBev) {
+      fields.spark_plug_oem = naField();
+      fields.spark_plug_quantity = naField();
+      fields.spark_plug_gap = naField();
+      fields.ignition_coil_oem = naField();
+      fields.spark_plug_miles = naField();
+      fields.spark_plug_months = naField();
+      fields.estimated_labor_spark_plug_hrs = naField();
+    }
+  }
+
   // ── Sedan/Coupe: no rear wiper ────────────────────────────────
   if (
     bodyClass &&
@@ -235,6 +272,15 @@ export const IDENTITY_DEPENDENT_FIELDS: Record<string, string[]> = {
     "trans_pan_gasket_oem",
   ],
   body_class: ["rear_wiper_size", "wiper_blade_rear_oem"],
+  fuel_type: [
+    "spark_plug_oem",
+    "spark_plug_quantity",
+    "spark_plug_gap",
+    "ignition_coil_oem",
+    "spark_plug_miles",
+    "spark_plug_months",
+    "estimated_labor_spark_plug_hrs",
+  ],
 };
 
 /**

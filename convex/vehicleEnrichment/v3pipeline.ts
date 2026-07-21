@@ -63,6 +63,8 @@ import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/
 import { verifyTransFluid, decideTransFluidAction } from "./utils/transFluidVerifier";
 import { reconcileDrivetrain } from "./drivetrainReconcile";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
+import { reconcileTransmissionType } from "./transmissionTypeReconcile";
+import { fluidNamesForeignChassisBrand, FLUID_TYPE_TO_PART_FIELD } from "./fluidBrandConsistency";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { laborFlagsFromEnv } from "./laborResearch";
 import type { Id } from "../_generated/dataModel";
@@ -1026,13 +1028,43 @@ async function writeNormalizedData(
   // Claude didn't answer we keep the existing row state untouched.
   if (transmissionId) {
     const rawTransType = asString(fields.transmission_type?.value);
-    const normalizedType = rawTransType
+    let normalizedType = rawTransType
       ? (await canonicalizeTransmissionType(rawTransType)) ?? undefined
       : undefined;
+    const transFluid = asString(fields.trans_fluid_type?.value);
+    // Reconcile a wrong automatic-vs-manual decode against the trans fluid
+    // (batch-8: vPIC "6-speed manual" on a ZF-8HP diesel automatic). A 3-pedal
+    // manual never takes ATF, so an automatic fluid means the "manual" decode
+    // is wrong — correct it here so the bad type doesn't persist and poison
+    // downstream (fluid gate, CVT/manual applicability, director display).
+    const transRecon = reconcileTransmissionType(normalizedType, transFluid);
+    if (transRecon.corrected && transRecon.type) {
+      console.warn(
+        `[v8] Transmission type "${normalizedType}" reconciled → "${transRecon.type}" via fluid (${transRecon.flagReason})`,
+      );
+      normalizedType = transRecon.type;
+      if (fields.transmission_type) {
+        fields.transmission_type = {
+          ...fields.transmission_type,
+          value: transRecon.type,
+          flagged: true,
+          flag_reason: transRecon.flagReason ?? "transmission_type_reconciled",
+        };
+      }
+    } else if (transRecon.flagReason && fields.transmission_type) {
+      // A weaker contradiction (automatic decode, manual-reading fluid) — flag
+      // for review, keep the decoded value (do not overwrite a likely-correct
+      // automatic on a possibly-misslotted gear-oil string).
+      fields.transmission_type = {
+        ...fields.transmission_type,
+        flagged: true,
+        flag_reason: transRecon.flagReason,
+      };
+    }
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs, {
       transmission_id: transmissionId,
       type: normalizedType,
-      fluid_type: asString(fields.trans_fluid_type?.value),
+      fluid_type: transFluid,
       // Drain-and-fill qts — the mutation always accepted this but nothing
       // passed it, leaving both ATF quantity paths (partRoleQuantity's fluid
       // role and serviceUnits' per_unit_spec count) with no enrichment feed.
@@ -3807,6 +3839,40 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         }
       } catch (e) {
         console.warn("[trans-fluid-verify] pass failed (non-fatal):", e);
+      }
+    }
+
+    // ── Fluid brand-consistency gate (round-7, batch-8) ───────────────
+    // The fluid TYPE field and the orderable fluid PART are independent LLM
+    // extractions with no cross-check; the part's brand is only ever validated
+    // against the CHASSIS make. On a badge-engineered car that lets a
+    // chassis-brand fluid PN ride under a correct foreign-brand spec (batch-8:
+    // a Mazda-built Yaris had trans_fluid_type "Mazda ATF FZ" but part
+    // 00289-ATFWS = Toyota ATF WS; coolant "Mazda FL22" but part 00272-SLLC2 =
+    // Toyota SLLC). When the fluid SPEC names a different marque than the make,
+    // flag the PART for brand review. FLAG ONLY (batch-8 doctrine — never
+    // rewrite a fluid part). Disable with FLUID_BRAND_VERIFY=0.
+    if ((process.env.FLUID_BRAND_VERIFY ?? "1") !== "0") {
+      for (const [typeKey, partKey] of FLUID_TYPE_TO_PART_FIELD) {
+        const typeVal = allFields[typeKey]?.value;
+        if (typeVal == null) continue;
+        const foreign = fluidNamesForeignChassisBrand(String(typeVal), args.make);
+        if (!foreign) continue;
+        transFluidErrors.push(
+          `fluid_brand_mismatch:${typeKey}:names_${foreign}_on_${args.make.toLowerCase()}`,
+        );
+        const pf = allFields[partKey];
+        if (pf && pf.value != null) {
+          allFields[partKey] = {
+            ...pf,
+            flagged: true,
+            flag_reason: `fluid_brand_mismatch:spec_names_${foreign}_but_make_is_${args.make.toLowerCase()}`,
+            confidence: Math.min(pf.confidence ?? 0.55, 0.55),
+          };
+        }
+        console.warn(
+          `[fluid-brand] ${typeKey} spec names "${foreign}" on a ${args.make} — ${partKey} flagged for brand review`,
+        );
       }
     }
 

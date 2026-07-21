@@ -217,10 +217,10 @@ import type * as oto_migrations_vehicleFactsReconciliation from "../oto/migratio
 import type * as oto_migrations_verifiedFactsSeed from "../oto/migrations/verifiedFactsSeed.js";
 import type * as oto_migrations_wave3Backfill from "../oto/migrations/wave3Backfill.js";
 import type * as oto_moodMap from "../oto/moodMap.js";
+import type * as oto_promptChangelog from "../oto/promptChangelog.js";
 import type * as oto_prompt_index from "../oto/prompt/index.js";
 import type * as oto_prompt_stable from "../oto/prompt/stable.js";
 import type * as oto_prompt_volatile from "../oto/prompt/volatile.js";
-import type * as oto_promptChangelog from "../oto/promptChangelog.js";
 import type * as oto_queryMoat from "../oto/queryMoat.js";
 import type * as oto_recordConfirmation from "../oto/recordConfirmation.js";
 import type * as oto_reliability from "../oto/reliability.js";
@@ -363,6 +363,7 @@ import type * as vehicleEnrichment_extractionPrompts from "../vehicleEnrichment/
 import type * as vehicleEnrichment_firecrawl from "../vehicleEnrichment/firecrawl.js";
 import type * as vehicleEnrichment_fitmentQuarantine from "../vehicleEnrichment/fitmentQuarantine.js";
 import type * as vehicleEnrichment_fleetEval from "../vehicleEnrichment/fleetEval.js";
+import type * as vehicleEnrichment_fluidBrandConsistency from "../vehicleEnrichment/fluidBrandConsistency.js";
 import type * as vehicleEnrichment_gapFill from "../vehicleEnrichment/gapFill.js";
 import type * as vehicleEnrichment_helpers from "../vehicleEnrichment/helpers.js";
 import type * as vehicleEnrichment_identityResolution from "../vehicleEnrichment/identityResolution.js";
@@ -406,6 +407,7 @@ import type * as vehicleEnrichment_sourceDiscovery from "../vehicleEnrichment/so
 import type * as vehicleEnrichment_sourceRegistry from "../vehicleEnrichment/sourceRegistry.js";
 import type * as vehicleEnrichment_sourceVerifier from "../vehicleEnrichment/sourceVerifier.js";
 import type * as vehicleEnrichment_tier2Enrichment from "../vehicleEnrichment/tier2Enrichment.js";
+import type * as vehicleEnrichment_transmissionTypeReconcile from "../vehicleEnrichment/transmissionTypeReconcile.js";
 import type * as vehicleEnrichment_types from "../vehicleEnrichment/types.js";
 import type * as vehicleEnrichment_utils_batchClient from "../vehicleEnrichment/utils/batchClient.js";
 import type * as vehicleEnrichment_utils_chassisLookup from "../vehicleEnrichment/utils/chassisLookup.js";
@@ -650,10 +652,10 @@ declare const fullApi: ApiFromModules<{
   "oto/migrations/verifiedFactsSeed": typeof oto_migrations_verifiedFactsSeed;
   "oto/migrations/wave3Backfill": typeof oto_migrations_wave3Backfill;
   "oto/moodMap": typeof oto_moodMap;
+  "oto/promptChangelog": typeof oto_promptChangelog;
   "oto/prompt/index": typeof oto_prompt_index;
   "oto/prompt/stable": typeof oto_prompt_stable;
   "oto/prompt/volatile": typeof oto_prompt_volatile;
-  "oto/promptChangelog": typeof oto_promptChangelog;
   "oto/queryMoat": typeof oto_queryMoat;
   "oto/recordConfirmation": typeof oto_recordConfirmation;
   "oto/reliability": typeof oto_reliability;
@@ -796,6 +798,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/firecrawl": typeof vehicleEnrichment_firecrawl;
   "vehicleEnrichment/fitmentQuarantine": typeof vehicleEnrichment_fitmentQuarantine;
   "vehicleEnrichment/fleetEval": typeof vehicleEnrichment_fleetEval;
+  "vehicleEnrichment/fluidBrandConsistency": typeof vehicleEnrichment_fluidBrandConsistency;
   "vehicleEnrichment/gapFill": typeof vehicleEnrichment_gapFill;
   "vehicleEnrichment/helpers": typeof vehicleEnrichment_helpers;
   "vehicleEnrichment/identityResolution": typeof vehicleEnrichment_identityResolution;
@@ -839,6 +842,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/sourceRegistry": typeof vehicleEnrichment_sourceRegistry;
   "vehicleEnrichment/sourceVerifier": typeof vehicleEnrichment_sourceVerifier;
   "vehicleEnrichment/tier2Enrichment": typeof vehicleEnrichment_tier2Enrichment;
+  "vehicleEnrichment/transmissionTypeReconcile": typeof vehicleEnrichment_transmissionTypeReconcile;
   "vehicleEnrichment/types": typeof vehicleEnrichment_types;
   "vehicleEnrichment/utils/batchClient": typeof vehicleEnrichment_utils_batchClient;
   "vehicleEnrichment/utils/chassisLookup": typeof vehicleEnrichment_utils_chassisLookup;

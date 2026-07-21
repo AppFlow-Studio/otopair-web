@@ -60,6 +60,7 @@ import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
 import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/partFitmentVerifier";
+import { verifyTransFluid, decideTransFluidAction } from "./utils/transFluidVerifier";
 import { reconcileDrivetrain } from "./drivetrainReconcile";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
@@ -3728,6 +3729,90 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       }
     }
 
+    // ── Transmission-fluid family gate (round-6, batch-7 Jul 2026) ─────
+    // The fitment verifier above cross-examines OEM PART numbers, but the
+    // transmission fluid SPEC ("Dexron VI", "NS-2", "Mercon LV") lives in the
+    // trans_fluid_type FIELD, never in a part row — so it reached quotes
+    // unchecked. Batch-7: 3 of 5 vehicles had a fluid of the RIGHT type but the
+    // WRONG generation/chemistry for their specific transmission unit (NS-2 vs
+    // NS-3, Dexron-VI vs Dexron-ULV, wet-auto Mercon-LV in a dry DPS6 DCT) —
+    // and a wrong trans fluid DESTROYS the unit. One web-search call places the
+    // exact unit for this variant, names its OEM fluid, and CORRECTS the stored
+    // spec on positive evidence only. "uncertain" never overwrites. Disable
+    // with TRANS_FLUID_VERIFY=0.
+    let transFluidErrors: string[] = [];
+    const transmissionId = args.transmissionId;
+    if (
+      (process.env.TRANS_FLUID_VERIFY ?? "1") !== "0" &&
+      !timedOut &&
+      transmissionId != null &&
+      allFields.trans_fluid_type?.value != null
+    ) {
+      try {
+        const trans: any = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getTransmission,
+          { transmissionId },
+        );
+        const storedFluid = String(allFields.trans_fluid_type.value);
+        const verdict = await verifyTransFluid(
+          {
+            year: args.year,
+            make: args.make,
+            model: args.model,
+            trim: args.trim,
+            engineCode: vehicle.engineCode,
+            displacement: args.displacement,
+            aspiration:
+              allFields.turbo?.value === true ? "turbocharged" : undefined,
+            transmissionType:
+              (allFields.transmission_type?.value as string | null) ??
+              (trans?.type as string | null) ??
+              undefined,
+            transmissionSpeeds: (trans?.speeds as number | null) ?? undefined,
+          },
+          storedFluid,
+        );
+        console.log(
+          `[trans-fluid-verify] ${verdict.verdict} — unit=${verdict.transUnit ?? "?"}, ` +
+            `stored="${storedFluid}", correct="${verdict.correctFluid ?? "?"}"`,
+        );
+        const action = decideTransFluidAction(verdict, storedFluid);
+        if (action.action === "correct") {
+          // Patch the persisted transmission row with the correct fluid. Keep
+          // the corrected value flagged/low-confidence (0.55: below the 0.75
+          // quote/consensus gates, above resolver floors) so it routes to
+          // review rather than shipping silently as a fresh authoritative spec.
+          await ctx.runMutation(
+            internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs,
+            {
+              transmission_id: transmissionId,
+              fluid_type: action.value,
+              data_quality: "enriched",
+            },
+          );
+          allFields.trans_fluid_type = {
+            ...allFields.trans_fluid_type,
+            value: action.value,
+            flagged: true,
+            flag_reason: `trans_fluid_corrected:${action.transUnit}: "${storedFluid}" → "${action.value}"`,
+            confidence: Math.min(
+              allFields.trans_fluid_type.confidence ?? 0.55,
+              0.55,
+            ),
+          };
+          transFluidErrors = [
+            `trans_fluid_corrected:${action.transUnit}:${storedFluid}→${action.value}`,
+          ];
+          console.warn(
+            `[trans-fluid-verify] CORRECTED trans_fluid_type "${storedFluid}" → "${action.value}" ` +
+              `for ${action.transUnit} (${action.reason})`,
+          );
+        }
+      } catch (e) {
+        console.warn("[trans-fluid-verify] pass failed (non-fatal):", e);
+      }
+    }
+
     // Pattern-suspect sentinel: >=2 oem_part_rejected gaps in ONE run means
     // the make's part pattern is probably wrong, not the data — every pattern
     // gap found so far (BMW leading zeros, VAG G-numbers, Hyundai fluid SKUs)
@@ -3777,6 +3862,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         // finalize (the fitment rows are already deleted; this is the audit
         // trail + review-queue routing).
         ...fitmentRefutedErrors,
+        // Transmission-fluid corrections: a wrong fluid family/generation
+        // rewritten to the unit's OEM spec at finalize (round-6). Audit trail +
+        // review-queue routing.
+        ...transFluidErrors,
         ...sanityFlags.map((f) => `sanity:${f.field}:${f.reason}`),
         ...oemFlags.map((f) => `oem:${f.field}:${f.reason}`),
       ],

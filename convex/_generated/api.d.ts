@@ -412,6 +412,7 @@ import type * as vehicleEnrichment_utils_claudeClient from "../vehicleEnrichment
 import type * as vehicleEnrichment_utils_engineCodeLookup from "../vehicleEnrichment/utils/engineCodeLookup.js";
 import type * as vehicleEnrichment_utils_engineLookup from "../vehicleEnrichment/utils/engineLookup.js";
 import type * as vehicleEnrichment_utils_partFitmentVerifier from "../vehicleEnrichment/utils/partFitmentVerifier.js";
+import type * as vehicleEnrichment_utils_transFluidVerifier from "../vehicleEnrichment/utils/transFluidVerifier.js";
 import type * as vehicleEnrichment_utils_wheelSizeScraper from "../vehicleEnrichment/utils/wheelSizeScraper.js";
 import type * as vehicleEnrichment_v3TestSuite from "../vehicleEnrichment/v3TestSuite.js";
 import type * as vehicleEnrichment_v3mutations from "../vehicleEnrichment/v3mutations.js";
@@ -843,6 +844,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/utils/engineCodeLookup": typeof vehicleEnrichment_utils_engineCodeLookup;
   "vehicleEnrichment/utils/engineLookup": typeof vehicleEnrichment_utils_engineLookup;
   "vehicleEnrichment/utils/partFitmentVerifier": typeof vehicleEnrichment_utils_partFitmentVerifier;
+  "vehicleEnrichment/utils/transFluidVerifier": typeof vehicleEnrichment_utils_transFluidVerifier;
   "vehicleEnrichment/utils/wheelSizeScraper": typeof vehicleEnrichment_utils_wheelSizeScraper;
   "vehicleEnrichment/v3TestSuite": typeof vehicleEnrichment_v3TestSuite;
   "vehicleEnrichment/v3mutations": typeof vehicleEnrichment_v3mutations;

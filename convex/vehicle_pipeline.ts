@@ -28,6 +28,7 @@ import { parseGvwrUpperLbs } from "./vehicleEnrichment/validation/sanityChecks";
 import { assembleVariantFingerprint, type TransmissionFamily } from "./vehicleEnrichment/variantFingerprint";
 import { resolveFuelClass } from "./vehicleEnrichment/fuelTypeResolver";
 import { resolveBuildSource } from "./vehicleEnrichment/buildSourceResolver";
+import { reconcilePerformanceVariant } from "./vehicleEnrichment/variantDecodeReconcile";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -299,6 +300,31 @@ export const processVin = internalAction({
         cca: vdb?.cca || null,
         steeringType: vdb?.steeringType || null,
       };
+
+      // Variant mis-decode reconciliation (batch-9): VDB occasionally decodes a
+      // non-performance vehicle as its performance halo — a 2003 Impreza Outback
+      // (2.5 NA) read as an "Impreza WRX" (2.0T) — and the fuzzy YMMT match lets
+      // it win because "Impreza WRX" ⊇ "Impreza". That wrong model then misleads
+      // the engine-code resolver to the turbo engine + wrong parts. When VDB
+      // adds a performance-halo token NHTSA lacks AND NHTSA positively decoded a
+      // different variant, prefer NHTSA's base model.
+      if (trustVdbYmmt && (vdb?.model || vdb?.trim) && nhtsa.model) {
+        // VDB records the halo in either the model ("Impreza WRX") or the TRIM
+        // ("Impreza" + trim "WRX") — scan both.
+        const vdbFull = `${vdb?.model ?? ""} ${vdb?.trim ?? ""}`.trim();
+        const nhtsaVariantText = [nhtsa.series, nhtsa.trim, nhtsa.series2, nhtsa.trim2]
+          .filter(Boolean)
+          .join(" ");
+        const vr = reconcilePerformanceVariant(vdbFull, nhtsa.model, nhtsaVariantText);
+        if (vr.demote) {
+          const demotedTrim = nhtsa.trim || nhtsa.series || "Base";
+          console.warn(
+            `[decode] VARIANT RECONCILE — ${vr.reason}; "${merged.model} ${merged.trim}" → NHTSA "${nhtsa.model} ${demotedTrim}"`,
+          );
+          merged.model = nhtsa.model;
+          merged.trim = demotedTrim;
+        }
+      }
 
       // Batch-6 fix: NHTSA sometimes omits the Model for a VALID VIN (the 2009
       // Escalade: ErrorCode 4,14 "manufacturer did not submit some fields")

@@ -1888,6 +1888,20 @@ export const enrichVehicleBatchV3 = internalAction({
       );
     }
 
+    // Attach the vehicle to the config being enriched NOW — not only at finalize.
+    // Finalize (below) also attaches, but that's the very END of a 20-40min run.
+    // When a re-enrichment's decode CHANGES the config_key — e.g. a variant
+    // correction "Impreza WRX" → "Impreza Outback", or a resolved engine code —
+    // the new config differs from the vehicle's old (possibly purged) one, and
+    // the vehicle otherwise keeps pointing at the stale config for the entire
+    // run (invisible/wrong by VIN), and forever if the run stalls before
+    // finalize. Attaching here makes the VIN reflect the live config from the
+    // start; the finalize attach is idempotent.
+    await ctx.runMutation(
+      internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
+      { vehicle_id: args.vehicleId, vehicle_config_id: vehicleConfigId },
+    );
+
     // STEP 4b: Persist detected packages (if any) onto the vehicle_config row.
     // patchVehicleConfig is a no-op when packages_available is undefined, so this
     // is safe to call unconditionally.

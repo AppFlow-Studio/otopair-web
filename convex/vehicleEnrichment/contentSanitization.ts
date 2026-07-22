@@ -223,8 +223,25 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   mazda: /^[A-Z0-9]{4,5}-?\d{2}-?\d{3}[A-Z0-9]{0,2}$/i,
   // Volvo: 8-digit
   volvo: /^\d{7,8}$/,
-  // Land Rover: LR-prefixed 6-digit
-  landrover: /^LR\d{6}$/i,
+  // Jaguar Land Rover (shared family formats). The old /^LR\d{6}$/ rejected 13
+  // of the 2012 Range Rover's real parts (batch-9): JLR uses far more than the
+  // modern "LR######" number. Covered here:
+  //   - LR + 6 digits, with an optional revision/kit suffix: LR011279, LR011593K
+  //   - 3-letter + 5-6 digit prefixed numbers: TYK500050 (ZF ATF), IYK500010
+  //     (transfer case), YLE500110, JDE37128 (Jaguar), and old Rover codes
+  //     STC3843 / ERR6299 / ANR1234 / FTC5106
+  //   - Jaguar letter-digit-letter numbers: C2Z30906, T2H7856, C2C8355
+  //     (matched by the [A-Z]\d[A-Z]... branch)
+  // 2-letter prefix minimum keeps it from matching a bare Asian 5-5 number; the
+  // foreign-brand-signature check still runs first, and isPlausiblePartNumber
+  // backstops. Jaguar previously had NO pattern (fell through to the generic
+  // check) — giving it the family pattern adds hallucination filtering without
+  // rejecting its real numbers.
+  landrover: /^(?:[A-Z]{2,4}\d{3,6}[A-Z]{0,2}|[A-Z]\d[A-Z]\d{3,6}[A-Z]?)$/i,
+  jaguar: /^(?:[A-Z]{2,4}\d{3,6}[A-Z]{0,2}|[A-Z]\d[A-Z]\d{3,6}[A-Z]?)$/i,
+  // Scion parts are Toyota-cataloged (same 5-5 / chemical formats). Was on the
+  // generic fallback; give it Toyota's pattern for parity.
+  scion: /^\d{5}(?:-[A-Z0-9]{4,6}(?:-[A-Z0-9]{1,4})?|[A-Z0-9]{5})$/i,
 };
 
 // ─── Cross-make brand signatures ─────────────────────────────────

@@ -242,7 +242,7 @@ export const DeltaChip = ({
 // ---------------------------------------------------------------------------
 
 export const StatCard = ({
-  label, value, hint, delta, deltaInverted, spark, tone = 'slate', accent,
+  label, value, hint, delta, deltaInverted, spark, tone = 'slate', accent, onClick, href,
 }: {
   label: string
   value: ReactNode
@@ -252,26 +252,81 @@ export const StatCard = ({
   spark?: number[]
   tone?: 'slate' | 'blue' | 'green' | 'yellow' | 'red' | 'purple'
   accent?: ReactNode
-}) => (
-  <div style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, padding:'14px 16px', display:'flex', flexDirection:'column', gap:6, minHeight:90, position:'relative', overflow:'hidden' }}>
-    <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:6 }}>
-      <span style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>{label}</span>
-      {accent}
-    </div>
-    <div style={{ display:'flex', alignItems:'baseline', gap:8 }}>
-      <span style={{ fontSize:22, fontWeight:700, color:'var(--slate-900)' }} className="mono">{value}</span>
-      {delta !== undefined && <DeltaChip pct={delta ?? null} inverted={deltaInverted} />}
-    </div>
-    {hint && <div style={{ fontSize:11, color:'var(--slate-500)' }}>{hint}</div>}
-    {spark && spark.length > 0 && (
-      <div style={{ marginTop:'auto', marginLeft:-2, marginRight:-2 }}>
-        <Sparkline values={spark} height={28}
-          color={`var(--${tone}-600, var(--blue-600))`}
-          fill={`var(--${tone}-50, var(--blue-50))`} />
+  onClick?: () => void
+  href?: string
+}) => {
+  const clickable = !!(onClick || href)
+  const inner = (
+    <div onClick={onClick}
+      style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, padding:'14px 16px', display:'flex', flexDirection:'column', gap:6, minHeight:90, position:'relative', overflow:'hidden', cursor:clickable ? 'pointer' : 'default', transition:'border-color 120ms, box-shadow 120ms', height:'100%' }}
+      onMouseEnter={clickable ? e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--blue-300, #93C5FD)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 1px 6px rgba(15,23,42,0.06)' } : undefined}
+      onMouseLeave={clickable ? e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--slate-200)'; (e.currentTarget as HTMLElement).style.boxShadow = 'none' } : undefined}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:6 }}>
+        <span style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>{label}</span>
+        {accent}
       </div>
-    )}
-  </div>
-)
+      <div style={{ display:'flex', alignItems:'baseline', gap:8 }}>
+        <span style={{ fontSize:22, fontWeight:700, color:'var(--slate-900)' }} className="mono">{value}</span>
+        {delta !== undefined && <DeltaChip pct={delta ?? null} inverted={deltaInverted} />}
+      </div>
+      {hint && <div style={{ fontSize:11, color:'var(--slate-500)' }}>{hint}</div>}
+      {spark && spark.length > 0 && (
+        <div style={{ marginTop:'auto', marginLeft:-2, marginRight:-2 }}>
+          <Sparkline values={spark} height={28}
+            color={`var(--${tone}-600, var(--blue-600))`}
+            fill={`var(--${tone}-50, var(--blue-50))`} />
+        </div>
+      )}
+    </div>
+  )
+  if (href) return <a href={href} style={{ textDecoration:'none', display:'block', height:'100%' }}>{inner}</a>
+  return inner
+}
+
+// ---------------------------------------------------------------------------
+// DailyBars — single-series daily bar chart with a sparse date axis. Replaces
+// ChartKit's recharts <TrendBars> in the inline-style director panel.
+// ---------------------------------------------------------------------------
+
+export const DailyBars = ({
+  data, color = 'var(--blue-300, #93C5FD)', height = 120, valueKey = 'value', labelKey = 'label',
+}: {
+  data: Array<Record<string, unknown>> | undefined
+  color?: string
+  height?: number
+  valueKey?: string
+  labelKey?: string
+}) => {
+  if (data === undefined) return <div style={{ height, background:'var(--slate-50)', borderRadius:8 }} />
+  if (data.length === 0) return <div style={{ height, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--slate-400)', fontSize:12 }}>No data.</div>
+  const vals = data.map(d => Number(d[valueKey] ?? 0))
+  const max = Math.max(...vals, 1)
+  const barH = height - 22
+  const n = data.length
+  const tickCount = Math.max(2, Math.min(6, Math.floor(n / 8)))
+  const tickIdxs = new Set(Array.from({ length: tickCount }, (_, i) => Math.round((i / (tickCount - 1)) * (n - 1))))
+  return (
+    <div>
+      <div style={{ display:'flex', alignItems:'flex-end', gap:2, height:barH }}>
+        {data.map((d, i) => {
+          const v = Number(d[valueKey] ?? 0)
+          const h = Math.max(v > 0 ? 2 : 0, (v / max) * barH)
+          const label = String(d[labelKey] ?? '')
+          return (
+            <div key={i} title={`${label}: ${v}`} style={{ flex:1, height:h, minWidth:2, background:color, borderRadius:'2px 2px 0 0', alignSelf:'flex-end' }} />
+          )
+        })}
+      </div>
+      <div style={{ display:'flex', gap:2, marginTop:6, fontSize:10, color:'var(--slate-400)' }}>
+        {data.map((d, i) => (
+          <span key={i} style={{ flex:1, textAlign:'center', whiteSpace:'nowrap', overflow:'hidden' }}>
+            {tickIdxs.has(i) ? String(d[labelKey] ?? '') : ''}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -306,4 +361,28 @@ export function fmtRelative(ts: number | undefined | null): string {
   if (days < 30) return `${days}d ago`
   const months = Math.floor(days / 30)
   return `${months}mo ago`
+}
+
+/**
+ * Exact currency (whole-dollar by default, cents when asked). Mirrors
+ * ChartKit's `money` so ported /ops + /shops surfaces keep exact figures —
+ * `fmtCurrency` above compacts ($1.2k) and is for stat tiles only.
+ */
+export function money(n: number | null | undefined, opts?: { cents?: boolean }): string {
+  if (n == null) return '—'
+  return n.toLocaleString('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: opts?.cents ? 2 : 0,
+    maximumFractionDigits: opts?.cents ? 2 : 0,
+  })
+}
+
+/** Short "M/D" label for a Date, timestamp, or ISO "YYYY-MM-DD" string. */
+export function dayLabel(d: number | string | Date): string {
+  const date = typeof d === 'string'
+    ? new Date(d.length === 10 ? `${d}T00:00:00` : d)
+    : new Date(d)
+  if (Number.isNaN(date.getTime())) return String(d)
+  return `${date.getMonth() + 1}/${date.getDate()}`
 }

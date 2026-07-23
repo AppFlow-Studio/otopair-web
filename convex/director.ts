@@ -9,12 +9,17 @@ export const sidebarCounts = query({
   args: { token: v.string() },
   handler: async (ctx, { token }) => {
     await requireDirector(ctx, token);
-    const [bugs, feedback, otoFeedback, refunds, pendingVerifications] = await Promise.all([
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const [bugs, feedback, otoFeedback, refunds, pendingVerifications, pendingDeletions, reviews, errorLogs] = await Promise.all([
       ctx.db.query("bugs").collect(),
       ctx.db.query("app_feedback").collect(),
       ctx.db.query("ai_feedback").collect(),
       ctx.db.query("bookings").withIndex("by_status", (q) => q.eq("status", "refunded")).collect(),
       ctx.db.query("mechanic_verifications").withIndex("by_status", (q) => q.eq("status", "pending")).collect(),
+      // Ops surfaces folded in: deletion-queue SLA, reviews needs-eyes, client errors.
+      ctx.db.query("users").withIndex("by_isPendingDeletion", (q) => q.eq("isPendingDeletion", true)).collect(),
+      ctx.db.query("reviews").take(500),
+      ctx.db.query("client_logs").withIndex("by_level", (q) => q.eq("level", "error")).order("desc").take(200),
     ]);
     const openBugStatuses   = new Set(["new", "triaged", "assigned", "in_progress"]);
     const openFbStatuses    = new Set(["new", "reviewed", "triaged"]);
@@ -25,6 +30,10 @@ export const sidebarCounts = query({
       otoFeedback:   otoFeedback.filter((f) => !f.archived && openOtoFbStatuses.has(f.review_status ?? "new")).length,
       stripe:        refunds.length,
       mechanicEdits: pendingVerifications.length,
+      deletionQueue: pendingDeletions.length,
+      // "Needs eyes": visible low-rating reviews awaiting moderation.
+      reviews:       reviews.filter((r) => r.hidden_at == null && r.rating <= 3).length,
+      systemHealth:  errorLogs.filter((l) => l.timestamp >= sevenDaysAgo).length,
     };
   },
 });

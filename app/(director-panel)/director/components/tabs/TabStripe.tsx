@@ -4,17 +4,19 @@ import { useState, useContext, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useAction } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
+import type { AuditEntry } from '../../data'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import {
-  Badge, Button, Card, Select, Modal, tableStyles,
+  Badge, Button, Card, Select, Modal, tableStyles, AuditButton,
   IconStripe, IconCheck, IconExternal, IconTag, IconBolt, IconClock, IconRefresh,
 } from '../Primitives'
 import { SectionAnchor } from '../Shell'
-import { gotoEntity } from '../directorNav'
+import { gotoEntity, consumeGoto, consumeStashedGoto } from '../directorNav'
 import {
   StatCard, DeltaChip, BarRow, DualSparkline,
-  fmtCurrency, fmtPct, fmtNumber, fmtRelative,
+  fmtCurrency, fmtPct, fmtNumber, fmtRelative, money,
 } from '../Charts'
+import { can } from '@/lib/portal/capabilities'
 
 type Period = '7d' | '30d' | '90d' | 'ytd'
 const PERIOD_LABELS: Record<Period, string> = { '7d': '7 days', '30d': '30 days', '90d': '90 days', ytd: 'Year to date' }
@@ -47,11 +49,12 @@ const TagRefundModal = ({ bookingId, onClose }: { bookingId: Id<'bookings'> | nu
   const session = useContext(DirectorSessionCtx)
   const actorName = session?.name ?? 'Director'
   const actorId   = session?.userId as Id<'director_users'> | undefined
+  const canWrite  = can(session?.role, 'money.write')
   const [reason, setReason] = useState('')
   const tagRefund = useMutation(api.director.tagRefund)
 
   const handleSave = async () => {
-    if (!bookingId || !reason) return
+    if (!bookingId || !reason || !canWrite) return
     await tagRefund({ id: bookingId, reason, actorName, actorId })
     setReason('')
     onClose()
@@ -62,9 +65,14 @@ const TagRefundModal = ({ bookingId, onClose }: { bookingId: Id<'bookings'> | nu
       title="Tag refund reason"
       footer={<>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="primary" onClick={handleSave} disabled={!reason}>Save tag</Button>
+        {canWrite && <Button variant="primary" onClick={handleSave} disabled={!reason}>Save tag</Button>}
       </>}>
       <div style={{ padding:22 }}>
+        {!canWrite && (
+          <div style={{ marginBottom:14, padding:'10px 12px', background:'var(--slate-25)', borderRadius:8, border:'1px solid var(--slate-100)', fontSize:12, color:'var(--slate-600)' }}>
+            Your role has read-only access to money operations. Refund tagging requires the money.write capability.
+          </div>
+        )}
         <div style={{ fontSize:13, color:'var(--slate-600)', marginBottom:14 }}>
           Select a reason for this refund. This will be logged in the audit trail.
         </div>
@@ -107,16 +115,83 @@ const paymentTone = (s: string): 'green' | 'yellow' | 'red' | 'slate' | 'blue' =
 // Stripe returns minor units (cents). Display as dollar amounts.
 function fmtMinor(amount: number, currency?: string): string {
   const sign = amount < 0 ? '−' : ''
-  const dollars = Math.abs(amount) / 100
+  const amt = Math.abs(amount) / 100
   const cur = (currency ?? 'usd').toUpperCase()
-  if (cur === 'USD') return `${sign}$${dollars.toFixed(2)}`
-  return `${sign}${dollars.toFixed(2)} ${cur}`
+  if (cur === 'USD') return `${sign}$${amt.toFixed(2)}`
+  return `${sign}${amt.toFixed(2)} ${cur}`
 }
 
 function fmtMinorTotals(rows?: { amount: number; currency: string }[]): string {
   if (!rows || rows.length === 0) return '$0.00'
   return rows.map(r => fmtMinor(r.amount, r.currency)).join(' + ')
 }
+
+// --- forensic payment-detail helpers (ported from /ops/payments/[id]) --------
+// Exact dollars — money() from ../Charts renders whole-dollar by default so we
+// pass { cents:true } to keep cents (matches ops `money`). `cents()` handles the
+// cents-denominated hold-lifecycle fields; `tsExact()` is the full locale string.
+
+const dollars = (n: number | null | undefined): string =>
+  n == null ? '—' : money(n, { cents: true })
+
+const centsToStr = (c: number | null | undefined): string =>
+  c == null ? '—' : money(c / 100, { cents: true })
+
+const tsExact = (ms: number | null | undefined): string =>
+  !ms ? '—' : new Date(ms).toLocaleString()
+
+// Ops status-pill palette → director Badge tone (superset of paymentTone; adds
+// capture/dispute/won/lost lifecycle states that appear on the detail surface).
+const opsStatusTone = (status: string): 'green'|'yellow'|'red'|'slate' => {
+  switch (status) {
+    case 'succeeded': case 'captured': case 'paid': case 'won':
+      return 'green'
+    case 'pending': case 'processing': case 'requires_action':
+      return 'yellow'
+    case 'failed': case 'disputed': case 'lost': case 'canceled': case 'cancelled':
+      return 'red'
+    default:
+      return 'slate'
+  }
+}
+
+// Copy-to-clipboard monospace value (ops CopyableMono, inline-styled).
+const CopyableMono = ({ value, style }: { value: string; style?: React.CSSProperties }) => {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button type="button" title="Copy to clipboard"
+      onClick={() => { void navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200) }}
+      style={{ border:'none', background:'transparent', padding:0, cursor:'pointer', textAlign:'left',
+        fontFamily:'ui-monospace, monospace', fontSize:12, color:'var(--slate-600)', wordBreak:'break-all', ...style }}
+      onMouseEnter={e => (e.currentTarget.style.color = 'var(--slate-900)')}
+      onMouseLeave={e => (e.currentTarget.style.color = 'var(--slate-600)')}>
+      {copied ? 'Copied ✓' : value}
+    </button>
+  )
+}
+
+// Field label + value (ops Field).
+const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div>
+    <div style={{ fontSize:11, fontWeight:600, color:'var(--slate-500)' }}>{label}</div>
+    <div style={{ marginTop:2, fontSize:13, color:'var(--slate-800)' }}>{children}</div>
+  </div>
+)
+
+// A breakdown line that renders "low–high" when a range is present (ops BreakdownRow).
+const BreakdownRow = ({ label, low, high }: { label: string; low: number | null; high: number | null }) => (
+  <div style={{ display:'flex', justifyContent:'space-between' }}>
+    <span style={{ color:'var(--slate-500)' }}>{label}</span>
+    <span className="mono" style={{ fontWeight:500, color:'var(--slate-800)' }}>
+      {high != null && high !== low ? `${dollars(low)}–${dollars(high)}` : dollars(low)}
+    </span>
+  </div>
+)
+
+// Inner subheading used inside the detail modal panes.
+const DetailH = ({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) => (
+  <h2 style={{ margin:0, fontSize:13, fontWeight:600, color:'var(--slate-900)', ...style }}>{children}</h2>
+)
 
 // ---------------------------------------------------------------------------
 // LiveStripeCard — calls checkStripeConfig + getPlatformLiveData
@@ -551,10 +626,423 @@ type PaymentRow = {
   bookingStatus?: string
 }
 
-const PaymentsList = () => {
+// ---------------------------------------------------------------------------
+// Forensic payment detail — Modal port of /ops/payments/[id]/page.tsx.
+// Powered by api.opsPayments.detail({ token, id }). Read-only (money changes
+// only via Stripe webhooks). Wires the Modal's audit drawer to the payment's
+// audit_log trail (entity_type "payment"), mirroring the ops AuditDrawer.
+// ---------------------------------------------------------------------------
+
+type OpsPaymentDetail = {
+  payment: {
+    id: Id<'payments'>
+    createdAt?: number
+    updatedAt?: number
+    amount: number
+    status: string
+    paymentMethod?: string
+    paymentOrigin?: string
+    cardBrand?: string
+    cardLast4?: string
+    transactionId?: string
+    stripePaymentIntentId?: string
+    reauthPaymentIntentId?: string
+    idempotencyKey?: string
+    holdAmountCents?: number
+    incrementedTotalCents?: number
+    capturedAmountCents?: number
+    invoiceNumber?: string
+    invoiceGeneratedAtMs?: number
+    invoiceEmailedAtMs?: number
+    invoiceQuoteFlags?: string[]
+    backfilledAtMs?: number
+  }
+  user: { id: Id<'users'>; name: string; email?: string } | null
+  shop: { id: Id<'shops'>; name: string } | null
+  booking: {
+    id: Id<'bookings'>
+    status: string
+    scheduledDate?: string
+    totalCost?: number
+    services: string[]
+    vehicleYmm: string | null
+    vin: string | null
+    breakdown: {
+      parts: number | null; labor: number | null; tax: number | null; serviceFee: number | null
+      isRange: boolean; partsHigh: number | null; taxHigh: number | null; serviceFeeHigh: number | null
+    } | null
+  } | null
+  history: { id: Id<'payment_status_history'>; oldStatus?: string; newStatus: string; errorCode?: string; errorMessage?: string; changedAt: number }[]
+  transactions: { id: Id<'transactions'>; createdAt: number; description: string; subDescription?: string; amount: number; status: string; type: string }[]
+  disputes: { id: Id<'payment_disputes'>; stripeDisputeId: string; amountCents: number; reason?: string; status: string; openedAtMs: number; closedAtMs?: number; evidenceDueByMs?: number }[]
+  refunds: {
+    bookingRefundReason: string | null
+    authVoidedAtMs: number | null
+    finalTotalCents: number | null
+    finalCaptureAmountCents: number | null
+    incrementedTotalCents: number | null
+    disputeRefunds: { amountCents: number; resolution: string | null; resolvedAtMs: number | null }[]
+    ledgerRefunds: { amount: number; description: string; createdAt: number }[]
+  }
+}
+
+const holdBox = (label: string, value: string) => (
+  <div style={{ borderRadius:8, border:'1px solid var(--slate-100)', background:'var(--slate-50)', padding:'10px 12px' }}>
+    <div style={{ fontSize:11, fontWeight:600, color:'var(--slate-500)' }}>{label}</div>
+    <div className="mono" style={{ fontSize:22, fontWeight:700, color:'var(--slate-900)', marginTop:2 }}>{value}</div>
+  </div>
+)
+
+const PaymentDetailModal = ({ id, onClose }: { id: Id<'payments'> | null; onClose: () => void }) => {
+  const session = useContext(DirectorSessionCtx)
+  const token   = session?.token ?? ''
+  const [auditOpen, setAuditOpen] = useState(false)
+
+  const data = useQuery(api.opsPayments.detail,
+    id ? { token, id } : 'skip') as OpsPaymentDetail | null | undefined
+
+  // Payment audit trail — same query the ops AuditDrawer reads (entity "payment").
+  const auditRaw = useQuery(api.audit_log.listByEntity,
+    id && auditOpen ? { entity_type: 'payment', entity_id: String(id), token } : 'skip')
+  const auditEntries: AuditEntry[] | undefined = auditRaw
+    ? [...auditRaw]
+        .sort((a, b) => b.created_at - a.created_at)
+        .map(e => ({
+          timestamp:  new Date(e.created_at).toLocaleString('en-US', { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }),
+          action:     e.action,
+          actor:      e.actor,
+          detail:     e.detail ?? '',
+          entity:     `${e.entity_type} · ${e.entity_id.slice(-8)}`,
+          entityType: e.entity_type,
+          entityId:   e.entity_id,
+        }))
+    : undefined
+
+  const p = data?.payment
+  const title = p ? `Payment · ${dollars(p.amount)}` : 'Payment'
+  const closeAll = () => { setAuditOpen(false); onClose() }
+
+  return (
+    <Modal open={!!id} onClose={closeAll} width={920}
+      title={title}
+      eyebrow={p ? <Badge tone={opsStatusTone(p.status)} dot>{p.status}</Badge> : undefined}
+      statusBadge={p?.backfilledAtMs != null ? <Badge tone="slate">backfilled</Badge> : undefined}
+      headerRight={<AuditButton onClick={() => setAuditOpen(o => !o)} />}
+      auditDrawer={{ open: auditOpen, onClose: () => setAuditOpen(false),
+        title: 'Payment audit trail', subtitle: p ? String(p.id) : undefined, entries: auditEntries }}>
+
+      {data === undefined && (
+        <div style={{ padding:40, textAlign:'center', color:'var(--slate-400)', fontSize:13 }}>Loading payment…</div>
+      )}
+
+      {data === null && (
+        <div style={{ padding:40, textAlign:'center' }}>
+          <div style={{ fontSize:13, color:'var(--slate-500)' }}>
+            Payment not found — it may have been removed or the link is stale.
+          </div>
+        </div>
+      )}
+
+      {data && p && (
+        <div style={{ padding:22, display:'flex', flexDirection:'column', gap:16 }}>
+          <div style={{ fontSize:12, color:'var(--slate-500)' }}>
+            Created {tsExact(p.createdAt)}
+            {data.user ? ` · ${data.user.name}` : ''}
+            {data.shop ? ` at ${data.shop.name}` : ''}
+          </div>
+
+          {/* two-column: field card (2fr) + linked entities (1fr) */}
+          <div style={{ display:'grid', gridTemplateColumns:'2fr 1fr', gap:16 }}>
+            {/* Field card + hold lifecycle */}
+            <Card>
+              <DetailH>Payment</DetailH>
+              <div style={{ marginTop:12, display:'grid', gridTemplateColumns:'1fr 1fr', gap:'16px 24px' }}>
+                <Field label="Amount">{dollars(p.amount)}</Field>
+                <Field label="Card">
+                  {p.cardLast4 ? (
+                    <span>
+                      <span style={{ textTransform:'capitalize' }}>{p.cardBrand ?? 'card'}</span>
+                      <span className="mono" style={{ marginLeft:4, color:'var(--slate-500)' }}>···· {p.cardLast4}</span>
+                      {p.paymentOrigin && p.paymentOrigin !== 'card' && (
+                        <span style={{ marginLeft:4, fontSize:11, color:'var(--slate-400)' }}>via {p.paymentOrigin.replace(/_/g, ' ')}</span>
+                      )}
+                    </span>
+                  ) : (p.paymentOrigin ?? p.paymentMethod ?? '—')}
+                </Field>
+                <Field label="Created">{tsExact(p.createdAt)}</Field>
+                <Field label="Updated">{tsExact(p.updatedAt)}</Field>
+                <Field label="Stripe payment intent">{p.stripePaymentIntentId ? <CopyableMono value={p.stripePaymentIntentId} /> : '—'}</Field>
+                <Field label="Reauth payment intent">{p.reauthPaymentIntentId ? <CopyableMono value={p.reauthPaymentIntentId} /> : '—'}</Field>
+                <Field label="Transaction id">{p.transactionId ? <CopyableMono value={p.transactionId} /> : '—'}</Field>
+                <Field label="Idempotency key">{p.idempotencyKey ? <CopyableMono value={p.idempotencyKey} /> : '—'}</Field>
+                <Field label="Invoice">
+                  {p.invoiceNumber ?? '—'}
+                  {p.invoiceGeneratedAtMs != null && <span style={{ marginLeft:4, fontSize:11, color:'var(--slate-400)' }}>generated {tsExact(p.invoiceGeneratedAtMs)}</span>}
+                  {p.invoiceEmailedAtMs != null && <span style={{ marginLeft:4, fontSize:11, color:'var(--slate-400)' }}>· emailed {tsExact(p.invoiceEmailedAtMs)}</span>}
+                </Field>
+                <Field label="Invoice quote flags">
+                  {p.invoiceQuoteFlags && p.invoiceQuoteFlags.length > 0
+                    ? <Badge tone="yellow">{p.invoiceQuoteFlags.join(', ')}</Badge>
+                    : 'none'}
+                </Field>
+              </div>
+
+              <DetailH style={{ marginTop:22 }}>Hold lifecycle</DetailH>
+              <div style={{ marginTop:12, display:'grid', gridTemplateColumns:'1fr 1fr 1fr', gap:12 }}>
+                {holdBox('Hold (authorized)', centsToStr(p.holdAmountCents))}
+                {holdBox('Incremented total', centsToStr(p.incrementedTotalCents))}
+                {holdBox('Captured', centsToStr(p.capturedAmountCents))}
+              </div>
+              {p.holdAmountCents == null && p.incrementedTotalCents == null && p.capturedAmountCents == null && (
+                <p style={{ marginTop:8, fontSize:12, color:'var(--slate-400)' }}>
+                  No hold lifecycle recorded — legacy or backfilled payment (amount field is canonical).
+                </p>
+              )}
+            </Card>
+
+            {/* Linked entities + breakdown + disputes + refunds */}
+            <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+              <Card>
+                <DetailH>Linked</DetailH>
+                <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:12 }}>
+                  <Field label="User">
+                    {data.user ? (
+                      <button type="button" onClick={() => { gotoEntity('users', String(data.user!.id)); closeAll() }}
+                        style={{ border:'none', background:'transparent', padding:0, cursor:'pointer', fontSize:13, color:'var(--blue-700)' }}>
+                        {data.user.name}
+                        {data.user.email && <span style={{ marginLeft:4, fontSize:11, color:'var(--slate-400)' }}>{data.user.email}</span>}
+                      </button>
+                    ) : 'Unknown'}
+                  </Field>
+                  <Field label="Shop">
+                    {data.shop ? (
+                      <button type="button" onClick={() => { gotoEntity('shops', String(data.shop!.id)); closeAll() }}
+                        style={{ border:'none', background:'transparent', padding:0, cursor:'pointer', fontSize:13, color:'var(--blue-700)' }}>
+                        {data.shop.name}
+                      </button>
+                    ) : '—'}
+                  </Field>
+                  <Field label="Booking">
+                    {data.booking ? (
+                      <div>
+                        <button type="button" onClick={() => { gotoEntity('bookings', String(data.booking!.id)); closeAll() }}
+                          style={{ border:'none', background:'transparent', padding:0, cursor:'pointer', fontSize:13, color:'var(--blue-700)', display:'inline-flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
+                          <span>{data.booking.scheduledDate ?? 'booking'} ·</span>
+                          <Badge tone={opsStatusTone(data.booking.status)}>{data.booking.status}</Badge>
+                          {data.booking.totalCost != null && <span style={{ fontSize:11, color:'var(--slate-400)' }}>{dollars(data.booking.totalCost)}</span>}
+                        </button>
+                        {(data.booking.services?.length > 0 || data.booking.vehicleYmm) && (
+                          <div style={{ marginTop:2, fontSize:12, color:'var(--slate-500)' }}>
+                            {[
+                              data.booking.services?.filter(s => s && s !== '—').join(', ') || null,
+                              data.booking.vehicleYmm,
+                            ].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
+                        {data.booking.vin && (
+                          <div style={{ marginTop:4 }}>
+                            <a href={`/director/data/vins/${data.booking.vin}`} className="mono"
+                              style={{ fontSize:11, color:'var(--blue-700)', textDecoration:'none' }}>
+                              VIN {data.booking.vin}
+                            </a>
+                          </div>
+                        )}
+                      </div>
+                    ) : '—'}
+                  </Field>
+                </div>
+              </Card>
+
+              {/* Price breakdown — lives on the booking (parts/labor/tax/fee) */}
+              {data.booking?.breakdown && (
+                <Card>
+                  <DetailH>
+                    Price breakdown
+                    {data.booking.breakdown.isRange && (
+                      <span style={{ marginLeft:6, fontSize:11, fontWeight:400, color:'var(--slate-400)' }}>quoted range</span>
+                    )}
+                  </DetailH>
+                  <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:6, fontSize:13 }}>
+                    <BreakdownRow label="Parts" low={data.booking.breakdown.parts} high={data.booking.breakdown.partsHigh} />
+                    <div style={{ display:'flex', justifyContent:'space-between' }}>
+                      <span style={{ color:'var(--slate-500)' }}>Labor</span>
+                      <span className="mono" style={{ fontWeight:500, color:'var(--slate-800)' }}>{dollars(data.booking.breakdown.labor)}</span>
+                    </div>
+                    <BreakdownRow label="Tax" low={data.booking.breakdown.tax} high={data.booking.breakdown.taxHigh} />
+                    <BreakdownRow label="Service fee" low={data.booking.breakdown.serviceFee} high={data.booking.breakdown.serviceFeeHigh} />
+                    <div style={{ display:'flex', justifyContent:'space-between', borderTop:'1px solid var(--slate-100)', paddingTop:6 }}>
+                      <span style={{ fontWeight:600, color:'var(--slate-700)' }}>Booking total</span>
+                      <span className="mono" style={{ fontWeight:700, color:'var(--slate-900)' }}>{dollars(data.booking.totalCost)}</span>
+                    </div>
+                  </div>
+                </Card>
+              )}
+
+              {/* Disputes */}
+              <Card>
+                <DetailH>Disputes</DetailH>
+                {data.disputes.length === 0 ? (
+                  <p style={{ marginTop:8, fontSize:12, color:'var(--slate-400)' }}>No disputes on this payment.</p>
+                ) : (
+                  <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:12 }}>
+                    {data.disputes.map(d => (
+                      <div key={String(d.id)} style={{ borderRadius:8, border:'1px solid #FECACA', background:'var(--red-50)', padding:'10px 12px' }}>
+                        <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between' }}>
+                          <Badge tone="red">{d.status}</Badge>
+                          <span className="mono" style={{ fontSize:12, fontWeight:600, color:'var(--slate-800)' }}>{centsToStr(d.amountCents)}</span>
+                        </div>
+                        <div style={{ marginTop:4, fontSize:12, color:'var(--slate-600)' }}>
+                          {d.reason ?? 'no reason'} · opened {tsExact(d.openedAtMs)}
+                          {d.closedAtMs != null && <> · closed {tsExact(d.closedAtMs)}</>}
+                          {d.evidenceDueByMs != null && d.closedAtMs == null && <> · evidence due {tsExact(d.evidenceDueByMs)}</>}
+                        </div>
+                        <div style={{ marginTop:4 }}><CopyableMono value={d.stripeDisputeId} /></div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+
+              {/* Refunds & capture reconciliation */}
+              <Card>
+                <DetailH>Refunds &amp; capture</DetailH>
+                {(() => {
+                  const r = data.refunds
+                  const hasAny =
+                    r.bookingRefundReason != null ||
+                    r.authVoidedAtMs != null ||
+                    r.disputeRefunds.length > 0 ||
+                    r.ledgerRefunds.length > 0 ||
+                    (r.finalCaptureAmountCents != null && r.finalTotalCents != null && r.finalCaptureAmountCents < r.finalTotalCents)
+                  if (!hasAny) return <p style={{ marginTop:8, fontSize:12, color:'var(--slate-400)' }}>No refunds or capture shortfall on this payment.</p>
+                  return (
+                    <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:8, fontSize:12 }}>
+                      {r.finalTotalCents != null && r.finalCaptureAmountCents != null && r.finalCaptureAmountCents < r.finalTotalCents && (
+                        <p style={{ margin:0, borderRadius:8, background:'var(--yellow-50)', padding:'8px 12px', color:'var(--yellow-800)' }}>
+                          Captured {centsToStr(r.finalCaptureAmountCents)} of a {centsToStr(r.finalTotalCents)} final total —{' '}
+                          {centsToStr(r.finalTotalCents - r.finalCaptureAmountCents)} not captured (deposit forfeit, partial capture, or refund).
+                        </p>
+                      )}
+                      {r.authVoidedAtMs != null && (
+                        <div style={{ color:'var(--slate-600)' }}>Authorization voided · {tsExact(r.authVoidedAtMs)}</div>
+                      )}
+                      {r.bookingRefundReason && (
+                        <div style={{ color:'var(--slate-600)' }}>
+                          <span style={{ fontWeight:500, color:'var(--slate-800)' }}>Refund reason:</span> {r.bookingRefundReason}
+                        </div>
+                      )}
+                      {r.disputeRefunds.map((d, i) => (
+                        <div key={i} style={{ display:'flex', justifyContent:'space-between', color:'var(--slate-600)' }}>
+                          <span>Dispute refund{d.resolution ? ` (${d.resolution.replace(/_/g, ' ')})` : ''}{d.resolvedAtMs ? ` · ${tsExact(d.resolvedAtMs)}` : ''}</span>
+                          <span className="mono" style={{ fontWeight:600, color:'var(--red-700)' }}>−{centsToStr(d.amountCents)}</span>
+                        </div>
+                      ))}
+                      {r.ledgerRefunds.map((d, i) => (
+                        <div key={i} style={{ display:'flex', justifyContent:'space-between', color:'var(--slate-600)' }}>
+                          <span>{d.description} · {tsExact(d.createdAt)}</span>
+                          <span className="mono" style={{ fontWeight:600, color:'var(--red-700)' }}>{dollars(d.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })()}
+              </Card>
+            </div>
+          </div>
+
+          {/* Status timeline (payment_status_history) */}
+          <Card>
+            <DetailH>Status timeline</DetailH>
+            {data.history.length === 0 ? (
+              <p style={{ marginTop:8, fontSize:12, color:'var(--slate-400)' }}>No status history recorded for this payment yet.</p>
+            ) : (
+              <ol style={{ margin:'12px 0 0', padding:0, listStyle:'none' }}>
+                {data.history.map((h, i) => (
+                  <li key={String(h.id)} style={{ display:'flex', alignItems:'baseline', gap:12, padding:'10px 0',
+                    borderBottom:i < data.history.length - 1 ? '1px solid var(--slate-50)' : 'none' }}>
+                    <span style={{ width:160, flexShrink:0, fontSize:12, color:'var(--slate-400)' }}>{tsExact(h.changedAt)}</span>
+                    <span style={{ fontSize:13, color:'var(--slate-700)', display:'inline-flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
+                      {h.oldStatus ? (
+                        <>
+                          <Badge tone={opsStatusTone(h.oldStatus)}>{h.oldStatus}</Badge>
+                          <span style={{ color:'var(--slate-400)' }}>→</span>
+                        </>
+                      ) : null}
+                      <Badge tone={opsStatusTone(h.newStatus)}>{h.newStatus}</Badge>
+                    </span>
+                    {(h.errorCode || h.errorMessage) && (
+                      <span style={{ fontSize:12, color:'var(--red-700)' }}>
+                        {h.errorCode}{h.errorCode && h.errorMessage ? ' — ' : ''}{h.errorMessage}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </Card>
+
+          {/* Linked transactions (what the user's app shows) */}
+          <Card padded={false}>
+            <div style={{ padding:'14px 16px 0' }}>
+              <DetailH>Linked transactions (what the user&apos;s app shows)</DetailH>
+            </div>
+            {data.transactions.length === 0 ? (
+              <p style={{ padding:'8px 16px 16px', margin:0, fontSize:12, color:'var(--slate-400)' }}>No transactions ledger rows link to this payment.</p>
+            ) : (
+              <table style={{ ...tableStyles.table, marginTop:12 }}>
+                <thead><tr>
+                  <th style={tableStyles.th}>Created</th>
+                  <th style={tableStyles.th}>Description</th>
+                  <th style={tableStyles.th}>Type</th>
+                  <th style={{ ...tableStyles.th, textAlign:'right' }}>Amount</th>
+                  <th style={tableStyles.th}>Status</th>
+                </tr></thead>
+                <tbody>
+                  {data.transactions.map(t => (
+                    <tr key={String(t.id)}>
+                      <td style={{ ...tableStyles.td, color:'var(--slate-500)', fontSize:12, whiteSpace:'nowrap' }}>{tsExact(t.createdAt)}</td>
+                      <td style={{ ...tableStyles.td, color:'var(--slate-700)' }}>
+                        {t.description}
+                        {t.subDescription && <span style={{ marginLeft:4, fontSize:11, color:'var(--slate-400)' }}>{t.subDescription}</span>}
+                      </td>
+                      <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{t.type}</td>
+                      <td style={{ ...tableStyles.td, textAlign:'right', fontWeight:600, color: t.amount < 0 ? 'var(--red-700)' : 'var(--green-700)' }} className="mono">{dollars(t.amount)}</td>
+                      <td style={tableStyles.td}><Badge tone={opsStatusTone(t.status)}>{t.status}</Badge></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Card>
+        </div>
+      )}
+    </Modal>
+  )
+}
+
+const PaymentsList = ({ initialDetailId = null }: { initialDetailId?: Id<'payments'> | null }) => {
+  const session = useContext(DirectorSessionCtx)
+  const token   = session?.token ?? ''
   const [status, setStatus] = useState<'all'|'succeeded'|'pending'|'failed'|'processing'|'canceled'>('all')
+  const [detailId, setDetailId] = useState<Id<'payments'> | null>(initialDetailId)
+  // Auto-open the forensic detail when arriving from the /ops/payments/[id] shim.
+  useEffect(() => { if (initialDetailId) setDetailId(initialDetailId) }, [initialDetailId])
+
   const rows = useQuery(api.directorStripe.stripePaymentsList,
     status === 'all' ? { limit: 200 } : { status, limit: 200 }) as PaymentRow[] | undefined
+
+  // Forensic status counts over the recent window (ops opsPayments.list) — drives
+  // the filter pills so live statuses always show, even while one is selected.
+  const forensic = useQuery(api.opsPayments.list,
+    status === 'all' ? { token, limit: 200 } : { token, status, limit: 200 })
+  const statusCounts = forensic?.statusCounts ?? {}
+  const windowSize   = forensic?.windowSize
+  // Statuses seen in the live window, plus "failed" always surfaced (ops pills).
+  const liveStatuses = forensic
+    ? Array.from(new Set([...Object.keys(statusCounts), 'failed'])).sort()
+    : []
+
+  const PILL_VALUES = new Set(['succeeded','pending','failed','processing','canceled'])
 
   return (
     <>
@@ -570,8 +1058,39 @@ const PaymentsList = () => {
           ]} />
         <span style={{ flex:1 }} />
         <span style={{ fontSize:12, color:'var(--slate-500)' }}>
-          {rows === undefined ? 'Loading…' : `${rows.length} payments`}
+          {rows === undefined ? 'Loading…'
+            : `${rows.length} payments${windowSize != null ? ` · window ${windowSize}` : ''}`}
         </span>
+      </div>
+
+      {/* Forensic status-count pills (ops opsPayments.list.statusCounts) */}
+      <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:8, marginBottom:12 }}>
+        <button type="button" onClick={() => setStatus('all')}
+          style={{ borderRadius:999, padding:'4px 12px', fontSize:12, fontWeight:600, cursor:'pointer',
+            border:'1px solid ' + (status === 'all' ? 'var(--slate-900)' : 'var(--slate-200)'),
+            background: status === 'all' ? 'var(--slate-900)' : '#fff',
+            color: status === 'all' ? '#fff' : 'var(--slate-600)' }}>
+          All{windowSize != null ? ` (${windowSize})` : ''}
+        </button>
+        {liveStatuses.map(s => {
+          const count  = statusCounts[s] ?? 0
+          const active = status === s
+          const selectable = PILL_VALUES.has(s)
+          const isFailed = s === 'failed'
+          return (
+            <button key={s} type="button"
+              onClick={() => { if (selectable) setStatus(active ? 'all' : (s as typeof status)) }}
+              disabled={!selectable}
+              style={{ borderRadius:999, padding:'4px 12px', fontSize:12, fontWeight:600,
+                cursor: selectable ? 'pointer' : 'default',
+                border:'1px solid ' + (active ? 'var(--slate-900)' : isFailed && !active ? '#FECACA' : 'var(--slate-200)'),
+                background: active ? 'var(--slate-900)' : isFailed && !active ? 'var(--red-50)' : '#fff',
+                color: active ? '#fff' : isFailed && !active ? 'var(--red-700)' : 'var(--slate-600)',
+                opacity: selectable ? 1 : 0.7 }}>
+              {s} ({count})
+            </button>
+          )
+        })}
       </div>
 
       <Card padded={false}>
@@ -592,7 +1111,7 @@ const PaymentsList = () => {
               : rows.length === 0
                 ? <tr><td colSpan={8} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>No payments found.</td></tr>
                 : rows.map(p => (
-                  <tr key={String(p.id)}>
+                  <tr key={String(p.id)} onClick={() => setDetailId(p.id)} style={{ cursor:'pointer' }}>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)', fontSize:12 }}>{fmtRelative(p.createdAt)}</td>
                     <td style={tableStyles.td}><Badge tone={paymentTone(p.status)} dot>{p.status}</Badge></td>
                     <td style={tableStyles.td}>{p.userName}</td>
@@ -602,8 +1121,9 @@ const PaymentsList = () => {
                     <td style={{ ...tableStyles.td, color:'var(--blue-700)' }} className="mono" >
                       {p.stripePaymentIntentId ? p.stripePaymentIntentId.slice(0, 18) + '…' : '—'}
                     </td>
-                    <td style={{ ...tableStyles.td, textAlign:'right' }}>
+                    <td style={{ ...tableStyles.td, textAlign:'right' }} onClick={e => e.stopPropagation()}>
                       <div style={{ display:'flex', gap:4, justifyContent:'flex-end' }}>
+                        <Button size="sm" onClick={() => setDetailId(p.id)}>Detail</Button>
                         {p.stripePaymentIntentId && (
                           <a href={`https://dashboard.stripe.com/payments/${p.stripePaymentIntentId}`} target="_blank" rel="noopener noreferrer" style={{ textDecoration:'none' }}>
                             <Button size="sm" iconRight={<IconExternal size={11} />}>Stripe</Button>
@@ -618,6 +1138,8 @@ const PaymentsList = () => {
           </tbody>
         </table>
       </Card>
+
+      <PaymentDetailModal id={detailId} onClose={() => setDetailId(null)} />
     </>
   )
 }
@@ -637,6 +1159,8 @@ type RefundsBreakdown = {
 }
 
 const RefundsView = ({ period, onTag }: { period: Period; onTag: (id: Id<'bookings'>) => void }) => {
+  const session  = useContext(DirectorSessionCtx)
+  const canWrite = can(session?.role, 'money.write')
   const data = useQuery(api.directorStripe.stripeRefundsBreakdown, { period }) as RefundsBreakdown | undefined
 
   if (!data) {
@@ -740,7 +1264,9 @@ const RefundsView = ({ period, onTag }: { period: Period; onTag: (id: Id<'bookin
                         : <span style={{ fontSize:12, color:'var(--slate-400)', fontStyle:'italic' }}>Untagged</span>}
                     </td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} onClick={e => e.stopPropagation()}>
-                      <Button size="sm" iconRight={<IconTag size={11} />} onClick={() => onTag(b.id)}>Tag</Button>
+                      {canWrite
+                        ? <Button size="sm" iconRight={<IconTag size={11} />} onClick={() => onTag(b.id)}>Tag</Button>
+                        : <span style={{ fontSize:11, color:'var(--slate-400)' }}>—</span>}
                     </td>
                   </tr>
                 )
@@ -869,6 +1395,17 @@ export const TabStripe = () => {
   const [sub, setSub]       = useState<SubTab>('overview')
   const [period, setPeriod] = useState<Period>('30d')
   const [tagTarget, setTagTarget] = useState<Id<'bookings'> | null>(null)
+  const [initialPaymentId, setInitialPaymentId] = useState<Id<'payments'> | null>(null)
+
+  useEffect(() => {
+    // Land on the Payments subtab (and open the forensic detail) when arriving
+    // from the retired /ops/payments[/id] redirect shims.
+    const goto = consumeGoto() ?? consumeStashedGoto('payments') ?? consumeStashedGoto('stripe')
+    if (goto) {
+      setSub('payments')
+      if (goto.entityId) setInitialPaymentId(goto.entityId as Id<'payments'>)
+    }
+  }, [])
 
   return (
     <SectionAnchor id="stripe" title="Stripe & Payments"
@@ -901,7 +1438,7 @@ export const TabStripe = () => {
 
       {sub === 'overview' && <FinancialOverview period={period} />}
       {sub === 'accounts' && <ConnectedAccounts period={period} />}
-      {sub === 'payments' && <PaymentsList />}
+      {sub === 'payments' && <PaymentsList initialDetailId={initialPaymentId} />}
       {sub === 'refunds'  && <RefundsView period={period} onTag={setTagTarget} />}
       {sub === 'webhooks' && <WebhookHealthView />}
 

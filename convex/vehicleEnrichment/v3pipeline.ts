@@ -86,6 +86,17 @@ export type EnrichVehicleBatchV3Result =
   | { status: "error"; reason: string }
   | { status: "batch_submitted"; configKey: string; batchId: string };
 
+// ─── Run-step trace (best-effort, non-fatal) ───────────────────────
+// Writes one enrichment_run_steps row per stage for the Enrichment Console
+// Deep-Dive replay. ALWAYS wrapped so a trace failure can never break a run.
+async function traceStep(ctx: any, patch: Record<string, unknown>): Promise<void> {
+  try {
+    await ctx.runMutation(internal.vehicleEnrichment.runSteps.recordRunStep, patch);
+  } catch (e) {
+    console.warn(`[v8/trace] step '${String(patch.step)}' record failed (non-fatal):`, e);
+  }
+}
+
 // ─── Constants ─────────────────────────────────────────────────────
 
 const MAX_POLL_ATTEMPTS = 180;
@@ -1726,8 +1737,10 @@ export const enrichVehicleBatchV3 = internalAction({
     }
 
     // VDB advanced decode — runs once, cached by VIN. Fields used in Step 6b/6e.
+    const decodeStartedAt = Date.now();
     const vdbRaw = vehicleDoc.vin ? await advancedVinDecode(vehicleDoc.vin) : null;
     const vdbFields = vdbRaw ? extractVDBFields(vdbRaw) : null;
+    const decodeEndedAt = Date.now();
 
     // Identity gap-fill: the applicability rules fail OPEN when drivetrain /
     // transmission_type / body_class are null (2001 740iA: no rule fired on a
@@ -1933,6 +1946,21 @@ export const enrichVehicleBatchV3 = internalAction({
       status: "scraping",
     });
 
+    // Trace: decode stage. Runs before the run row exists (NHTSA vPic decode is
+    // passed in; VDB advancedVinDecode above), so it's timed via locals and
+    // recorded now that runId is known.
+    await traceStep(ctx, {
+      run_id: runId,
+      vehicle_config_id: vehicleConfigId,
+      step: "decode",
+      seq: 1,
+      status: "ok",
+      started_at: decodeStartedAt,
+      ended_at: decodeEndedAt,
+      summary: `drivetrain=${vPicData?.drivetrain ?? "?"} · transmission=${vPicData?.transmission_type ?? "?"} · body=${vPicData?.body_class ?? "?"}`,
+      response_text: JSON.stringify({ nhtsa_merged_identity: vPicData, vdb_fields: vdbFields }, null, 2),
+    });
+
     // STEP 6: Upsert drivetrain_config — only if we have a REAL value from NHTSA.
     // If drivetrain is unknown, skip this. _pollBatch1V3 will create it after
     // Batch 1B resolves the drivetrain.
@@ -2073,7 +2101,9 @@ export const enrichVehicleBatchV3 = internalAction({
     }
 
     // STEP 7: FireCrawl scrape — parts catalog + owner's manual
+    const scrapeStartedAt = Date.now();
     const sources = await scrapeVehicleSources(ctx, vehicle);
+    const scrapeEndedAt = Date.now();
 
     // STEP 7b: Record deterministic supersession chains parsed from the same
     // registry HTML (marks known-superseded oem_parts rows so fitment writes
@@ -2087,6 +2117,28 @@ export const enrichVehicleBatchV3 = internalAction({
         console.warn("[v8] recordSupersessions failed (non-fatal):", e);
       }
     }
+
+    // Trace: scrape stage (covers VDB-repair fetch, chassis/engine sibling
+    // merges, and the FireCrawl source scrape).
+    await traceStep(ctx, {
+      run_id: runId,
+      vehicle_config_id: vehicleConfigId,
+      step: "scrape",
+      seq: 2,
+      status: "ok",
+      started_at: scrapeStartedAt,
+      ended_at: scrapeEndedAt,
+      summary: `${sources.partsSourceUrls.length + sources.manualSourceUrls.length} sources · ${sources.supersessions.length} supersessions · ${vdbRepairRaw?.blocks.length ?? 0} VDB repair blocks`,
+      response_text: JSON.stringify(
+        {
+          parts_source_urls: sources.partsSourceUrls,
+          manual_source_urls: sources.manualSourceUrls,
+          supersessions: sources.supersessions,
+        },
+        null,
+        2,
+      ),
+    });
 
     // STEP 8: Submit Batch [1A, 1B]
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
@@ -2166,6 +2218,30 @@ export const enrichVehicleBatchV3 = internalAction({
       });
       return { status: "error" as const, reason: "batch1_submission_failed" };
     }
+
+    // Trace: batch 1 request (response is patched onto this same row in
+    // _pollBatch1V3 once the batch results return).
+    await traceStep(ctx, {
+      run_id: runId,
+      vehicle_config_id: vehicleConfigId,
+      step: "batch1",
+      seq: 3,
+      status: "submitted",
+      started_at: Date.now(),
+      summary: `batchId=${batchId} · ${batch1Requests.length} requests`,
+      request_text: JSON.stringify(
+        batch1Requests.map((r) => ({
+          customId: r.customId,
+          model: r.model ?? "sonnet",
+          maxTokens: r.maxTokens,
+          maxSearchUses: r.maxSearchUses,
+          system: r.system,
+          userPrompt: r.userPrompt,
+        })),
+        null,
+        2,
+      ),
+    });
 
     console.log(`[v8] Batch [1A, 1B] submitted (batchId=${batchId}), scheduling poll`);
 
@@ -2342,6 +2418,21 @@ async function runPollBatch1Body(
     const r1a = results["batch1a"];
     const r1b = results["batch1b"];
     const r1c = results["batch1c"];
+
+    // Trace: batch 1 response — patch the row opened at submit. Recorded before
+    // the error early-returns below so a failed batch still leaves a trace.
+    await traceStep(ctx, {
+      run_id: args.runId,
+      vehicle_config_id: args.vehicleConfigId,
+      step: "batch1",
+      seq: 3,
+      status: r1a?.error ? "error" : "ok",
+      ended_at: Date.now(),
+      tokens_in: (r1a?.usage.tokensIn ?? 0) + (r1b?.usage.tokensIn ?? 0) + (r1c?.usage.tokensIn ?? 0),
+      tokens_out: (r1a?.usage.tokensOut ?? 0) + (r1b?.usage.tokensOut ?? 0) + (r1c?.usage.tokensOut ?? 0),
+      web_searches: (r1a?.usage.webSearches ?? 0) + (r1b?.usage.webSearches ?? 0) + (r1c?.usage.webSearches ?? 0),
+      response_text: JSON.stringify(results, null, 2),
+    });
 
     // v9.8: Apply VDB action→slug mapping from 1C, then write intervals + labor.
     // Confidence 0.9 ensures Batch 2 fallback never overwrites this.
@@ -2611,13 +2702,14 @@ async function runPollBatch1Body(
     ).length;
     const batch2SearchUses = Math.min(1 + numericSpecGaps, 5);
 
+    const batch2UserPrompt = buildBatch2Prompt(vehicle, nullFields, oemParts);
     let batch2Id: string;
     try {
       batch2Id = await submitBatch([
         {
           customId: "batch2",
           system: BATCH_2_SYSTEM,
-          userPrompt: buildBatch2Prompt(vehicle, nullFields, oemParts),
+          userPrompt: batch2UserPrompt,
           maxTokens: 16384,
           temperature: 0,
           maxSearchUses: batch2SearchUses,
@@ -2636,6 +2728,22 @@ async function runPollBatch1Body(
       });
       return;
     }
+
+    // Trace: batch 2 request (response patched onto this row in _pollBatch2V3).
+    await traceStep(ctx, {
+      run_id: args.runId,
+      vehicle_config_id: args.vehicleConfigId,
+      step: "batch2",
+      seq: 4,
+      status: "submitted",
+      started_at: Date.now(),
+      summary: `batchId=${batch2Id} · ${nullFields.length} gap fields · ${batch2SearchUses} searches`,
+      request_text: JSON.stringify(
+        { customId: "batch2", system: BATCH_2_SYSTEM, userPrompt: batch2UserPrompt },
+        null,
+        2,
+      ),
+    });
 
     await ctx.scheduler.runAfter(
       POLL_INTERVAL_MS,
@@ -2794,6 +2902,22 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
 
     const results = timedOut ? {} : await getBatchResults(args.batchId);
     const r2 = results["batch2"];
+
+    // Trace: batch 2 response — patch the row opened at submit.
+    await traceStep(ctx, {
+      run_id: args.runId,
+      vehicle_config_id: args.vehicleConfigId,
+      step: "batch2",
+      seq: 4,
+      status: timedOut ? "timeout" : r2?.error ? "error" : "ok",
+      ended_at: Date.now(),
+      tokens_in: r2?.usage.tokensIn ?? 0,
+      tokens_out: r2?.usage.tokensOut ?? 0,
+      web_searches: r2?.usage.webSearches ?? 0,
+      response_text: timedOut
+        ? "(batch 2 timed out — no response collected)"
+        : JSON.stringify(results, null, 2),
+    });
 
     // Fix #3: Detect errored/expired batch2 request
     if (r2?.error) {
@@ -3993,6 +4117,30 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       ],
       field_gaps: finalGaps,
       quotability,
+    });
+
+    // Trace: finalize stage — the run's terminal snapshot.
+    await traceStep(ctx, {
+      run_id: args.runId,
+      vehicle_config_id: args.vehicleConfigId,
+      step: "finalize",
+      seq: 5,
+      status: timedOut ? "timeout" : "ok",
+      ended_at: Date.now(),
+      summary: `fill ${fillRate}% · applicable ${applicableFillRate}% · quotability ${quotability?.pct ?? "—"} · ${sanityFlags.length} sanity · ${finalGaps.length} gaps`,
+      response_text: JSON.stringify(
+        {
+          fill_rate: fillRate,
+          applicable_fill_rate: applicableFillRate,
+          fields_filled: fieldsFilledCount,
+          fields_total: V4_FIELD_KEYS.length,
+          quotability,
+          sanity_flags: sanityFlags,
+          field_gaps: finalGaps,
+        },
+        null,
+        2,
+      ),
     });
 
     // Read current vehicle_config to get resolved drivetrain

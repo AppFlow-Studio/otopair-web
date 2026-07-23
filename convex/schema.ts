@@ -833,6 +833,36 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_created_at", ["created_at"]),
 
+  // Per-stage trace of an enrichment run — decode → scrape → batch1 → batch2 →
+  // finalize. Written by v3pipeline (non-fatal, best-effort) so the Enrichment
+  // Console Deep-Dive can replay a run step by step, including each batch's
+  // prompt (request_text) and raw+parsed model output (response_text). One row
+  // per (run, step), upserted: the submit pass writes request_text/started_at,
+  // the poll pass patches response_text/ended_at/tokens. Text fields are capped
+  // (see runSteps.ts CAP) to stay under Convex's document-size limit; `truncated`
+  // flags when a cap was hit. Only NEW runs (post-instrumentation) have rows.
+  enrichment_run_steps: defineTable({
+    enrichment_run_id: v.id("enrichment_runs"),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    step: v.string(), // "decode" | "scrape" | "batch1" | "batch2" | "finalize"
+    seq: v.number(), // stable display order
+    status: v.optional(v.string()), // "submitted" | "ok" | "error" | "timeout" | "skipped"
+    started_at: v.optional(v.number()),
+    ended_at: v.optional(v.number()),
+    duration_ms: v.optional(v.number()),
+    summary: v.optional(v.string()),
+    tokens_in: v.optional(v.number()),
+    tokens_out: v.optional(v.number()),
+    web_searches: v.optional(v.number()),
+    request_text: v.optional(v.string()),
+    response_text: v.optional(v.string()),
+    truncated: v.optional(v.boolean()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_run", ["enrichment_run_id"])
+    .index("by_run_step", ["enrichment_run_id", "step"]),
+
   source_registry: defineTable({
     make_id: v.optional(v.id("makes")),
     source_type: v.string(),

@@ -82,6 +82,7 @@ import type * as directorCars from "../directorCars.js";
 import type * as directorConfigActions from "../directorConfigActions.js";
 import type * as directorConfigBackfills from "../directorConfigBackfills.js";
 import type * as directorData from "../directorData.js";
+import type * as directorEnrichment from "../directorEnrichment.js";
 import type * as directorGate from "../directorGate.js";
 import type * as directorOverview from "../directorOverview.js";
 import type * as directorPricing from "../directorPricing.js";
@@ -402,6 +403,7 @@ import type * as vehicleEnrichment_repairpalEndpointSibling from "../vehicleEnri
 import type * as vehicleEnrichment_reverseFitment from "../vehicleEnrichment/reverseFitment.js";
 import type * as vehicleEnrichment_runHeadless from "../vehicleEnrichment/runHeadless.js";
 import type * as vehicleEnrichment_runPublic from "../vehicleEnrichment/runPublic.js";
+import type * as vehicleEnrichment_runSteps from "../vehicleEnrichment/runSteps.js";
 import type * as vehicleEnrichment_runTest from "../vehicleEnrichment/runTest.js";
 import type * as vehicleEnrichment_scraper from "../vehicleEnrichment/scraper.js";
 import type * as vehicleEnrichment_scraperQueries from "../vehicleEnrichment/scraperQueries.js";
@@ -522,6 +524,7 @@ declare const fullApi: ApiFromModules<{
   directorConfigActions: typeof directorConfigActions;
   directorConfigBackfills: typeof directorConfigBackfills;
   directorData: typeof directorData;
+  directorEnrichment: typeof directorEnrichment;
   directorGate: typeof directorGate;
   directorOverview: typeof directorOverview;
   directorPricing: typeof directorPricing;
@@ -842,6 +845,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/reverseFitment": typeof vehicleEnrichment_reverseFitment;
   "vehicleEnrichment/runHeadless": typeof vehicleEnrichment_runHeadless;
   "vehicleEnrichment/runPublic": typeof vehicleEnrichment_runPublic;
+  "vehicleEnrichment/runSteps": typeof vehicleEnrichment_runSteps;
   "vehicleEnrichment/runTest": typeof vehicleEnrichment_runTest;
   "vehicleEnrichment/scraper": typeof vehicleEnrichment_scraper;
   "vehicleEnrichment/scraperQueries": typeof vehicleEnrichment_scraperQueries;

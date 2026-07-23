@@ -54,6 +54,9 @@ export interface BatchRequest {
 export interface BatchResultEntry {
   customId: string;
   data: Record<string, any>;
+  /** Raw model content blocks, stringified — captured for the enrichment run
+   *  trace (Deep-Dive step replay). Undefined on errored requests. */
+  rawText?: string;
   usage: { tokensIn: number; tokensOut: number; webSearches: number };
   error: string | null;
 }
@@ -132,9 +135,17 @@ export async function getBatchResults(batchId: string): Promise<Record<string, B
         console.error(`[batch] JSON extraction failed for ${item.custom_id}:`, e);
       }
 
+      let rawText: string | undefined;
+      try {
+        rawText = JSON.stringify(content);
+      } catch {
+        rawText = undefined;
+      }
+
       results[item.custom_id] = {
         customId: item.custom_id,
         data,
+        rawText,
         usage: {
           tokensIn: (message as any).usage?.input_tokens ?? 0,
           tokensOut: (message as any).usage?.output_tokens ?? 0,

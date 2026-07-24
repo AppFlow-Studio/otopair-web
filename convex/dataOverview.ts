@@ -57,8 +57,10 @@ export const attention = query({
       .withIndex("by_created_at", (q) => q.gte("created_at", now - 24 * HOUR))
       .order("desc")
       .take(500);
-    const failedRuns = recentRuns
-      .filter((r) => r.status === "failed")
+    // Acknowledged runs (triaged via the Enrichment Console) drop out of the
+    // rail — reviewed_at is stamped by directorEnrichment.acknowledgeRun.
+    const failedUnreviewed = recentRuns.filter((r) => r.status === "failed" && r.reviewed_at == null);
+    const failedRuns = failedUnreviewed
       .slice(0, 25)
       .map((r) => ({
         id: String(r._id),
@@ -107,7 +109,7 @@ export const attention = query({
 
     return {
       failed_runs_24h: failedRuns,
-      failed_runs_24h_total: recentRuns.filter((r) => r.status === "failed").length,
+      failed_runs_24h_total: failedUnreviewed.length,
       stale_open_reviews: staleReviews,
       open_by_stream: openByStream,
     };

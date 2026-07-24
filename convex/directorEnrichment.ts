@@ -33,6 +33,14 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { requireDirector, logAudit } from "./directorGate";
+// Real prompt constants — imported so the Pipeline reference visual never drifts
+// from the code. (batch1c's system prompt lives in the heavier vehicleDatabases
+// module and is summarized inline below rather than imported.)
+import { BATCH_1_SYSTEM } from "./vehicleEnrichment/prompts/batch1Prompt";
+import { BATCH_1B_SYSTEM } from "./vehicleEnrichment/prompts/batch1bPrompt";
+import { BATCH_2_SYSTEM } from "./vehicleEnrichment/prompts/batch2Prompt";
+import { GAP_FILL_SYSTEM } from "./vehicleEnrichment/prompts/gapFillPrompt";
+import { BLOCKED_DOMAINS } from "./vehicleEnrichment/blockedDomains";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -212,6 +220,62 @@ export const liveRuns = query({
   },
 });
 
+// ─── Live stage funnel: accurate in-flight + stuck counts by pipeline stage ──
+
+/** Status → pipeline stage. Mirrors PipelineTab.nodeLiveCounts: decode=started,
+ *  scrape=scraping, batch1=batch1, batch2=batch2. */
+const STATUS_STAGE: Record<string, "decode" | "scrape" | "batch1" | "batch2"> = {
+  started: "decode",
+  scraping: "scrape",
+  batch1: "batch1",
+  batch2: "batch2",
+};
+
+export type StageCounts = { decode: number; scrape: number; batch1: number; batch2: number };
+export type LiveStageFunnel = {
+  total: number;
+  stale: number;
+  stages: StageCounts;
+  stalePerStage: StageCounts;
+  truncated: boolean;
+};
+
+/** Counting-only aggregate over in-flight runs — no config_key resolution, so
+ *  it's cheap and accurate to a raised cap. This is the source of truth for the
+ *  funnel + stuck count; liveRuns' take(100)/status undercounts at 100+. */
+export const liveStageFunnel = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }): Promise<LiveStageFunnel> => {
+    await requireDirector(ctx, token);
+    const now = Date.now();
+    const CAP = 1000;
+    const stages: StageCounts = { decode: 0, scrape: 0, batch1: 0, batch2: 0 };
+    const stalePerStage: StageCounts = { decode: 0, scrape: 0, batch1: 0, batch2: 0 };
+    let total = 0;
+    let stale = 0;
+    let truncated = false;
+    for (const status of LIVE_RUN_STATUSES) {
+      const runs = await ctx.db
+        .query("enrichment_runs")
+        .withIndex("by_status", (q) => q.eq("status", status))
+        .take(CAP);
+      if (runs.length === CAP) truncated = true;
+      const stage = STATUS_STAGE[status];
+      for (const r of runs) {
+        total++;
+        if (stage) stages[stage]++;
+        const hb = r.last_heartbeat_at ?? null;
+        const isStale = hb == null || now - hb > LIVE_WINDOW_MS;
+        if (isStale) {
+          stale++;
+          if (stage) stalePerStage[stage]++;
+        }
+      }
+    }
+    return { total, stale, stages, stalePerStage, truncated };
+  },
+});
+
 // ─── Recent runs (paginated, token-derived cost) ─────────────────────────────
 
 export type RecentRunRow = {
@@ -279,14 +343,23 @@ export type CostDayPoint = {
  *  snapshot value is the dead estimated_cost_usd sum (== 0). Bounded: the
  *  snapshot table is one row per day. */
 export const costDaily = query({
-  args: { token: v.string() },
-  handler: async (ctx, { token }): Promise<CostDayPoint[]> => {
+  args: { token: v.string(), days: v.optional(v.number()) },
+  handler: async (ctx, { token, days }): Promise<CostDayPoint[]> => {
     await requireDirector(ctx, token);
     const rows = await ctx.db
       .query("portal_stats")
       .withIndex("by_key", (q) => q.gte("key", "data.costs.day.").lt("key", "data.costs.day.￿"))
       .take(400);
+    // Optional window: keep only the last `days` day-rows (clamped 1–30) so the
+    // daily charts track the segmented control and agree with topCostRuns.
+    let cutoff: string | null = null;
+    if (days != null) {
+      const windowDays = Math.min(Math.max(days, 1), 30);
+      const d = new Date(Date.now() - (windowDays - 1) * DAY);
+      cutoff = d.toISOString().slice(0, 10);
+    }
     return rows
+      .filter((r) => cutoff == null || r.key.slice("data.costs.day.".length) >= cutoff)
       .map((r) => {
         const meta = (r.meta ?? {}) as {
           runs?: number;
@@ -444,6 +517,75 @@ export const flagTaxonomy = query({
       runsScanned: runs.length,
       truncated: runs.length === LIMIT,
     };
+  },
+});
+
+// ─── Flag drill-down: which runs raised a given flag, and why ────────────────
+
+export type FlagRunRow = {
+  runId: Id<"enrichment_runs">;
+  configId: Id<"vehicle_configs">;
+  configKey: string | null;
+  status: string;
+  at: number;
+  matched: string[]; // exact offending errors[]/sanity strings — the "why"
+};
+export type RunsForFlagResult = {
+  kind: "error" | "sanityField" | "partMake";
+  key: string;
+  windowDays: number;
+  runs: FlagRunRow[];
+  scanned: number;
+  truncated: boolean;
+};
+
+/** The runs behind a flagTaxonomy bucket. Mirrors flagTaxonomy's window so the
+ *  counts line up; returns the exact matched strings so the UI shows WHY. */
+export const runsForFlag = query({
+  args: {
+    token: v.string(),
+    days: v.optional(v.number()),
+    kind: v.union(v.literal("error"), v.literal("sanityField"), v.literal("partMake")),
+    key: v.string(),
+  },
+  handler: async (ctx, { token, days, kind, key }): Promise<RunsForFlagResult> => {
+    await requireDirector(ctx, token);
+    const windowDays = Math.min(Math.max(days ?? 14, 1), 30);
+    const since = Date.now() - windowDays * DAY;
+    const LIMIT = 1000;
+    const scanned = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_created_at", (q) => q.gte("created_at", since))
+      .take(LIMIT);
+    const keyFor = await configKeyResolver(ctx);
+    const OUT_CAP = 200;
+    const out: FlagRunRow[] = [];
+    for (const r of scanned) {
+      if (out.length >= OUT_CAP) break;
+      const matched: string[] = [];
+      if (kind === "error" || kind === "partMake") {
+        for (const e of r.errors ?? []) {
+          const parts = e.split(":");
+          if (kind === "error" && (parts[0] || e) === key) matched.push(e);
+          else if (kind === "partMake" && parts[0] === "part_pattern_suspect" && parts[1] === key) matched.push(e);
+        }
+      } else {
+        for (const s of r.sanity_flags ?? []) {
+          if (s.field === key) matched.push(`${s.field}:${s.severity}:${s.reason}`);
+        }
+      }
+      if (matched.length === 0) continue;
+      out.push({
+        runId: r._id,
+        configId: r.vehicle_config_id,
+        configKey: await keyFor(r.vehicle_config_id),
+        status: r.status,
+        at: r.created_at ?? r._creationTime,
+        matched,
+      });
+    }
+    out.sort((a, b) => b.at - a.at);
+    return { kind, key, windowDays, runs: out, scanned: scanned.length, truncated: scanned.length === LIMIT };
   },
 });
 
@@ -821,6 +963,132 @@ export const stepsForRun = query({
   },
 });
 
+// ─── Pipeline reference (how it works: prompts + Firecrawl) ──────────────────
+
+export type PipelineStepRef = {
+  id: string;
+  title: string;
+  phase: "decode" | "scrape" | "batch1" | "batch2" | "gapfill" | "finalize";
+  model: string | null;
+  maxTokens: number | null;
+  webSearch: string;
+  purpose: string;
+  inputs: string[];
+  systemPrompt: string | null;
+};
+export type FirecrawlSourceRef = {
+  category: string;
+  method: string;
+  detail: string;
+  examples: string[];
+};
+export type FlowNodeRef = { id: string; label: string; detail: string; kind: "input" | "decode" | "scrape" | "llm" | "finalize" };
+export type PipelineReferenceResult = {
+  flow: FlowNodeRef[];
+  llmSteps: PipelineStepRef[];
+  firecrawl: {
+    sources: FirecrawlSourceRef[];
+    blockedDomains: string[];
+    marketplaceDomains: string[];
+    caching: string[];
+    charCaps: string[];
+    metering: string;
+  };
+};
+
+/** Static "how the pipeline works" reference — the real batch system prompts +
+ *  the Firecrawl scraping flow. Token-gated; the system-prompt text is imported
+ *  from the actual prompt constants so it stays in sync with the code. */
+export const pipelineReference = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }): Promise<PipelineReferenceResult> => {
+    await requireDirector(ctx, token);
+    return {
+      flow: [
+        { id: "vin", label: "VIN", detail: "17-char VIN in", kind: "input" },
+        { id: "decode", label: "Decode", detail: "NHTSA vPIC + VehicleDatabases → engine · transmission · drivetrain · packages", kind: "decode" },
+        { id: "scrape", label: "Firecrawl scrape", detail: "OEM parts catalog + owner's manual → markdown (+ wheel-size API)", kind: "scrape" },
+        { id: "batch1", label: "Batch 1", detail: "1a extract (scraped) · 1b web-search specs · 1c Haiku VDB→slug", kind: "llm" },
+        { id: "batch2", label: "Batch 2", detail: "gap-fill still-null fields + per-part pricing + labor (web search)", kind: "llm" },
+        { id: "gapfill", label: "Gap-fill re-ask", detail: "final bounded web-search pass over fields still null", kind: "llm" },
+        { id: "finalize", label: "Finalize", detail: "validate · sanity · quotability → normalized tables", kind: "finalize" },
+      ],
+      llmSteps: [
+        {
+          id: "batch1a", title: "Batch 1A · extract from scraped pages", phase: "batch1",
+          model: "Claude Sonnet", maxTokens: 8192, webSearch: "none",
+          purpose: "Structured extraction of specs, fluids, capacities, intervals, OEM part numbers from the pre-scraped markdown — no web search.",
+          inputs: ["Vehicle identity (year/make/model/trim/engine)", "NHTSA vPIC facts (drivetrain, transmission, injection, timing)", "Variant constraints (fuel class, build source, chassis)", "Scraped OEM parts catalog markdown (≤20k chars)", "Scraped owner's-manual markdown (≤20k chars)", "Detected packages", "Target JSON schema"],
+          systemPrompt: BATCH_1_SYSTEM,
+        },
+        {
+          id: "batch1b", title: "Batch 1B · web-search specs", phase: "batch1",
+          model: "Claude Sonnet", maxTokens: 16384, webSearch: "1 search",
+          purpose: "Web-search intervals, fluid specs, drivetrain fluids, battery + tire specs. Runs independent of 1A (fills its nulls; scraped wins).",
+          inputs: ["Vehicle identity only (no scraped content — parallel to 1A)", "Example search queries", "Target JSON schema"],
+          systemPrompt: BATCH_1B_SYSTEM,
+        },
+        {
+          id: "batch1c", title: "Batch 1C · VDB action → service slug", phase: "batch1",
+          model: "Claude Haiku", maxTokens: 4096, webSearch: "none",
+          purpose: "Classifier mapping raw VehicleDatabases maintenance-action strings to Otopair service slugs → feeds service intervals + labor.",
+          inputs: ["Vehicle label", "Otopair service-slug list", "Verbatim VDB action strings"],
+          systemPrompt:
+            "You are a vehicle service classifier. You will receive a list of VDB action strings from a maintenance schedule, plus the target vehicle context. For each action, return the Otopair service slug it represents, or null if the action is not a serviceable maintenance item we track.\n\n(Full text lives in convex/lib/vehicleDatabases.ts · HAIKU_SYSTEM.)",
+        },
+        {
+          id: "batch2", title: "Batch 2 · gap-fill + pricing", phase: "batch2",
+          model: "Claude Sonnet", maxTokens: 16384, webSearch: "2–5 (1 + 1 per missing numeric spec, capped 5)",
+          purpose: "Two jobs: web-search each still-null field, and look up per-OEM-part retail pricing + labor hours across the 25-service list.",
+          inputs: ["Vehicle identity", "\"Fields needing gap fill\" list", "OEM part numbers from Batch 1 (for pricing)", "Per-service schema + 25-item service list"],
+          systemPrompt: BATCH_2_SYSTEM,
+        },
+        {
+          id: "gapfill", title: "Gap-fill re-ask · final pass", phase: "gapfill",
+          model: "Claude Sonnet", maxTokens: 4000, webSearch: "up to 12 (2 per still-null field, capped 12)",
+          purpose: "Final bounded, ranked web-search pass over fields still null after Batch 2 (gap-fill only — no pricing). Synchronous, not batched.",
+          inputs: ["Vehicle identity", "\"Fields still missing after two passes\" list"],
+          systemPrompt: GAP_FILL_SYSTEM,
+        },
+      ],
+      firecrawl: {
+        sources: [
+          {
+            category: "OEM parts catalog",
+            method: "Firecrawl POST /v2/scrape (markdown + rawHtml, maxAge 2d, stealth-proxy retry)",
+            detail: "Deterministic brand URL templates; open-web Firecrawl /search fallback for makes with no registry or an empty template. JSON-LD prices + supersession chains parsed from the raw HTML.",
+            examples: ["bmwpartsdeal.com", "toyotapartsdeal.com", "hondapartsdeal.com", "{brand}.oempartsonline.com (Ford, GM, Hyundai/Kia, MB, VW/Audi, Subaru, Nissan, Mazda, Volvo, Porsche, Lexus, Mopar, Land Rover, Jaguar, Mitsubishi)"],
+          },
+          {
+            category: "Owner's manual / maintenance schedule",
+            method: "Firecrawl POST /v2/search (markdown)",
+            detail: "Per-make maintenance-schedule search queries → dealer / manufacturer pages. Blocked domains filtered from results.",
+            examples: ["\"[year] [make] [model] maintenance schedule\"", "dealer & manufacturer service pages"],
+          },
+          {
+            category: "Wheel / tire fitment",
+            method: "wheel-size.com REST API (NOT Firecrawl)",
+            detail: "OEM tire fitment options (front/rear size, rim spec, load/speed index, PSI). Non-fatal; free tier 300 vehicles/day.",
+            examples: ["api.wheel-size.com/v2/search/by_model"],
+          },
+        ],
+        blockedDomains: [...BLOCKED_DOMAINS],
+        marketplaceDomains: ["ebay.com", "amazon.com", "walmart.com", "alibaba.com", "aliexpress.com"],
+        caching: [
+          "Convex scrape_cache table — parts 30d · owner_manual 90d · pricing 7d, keyed by make_model_year_trim_sourceType",
+          "Firecrawl maxAge 2d — a second, near-free page cache on every scrape/search",
+        ],
+        charCaps: [
+          "Per scraped page: 8,000 chars",
+          "Per source-type total: 40,000 chars",
+          "Embedded into Batch 1A prompt: 20,000 chars each (parts + manual)",
+        ],
+        metering: "No Firecrawl credit metering exists — total_firecrawl_credits is a dead column. The search API returns creditsUsed but it is never persisted. Cost tracking is token-derived only.",
+      },
+    };
+  },
+});
+
 // ─── Triggers (data.trigger + reason ceremony + cooldown + audit) ────────────
 // Re-run a VIN reuses the queue-tracked dataControlRoom.triggerReEnrich — the
 // frontend calls that directly. New here: force-unstick + purge-and-reenrich.
@@ -886,6 +1154,76 @@ export const forceUnstickRun = mutation({
       detail: `${why} — was '${run.status}', heartbeat ${hb == null ? "missing" : `${Math.floor((now - hb) / 60_000)}m stale`}`,
     });
     return { unstuck: true };
+  },
+});
+
+/** Bulk force-unstick: mark every stale (or heartbeat-less) in-flight run as
+ *  `failed` in one pass. Sees the true set via by_status (unlike the capped
+ *  liveRuns list). Returns `remaining: true` when a status hit the batch cap so
+ *  the client can call again until drained. One summary audit row. */
+export const bulkForceUnstickStale = mutation({
+  args: { token: v.string(), reason: v.string() },
+  handler: async (ctx, { token, reason }): Promise<{ unstuck: number; scanned: number; remaining: boolean }> => {
+    const actor = await requireDirector(ctx, token, "data.trigger");
+    const why = requireReason(reason);
+    const now = Date.now();
+    const BATCH = 500;
+    let unstuck = 0;
+    let scanned = 0;
+    let remaining = false;
+    for (const status of LIVE_RUN_STATUSES) {
+      const runs = await ctx.db
+        .query("enrichment_runs")
+        .withIndex("by_status", (q) => q.eq("status", status))
+        .take(BATCH);
+      if (runs.length === BATCH) remaining = true;
+      for (const run of runs) {
+        scanned++;
+        const hb = run.last_heartbeat_at;
+        const stale = hb == null || now - hb > LIVE_WINDOW_MS;
+        if (!stale) continue;
+        await ctx.db.patch(run._id, {
+          status: "failed",
+          completed_at: now,
+          duration_ms: run.started_at != null ? now - run.started_at : run.duration_ms,
+          errors: [...(run.errors ?? []), "manual_force_unstick"],
+        });
+        unstuck++;
+      }
+    }
+    if (unstuck > 0) {
+      await logAudit(ctx, actor, {
+        entity_type: "enrichment_trigger:force_unstick",
+        entity_id: "bulk",
+        action: "bulk_force_unstick",
+        detail: `${why} — ${unstuck} of ${scanned} in-flight runs marked failed`,
+      });
+    }
+    return { unstuck, scanned, remaining };
+  },
+});
+
+/** Acknowledge a failed/flagged run: mark it handled so it clears from Needs
+ *  Attention WITHOUT re-running it. Distinct from re-enrich. */
+export const acknowledgeRun = mutation({
+  args: { token: v.string(), reason: v.string(), runId: v.id("enrichment_runs") },
+  handler: async (ctx, { token, reason, runId }): Promise<{ ok: true }> => {
+    const actor = await requireDirector(ctx, token, "data.trigger");
+    const why = requireReason(reason);
+    const run = await ctx.db.get(runId);
+    if (!run) throw new Error("Run not found.");
+    await ctx.db.patch(runId, {
+      reviewed_at: Date.now(),
+      reviewed_by: actor.name,
+      review_note: why,
+    });
+    await logAudit(ctx, actor, {
+      entity_type: "enrichment_run",
+      entity_id: String(runId),
+      action: "acknowledge",
+      detail: `${why} — was '${run.status}'`,
+    });
+    return { ok: true };
   },
 });
 

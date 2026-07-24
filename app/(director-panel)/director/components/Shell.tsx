@@ -28,6 +28,7 @@ const NAV_GROUPS: NavGroup[] = [
   { section:'Catalog', items: [
     { id:'cars',         label:'Cars',            Icon:IconCar },
     { id:'configs',      label:'Vehicle configs', Icon:IconSettings },
+    { id:'enrichment',   label:'Enrichment',      Icon:IconRefresh },
     { id:'pricing',      label:'Pricing & tiers', Icon:IconBolt },
     { id:'serviceParts', label:'Service Parts',   Icon:IconTag },
     { id:'repairpalLabor', label:'RepairPal & Labor', Icon:IconClock },

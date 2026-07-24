@@ -828,6 +828,12 @@ export default defineSchema({
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
     created_at: v.optional(v.number()),
+    // Manual triage of a failed/flagged run from the Enrichment Console's Needs
+    // Attention rail. Acknowledging clears the run without re-running it —
+    // distinct from a fresh re-enrich. Written by directorEnrichment.acknowledgeRun.
+    reviewed_at: v.optional(v.number()),
+    reviewed_by: v.optional(v.string()),
+    review_note: v.optional(v.string()),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])
     .index("by_status", ["status"])

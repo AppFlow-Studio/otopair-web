@@ -32,7 +32,91 @@ function useContainerWidth(fallback = 800) {
  * - BarRow      — horizontal "X of Y" bar for leaderboards
  * - StatCard    — metric tile with delta chip + optional sparkline
  * - DeltaChip   — ▲ +12.3% / ▼ −4.1% pill
+ * - InfoTip     — hover/focus "i" popover for explaining a metric
+ * - StackedBars — daily bar chart with a per-status segment stack
  */
+
+// ---------------------------------------------------------------------------
+// InfoIcon + InfoTip — accessible hover/focus/tap popover. No deps; matches the
+// inline-style system. Drops into StatCard's `accent` slot or a Panel title.
+// ---------------------------------------------------------------------------
+
+export const InfoIcon = ({ size = 13, color = 'var(--slate-400)' }: { size?: number; color?: string }) => (
+  <span aria-hidden style={{
+    display:'inline-flex', alignItems:'center', justifyContent:'center', width:size, height:size,
+    borderRadius:999, border:`1px solid ${color}`, color, fontSize:Math.round(size * 0.72),
+    fontWeight:700, fontStyle:'italic', fontFamily:'Georgia, serif', lineHeight:1, cursor:'help',
+  }}>i</span>
+)
+
+export const InfoTip = ({
+  content, children, side = 'top', width = 240, label = 'More info',
+}: {
+  content: ReactNode
+  children?: ReactNode
+  side?: 'top' | 'bottom' | 'left' | 'right'
+  width?: number
+  label?: string
+}) => {
+  const [open, setOpen] = useState(false)
+  const pos: CSSProperties =
+    side === 'bottom' ? { top: '130%', left: '50%', transform: 'translateX(-50%)' }
+    : side === 'left' ? { right: '130%', top: '50%', transform: 'translateY(-50%)' }
+    : side === 'right' ? { left: '130%', top: '50%', transform: 'translateY(-50%)' }
+    : { bottom: '130%', left: '50%', transform: 'translateX(-50%)' }
+  return (
+    <span
+      role="button" tabIndex={0} aria-label={label}
+      onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)} onBlur={() => setOpen(false)}
+      onClick={(e) => { e.stopPropagation(); setOpen(o => !o) }}
+      onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false) }}
+      style={{ position:'relative', display:'inline-flex', alignItems:'center', outline:'none', verticalAlign:'middle' }}>
+      {children ?? <InfoIcon />}
+      {open && (
+        <span role="tooltip" style={{
+          position:'absolute', ...pos, width, zIndex:50, background:'#fff',
+          border:'1px solid var(--slate-200)', borderRadius:8, padding:'8px 10px',
+          fontSize:12, fontWeight:400, lineHeight:1.5, color:'var(--slate-600)', textAlign:'left',
+          textTransform:'none', letterSpacing:'normal', boxShadow:'0 4px 12px rgba(15,23,42,0.10)',
+          pointerEvents:'none', whiteSpace:'normal',
+        }}>{content}</span>
+      )}
+    </span>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// denseDailySeries — pure gap-filler. Sparse per-day rows (portal_stats /
+// overview.daily only carry days that had data) get expanded to a contiguous
+// [today-days+1 … today] array so index-positioned bar charts align across
+// panels and missing days render as real gaps, not shifted bars.
+// ---------------------------------------------------------------------------
+
+export function denseDailySeries<T>({
+  days, rows, dateOf, zero, today,
+}: {
+  days: number
+  rows: T[]
+  dateOf: (r: T) => string        // 'YYYY-MM-DD'
+  zero: (date: string) => T       // synthesize an empty row for a missing day
+  today?: string                  // 'YYYY-MM-DD' anchor; defaults to the latest present row / now
+}): T[] {
+  const byDate = new Map<string, T>()
+  for (const r of rows) byDate.set(dateOf(r), r)
+  // Anchor: explicit override, else the max present date, else today (UTC).
+  const anchor = today
+    ?? (rows.length ? [...byDate.keys()].sort().at(-1)! : new Date().toISOString().slice(0, 10))
+  const end = new Date(`${anchor}T00:00:00Z`)
+  const out: T[] = []
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(end)
+    d.setUTCDate(d.getUTCDate() - i)
+    const key = d.toISOString().slice(0, 10)
+    out.push(byDate.get(key) ?? zero(key))
+  }
+  return out
+}
 
 // ---------------------------------------------------------------------------
 // Sparkline (area + line)
@@ -289,14 +373,18 @@ export const StatCard = ({
 // ---------------------------------------------------------------------------
 
 export const DailyBars = ({
-  data, color = 'var(--blue-300, #93C5FD)', height = 120, valueKey = 'value', labelKey = 'label',
+  data, color = 'var(--blue-300, #93C5FD)', height = 120, valueKey = 'value', labelKey = 'label', tooltip,
 }: {
   data: Array<Record<string, unknown>> | undefined
   color?: string
   height?: number
   valueKey?: string
   labelKey?: string
+  // When supplied, hovering a bar renders a real hover card instead of the
+  // native title="" tooltip. Return null to fall back to the title for a bar.
+  tooltip?: (row: Record<string, unknown>, i: number) => ReactNode
 }) => {
+  const [hover, setHover] = useState<number | null>(null)
   if (data === undefined) return <div style={{ height, background:'var(--slate-50)', borderRadius:8 }} />
   if (data.length === 0) return <div style={{ height, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--slate-400)', fontSize:12 }}>No data.</div>
   const vals = data.map(d => Number(d[valueKey] ?? 0))
@@ -307,21 +395,156 @@ export const DailyBars = ({
   const tickIdxs = new Set(Array.from({ length: tickCount }, (_, i) => Math.round((i / (tickCount - 1)) * (n - 1))))
   return (
     <div>
-      <div style={{ display:'flex', alignItems:'flex-end', gap:2, height:barH }}>
+      <div style={{ position:'relative', display:'flex', alignItems:'flex-end', gap:2, height:barH }}
+        onMouseLeave={() => setHover(null)}>
         {data.map((d, i) => {
           const v = Number(d[valueKey] ?? 0)
           const h = Math.max(v > 0 ? 2 : 0, (v / max) * barH)
           const label = String(d[labelKey] ?? '')
           return (
-            <div key={i} title={`${label}: ${v}`} style={{ flex:1, height:h, minWidth:2, background:color, borderRadius:'2px 2px 0 0', alignSelf:'flex-end' }} />
+            <div key={i} onMouseEnter={() => setHover(i)}
+              title={tooltip ? undefined : `${label}: ${v}`}
+              style={{ flex:1, height:h, minWidth:2, background:color, borderRadius:'2px 2px 0 0', alignSelf:'flex-end',
+                opacity: hover != null && hover !== i ? 0.55 : 1, transition:'opacity 100ms' }} />
           )
         })}
+        {tooltip && hover != null && tooltip(data[hover], hover) && (
+          <div style={{ position:'absolute', bottom:'100%', marginBottom:6,
+            left:`${((hover + 0.5) / n) * 100}%`, transform:'translateX(-50%)',
+            background:'#fff', border:'1px solid var(--slate-200)', borderRadius:8, padding:'6px 9px',
+            fontSize:11, lineHeight:1.5, color:'var(--slate-700)', whiteSpace:'nowrap', zIndex:20,
+            boxShadow:'0 4px 12px rgba(15,23,42,0.10)', pointerEvents:'none' }}>
+            {tooltip(data[hover], hover)}
+          </div>
+        )}
       </div>
       <div style={{ display:'flex', gap:2, marginTop:6, fontSize:10, color:'var(--slate-400)' }}>
         {data.map((d, i) => (
           <span key={i} style={{ flex:1, textAlign:'center', whiteSpace:'nowrap', overflow:'hidden' }}>
             {tickIdxs.has(i) ? String(d[labelKey] ?? '') : ''}
           </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// StackedBars — daily bars split into stacked segments (e.g. run-status
+// composition per day). Shares DailyBars' sparse tick axis + hover-card layer,
+// with an inline legend.
+// ---------------------------------------------------------------------------
+
+export const StackedBars = ({
+  data, segments, labelKey = 'label', height = 160, tooltip,
+}: {
+  data: Array<Record<string, unknown>> | undefined
+  segments: { key: string; color: string; label: string }[]
+  labelKey?: string
+  height?: number
+  tooltip?: (row: Record<string, unknown>, i: number) => ReactNode
+}) => {
+  const [hover, setHover] = useState<number | null>(null)
+  if (data === undefined) return <div style={{ height, background:'var(--slate-50)', borderRadius:8 }} />
+  if (data.length === 0) return <div style={{ height, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--slate-400)', fontSize:12 }}>No data.</div>
+  const totals = data.map(d => segments.reduce((s, seg) => s + Number(d[seg.key] ?? 0), 0))
+  const max = Math.max(...totals, 1)
+  const barH = height - 40
+  const n = data.length
+  const tickCount = Math.max(2, Math.min(6, Math.floor(n / 8)))
+  const tickIdxs = new Set(Array.from({ length: tickCount }, (_, i) => Math.round((i / (tickCount - 1)) * (n - 1))))
+  return (
+    <div>
+      <div style={{ position:'relative', display:'flex', alignItems:'flex-end', gap:2, height:barH }}
+        onMouseLeave={() => setHover(null)}>
+        {data.map((d, i) => {
+          const total = totals[i]
+          const colH = Math.max(total > 0 ? 2 : 0, (total / max) * barH)
+          return (
+            <div key={i} onMouseEnter={() => setHover(i)}
+              style={{ flex:1, minWidth:2, height:colH, display:'flex', flexDirection:'column',
+                alignSelf:'flex-end', borderRadius:'2px 2px 0 0', overflow:'hidden',
+                opacity: hover != null && hover !== i ? 0.55 : 1, transition:'opacity 100ms' }}>
+              {segments.map(seg => {
+                const v = Number(d[seg.key] ?? 0)
+                if (v <= 0 || total <= 0) return null
+                return <div key={seg.key} style={{ height:`${(v / total) * 100}%`, background:seg.color }} />
+              })}
+            </div>
+          )
+        })}
+        {tooltip && hover != null && (
+          <div style={{ position:'absolute', bottom:'100%', marginBottom:6,
+            left:`${((hover + 0.5) / n) * 100}%`, transform:'translateX(-50%)',
+            background:'#fff', border:'1px solid var(--slate-200)', borderRadius:8, padding:'6px 9px',
+            fontSize:11, lineHeight:1.5, color:'var(--slate-700)', whiteSpace:'nowrap', zIndex:20,
+            boxShadow:'0 4px 12px rgba(15,23,42,0.10)', pointerEvents:'none' }}>
+            {tooltip(data[hover], hover)}
+          </div>
+        )}
+      </div>
+      <div style={{ display:'flex', gap:2, marginTop:6, fontSize:10, color:'var(--slate-400)' }}>
+        {data.map((d, i) => (
+          <span key={i} style={{ flex:1, textAlign:'center', whiteSpace:'nowrap', overflow:'hidden' }}>
+            {tickIdxs.has(i) ? String(d[labelKey] ?? '') : ''}
+          </span>
+        ))}
+      </div>
+      <div style={{ display:'flex', flexWrap:'wrap', gap:'4px 14px', marginTop:10, fontSize:11, color:'var(--slate-500)' }}>
+        {segments.map(seg => (
+          <span key={seg.key} style={{ display:'inline-flex', alignItems:'center', gap:5 }}>
+            <span style={{ width:9, height:9, borderRadius:2, background:seg.color }} />
+            {seg.label}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Histogram — vertical distribution bars with a completion-gate line. Bars at
+// or past the gate render green; those before it blue. Used by Flags & Quality
+// for the fill-rate / quotability distributions.
+// ---------------------------------------------------------------------------
+
+export const Histogram = ({
+  bins, gateLabel, height = 140,
+}: {
+  bins: Array<{ label: string; count: number; pass: boolean }>
+  gateLabel?: string
+  height?: number
+}) => {
+  if (!bins || bins.length === 0) {
+    return <div style={{ height, display:'flex', alignItems:'center', justifyContent:'center', color:'var(--slate-400)', fontSize:12 }}>No data.</div>
+  }
+  const max = Math.max(...bins.map(b => b.count), 1)
+  const barH = height - 34
+  const firstPass = bins.findIndex(b => b.pass)
+  return (
+    <div style={{ position:'relative' }}>
+      {firstPass > 0 && (
+        <div style={{ position:'absolute', top:0, bottom:22, left:`${(firstPass / bins.length) * 100}%`, width:0, borderLeft:'2px dashed var(--slate-300)', zIndex:1 }}>
+          {gateLabel && (
+            <span className="mono" style={{ position:'absolute', top:-1, left:5, fontSize:10, fontWeight:600, color:'var(--slate-400)', whiteSpace:'nowrap' }}>{gateLabel}</span>
+          )}
+        </div>
+      )}
+      <div style={{ display:'flex', alignItems:'flex-end', gap:6, height:barH }}>
+        {bins.map((b, i) => {
+          const h = Math.max(b.count > 0 ? 3 : 0, (b.count / max) * (barH - 14))
+          const color = b.pass ? 'var(--green-600)' : 'var(--blue-400, #60A5FA)'
+          return (
+            <div key={i} style={{ flex:1, display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'flex-end', gap:4 }}>
+              <span className="mono" style={{ fontSize:10, color:'var(--slate-400)' }}>{b.count}</span>
+              <div title={`${b.label}: ${b.count}`} style={{ width:'68%', height:h, minHeight: b.count > 0 ? 3 : 0, background:color, borderRadius:'3px 3px 0 0' }} />
+            </div>
+          )
+        })}
+      </div>
+      <div style={{ display:'flex', gap:6, marginTop:6, fontSize:10, color:'var(--slate-400)' }}>
+        {bins.map((b, i) => (
+          <span key={i} style={{ flex:1, textAlign:'center', whiteSpace:'nowrap', overflow:'hidden' }}>{b.label}</span>
         ))}
       </div>
     </div>

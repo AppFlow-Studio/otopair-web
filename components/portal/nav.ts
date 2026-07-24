@@ -114,10 +114,6 @@ export const NAV: Record<PortalId, NavGroup[]> = {
       ],
     },
     {
-      label: "Enrichment",
-      items: [{ label: "Enrichment Console", href: "/director/data/enrichment" }],
-    },
-    {
       label: "Pricing & Labor",
       items: [
         { label: "Labor Times", href: "/director/data/labor" },

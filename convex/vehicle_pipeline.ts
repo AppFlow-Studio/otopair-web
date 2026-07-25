@@ -24,6 +24,7 @@ import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
 import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
+import { acceptNormalizedTrim } from "./vehicleEnrichment/identityResolution";
 import { parseGvwrUpperLbs } from "./vehicleEnrichment/validation/sanityChecks";
 import { assembleVariantFingerprint, type TransmissionFamily } from "./vehicleEnrichment/variantFingerprint";
 import { resolveFuelClass } from "./vehicleEnrichment/fuelTypeResolver";
@@ -439,7 +440,25 @@ export const processVin = internalAction({
         });
         if (normalized) {
           if (normalized.model) finalModel = normalized.model;
-          if (normalized.trim) finalTrim = normalized.trim;
+          // Round 8 (batch-10): accept the LLM's trim only when it overlaps the
+          // decode evidence — the unconditional override stored a Lariat F-150
+          // as "FX4 SuperCrew" and a 745Li as "745i" (trims no decoder produced).
+          if (normalized.trim) {
+            if (
+              acceptNormalizedTrim(normalized.trim, [
+                merged.trim,
+                merged.trim2,
+                merged.series,
+                merged.series2,
+              ])
+            ) {
+              finalTrim = normalized.trim;
+            } else {
+              console.log(
+                `[decode] Normalizer trim "${normalized.trim}" rejected — no token overlap with decode evidence (kept "${finalTrim}")`,
+              );
+            }
+          }
           if (normalized.engine_code && !vdbCode && !isSyntheticEngineCode(normalized.engine_code)) {
             finalEngineCode = normalized.engine_code;
           }

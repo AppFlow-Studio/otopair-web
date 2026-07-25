@@ -8,11 +8,12 @@ import { useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
-import { Button, Input, MicroH } from '../../Primitives'
+import { Badge, Button, Input, MicroH } from '../../Primitives'
 import { IconSearch } from '../../Primitives'
 import {
   Panel, Empty, TableSkeleton, TableWrap, th, td, thRight, tdRight,
-  SkeletonBlock, StatusPill, fmtPct, fmtCost, fmtDuration, timeAgo, fmtWhen, type OpenTrigger,
+  SkeletonBlock, StatusPill, SourceChip, SourceTypeBadge,
+  fmtPct, fmtCost, fmtDuration, fmtNum, timeAgo, fmtWhen, type OpenTrigger,
 } from './helpers'
 import { RunTrace } from './RunTrace'
 
@@ -104,8 +105,8 @@ export function DeepDiveTab({ token, selected, onSelect, openTrigger, focusRunId
   const runs = useQuery(api.directorEnrichment.runsForConfig, configId ? { token, vehicleConfigId: configId } : 'skip')
   const parts = useQuery(api.directorEnrichment.partsForConfig, configId ? { token, vehicleConfigId: configId } : 'skip')
   const vins = useQuery(api.directorEnrichment.vinsForConfig, configId ? { token, vehicleConfigId: configId } : 'skip')
+  const intervals = useQuery(api.directorEnrichment.intervalsForConfig, configId ? { token, vehicleConfigId: configId } : 'skip')
   const latestRunId = ov?.latestRun?.id ?? null
-  const evidence = useQuery(api.directorEnrichment.evidenceForRun, latestRunId ? { token, enrichmentRunId: latestRunId } : 'skip')
 
   // A flag→run drill-down seeds the trace selection so the timeline + RunTrace
   // open on that exact run. The tab remounts on each entry (conditional render
@@ -114,6 +115,15 @@ export function DeepDiveTab({ token, selected, onSelect, openTrigger, focusRunId
     focusRunId ? (focusRunId as Id<'enrichment_runs'>) : null,
   )
   const activeTraceRunId = traceRunId ?? latestRunId
+
+  // Evidence follows the run selected in the timeline (was: always the latest
+  // run). "Current best" swaps in the config-scoped latest-per-field view.
+  const [evidenceView, setEvidenceView] = useState<'run' | 'best'>('run')
+  const runEvidence = useQuery(api.directorEnrichment.evidenceForRun,
+    evidenceView === 'run' && activeTraceRunId ? { token, enrichmentRunId: activeTraceRunId } : 'skip')
+  const bestEvidence = useQuery(api.directorEnrichment.evidenceForConfig,
+    evidenceView === 'best' && configId ? { token, vehicleConfigId: configId } : 'skip')
+  const evidence = evidenceView === 'run' ? runEvidence : bestEvidence
   const vin = vins && vins.length > 0 ? vins[0].vin : null
 
   return (
@@ -212,7 +222,7 @@ export function DeepDiveTab({ token, selected, onSelect, openTrigger, focusRunId
               <TableWrap>
                 <thead><tr>
                   <th style={th}>OEM #</th><th style={th}>Part</th><th style={th}>Role</th>
-                  <th style={thRight}>Conf.</th><th style={thRight}>Sources</th><th style={thRight}>Price</th>
+                  <th style={thRight}>Conf.</th><th style={th}>Source</th><th style={thRight}>Price</th>
                 </tr></thead>
                 <tbody>
                   {parts.map(p => (
@@ -221,7 +231,13 @@ export function DeepDiveTab({ token, selected, onSelect, openTrigger, focusRunId
                       <td style={{ ...td, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</td>
                       <td style={{ ...td, color: 'var(--slate-500)' }}>{p.serviceRole ?? '—'}</td>
                       <td style={tdRight}>{fmtPct(p.confidence)}</td>
-                      <td style={{ ...tdRight, color: 'var(--slate-500)' }}>{p.sourceCount ?? '—'}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                        <SourceChip url={p.source?.url ?? null} domain={p.source?.domain ?? null} />
+                        {p.sourceDomains.length > 1 && (
+                          <span title={p.sourceDomains.join(', ')} style={{ marginLeft: 6, fontSize: 11, color: 'var(--slate-400)' }}>×{p.sourceDomains.length}</span>
+                        )}
+                        {p.source?.type && <span style={{ marginLeft: 6 }}><SourceTypeBadge type={p.source.type} /></span>}
+                      </td>
                       <td style={tdRight}>{p.price != null ? fmtCost(p.price) : <span style={{ color: 'var(--red-600)' }}>no price</span>}</td>
                     </tr>
                   ))}
@@ -230,19 +246,69 @@ export function DeepDiveTab({ token, selected, onSelect, openTrigger, focusRunId
             )}
           </Panel>
 
-          <Panel title="Evidence" sub={latestRunId ? 'latest run' : undefined}>
-            {!latestRunId ? <Empty>No run to show evidence for.</Empty> :
-              evidence === undefined ? <TableSkeleton /> : evidence.length === 0 ? <Empty>No evidence recorded for the latest run.</Empty> : (
+          <Panel title="OEM intervals" sub={intervals ? String(intervals.length) : undefined}>
+            {intervals === undefined ? <TableSkeleton /> : intervals.length === 0 ? <Empty>No service intervals for this config.</Empty> : (
+              <TableWrap>
+                <thead><tr>
+                  <th style={th}>Service</th><th style={th}>Interval</th><th style={thRight}>Conf.</th>
+                  <th style={thRight}>Sources</th><th style={th}>Source</th>
+                </tr></thead>
+                <tbody>
+                  {intervals.map((it, i) => (
+                    <tr key={i}>
+                      <td style={td}>
+                        {it.service}
+                        {it.mechanicVerified && <span title="mechanic verified" style={{ marginLeft: 6, color: 'var(--green-600)' }}>✓</span>}
+                      </td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                        {it.miles != null || it.months != null
+                          ? <span className="mono">{[it.miles != null ? `${fmtNum(it.miles)} mi` : null, it.months != null ? `${it.months} mo` : null].filter(Boolean).join(' / ')}</span>
+                          : it.status ? <StatusPill status={it.status} /> : '—'}
+                        {(it.status === 'estimated' || it.dataQuality === 'default_fallback') && (it.miles != null || it.months != null) && (
+                          <span style={{ marginLeft: 6 }} title="Fallback estimate — not an OEM schedule"><Badge tone="orange">est.</Badge></span>
+                        )}
+                      </td>
+                      <td style={tdRight}>{fmtPct(it.confidence)}</td>
+                      <td style={{ ...tdRight, color: 'var(--slate-500)' }}>{it.sourceCount ?? '—'}</td>
+                      <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                        <SourceChip url={it.source?.url ?? null} domain={it.source?.domain ?? null} />
+                        {it.source?.type && <span style={{ marginLeft: 6 }}><SourceTypeBadge type={it.source.type} /></span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </TableWrap>
+            )}
+          </Panel>
+
+          <Panel title="Evidence" sub={evidenceView === 'run' ? 'selected run' : 'current best per field'}
+            right={
+              <div style={{ display: 'flex', gap: 4 }}>
+                {(['run', 'best'] as const).map(v => (
+                  <button key={v} onClick={() => setEvidenceView(v)}
+                    style={{ padding: '4px 10px', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 12, fontWeight: 500, fontFamily: 'inherit',
+                      background: evidenceView === v ? 'var(--slate-900)' : 'var(--slate-100)', color: evidenceView === v ? '#fff' : 'var(--slate-600)' }}>
+                    {v === 'run' ? 'This run' : 'Current best'}
+                  </button>
+                ))}
+              </div>
+            }>
+            {evidenceView === 'run' && !activeTraceRunId ? <Empty>No run to show evidence for.</Empty> :
+              evidence === undefined ? <TableSkeleton /> : evidence.length === 0 ? <Empty>No evidence recorded{evidenceView === 'run' ? ' for this run' : ''}.</Empty> : (
                 <TableWrap>
                   <thead><tr>
-                    <th style={th}>Field</th><th style={th}>Value</th><th style={th}>Source</th><th style={thRight}>Conf.</th>
+                    <th style={th}>Field</th><th style={th}>Value</th><th style={th}>Source</th><th style={th}>Type</th><th style={thRight}>Conf.</th>
                   </tr></thead>
                   <tbody>
-                    {evidence.slice(0, 100).map((e, i) => (
+                    {evidence.slice(0, 150).map((e, i) => (
                       <tr key={i}>
-                        <td style={td} className="mono">{e.field}</td>
+                        <td style={td} className="mono">
+                          {evidenceView === 'best' && <span style={{ color: 'var(--slate-400)' }}>{e.entityType}·</span>}
+                          {e.field}
+                        </td>
                         <td style={{ ...td, maxWidth: 220, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.value ?? '—'}</td>
-                        <td style={{ ...td, color: 'var(--slate-500)' }}>{e.sourceDomain ?? '—'}</td>
+                        <td style={{ ...td, whiteSpace: 'nowrap' }}><SourceChip url={e.sourceUrl} domain={e.sourceDomain} /></td>
+                        <td style={td}><SourceTypeBadge type={e.sourceType} /></td>
                         <td style={tdRight}>{fmtPct(e.confidence)}</td>
                       </tr>
                     ))}

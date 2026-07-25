@@ -118,6 +118,7 @@ Work in this order and SEARCH THE WEB:
 
 REFUSE these traps (all are "mismatch" when they contradict the unit's real spec):
 - A newer/older GENERATION of the same family: NS-2 vs NS-3 (Nissan CVT), DEXRON-VI vs DEXRON-ULV (GM), Mercon LV vs Mercon ULV — same brand, wrong generation, wrong fluid.
+- The reverse direction of the generation trap: do NOT demand a NEWER-era fluid on an OLDER unit that never used it. MERCON LV belongs to Ford's 6R80/6F35 era (2009+); the earlier 4R70W/4R75W/4R75E family (2004-2008 F-150 etc.) is specified MERCON V, and MERCON V and LV are NOT interchangeable in either direction. Calling a correct period fluid "mismatch" because a newer spec exists for LATER transmissions is a false positive (a batch-10 verifier error flagged MERCON V on a 2006 4R75E, expecting LV).
 - A WET-auto fluid in a DRY dual-clutch (or vice-versa): a DPS6/DSG dry-clutch needs a dedicated dry-DCT fluid, NOT Mercon LV / Dexron; a wet DCT needs its own DCT fluid, not a torque-converter ATF.
 - A geared-automatic ATF in a CVT (or a CVT fluid in a geared automatic) — CVT fluid is NOT interchangeable with ATF.
 - When the transmission is built by a different company than the make (e.g. an Allison in a Chevy, a Jatco in a Nissan is still Nissan-spec, but an Aisin/ZF unit follows the unit maker's approved spec), follow the UNIT's approved fluid, not a generic chassis-brand ATF.

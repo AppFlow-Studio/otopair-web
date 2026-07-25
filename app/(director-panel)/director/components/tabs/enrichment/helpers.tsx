@@ -68,6 +68,45 @@ export function StatusPill({ status }: { status: string }) {
   return <Badge tone={statusTone(status)}>{status}</Badge>
 }
 
+// ─── provenance (enrichment_evidence source_type + URL) ──────────────────────
+
+const SOURCE_TONE: Record<string, Tone> = {
+  nhtsa: 'blue',
+  scraped: 'green',
+  web_search: 'yellow',
+  training_data: 'slate',
+  gap_fill: 'orange',
+  consensus_review: 'slate',
+  anomaly_detection: 'red',
+  mechanic: 'green',
+}
+
+export function SourceTypeBadge({ type }: { type: string | null | undefined }) {
+  if (!type) return <span style={{ color: 'var(--slate-400)' }}>—</span>
+  return <Badge tone={SOURCE_TONE[type] ?? 'slate'}>{type.replace(/_/g, ' ')}</Badge>
+}
+
+function hostnameOf(url: string): string | null {
+  try { return new URL(url).hostname.replace(/^www\./, '') } catch { return null }
+}
+
+/** Where a fact came from: clickable domain when a URL exists, plain domain
+ *  otherwise. stopPropagation so it works inside clickable rows. */
+export function SourceChip({ url, domain }: { url: string | null | undefined; domain: string | null | undefined }) {
+  const label = domain ?? (url ? hostnameOf(url) : null)
+  if (url) {
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+        title={url}
+        style={{ fontSize: 12, color: 'var(--blue-600)', textDecoration: 'none', display: 'inline-block',
+          maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', verticalAlign: 'bottom' }}>
+        {label ?? url} ↗
+      </a>
+    )
+  }
+  return <span style={{ fontSize: 12, color: 'var(--slate-500)' }}>{label ?? '—'}</span>
+}
+
 // ─── layout primitives ───────────────────────────────────────────────────────
 
 export function Panel({ title, sub, right, children, style }: {

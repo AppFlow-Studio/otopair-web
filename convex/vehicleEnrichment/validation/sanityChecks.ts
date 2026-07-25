@@ -35,8 +35,11 @@ const SANITY_RULES: SanityRule[] = [
     reason: "Oil capacity outside typical range (3-16 qts)" },
   { field: "oil_capacity_qts", type: "range", min: 1, max: 20, severity: "reject",
     reason: "Oil capacity outside valid range — likely incorrect" },
-  { field: "coolant_capacity_qts", type: "range", min: 4, max: 20, severity: "flag",
-    reason: "Coolant capacity outside typical range (4-20 qts)" },
+  // Flag ceiling 20→22 (round 8, batch-10): a light-duty 5.4L F-150's REAL
+  // owner's-guide capacity is 20.9 qt — full-size gas trucks legitimately
+  // exceed 20 qt without being medium-duty. The reject ceiling is unchanged.
+  { field: "coolant_capacity_qts", type: "range", min: 4, max: 22, severity: "flag",
+    reason: "Coolant capacity outside typical range (4-22 qts)" },
   { field: "coolant_capacity_qts", type: "range", min: 3, max: 24, severity: "reject",
     reason: "Coolant capacity outside valid range (3-24 qts) — likely wrong unit or wrong engine" },
   { field: "diff_fluid_capacity_qts", type: "range", min: 0.5, max: 4, severity: "flag",
@@ -244,6 +247,14 @@ export function getCapacityBand(
     // cooling) was flagged as "outside 4-11 qts". Large 2.5L 4-cyl and hybrid
     // engine loops legitimately reach ~11-12 qt; a genuine liters-as-quarts
     // misread still lands above 13 and flags. The reject ceiling is unchanged.
+    //
+    // Round-8 note (batch-10): the V8 typicalMax was NOT raised to cover the
+    // F-150's real 20.9 qt. Widening to 21 flips decideCapacity's in-band
+    // arbitration so a 2-blog 16.9 cluster outranks an authoritative 13.8 —
+    // re-introducing the batch-6 Silverado L84 wrong-value class. A correct
+    // 20.9 wearing one informational band flag is the cheaper error; the flat
+    // SANITY_RULES flag ceiling was widened to 22 instead (one flag, not two).
+    // Full fix needs a body-class/full-size-truck signal in CapacityBandContext.
     typicalMax: cylinders === 4 ? 13 : 16,
   };
 }
@@ -406,6 +417,37 @@ export function runSanityChecks(
   if (trans && typeof trans.value === "string") {
     const canon = TRANSMISSION_CASE_CANON[trans.value.trim().toLowerCase()];
     if (canon && canon !== trans.value) fields["transmission_type"] = { ...trans, value: canon };
+  }
+
+  // Round 8 (batch-10): flex-fuel claims from decode-only sources are a known
+  // false-positive class — NHTSA carries "E85 Max" as an ENGINE-FAMILY
+  // attribute, so a family that was FFV in some years marks every year (2014
+  // SRX: EPA + owner's manual say gasoline-only; 2012-13 were the FFV years).
+  // FLAG-ONLY (round-6 doctrine): an uncorroborated E85/flex claim gets a flag
+  // + the standard 0.6 confidence cap; a scraped/web-search-sourced claim with
+  // a URL is treated as corroborated and left alone.
+  const fuel = fields["fuel_type"];
+  if (fuel && typeof fuel.value === "string") {
+    const f = fuel.value.toLowerCase();
+    const claimsFlex = f.includes("e85") || f.includes("flex") || f.includes("ethanol");
+    const corroborated =
+      !!fuel.source_url &&
+      (fuel.source_type === "scraped" || fuel.source_type === "web_search");
+    if (claimsFlex && !corroborated) {
+      flags.push({
+        field: "fuel_type",
+        severity: "flag",
+        reason:
+          "flex_fuel_claim_uncorroborated: E85/FFV from decode-only source — NHTSA family-attribute bleed; verify against EPA/owner's manual for this model year",
+        value: String(fuel.value),
+      });
+      fields["fuel_type"] = {
+        ...fuel,
+        flagged: true,
+        flag_reason: "flex_fuel_claim_uncorroborated",
+        confidence: Math.min(fuel.confidence ?? 0.6, 0.6),
+      };
+    }
   }
 
   // Convert fluid-capacity fields to US quarts BEFORE the range rules run. A source

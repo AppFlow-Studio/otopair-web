@@ -626,6 +626,43 @@ export const upsertPartAndFitment = internalMutation({
 
     const config = await ctx.db.get(args.vehicle_config_id);
 
+    // Round 8 (batch-10): a FWD SRX persisted a core-role GL-5 gear-oil
+    // fitment on differential_service — harmless only because the drivetrain
+    // gate suppressed the service downstream. The interval/labor writers
+    // already skip requires_differential services on FWD; the part path had no
+    // equivalent. Reject diff-service consumables when the config positively
+    // has no differential (has_differential === false; unknown fails open).
+    const DIFF_ONLY_SUBCATEGORIES = new Set(["gear_oil", "diff_fluid", "friction_modifier"]);
+    if (
+      (config as any)?.has_differential === false &&
+      DIFF_ONLY_SUBCATEGORIES.has(args.subcategory)
+    ) {
+      console.log(
+        `[v8-parts] REJECTED diff-service part on no-differential config: ${args.oem_part_number} (${args.subcategory})`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "no_differential" as const };
+    }
+
+    // Round 8 (batch-10): an unfindable drain-plug-gasket number persisted
+    // with zero source domains (likely hallucinated — the engine's plug has an
+    // integrated washer). Low-consequence commodity hardware must carry at
+    // least one source domain to be stored; the priced/core roles are covered
+    // by the fitment verifier instead.
+    const COMMODITY_SUBCATEGORIES = new Set([
+      "drain_plug_gasket",
+      "oil_filter_housing_oring",
+      "thermostat_gasket",
+    ]);
+    if (
+      COMMODITY_SUBCATEGORIES.has(args.subcategory) &&
+      !(args.source_domain && args.source_domain.trim())
+    ) {
+      console.log(
+        `[v8-parts] REJECTED sourceless commodity part: ${args.oem_part_number} (${args.subcategory}) — no source_domain`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "commodity_no_source" as const };
+    }
+
     // CHOKE-POINT sanitization: every part write funnels through this mutation
     // (batch1/batch2 pipeline, diagnoseVin backfills, future admin tools), so
     // the cross-make + per-make-format validation runs here regardless of
@@ -2124,7 +2161,12 @@ export const ensureAllServiceIntervals = internalMutation({
         service_id: svc._id,
         interval_miles: defaults?.miles,
         interval_months: isWearItem ? undefined : defaults?.months,
-        status: isOnDemand ? "on_demand" : "scheduled",
+        // Round 8 (batch-10): fallback cadences carried status "scheduled" on
+        // every config — an invented 70k-mi rotor "schedule" was
+        // indistinguishable (by status) from a real OEM interval. "estimated"
+        // is the honest label; data_quality already says default_fallback but
+        // status is what consumers/UI key on.
+        status: isOnDemand ? "on_demand" : "estimated",
         display_string: isOnDemand ? "As needed" : undefined,
         confidence: 0.50, // low confidence — these are fallback defaults
         data_quality: "default_fallback",

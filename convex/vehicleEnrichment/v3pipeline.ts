@@ -35,7 +35,7 @@ import { runSanityChecks, normalizeOilViscosity, aggregateFieldConfidence } from
 import { resolveCapacities } from "./capacityResolver";
 import { validateAllOemParts } from "./validation/oemValidation";
 import { BLOCKED_DOMAINS, isMarketplaceUrl } from "./sourceRegistry";
-import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts, applyFinalizeApplicability, IDENTITY_DEPENDENT_FIELDS } from "./applicabilityRules";
+import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts, applyFinalizeApplicability, applyEpsSuppression, IDENTITY_DEPENDENT_FIELDS } from "./applicabilityRules";
 import { deriveIdentityFromTrim, mergeIdentity } from "./identityResolution";
 import { computeEnrichmentStatus, explainGateDecision } from "./completionGate";
 import { scrapeVehicleSources } from "./scraper";
@@ -63,7 +63,7 @@ import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/
 import { verifyTransFluid, decideTransFluidAction } from "./utils/transFluidVerifier";
 import { reconcileDrivetrain } from "./drivetrainReconcile";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
-import { reconcileTransmissionType } from "./transmissionTypeReconcile";
+import { reconcileTransmissionType, speedsFromTransUnit } from "./transmissionTypeReconcile";
 import { fluidNamesForeignChassisBrand, FLUID_TYPE_TO_PART_FIELD } from "./fluidBrandConsistency";
 import { resolveScrapeRedirect } from "./buildSourceResolver";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
@@ -884,7 +884,7 @@ export function rankGapFillFields(
 }
 
 /** Map interval field prefix to service slug. */
-const INTERVAL_TO_SERVICE: Record<string, string> = {
+export const INTERVAL_TO_SERVICE: Record<string, string> = {
   oil_change: "oil_change",
   spark_plug: "spark_plugs",
   transmission_service: "transmission_service",
@@ -2574,6 +2574,12 @@ async function runPollBatch1Body(
     // Apply applicability rules
     const vPicData = args.vPicData as VehicleIdentity | null;
     fields = applyApplicabilityRules(fields, vPicData);
+    // Round 8: deterministic EPS suppression — a known electric-PS platform
+    // extracted as "hydraulic" shipped a phantom PS-fluid capacity + a
+    // scheduled (unperformable) PS flush on the batch-10 Cobalt.
+    if (applyEpsSuppression(fields, args.make, args.model, args.year)) {
+      console.log(`[v8/_pollBatch1] known EPS platform — power_steering_type forced electric, PS fluid fields suppressed`);
+    }
 
     const filledCount = V4_FIELD_KEYS.filter((k) => fields[k]?.value != null).length;
     console.log(`[v8/_pollBatch1] ${filledCount}/${V4_FIELD_KEYS.length} fields after merge+applicability`);
@@ -3043,6 +3049,9 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       deriveIdentityFromTrim(args.trim),
     );
     allFields = applyApplicabilityRules(allFields, finalIdentity);
+    if (applyEpsSuppression(allFields, args.make, args.model, args.year)) {
+      console.log(`[v8] known EPS platform — power_steering_type forced electric, PS fluid fields suppressed (finalize)`);
+    }
     allFields = applyFinalizeApplicability(allFields);
 
     const sanityFlags = runSanityChecks(allFields, cylinders, {
@@ -3867,6 +3876,11 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               // finalize-scope identity (vPicData is first-action only).
               cylinders: enginePicData?.cylinders ?? undefined,
               engineManufacturer: enginePicData?.engine_manufacturer ?? undefined,
+              // Batch-10: a 5W-20 blend oil product shipped on the 0W-20 MDX —
+              // the verifier refutes fluid products whose grade differs from
+              // the vehicle's stored requirement.
+              oilViscosity:
+                (allFields.oil_viscosity?.value as string | null) ?? undefined,
             },
             toVerify.map((c) => ({
               roleKey: c.roleKey,
@@ -4002,6 +4016,38 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             `[trans-fluid-verify] FLAGGED (not changed) trans_fluid_type "${storedFluid}" — ` +
               `verifier expected "${action.claimedCorrect}" for ${action.suspectUnit} (${action.reason})`,
           );
+        }
+
+        // ── Round 8: speeds-vs-unit reconcile (batch-10 Cobalt) ──────────
+        // NHTSA's transSpeeds can carry the OTHER gearbox's gear count (the
+        // manual's 5 merged onto the resolved 4T45 automatic → "5-speed
+        // automatic", a config that never existed). The verifier names the
+        // specific unit; most units lead with their gear count. Correct only
+        // in the high-precision direction: the fluid verdict was "match"
+        // (unit↔fluid corroborated), the unit encodes a count, and the stored
+        // count differs. Anything weaker is flag-only.
+        const impliedSpeeds = speedsFromTransUnit(verdict.transUnit);
+        const storedSpeeds = (trans?.speeds as number | null) ?? null;
+        if (impliedSpeeds != null && storedSpeeds != null && storedSpeeds !== impliedSpeeds) {
+          if (verdict.verdict === "match") {
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs, {
+              transmission_id: transmissionId,
+              speeds: impliedSpeeds,
+            });
+            transFluidErrors.push(
+              `trans_speeds_reconciled:${verdict.transUnit}:stored=${storedSpeeds}:unit_implies=${impliedSpeeds}`,
+            );
+            console.warn(
+              `[trans-speeds-reconcile] speeds ${storedSpeeds} → ${impliedSpeeds} (unit ${verdict.transUnit}, fluid verdict=match)`,
+            );
+          } else {
+            transFluidErrors.push(
+              `trans_speeds_suspect:${verdict.transUnit ?? "?"}:stored=${storedSpeeds}:unit_implies=${impliedSpeeds}`,
+            );
+            console.warn(
+              `[trans-speeds-reconcile] SUSPECT (not changed): stored ${storedSpeeds} vs unit-implied ${impliedSpeeds} (${verdict.transUnit}, verdict=${verdict.verdict})`,
+            );
+          }
         }
       } catch (e) {
         console.warn("[trans-fluid-verify] pass failed (non-fatal):", e);

@@ -31,8 +31,11 @@ import type { PaginationResult } from "convex/server";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { requireDirector, logAudit } from "./directorGate";
+// Field-key maps reused for the provenance joins (import precedent:
+// priceRefresh.ts imports PART_FIELD_MAP the same way).
+import { PART_FIELD_MAP, INTERVAL_TO_SERVICE } from "./vehicleEnrichment/v3pipeline";
 // Real prompt constants — imported so the Pipeline reference visual never drifts
 // from the code. (batch1c's system prompt lives in the heavier vehicleDatabases
 // module and is summarized inline below rather than imported.)
@@ -655,19 +658,54 @@ export type ReviewRow = {
   id: Id<"review_queue">;
   sourceStream: string;
   sourceId: string;
+  entityType: string;
   status: string;
   priority: string;
   title: string;
   vin: string | null;
+  assigneeName: string | null; // who claimed it (resolved), null while open
+  configId: Id<"vehicle_configs"> | null; // set when the item traces to a config
+  configKey: string | null;
   createdAt: number;
 };
 
 /** Open + claimed review items, bounded by_status. NOT manual_review_queue.list
- *  (that .collect()s all of enrichment_runs). */
+ *  (that .collect()s all of enrichment_runs). Resolves the assignee name and the
+ *  originating config (via the source run / config) so the console can show
+ *  where each item came from and jump straight to its Deep-Dive. */
 export const reviewQueueOpen = query({
   args: { token: v.string() },
   handler: async (ctx, { token }): Promise<ReviewRow[]> => {
     await requireDirector(ctx, token);
+    const keyFor = await configKeyResolver(ctx);
+    const nameCache = new Map<string, string | null>();
+    const nameFor = async (id: Id<"director_users">): Promise<string | null> => {
+      const k = String(id);
+      if (!nameCache.has(k)) {
+        const u = await ctx.db.get(id);
+        nameCache.set(k, u?.name ?? null);
+      }
+      return nameCache.get(k) ?? null;
+    };
+    // Trace an item to its config: enrichment_run → its config, or a direct
+    // vehicle_config entity. Other entity types (mechanic_verification, …) don't
+    // resolve and simply stay non-deep-divable.
+    const configFor = async (
+      entityType: string,
+      entityId: string,
+    ): Promise<Id<"vehicle_configs"> | null> => {
+      try {
+        if (entityType === "vehicle_config") return entityId as Id<"vehicle_configs">;
+        if (entityType === "enrichment_run") {
+          const run = await ctx.db.get(entityId as Id<"enrichment_runs">);
+          return run?.vehicle_config_id ?? null;
+        }
+      } catch {
+        return null;
+      }
+      return null;
+    };
+
     const out: ReviewRow[] = [];
     for (const status of ["open", "claimed"] as const) {
       const rows = await ctx.db
@@ -676,14 +714,19 @@ export const reviewQueueOpen = query({
         .order("desc")
         .take(100);
       for (const r of rows) {
+        const configId = await configFor(r.entity_type, r.entity_id);
         out.push({
           id: r._id,
           sourceStream: r.source_stream,
           sourceId: r.source_id,
+          entityType: r.entity_type,
           status: r.status,
           priority: r.priority,
           title: r.title,
           vin: r.vin ?? null,
+          assigneeName: r.assignee ? await nameFor(r.assignee) : null,
+          configId,
+          configKey: configId ? await keyFor(configId) : null,
           createdAt: r.created_at,
         });
       }
@@ -845,13 +888,35 @@ export type ConfigPartRow = {
   serviceRole: string | null;
   confidence: number | null;
   sourceCount: number | null;
+  sourceDomains: string[]; // distinct corroborating domains from the fitment
+  // Latest evidence for this part's field (full URL + source_type) or null for
+  // legacy parts with no evidence match.
+  source: { url: string | null; domain: string | null; type: string | null; confidence: number | null } | null;
   price: number | null; // lowest known SKU price
 };
+
+/** subcategory → pipeline field key (oil_filter → oil_filter_oem…), reversed
+ *  from PART_FIELD_MAP so a fitment can find its evidence row. */
+const SUBCATEGORY_TO_FIELD: Record<string, string> = (() => {
+  const out: Record<string, string> = {};
+  for (const [field, spec] of Object.entries(PART_FIELD_MAP)) out[spec.subcategory] = field;
+  return out;
+})();
+
+const normalizePartNumber = (s: string) => s.replace(/[^a-z0-9]/gi, "").toUpperCase();
 
 export const partsForConfig = query({
   args: { token: v.string(), vehicleConfigId: v.id("vehicle_configs") },
   handler: async (ctx, { token, vehicleConfigId }): Promise<ConfigPartRow[]> => {
     await requireDirector(ctx, token);
+    const cfg = await ctx.db.get(vehicleConfigId);
+    const evidence = cfg ? await latestEvidenceMapForConfig(ctx, cfg) : new Map<string, EvidenceDetail>();
+    // Fallback lookup for legacy parts with missing/renamed subcategory: match
+    // the normalized part number against *_oem evidence values.
+    const byNormalizedValue = new Map<string, EvidenceDetail>();
+    for (const ev of evidence.values()) {
+      if (ev.field.endsWith("_oem") && ev.value) byNormalizedValue.set(normalizePartNumber(ev.value), ev);
+    }
     const fitments = await ctx.db
       .query("part_fitments")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", vehicleConfigId))
@@ -866,6 +931,10 @@ export const partsForConfig = query({
         .withIndex("by_part", (q) => q.eq("part_id", f.part_id))
         .take(20);
       const price = prices.length ? Math.min(...prices.map((p) => p.price)) : null;
+      const fieldKey = part?.subcategory ? SUBCATEGORY_TO_FIELD[part.subcategory] : undefined;
+      const ev =
+        (fieldKey ? evidence.get(fieldKey) : undefined) ??
+        (part?.oem_part_number ? byNormalizedValue.get(normalizePartNumber(part.oem_part_number)) : undefined);
       out.push({
         fitmentId: f._id,
         oemNumber: part?.oem_part_number ?? "?",
@@ -875,6 +944,8 @@ export const partsForConfig = query({
         serviceRole: f.service_role ?? null, // NOTE: field is service_role, not role
         confidence: f.confidence ?? null,
         sourceCount: f.source_count ?? null,
+        sourceDomains: f.source_domains ?? [],
+        source: ev ? { url: ev.sourceUrl, domain: ev.sourceDomain, type: ev.sourceType, confidence: ev.confidence } : null,
         price,
       });
     }
@@ -885,7 +956,10 @@ export const partsForConfig = query({
 export type EvidenceRow = {
   field: string;
   value: string | null;
+  sourceUrl: string | null;
   sourceDomain: string | null;
+  sourceType: string | null;
+  entityType: string;
   confidence: number | null;
 };
 
@@ -903,9 +977,171 @@ export const evidenceForRun = query({
     return rows.map((e) => ({
       field: e.field_name,
       value: e.observed_value == null ? null : String(e.observed_value),
+      sourceUrl: e.source_url ?? null,
       sourceDomain: e.source_domain ?? null,
+      sourceType: e.source_type ?? null,
+      entityType: e.entity_type,
       confidence: e.confidence ?? null,
     }));
+  },
+});
+
+// ─── Config-scoped provenance (latest evidence per field) ────────────────────
+
+export type EvidenceDetail = {
+  field: string;
+  value: string | null;
+  sourceUrl: string | null;
+  sourceDomain: string | null;
+  sourceType: string | null;
+  confidence: number | null;
+  entityType: string;
+  observedAt: number | null;
+  runId: Id<"enrichment_runs"> | null;
+};
+
+/** Latest evidence row per field_name for one config. Evidence is keyed across
+ *  several (entity_type, entity_id) pairs (engine/transmission by their doc id,
+ *  everything else by config id — see v3pipeline getEntityType), so this unions
+ *  bounded by_entity index reads. is_latest is NOT trusted: addEvidenceBatch
+ *  stamps it true on every run and never retires prior rows — latest = max
+ *  observed_at (fallback _creationTime). */
+async function latestEvidenceMapForConfig(
+  ctx: QueryCtx,
+  cfg: Doc<"vehicle_configs">,
+): Promise<Map<string, EvidenceDetail>> {
+  const cfgId = String(cfg._id);
+  const pairs: Array<[string, string]> = [];
+  if (cfg.engine_id) pairs.push(["engine", String(cfg.engine_id)]);
+  if (cfg.transmission_id) pairs.push(["transmission", String(cfg.transmission_id)]);
+  for (const t of [
+    "transmission", // legacy config-keyed rows (pipeline falls back when transmissionId null)
+    "trim_spec",
+    "part",
+    "interval",
+    "drivetrain_config",
+    "vehicle_config",
+  ]) {
+    pairs.push([t, cfgId]);
+  }
+  const best = new Map<string, { detail: EvidenceDetail; ts: number }>();
+  for (const [entityType, entityId] of pairs) {
+    const rows = await ctx.db
+      .query("enrichment_evidence")
+      .withIndex("by_entity", (q) => q.eq("entity_type", entityType).eq("entity_id", entityId))
+      .order("desc")
+      .take(400);
+    for (const e of rows) {
+      const ts = e.observed_at ?? e._creationTime;
+      const cur = best.get(e.field_name);
+      if (cur && cur.ts >= ts) continue;
+      best.set(e.field_name, {
+        ts,
+        detail: {
+          field: e.field_name,
+          value: e.observed_value == null ? null : String(e.observed_value),
+          sourceUrl: e.source_url ?? null,
+          sourceDomain: e.source_domain ?? null,
+          sourceType: e.source_type ?? null,
+          confidence: e.confidence ?? null,
+          entityType: e.entity_type,
+          observedAt: e.observed_at ?? null,
+          runId: e.enrichment_run_id ?? null,
+        },
+      });
+    }
+  }
+  const out = new Map<string, EvidenceDetail>();
+  for (const [field, { detail }] of best) out.set(field, detail);
+  return out;
+}
+
+/** Current-best provenance per field for one config ("what does the system
+ *  believe now, and where did it come from"), vs evidenceForRun's per-run
+ *  snapshot. */
+export const evidenceForConfig = query({
+  args: { token: v.string(), vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, { token, vehicleConfigId }): Promise<EvidenceDetail[]> => {
+    await requireDirector(ctx, token);
+    const cfg = await ctx.db.get(vehicleConfigId);
+    if (!cfg) return [];
+    const map = await latestEvidenceMapForConfig(ctx, cfg);
+    return [...map.values()].sort((a, b) => a.field.localeCompare(b.field));
+  },
+});
+
+/** slug → interval field prefixes (filter_replacement ← air_filter +
+ *  cabin_filter, differential_service ← diff_fluid + transfer_case_fluid). */
+const SERVICE_TO_INTERVAL_PREFIXES: Record<string, string[]> = (() => {
+  const out: Record<string, string[]> = {};
+  for (const [prefix, slug] of Object.entries(INTERVAL_TO_SERVICE)) {
+    (out[slug] ??= []).push(prefix);
+  }
+  return out;
+})();
+
+export type ConfigIntervalRow = {
+  service: string;
+  slug: string | null;
+  miles: number | null;
+  months: number | null;
+  status: string | null;
+  displayString: string | null;
+  confidence: number | null;
+  sourceCount: number | null;
+  mechanicVerified: boolean;
+  dataQuality: string | null;
+  source: { url: string | null; domain: string | null; type: string | null; confidence: number | null } | null;
+};
+
+/** OEM service intervals for one config with per-row provenance joined from
+ *  enrichment_evidence via the interval field keys (`${prefix}_miles` /
+ *  `${prefix}_months`). Bounded: ~22 interval rows + the evidence map. */
+export const intervalsForConfig = query({
+  args: { token: v.string(), vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, { token, vehicleConfigId }): Promise<ConfigIntervalRow[]> => {
+    await requireDirector(ctx, token);
+    const cfg = await ctx.db.get(vehicleConfigId);
+    if (!cfg) return [];
+    const [intervals, evidence] = await Promise.all([
+      ctx.db
+        .query("service_intervals")
+        .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", vehicleConfigId))
+        .take(50),
+      latestEvidenceMapForConfig(ctx, cfg),
+    ]);
+    const out: ConfigIntervalRow[] = [];
+    for (const it of intervals) {
+      const svc = await ctx.db.get(it.service_id);
+      const slug = svc?.slug ?? null;
+      let source: ConfigIntervalRow["source"] = null;
+      for (const prefix of slug ? (SERVICE_TO_INTERVAL_PREFIXES[slug] ?? []) : []) {
+        const ev = evidence.get(`${prefix}_miles`) ?? evidence.get(`${prefix}_months`);
+        if (ev) {
+          source = { url: ev.sourceUrl, domain: ev.sourceDomain, type: ev.sourceType, confidence: ev.confidence };
+          break;
+        }
+      }
+      out.push({
+        service: svc?.name ?? slug ?? "?",
+        slug,
+        miles: it.interval_miles ?? null,
+        months: it.interval_months ?? null,
+        status: it.status ?? null,
+        displayString: it.display_string ?? null,
+        confidence: it.confidence ?? null,
+        sourceCount: it.source_count ?? null,
+        mechanicVerified: it.mechanic_verified ?? false,
+        dataQuality: it.data_quality ?? null,
+        source,
+      });
+    }
+    // Scheduled (has miles) first, then by service name.
+    return out.sort((a, b) => {
+      const am = a.miles != null ? 0 : 1;
+      const bm = b.miles != null ? 0 : 1;
+      return am - bm || a.service.localeCompare(b.service);
+    });
   },
 });
 

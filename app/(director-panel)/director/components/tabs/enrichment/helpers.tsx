@@ -4,7 +4,9 @@
 // inline-style design system (Primitives + Charts), NOT Tailwind. Palette via
 // the panel's CSS vars (--slate-*, --green-*, --red-*, …).
 
-import { Component, useState, type ReactNode, type CSSProperties } from 'react'
+import { Component, useState, type ReactNode, type CSSProperties, type MouseEvent } from 'react'
+import type { FunctionReturnType } from 'convex/server'
+import { api } from '@/convex/_generated/api'
 import { Badge, Button, Card, MicroH, Modal, tableStyles } from '../../Primitives'
 
 // ─── formatting (pure) ───────────────────────────────────────────────────────
@@ -105,6 +107,65 @@ export function SourceChip({ url, domain }: { url: string | null | undefined; do
     )
   }
   return <span style={{ fontSize: 12, color: 'var(--slate-500)' }}>{label ?? '—'}</span>
+}
+
+const URL_SPLIT_RE = /(https?:\/\/[^\s)]+)/g
+
+/** Renders free text (e.g. a sanity-flag `reason` string) with any embedded
+ *  http(s) URL swapped for a clickable domain link — sanityChecks.ts embeds
+ *  the actual source_url inline in reasons like "…dropped: sole source is a
+ *  low-authority forum page (https://…)" and that URL was otherwise dead
+ *  text a director couldn't click through to verify. */
+export function Linkify({ text }: { text: string }) {
+  const parts = text.split(URL_SPLIT_RE)
+  return (
+    <>
+      {parts.map((part, i) =>
+        /^https?:\/\//.test(part) ? (
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+            title={part}
+            style={{ color: 'var(--blue-600)', textDecoration: 'none', wordBreak: 'break-word' }}>
+            {hostnameOf(part) ?? part} ↗
+          </a>
+        ) : (
+          <span key={i}>{part}</span>
+        ),
+      )}
+    </>
+  )
+}
+
+// ─── copy-to-clipboard ───────────────────────────────────────────────────────
+
+const CopyIcon = ({ size = 12 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}
+    strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+    <rect x="9" y="9" width="13" height="13" rx="2" />
+    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+  </svg>
+)
+
+/** Click-to-copy value chip — for VIN / YMMT / config-key fields a director
+ *  needs to paste into a VIN decoder or manufacturer lookup. `mono` renders
+ *  the value in a monospace face (ids/VINs); leave it off for prose (YMMT). */
+export function CopyableMono({ value, label, mono = true, style }: {
+  value: string; label?: ReactNode; mono?: boolean; style?: CSSProperties
+}) {
+  const [copied, setCopied] = useState(false)
+  return (
+    <button type="button" title={`Copy ${typeof label === 'string' ? label : 'value'} to clipboard`}
+      onClick={(e: MouseEvent) => { e.stopPropagation(); void navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200) }}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, border: `1px solid ${copied ? 'var(--green-200, #BBF7D0)' : 'var(--slate-200)'}`,
+        background: copied ? 'var(--green-50)' : '#fff', borderRadius: 6, padding: '3px 8px', cursor: 'pointer',
+        fontSize: 12, fontFamily: 'inherit', color: copied ? 'var(--green-700)' : 'var(--slate-700)',
+        transition: 'background 120ms, border-color 120ms', ...style }}
+      onMouseEnter={e => { if (!copied) (e.currentTarget as HTMLElement).style.background = 'var(--slate-50)' }}
+      onMouseLeave={e => { if (!copied) (e.currentTarget as HTMLElement).style.background = '#fff' }}>
+      {label && <span style={{ color: 'var(--slate-400)', fontWeight: 500 }}>{label}</span>}
+      <span style={{ fontFamily: mono ? 'ui-monospace, monospace' : 'inherit', fontWeight: 500 }}>{value}</span>
+      {copied ? <span>✓</span> : <CopyIcon />}
+    </button>
+  )
 }
 
 // ─── layout primitives ───────────────────────────────────────────────────────
@@ -217,14 +278,66 @@ export type TriggerRequest =
   | { kind: 'unstick'; runId: string; label: string }
   | { kind: 'bulkUnstick'; count: number }
   | { kind: 'acknowledgeRun'; runId: string; label: string }
-  | { kind: 'resolveReview'; id: string; title: string; outcome: 'resolved' | 'dismissed' }
 
 export type OpenTrigger = (req: TriggerRequest) => void
 
+// ─── review queue row ────────────────────────────────────────────────────────
+
+/** What "source_stream" means in plain language — the review item's origin.
+ *  Shared by every surface that lists review_queue rows (and the sidebar). */
+export const STREAM_SOURCE: Record<string, string> = {
+  consensus: 'enrichment run — sources disagreed or a sanity check flagged a value',
+  correction: 'a shop/mechanic correction to a predicted part, labor, or exclusion',
+  report: 'a user-reported data problem',
+  survey: 'a routine spec-variance spot-check sample',
+}
+
+export type ReviewRow = FunctionReturnType<typeof api.dataOverview.openReviews>['rows'][number]
+
+/** One review_queue row: a single summary line (stream · car/title · age ·
+ *  claimed-by · optional Claim). Clicking it opens the review sidebar
+ *  (ReviewSidebar) — car identity, source/run, flags-with-current-value, and
+ *  the resolve/dismiss actions all live there, ONE component, instead of
+ *  each list duplicating its own expand/detail markup. Shared by the
+ *  Overview rail (stale-only) and the Needs Attention tab (full queue). */
+export function ReviewQueueRow({
+  r, active, onOpen, canClaim, onClaim,
+}: {
+  r: ReviewRow
+  active: boolean
+  onOpen: () => void
+  canClaim?: boolean
+  onClaim?: () => void
+}) {
+  const carLabel = [r.year, r.make, r.model, r.trim].filter(Boolean).join(' ')
+  return (
+    <div onClick={onOpen} title="Open review detail"
+      style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '6px 8px', margin: '0 -8px',
+        borderRadius: 6, cursor: 'pointer', borderBottom: '1px solid var(--slate-50)',
+        background: active ? 'var(--blue-50)' : 'transparent' }}
+      onMouseEnter={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'var(--slate-50)' }}
+      onMouseLeave={e => { if (!active) (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
+      <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 999, background: 'var(--yellow-50)', color: 'var(--yellow-800)', flexShrink: 0 }}>{r.stream}</span>
+      <span style={{ flex: 1, minWidth: 0, color: 'var(--slate-600)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {carLabel || r.title}
+      </span>
+      {r.status === 'claimed' && (
+        <span style={{ color: 'var(--blue-700)', flexShrink: 0, fontSize: 11 }}>● {r.claimed_by ?? 'claimed'}</span>
+      )}
+      <span style={{ color: 'var(--slate-400)', flexShrink: 0 }} title={new Date(r.created_at).toLocaleString()}>{r.age_h}h</span>
+      {canClaim && r.status === 'open' && onClaim && (
+        <button style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--blue-700)', fontSize: 12, fontFamily: 'inherit', fontWeight: 500, flexShrink: 0 }}
+          onClick={e => { e.stopPropagation(); onClaim() }}>Claim</button>
+      )}
+      <span style={{ color: 'var(--slate-300)', flexShrink: 0 }}>›</span>
+    </div>
+  )
+}
+
 /** Which capability an action requires. Review resolution needs data.write; the
  *  run/queue triggers need data.trigger. */
-export function triggerCapability(req: TriggerRequest): 'data.write' | 'data.trigger' {
-  return req.kind === 'resolveReview' ? 'data.write' : 'data.trigger'
+export function triggerCapability(_req: TriggerRequest): 'data.write' | 'data.trigger' {
+  return 'data.trigger'
 }
 
 function triggerMeta(req: TriggerRequest): { title: string; destructive: boolean; summary: ReactNode } {
@@ -237,9 +350,6 @@ function triggerMeta(req: TriggerRequest): { title: string; destructive: boolean
     return { title: 'Force-unstick all stale runs', destructive: true, summary: <>Mark all <b>{req.count}</b> in-flight {req.count === 1 ? 'run' : 'runs'} with a stale heartbeat (&gt;15&nbsp;min) as <b>failed</b> so new runs can take over. Runs still heart-beating are left untouched.</> }
   if (req.kind === 'acknowledgeRun')
     return { title: 'Acknowledge failed run', destructive: false, summary: <>Mark the failed run for {mono(req.label)} as <b>handled</b> so it clears from Needs Attention. This does not re-run it — record why it was triaged.</> }
-  if (req.kind === 'resolveReview')
-    return { title: req.outcome === 'dismissed' ? 'Dismiss review item' : 'Resolve review item', destructive: req.outcome === 'dismissed',
-      summary: <>Mark the review item {mono(req.title)} as <b>{req.outcome}</b>. It stays in history for audit; the source record is untouched.</> }
   return { title: 'Force-unstick run', destructive: true, summary: <>Mark the stale in-flight run for {mono(req.label)} as <b>failed</b> so a new run can take over. Only eligible while its heartbeat is stale (&gt;15&nbsp;min).</> }
 }
 
@@ -281,6 +391,36 @@ export function TriggerCeremony({ req, onClose, onConfirm }: {
           {err && <div style={{ marginTop: 8, fontSize: 12, fontWeight: 500, color: 'var(--red-600)' }}>{err}</div>}
         </div>
       </div>
+    </Modal>
+  )
+}
+
+// ─── confirm popup ───────────────────────────────────────────────────────────
+
+/** A second "are you sure?" step for a button whose reason box is already
+ *  filled in — the reason box gates whether you CAN act; this gates whether
+ *  you MEANT to click. Shared by ReviewSidebar and WrongPartsPanel's drawer
+ *  so every approve/adjust/dismiss/resolve action gets the same pause. */
+export function ConfirmPopup({ open, title, message, confirmLabel = 'Confirm', destructive, busy, onConfirm, onCancel }: {
+  open: boolean
+  title: string
+  message: ReactNode
+  confirmLabel?: string
+  destructive?: boolean
+  busy?: boolean
+  onConfirm: () => void
+  onCancel: () => void
+}) {
+  if (!open) return null
+  return (
+    <Modal open onClose={onCancel} title={title} width={420}
+      footer={<>
+        <Button variant="secondary" onClick={onCancel} disabled={busy}>Cancel</Button>
+        <Button variant={destructive ? 'danger' : 'primary'} onClick={onConfirm} disabled={busy}>
+          {busy ? 'Applying…' : confirmLabel}
+        </Button>
+      </>}>
+      <div style={{ padding: '18px 22px', fontSize: 13, color: 'var(--slate-600)', lineHeight: 1.55 }}>{message}</div>
     </Modal>
   )
 }

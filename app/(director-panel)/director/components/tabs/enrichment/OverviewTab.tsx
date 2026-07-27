@@ -10,7 +10,7 @@ import type { FunctionReturnType } from 'convex/server'
 import { api } from '@/convex/_generated/api'
 import { StatCard, BarRow, StackedBars, DailyBars, DeltaChip, InfoTip, denseDailySeries, dayLabel } from '../../Charts'
 import { Button, SegmentedControl } from '../../Primitives'
-import { Panel, Empty, StatusPill, SkeletonBlock, fmtPct, fmtCost, fmtNum, fmtWhen, SLO_BANDS, type OpenTrigger } from './helpers'
+import { Panel, Empty, StatusPill, SkeletonBlock, ReviewQueueRow, fmtPct, fmtCost, fmtNum, fmtWhen, SLO_BANDS, type OpenTrigger } from './helpers'
 
 const WINDOWS = [{ value: '7', label: '7d' }, { value: '14', label: '14d' }, { value: '30', label: '30d' }]
 
@@ -51,11 +51,13 @@ const STATUS_SEGMENTS = [
   { key: 'other', color: 'var(--slate-400)', label: 'Other' },
 ]
 
-export function OverviewTab({ token, goTab, goDeepDive, openTrigger }: {
+export function OverviewTab({ token, goTab, goDeepDive, openTrigger, activeReviewId, onOpenReview }: {
   token: string
   goTab: (t: string) => void
   goDeepDive: (configId: string, configKey: string | null, runId?: string) => void
   openTrigger: OpenTrigger
+  activeReviewId: string | null
+  onOpenReview: (id: string, title: string) => void
 }) {
   const [win, setWin] = useState('7')
   const ov = useQuery(api.directorEnrichment.overview, { token, days: 7 })
@@ -94,7 +96,10 @@ export function OverviewTab({ token, goTab, goDeepDive, openTrigger }: {
   const accent = (dotTone: 'green' | 'yellow' | 'red' | 'slate' | null, tip: React.ReactNode) => (
     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
       {dotTone && <Dot tone={dotTone} />}
-      <InfoTip content={tip} width={230} />
+      {/* side="bottom": these tiles sit at the very top of the page, so a
+          tooltip opening upward (the InfoTip default) gets clipped by the
+          viewport edge before it ever renders. */}
+      <InfoTip content={tip} width={230} side="bottom" />
     </span>
   )
 
@@ -184,27 +189,30 @@ export function OverviewTab({ token, goTab, goDeepDive, openTrigger }: {
                 <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--slate-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Failed runs · 24h</div>
                 {attention.failed_runs_24h.length === 0 ? <Empty>None.</Empty> :
                   attention.failed_runs_24h.slice(0, 8).map(r => (
-                    <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 0' }}>
+                    <div key={r.id} onClick={() => goDeepDive(r.vehicle_config_id, null, r.id)}
+                      title="Open this run in Deep-Dive"
+                      style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 6px', margin: '0 -6px',
+                        borderRadius: 6, cursor: 'pointer' }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--slate-50)' }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}>
                       <StatusPill status="failed" />
                       <span style={{ flex: 1, minWidth: 0, color: 'var(--slate-600)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.first_error ?? '—'}</span>
                       <span style={{ color: 'var(--slate-400)' }}>{fmtWhen(r.at)}</span>
-                      <button style={{ ...linkBtn }} onClick={() => goDeepDive(r.vehicle_config_id, null, r.id)}>Deep-dive</button>
-                      <button style={{ ...linkBtn, color: 'var(--slate-500)' }}
-                        onClick={() => openTrigger({ kind: 'acknowledgeRun', runId: r.id, label: r.first_error ?? String(r.id) })}>Ack</button>
+                      <button style={{ ...linkBtn, flexShrink: 0 }} onClick={() => goDeepDive(r.vehicle_config_id, null, r.id)}>Deep-dive</button>
+                      <button style={{ ...linkBtn, color: 'var(--slate-500)', flexShrink: 0 }}
+                        onClick={e => { e.stopPropagation(); openTrigger({ kind: 'acknowledgeRun', runId: r.id, label: r.first_error ?? String(r.id) }) }}>Ack</button>
                     </div>
                   ))}
               </div>
               <div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--slate-500)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 8 }}>Stale open reviews · &gt;72h</div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--slate-500)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Stale open reviews · &gt;72h</div>
+                  <button style={linkBtn} onClick={() => goTab('attention')}>View all in Needs Attention →</button>
+                </div>
                 {attention.stale_open_reviews.length === 0 ? <Empty>None.</Empty> :
                   attention.stale_open_reviews.slice(0, 8).map(r => (
-                    <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '4px 0' }}>
-                      <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 999, background: 'var(--yellow-50)', color: 'var(--yellow-800)' }}>{r.stream}</span>
-                      <span style={{ flex: 1, minWidth: 0, color: 'var(--slate-600)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
-                      <span style={{ color: 'var(--slate-400)' }}>{r.age_h}h</span>
-                      <button style={{ ...linkBtn }} onClick={() => openTrigger({ kind: 'resolveReview', id: r.id, title: r.title, outcome: 'resolved' })}>Resolve</button>
-                      <button style={{ ...linkBtn, color: 'var(--slate-500)' }} onClick={() => openTrigger({ kind: 'resolveReview', id: r.id, title: r.title, outcome: 'dismissed' })}>Dismiss</button>
-                    </div>
+                    <ReviewQueueRow key={r.id} r={r} active={activeReviewId === r.id}
+                      onOpen={() => onOpenReview(r.id, r.title)} />
                   ))}
               </div>
             </div>

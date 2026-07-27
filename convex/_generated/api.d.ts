@@ -85,6 +85,7 @@ import type * as directorData from "../directorData.js";
 import type * as directorEnrichment from "../directorEnrichment.js";
 import type * as directorGate from "../directorGate.js";
 import type * as directorOverview from "../directorOverview.js";
+import type * as directorPartQuality from "../directorPartQuality.js";
 import type * as directorPricing from "../directorPricing.js";
 import type * as directorRepairpal from "../directorRepairpal.js";
 import type * as directorSettings from "../directorSettings.js";
@@ -149,6 +150,7 @@ import type * as lib_priceTypes from "../lib/priceTypes.js";
 import type * as lib_publicLabor from "../lib/publicLabor.js";
 import type * as lib_push_dispatcher from "../lib/push_dispatcher.js";
 import type * as lib_quoteEngine from "../lib/quoteEngine.js";
+import type * as lib_reviewFieldMap from "../lib/reviewFieldMap.js";
 import type * as lib_robustStats from "../lib/robustStats.js";
 import type * as lib_schedule_overlap from "../lib/schedule_overlap.js";
 import type * as lib_servicePartsReference from "../lib/servicePartsReference.js";
@@ -412,6 +414,7 @@ import type * as vehicleEnrichment_sourceDiscovery from "../vehicleEnrichment/so
 import type * as vehicleEnrichment_sourceRegistry from "../vehicleEnrichment/sourceRegistry.js";
 import type * as vehicleEnrichment_sourceVerifier from "../vehicleEnrichment/sourceVerifier.js";
 import type * as vehicleEnrichment_tier2Enrichment from "../vehicleEnrichment/tier2Enrichment.js";
+import type * as vehicleEnrichment_transFluidSpecReconcile from "../vehicleEnrichment/transFluidSpecReconcile.js";
 import type * as vehicleEnrichment_transmissionTypeReconcile from "../vehicleEnrichment/transmissionTypeReconcile.js";
 import type * as vehicleEnrichment_types from "../vehicleEnrichment/types.js";
 import type * as vehicleEnrichment_utils_batchClient from "../vehicleEnrichment/utils/batchClient.js";
@@ -527,6 +530,7 @@ declare const fullApi: ApiFromModules<{
   directorEnrichment: typeof directorEnrichment;
   directorGate: typeof directorGate;
   directorOverview: typeof directorOverview;
+  directorPartQuality: typeof directorPartQuality;
   directorPricing: typeof directorPricing;
   directorRepairpal: typeof directorRepairpal;
   directorSettings: typeof directorSettings;
@@ -591,6 +595,7 @@ declare const fullApi: ApiFromModules<{
   "lib/publicLabor": typeof lib_publicLabor;
   "lib/push_dispatcher": typeof lib_push_dispatcher;
   "lib/quoteEngine": typeof lib_quoteEngine;
+  "lib/reviewFieldMap": typeof lib_reviewFieldMap;
   "lib/robustStats": typeof lib_robustStats;
   "lib/schedule_overlap": typeof lib_schedule_overlap;
   "lib/servicePartsReference": typeof lib_servicePartsReference;
@@ -854,6 +859,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/sourceRegistry": typeof vehicleEnrichment_sourceRegistry;
   "vehicleEnrichment/sourceVerifier": typeof vehicleEnrichment_sourceVerifier;
   "vehicleEnrichment/tier2Enrichment": typeof vehicleEnrichment_tier2Enrichment;
+  "vehicleEnrichment/transFluidSpecReconcile": typeof vehicleEnrichment_transFluidSpecReconcile;
   "vehicleEnrichment/transmissionTypeReconcile": typeof vehicleEnrichment_transmissionTypeReconcile;
   "vehicleEnrichment/types": typeof vehicleEnrichment_types;
   "vehicleEnrichment/utils/batchClient": typeof vehicleEnrichment_utils_batchClient;

@@ -342,7 +342,7 @@ export const StatCard = ({
   const clickable = !!(onClick || href)
   const inner = (
     <div onClick={onClick}
-      style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, padding:'14px 16px', display:'flex', flexDirection:'column', gap:6, minHeight:90, position:'relative', overflow:'hidden', cursor:clickable ? 'pointer' : 'default', transition:'border-color 120ms, box-shadow 120ms', height:'100%' }}
+      style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, padding:'14px 16px', display:'flex', flexDirection:'column', gap:6, minHeight:90, position:'relative', cursor:clickable ? 'pointer' : 'default', transition:'border-color 120ms, box-shadow 120ms', height:'100%' }}
       onMouseEnter={clickable ? e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--blue-300, #93C5FD)'; (e.currentTarget as HTMLElement).style.boxShadow = '0 1px 6px rgba(15,23,42,0.06)' } : undefined}
       onMouseLeave={clickable ? e => { (e.currentTarget as HTMLElement).style.borderColor = 'var(--slate-200)'; (e.currentTarget as HTMLElement).style.boxShadow = 'none' } : undefined}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:6 }}>

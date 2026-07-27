@@ -1,8 +1,10 @@
 'use client'
 
 // Tab 4 · Flags & Quality — flag taxonomy with per-flag run drill-down, fill /
-// quotability distributions vs the completion gate, field-family coverage, and
-// an actionable review queue (claim / resolve / dismiss). Native panel styling.
+// quotability distributions vs the completion gate, and field-family coverage.
+// The review queue itself (claim / resolve / dismiss) lives in the Needs
+// Attention tab — this tab just summarizes counts by stream and links there.
+// Native panel styling.
 
 import { useState } from 'react'
 import { useQuery } from 'convex/react'
@@ -11,7 +13,7 @@ import { BarRow, Histogram, InfoTip } from '../../Charts'
 import { SegmentedControl, Button } from '../../Primitives'
 import {
   Panel, Empty, SkeletonBlock, TableWrap, th, td, thRight, tdRight,
-  StatusPill, fmtPct, fmtNum, timeAgo, type OpenTrigger,
+  StatusPill, fmtPct, fmtNum, timeAgo,
 } from './helpers'
 
 const WINDOWS = [{ value: '7', label: '7d' }, { value: '14', label: '14d' }, { value: '30', label: '30d' }]
@@ -35,17 +37,10 @@ function ClickableBar({ selected, onClick, children }: { selected: boolean; onCl
   )
 }
 
-const priorityDot = (p: string) => (
-  <span title={`${p} priority`} style={{ width: 8, height: 8, borderRadius: 999, flexShrink: 0,
-    background: p === 'high' ? 'var(--red-500)' : p === 'low' ? 'var(--slate-300)' : 'var(--yellow-500)' }} />
-)
-
-export function FlagsTab({ token, openTrigger, goDeepDive, canWrite, claimReview }: {
+export function FlagsTab({ token, goDeepDive, goTab }: {
   token: string
-  openTrigger: OpenTrigger
   goDeepDive: (configId: string, configKey: string | null, runId?: string) => void
-  canWrite: boolean
-  claimReview: (id: string) => Promise<void>
+  goTab: (t: string) => void
 }) {
   const [win, setWin] = useState('14')
   const [drill, setDrill] = useState<Drill | null>(null)
@@ -187,30 +182,14 @@ export function FlagsTab({ token, openTrigger, goDeepDive, canWrite, claimReview
       </Panel>
 
       <Panel title="Open review queue" sub={review ? `${review.length} items` : undefined}
-        right={review && review.length > 0 ? (
-          <div style={{ display: 'flex', gap: 8, fontSize: 11, color: 'var(--slate-500)' }}>
+        right={<Button variant="secondary" size="sm" onClick={() => goTab('attention')}>Open Needs Attention →</Button>}>
+        {!review ? <SkeletonBlock height={60} /> : review.length === 0 ? <Empty>Review queue is clear.</Empty> : (
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {Object.entries(streamCounts).map(([s, n]) => (
-              <span key={s}><b className="mono" style={{ color: 'var(--slate-700)' }}>{n}</b> {s}</span>
-            ))}
-          </div>
-        ) : undefined}>
-        {!review ? <SkeletonBlock height={100} /> : review.length === 0 ? <Empty>Review queue is clear.</Empty> : (
-          <div>
-            {review.slice(0, 20).map(r => (
-              <div key={String(r.id)} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, padding: '7px 0', borderBottom: '1px solid var(--slate-100)' }}>
-                {priorityDot(r.priority)}
-                <StatusPill status={r.status} />
-                <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 999, background: 'var(--slate-100)', color: 'var(--slate-600)' }}>{r.sourceStream}</span>
-                <span style={{ flex: 1, minWidth: 0, color: 'var(--slate-700)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
-                {r.vin && <span className="mono" style={{ color: 'var(--slate-400)' }}>{r.vin}</span>}
-                {canWrite && (
-                  <span style={{ display: 'inline-flex', gap: 10, flexShrink: 0 }}>
-                    {r.status === 'open' && <button style={linkBtn} onClick={() => claimReview(String(r.id))}>Claim</button>}
-                    <button style={linkBtn} onClick={() => openTrigger({ kind: 'resolveReview', id: String(r.id), title: r.title, outcome: 'resolved' })}>Resolve</button>
-                    <button style={{ ...linkBtn, color: 'var(--slate-500)' }} onClick={() => openTrigger({ kind: 'resolveReview', id: String(r.id), title: r.title, outcome: 'dismissed' })}>Dismiss</button>
-                  </span>
-                )}
-              </div>
+              <span key={s} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '4px 10px', borderRadius: 8, background: 'var(--slate-50)', border: '1px solid var(--slate-200)' }}>
+                <span style={{ color: 'var(--slate-600)' }}>{s}</span>
+                <b className="mono" style={{ color: 'var(--slate-900)' }}>{n}</b>
+              </span>
             ))}
           </div>
         )}

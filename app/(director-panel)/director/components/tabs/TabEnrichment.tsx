@@ -12,6 +12,8 @@ import type { Id } from '@/convex/_generated/dataModel'
 import { can } from '@/lib/portal/capabilities'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { Zone, TriggerCeremony, triggerCapability, type TriggerRequest } from './enrichment/helpers'
+import { ReviewSidebar } from './enrichment/ReviewSidebar'
+import { NeedsAttentionTab } from './enrichment/NeedsAttentionTab'
 import { OverviewTab } from './enrichment/OverviewTab'
 import { LiveRunsTab } from './enrichment/LiveRunsTab'
 import { CostsTab } from './enrichment/CostsTab'
@@ -21,6 +23,7 @@ import { PipelineTab } from './enrichment/PipelineTab'
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'attention', label: 'Needs Attention' },
   { id: 'runs', label: 'Live Runs' },
   { id: 'costs', label: 'Costs' },
   { id: 'flags', label: 'Flags & Quality' },
@@ -35,13 +38,17 @@ export function TabEnrichment() {
   const [selected, setSelected] = useState<PickedConfig | null>(null)
   const [focusRunId, setFocusRunId] = useState<string | null>(null)
   const [ceremony, setCeremony] = useState<TriggerRequest | null>(null)
+  // The review sidebar is independent of the ceremony/trigger system — every
+  // review row (Overview's stale rail, Needs Attention's full queue) opens
+  // this SAME instance, so there is exactly one place that knows how to
+  // show/resolve a review item instead of each list owning its own popup.
+  const [sidebarItem, setSidebarItem] = useState<{ id: string; title: string } | null>(null)
 
   const reEnrich = useMutation(api.dataControlRoom.triggerReEnrich)
   const purge = useMutation(api.directorEnrichment.purgeAndReenrich)
   const unstick = useMutation(api.directorEnrichment.forceUnstickRun)
   const bulkUnstick = useMutation(api.directorEnrichment.bulkForceUnstickStale)
   const acknowledgeRun = useMutation(api.directorEnrichment.acknowledgeRun)
-  const resolveReview = useMutation(api.reviewQueue.resolve)
   const claimReview = useMutation(api.reviewQueue.claim)
 
   if (!session) return null
@@ -57,12 +64,12 @@ export function TabEnrichment() {
   }
   const claim = async (id: string) => { await claimReview({ token, id: id as Id<'review_queue'> }) }
   const openTrigger = (req: TriggerRequest) => { if (hasCap(triggerCapability(req))) setCeremony(req) }
+  const openReviewSidebar = (id: string, title: string) => setSidebarItem({ id, title })
   const runTrigger = async (reason: string) => {
     if (!ceremony) return
     if (ceremony.kind === 'reenrich') await reEnrich({ token, reason, vin: ceremony.vin })
     else if (ceremony.kind === 'purge') await purge({ token, reason, vin: ceremony.vin })
     else if (ceremony.kind === 'acknowledgeRun') await acknowledgeRun({ token, reason, runId: ceremony.runId as Id<'enrichment_runs'> })
-    else if (ceremony.kind === 'resolveReview') await resolveReview({ token, reason, id: ceremony.id as Id<'review_queue'>, outcome: ceremony.outcome })
     else if (ceremony.kind === 'bulkUnstick') {
       // Drain in bounded passes — the mutation caps each pass at 500/status.
       for (let i = 0; i < 20; i++) {
@@ -104,15 +111,18 @@ export function TabEnrichment() {
           </div>
         )}
 
-        {tab === 'overview' && <Zone label="Overview"><OverviewTab token={token} goTab={t => setTab(t as TabId)} goDeepDive={goDeepDive} openTrigger={openTrigger} /></Zone>}
+        {tab === 'overview' && <Zone label="Overview"><OverviewTab token={token} goTab={t => setTab(t as TabId)} goDeepDive={goDeepDive} openTrigger={openTrigger} activeReviewId={sidebarItem?.id ?? null} onOpenReview={openReviewSidebar} /></Zone>}
+        {tab === 'attention' && <Zone label="Needs Attention"><NeedsAttentionTab token={token} goDeepDive={goDeepDive} openTrigger={openTrigger} canWrite={canWrite} canTrigger={canTrigger} claimReview={claim} activeReviewId={sidebarItem?.id ?? null} onOpenReview={openReviewSidebar} /></Zone>}
         {tab === 'runs' && <Zone label="Live Runs"><LiveRunsTab token={token} openTrigger={openTrigger} goDeepDive={goDeepDive} canTrigger={canTrigger} /></Zone>}
         {tab === 'costs' && <Zone label="Costs"><CostsTab token={token} /></Zone>}
-        {tab === 'flags' && <Zone label="Flags & Quality"><FlagsTab token={token} openTrigger={openTrigger} goDeepDive={goDeepDive} canWrite={canWrite} claimReview={claim} /></Zone>}
+        {tab === 'flags' && <Zone label="Flags & Quality"><FlagsTab token={token} goDeepDive={goDeepDive} goTab={t => setTab(t as TabId)} /></Zone>}
         {tab === 'config' && <Zone label="Deep-Dive"><DeepDiveTab token={token} selected={selected} onSelect={setSelected} openTrigger={openTrigger} focusRunId={focusRunId} /></Zone>}
         {tab === 'pipeline' && <Zone label="Pipeline"><PipelineTab token={token} /></Zone>}
       </div>
 
       <TriggerCeremony req={ceremony} onClose={() => setCeremony(null)} onConfirm={runTrigger} />
+      <ReviewSidebar key={sidebarItem?.id ?? 'none'} token={token} item={sidebarItem}
+        onClose={() => setSidebarItem(null)} onResolved={() => setSidebarItem(null)} goDeepDive={goDeepDive} />
     </div>
   )
 }

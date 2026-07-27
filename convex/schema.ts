@@ -446,6 +446,14 @@ export default defineSchema({
     // beat the correct SK-gen pads).
     refute_flagged: v.optional(v.boolean()),
     refute_reason: v.optional(v.string()),
+    // Director reviewed this fitment's "wrong part" flag (I1 guard failure /
+    // refute_flagged) and chose NOT to act on it right now. Deliberately
+    // separate from mechanic_verified: dismissing hides it from the Needs
+    // Attention scan without claiming the part is actually correct, so
+    // quote-time selection keeps treating it exactly as before.
+    flag_dismissed_at: v.optional(v.number()),
+    flag_dismissed_by: v.optional(v.string()),
+    flag_dismissed_by_id: v.optional(v.id("director_users")),
     created_at: v.optional(v.number()),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])

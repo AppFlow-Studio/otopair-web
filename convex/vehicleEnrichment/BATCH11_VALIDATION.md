@@ -71,6 +71,70 @@ Per-vehicle detail: `reports/ground-truth-batch11/gt-*.md` + `verdict-*.md` (Cam
 
 5 runs in parallel on `dev:third-bird-914`, all completed server-side in ~16-19 min; CLI `go` wrappers hit the known action-timeout artifact ("Error" print) — results read via `b8collect` + `v3queries` dump. `purgeAndRerun` returns `no_config_found` on never-enriched VINs — fresh VINs must use `runPublic:go` (plan doc updated understanding; worth a fallthrough fix eventually).
 
-## Wave 2 (pending)
+---
 
-Remaining from the user's list: 2021 Tucson Ultimate, 2022 Accord Sport, 2023 Grand Highlander Hybrid, 2024 Equinox Premier, 2025 Crosstrek Limited (real VINs still to be sourced) + the 4 round-8 checklist re-runs from `reports/batch11_plan_2026-07-25.md`.
+# Wave 2 — Jul 27 2026 (round-9 stack)
+
+**Code state:** commit `d31e0a7` (round-9 gates, written from the wave-1 audit above, deployed to `dev:third-bird-914` before wave 2 ran). 9 runs: 5 fresh vehicles (real VINs sourced + verified; note the user's "2023 Grand Highlander" does not exist as a model year — a 2024 was used) + the 4 round-8 checklist re-runs from `reports/batch11_plan_2026-07-25.md`.
+
+**Verdict: NOT at the bar, and the failure mode moved up a level.** Round-9's semantics all validated (see below), and the MDX re-run came back clean — but 4 of 5 fresh vehicles FAILED, dominated by a class no part/interval gate can reach: **vehicle-identity resolution**. Wave 2 is the strongest evidence yet for the variant-fingerprint P1 plan (`reports/variant_identification_scope_2026-07-21.md`).
+
+## The wave
+
+| VIN | Vehicle | Run | Fill | Verdict | Headline |
+|---|---|---|---|---|---|
+| KM8J3CAL1MU359440 | 2021 Tucson Ultimate (G4KJ, TL) | complete | 90 | **FAIL** | Chassis mis-ID "NX4" → 3 false refutes + wrong-gen plug survived |
+| 1HGCV1F33NA018579 | 2022 Accord Sport 1.5T (L15BE) | complete | 92 | PARTIAL | 11th-gen parts at 0.95; 1 refute FP (correct oil filter deleted) |
+| 5TDACAB54RS004749 | 2024 Grand Highlander Hybrid | complete | 93 | **FAIL** | Decoded/keyed as plain Highlander Hybrid — model-level identity loss |
+| 3GNAXNEG5RL211320 | 2024 Equinox Premier 1.5T | partial | 88 | **FAIL** | vPIC's own "LSD" 2025-RPO error ingested; CVT fluid on the 6AT |
+| 4S4GUHL66S3702757 | 2025 Crosstrek Limited (FB25D) | complete | 83 | **FAIL** | Chimera CVT-fluid string; legacy rotor at 0.95; engine code "NA" |
+| 1G1AT58H897221703 | 2009 Cobalt (re-run) | complete | 79 | 4/7 | Speeds reconcile ✅; 25894265 refute FP (pre-registered); 1-part coverage collapse |
+| 1FTPW14556FB15661 | 2006 F-150 (re-run) | partial | 94 | 4/6 | Wrong-part refutes hold; FX4-vs-Lariat trim P1 recurred; 20.9qt over-suppressed |
+| 3GYFNBE34ES609578 | 2014 SRX (re-run) | partial | 88 | 2/5 | FFV gate never fired; refutes don't persist across purges; new wrong belt |
+| 5FRYD4H2XEB028867 | 2014 MDX (re-run) | partial | 90 | **3/3 ✅** | Batch-10 P1 fixed (0W-20 oil part); both must-keeps held; clean |
+
+Per-vehicle detail: `reports/ground-truth-batch11/verdict-*.md` (fresh) and `verdict-*-rerun.md` (checklist re-runs).
+
+## Round-9 validation scorecard
+
+**Working as designed (validated on multiple vehicles):**
+- **Interval status semantics** — zero wear items stored "scheduled" anywhere in 9 runs; wear/fallback/non-scraped rows all "estimated"; OEM-scraped rows "scheduled". Wave-1's whole interval P-class did not recur.
+- **Component-type rule** — MDX: thermostat *housing* 19410-5J6-A00 correctly refuted (verified: it's the water passage, not the thermostat).
+- **Year-band rule + retention fix on a correct identity** — Crosstrek: both wave-1 Forester winners (SJ air filter 16546AA12A, multisource-kept pad 26296SC011) correctly killed this time.
+- **Round-8 holdovers** — Cobalt speeds 5→4 reconcile fired; MERCON V no-LV; MDX viscosity gate (#14).
+- **CVT spec reconcile correctly silent** on the GH Hybrid's legitimate WS-on-eCVT.
+
+**Round-9 costs (the trade-off bit, as pre-registered in checklist #15):**
+- **Refute false-positive hard-deletes**: Cobalt air filter 25894265 (batch-10-verified correct; killed off "2.0L"-titled listings), Accord oil filter 15400-PLM-A02, Tucson ×3 (all downstream of the NX4 chassis mis-ID). Distinct-domain retention makes single-domain-corroborated CORRECT parts one bad Haiku verdict from deletion.
+- **Coverage thinning without backfill**: Cobalt rebuilt 1 of ~14 part roles post-purge; Crosstrek 7 parts; Equinox 10. Kills leave honest gaps but nothing refills them.
+- **Sanity over-suppression**: F-150's exactly-correct 20.9 qt coolant capacity DROPPED (sole source was a forum) where batch-10 kept-with-flag.
+
+## Confirmed defects → round-10 fix list
+
+### P1 — the identity layer (new dominant class; the variant-fingerprint work is the real fix)
+1. **Chassis/generation mis-ID poisons downstream gates (Tucson)**: `chassis:"NX4"` on a TL car made the refute gate kill 3 correct parts and pass the wrong-gen plug. A wrong identity is worse than no identity — gates ran with confidence on a false premise.
+2. **Model-level identity loss (Grand Highlander → Highlander)**: shared-engine sibling models make wrong values look multi-source-consistent; no downstream gate can catch it. Decode must preserve the full model token before any enrichment.
+3. **Trusted-decoder upstream error ingested verbatim (Equinox)**: vPIC returns 2025 RPO "LSD" for a 2024 VIN → keyed into config identity, anchoring 2025-gen content (CVT fluid on the 6T45). Need an RPO/engine-code vs model-year sanity gate on DECODE output.
+4. **Trim guard ineffective (F-150, 2nd consecutive failure on its target VIN)**: FX4-vs-Lariat again; round-8's normalizer-trim rejection never fired. Also engine-code passthroughs persist ("995" F-150; literal "NA" Crosstrek).
+
+### P1 — fluid-family gaps
+5. **Inverse fluid reconcile direction (Equinox)**: automatic-type + CVT-family spec is uncovered by round-9's `transFluidSpecReconcile` (it only handles CVT-type + stepped-spec). Add the mirror rule → DEXRON-VI class.
+6. **Chimera/wrong-family CVT strings pass the round-7 gate (Crosstrek)**: "Subaru CVT Fluid TC (CVT-HT-LV)" mixes a Toyota spec name with TR690 fluids on a TR580 (correct: CVTF-III per TSB 01-167-08R) — no flag fired. The fluid-family verifier needs Subaru CVTF generation rows + a spec-string-coherence check.
+7. **Round-8 gates that never fire**: SRX FFV flag (2nd consecutive miss on its target VIN), Cobalt DEX-COOL interval floor (30k/24mo shipped again). Both fixes exist in code but demonstrably don't execute on their target configs — debug why (ordering? gating conditions?), don't rewrite them.
+
+### P2 — refute machinery
+8. **Refute persistence**: refuted parts return on purge+re-run (SRX cabin filter 13508023, correctly killed in batch-10, reinstated at 0.95). Persist refuted (config, oem) pairs as a durable blocklist consulted by `upsertPartAndFitment`.
+9. **Refute precision**: require positive year-range evidence (not just "2.0L"-titled listings) before HARD delete of a previously-verified part; consider a keep-with-refute_flagged default for parts that were mechanic/batch-verified in a prior run.
+10. **Refute-as-PN-blacklist**: killing 5L3Z-8620-BA (F-150) / 12677093 (SRX) lets a *different* wrong-vehicle part of the same class in (SRX got a Trailblazer belt). The verifier should validate the REPLACEMENT too, or the role should stay null pending catalog-scoped backfill.
+11. **Backfill after kill**: refute leaves an honest gap that nothing refills (Cobalt 1-part collapse; Crosstrek 8 empty roles). A catalog-scoped re-extraction pass for killed roles.
+12. **Sanity keep-with-flag**: single-source in-band capacities should flag, not drop (F-150 20.9 qt regression).
+
+### P3 (carried/new, grouped)
+- Accord: 60k "severe turbo" plug interval; Equinox: AWD oil capacity on FWD config (drivetrain field ignored by capacity picker), nonexistent PN 84588699, PF64 filter GM number in the engine-oil slot; Crosstrek: speeds:8 on a CVT; MDX: ATF 60k vs MM-3 band + DPSF part gap (carryover), timing-belt year drift; GH: typo'd trans type string + speeds:1, premium cabin filter as default; assorted price hygiene (EUR domains, forum sources, $144 "gasket").
+
+## GT corrections filed by auditors (pipeline beat the ground truth)
+- Crosstrek: OM specifies 0W-16 (not 0W-20) and 4.6 qt — GT rows corrected in verdict; coolant SOA868V9272 is the current supersession.
+- Accord/others: oil filter 15400-PLM-A02 confirmed correct for the 1.5T (its deletion was the pipeline's error, not its extraction).
+
+## Cost / mechanics
+9 runs ≈ $11 (wave-2), batch-11 total ≈ $17 across 14 runs. 5-parallel staggered launch worked; all CLI wrappers hit the known timeout artifact; results read via `b8collect` + `v3queries` dump script.

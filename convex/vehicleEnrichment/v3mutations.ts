@@ -10,6 +10,7 @@ import { partFitsConfigMake } from "../partSelector";
 import { makesSameFamily, sanitizePartNumber } from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
 import { isMarketplaceDomain, isMarketplaceUrl } from "./sourceRegistry";
+import { WEAR_ITEM_SERVICE_SLUGS } from "./types";
 
 /**
  * Family-aware make compatibility for WRITE paths. The strict id-equality
@@ -969,16 +970,14 @@ export const upsertServiceInterval = internalMutation({
     // as "replace brake pads every 12 months" (Jul 2026 5-VIN test: Atlas
     // pads landed 10k/12mo at 0.95 — an inspection cadence stored as a
     // replacement schedule). Strip months for these services on every write
-    // path that funnels through this mutation.
-    const WEAR_ITEM_SLUGS = new Set([
-      "brake_pad_replacement",
-      "rotor_replacement",
-      "tire_replacement",
-      "battery_replacement",
-    ]);
+    // path that funnels through this mutation. Round 9: also force status
+    // "estimated" — a wear estimate must never read as an OEM schedule,
+    // whichever writer called us (batch-11: pads 50k "scheduled" on 3 configs).
     const svc = await ctx.db.get(args.service_id);
-    const isWearItem = WEAR_ITEM_SLUGS.has(((svc as any)?.slug ?? "").replace(/-/g, "_"));
+    const isWearItem = WEAR_ITEM_SERVICE_SLUGS.has(((svc as any)?.slug ?? "").replace(/-/g, "_"));
     const intervalMonths = isWearItem ? undefined : args.interval_months;
+    const effectiveStatus =
+      isWearItem && args.status === "scheduled" ? "estimated" : args.status;
 
     const existing = await ctx.db
       .query("service_intervals")
@@ -994,7 +993,7 @@ export const upsertServiceInterval = internalMutation({
       service_id: args.service_id,
       interval_miles: args.interval_miles,
       interval_months: intervalMonths,
-      status: args.status,
+      status: effectiveStatus,
       display_string: args.display_string,
       confidence: args.confidence,
       data_quality: args.data_quality,
@@ -1025,7 +1024,7 @@ export const upsertServiceInterval = internalMutation({
           await ctx.db.patch(existing._id, {
             interval_miles: args.interval_miles,
             interval_months: intervalMonths,
-            status: args.status,
+            status: effectiveStatus,
             display_string: args.display_string,
             confidence: args.confidence,
             data_quality: args.data_quality,
@@ -1595,6 +1594,39 @@ export const removeRefutedFitments = internalMutation({
   },
 });
 
+// Round 9 (batch-11): marks refuted-but-KEPT fitments (multi-source support
+// blocked the hard delete) so the part selector can demote them. Before this,
+// "kept for review" only meant a run_errors string — the flagged part still
+// competed (and won) in quote selection: the Forester's refuted 2010-2018
+// front pads beat the correct SK-gen pads because only the wrong part had
+// prices attached.
+export const flagRefutedFitments = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    refuted: v.array(v.object({ oem: v.string(), reason: v.string() })),
+  },
+  handler: async (ctx, args) => {
+    if (args.refuted.length === 0) return { flagged: 0 };
+    const refutedByOem = new Map(args.refuted.map((r) => [r.oem.toUpperCase(), r.reason]));
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicle_config_id))
+      .collect();
+    let flagged = 0;
+    for (const f of fitments) {
+      const part = await ctx.db.get(f.part_id);
+      const oem = ((part as any)?.oem_part_number ?? "").toUpperCase();
+      if (!oem || !refutedByOem.has(oem)) continue;
+      await ctx.db.patch(f._id, {
+        refute_flagged: true,
+        refute_reason: refutedByOem.get(oem),
+      });
+      flagged++;
+    }
+    return { flagged };
+  },
+});
+
 // ============================================================================
 // 13. attachVehicleConfig
 // ============================================================================
@@ -2101,7 +2133,7 @@ export const ensureAllServiceIntervals = internalMutation({
     // kept stale rows through re-enrichment (Soul re-run kept rotor 72mo /
     // tire 60mo / battery 48mo). Every re-run now repairs existing rows too.
     const svcById = new Map(allServices.map((s) => [s._id.toString(), s]));
-    const WEAR_SLUGS = new Set(["brake_pad_replacement", "rotor_replacement", "tire_replacement", "battery_replacement"]);
+    const WEAR_SLUGS = WEAR_ITEM_SERVICE_SLUGS;
     let cleaned = 0;
     for (const row of existingIntervals) {
       const svc = svcById.get(row.service_id.toString());
@@ -2153,8 +2185,7 @@ export const ensureAllServiceIntervals = internalMutation({
       // Wear items are condition-based — miles is a wear estimate, a months
       // recurrence is nonsense ("pads every 48 months"). Same guard as
       // upsertServiceInterval.
-      const isWearItem = ["brake_pad_replacement", "rotor_replacement", "tire_replacement", "battery_replacement"]
-        .includes((svc.slug ?? "").replace(/-/g, "_"));
+      const isWearItem = WEAR_ITEM_SERVICE_SLUGS.has((svc.slug ?? "").replace(/-/g, "_"));
 
       await ctx.db.insert("service_intervals", {
         vehicle_config_id: args.vehicle_config_id,

@@ -170,8 +170,10 @@ describe("Confidence gate", () => {
     );
     expect(result.winner).not.toBeNull();
     expect(result.low_confidence).toBe(true);
-    // p_b has more price sources → wins layer 1.
-    expect(result.winner?.part_id).toBe("p_b");
+    // Fitment-first ordering: p_a's higher fitment confidence (0.4 vs 0.3)
+    // wins Layer 1 before p_b's extra price source can matter. (This
+    // assertion was stale from the pre-fitment-first layer order.)
+    expect(result.winner?.part_id).toBe("p_a");
   });
 });
 
@@ -286,7 +288,7 @@ describe("Tiebreak layers 1–6", () => {
   });
 });
 
-describe("Layer 7 — lexicographic deterministic tiebreaker", () => {
+describe("Layer 8 — lexicographic deterministic tiebreaker", () => {
   it("always picks the alphabetically-first part_id when all signals tie", () => {
     const prices = [
       { price: 50, refreshed_days_ago: 5 },
@@ -301,7 +303,95 @@ describe("Layer 7 — lexicographic deterministic tiebreaker", () => {
       });
     const result = selectPart([make("p_zebra"), make("p_alpha"), make("p_mid")], GATE);
     expect(result.winner?.part_id).toBe("p_alpha");
-    expect(result.trace[result.trace.length - 1].layer).toBe(7);
+    expect(result.trace[result.trace.length - 1].layer).toBe(8);
+  });
+});
+
+describe("Refute demotion (round 9)", () => {
+  it("a refute-flagged candidate loses to an unflagged rival even with better prices", () => {
+    const result = selectPart(
+      [
+        makeCandidate({
+          part_id: id("p_refuted_priced"),
+          confidence: 0.95,
+          refute_flagged: true,
+          prices: [
+            { price: 40, refreshed_days_ago: 1 },
+            { price: 42, refreshed_days_ago: 1 },
+          ],
+        }),
+        makeCandidate({
+          part_id: id("p_clean_unpriced"),
+          confidence: 0.8,
+          prices: [],
+        }),
+      ],
+      GATE,
+    );
+    expect(result.winner?.part_id).toBe("p_clean_unpriced");
+    expect(result.trace.some((t) => t.layer === "refute")).toBe(true);
+  });
+
+  it("a flagged sole candidate still wins (pool never empties)", () => {
+    const result = selectPart(
+      [makeCandidate({ part_id: id("p_only"), refute_flagged: true })],
+      GATE,
+    );
+    expect(result.winner?.part_id).toBe("p_only");
+  });
+});
+
+describe("Layer 3 — OEM catalog fitment (round 9)", () => {
+  it("catalog-attested unpriced part beats retail-priced part with no catalog attestation", () => {
+    // The batch-11 Forester shape: wrong-generation part carries retail
+    // prices; the correct part is attested by parts.subaru.com but unpriced.
+    const result = selectPart(
+      [
+        makeCandidate({
+          part_id: id("p_wrong_priced"),
+          confidence: 0.9,
+          data_quality: "oem",
+          source_domains: ["subaruonlineparts.com"],
+          prices: [
+            { price: 30, refreshed_days_ago: 2 },
+            { price: 32, refreshed_days_ago: 2 },
+          ],
+        }),
+        makeCandidate({
+          part_id: id("p_catalog_unpriced"),
+          confidence: 0.9,
+          data_quality: "oem",
+          source_domains: ["parts.subaru.com"],
+          prices: [],
+        }),
+      ],
+      GATE,
+    );
+    expect(result.winner?.part_id).toBe("p_catalog_unpriced");
+  });
+
+  it("both catalog-attested → falls through to price layers", () => {
+    const result = selectPart(
+      [
+        makeCandidate({
+          part_id: id("p_two_prices"),
+          confidence: 0.9,
+          source_domains: ["parts.toyota.com"],
+          prices: [
+            { price: 30, refreshed_days_ago: 2 },
+            { price: 32, refreshed_days_ago: 2 },
+          ],
+        }),
+        makeCandidate({
+          part_id: id("p_one_price"),
+          confidence: 0.9,
+          source_domains: ["autoparts.toyota.com"],
+          prices: [{ price: 30, refreshed_days_ago: 2 }],
+        }),
+      ],
+      GATE,
+    );
+    expect(result.winner?.part_id).toBe("p_two_prices");
   });
 });
 

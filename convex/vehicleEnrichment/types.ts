@@ -431,3 +431,17 @@ export const ON_DEMAND_SERVICE_SLUGS = [
   "pre_purchase_inspection",
   "diagnostic_scan",
 ] as const;
+
+/**
+ * Wear/condition-based services (by `services.slug`): the mileage figure is a
+ * wear ESTIMATE, never an OEM replacement schedule. Their interval rows must
+ * carry status "estimated" (round 9, batch-11: pads-at-50k shipped as
+ * "scheduled" on 3 of 5 configs) and never a months recurrence. Single source
+ * of truth for the sets previously duplicated across v3mutations.
+ */
+export const WEAR_ITEM_SERVICE_SLUGS = new Set([
+  "brake_pad_replacement",
+  "rotor_replacement",
+  "tire_replacement",
+  "battery_replacement",
+]);

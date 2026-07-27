@@ -304,6 +304,8 @@ REMINDERS:
 - thermostat_oem / thermostat_gasket_oem: replaced only if found bad during a coolant flush — still extract the SKUs when the catalog lists them.
 - ${cvtReminder}
 - brake_pads interval: the manufacturer's INSPECTION / typical pad-life guidance (wear-based, not a hard schedule) — use status "inspect_only" unless the schedule explicitly mandates replacement. tire_rotation: the rotation schedule (typically 5,000-8,000 miles).
+- INTERVALS ARE MODEL-YEAR-SPECIFIC: manufacturers routinely changed schedules at a generation or model-year boundary (e.g. Toyota moved many nameplates from 5,000-mile to 10,000-mile oil intervals at MY2013). Use the schedule published for THIS exact model year; a schedule for the same nameplate's later/earlier years is WRONG. If the source's year coverage does not include this model year, return null rather than the wrong-year value.
+- Interval status "scheduled" is a claim that the cadence is the OEM maintenance schedule (owner's manual / warranty & maintenance guide). A dealer-site or aftermarket convention with no OEM schedule behind it (e.g. "brake fluid every 2 years" on a make whose guide says inspect-only, "transmission service every 60k" when the OEM schedule lists none under normal driving) must use status "inspect_only" or "conditional_severe" — never "scheduled".
 - Conditional existence IS the data: returning null for any of the above means the vehicle does not use that part — do not guess a substitute.
 - Return null for any field not found in sources and not in the 4 allowed training data fields.`;
 }

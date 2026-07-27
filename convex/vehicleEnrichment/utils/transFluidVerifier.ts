@@ -12,7 +12,9 @@
  * GENERATION / chemistry mismatch inside the correct transmission type that
  * rides in on a wrong-variant identification:
  *   - 2015 Rogue mislabeled the old "Rogue Select" (JF011E) → CVT NS-2 where
- *     the T32's JF017E needs NS-3 (damaging).
+ *     the T32 2.5's JF016E (RE0F10H) needs NS-3 (damaging). (Round 9: this KB
+ *     row previously said JF017E — that is the larger 3.5L-class Jatco unit,
+ *     not the Rogue 2.5's; batch-11 P2-10.)
  *   - 2018 Focus DPS6 DRY dual-clutch got Mercon LV (a WET-auto fluid) — needs
  *     the dry-DCT fluid XT-11-QDC.
  *   - 2022 Tahoe 10L80 10-speed got DEXRON-VI where it needs DEXRON-ULV.
@@ -40,7 +42,7 @@ export interface TransFluidVerdict {
    *  the unit or its required fluid with confidence. */
   verdict: "match" | "mismatch" | "uncertain";
   /** The specific transmission unit the checker placed on this vehicle (e.g.
-   *  "Jatco JF017E CVT", "GM 10L80", "Ford DPS6 dry dual-clutch"). Null when it
+   *  "Jatco JF016E CVT", "GM 10L80", "Ford DPS6 dry dual-clutch"). Null when it
    *  could not name the unit — which forces "uncertain" (no positive evidence). */
   transUnit: string | null;
   /** The OEM-required fluid family/spec for that unit (e.g. "Nissan CVT NS-3",
@@ -112,7 +114,7 @@ const SYSTEM = `You are an automotive transmission-fluid fact-checker. You are g
 The "claimed family" line below (automatic / CVT / manual / N-speed) comes from a VIN decode that is SOMETIMES WRONG — decoders routinely mis-report automatic-vs-manual and the speed count (e.g. a diesel with a ZF 8-speed automatic that vPIC labels "6-speed manual"). Treat it as a weak hint, NOT ground truth: independently establish the real transmission from the YEAR + MODEL + ENGINE. If your web research contradicts the claimed family, trust your research and say so.
 
 Work in this order and SEARCH THE WEB:
-1. Identify the SPECIFIC transmission UNIT fitted to THIS exact year + model + engine + trim/variant. Name the maker's unit code, e.g. "Jatco JF017E CVT", "GM 10L80 10-speed", "Ford DPS6 dry dual-clutch", "ZF 8HP45", "Aisin AWF8F35". Many nameplates have MULTIPLE units in the SAME model year across trims/generations (e.g. a 2015 Nissan Rogue is the T32 with a JF017E, NOT the older "Rogue Select" S35 with a JF011E; a 2011 Corolla is the U341E using ATF WS, NOT the older U240E that used Type T-IV) — pin the one that matches THIS vehicle, and do NOT let a superseded/older unit's fluid stand in for the current one.
+1. Identify the SPECIFIC transmission UNIT fitted to THIS exact year + model + engine + trim/variant. Name the maker's unit code, e.g. "Jatco JF016E CVT", "GM 10L80 10-speed", "Ford DPS6 dry dual-clutch", "ZF 8HP45", "Aisin AWF8F35". Many nameplates have MULTIPLE units in the SAME model year across trims/generations, and unit families split by ENGINE within one model (e.g. a 2015-2017 Nissan Rogue 2.5 is the T32 with the JF016E / RE0F10H, NOT the older "Rogue Select" S35 with a JF011E — and NOT the larger JF017E, which serves the 3.5L-class applications; a 2011 Corolla is the U341E using ATF WS, NOT the older U240E that used Type T-IV) — pin the one that matches THIS vehicle+engine, and do NOT let a superseded/older unit's fluid stand in for the current one.
 2. State the OEM-required fluid family/spec for THAT unit (e.g. "Nissan CVT NS-3", "DEXRON-ULV", "Ford XT-11-QDC dry-DCT fluid", "ZF LifeguardFluid 8 / Shell M-1375.4").
 3. Compare it to the claimed fluid.
 

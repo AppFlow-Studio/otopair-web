@@ -992,6 +992,77 @@ export const getServiceGapsForConfig = query({
   },
 });
 
+export type ConfigPriceGap = {
+  serviceSlug: string;
+  serviceName: string;
+  roleKey: string | null;
+  partId: string;
+  oemNumber: string | null;
+  partName: string | null;
+};
+
+/**
+ * Parts this config HAS a fitment for but no trusted price (part_prices row
+ * that survives the poison/non-pooled/price-band filter — same standard
+ * quotability.ts's has_trusted_price and summarizePartPrices use). Reads
+ * "which services" off the latest run's persisted `quotability` snapshot
+ * (the pipeline's own per-role-aware computation — not re-derived here) and
+ * only re-checks live pricing for THOSE services' actual fitments, so this
+ * stays cheap and never drifts from what the run itself flagged as
+ * unquotable. Powers the director "Add price" control in the review-resolve
+ * modal.
+ */
+export const getPriceGapsForConfig = query({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, { vehicleConfigId }): Promise<{ gaps: ConfigPriceGap[] }> => {
+    const latest = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", vehicleConfigId))
+      .order("desc")
+      .first();
+    const services = latest?.quotability?.services ?? [];
+    const gappedSlugs = services.filter((s) => s.core_with_price < s.core_total).map((s) => s.slug);
+    if (gappedSlugs.length === 0) return { gaps: [] };
+
+    const allServices = await ctx.db.query("services").collect();
+    const serviceBySlug = new Map<string, Doc<"services">>();
+    for (const svc of allServices) {
+      if (svc.slug) serviceBySlug.set(normalizeServiceSlug(svc.slug), svc);
+    }
+
+    const gaps: ConfigPriceGap[] = [];
+    const seenParts = new Set<string>();
+    for (const slug of gappedSlugs) {
+      const rows = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", vehicleConfigId).eq("service_type", slug),
+        )
+        .collect();
+      const svc = serviceBySlug.get(slug);
+      for (const f of rows) {
+        if (f.package_code != null) continue;
+        const key = String(f.part_id);
+        if (seenParts.has(key)) continue;
+        const part = await ctx.db.get(f.part_id);
+        if (!part) continue;
+        const summary = await summarizePartPrices(ctx, f.part_id);
+        if (summary.sample_size > 0) continue; // has a trusted price already
+        seenParts.add(key);
+        gaps.push({
+          serviceSlug: svc?.slug ?? slug,
+          serviceName: svc?.name ?? slug.replace(/_/g, " "),
+          roleKey: part.subcategory ?? null,
+          partId: String(part._id),
+          oemNumber: part.oem_part_number ?? null,
+          partName: part.name ?? null,
+        });
+      }
+    }
+    return { gaps };
+  },
+});
+
 /**
  * The brake axle(s) a booking actually covers — drives the pre-job brakes
  * section so a "Rear pads only" job hides the front-pad field (and vice
@@ -1660,6 +1731,8 @@ export async function resolveWinningPartForService(
       data_quality: normalizeDataQuality(
         c.fitment.data_quality ?? c.part.data_quality ?? null,
       ),
+      refute_flagged: c.fitment.refute_flagged === true,
+      source_domains: c.fitment.source_domains ?? [],
       prices: c.priceSummary.sources_used.map((s) => ({
         price: s.price,
         refreshed_days_ago:

@@ -439,6 +439,13 @@ export default defineSchema({
     last_confirmed_at: v.optional(v.number()),
     mechanic_verified: v.optional(v.boolean()),
     data_quality: v.optional(v.string()),
+    // Round 9 (batch-11): the fitment verifier REFUTED this part but it was
+    // kept because multiple sources attested it (proportional skepticism).
+    // Selection demotes flagged fitments so a kept-for-safety part can't win
+    // a quote over an unflagged competitor (Forester: refuted 2010-2018 pads
+    // beat the correct SK-gen pads).
+    refute_flagged: v.optional(v.boolean()),
+    refute_reason: v.optional(v.string()),
     created_at: v.optional(v.number()),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])
@@ -2341,7 +2348,7 @@ export default defineSchema({
           trace: v.optional(
             v.array(
               v.object({
-                layer: v.union(v.number(), v.literal("gate")),
+                layer: v.union(v.number(), v.literal("gate"), v.literal("refute")),
                 name: v.string(),
                 decisive: v.boolean(),
                 reason: v.string(),
@@ -3318,6 +3325,29 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_slug", ["slug"])
     .index("by_number", ["number"]),
+
+  // Itemized membership: which specific vehicle_configs a data_incidents row
+  // covers. data_incidents.affected_count/affected_entity_type stayed a bare
+  // number+type pair (Incident #1's "38 vehicle_config" was never itemized) —
+  // this table is what lets a director actually WORK a declared incident down
+  // instead of just reading its headline count. One row per (incident,
+  // config); status here is per-vehicle progress, independent of the parent
+  // incident's own open/monitoring/resolved status.
+  data_incident_configs: defineTable({
+    incident_id: v.id("data_incidents"),
+    vehicle_config_id: v.id("vehicle_configs"),
+    status: v.union(v.literal("open"), v.literal("corrected")),
+    added_by: v.string(),
+    added_by_id: v.optional(v.id("director_users")),
+    added_at: v.number(),
+    corrected_by: v.optional(v.string()),
+    corrected_by_id: v.optional(v.id("director_users")),
+    corrected_at: v.optional(v.number()),
+    correction_note: v.optional(v.string()),
+  })
+    .index("by_incident", ["incident_id", "status"])
+    .index("by_incident_config", ["incident_id", "vehicle_config_id"])
+    .index("by_config", ["vehicle_config_id"]),
 
   // Materialized KPI counters for the internal portals (decision #3, R2
   // class). Written only by portalStats.ts summarizers on cron; read via the

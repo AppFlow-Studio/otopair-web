@@ -4457,6 +4457,7 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
         : undefined,
     tires: {
       brand: prejob.tire_brand ?? undefined,
+      model: prejob.tire_model ?? undefined,
       size_front: prejob.tire_size_front ?? undefined,
       size_rear: prejob.tire_size_rear ?? undefined,
       tread_depths: prejob.tire_tread ?? undefined,

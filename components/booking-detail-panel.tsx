@@ -1417,6 +1417,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 ? "Could not save the pre-job vehicle check."
                 : "Could not start booking."),
           );
+          throw err;
         }
       } finally {
         setIsSubmittingPrejob(false);

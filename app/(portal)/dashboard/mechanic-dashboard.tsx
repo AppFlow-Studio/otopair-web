@@ -305,6 +305,7 @@ export default function MechanicDashboard() {
               ? "Could not save the pre-job vehicle check"
               : "Could not start booking"),
         );
+        throw error;
       }
     } finally {
       setBusyAction(null);

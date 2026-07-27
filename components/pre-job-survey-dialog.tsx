@@ -66,7 +66,9 @@ import {
   type TirePosition,
   type TireTreadReading,
 } from "@/lib/inspection-measurements";
+import { TIRE_BRAND_OPTIONS } from "@/lib/inspection-options";
 import { cn } from "@/lib/utils";
+import { TireSizeInput } from "@/components/ui/tire-size-input";
 
 const conditionPalette: Record<
   TireCondition,
@@ -112,28 +114,6 @@ function resolveOption(value: string | null | undefined, options: SelectOption[]
 function optionLabel(value: string | null | undefined, options: SelectOption[]): string {
   return resolveOption(value, options)?.label ?? (value ?? "");
 }
-
-const TIRE_BRAND_OPTIONS: SelectOption[] = [
-  { value: "goodyear", label: "Goodyear" },
-  { value: "michelin", label: "Michelin" },
-  { value: "bridgestone", label: "Bridgestone" },
-  { value: "firestone", label: "Firestone" },
-  { value: "continental", label: "Continental" },
-  { value: "pirelli", label: "Pirelli" },
-  { value: "cooper", label: "Cooper" },
-  { value: "hankook", label: "Hankook" },
-  { value: "yokohama", label: "Yokohama" },
-  { value: "bfgoodrich", label: "BFGoodrich", aliases: ["bf goodrich", "b.f. goodrich"] },
-  { value: "toyo", label: "Toyo" },
-  { value: "falken", label: "Falken" },
-  { value: "general", label: "General" },
-  { value: "kumho", label: "Kumho" },
-  { value: "dunlop", label: "Dunlop" },
-  { value: "nitto", label: "Nitto" },
-  { value: "nexen", label: "Nexen" },
-  { value: "mastercraft", label: "Mastercraft" },
-  { value: "sumitomo", label: "Sumitomo" },
-];
 
 const OIL_VISCOSITY_OPTIONS: SelectOption[] = [
   { value: "0w_8", label: "0W-8", aliases: ["0w8", "0w-8"] },
@@ -396,109 +376,6 @@ function normalizeTireSizeValue(value?: string | null) {
 
 function isValidTireSize(value: string) {
   return TIRE_SIZE_PATTERN.test(normalizeTireSizeValue(value));
-}
-
-function parseTireSizeParts(value: string): { width: string; aspect: string; wheel: string } {
-  const normalized = normalizeTireSizeValue(value);
-  const match = normalized.match(/^(\d{0,3})(?:\/(\d{0,2}))?(?:R(\d{0,2}))?$/i);
-  return {
-    width: match?.[1] ?? "",
-    aspect: match?.[2] ?? "",
-    wheel: match?.[3] ?? "",
-  };
-}
-
-function composeTireSize(width: string, aspect: string, wheel: string): string {
-  if (!width && !aspect && !wheel) return "";
-  return `${width}/${aspect}R${wheel}`;
-}
-
-function TireSizeInput({
-  value,
-  onChange,
-  className,
-}: {
-  value: string;
-  onChange: (next: string) => void;
-  className?: string;
-}) {
-  const parts = parseTireSizeParts(value);
-  const aspectRef = useRef<HTMLInputElement | null>(null);
-  const wheelRef = useRef<HTMLInputElement | null>(null);
-
-  const emit = (width: string, aspect: string, wheel: string) => {
-    onChange(composeTireSize(width, aspect, wheel));
-  };
-
-  const sanitize = (s: string, max: number) =>
-    s.replace(/[^0-9]/g, "").slice(0, max);
-
-  return (
-    <div
-      className={cn(
-        "inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-sm",
-        "focus-within:ring-2 focus-within:ring-ring focus-within:border-ring",
-        className,
-      )}
-      aria-label="Tire size"
-    >
-      <input
-        inputMode="numeric"
-        maxLength={3}
-        value={parts.width}
-        placeholder="225"
-        aria-label="Section width"
-        onChange={(e) => {
-          const next = sanitize(e.target.value, 3);
-          emit(next, parts.aspect, parts.wheel);
-          if (next.length === 3) aspectRef.current?.focus();
-        }}
-        className="w-9 bg-transparent text-center outline-none"
-      />
-      <span className="text-muted-foreground">/</span>
-      <input
-        ref={aspectRef}
-        inputMode="numeric"
-        maxLength={2}
-        value={parts.aspect}
-        placeholder="65"
-        aria-label="Aspect ratio"
-        onChange={(e) => {
-          const next = sanitize(e.target.value, 2);
-          emit(parts.width, next, parts.wheel);
-          if (next.length === 2) wheelRef.current?.focus();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Backspace" && !parts.aspect) {
-            e.preventDefault();
-            emit(parts.width.slice(0, -1), parts.aspect, parts.wheel);
-          }
-        }}
-        className="w-7 bg-transparent text-center outline-none"
-      />
-      <span className="text-muted-foreground">R</span>
-      <input
-        ref={wheelRef}
-        inputMode="numeric"
-        maxLength={2}
-        value={parts.wheel}
-        placeholder="17"
-        aria-label="Wheel diameter"
-        onChange={(e) => {
-          const next = sanitize(e.target.value, 2);
-          emit(parts.width, parts.aspect, next);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Backspace" && !parts.wheel) {
-            e.preventDefault();
-            emit(parts.width, parts.aspect.slice(0, -1), parts.wheel);
-            aspectRef.current?.focus();
-          }
-        }}
-        className="w-7 bg-transparent text-center outline-none"
-      />
-    </div>
-  );
 }
 
 function findScrollableAncestor(element: HTMLElement): HTMLElement | null {

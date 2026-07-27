@@ -7,10 +7,12 @@ import { motion, useMotionValueEvent, useScroll } from "motion/react";
 import { ArrowUpRight } from "lucide-react";
 import { UnderlineLink } from "./shared";
 
+// Section anchors on the landing page itself — /about, /careers and /services
+// don't exist yet, and a 404 from the main nav is worse than honest anchors.
 const LINKS = [
-  { label: "About", href: "/about" },
-  { label: "Careers", href: "/careers" },
-  { label: "Services", href: "/services" },
+  { label: "How it works", href: "#how-it-works" },
+  { label: "For shops", href: "#for-shops" },
+  { label: "Coverage", href: "#coverage" },
 ];
 
 /** Floating glass pill nav — fixed, hides on scroll-down, reveals on scroll-up. */

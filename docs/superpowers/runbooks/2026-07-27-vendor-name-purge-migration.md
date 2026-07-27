@@ -8,6 +8,20 @@
 > **Read this whole page before running anything on a deployment that has data
 > you care about.** Steps 1–6 are safe and reversible. Step 7 deletes rows.
 
+## Status
+
+| Deployment | Env vars | Code | Migration | Legacy rows dropped |
+|---|---|---|---|---|
+| `flippant-mink-750` (dev, shared) | ✅ set | ✅ deployed | ✅ `clean: true` | ❌ not run (intentional) |
+| any other deployment | ⬜ | ⬜ | ⬜ | ⬜ |
+
+`flippant-mink-750` was completed 2026-07-27: 183 estimates copied, 182
+observations, 100 part_prices, 7 service slugs. **Every other deployment still
+needs the full run**, starting at §2.
+
+The compatibility layer has **not** been removed anywhere yet — that is §6, and
+it is gated on every deployment above reading `clean: true`.
+
 ---
 
 ## 0. What this is
@@ -220,17 +234,20 @@ All commands are `npx convex run`. Each mutation processes at most `limit` rows
 npx convex run migrations/purgeVendorNames:status
 ```
 
-Example output:
+Real output from the `flippant-mink-750` run (2026-07-27), for shape and scale:
 
 ```json
 {
-  "estimates":    { "legacyTable": 1284, "currentTable": 0, "remaining": 1284 },
-  "observations": { "remaining": 3120, "bySource": { "repairpal_endpoint": 2890, "repairpal_motor": 230 } },
-  "partPrices":   { "remainingPriceType": 640, "remainingSourceDomain": 640, "remainingSourceUrl": 640 },
-  "services":     { "remaining": 7 },
-  "clean": false
+  "clean": false,
+  "estimates":    { "currentTable": 0, "legacyTable": 183, "remaining": 183 },
+  "observations": { "remaining": 182, "bySource": { "repairpal_endpoint": 182 } },
+  "partPrices":   { "remainingPriceType": 100, "remainingSourceDomain": 100, "remainingSourceUrl": 100 },
+  "services":     { "remaining": 7 }
 }
 ```
+
+Every step there drained to `remaining: 0` on a single pass at the default batch
+size, so a deployment of comparable size needs no batching.
 
 **Write these down.** They are your reconciliation baseline for step 5.
 
@@ -320,7 +337,9 @@ separate PR.
 5. **`tests/vendorNamePurge.test.ts`** — the dual-read and migration blocks
    become dead. Keep the `source-name vocabulary` block.
 
-### 7. Drop the legacy rows (destructive)
+---
+
+## 7. Drop the legacy rows (destructive)
 
 Run **only** after step 5 is clean and the app is verified healthy. Requires
 explicit confirmation:
@@ -379,8 +398,9 @@ source authority scoring.
 npx convex env set ESTIMATOR_API_BASE https://repairpal.com/next-api/estimator-flow
 npx convex env set ESTIMATOR_SPEC_DOMAINS repairpal.com,motor.com
 
-# 1. deploy code
-npx convex deploy
+# 1. deploy code — `dev --once` targets CONVEX_DEPLOYMENT.
+#    `npx convex deploy` targets PRODUCTION. Not interchangeable.
+npx convex dev --once
 
 # 2. census — record output
 npx convex run migrations/purgeVendorNames:status

@@ -29,6 +29,17 @@ export interface SanityFlag {
   value: any;
 }
 
+// Round 10: the static base flag bands for capacity fields, used by the
+// forum-escalation rule — a value INSIDE its base band is plausible enough to
+// keep-with-flag even from a low-authority sole source (see runSanityChecks).
+// Keep in sync with the corresponding SANITY_RULES entries below.
+const BASE_CAPACITY_FLAG_BANDS: Record<string, [number, number]> = {
+  oil_capacity_qts: [3, 16],
+  coolant_capacity_qts: [4, 22],
+  diff_fluid_capacity_qts: [0.5, 4],
+  transfer_case_fluid_capacity_qts: [0.5, 3],
+};
+
 const SANITY_RULES: SanityRule[] = [
   // ── Fluids ──
   { field: "oil_capacity_qts", type: "range", min: 3, max: 16, severity: "flag",
@@ -504,6 +515,29 @@ export function runSanityChecks(
         rule.type === "range" &&
         isLowAuthorityDomain(field.source_url)
       ) {
+        // Round 10 (batch-11 F-150): the escalation destroyed the EXACTLY
+        // correct 20.9 qt because the V8 engine-typical band flagged it and
+        // the sole source was f150forum. A value inside the field's STATIC
+        // base flag band is plausible — keep it flagged at capped confidence
+        // (the capacity resolver re-resolves coolant/oil from authoritative
+        // sources anyway); only a value outside the base band still drops on
+        // a forum-only source (the Sierra 16.9-was-wrong class stays covered
+        // by the resolver + the 0.5 cap below).
+        const baseBand = BASE_CAPACITY_FLAG_BANDS[rule.field];
+        const numVal = Number(field.value);
+        const inBaseBand =
+          baseBand != null && !isNaN(numVal) && numVal >= baseBand[0] && numVal <= baseBand[1];
+        if (inBaseBand) {
+          reason = `${rule.reason} — kept (in base band) but sole source is a low-authority page (${field.source_url}); confidence capped`;
+          fields[rule.field] = {
+            ...field,
+            flagged: true,
+            flag_reason: reason,
+            confidence: Math.min(field.confidence ?? 0.5, 0.5),
+          };
+          flags.push({ field: rule.field, severity: "flag", reason, value: field.value });
+          continue;
+        }
         severity = "reject";
         reason = `${rule.reason} — dropped: sole source is a low-authority forum/community page (${field.source_url})`;
       }

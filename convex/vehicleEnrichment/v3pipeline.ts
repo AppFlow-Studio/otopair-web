@@ -58,6 +58,9 @@ import {
 } from "../lib/vehicleDatabases";
 import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
+import { validateChassisCodeYear } from "./generationGate";
+import { hasOemCatalogDomain } from "../partSelector";
+import { backfillKilledRoles } from "./utils/roleBackfill";
 import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
 import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/partFitmentVerifier";
 import { verifyTransFluid, decideTransFluidAction } from "./utils/transFluidVerifier";
@@ -1692,6 +1695,30 @@ export const enrichVehicleBatchV3 = internalAction({
     // (isNhtsaDescriptor catches all three.) Persist the resolved code back to
     // the engines table after STEP 3 below, so sibling-matching uses it.
     let resolvedEngineCodeForPersist: string | null = null;
+    // Adopt a verified replacement code: rebuild the key, thread it through
+    // the scheduler chain (poll bodies rebuild `vehicle` from args.engineCode
+    // — batch-2 audit: Soul verified "U" yet completed as "2l_4cyl"), and
+    // check whether a complete config already exists under the resolved key.
+    const adoptVerifiedEngineCode = async (code: string) => {
+      vehicle.engineCode = code;
+      configKey = buildEngineKey(vehicle);
+      resolvedEngineCodeForPersist = code;
+      (args as any).engineCode = code;
+      const resolvedConfig = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getVehicleConfigByKey,
+        { configKey },
+      );
+      if (resolvedConfig && (resolvedConfig.enrichment_status === "complete" || resolvedConfig.enrichment_status === "verified")) {
+        console.log(`[v8] Resolved config already complete (status=${resolvedConfig.enrichment_status}) — attaching`);
+        await ctx.runMutation(
+          internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
+          { vehicle_id: args.vehicleId, vehicle_config_id: resolvedConfig._id },
+        );
+        return resolvedConfig._id;
+      }
+      return null;
+    };
+
     if (isNhtsaDescriptor(args.engineCode)) {
       console.log(`[v8] Engine code "${args.engineCode}" is a placeholder — resolving real OEM code`);
       const resolved = await resolveEngineCode(
@@ -1701,27 +1728,8 @@ export const enrichVehicleBatchV3 = internalAction({
       );
       if (resolved.source === "verified" && !isNhtsaDescriptor(resolved.engineCode)) {
         console.log(`[v8] Engine code resolved+verified: "${args.engineCode}" → "${resolved.engineCode}"`);
-        vehicle.engineCode = resolved.engineCode;
-        configKey = buildEngineKey(vehicle);
-        resolvedEngineCodeForPersist = resolved.engineCode;
-        // Thread the verified code through the whole scheduler chain: the
-        // poll bodies rebuild `vehicle` from args.engineCode, so without
-        // this the finalize named/keyed the config by the stale placeholder
-        // (batch-2 audit: Soul verified "U" yet completed as "2l_4cyl").
-        (args as any).engineCode = resolved.engineCode;
-        // Check if a complete config already exists under the resolved key
-        const resolvedConfig = await ctx.runQuery(
-          internal.vehicleEnrichment.v3queries.getVehicleConfigByKey,
-          { configKey },
-        );
-        if (resolvedConfig && (resolvedConfig.enrichment_status === "complete" || resolvedConfig.enrichment_status === "verified")) {
-          console.log(`[v8] Resolved config already complete (status=${resolvedConfig.enrichment_status}) — attaching`);
-          await ctx.runMutation(
-            internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
-            { vehicle_id: args.vehicleId, vehicle_config_id: resolvedConfig._id },
-          );
-          return { status: "cache_hit" as const, configId: resolvedConfig._id };
-        }
+        const cacheHitId = await adoptVerifiedEngineCode(resolved.engineCode);
+        if (cacheHitId) return { status: "cache_hit" as const, configId: cacheHitId };
       } else if (resolved.source === "unverified") {
         // 5-VIN test (Jul 2026): unverified codes were how CZDA/ERG/G4FJ
         // poisoned config keys and extraction prompts. Keep the displacement
@@ -1729,6 +1737,33 @@ export const enrichVehicleBatchV3 = internalAction({
         console.warn(`[v8] Engine code candidate "${resolved.engineCode}" failed verification — keeping placeholder "${args.engineCode}"`);
       } else if (resolved.source === "unknown") {
         console.log(`[v8] Engine code resolution returned unknown — keeping placeholder "${args.engineCode}"`);
+      }
+    } else if (args.engineCode && args.engineCode.replace(/[^a-zA-Z0-9]/g, "").length <= 4) {
+      // Round 10 (batch-11 Equinox): a SHORT decoder code (GM RPO shape —
+      // "LSD", "LYX", "LFX") passed straight into the config key with zero
+      // verification, and vPIC itself can return the WRONG YEAR's RPO (2025
+      // "LSD" on a 2024 VIN), anchoring next-generation content. Short codes
+      // get the adversarial year/model check; a refuted one is re-resolved
+      // and only a verified replacement is adopted.
+      const verdict = await verifyEngineCode(
+        args.engineCode, args.year, args.make, args.model, args.trim,
+        args.displacement, vPicData?.cylinders ?? 4,
+      );
+      if (verdict === "refuted") {
+        console.warn(`[v8] Short engine code "${args.engineCode}" REFUTED for MY${args.year} — re-resolving`);
+        const resolved = await resolveEngineCode(
+          args.year, args.make, args.model, args.trim,
+          args.displacement, vPicData?.cylinders ?? 4,
+          vPicData?.fuel_type ?? "Gasoline", args.engineCode,
+          { forceResolve: true },
+        );
+        if (resolved.source === "verified" && !isNhtsaDescriptor(resolved.engineCode)) {
+          console.log(`[v8] Engine code corrected: "${args.engineCode}" → "${resolved.engineCode}"`);
+          const cacheHitId = await adoptVerifiedEngineCode(resolved.engineCode);
+          if (cacheHitId) return { status: "cache_hit" as const, configId: cacheHitId };
+        } else {
+          console.warn(`[v8] Refuted code "${args.engineCode}" could not be replaced with a verified one — keeping (visible in logs only)`);
+        }
       }
     }
 
@@ -2044,6 +2079,24 @@ export const enrichVehicleBatchV3 = internalAction({
         args.model,
         args.trim,
       );
+
+      // Round 10 (batch-11 Tucson): validate the returned code against the
+      // model year BEFORE storing — launch-overlap years get the next
+      // generation's code from web search ("NX4" on a 2021 TL Tucson), and a
+      // wrong stored chassis poisons year-band refutes + sibling cloning.
+      // Deterministic table, fail-open on unknown nameplates/codes.
+      if (chassisResult.chassisCode) {
+        const genVerdict = validateChassisCodeYear(
+          args.make, args.model, chassisResult.chassisCode, args.year,
+        );
+        if (!genVerdict.ok) {
+          console.warn(
+            `[v8] CHASSIS-YEAR GATE — rejected "${chassisResult.chassisCode}": ${genVerdict.reason}` +
+              (genVerdict.expectedForYear ? ` — substituting ${genVerdict.expectedForYear}` : " — leaving chassis null"),
+          );
+          chassisResult.chassisCode = genVerdict.expectedForYear;
+        }
+      }
 
       if (chassisResult.chassisCode) {
         // Patch the chassis code onto the vehicle_config
@@ -2633,6 +2686,21 @@ async function runPollBatch1Body(
     // coolant survival vector). Rejecting here also puts the field back in the
     // batch-2 gap-fill set, giving the pipeline a second chance at a clean
     // value. Finalize re-runs the checks over the merged map as before.
+    // Round 10 (batch-11 SRX, 2nd recurrence): the flex-fuel gate reads
+    // fields["fuel_type"], but fuel_type is not an extraction key — the
+    // decoded fuel lives on the engines row and never entered the map, so
+    // the gate was dead on every config. Inject the decoded value (same
+    // fallback applicabilityRules already uses) so the gate can see it.
+    if (!fields.fuel_type && vPicData?.fuel_type) {
+      fields.fuel_type = {
+        value: vPicData.fuel_type,
+        source_url: null,
+        source_type: "nhtsa",
+        confidence: 0.9,
+        flagged: false,
+        flag_reason: null,
+      };
+    }
     const batch1SanityFlags = runSanityChecks(fields, vPicData?.cylinders ?? 4, {
       gvwrLbs: vPicData?.gvwr_lbs ?? null,
     });
@@ -3096,6 +3164,19 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     }
     allFields = applyFinalizeApplicability(allFields);
 
+    // Round 10: same fuel_type injection as the batch-1 call site — the
+    // flex-fuel gate is otherwise blind (fuel lives on engines, not in the
+    // extraction map). See batch-11 SRX P1-1.
+    if (!allFields.fuel_type && enginePicData?.fuel_type) {
+      allFields.fuel_type = {
+        value: enginePicData.fuel_type,
+        source_url: null,
+        source_type: "nhtsa",
+        confidence: 0.9,
+        flagged: false,
+        flag_reason: null,
+      };
+    }
     const sanityFlags = runSanityChecks(allFields, cylinders, {
       gvwrLbs: enginePicData?.gvwr_lbs ?? null,
     });
@@ -3864,6 +3945,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           name: string;
           sourceCount: number;
           domainCount: number;
+          catalogAttested: boolean;
           quantity: number | null;
         }[] = [];
         const seenOem = new Set<string>();
@@ -3893,6 +3975,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             domainCount: Array.isArray((f as any).source_domains)
               ? (f as any).source_domains.length
               : 0,
+            catalogAttested: hasOemCatalogDomain((f as any).source_domains ?? undefined),
             quantity: (f as any).quantity_needed ?? null,
           });
         }
@@ -3963,15 +4046,26 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               c.domainCount > 0 ? c.domainCount : c.sourceCount,
             ]),
           );
+          // Round 10 (batch-11 Cobalt/Accord): an OEM/dealer-CATALOG-attested
+          // part is never hard-deleted on one verdict — batch-verified correct
+          // parts (25894265, 15400-PLM-A02) were destroyed by single Haiku
+          // refutes fed by mistitled aftermarket listings. Catalog-attested
+          // refutes demote (soft-flag) instead: reversible, and the selector
+          // already prefers unflagged rivals.
+          const catalogByOem = new Map(
+            toVerify.map((c) => [c.oem.toUpperCase(), c.catalogAttested]),
+          );
           const hardDelete = refuted.filter(
             (r) =>
               (supportByOem.get(r.oem.toUpperCase()) ?? 1) <=
-              FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES,
+                FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES &&
+              !catalogByOem.get(r.oem.toUpperCase()),
           );
           const softFlag = refuted.filter(
             (r) =>
               (supportByOem.get(r.oem.toUpperCase()) ?? 1) >
-              FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES,
+                FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES ||
+              catalogByOem.get(r.oem.toUpperCase()),
           );
           if (softFlag.length > 0) {
             console.warn(
@@ -3996,6 +4090,65 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
                 refuted: hardDelete.map((r) => ({ oem: r.oem, reason: r.reason })),
               },
             );
+
+            // Round 10 (batch-11 Cobalt/Crosstrek): a kill used to leave a
+            // permanent hole. One focused re-extraction call for the emptied
+            // roles; answers flow through upsertPartAndFitment where the
+            // fresh blocklist rows reject the refuted numbers, so this can
+            // only add a DIFFERENT part. Disable: PARTS_REFUTE_BACKFILL=0.
+            if ((process.env.PARTS_REFUTE_BACKFILL ?? "1") !== "0") {
+              try {
+                const killed = hardDelete.slice(0, 4).map((r) => ({
+                  roleKey: r.roleKey,
+                  killedOem: r.oem,
+                }));
+                const refills = await backfillKilledRoles(
+                  {
+                    year: args.year,
+                    make: args.make,
+                    model: args.model,
+                    trim: args.trim,
+                    engineCode: vehicle.engineCode,
+                    displacement: args.displacement,
+                  },
+                  killed,
+                );
+                if (refills.length > 0) {
+                  const makeDocForBackfill = await ctx.runQuery(
+                    internal.vehicleEnrichment.v3queries.getMakeByName,
+                    { name: args.make },
+                  );
+                  for (const r of refills) {
+                    const meta = Object.values(PART_FIELD_MAP).find(
+                      (m: any) => m.subcategory === r.roleKey,
+                    ) as any;
+                    if (!meta || !makeDocForBackfill) continue;
+                    const res: any = await ctx.runMutation(
+                      internal.vehicleEnrichment.v3mutations.upsertPartAndFitment,
+                      {
+                        oem_part_number: r.oem,
+                        name: meta.name ?? r.name,
+                        category: meta.category,
+                        subcategory: meta.subcategory,
+                        make_id: makeDocForBackfill._id,
+                        vehicle_config_id: args.vehicleConfigId,
+                        service_type: meta.serviceSlug ?? meta.subcategory,
+                        quantity_needed: 1,
+                        position: meta.position,
+                        service_role: meta.serviceRole,
+                        confidence: 0.7,
+                        source_domain: extractDomain(r.source_url),
+                      },
+                    );
+                    console.log(
+                      `[role-backfill] ${r.roleKey}: ${r.oem}${res?.rejected ? ` REJECTED (${res.rejected})` : " written"}`,
+                    );
+                  }
+                }
+              } catch (e) {
+                console.warn("[role-backfill] pass failed (non-fatal):", e);
+              }
+            }
           }
           fitmentRefutedErrors = [
             ...hardDelete.map((r) => `fitment_refuted:${r.roleKey}:${r.oem}`),

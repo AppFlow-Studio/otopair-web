@@ -413,6 +413,23 @@ export default defineSchema({
     .index("by_brand", ["brand"]),
 
   // [U-W] Unified part-to-vehicle-config fitment
+  // Round 10 (batch-11): durable per-config refute memory. Fitment-verifier
+  // kills used to live only on the (deletable) part_fitments row, so a purge
+  // + re-run reinserted parts that batch-10 had correctly refuted (SRX cabin
+  // filter 13508023). upsertPartAndFitment consults this table on every
+  // write: mode "block" rejects the insert outright; mode "flag" lets the
+  // row in but pre-marks it refute_flagged (selector demotes it).
+  refuted_fitments: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    oem_part_number_normalized: v.string(),
+    service_type: v.optional(v.string()),
+    mode: v.union(v.literal("block"), v.literal("flag")),
+    reason: v.string(),
+    refuted_at: v.number(),
+  })
+    .index("by_config", ["vehicle_config_id"])
+    .index("by_config_oem", ["vehicle_config_id", "oem_part_number_normalized"]),
+
   part_fitments: defineTable({
     part_id: v.id("oem_parts"),
     vehicle_config_id: v.id("vehicle_configs"),

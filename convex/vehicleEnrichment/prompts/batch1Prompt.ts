@@ -289,6 +289,7 @@ REMINDERS:
 - spark_plug quantity = cylinder count from NHTSA if available (use source_type: "nhtsa").
 - If status is "not_applicable" (e.g., timing belt on a chain engine), set miles/months values to null.
 - For rotor_front_oem and rotor_rear_oem: both may appear on the same "brake_disc" page. Extract front and rear part numbers separately if they differ by axle position.
+- Capacities can differ BY DRIVETRAIN on the same engine (2024 Equinox 1.5T: FWD 4.2 qt vs AWD 5.3 qt oil). Use the figure for THIS vehicle's drivetrain (stated in the vehicle description); if the source only gives the other drivetrain's figure, return null.
 - oil_capacity_qts / coolant_capacity_qts must be in US quarts for THIS exact engine. If the source lists the capacity in liters, convert (qts = L × 1.057); never copy a liter figure as a quart figure. Do not use a capacity for a different engine option.
 - coolant_capacity_qts is the TOTAL cooling-system capacity (initial fill). Owner's manuals usually print both "total fill" and "drain and refill" — use total fill (a coolant flush exchanges the full system), never the smaller drain-and-refill figure.
 - brake_fluid_capacity_oz: full-flush brake system capacity in US fluid OUNCES (typical 16-48 oz; 1 L = 33.8 oz). ps_fluid_capacity_oz: power-steering system capacity in US fluid OUNCES — null when power_steering_type is electric.

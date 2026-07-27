@@ -246,9 +246,32 @@ export const processVin = internalAction({
         year: trustVdbYmmt
           ? (vdb?.year || parseInt(nhtsa.year || "0"))
           : (parseInt(nhtsa.year || "0") || vdb?.year || 0),
-        trim: trustVdbYmmt
-          ? (vdb?.trim || nhtsa.trim || "Base")
-          : (nhtsa.trim || "Base"),
+        // Round 10 (batch-11 F-150, 2nd recurrence): the round-8 trim guard
+        // only gated the LLM-normalizer branch — a wrong trim arriving from
+        // the DECODE MERGE itself ("FX4 SuperCrew" from VDB while NHTSA's
+        // series positively says Lariat) flowed through unchecked. Apply the
+        // same token-overlap philosophy here: when VDB's trim shares no
+        // token with NHTSA's trim/series evidence AND NHTSA positively named
+        // one, prefer NHTSA's (the regulatory decode over the aggregator).
+        trim: (() => {
+          const vdbTrim = vdb?.trim ?? "";
+          const nhtsaEvidence = [nhtsa.trim, nhtsa.series, nhtsa.trim2, nhtsa.series2]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          if (trustVdbYmmt && vdbTrim && nhtsaEvidence) {
+            const vdbTokens = vdbTrim.toLowerCase().split(/[\s/_-]+/).filter((t: string) => t.length >= 2);
+            const overlaps = vdbTokens.some((t: string) => nhtsaEvidence.includes(t));
+            if (!overlaps && (nhtsa.trim || nhtsa.series)) {
+              const preferred = nhtsa.trim || nhtsa.series;
+              console.warn(
+                `[decode] TRIM PRECEDENCE — VDB trim "${vdbTrim}" shares no token with NHTSA evidence "${nhtsaEvidence}"; using NHTSA "${preferred}"`,
+              );
+              return preferred;
+            }
+          }
+          return trustVdbYmmt ? (vdbTrim || nhtsa.trim || "Base") : (nhtsa.trim || "Base");
+        })(),
         trim2: nhtsa.trim2 || "",
         series: nhtsa.series || "",
         series2: nhtsa.series2 || "",
@@ -301,6 +324,36 @@ export const processVin = internalAction({
         cca: vdb?.cca || null,
         steeringType: vdb?.steeringType || null,
       };
+
+      // Round 10 (batch-11 Grand Highlander): the substring YMMT agreement
+      // lets the SHORTER nameplate win the merge — vPIC's "Highlander"
+      // collapsed VDB's "Grand Highlander", and because both models share the
+      // A25A-FXS every model-divergent field then resolved to the wrong
+      // sibling at high confidence with no catchable contradiction. When both
+      // decoders name a model and one is a whole-word extension of the other,
+      // the LONGER (more specific) name wins: decoders drop tokens, they
+      // don't invent them. The performance-halo reconcile below still demotes
+      // over-claimed halo tokens (WRX/SS/…) after this.
+      {
+        const normM = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, " ").trim();
+        const a = normM(vdb?.model ?? "");
+        const b = normM(nhtsa.model ?? "");
+        if (a && b && a !== b && merged.model) {
+          const longerRaw = a.length >= b.length ? (vdb?.model ?? "") : (nhtsa.model ?? "");
+          const longerN = normM(longerRaw);
+          const shorterN = a.length >= b.length ? b : a;
+          const wholeWordExtension =
+            longerN.startsWith(shorterN + " ") ||
+            longerN.endsWith(" " + shorterN) ||
+            longerN.includes(" " + shorterN + " ");
+          if (wholeWordExtension && normM(merged.model) === shorterN) {
+            console.warn(
+              `[decode] MODEL SPECIFICITY — "${merged.model}" → "${longerRaw}" (longer decoder nameplate wins over prefix collapse)`,
+            );
+            merged.model = longerRaw;
+          }
+        }
+      }
 
       // Variant mis-decode reconciliation (batch-9): VDB occasionally decodes a
       // non-performance vehicle as its performance halo — a 2003 Impreza Outback
@@ -517,9 +570,26 @@ export const processVin = internalAction({
             });
             const code = (resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "")
               .replace(/[^a-zA-Z0-9\-_.]/g, "");
-            if (code && code.toLowerCase() !== "null" && code.length >= 2 && code.length <= 20) {
+            // Round 10 (batch-11 Crosstrek): "NA" (naturally aspirated) passed
+            // the length filter and was keyed as the engine code. Reject
+            // aspiration/architecture descriptors — they are answers to a
+            // different question, never codes.
+            const DESCRIPTOR_ANSWERS = new Set([
+              "na", "n-a", "turbo", "turbocharged", "supercharged", "dohc",
+              "sohc", "ohv", "vtec", "gdi", "mpi", "diesel", "hybrid", "ev",
+              "i4", "v6", "v8", "h4", "boxer",
+            ]);
+            if (
+              code &&
+              code.toLowerCase() !== "null" &&
+              !DESCRIPTOR_ANSWERS.has(code.toLowerCase()) &&
+              code.length >= 2 &&
+              code.length <= 20
+            ) {
               console.log(`[decode] Search + Haiku resolved engine code: ${code} (was "${finalEngineCode}")`);
               finalEngineCode = code;
+            } else if (code && DESCRIPTOR_ANSWERS.has(code.toLowerCase())) {
+              console.log(`[decode] Search + Haiku returned descriptor "${code}", not an engine code — ignored`);
             }
           }
         } catch (err) {

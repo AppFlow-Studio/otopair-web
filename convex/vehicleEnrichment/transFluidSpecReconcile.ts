@@ -47,6 +47,22 @@ const PART_TOKEN_TO_SPEC: Array<[RegExp, string]> = [
   [/CVTF/, "OEM CVT Fluid (CVTF)"],
 ];
 
+/** Geared-automatic type text (round 10, the Equinox mirror direction).
+ *  Deliberately narrow: plain "Automatic" / "N-speed automatic"; anything
+ *  CVT-ish is excluded by the CVT check running first. */
+const GEARED_AUTO_TYPE_RE = /\bautomatic\b|\b\d+\s*-?\s*speed\b/i;
+
+/** Stepped-ATF family tokens in the PART's number/name (normalized) that
+ *  authorize the mirror correction. */
+const PART_STEPPED_TOKEN_TO_SPEC: Array<[RegExp, string]> = [
+  [/DEXRONVI/, "DEXRON-VI ATF"],
+  [/DEXRONULV/, "DEXRON-ULV ATF"],
+  [/MERCONLV/, "MERCON LV ATF"],
+  [/MERCONV/, "MERCON V ATF"],
+  [/ATF4/, "ATF+4"],
+  [/MATICS/, "Nissan Matic S ATF"],
+];
+
 export type TransFluidSpecReconcile =
   | { action: "keep" }
   | { action: "flag"; reason: string }
@@ -63,22 +79,47 @@ export function reconcileTransFluidSpecWithPart(input: {
   const type = (input.transTypeText ?? "").trim();
   const spec = (input.spec ?? "").trim();
   if (!type || !spec) return { action: "keep" };
-  if (!CVT_TYPE_RE.test(type)) return { action: "keep" };
-  if (CVT_SPEC_RE.test(spec)) return { action: "keep" }; // spec already CVT-family
-  if (!STEPPED_SPEC_RE.test(spec)) return { action: "keep" }; // not identifiably stepped — leave alone
-
   const partNorm = (input.partText ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-  for (const [re, label] of PART_TOKEN_TO_SPEC) {
-    if (re.test(partNorm)) {
-      return {
-        action: "correct",
-        correctedSpec: label,
-        reason: `CVT transmission with stepped-ATF spec "${spec}" contradicted by CVT-family fluid part — spec reconciled to the part's family`,
-      };
+
+  // Direction 1 (batch-11 Rogue): CVT unit + stepped-ATF spec.
+  if (CVT_TYPE_RE.test(type)) {
+    if (CVT_SPEC_RE.test(spec)) return { action: "keep" }; // spec already CVT-family
+    if (!STEPPED_SPEC_RE.test(spec)) return { action: "keep" }; // not identifiably stepped — leave alone
+    for (const [re, label] of PART_TOKEN_TO_SPEC) {
+      if (re.test(partNorm)) {
+        return {
+          action: "correct",
+          correctedSpec: label,
+          reason: `CVT transmission with stepped-ATF spec "${spec}" contradicted by CVT-family fluid part — spec reconciled to the part's family`,
+        };
+      }
     }
+    return {
+      action: "flag",
+      reason: `CVT transmission but spec "${spec}" is a stepped-gearbox ATF family and no CVT-family fluid part corroborates a replacement`,
+    };
   }
-  return {
-    action: "flag",
-    reason: `CVT transmission but spec "${spec}" is a stepped-gearbox ATF family and no CVT-family fluid part corroborates a replacement`,
-  };
+
+  // Direction 2 (round 10, batch-11 Equinox): geared automatic + CVT-family
+  // spec — the inverse contradiction ("GM CVT Fluid (green)" on the 6T45,
+  // anchored by next-generation content). Same evidence bar mirrored.
+  if (GEARED_AUTO_TYPE_RE.test(type)) {
+    if (!CVT_SPEC_RE.test(spec)) return { action: "keep" }; // spec not CVT-family — nothing to do
+    if (STEPPED_SPEC_RE.test(spec)) return { action: "keep" }; // ambiguous chimera string — leave for the verifier
+    for (const [re, label] of PART_STEPPED_TOKEN_TO_SPEC) {
+      if (re.test(partNorm)) {
+        return {
+          action: "correct",
+          correctedSpec: label,
+          reason: `geared automatic with CVT-family spec "${spec}" contradicted by stepped-ATF fluid part — spec reconciled to the part's family`,
+        };
+      }
+    }
+    return {
+      action: "flag",
+      reason: `geared automatic transmission but spec "${spec}" is a CVT fluid family and no stepped-ATF fluid part corroborates a replacement`,
+    };
+  }
+
+  return { action: "keep" };
 }

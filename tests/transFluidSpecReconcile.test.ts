@@ -65,4 +65,32 @@ describe("reconcileTransFluidSpecWithPart", () => {
     });
     expect(r.action).toBe("keep");
   });
+
+  it("mirror direction: flags the batch-11 Equinox shape (6AT + CVT-fluid spec, no part)", () => {
+    const r = reconcileTransFluidSpecWithPart({
+      transTypeText: "Automatic 6-speed",
+      spec: "GM CVT Fluid (green)",
+      partText: null,
+    });
+    expect(r.action).toBe("flag");
+  });
+
+  it("mirror direction: corrects when a stepped-ATF part corroborates", () => {
+    const r = reconcileTransFluidSpecWithPart({
+      transTypeText: "Automatic",
+      spec: "CVT Fluid",
+      partText: "ACDelco DEXRON-VI 10-9243",
+    });
+    expect(r.action).toBe("correct");
+    if (r.action === "correct") expect(r.correctedSpec).toBe("DEXRON-VI ATF");
+  });
+
+  it("mirror direction: keeps a geared automatic with a stepped spec", () => {
+    const r = reconcileTransFluidSpecWithPart({
+      transTypeText: "Automatic 8-speed",
+      spec: "DEXRON-VI",
+      partText: "19417577",
+    });
+    expect(r.action).toBe("keep");
+  });
 });

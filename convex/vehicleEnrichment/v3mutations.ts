@@ -503,6 +503,17 @@ export const updateTransmissionSpecs = internalMutation({
         );
       }
     }
+    // Round 10 (batch-11 Crosstrek speeds:8, GH speeds:1): a CVT has no
+    // discrete gear count — paddle-step counts and eCVT "1" are data-shape
+    // noise that downstream reconcilers then argue with. When the resolved
+    // family is CVT, never store speeds (and clear any previously stored).
+    const resolvedType = String(
+      patch.type ?? patch.transmission_type ?? (await ctx.db.get(transmission_id) as any)?.type ?? "",
+    ).toLowerCase();
+    if (resolvedType.includes("cvt") || resolvedType.includes("continuously variable")) {
+      if (patch.speeds !== undefined) delete patch.speeds;
+      (patch as Record<string, unknown>).speeds = undefined;
+    }
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(transmission_id, patch);
     }
@@ -694,6 +705,24 @@ export const upsertPartAndFitment = internalMutation({
     // variants ("5Q0 698 451 A" vs "5Q0698451A") resolve to one row instead of
     // splitting fitments and price history across duplicates.
     const normalized = normalizeOemNumber(cleanNumber);
+
+    // Round 10 (batch-11 SRX): durable refute memory. A number the fitment
+    // verifier hard-killed for THIS config must not walk back in on a purge
+    // + re-run ("block"); a soft-flagged one re-enters pre-demoted ("flag").
+    const refutedRow = await ctx.db
+      .query("refuted_fitments")
+      .withIndex("by_config_oem", (q) =>
+        q.eq("vehicle_config_id", args.vehicle_config_id)
+         .eq("oem_part_number_normalized", normalized)
+      )
+      .first();
+    if (refutedRow && refutedRow.mode === "block") {
+      console.log(
+        `[v8-parts] REJECTED at write: ${cleanNumber} (${args.subcategory}) is on this config's refute blocklist — ${refutedRow.reason}`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "refuted" as const };
+    }
+
     let part = await ctx.db
       .query("oem_parts")
       .withIndex("by_part_number_normalized", (q) =>
@@ -823,6 +852,11 @@ export const upsertPartAndFitment = internalMutation({
         confidence: args.confidence,
         source_count: 1,
         ...(domain ? { source_domains: [domain] } : {}),
+        // Round 10: a soft-refuted number re-enters pre-demoted so the flag
+        // (and the selector's demotion) survives purge + re-run.
+        ...(refutedRow && refutedRow.mode === "flag"
+          ? { refute_flagged: true, refute_reason: refutedRow.reason }
+          : {}),
         first_confirmed_at: now,
         last_confirmed_at: now,
         mechanic_verified: false,
@@ -1041,6 +1075,43 @@ export const upsertServiceInterval = internalMutation({
       mechanic_verified: false,
       created_at: Date.now(),
     });
+  },
+});
+
+// Round 10: targeted interval patch for the adversarial-verification writer.
+// Resolves the service by slug (the suspect carries serviceSlug, not an id)
+// and patches the one row. Previously interval corrections were a no-op stub
+// (batch-11 Cobalt DEX-COOL 30k/24mo survived two batches after detection).
+export const patchServiceIntervalBySlug = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_slug: v.string(),
+    interval_miles: v.optional(v.float64()),
+    interval_months: v.optional(v.float64()),
+    status: v.optional(v.string()),
+    confidence: v.optional(v.float64()),
+    data_quality: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const slugNorm = args.service_slug.replace(/-/g, "_");
+    const services = await ctx.db.query("services").collect();
+    const svc = services.find((s) => ((s.slug ?? "") as string).replace(/-/g, "_") === slugNorm);
+    if (!svc) return { patched: false, reason: "service_not_found" };
+    const row = await ctx.db
+      .query("service_intervals")
+      .withIndex("by_config_service", (q) =>
+        q.eq("vehicle_config_id", args.vehicle_config_id).eq("service_id", svc._id)
+      )
+      .first();
+    if (!row) return { patched: false, reason: "interval_row_not_found" };
+    const patch: Record<string, unknown> = {};
+    if (args.interval_miles !== undefined) patch.interval_miles = args.interval_miles;
+    if (args.interval_months !== undefined) patch.interval_months = args.interval_months;
+    if (args.status !== undefined) patch.status = args.status;
+    if (args.confidence !== undefined) patch.confidence = args.confidence;
+    if (args.data_quality !== undefined) patch.data_quality = args.data_quality;
+    if (Object.keys(patch).length > 0) await ctx.db.patch(row._id, patch);
+    return { patched: true };
   },
 });
 
@@ -1588,6 +1659,28 @@ export const removeRefutedFitments = internalMutation({
         `[fitment-verify] Removing refuted fitment ${String(f._id)} (${oem}, service=${(f as any).service_type ?? "?"}): ${refutedByOem.get(oem)}`,
       );
       await ctx.db.delete(f._id);
+      // Round 10: make the kill durable — a purge + re-run must not
+      // reinsert this number on this config (batch-11 SRX regression).
+      const normalized = normalizeOemNumber((part as any)?.oem_part_number ?? oem);
+      const already = await ctx.db
+        .query("refuted_fitments")
+        .withIndex("by_config_oem", (q) =>
+          q.eq("vehicle_config_id", args.vehicle_config_id)
+           .eq("oem_part_number_normalized", normalized)
+        )
+        .first();
+      if (already) {
+        await ctx.db.patch(already._id, { mode: "block", reason: refutedByOem.get(oem)!, refuted_at: Date.now() });
+      } else {
+        await ctx.db.insert("refuted_fitments", {
+          vehicle_config_id: args.vehicle_config_id,
+          oem_part_number_normalized: normalized,
+          service_type: (f as any).service_type,
+          mode: "block",
+          reason: refutedByOem.get(oem)!,
+          refuted_at: Date.now(),
+        });
+      }
       removed++;
     }
     return { removed };
@@ -1621,6 +1714,27 @@ export const flagRefutedFitments = internalMutation({
         refute_flagged: true,
         refute_reason: refutedByOem.get(oem),
       });
+      // Round 10: persist the soft flag across purge + re-run (mode "flag":
+      // re-inserts are allowed but come back pre-demoted). Never downgrade
+      // an existing "block" row to "flag".
+      const normalized = normalizeOemNumber((part as any)?.oem_part_number ?? oem);
+      const already = await ctx.db
+        .query("refuted_fitments")
+        .withIndex("by_config_oem", (q) =>
+          q.eq("vehicle_config_id", args.vehicle_config_id)
+           .eq("oem_part_number_normalized", normalized)
+        )
+        .first();
+      if (!already) {
+        await ctx.db.insert("refuted_fitments", {
+          vehicle_config_id: args.vehicle_config_id,
+          oem_part_number_normalized: normalized,
+          service_type: (f as any).service_type,
+          mode: "flag",
+          reason: refutedByOem.get(oem)!,
+          refuted_at: Date.now(),
+        });
+      }
       flagged++;
     }
     return { flagged };

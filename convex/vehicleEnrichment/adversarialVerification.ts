@@ -262,8 +262,26 @@ export const writeVerificationResults = internalMutation({
             vehicle_config_id: args.vehicle_config_id,
             ...trimPatchFields,
           } as any);
+        } else if (result.table === "interval" && result.serviceSlug && isNumeric) {
+          // Round 10 (batch-11 Cobalt, 2nd recurrence): this branch was a
+          // documented no-op stub, so a coolant-floor suspect (30k/24mo on
+          // DEX-COOL) was detected, sent to Haiku, corrected — and never
+          // written. Patch the interval row and downgrade it to "estimated":
+          // an adversarially-corrected cadence is a defensible estimate, not
+          // an OEM schedule.
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchServiceIntervalBySlug, {
+            vehicle_config_id: args.vehicle_config_id,
+            service_slug: result.serviceSlug,
+            ...(result.field === "interval_miles" ? { interval_miles: numVal } : {}),
+            ...(result.field === "interval_months" ? { interval_months: numVal } : {}),
+            status: "estimated",
+            confidence: Math.min(result.confidence, 0.7),
+            data_quality: "adversarial_corrected",
+          });
+          console.log(
+            `[adversarial] interval corrected: ${result.serviceSlug}.${result.field} ${result.originalValue} → ${result.verifiedValue} (estimated)`,
+          );
         }
-        // Service interval corrections would need a dedicated mutation — skip for now
         corrections++;
       } else if (result.action === "nullified" && result.table === "engine" && args.engine_id) {
         // Null out the bad value

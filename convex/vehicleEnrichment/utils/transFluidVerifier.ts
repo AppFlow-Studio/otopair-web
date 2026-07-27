@@ -119,7 +119,8 @@ Work in this order and SEARCH THE WEB:
 3. Compare it to the claimed fluid.
 
 REFUSE these traps (all are "mismatch" when they contradict the unit's real spec):
-- A newer/older GENERATION of the same family: NS-2 vs NS-3 (Nissan CVT), DEXRON-VI vs DEXRON-ULV (GM), Mercon LV vs Mercon ULV — same brand, wrong generation, wrong fluid.
+- A newer/older GENERATION of the same family: NS-2 vs NS-3 (Nissan CVT), DEXRON-VI vs DEXRON-ULV (GM), Mercon LV vs Mercon ULV — same brand, wrong generation, wrong fluid. Subaru CVTs are a known minefield: the TR580 chain CVT moved from CVTF-II to **CVTF-III** for 2021+ applications per Subaru TSB 01-167-08R, while "High Torque CVT Fluid" and "CVT Fluid LV" are **TR690** fluids — a TR580 car specced with HT/LV or the gen-1 blue K0425Y0710 is a mismatch.
+- A CHIMERA spec string that mixes manufacturers or families (e.g. "Subaru CVT Fluid TC (CVT-HT-LV)" — "Fluid TC" is a Toyota/Idemitsu spec name welded onto two Subaru TR690 fluid names). A fluid string that does not parse to ONE real spec of ONE family for this unit is a mismatch; name the single correct spec in your answer.
 - The reverse direction of the generation trap: do NOT demand a NEWER-era fluid on an OLDER unit that never used it. MERCON LV belongs to Ford's 6R80/6F35 era (2009+); the earlier 4R70W/4R75W/4R75E family (2004-2008 F-150 etc.) is specified MERCON V, and MERCON V and LV are NOT interchangeable in either direction. Calling a correct period fluid "mismatch" because a newer spec exists for LATER transmissions is a false positive (a batch-10 verifier error flagged MERCON V on a 2006 4R75E, expecting LV).
 - A WET-auto fluid in a DRY dual-clutch (or vice-versa): a DPS6/DSG dry-clutch needs a dedicated dry-DCT fluid, NOT Mercon LV / Dexron; a wet DCT needs its own DCT fluid, not a torque-converter ATF.
 - A geared-automatic ATF in a CVT (or a CVT fluid in a geared automatic) — CVT fluid is NOT interchangeable with ATF.

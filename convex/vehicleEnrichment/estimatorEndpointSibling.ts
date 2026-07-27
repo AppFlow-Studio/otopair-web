@@ -1,5 +1,5 @@
 /**
- * repairpalEndpointSibling.ts — Tier 2 engine-sibling selector. When RepairPal
+ * estimatorEndpointSibling.ts — Tier 2 engine-sibling selector. When Estimator
  * has no entry for our exact trim (e.g. BMW M550i), ask Haiku to pick the
  * closest ENGINE-equivalent RP base vehicle from the make+year candidate list.
  * The answer is validated against the list (pickValidSibling) — no hallucinated
@@ -8,7 +8,7 @@
  * verified by the live backfill integration run.
  */
 import Anthropic from "@anthropic-ai/sdk";
-import { pickValidSibling } from "./repairpalEndpointMatch";
+import { pickValidSibling } from "./estimatorEndpointMatch";
 
 const HAIKU_MODEL = "claude-haiku-4-5-20251001";
 
@@ -35,7 +35,7 @@ export async function selectEngineSiblingLLM(
   if (!candidates.length) return null;
   const client = getHaikuClient();
   if (!client) {
-    console.log("[repairpal-sibling] No ANTHROPIC_API_KEY — no engine-sibling");
+    console.log("[estimator-sibling] No ANTHROPIC_API_KEY — no engine-sibling");
     return null;
   }
 
@@ -47,7 +47,7 @@ export async function selectEngineSiblingLLM(
   const drive = cfg.drivetrain ? ` (${cfg.drivetrain})` : "";
 
   const userPrompt = `Our vehicle: ${label}${drive}, engine ${engine}.
-RepairPal has no listing for it. From this list of RepairPal ${cfg.make} ${cfg.year} models, pick the ONE that is the closest engine-equivalent for service labor, or null if none shares the engine:
+Estimator has no listing for it. From this list of Estimator ${cfg.make} ${cfg.year} models, pick the ONE that is the closest engine-equivalent for service labor, or null if none shares the engine:
 ${candidates.map((c) => `  - ${c.modelName}`).join("\n")}
 
 Return JSON: { "sibling": "<exact modelName from the list>" | null, "reason": "<short>" }`;
@@ -66,10 +66,10 @@ Return JSON: { "sibling": "<exact modelName from the list>" | null, "reason": "<
     const parsed = JSON.parse(raw);
     const name = typeof parsed?.sibling === "string" ? parsed.sibling : null;
     const picked = pickValidSibling(name, candidates);
-    console.log(`[repairpal-sibling] ${label}: LLM -> ${name ?? "null"} ${picked ? "(valid)" : "(no/invalid)"}`);
+    console.log(`[estimator-sibling] ${label}: LLM -> ${name ?? "null"} ${picked ? "(valid)" : "(no/invalid)"}`);
     return picked;
   } catch (e) {
-    console.warn(`[repairpal-sibling] Haiku failed (${e}) — no engine-sibling`);
+    console.warn(`[estimator-sibling] Haiku failed (${e}) — no engine-sibling`);
     return null;
   }
 }

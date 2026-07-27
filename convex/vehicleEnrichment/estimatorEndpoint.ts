@@ -1,16 +1,16 @@
 /**
- * repairpalEndpoint.ts — RepairPal ESTIMATE-ENDPOINT resolver (the new
+ * estimatorEndpoint.ts — Estimator ESTIMATE-ENDPOINT resolver (the new
  * high-confidence labor + parts source).
  *
  * STATUS: IMPLEMENTED. Resolves make → base-vehicle → per-service estimates
- * via the RepairPal next-api estimator-flow endpoint, upserts raw rows into
- * repairpal_endpoint_estimates, and returns { resolved, services: {slug: hours} }
+ * via the Estimator next-api estimator-flow endpoint, upserts raw rows into
+ * estimator_estimates, and returns { resolved, services: {slug: hours} }
  * for the labor_observations merge (weight 0.9).
  *
  * Pure helpers composed (do not re-implement):
- *   convex/vehicleEnrichment/repairpalEndpointMatch.ts
+ *   convex/vehicleEnrichment/estimatorEndpointMatch.ts
  *   (resolveMakeId, resolveBaseVehicleId, extractVariants, selectVariant,
- *    endpointPartCategory, SERVICE_REPAIRPAL_IDS)
+ *    endpointPartCategory, SERVICE_ESTIMATOR_IDS)
  */
 import { internalAction } from "../_generated/server";
 import { v } from "convex/values";
@@ -20,19 +20,19 @@ import {
   extractVariants,
   selectVariant,
   endpointPartCategory,
-  SERVICE_REPAIRPAL_IDS,
+  SERVICE_ESTIMATOR_IDS,
   type EndpointVariant,
-} from "./repairpalEndpointMatch";
+} from "./estimatorEndpointMatch";
 import { internal } from "../_generated/api";
-import { selectEngineSiblingLLM } from "./repairpalEndpointSibling";
+import { selectEngineSiblingLLM } from "./estimatorEndpointSibling";
+import { requireEstimatorApiBase } from "../lib/estimatorApi";
 
-export type RepairpalEndpointResult = {
+export type EstimatorEndpointResult = {
   resolved: boolean;
   /** serviceSlug -> labor hours (fed into the labor_observations merge at weight 0.9). */
   services: Record<string, number>;
 };
 
-const BASE = "https://repairpal.com/next-api/estimator-flow";
 const ZIP = "10001";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -75,7 +75,7 @@ function mapPart(p: any) {
   };
 }
 
-export const resolveRepairpalEndpointForConfig = internalAction({
+export const resolveEstimatorEndpointForConfig = internalAction({
   args: {
     vehicleConfigId: v.id("vehicle_configs"),
     make: v.string(),
@@ -87,7 +87,12 @@ export const resolveRepairpalEndpointForConfig = internalAction({
     drivetrain: v.optional(v.union(v.string(), v.null())),
     services: v.array(v.object({ slug: v.string(), serviceId: v.id("services") })),
   },
-  handler: async (ctx, args): Promise<RepairpalEndpointResult> => {
+  handler: async (ctx, args): Promise<EstimatorEndpointResult> => {
+    // Provider host comes from the deployment env, never from source. Unset →
+    // report unresolved so the labor aggregate falls back to its other sources.
+    const BASE = requireEstimatorApiBase("estimate-endpoint resolution");
+    if (!BASE) return { resolved: false, services: {} };
+
     const makes = await getJson(`${BASE}/makes?year=${args.year}`);
     const makeId = Array.isArray(makes) ? resolveMakeId(makes, args.make) : null;
     if (makeId == null) return { resolved: false, services: {} };
@@ -130,7 +135,7 @@ export const resolveRepairpalEndpointForConfig = internalAction({
     };
 
     for (const svc of args.services) {
-      const map = SERVICE_REPAIRPAL_IDS[svc.slug];
+      const map = SERVICE_ESTIMATOR_IDS[svc.slug];
       if (!map) continue;
 
       if (svc.slug === "filter_replacement") {
@@ -149,7 +154,7 @@ export const resolveRepairpalEndpointForConfig = internalAction({
           return t || undefined;
         };
         services[svc.slug] = minutes / 60;
-        await ctx.runMutation(internal.vehicleEnrichment.repairpalEndpointMutations.upsertRepairpalEndpointEstimate, {
+        await ctx.runMutation(internal.vehicleEnrichment.estimatorEndpointMutations.upsertEstimatorEstimate, {
           vehicle_config_id: args.vehicleConfigId, service_id: svc.serviceId, base_vehicle_id: baseVehicleId,
           variant_label: picks.map((vrt) => vrt.label).join(" + "),
           labor_minutes: minutes, labor_hours: minutes / 60,
@@ -168,7 +173,7 @@ export const resolveRepairpalEndpointForConfig = internalAction({
         if (!picked) continue;
         services[svc.slug] = picked.minutes / 60;
         const parts = (picked.parts ?? []).map(mapPart);
-        await ctx.runMutation(internal.vehicleEnrichment.repairpalEndpointMutations.upsertRepairpalEndpointEstimate, {
+        await ctx.runMutation(internal.vehicleEnrichment.estimatorEndpointMutations.upsertEstimatorEstimate, {
           vehicle_config_id: args.vehicleConfigId, service_id: svc.serviceId, base_vehicle_id: baseVehicleId,
           variant_label: picked.label,
           labor_minutes: picked.minutes, labor_hours: picked.minutes / 60,

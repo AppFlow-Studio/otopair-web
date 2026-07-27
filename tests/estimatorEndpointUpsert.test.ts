@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { makeT } from "./helpers";
 import { internal } from "../convex/_generated/api";
 
-describe("upsertRepairpalEndpointEstimate", () => {
+describe("upsertEstimatorEstimate", () => {
   it("upserts one row per (config, service)", async () => {
     const t = makeT();
 
@@ -45,20 +45,20 @@ describe("upsertRepairpalEndpointEstimate", () => {
 
     // First upsert — should INSERT
     await t.mutation(
-      internal.vehicleEnrichment.repairpalEndpointMutations
-        .upsertRepairpalEndpointEstimate,
+      internal.vehicleEnrichment.estimatorEndpointMutations
+        .upsertEstimatorEstimate,
       row,
     );
 
     // Second upsert — same (config, service), different labor_minutes — should PATCH
     await t.mutation(
-      internal.vehicleEnrichment.repairpalEndpointMutations
-        .upsertRepairpalEndpointEstimate,
+      internal.vehicleEnrichment.estimatorEndpointMutations
+        .upsertEstimatorEstimate,
       { ...row, labor_minutes: 36, fetched_at: 2 },
     );
 
     const rows = await t.run((ctx) =>
-      ctx.db.query("repairpal_endpoint_estimates").collect(),
+      ctx.db.query("estimator_estimates").collect(),
     );
 
     expect(rows.length).toBe(1);

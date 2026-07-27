@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeName } from "../convex/devOnly/repairpalMinutesSpread";
+import { normalizeName } from "../convex/devOnly/estimatorMinutesSpread";
 
 describe("normalizeName", () => {
   it("lowercases, collapses whitespace, strips punctuation", () => {
@@ -11,7 +11,7 @@ describe("normalizeName", () => {
   });
 });
 
-import { matchMake, matchBaseVehicle } from "../convex/devOnly/repairpalMinutesSpread";
+import { matchMake, matchBaseVehicle } from "../convex/devOnly/estimatorMinutesSpread";
 
 // Real shapes captured 2026-06-15 from the estimator-flow endpoints.
 const MAKES_2015 = [
@@ -48,7 +48,7 @@ describe("matchBaseVehicle", () => {
   });
 });
 
-import { impliedRate, cv, rateConsistency } from "../convex/devOnly/repairpalMinutesSpread";
+import { impliedRate, cv, rateConsistency } from "../convex/devOnly/estimatorMinutesSpread";
 
 describe("impliedRate", () => {
   it("computes labor$ / (minutes/60)", () => {
@@ -89,7 +89,7 @@ describe("rateConsistency", () => {
   });
 });
 
-import { extractVariants, minutesSpread } from "../convex/devOnly/repairpalMinutesSpread";
+import { extractVariants, minutesSpread } from "../convex/devOnly/estimatorMinutesSpread";
 
 // Real payload (field spec §7a) — submodel dimension, with an EX position_count split.
 const CIVIC_BRAKE = {
@@ -190,7 +190,7 @@ describe("minutesSpread", () => {
   });
 });
 
-import { extractPayloadEcho, median, summarizeRows } from "../convex/devOnly/repairpalMinutesSpread";
+import { extractPayloadEcho, median, summarizeRows } from "../convex/devOnly/estimatorMinutesSpread";
 
 describe("extractPayloadEcho", () => {
   it("echoes vehicle/operation/calculation_context/ranged_estimate faithfully", () => {

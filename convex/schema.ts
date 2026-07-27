@@ -455,21 +455,21 @@ export default defineSchema({
     .index("by_part", ["part_id"])
     .index("by_part_source", ["part_id", "source_domain"]),
 
-  // Raw per-config RepairPal estimate-endpoint cache — one row per (config,
+  // Raw per-config estimator estimate-endpoint cache — one row per (config,
   // service), storing the whole endpoint response at its natural granularity so
   // `part_prices` stays SKU-only. Labor is ALSO projected into labor_observations
-  // (source repairpal_endpoint, weight 0.9).
+  // (source estimator_endpoint, weight 0.9).
   // Parts: each endpoint part's averaged per-unit price (total_price avg ÷
   // quantity) is ALSO projected into part_prices as a fallback POINT
-  // (source_domain="repairpal_endpoint", a price_type excluded from the pooled
+  // (source_domain="estimator_endpoint", a price_type excluded from the pooled
   // SKU aggregate). resolvePartsCost (flag PARTS_SOURCE_REAL_PRIMARY) pools SKU
   // prices WITH this endpoint point per role, falling back to it when a part has
   // no SKU price, then to Camry×multiplier. See
   // docs/superpowers/plans/2026-06-23-parts-real-primary-endpoint-point.md.
-  repairpal_endpoint_estimates: defineTable({
+  estimator_estimates: defineTable({
     vehicle_config_id: v.id("vehicle_configs"),
     service_id: v.id("services"),
-    base_vehicle_id: v.number(),               // resolved RepairPal baseVehicleId
+    base_vehicle_id: v.number(),               // resolved provider baseVehicleId
     variant_label: v.optional(v.string()),     // matched engine/position variant
     labor_minutes: v.optional(v.number()),
     labor_hours: v.optional(v.number()),
@@ -483,7 +483,7 @@ export default defineSchema({
       v.array(
         v.object({
           role: v.optional(v.string()),        // oem_parts.subcategory (+position) via endpointPartCategory
-          name: v.string(),                    // RepairPal part name (verbatim)
+          name: v.string(),                    // provider part name (verbatim)
           quantity: v.optional(v.number()),
           price_low: v.optional(v.number()),
           price_high: v.optional(v.number()),
@@ -493,7 +493,47 @@ export default defineSchema({
     ),
     zip: v.optional(v.string()),
     match_quality: v.optional(v.string()),   // "exact" | "engine_sibling"
-    matched_via: v.optional(v.string()),     // RP modelName substituted when engine_sibling
+    matched_via: v.optional(v.string()),     // provider modelName substituted when engine_sibling
+    fetched_at: v.number(),
+  })
+    .index("by_config_service", ["vehicle_config_id", "service_id"])
+    .index("by_config", ["vehicle_config_id"]),
+
+  // ── DUAL-READ WINDOW — DELETE AFTER MIGRATION ──────────────────────────
+  // Pre-rename shape of `estimator_estimates`. Retained ONLY so existing rows
+  // stay queryable while convex/migrations/purgeVendorNames.ts copies them into
+  // the table above. Nothing writes here anymore. Once every deployment reports
+  // a 0-row remainder, delete this block (see the runbook:
+  // docs/superpowers/runbooks/2026-07-27-vendor-name-purge-migration.md).
+  // eslint-disable-next-line -- legacy table name, intentionally retained
+  repairpal_endpoint_estimates: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    base_vehicle_id: v.number(),
+    variant_label: v.optional(v.string()),
+    labor_minutes: v.optional(v.number()),
+    labor_hours: v.optional(v.number()),
+    labor_low: v.optional(v.number()),
+    labor_high: v.optional(v.number()),
+    total_independent_low: v.optional(v.number()),
+    total_independent_high: v.optional(v.number()),
+    total_dealer_low: v.optional(v.number()),
+    total_dealer_high: v.optional(v.number()),
+    parts: v.optional(
+      v.array(
+        v.object({
+          role: v.optional(v.string()),
+          name: v.string(),
+          quantity: v.optional(v.number()),
+          price_low: v.optional(v.number()),
+          price_high: v.optional(v.number()),
+          position: v.optional(v.string()),
+        }),
+      ),
+    ),
+    zip: v.optional(v.string()),
+    match_quality: v.optional(v.string()),
+    matched_via: v.optional(v.string()),
     fetched_at: v.number(),
   })
     .index("by_config_service", ["vehicle_config_id", "service_id"])
@@ -997,10 +1037,14 @@ export default defineSchema({
     display_order: v.optional(v.number()),
     default_labor_hours: v.optional(v.number()),
     // Labor sourcing: which platform dimension determines this service's labor,
-    // and the RepairPal estimator slug (null = no RepairPal page, e.g. fluids).
+    // and the external estimator slug (null = no estimator page, e.g. fluids).
     labor_determinant: v.optional(
       v.union(v.literal("engine"), v.literal("chassis"), v.literal("both")),
     ),
+    estimator_slug: v.optional(v.union(v.string(), v.null())),
+    // DUAL-READ WINDOW — DELETE AFTER MIGRATION. Pre-rename name of
+    // `estimator_slug`; readers fall back to it until the migration has copied
+    // every value across. Nothing writes here anymore.
     repairpal_slug: v.optional(v.union(v.string(), v.null())),
     has_options: v.optional(v.boolean()),
     is_labor_only: v.optional(v.boolean()),
@@ -1200,7 +1244,7 @@ export default defineSchema({
     tier: v.string(), // "catalog" (book-time sources) | "empirical" (reserved)
     weight: v.number(), // catalog trust weight (vdb 0.4, llm 0.3, …)
     observed_at: v.number(),
-    // Provenance when sourced from a platform-equivalent sibling (RepairPal).
+    // Provenance when sourced from a platform-equivalent sibling (estimator).
     sibling_slug: v.optional(v.string()), // e.g. "550i-xdrive"
     match_key: v.optional(v.string()), // "engine_family:N63" | "chassis_code:G30" | "exact"
   })
@@ -1899,12 +1943,19 @@ export default defineSchema({
     .index("by_shop", ["shop_id"])
     .index("by_shop_service", ["shop_id", "service_id"]),
 
-  // [I]
+  // [I] Two image sources coexist: legacy seed rows reference cdn_assets via
+  // content_id; owner-uploaded rows (settings gallery) reference Convex
+  // storage via storage_id. Exactly one of the two should be set per row.
   shop_portfolio: defineTable({
     shop_id: v.id("shops"),
-    content_id: v.string(),
+    content_id: v.optional(v.string()),
+    storage_id: v.optional(v.id("_storage")),
+    caption: v.optional(v.string()),
     display_order: v.optional(v.number()),
-  }).index("by_shop_id", ["shop_id"]),
+    created_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_storage_id", ["storage_id"]),
 
   // [U-D] Shop staff roles, permissions, deletion tracking
   shop_users: defineTable({

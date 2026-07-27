@@ -52,15 +52,15 @@ function Stat({ label, value, tone }: { label: string; value?: number | string; 
   )
 }
 
-export const TabRepairPalLabor = () => {
-  const overview = useQuery(api.directorRepairpal.repairpalLaborOverview)
+export const TabEstimatorLabor = () => {
+  const overview = useQuery(api.directorEstimator.estimatorLaborOverview)
   const [openId, setOpenId] = useState<Id<'vehicle_configs'> | null>(null)
 
   return (
     <SectionAnchor
-      id="repairpalLabor"
-      title="RepairPal & Labor"
-      subtitle="RepairPal estimate-endpoint data — the authoritative labor source when present (exact MOTOR flat-rate). Other sources shown only as corroboration."
+      id="estimatorLabor"
+      title="Estimator & Labor"
+      subtitle="Estimator estimate-endpoint data — the authoritative labor source when present (exact flat-rate). Other sources shown only as corroboration."
     >
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
         <Stat label="Configs with data" value={overview?.configCount} />
@@ -97,7 +97,7 @@ export const TabRepairPalLabor = () => {
           </tbody>
         </table>
         {overview && overview.configs.length === 0 && (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--slate-400)' }}>No RepairPal endpoint data yet.</div>
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--slate-400)' }}>No Estimator endpoint data yet.</div>
         )}
       </Card>
 
@@ -107,8 +107,8 @@ export const TabRepairPalLabor = () => {
 }
 
 function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; onClose: () => void }) {
-  const rows = useQuery(api.directorRepairpal.repairpalLaborByConfig, { vehicle_config_id: configId })
-  const shadowDiff = useQuery(api.directorRepairpal.partsShadowDiff, { configIds: [configId] })
+  const rows = useQuery(api.directorEstimator.estimatorLaborByConfig, { vehicle_config_id: configId })
+  const shadowDiff = useQuery(api.directorEstimator.partsShadowDiff, { configIds: [configId] })
   const [rawOpen, setRawOpen] = useState<Set<string>>(new Set())
   const toggleRaw = (id: string) =>
     setRawOpen((s) => {
@@ -128,7 +128,7 @@ function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; 
       open
       onClose={onClose}
       width={1400}
-      eyebrow={<span>RepairPal endpoint — authoritative labor</span>}
+      eyebrow={<span>Estimator endpoint — authoritative labor</span>}
       title="Per-service labor &amp; parts"
       footer={<Button variant="secondary" onClick={onClose}>Close</Button>}
     >
@@ -245,7 +245,7 @@ function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; 
 }
 
 /**
- * RawEndpoint — the unfiltered RepairPal endpoint payload for one service, so a
+ * RawEndpoint — the unfiltered Estimator endpoint payload for one service, so a
  * director can verify the mapper for themselves: EVERY part (including ones we
  * could not map → role "(unmapped)"), the labor + totals bands, and the match
  * metadata (variant, base_vehicle_id, zip, fetched_at). This is the source data

@@ -1,8 +1,8 @@
 /**
- * RepairPal global ID catalog crawler — MANUAL, one-off (direct-fetch, no browser).
- * Run: npx playwright test tests/repairpal/catalog-crawl.manual.spec.ts --project=chromium
+ * Estimator global ID catalog crawler — MANUAL, one-off (direct-fetch, no browser).
+ * Run: npx playwright test tests/estimator/catalog-crawl.manual.spec.ts --project=chromium
  * Writes CSVs to OUT_DIR (default: the user's Downloads). Resumable; re-running
- * continues base_vehicles from where it left off. Read-only against RepairPal.
+ * continues base_vehicles from where it left off. Read-only against Estimator.
  *
  * Uses Node's global fetch directly (no Playwright browser): Cloudflare challenges
  * automated-browser navigation but NOT plain HTTP from our IP, so direct fetch is the
@@ -20,7 +20,16 @@ import { toCsv, toCsvRow, extractServices, dedupById } from "./catalogCrawl.help
 const ZIP = "10001";
 const START_YEAR = 2000;
 const DELAY_MS = Number(process.env.DELAY_MS ?? 150);
-const API = "https://repairpal.com/next-api/estimator-flow";
+// Provider host is env-supplied, never in source. Export ESTIMATOR_API_BASE in
+// the shell before running this manual crawler.
+const API = process.env.ESTIMATOR_API_BASE?.replace(/\/+$/, "") ?? "";
+if (!API) {
+  throw new Error(
+    "ESTIMATOR_API_BASE is not set — export it before running the catalog crawler.",
+  );
+}
+/** Origin of the provider's public site, derived from the API base. */
+const WEB_ORIGIN = new URL(API).origin;
 const OUT_DIR = process.env.OUT_DIR ?? "C:\\Users\\manso\\Downloads";
 
 // Diverse probe vehicles whose repair-services pages are unioned for the full
@@ -58,7 +67,7 @@ async function fetchText(url: string): Promise<string | null> {
   return null;
 }
 
-test("crawl RepairPal global ID catalog", async ({}, testInfo) => {
+test("crawl Estimator global ID catalog", async ({}, testInfo) => {
   test.skip(
     testInfo.project.name !== "chromium",
     "Manual crawler runs once — invoke with --project=chromium to avoid 3x concurrent runs corrupting the CSV output.",
@@ -89,7 +98,7 @@ test("crawl RepairPal global ID catalog", async ({}, testInfo) => {
 
   // 2. Resume: read any existing base_vehicles.csv to skip completed (year,makeId).
   //    Model names contain no commas, so the first three numeric columns are split-safe.
-  const bvPath = path.join(OUT_DIR, "repairpal_base_vehicles.csv");
+  const bvPath = path.join(OUT_DIR, "estimator_base_vehicles.csv");
   const BV_HEADER = "base_vehicle_id,year,make_id,make_name,model_id,model_name,slug";
   const done = new Set<string>();
   if (fs.existsSync(bvPath)) {
@@ -131,21 +140,21 @@ test("crawl RepairPal global ID catalog", async ({}, testInfo) => {
 
   // 4. makes.csv
   fs.writeFileSync(
-    path.join(OUT_DIR, "repairpal_makes.csv"),
+    path.join(OUT_DIR, "estimator_makes.csv"),
     toCsv(["make_id", "make_name"], [...makesById].map(([id, name]) => [id, name])),
   );
 
   // 5. Services: union the embedded catalog across the diverse probe vehicles.
   const services: Array<{ service_id: number; service_name: string }> = [];
   for (const id of SERVICE_PROBE_IDS) {
-    const html = await fetchText(`https://repairpal.com/estimator/repair-services?zipCode=${ZIP}&baseVehicleId=${id}`);
+    const html = await fetchText(`${WEB_ORIGIN}/estimator/repair-services?zipCode=${ZIP}&baseVehicleId=${id}`);
     await sleep(DELAY_MS);
     if (html) services.push(...extractServices(html));
     else console.warn(`[catalog] repair-services fetch failed for baseVehicleId ${id}`);
   }
   const uniqServices = dedupById(services, "service_id");
   fs.writeFileSync(
-    path.join(OUT_DIR, "repairpal_services.csv"),
+    path.join(OUT_DIR, "estimator_services.csv"),
     toCsv(["service_id", "service_name"], uniqServices.map((s) => [s.service_id, s.service_name])),
   );
 
@@ -163,7 +172,7 @@ test("crawl RepairPal global ID catalog", async ({}, testInfo) => {
     service_timing_144: uniqServices.some((s) => s.service_id === 144),
   };
   fs.writeFileSync(
-    path.join(OUT_DIR, "repairpal_catalog_manifest.json"),
+    path.join(OUT_DIR, "estimator_catalog_manifest.json"),
     JSON.stringify(
       {
         crawled_at: new Date().toISOString(),

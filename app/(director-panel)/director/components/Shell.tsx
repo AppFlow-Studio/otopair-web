@@ -12,7 +12,7 @@ const NAV_ITEMS = [
   { id:'configs',      label:'Vehicle configs', Icon:IconSettings },
   { id:'pricing',      label:'Pricing & tiers', Icon:IconBolt },
   { id:'serviceParts', label:'Service Parts', Icon:IconTag },
-  { id:'repairpalLabor', label:'RepairPal & Labor', Icon:IconClock },
+  { id:'estimatorLabor', label:'Estimator & Labor', Icon:IconClock },
   { id:'bugs',         label:'Bugs',         Icon:IconBug,     badge:'bugs' },
   { id:'feedback',     label:'Feedback',     Icon:IconMessage, badge:'feedback' },
   { id:'otoFeedback',  label:'Oto feedback', Icon:IconBolt,    badge:'otoFeedback' },

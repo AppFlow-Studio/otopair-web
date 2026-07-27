@@ -1149,7 +1149,7 @@ export const _listPartsMissingPrices = internalQuery({
         .query("part_prices")
         .withIndex("by_part", q => q.eq("part_id", p._id))
         .collect();
-      // A non-pooled fallback row (repairpal_endpoint) is NOT a real SKU price,
+      // A non-pooled fallback row (estimator_endpoint) is NOT a real SKU price,
       // so it must not make skipExisting skip real LLM pricing for the part.
       const hasPrice = prices.some((r) => !isNonPooledPriceType((r as any).price_type));
       if (skipExisting && hasPrice) continue;

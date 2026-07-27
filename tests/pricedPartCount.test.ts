@@ -7,7 +7,7 @@
 import { describe, test, expect } from "vitest";
 import { internal } from "../convex/_generated/api";
 import { makeT } from "./helpers";
-import { REPAIRPAL_ENDPOINT_PRICE_TYPE } from "../convex/lib/priceTypes";
+import { ESTIMATOR_ENDPOINT_PRICE_TYPE } from "../convex/lib/priceTypes";
 
 describe("getPricedPartCount", () => {
   test("counts only parts with at least one non-poison price row", async () => {
@@ -45,11 +45,11 @@ describe("getPricedPartCount", () => {
       const d = await mkPart("D-1");
       await ctx.db.insert("part_fitments", { part_id: d, vehicle_config_id: configId });
 
-      // E: repairpal_endpoint fallback only — NOT a real SKU price, must NOT count
+      // E: estimator_endpoint fallback only — NOT a real SKU price, must NOT count
       // (else the pipeline would skip fetching a real price for it).
       const e = await mkPart("E-1");
       await ctx.db.insert("part_fitments", { part_id: e, vehicle_config_id: configId });
-      await ctx.db.insert("part_prices", { part_id: e, price: 10.33, price_type: REPAIRPAL_ENDPOINT_PRICE_TYPE, source_domain: "repairpal_endpoint" });
+      await ctx.db.insert("part_prices", { part_id: e, price: 10.33, price_type: ESTIMATOR_ENDPOINT_PRICE_TYPE, source_domain: "estimator_endpoint" });
 
       return { configId };
     });

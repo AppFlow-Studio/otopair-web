@@ -1,7 +1,7 @@
 /**
- * endpointPartPriceBackfill.ts — DEV-ONLY driver: reads repairpal_endpoint_estimates
+ * endpointPartPriceBackfill.ts — DEV-ONLY driver: reads estimator_estimates
  * and writes each endpoint part's averaged PER-UNIT point into part_prices
- * (source_domain="repairpal_endpoint"), joined to the config's fitment by role.
+ * (source_domain="estimator_endpoint"), joined to the config's fitment by role.
  * Inert to existing consumers (price_type excluded from the pooled aggregate);
  * only resolvePartsCost's gated real-band block reads them. Not prod wiring.
  *
@@ -11,21 +11,23 @@
 import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { v } from "convex/values";
-import { endpointPartCategory, endpointRoleToSubcategory } from "../vehicleEnrichment/repairpalEndpointMatch";
+import { endpointPartCategory, endpointRoleToSubcategory } from "../vehicleEnrichment/estimatorEndpointMatch";
+import { ESTIMATOR_SOURCE_URL } from "../lib/estimatorApi";
+import { collectEstimates, listEstimatesByConfig } from "../lib/estimatorEstimates";
 
 /**
- * One-shot DB migration: re-map every stored repairpal_endpoint_estimates part's
+ * One-shot DB migration: re-map every stored estimator_estimates part's
  * `role`/`position` from its `name` using the current endpointPartCategory — so
  * existing rows pick up role-mapper fixes (engine oil recognized, filter seals
  * split out of oil_filter, transmission filter routed correctly) WITHOUT
- * re-fetching from RepairPal. The position from the name wins; otherwise the
+ * re-fetching from Estimator. The position from the name wins; otherwise the
  * already-stored position is kept (brake parts carry position with no front/rear
  * in the name). Idempotent.
  */
 export const remapEndpointPartRoles = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const rows = await ctx.db.query("repairpal_endpoint_estimates").collect();
+    const rows = await collectEstimates(ctx);
     let rowsTouched = 0;
     let partsChanged = 0;
     for (const row of rows) {
@@ -80,10 +82,8 @@ export const listEndpointRows = internalQuery({
   args: { configIds: v.optional(v.array(v.id("vehicle_configs"))) },
   handler: async (ctx, args) => {
     const all = args.configIds
-      ? (await Promise.all(args.configIds.map((id) =>
-          ctx.db.query("repairpal_endpoint_estimates").withIndex("by_config", (q) =>
-            q.eq("vehicle_config_id", id)).collect()))).flat()
-      : await ctx.db.query("repairpal_endpoint_estimates").collect();
+      ? (await Promise.all(args.configIds.map((id) => listEstimatesByConfig(ctx, id)))).flat()
+      : await collectEstimates(ctx);
     const out: any[] = [];
     for (const row of all) {
       const service = await ctx.db.get(row.service_id);
@@ -122,7 +122,7 @@ export const backfill = internalAction({
         );
         if (!match) { skipped++; continue; }
         // Divisor is the ENDPOINT's reported unit count (p.quantity) — that is
-        // the count RepairPal's total_price covers, so avg / p.quantity is the
+        // the count Estimator's total_price covers, so avg / p.quantity is the
         // true PER-UNIT price. Do NOT divide by the fitment's quantity_needed:
         // the config's canonical quantity is applied later at READ time
         // (resolvePartsCost → resolveRoleQuantity), which re-multiplies the
@@ -130,7 +130,7 @@ export const backfill = internalAction({
         const avg = (p.price_low + p.price_high) / 2;
         await ctx.runMutation(
           internal.vehicleEnrichment.endpointPartPriceMutations.upsertEndpointPartPrice,
-          { part_id: match.part_id, price: avg / qty, source_url: "https://repairpal.com/estimator", refreshed_at: row.fetched_at },
+          { part_id: match.part_id, price: avg / qty, source_url: ESTIMATOR_SOURCE_URL, refreshed_at: row.fetched_at },
         );
         written++;
       }

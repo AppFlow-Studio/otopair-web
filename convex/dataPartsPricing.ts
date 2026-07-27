@@ -4,7 +4,7 @@
 // rejection via part_prices.summarizePriceRows), the locked range rules
 // (multi-source → 5–8% cap · single → ±8% · zero → Camry×multiplier fallback),
 // the extraction-pathology queue (POISON price_types from lib/priceTypes),
-// and the RepairPal endpoint validation runs (Jun 18 next-step) read-only.
+// and the Estimator endpoint validation runs (Jun 18 next-step) read-only.
 // =============================================================================
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
@@ -12,6 +12,7 @@ import { mutation, query } from "./_generated/server";
 import { requireDirector, logAudit } from "./directorGate";
 import { summarizePriceRows, type PriceSummary } from "./part_prices";
 import { isPoisonPriceType, isNonPooledPriceType } from "./lib/priceTypes";
+import { listRecentEstimates } from "./lib/estimatorEstimates";
 
 // --- Range rule (May 28, locked) ----------------------------------------------
 // multi-source: natural kept spread stands when ≤8%; wider clamps to median±4%
@@ -261,7 +262,7 @@ export const endpointValidationRuns = query({
   args: { token: v.string() },
   handler: async (ctx, { token }): Promise<ValidationRunRow[]> => {
     await requireDirector(ctx, token);
-    const rows = await ctx.db.query("repairpal_endpoint_estimates").order("desc").take(50);
+    const rows = await listRecentEstimates(ctx, 50);
     const configKey = new Map<string, string | null>();
     const serviceName = new Map<string, string | null>();
     const out: ValidationRunRow[] = [];

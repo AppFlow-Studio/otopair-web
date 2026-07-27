@@ -2,7 +2,7 @@
  * vehicleEnrichment/olpRelabor.ts — OLP labor backfill for an ALREADY-ENRICHED
  * config (no LLM batch). Resolves the config to OLP and writes olp_labor
  * observations (weight 0.8) + recomputes the weighted-median labor_times row.
- * Replaces the deleted relabor.ts (RepairPal). Spec: 2026-06-13-olp-replaces-repairpal.
+ * Replaces the deleted relabor.ts (Estimator). Spec: 2026-06-13-olp-replaces-estimator.
  */
 import { v } from "convex/values";
 import { internalAction, internalQuery } from "../_generated/server";

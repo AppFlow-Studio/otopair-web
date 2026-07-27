@@ -10,7 +10,7 @@ const PART = v.object({
   position: v.optional(v.string()),
 });
 
-export const upsertRepairpalEndpointEstimate = internalMutation({
+export const upsertEstimatorEstimate = internalMutation({
   args: {
     vehicle_config_id: v.id("vehicle_configs"),
     service_id: v.id("services"),
@@ -32,7 +32,7 @@ export const upsertRepairpalEndpointEstimate = internalMutation({
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
-      .query("repairpal_endpoint_estimates")
+      .query("estimator_estimates")
       .withIndex("by_config_service", (q) =>
         q
           .eq("vehicle_config_id", args.vehicle_config_id)
@@ -43,6 +43,6 @@ export const upsertRepairpalEndpointEstimate = internalMutation({
       await ctx.db.patch(existing._id, args);
       return existing._id;
     }
-    return await ctx.db.insert("repairpal_endpoint_estimates", args);
+    return await ctx.db.insert("estimator_estimates", args);
   },
 });

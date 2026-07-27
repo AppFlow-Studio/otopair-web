@@ -1,15 +1,15 @@
 /**
- * repairpalEndpointMatch.ts — PURE matcher + parser for the RepairPal estimate
+ * estimatorEndpointMatch.ts — PURE matcher + parser for the Estimator estimate
  * endpoint. NO Convex imports, so it is unit-testable in isolation
- * (tests/repairpalEndpointMatch.test.ts). The network action
- * (repairpalEndpoint.ts) composes these helpers.
+ * (tests/estimatorEndpointMatch.test.ts). The network action
+ * (estimatorEndpoint.ts) composes these helpers.
  *
  * Pipeline: resolveMakeId → resolveBaseVehicleId → (fetch /estimate) →
  * extractVariants → selectVariant → endpointPartCategory (to map the endpoint's
  * named parts back onto the part_fitments we already gathered).
  */
 
-/** Dimension keys RepairPal nests estimates under — excluded from variant labels. */
+/** Dimension keys Estimator nests estimates under — excluded from variant labels. */
 const STRUCT = new Set([
   "estimates", "estimate", "submodel", "engine_base",
   "position_count", "qualifiers", "drive_type", "ranged_estimate",
@@ -241,9 +241,9 @@ export function endpointRoleToSubcategory(
   }
 }
 
-/** otopair service slug → RepairPal serviceId(s). Multi-id = scope (sum/prefer).
+/** otopair service slug → Estimator serviceId(s). Multi-id = scope (sum/prefer).
  *  Source: docs/superpowers/reviews/2026-06-15-otopair-services-repairpal-coverage.md. */
-export const SERVICE_REPAIRPAL_IDS: Record<string, { serviceIds: number[] }> = {
+export const SERVICE_ESTIMATOR_IDS: Record<string, { serviceIds: number[] }> = {
   oil_change: { serviceIds: [107] },
   filter_replacement: { serviceIds: [14, 35] },   // air (14) + cabin (35)
   spark_plugs: { serviceIds: [128] },

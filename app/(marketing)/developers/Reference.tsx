@@ -496,7 +496,7 @@ export function Reference() {
         />
         <EndpointCard
           path="/v0/labor"
-          description="Labor times per service. services[] holds empirical measurements from completed Otopair jobs — hours, sample size, and the p25–p75 spread. estimates[] adds an estimated_hours answer for every applicable service, sourced either from those measurements ('empirical') or from our own Camry-anchored vehicle-tier model ('model_estimate', with its confidence). Book-time blends (RepairPal / MOTOR / VDB) are internal-only and never served."
+          description="Labor times per service. services[] holds empirical measurements from completed Otopair jobs — hours, sample size, and the p25–p75 spread. estimates[] adds an estimated_hours answer for every applicable service, sourced either from those measurements ('empirical') or from our own Camry-anchored vehicle-tier model ('model_estimate', with its confidence). Book-time blends (Estimator / Book Rate / VDB) are internal-only and never served."
           params={LABOR_PARAMS}
           example={LABOR_EXAMPLE}
           exampleQuery="config_key=toyota%7Ccamry%7C2019%7Cle%7C2.5l&service=front-brake-pads"

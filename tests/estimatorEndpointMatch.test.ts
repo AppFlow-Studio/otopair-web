@@ -8,7 +8,7 @@ import {
   trimTokenSet,
   pickValidSibling,
   endpointRoleToSubcategory,
-} from "../convex/vehicleEnrichment/repairpalEndpointMatch";
+} from "../convex/vehicleEnrichment/estimatorEndpointMatch";
 
 describe("extractVariants — recursive parse of the estimate payload", () => {
   const payload = {

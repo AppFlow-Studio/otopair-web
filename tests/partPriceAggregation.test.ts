@@ -14,7 +14,7 @@
 
 import { describe, expect, it } from "vitest";
 import { summarizePriceRows } from "../convex/part_prices";
-import { isPoisonPriceType, REPAIRPAL_ENDPOINT_PRICE_TYPE } from "../convex/lib/priceTypes";
+import { isPoisonPriceType, ESTIMATOR_ENDPOINT_PRICE_TYPE } from "../convex/lib/priceTypes";
 
 const PID = "part_xyz" as any;
 
@@ -76,11 +76,11 @@ describe("summarizePriceRows — excludes poison rows", () => {
 });
 
 describe("summarizePriceRows — endpoint fallback points are excluded from the pooled aggregate", () => {
-  it("ignores repairpal_endpoint rows so existing consumers are unchanged", () => {
+  it("ignores estimator_endpoint rows so existing consumers are unchanged", () => {
     const withEndpoint = summarizePriceRows(PID, [
       { price: 10, price_type: "sale", source_domain: "rockauto.com" },
       { price: 14, price_type: "sale", source_domain: "partsgeek.com" },
-      { price: 999, price_type: REPAIRPAL_ENDPOINT_PRICE_TYPE, source_domain: "repairpal_endpoint" },
+      { price: 999, price_type: ESTIMATOR_ENDPOINT_PRICE_TYPE, source_domain: "estimator_endpoint" },
     ]);
     const withoutEndpoint = summarizePriceRows(PID, [
       { price: 10, price_type: "sale", source_domain: "rockauto.com" },

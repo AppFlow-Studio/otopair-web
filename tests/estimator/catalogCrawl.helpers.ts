@@ -1,5 +1,5 @@
 /**
- * Pure helpers for the RepairPal catalog crawler (tests/repairpal/catalog-crawl.manual.spec.ts).
+ * Pure helpers for the Estimator catalog crawler (tests/estimator/catalog-crawl.manual.spec.ts).
  * NO fs / NO Playwright imports — kept edge-runtime-safe so Vitest can unit-test them.
  */
 
@@ -31,7 +31,7 @@ function decodeJsonString(raw: string): string {
   }
 }
 
-/** Extract RepairPal service objects from a repair-services page's HTML.
+/** Extract Estimator service objects from a repair-services page's HTML.
  *  Anchors on the `emuOperationTaxonomyCategoryId` field that follows each service's
  *  name — categories (followed by `icon`) are NOT matched, avoiding the id collision. */
 export function extractServices(html: string): Array<{ service_id: number; service_name: string }> {

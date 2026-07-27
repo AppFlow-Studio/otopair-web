@@ -1,11 +1,12 @@
 import { internalMutation } from "../_generated/server";
 import { v } from "convex/values";
-import { REPAIRPAL_ENDPOINT_PRICE_TYPE } from "../lib/priceTypes";
+import { ESTIMATOR_ENDPOINT_PRICE_TYPE } from "../lib/priceTypes";
+import { ESTIMATOR_ENDPOINT_SOURCE } from "../lib/sourceNames";
 
-const SOURCE_DOMAIN = "repairpal_endpoint";
+const SOURCE_DOMAIN = ESTIMATOR_ENDPOINT_SOURCE;
 
-/** Idempotent upsert of the RepairPal endpoint averaged per-unit point for a
- *  part (one row per part, source_domain="repairpal_endpoint"). Excluded from
+/** Idempotent upsert of the Estimator endpoint averaged per-unit point for a
+ *  part (one row per part, source_domain="estimator_endpoint"). Excluded from
  *  the pooled SKU aggregate (price_type), so it only feeds resolvePartsCost's
  *  gated real-band block. */
 export const upsertEndpointPartPrice = internalMutation({
@@ -24,7 +25,7 @@ export const upsertEndpointPartPrice = internalMutation({
     const fields = {
       part_id: args.part_id,
       price: args.price,
-      price_type: REPAIRPAL_ENDPOINT_PRICE_TYPE,
+      price_type: ESTIMATOR_ENDPOINT_PRICE_TYPE,
       source_domain: SOURCE_DOMAIN,
       source_url: args.source_url,
       refreshed_at: args.refreshed_at,

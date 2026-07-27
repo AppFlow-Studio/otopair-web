@@ -1,30 +1,43 @@
 /**
- * devOnly/repairpalMinutesSpread.ts — THROWAWAY diagnostic probe (design spike, NOT a feature).
+ * devOnly/estimatorMinutesSpread.ts — THROWAWAY diagnostic probe (design spike, NOT a feature).
  *
- * For a curated set of vehicles × services, resolves RepairPal numeric IDs via the
+ * For a curated set of vehicles × services, resolves Estimator numeric IDs via the
  * public estimator-flow JSON endpoints, fetches the estimate payload, and returns a
  * FAITHFUL, LOSSLESS capture of every labor field (minutes, unrounded $, parts,
  * footnotes, totals, ranged_estimate, calculation_context) plus derived trust signals
  * (implied $/hr, variant spread, rate-consistency CV). Read-only — writes nothing.
  *
- * Feeds the decision: promote RepairPal from a $0.4 dollar-guesstimate corroborator to
+ * Feeds the decision: promote Estimator from a $0.4 dollar-guesstimate corroborator to
  * a real, exact labor-time source? See
  * docs/superpowers/specs/2026-06-15-repairpal-minutes-spread-spike-design.md
  */
 import { internalAction } from "../_generated/server";
 import { v } from "convex/values";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
+import { estimatorApiBase } from "../lib/estimatorApi";
 
 // ───────────────────────── constants ─────────────────────────
 
-const REPAIRPAL_API_BASE = "https://repairpal.com/next-api/estimator-flow";
+/** Provider host comes from the deployment env, never from source. This is a
+ *  manually-run devOnly probe, so an unset var should fail loudly rather than
+ *  silently produce malformed URLs. */
+function estimatorBase(): string {
+  const base = estimatorApiBase();
+  if (!base) {
+    throw new Error(
+      "ESTIMATOR_API_BASE is not set on this deployment — set it before running the minutes-spread probe.",
+    );
+  }
+  return base;
+}
+
 const FIRECRAWL_BASE = "https://api.firecrawl.dev/v2";
 
-/** Static service-slug → RepairPal global serviceId map (resolved 2026-06-15 from the
- *  repair-services catalog). rotor_replacement has NO standalone RepairPal service —
+/** Static service-slug → Estimator global serviceId map (resolved 2026-06-15 from the
+ *  repair-services catalog). rotor_replacement has NO standalone Estimator service —
  *  the nearest is the composite "Brake Pad and Rotor Replacement" (4453439), whose
  *  minutes cover pads+rotors and are NOT comparable to standalone rotor labor. */
-export const REPAIRPAL_SERVICE_IDS: Record<string, number | null> = {
+export const ESTIMATOR_SERVICE_IDS: Record<string, number | null> = {
   oil_change: 107,
   spark_plugs: 128,
   timing_belt: 144,
@@ -67,7 +80,7 @@ export type MoneyBand = {
   dealer: { low: number; high: number };
 };
 
-export type RepairpalVariant = {
+export type EstimatorVariant = {
   key: string;
   position: string | null;
   labor: { low: number; high: number; minutes: number; notes: string[] };
@@ -154,7 +167,7 @@ function coerceMoneyBand(t: any): MoneyBand {
 }
 
 /** Build one variant from a payload `estimate` object. null if labor.minutes is non-numeric. */
-function variantFromEstimate(key: string, position: string | null, est: any): RepairpalVariant | null {
+function variantFromEstimate(key: string, position: string | null, est: any): EstimatorVariant | null {
   const labor = est?.labor;
   if (!labor || typeof labor.minutes !== "number") return null;
   const minutes = labor.minutes;
@@ -183,7 +196,7 @@ function variantFromEstimate(key: string, position: string | null, est: any): Re
  *  descending into position_count splits. Variants lacking numeric minutes are dropped. */
 export function extractVariants(estimateJson: any): {
   dimension: "submodel" | "engine_base" | null;
-  variants: RepairpalVariant[];
+  variants: EstimatorVariant[];
 } {
   const e = estimateJson?.estimates ?? {};
   const dimension: "submodel" | "engine_base" | null = e.submodel
@@ -193,7 +206,7 @@ export function extractVariants(estimateJson: any): {
       : null;
   if (!dimension) return { dimension: null, variants: [] };
   const map = e[dimension] ?? {};
-  const variants: RepairpalVariant[] = [];
+  const variants: EstimatorVariant[] = [];
   for (const [key, node] of Object.entries<any>(map)) {
     if (node?.estimate) {
       const variant = variantFromEstimate(key, null, node.estimate);
@@ -258,7 +271,7 @@ export function summarizeRows(rows: any[]): {
   median_implied_rate_high: number | null;
   rate_consistency: { low_cv: number | null; high_cv: number | null };
   high_spread_pairs: Array<{ vehicle: string; service: string; minutes_min: number; minutes_max: number; distinct_minutes: number }>;
-  book_hours_deltas: Array<{ vehicle: string; service: string; repairpal_hours: number; book_hours: number; delta_hours: number; delta_pct: number }>;
+  book_hours_deltas: Array<{ vehicle: string; service: string; estimator_hours: number; book_hours: number; delta_hours: number; delta_pct: number }>;
 } {
   const allLow: number[] = [];
   const allHigh: number[] = [];
@@ -325,7 +338,7 @@ async function firecrawlRawJson(url: string): Promise<{ json: any | null; status
 
 /** Direct GET first (accept: application/json); on non-200 / non-JSON / parse-fail,
  *  fall back to the firecrawl raw scrape. Records which path produced the JSON. */
-async function fetchRepairpalJson(url: string): Promise<FetchResult> {
+async function fetchEstimatorJson(url: string): Promise<FetchResult> {
   try {
     const r = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(20000) });
     const ct = r.headers.get("content-type") ?? "";
@@ -361,7 +374,7 @@ async function resolveBaseVehicleId(
   const makesKey = `makes:${year}`;
   let makes = cache.get(makesKey);
   if (makes === undefined) {
-    const { json } = await fetchJson(`${REPAIRPAL_API_BASE}/makes?year=${year}`);
+    const { json } = await fetchJson(`${estimatorBase()}/makes?year=${year}`);
     makes = Array.isArray(json) ? json : [];
     cache.set(makesKey, makes);
   }
@@ -371,7 +384,7 @@ async function resolveBaseVehicleId(
   const bvKey = `bv:${year}:${makeId}`;
   let bvs = cache.get(bvKey);
   if (bvs === undefined) {
-    const { json } = await fetchJson(`${REPAIRPAL_API_BASE}/base-vehicles?year=${year}&makeId=${makeId}`);
+    const { json } = await fetchJson(`${estimatorBase()}/base-vehicles?year=${year}&makeId=${makeId}`);
     bvs = Array.isArray(json) ? json : [];
     cache.set(bvKey, bvs);
   }
@@ -403,7 +416,7 @@ export const probe = internalAction({
     let direct_ok = 0, firecrawl_used = 0, failed = 0;
 
     const track = async (url: string): Promise<FetchResult> => {
-      const res = await fetchRepairpalJson(url);
+      const res = await fetchEstimatorJson(url);
       by_request.push({ url, via: res.via, status: res.status });
       if (res.via === "direct") direct_ok++;
       else if (res.via === "firecrawl") firecrawl_used++;
@@ -416,7 +429,7 @@ export const probe = internalAction({
       const rv = await resolveBaseVehicleId(veh.year, veh.make, veh.model, cache, track);
       if (!rv.ok) {
         for (const slug of serviceSlugs) {
-          coverage_gaps.push({ vehicle: vlabel, service: slug, stage: rv.stage, detail: `${rv.stage} not found on RepairPal` });
+          coverage_gaps.push({ vehicle: vlabel, service: slug, stage: rv.stage, detail: `${rv.stage} not found on Estimator` });
         }
         continue;
       }
@@ -428,7 +441,7 @@ export const probe = internalAction({
       for (const slug of serviceSlugs) {
         const cfg = LABOR_SERVICE_CONFIG[slug];
         const notes: string[] = [];
-        let serviceId = REPAIRPAL_SERVICE_IDS[slug] ?? null;
+        let serviceId = ESTIMATOR_SERVICE_IDS[slug] ?? null;
 
         if (serviceId == null) {
           if (slug === "rotor_replacement" && includeComposite) {
@@ -437,14 +450,14 @@ export const probe = internalAction({
           } else {
             coverage_gaps.push({
               vehicle: vlabel, service: slug, stage: "service_id",
-              detail: slug === "rotor_replacement" ? "no standalone RepairPal rotor service" : "no serviceId mapped",
+              detail: slug === "rotor_replacement" ? "no standalone Estimator rotor service" : "no serviceId mapped",
             });
             continue;
           }
         }
 
         const url =
-          `${REPAIRPAL_API_BASE}/estimate?baseVehicleId=${rv.base_vehicle_id}` +
+          `${estimatorBase()}/estimate?baseVehicleId=${rv.base_vehicle_id}` +
           `&scheduled=0&serviceId=${serviceId}&zipCode=${encodeURIComponent(zipCode)}`;
         const { json, via, status } = await track(url);
 
@@ -452,7 +465,7 @@ export const probe = internalAction({
           coverage_gaps.push({ vehicle: vlabel, service: slug, stage: "estimate_empty", detail: `fetch ${via} status ${status}` });
           rows.push({
             vehicle_input: veh,
-            service: { slug, repairpal_slug: cfg?.repairpal_slug ?? null, service_id: serviceId },
+            service: { slug, estimator_slug: cfg?.estimator_slug ?? null, service_id: serviceId },
             resolved, fetch: { via, status, url },
             payload: { vehicle: "", operation: "", calculation_context: null, ranged_estimate: null },
             dimension: null, variant_count: 0, variants: [],
@@ -473,7 +486,7 @@ export const probe = internalAction({
 
         rows.push({
           vehicle_input: veh,
-          service: { slug, repairpal_slug: cfg?.repairpal_slug ?? null, service_id: serviceId },
+          service: { slug, estimator_slug: cfg?.estimator_slug ?? null, service_id: serviceId },
           resolved, fetch: { via, status, url },
           payload,
           dimension, variant_count: variants.length, variants,

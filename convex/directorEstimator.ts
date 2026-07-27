@@ -1,8 +1,8 @@
 /**
- * directorRepairpal.ts — read-only director queries surfacing the RepairPal
+ * directorEstimator.ts — read-only director queries surfacing the Estimator
  * estimate-endpoint data + labor times. Read-only (middleware-gated like the
- * other director queries). RepairPal endpoint minutes are the AUTHORITATIVE
- * labor value when present (exact MOTOR flat-rate); other sources are shown as
+ * other director queries). Estimator endpoint minutes are the AUTHORITATIVE
+ * labor value when present (exact flat-rate); other sources are shown as
  * secondary corroboration, with a flag when they disagree — never as a
  * competing value to pick.
  */
@@ -10,12 +10,14 @@ import { query } from "./_generated/server";
 import { v } from "convex/values";
 import { resolvePartsCost } from "./lib/quoteEngine";
 import type { VehicleTier } from "./lib/vehicleTiers";
+import { listEstimates, listEstimatesByConfig } from "./lib/estimatorEstimates";
+import { ESTIMATOR_ENDPOINT_SOURCES } from "./lib/sourceNames";
 
 /** Overview: counts + the list of configs that have endpoint data. */
-export const repairpalLaborOverview = query({
+export const estimatorLaborOverview = query({
   args: {},
   handler: async (ctx) => {
-    const eps = await ctx.db.query("repairpal_endpoint_estimates").take(5000);
+    const eps = await listEstimates(ctx, 5000);
 
     const byConfig = new Map<
       string,
@@ -67,12 +69,16 @@ export const repairpalLaborOverview = query({
     );
 
     // Is endpoint labor actually live yet? It's live only once laborAllSources
-    // (flag-gated) has written repairpal_endpoint observations. The backfill
+    // (flag-gated) has written estimator_endpoint observations. The backfill
     // fills the endpoint table but NOT labor_observations, so this is 0 until
-    // LABOR_SOURCE_REPAIRPAL_ENDPOINT is flipped on.
+    // LABOR_SOURCE_ESTIMATOR_ENDPOINT is flipped on.
+    // DUAL-READ: matches the canonical name OR its pre-migration alias, so the
+    // panel doesn't report "not live" on a deployment that hasn't migrated yet.
     const endpointObs = await ctx.db
       .query("labor_observations")
-      .filter((q) => q.eq(q.field("source"), "repairpal_endpoint"))
+      .filter((q) =>
+        q.or(...[...ESTIMATOR_ENDPOINT_SOURCES].map((s) => q.eq(q.field("source"), s))),
+      )
       .take(1);
     const endpointLaborLive = endpointObs.length > 0;
 
@@ -90,17 +96,14 @@ export const repairpalLaborOverview = query({
 });
 
 /**
- * Per-config detail: per service, the RepairPal endpoint estimate (authoritative
+ * Per-config detail: per service, the Estimator endpoint estimate (authoritative
  * labor) + parts, alongside the current labor_times row and the corroborating
- * observations (secondary). RepairPal minutes are the source of truth here.
+ * observations (secondary). Estimator minutes are the source of truth here.
  */
-export const repairpalLaborByConfig = query({
+export const estimatorLaborByConfig = query({
   args: { vehicle_config_id: v.id("vehicle_configs") },
   handler: async (ctx, { vehicle_config_id }) => {
-    const eps = await ctx.db
-      .query("repairpal_endpoint_estimates")
-      .withIndex("by_config", (q) => q.eq("vehicle_config_id", vehicle_config_id))
-      .collect();
+    const eps = await listEstimatesByConfig(ctx, vehicle_config_id);
 
     const rows: any[] = [];
     for (const ep of eps) {
@@ -165,7 +168,7 @@ export const repairpalLaborByConfig = query({
 });
 
 /**
- * partsShadowDiff — for every (config, service) pair that has a RepairPal
+ * partsShadowDiff — for every (config, service) pair that has a Estimator
  * endpoint row, compute BOTH the multiplier band (forceRealPrimary:false) and
  * the real band (forceRealPrimary:true) so the director can show them side-by-
  * side regardless of the PARTS_SOURCE_REAL_PRIMARY env flag.
@@ -185,20 +188,16 @@ export const partsShadowDiff = query({
   },
   handler: async (ctx, { configIds }) => {
     // Enumerate (config, service) pairs via the endpoint estimates table —
-    // same population as repairpalLaborOverview / repairpalLaborByConfig.
+    // same population as estimatorLaborOverview / estimatorLaborByConfig.
     let eps;
     if (configIds && configIds.length > 0) {
       const rows: any[] = [];
       for (const cid of configIds) {
-        const epRows = await ctx.db
-          .query("repairpal_endpoint_estimates")
-          .withIndex("by_config", (q) => q.eq("vehicle_config_id", cid))
-          .collect();
-        rows.push(...epRows);
+        rows.push(...(await listEstimatesByConfig(ctx, cid)));
       }
       eps = rows;
     } else {
-      eps = await ctx.db.query("repairpal_endpoint_estimates").take(5000);
+      eps = await listEstimates(ctx, 5000);
     }
 
     const results: Array<{

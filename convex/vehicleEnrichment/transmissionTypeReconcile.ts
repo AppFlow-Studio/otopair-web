@@ -133,3 +133,34 @@ export function reconcileTransmissionType(
 
   return { corrected: false };
 }
+
+/**
+ * Gear count implied by a transmission UNIT designation (round 8, batch-10).
+ *
+ * Batch-10: a 2009 Cobalt stored "Automatic, 5 speeds" — no 5-speed-automatic
+ * Cobalt ever existed. NHTSA's transSpeeds carried the MANUAL's gear count (5,
+ * Getrag F23) and it was merged onto the resolved automatic (4T45 = 4-speed)
+ * with nothing cross-checking speeds against the resolved unit. The trans-fluid
+ * verifier already names the specific unit ("4T45", "6HP26", "4R75E", "8HP75",
+ * "6T70"); most unit designations lead with their gear count — extract it and
+ * let the caller compare against stored speeds.
+ *
+ * Returns null when the unit doesn't encode a leading gear count (CD4E, JF506E,
+ * Powerglide, CVTs...) — no reconciliation, never a guess. Pure; exported for
+ * tests.
+ */
+export function speedsFromTransUnit(unit: string | null | undefined): number | null {
+  if (!unit) return null;
+  const u = unit.trim().toUpperCase();
+  // CVTs have no discrete gear count — a digit in a CVT name (JF017E…) is not
+  // a gear count.
+  if (u.includes("CVT")) return null;
+  // Leading digit(s) immediately followed by a letter: 4T45, 6T70, 6L80,
+  // 8HP75, 6HP26, 4R75E, 5R55S, 6R80, 9T50, 10R80, 8F35...
+  const m = u.match(/(?:^|[\s(])(\d{1,2})(?=[A-Z])/);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  // Real gearbox counts only — a "3.6L" style capture or a part-number digit
+  // run must not read as a gear count.
+  return n >= 3 && n <= 10 ? n : null;
+}

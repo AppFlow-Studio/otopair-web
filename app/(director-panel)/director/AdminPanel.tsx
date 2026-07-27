@@ -12,6 +12,7 @@ import { TabUsers }     from './components/tabs/TabUsers'
 import { TabBookings }  from './components/tabs/TabBookings'
 import { TabCars }      from './components/tabs/TabCars'
 import { TabVehicleConfigs } from './components/tabs/TabVehicleConfigs'
+import { TabEnrichment } from './components/tabs/TabEnrichment'
 import { TabPricing } from './components/tabs/TabPricing'
 import { TabBugs }      from './components/tabs/TabBugs'
 import { TabFeedback }  from './components/tabs/TabFeedback'
@@ -45,6 +46,7 @@ const TABS: Record<string, React.ComponentType> = {
   transactions: TabTransactions,
   cars:        TabCars,
   configs:     TabVehicleConfigs,
+  enrichment:  TabEnrichment,
   pricing:     TabPricing,
   serviceParts: TabServiceParts,
   repairpalLabor: TabRepairPalLabor,

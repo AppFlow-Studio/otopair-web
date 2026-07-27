@@ -439,6 +439,21 @@ export default defineSchema({
     last_confirmed_at: v.optional(v.number()),
     mechanic_verified: v.optional(v.boolean()),
     data_quality: v.optional(v.string()),
+    // Round 9 (batch-11): the fitment verifier REFUTED this part but it was
+    // kept because multiple sources attested it (proportional skepticism).
+    // Selection demotes flagged fitments so a kept-for-safety part can't win
+    // a quote over an unflagged competitor (Forester: refuted 2010-2018 pads
+    // beat the correct SK-gen pads).
+    refute_flagged: v.optional(v.boolean()),
+    refute_reason: v.optional(v.string()),
+    // Director reviewed this fitment's "wrong part" flag (I1 guard failure /
+    // refute_flagged) and chose NOT to act on it right now. Deliberately
+    // separate from mechanic_verified: dismissing hides it from the Needs
+    // Attention scan without claiming the part is actually correct, so
+    // quote-time selection keeps treating it exactly as before.
+    flag_dismissed_at: v.optional(v.number()),
+    flag_dismissed_by: v.optional(v.string()),
+    flag_dismissed_by_id: v.optional(v.id("director_users")),
     created_at: v.optional(v.number()),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])
@@ -828,10 +843,46 @@ export default defineSchema({
     batch_ids: v.optional(v.array(v.string())),
     scrape_cache_hit: v.optional(v.boolean()),
     created_at: v.optional(v.number()),
+    // Manual triage of a failed/flagged run from the Enrichment Console's Needs
+    // Attention rail. Acknowledging clears the run without re-running it —
+    // distinct from a fresh re-enrich. Written by directorEnrichment.acknowledgeRun.
+    reviewed_at: v.optional(v.number()),
+    reviewed_by: v.optional(v.string()),
+    review_note: v.optional(v.string()),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])
     .index("by_status", ["status"])
     .index("by_created_at", ["created_at"]),
+
+  // Per-stage trace of an enrichment run — decode → scrape → batch1 → batch2 →
+  // finalize. Written by v3pipeline (non-fatal, best-effort) so the Enrichment
+  // Console Deep-Dive can replay a run step by step, including each batch's
+  // prompt (request_text) and raw+parsed model output (response_text). One row
+  // per (run, step), upserted: the submit pass writes request_text/started_at,
+  // the poll pass patches response_text/ended_at/tokens. Text fields are capped
+  // (see runSteps.ts CAP) to stay under Convex's document-size limit; `truncated`
+  // flags when a cap was hit. Only NEW runs (post-instrumentation) have rows.
+  enrichment_run_steps: defineTable({
+    enrichment_run_id: v.id("enrichment_runs"),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    step: v.string(), // "decode" | "scrape" | "batch1" | "batch2" | "finalize"
+    seq: v.number(), // stable display order
+    status: v.optional(v.string()), // "submitted" | "ok" | "error" | "timeout" | "skipped"
+    started_at: v.optional(v.number()),
+    ended_at: v.optional(v.number()),
+    duration_ms: v.optional(v.number()),
+    summary: v.optional(v.string()),
+    tokens_in: v.optional(v.number()),
+    tokens_out: v.optional(v.number()),
+    web_searches: v.optional(v.number()),
+    request_text: v.optional(v.string()),
+    response_text: v.optional(v.string()),
+    truncated: v.optional(v.boolean()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_run", ["enrichment_run_id"])
+    .index("by_run_step", ["enrichment_run_id", "step"]),
 
   source_registry: defineTable({
     make_id: v.optional(v.id("makes")),
@@ -2305,7 +2356,7 @@ export default defineSchema({
           trace: v.optional(
             v.array(
               v.object({
-                layer: v.union(v.number(), v.literal("gate")),
+                layer: v.union(v.number(), v.literal("gate"), v.literal("refute")),
                 name: v.string(),
                 decisive: v.boolean(),
                 reason: v.string(),
@@ -3282,6 +3333,29 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_slug", ["slug"])
     .index("by_number", ["number"]),
+
+  // Itemized membership: which specific vehicle_configs a data_incidents row
+  // covers. data_incidents.affected_count/affected_entity_type stayed a bare
+  // number+type pair (Incident #1's "38 vehicle_config" was never itemized) —
+  // this table is what lets a director actually WORK a declared incident down
+  // instead of just reading its headline count. One row per (incident,
+  // config); status here is per-vehicle progress, independent of the parent
+  // incident's own open/monitoring/resolved status.
+  data_incident_configs: defineTable({
+    incident_id: v.id("data_incidents"),
+    vehicle_config_id: v.id("vehicle_configs"),
+    status: v.union(v.literal("open"), v.literal("corrected")),
+    added_by: v.string(),
+    added_by_id: v.optional(v.id("director_users")),
+    added_at: v.number(),
+    corrected_by: v.optional(v.string()),
+    corrected_by_id: v.optional(v.id("director_users")),
+    corrected_at: v.optional(v.number()),
+    correction_note: v.optional(v.string()),
+  })
+    .index("by_incident", ["incident_id", "status"])
+    .index("by_incident_config", ["incident_id", "vehicle_config_id"])
+    .index("by_config", ["vehicle_config_id"]),
 
   // Materialized KPI counters for the internal portals (decision #3, R2
   // class). Written only by portalStats.ts summarizers on cron; read via the

@@ -539,3 +539,64 @@ export const Modal = ({ open, onClose, title, eyebrow, statusBadge, headerRight,
     </div>
   )
 }
+
+/* ---------- SIDEBAR ---------- */
+// Full-height right-edge slide-over — the "singular scalable component"
+// pattern for detail-on-click: a list row opens this instead of a centered
+// Modal, so the list stays visible/scrollable behind it and the same panel
+// can be reused from any row anywhere in the panel.
+export type SidebarProps = {
+  open: boolean
+  onClose: () => void
+  title: string
+  eyebrow?: ReactNode
+  headerRight?: ReactNode
+  children?: ReactNode
+  footer?: ReactNode
+  width?: number
+}
+
+export const Sidebar = ({ open, onClose, title, eyebrow, headerRight, children, footer, width = 520 }: SidebarProps) => {
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const raf = requestAnimationFrame(() => setShow(true))
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+      setShow(false) // reset so the slide-in replays next time this instance reopens
+    }
+  }, [open, onClose])
+  if (!open) return null
+  return (
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(15,23,42,0.45)', zIndex:200,
+      display:'flex', justifyContent:'flex-end' }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width:`min(100%, ${width}px)`, height:'100%', background:'#fff', boxShadow:'-24px 0 60px rgba(15,23,42,0.25)',
+        display:'flex', flexDirection:'column', transform: show ? 'translateX(0)' : 'translateX(100%)',
+        transition:'transform 220ms cubic-bezier(.2,.7,.2,1)' }}>
+        <div style={{ padding:'16px 22px', borderBottom:'1px solid var(--slate-200)',
+          background:'linear-gradient(to right, var(--blue-50), #fff 60%)',
+          display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, flexShrink:0 }}>
+          <div style={{ minWidth:0 }}>
+            {eyebrow && <div style={{ marginBottom:6 }}>{eyebrow}</div>}
+            <div style={{ fontSize:17, fontWeight:600, color:'var(--slate-900)', letterSpacing:-0.2 }}>{title}</div>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+            {headerRight}
+            <button onClick={onClose} style={{ border:'none', background:'transparent', cursor:'pointer', color:'var(--slate-500)', padding:4, borderRadius:6, display:'inline-flex' }}>
+              <IconX size={18} />
+            </button>
+          </div>
+        </div>
+        <div style={{ flex:1, overflow:'auto' }}>{children}</div>
+        {footer && <div style={{ padding:'12px 22px', borderTop:'1px solid var(--slate-200)', background:'var(--slate-25)', display:'flex', justifyContent:'flex-end', gap:8, flexShrink:0 }}>{footer}</div>}
+      </div>
+    </div>
+  )
+}

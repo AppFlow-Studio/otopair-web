@@ -23,7 +23,7 @@ import type {
   CallLogEntry,
   VehicleIdentity,
 } from "./types";
-import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS, ON_DEMAND_SERVICE_SLUGS } from "./types";
+import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS, ON_DEMAND_SERVICE_SLUGS, WEAR_ITEM_SERVICE_SLUGS } from "./types";
 import { submitBatch, getBatchStatus, getBatchResults } from "./utils/batchClient";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
@@ -35,7 +35,7 @@ import { runSanityChecks, normalizeOilViscosity, aggregateFieldConfidence } from
 import { resolveCapacities } from "./capacityResolver";
 import { validateAllOemParts } from "./validation/oemValidation";
 import { BLOCKED_DOMAINS, isMarketplaceUrl } from "./sourceRegistry";
-import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts, applyFinalizeApplicability, IDENTITY_DEPENDENT_FIELDS } from "./applicabilityRules";
+import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts, applyFinalizeApplicability, applyEpsSuppression, IDENTITY_DEPENDENT_FIELDS } from "./applicabilityRules";
 import { deriveIdentityFromTrim, mergeIdentity } from "./identityResolution";
 import { computeEnrichmentStatus, explainGateDecision } from "./completionGate";
 import { scrapeVehicleSources } from "./scraper";
@@ -63,8 +63,9 @@ import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/
 import { verifyTransFluid, decideTransFluidAction } from "./utils/transFluidVerifier";
 import { reconcileDrivetrain } from "./drivetrainReconcile";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
-import { reconcileTransmissionType } from "./transmissionTypeReconcile";
+import { reconcileTransmissionType, speedsFromTransUnit } from "./transmissionTypeReconcile";
 import { fluidNamesForeignChassisBrand, FLUID_TYPE_TO_PART_FIELD } from "./fluidBrandConsistency";
+import { reconcileTransFluidSpecWithPart } from "./transFluidSpecReconcile";
 import { resolveScrapeRedirect } from "./buildSourceResolver";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { laborFlagsFromEnv } from "./laborResearch";
@@ -85,6 +86,17 @@ export type EnrichVehicleBatchV3Result =
   | { status: "cache_hit"; configId: Id<"vehicle_configs"> }
   | { status: "error"; reason: string }
   | { status: "batch_submitted"; configKey: string; batchId: string };
+
+// ─── Run-step trace (best-effort, non-fatal) ───────────────────────
+// Writes one enrichment_run_steps row per stage for the Enrichment Console
+// Deep-Dive replay. ALWAYS wrapped so a trace failure can never break a run.
+async function traceStep(ctx: any, patch: Record<string, unknown>): Promise<void> {
+  try {
+    await ctx.runMutation(internal.vehicleEnrichment.runSteps.recordRunStep, patch);
+  } catch (e) {
+    console.warn(`[v8/trace] step '${String(patch.step)}' record failed (non-fatal):`, e);
+  }
+}
 
 // ─── Constants ─────────────────────────────────────────────────────
 
@@ -186,10 +198,29 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
     const iv = parseInterval(intervals[key]);
     f[`${key}_miles`] = iv.miles;
     f[`${key}_months`] = iv.months;
+    // Round 9 (batch-11): the model's per-interval status ("inspect_only",
+    // "conditional_severe") was parsed and then dropped, so every interval
+    // wrote as "scheduled". Carry it through to the G-section writer.
+    f[`${key}_status`] = {
+      value: iv.status,
+      source_url: null,
+      source_type: null,
+      confidence: null,
+      flagged: false,
+      flag_reason: null,
+    };
   }
   const timing = parseInterval(intervals.timing_belt_or_chain_service);
   f.timing_service_miles = timing.miles;
   f.timing_service_months = timing.months;
+  f.timing_service_status = {
+    value: timing.status,
+    source_url: null,
+    source_type: null,
+    confidence: null,
+    flagged: false,
+    flag_reason: null,
+  };
 
   // Attributes
   const attrs = data.attributes ?? {};
@@ -873,7 +904,7 @@ export function rankGapFillFields(
 }
 
 /** Map interval field prefix to service slug. */
-const INTERVAL_TO_SERVICE: Record<string, string> = {
+export const INTERVAL_TO_SERVICE: Record<string, string> = {
   oil_change: "oil_change",
   spark_plug: "spark_plugs",
   transmission_service: "transmission_service",
@@ -1375,12 +1406,34 @@ async function writeNormalizedData(
       fields[`${prefix}_months`]?.confidence ?? 1,
     );
 
+    // Round 9 (batch-11): "scheduled" is a claim that this cadence is the OEM
+    // maintenance schedule — it was stamped unconditionally, so wear estimates
+    // (pads 50k), inspection guidance, and training-data cadences all read as
+    // OEM schedule (RAV4 shipped 10k oil at 0.95 when the 2012 guide says 5k).
+    // Reserve "scheduled" for values the extractor tied to a scraped source;
+    // wear items and model-declared inspect/conditional cadences are
+    // "estimated" (the round-8 honesty status the UI already badges).
+    const llmStatus = asString(fields[`${prefix}_status`]?.value);
+    if (llmStatus === "not_applicable") continue;
+    const hasScrapedSource =
+      fields[`${prefix}_miles`]?.source_type === "scraped" ||
+      fields[`${prefix}_months`]?.source_type === "scraped";
+    const status =
+      !(milesVal || monthsVal)
+        ? "on_demand"
+        : WEAR_ITEM_SERVICE_SLUGS.has(slug) ||
+            llmStatus === "inspect_only" ||
+            llmStatus === "conditional_severe" ||
+            !hasScrapedSource
+          ? "estimated"
+          : "scheduled";
+
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertServiceInterval, {
       vehicle_config_id: vehicleConfigId,
       service_id: serviceId,
       interval_miles: milesVal,
       interval_months: monthsVal,
-      status: milesVal || monthsVal ? "scheduled" : "on_demand",
+      status,
       confidence,
       data_quality: "enriched",
     });
@@ -1726,8 +1779,10 @@ export const enrichVehicleBatchV3 = internalAction({
     }
 
     // VDB advanced decode — runs once, cached by VIN. Fields used in Step 6b/6e.
+    const decodeStartedAt = Date.now();
     const vdbRaw = vehicleDoc.vin ? await advancedVinDecode(vehicleDoc.vin) : null;
     const vdbFields = vdbRaw ? extractVDBFields(vdbRaw) : null;
+    const decodeEndedAt = Date.now();
 
     // Identity gap-fill: the applicability rules fail OPEN when drivetrain /
     // transmission_type / body_class are null (2001 740iA: no rule fired on a
@@ -1888,6 +1943,20 @@ export const enrichVehicleBatchV3 = internalAction({
       );
     }
 
+    // Attach the vehicle to the config being enriched NOW — not only at finalize.
+    // Finalize (below) also attaches, but that's the very END of a 20-40min run.
+    // When a re-enrichment's decode CHANGES the config_key — e.g. a variant
+    // correction "Impreza WRX" → "Impreza Outback", or a resolved engine code —
+    // the new config differs from the vehicle's old (possibly purged) one, and
+    // the vehicle otherwise keeps pointing at the stale config for the entire
+    // run (invisible/wrong by VIN), and forever if the run stalls before
+    // finalize. Attaching here makes the VIN reflect the live config from the
+    // start; the finalize attach is idempotent.
+    await ctx.runMutation(
+      internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
+      { vehicle_id: args.vehicleId, vehicle_config_id: vehicleConfigId },
+    );
+
     // STEP 4b: Persist detected packages (if any) onto the vehicle_config row.
     // patchVehicleConfig is a no-op when packages_available is undefined, so this
     // is safe to call unconditionally.
@@ -1917,6 +1986,21 @@ export const enrichVehicleBatchV3 = internalAction({
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
       run_id: runId,
       status: "scraping",
+    });
+
+    // Trace: decode stage. Runs before the run row exists (NHTSA vPic decode is
+    // passed in; VDB advancedVinDecode above), so it's timed via locals and
+    // recorded now that runId is known.
+    await traceStep(ctx, {
+      run_id: runId,
+      vehicle_config_id: vehicleConfigId,
+      step: "decode",
+      seq: 1,
+      status: "ok",
+      started_at: decodeStartedAt,
+      ended_at: decodeEndedAt,
+      summary: `drivetrain=${vPicData?.drivetrain ?? "?"} · transmission=${vPicData?.transmission_type ?? "?"} · body=${vPicData?.body_class ?? "?"}`,
+      response_text: JSON.stringify({ nhtsa_merged_identity: vPicData, vdb_fields: vdbFields }, null, 2),
     });
 
     // STEP 6: Upsert drivetrain_config — only if we have a REAL value from NHTSA.
@@ -2059,7 +2143,9 @@ export const enrichVehicleBatchV3 = internalAction({
     }
 
     // STEP 7: FireCrawl scrape — parts catalog + owner's manual
+    const scrapeStartedAt = Date.now();
     const sources = await scrapeVehicleSources(ctx, vehicle);
+    const scrapeEndedAt = Date.now();
 
     // STEP 7b: Record deterministic supersession chains parsed from the same
     // registry HTML (marks known-superseded oem_parts rows so fitment writes
@@ -2073,6 +2159,28 @@ export const enrichVehicleBatchV3 = internalAction({
         console.warn("[v8] recordSupersessions failed (non-fatal):", e);
       }
     }
+
+    // Trace: scrape stage (covers VDB-repair fetch, chassis/engine sibling
+    // merges, and the FireCrawl source scrape).
+    await traceStep(ctx, {
+      run_id: runId,
+      vehicle_config_id: vehicleConfigId,
+      step: "scrape",
+      seq: 2,
+      status: "ok",
+      started_at: scrapeStartedAt,
+      ended_at: scrapeEndedAt,
+      summary: `${sources.partsSourceUrls.length + sources.manualSourceUrls.length} sources · ${sources.supersessions.length} supersessions · ${vdbRepairRaw?.blocks.length ?? 0} VDB repair blocks`,
+      response_text: JSON.stringify(
+        {
+          parts_source_urls: sources.partsSourceUrls,
+          manual_source_urls: sources.manualSourceUrls,
+          supersessions: sources.supersessions,
+        },
+        null,
+        2,
+      ),
+    });
 
     // STEP 8: Submit Batch [1A, 1B]
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
@@ -2152,6 +2260,30 @@ export const enrichVehicleBatchV3 = internalAction({
       });
       return { status: "error" as const, reason: "batch1_submission_failed" };
     }
+
+    // Trace: batch 1 request (response is patched onto this same row in
+    // _pollBatch1V3 once the batch results return).
+    await traceStep(ctx, {
+      run_id: runId,
+      vehicle_config_id: vehicleConfigId,
+      step: "batch1",
+      seq: 3,
+      status: "submitted",
+      started_at: Date.now(),
+      summary: `batchId=${batchId} · ${batch1Requests.length} requests`,
+      request_text: JSON.stringify(
+        batch1Requests.map((r) => ({
+          customId: r.customId,
+          model: r.model ?? "sonnet",
+          maxTokens: r.maxTokens,
+          maxSearchUses: r.maxSearchUses,
+          system: r.system,
+          userPrompt: r.userPrompt,
+        })),
+        null,
+        2,
+      ),
+    });
 
     console.log(`[v8] Batch [1A, 1B] submitted (batchId=${batchId}), scheduling poll`);
 
@@ -2329,6 +2461,21 @@ async function runPollBatch1Body(
     const r1b = results["batch1b"];
     const r1c = results["batch1c"];
 
+    // Trace: batch 1 response — patch the row opened at submit. Recorded before
+    // the error early-returns below so a failed batch still leaves a trace.
+    await traceStep(ctx, {
+      run_id: args.runId,
+      vehicle_config_id: args.vehicleConfigId,
+      step: "batch1",
+      seq: 3,
+      status: r1a?.error ? "error" : "ok",
+      ended_at: Date.now(),
+      tokens_in: (r1a?.usage.tokensIn ?? 0) + (r1b?.usage.tokensIn ?? 0) + (r1c?.usage.tokensIn ?? 0),
+      tokens_out: (r1a?.usage.tokensOut ?? 0) + (r1b?.usage.tokensOut ?? 0) + (r1c?.usage.tokensOut ?? 0),
+      web_searches: (r1a?.usage.webSearches ?? 0) + (r1b?.usage.webSearches ?? 0) + (r1c?.usage.webSearches ?? 0),
+      response_text: JSON.stringify(results, null, 2),
+    });
+
     // v9.8: Apply VDB action→slug mapping from 1C, then write intervals + labor.
     // Confidence 0.9 ensures Batch 2 fallback never overwrites this.
     if (r1c && !r1c.error && args.vdbRepairBlocks && args.vdbRepairActions) {
@@ -2469,6 +2616,12 @@ async function runPollBatch1Body(
     // Apply applicability rules
     const vPicData = args.vPicData as VehicleIdentity | null;
     fields = applyApplicabilityRules(fields, vPicData);
+    // Round 8: deterministic EPS suppression — a known electric-PS platform
+    // extracted as "hydraulic" shipped a phantom PS-fluid capacity + a
+    // scheduled (unperformable) PS flush on the batch-10 Cobalt.
+    if (applyEpsSuppression(fields, args.make, args.model, args.year)) {
+      console.log(`[v8/_pollBatch1] known EPS platform — power_steering_type forced electric, PS fluid fields suppressed`);
+    }
 
     const filledCount = V4_FIELD_KEYS.filter((k) => fields[k]?.value != null).length;
     console.log(`[v8/_pollBatch1] ${filledCount}/${V4_FIELD_KEYS.length} fields after merge+applicability`);
@@ -2597,13 +2750,14 @@ async function runPollBatch1Body(
     ).length;
     const batch2SearchUses = Math.min(1 + numericSpecGaps, 5);
 
+    const batch2UserPrompt = buildBatch2Prompt(vehicle, nullFields, oemParts);
     let batch2Id: string;
     try {
       batch2Id = await submitBatch([
         {
           customId: "batch2",
           system: BATCH_2_SYSTEM,
-          userPrompt: buildBatch2Prompt(vehicle, nullFields, oemParts),
+          userPrompt: batch2UserPrompt,
           maxTokens: 16384,
           temperature: 0,
           maxSearchUses: batch2SearchUses,
@@ -2622,6 +2776,22 @@ async function runPollBatch1Body(
       });
       return;
     }
+
+    // Trace: batch 2 request (response patched onto this row in _pollBatch2V3).
+    await traceStep(ctx, {
+      run_id: args.runId,
+      vehicle_config_id: args.vehicleConfigId,
+      step: "batch2",
+      seq: 4,
+      status: "submitted",
+      started_at: Date.now(),
+      summary: `batchId=${batch2Id} · ${nullFields.length} gap fields · ${batch2SearchUses} searches`,
+      request_text: JSON.stringify(
+        { customId: "batch2", system: BATCH_2_SYSTEM, userPrompt: batch2UserPrompt },
+        null,
+        2,
+      ),
+    });
 
     await ctx.scheduler.runAfter(
       POLL_INTERVAL_MS,
@@ -2781,6 +2951,22 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     const results = timedOut ? {} : await getBatchResults(args.batchId);
     const r2 = results["batch2"];
 
+    // Trace: batch 2 response — patch the row opened at submit.
+    await traceStep(ctx, {
+      run_id: args.runId,
+      vehicle_config_id: args.vehicleConfigId,
+      step: "batch2",
+      seq: 4,
+      status: timedOut ? "timeout" : r2?.error ? "error" : "ok",
+      ended_at: Date.now(),
+      tokens_in: r2?.usage.tokensIn ?? 0,
+      tokens_out: r2?.usage.tokensOut ?? 0,
+      web_searches: r2?.usage.webSearches ?? 0,
+      response_text: timedOut
+        ? "(batch 2 timed out — no response collected)"
+        : JSON.stringify(results, null, 2),
+    });
+
     // Fix #3: Detect errored/expired batch2 request
     if (r2?.error) {
       console.error(`[v8/_pollBatch2] batch2 ${r2.error} — continuing with batch1 data only`);
@@ -2905,6 +3091,9 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       deriveIdentityFromTrim(args.trim),
     );
     allFields = applyApplicabilityRules(allFields, finalIdentity);
+    if (applyEpsSuppression(allFields, args.make, args.model, args.year)) {
+      console.log(`[v8] known EPS platform — power_steering_type forced electric, PS fluid fields suppressed (finalize)`);
+    }
     allFields = applyFinalizeApplicability(allFields);
 
     const sanityFlags = runSanityChecks(allFields, cylinders, {
@@ -3674,6 +3863,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           oem: string;
           name: string;
           sourceCount: number;
+          domainCount: number;
           quantity: number | null;
         }[] = [];
         const seenOem = new Set<string>();
@@ -3690,12 +3880,19 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           // Carried so a single hallucinated "refuted" verdict can't hard-delete
           // a well-corroborated part (batch-5: the gate wrongly deleted the
           // correct G90 rear pad 58302-T4A10). Proportional skepticism below.
+          // Round 9 (batch-11): domainCount (DISTINCT source domains) is the
+          // corroboration basis when available — raw source_count counts every
+          // re-scrape of the same wrong year-band listing as "support" (the
+          // Forester's refuted 2010-2018 pads survived on page count alone).
           // quantity feeds the dual-plug count check (batch-5: HEMI = 2×cyl).
           candidates.push({
             roleKey: sub,
             oem,
             name: part?.name ?? sub,
             sourceCount: (f as any).source_count ?? 1,
+            domainCount: Array.isArray((f as any).source_domains)
+              ? (f as any).source_domains.length
+              : 0,
             quantity: (f as any).quantity_needed ?? null,
           });
         }
@@ -3729,6 +3926,11 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               // finalize-scope identity (vPicData is first-action only).
               cylinders: enginePicData?.cylinders ?? undefined,
               engineManufacturer: enginePicData?.engine_manufacturer ?? undefined,
+              // Batch-10: a 5W-20 blend oil product shipped on the 0W-20 MDX —
+              // the verifier refutes fluid products whose grade differs from
+              // the vehicle's stored requirement.
+              oilViscosity:
+                (allFields.oil_viscosity?.value as string | null) ?? undefined,
             },
             toVerify.map((c) => ({
               roleKey: c.roleKey,
@@ -3751,8 +3953,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           // well-corroborated part (multiple independent sources) is only
           // soft-flagged for review, not deleted — a lone hallucinated "refuted"
           // must not erase a part that several sources agreed fits.
+          // Round 9: support = distinct attesting domains when recorded (rows
+          // enriched since Jul 2026 all carry source_domains); legacy rows
+          // without domain data keep the old page-count basis rather than
+          // losing their multi-source protection.
           const supportByOem = new Map(
-            toVerify.map((c) => [c.oem.toUpperCase(), c.sourceCount]),
+            toVerify.map((c) => [
+              c.oem.toUpperCase(),
+              c.domainCount > 0 ? c.domainCount : c.sourceCount,
+            ]),
           );
           const hardDelete = refuted.filter(
             (r) =>
@@ -3768,6 +3977,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             console.warn(
               `[fitment-verify] ${softFlag.length} refuted part(s) KEPT (multi-source support > ${FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES}) — flagged for review, not deleted: ` +
                 softFlag.map((r) => `${r.roleKey}:${r.oem}`).join(", "),
+            );
+            // Persist the flag so the part selector demotes kept-but-refuted
+            // fitments (they must not win a quote over an unflagged rival).
+            await ctx.runMutation(
+              internal.vehicleEnrichment.v3mutations.flagRefutedFitments,
+              {
+                vehicle_config_id: args.vehicleConfigId,
+                refuted: softFlag.map((r) => ({ oem: r.oem, reason: r.reason })),
+              },
             );
           }
           if (hardDelete.length > 0) {
@@ -3865,8 +4083,102 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               `verifier expected "${action.claimedCorrect}" for ${action.suspectUnit} (${action.reason})`,
           );
         }
+
+        // ── Round 8: speeds-vs-unit reconcile (batch-10 Cobalt) ──────────
+        // NHTSA's transSpeeds can carry the OTHER gearbox's gear count (the
+        // manual's 5 merged onto the resolved 4T45 automatic → "5-speed
+        // automatic", a config that never existed). The verifier names the
+        // specific unit; most units lead with their gear count. Correct only
+        // in the high-precision direction: the fluid verdict was "match"
+        // (unit↔fluid corroborated), the unit encodes a count, and the stored
+        // count differs. Anything weaker is flag-only.
+        const impliedSpeeds = speedsFromTransUnit(verdict.transUnit);
+        const storedSpeeds = (trans?.speeds as number | null) ?? null;
+        if (impliedSpeeds != null && storedSpeeds != null && storedSpeeds !== impliedSpeeds) {
+          if (verdict.verdict === "match") {
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs, {
+              transmission_id: transmissionId,
+              speeds: impliedSpeeds,
+            });
+            transFluidErrors.push(
+              `trans_speeds_reconciled:${verdict.transUnit}:stored=${storedSpeeds}:unit_implies=${impliedSpeeds}`,
+            );
+            console.warn(
+              `[trans-speeds-reconcile] speeds ${storedSpeeds} → ${impliedSpeeds} (unit ${verdict.transUnit}, fluid verdict=match)`,
+            );
+          } else {
+            transFluidErrors.push(
+              `trans_speeds_suspect:${verdict.transUnit ?? "?"}:stored=${storedSpeeds}:unit_implies=${impliedSpeeds}`,
+            );
+            console.warn(
+              `[trans-speeds-reconcile] SUSPECT (not changed): stored ${storedSpeeds} vs unit-implied ${impliedSpeeds} (${verdict.transUnit}, verdict=${verdict.verdict})`,
+            );
+          }
+        }
       } catch (e) {
         console.warn("[trans-fluid-verify] pass failed (non-fatal):", e);
+      }
+    }
+
+    // ── Round 9: deterministic CVT spec↔part reconcile (batch-11 Rogue) ─
+    // No LLM involved (see transFluidSpecReconcile.ts for why this is exempt
+    // from the batch-8 flag-only doctrine): fires only when the resolved type
+    // is CVT, the stored spec is token-identifiably a stepped-gearbox ATF,
+    // and the extracted fluid PART is token-identifiably CVT-family — then
+    // the spec is reconciled to the part's family. Weaker evidence flags.
+    if (
+      (process.env.TRANS_FLUID_SPEC_RECONCILE ?? "1") !== "0" &&
+      !timedOut &&
+      transmissionId != null &&
+      allFields.trans_fluid_type?.value != null
+    ) {
+      try {
+        const trans: any = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getTransmission,
+          { transmissionId },
+        );
+        const typeText = [
+          asString(allFields.transmission_type?.value),
+          trans?.type,
+          trans?.transmission_type,
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const specRecon = reconcileTransFluidSpecWithPart({
+          transTypeText: typeText,
+          spec: asString(allFields.trans_fluid_type?.value),
+          partText: asString(allFields.atf_fluid_oem?.value),
+        });
+        if (specRecon.action === "correct") {
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs, {
+            transmission_id: transmissionId,
+            fluid_type: specRecon.correctedSpec,
+          });
+          const oldSpec = String(allFields.trans_fluid_type.value);
+          allFields.trans_fluid_type = {
+            ...allFields.trans_fluid_type,
+            value: specRecon.correctedSpec,
+          };
+          transFluidErrors.push(
+            `trans_fluid_spec_reconciled:stored=${oldSpec}:part_implies=${specRecon.correctedSpec}`,
+          );
+          console.warn(
+            `[trans-fluid-spec-reconcile] "${oldSpec}" → "${specRecon.correctedSpec}" (${specRecon.reason})`,
+          );
+        } else if (specRecon.action === "flag") {
+          allFields.trans_fluid_type = {
+            ...allFields.trans_fluid_type,
+            flagged: true,
+            flag_reason: `trans_fluid_spec_family_conflict: ${specRecon.reason}`,
+            confidence: Math.min(allFields.trans_fluid_type.confidence ?? 0.55, 0.55),
+          };
+          transFluidErrors.push(
+            `trans_fluid_spec_family_conflict:stored=${String(allFields.trans_fluid_type.value)}`,
+          );
+          console.warn(`[trans-fluid-spec-reconcile] FLAGGED: ${specRecon.reason}`);
+        }
+      } catch (e) {
+        console.warn("[trans-fluid-spec-reconcile] pass failed (non-fatal):", e);
       }
     }
 
@@ -3979,6 +4291,30 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       ],
       field_gaps: finalGaps,
       quotability,
+    });
+
+    // Trace: finalize stage — the run's terminal snapshot.
+    await traceStep(ctx, {
+      run_id: args.runId,
+      vehicle_config_id: args.vehicleConfigId,
+      step: "finalize",
+      seq: 5,
+      status: timedOut ? "timeout" : "ok",
+      ended_at: Date.now(),
+      summary: `fill ${fillRate}% · applicable ${applicableFillRate}% · quotability ${quotability?.pct ?? "—"} · ${sanityFlags.length} sanity · ${finalGaps.length} gaps`,
+      response_text: JSON.stringify(
+        {
+          fill_rate: fillRate,
+          applicable_fill_rate: applicableFillRate,
+          fields_filled: fieldsFilledCount,
+          fields_total: V4_FIELD_KEYS.length,
+          quotability,
+          sanity_flags: sanityFlags,
+          field_gaps: finalGaps,
+        },
+        null,
+        2,
+      ),
     });
 
     // Read current vehicle_config to get resolved drivetrain

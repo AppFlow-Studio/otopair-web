@@ -24,10 +24,12 @@ import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
 import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
+import { acceptNormalizedTrim } from "./vehicleEnrichment/identityResolution";
 import { parseGvwrUpperLbs } from "./vehicleEnrichment/validation/sanityChecks";
 import { assembleVariantFingerprint, type TransmissionFamily } from "./vehicleEnrichment/variantFingerprint";
 import { resolveFuelClass } from "./vehicleEnrichment/fuelTypeResolver";
 import { resolveBuildSource } from "./vehicleEnrichment/buildSourceResolver";
+import { reconcilePerformanceVariant } from "./vehicleEnrichment/variantDecodeReconcile";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -300,6 +302,31 @@ export const processVin = internalAction({
         steeringType: vdb?.steeringType || null,
       };
 
+      // Variant mis-decode reconciliation (batch-9): VDB occasionally decodes a
+      // non-performance vehicle as its performance halo — a 2003 Impreza Outback
+      // (2.5 NA) read as an "Impreza WRX" (2.0T) — and the fuzzy YMMT match lets
+      // it win because "Impreza WRX" ⊇ "Impreza". That wrong model then misleads
+      // the engine-code resolver to the turbo engine + wrong parts. When VDB
+      // adds a performance-halo token NHTSA lacks AND NHTSA positively decoded a
+      // different variant, prefer NHTSA's base model.
+      if (trustVdbYmmt && (vdb?.model || vdb?.trim) && nhtsa.model) {
+        // VDB records the halo in either the model ("Impreza WRX") or the TRIM
+        // ("Impreza" + trim "WRX") — scan both.
+        const vdbFull = `${vdb?.model ?? ""} ${vdb?.trim ?? ""}`.trim();
+        const nhtsaVariantText = [nhtsa.series, nhtsa.trim, nhtsa.series2, nhtsa.trim2]
+          .filter(Boolean)
+          .join(" ");
+        const vr = reconcilePerformanceVariant(vdbFull, nhtsa.model, nhtsaVariantText);
+        if (vr.demote) {
+          const demotedTrim = nhtsa.trim || nhtsa.series || "Base";
+          console.warn(
+            `[decode] VARIANT RECONCILE — ${vr.reason}; "${merged.model} ${merged.trim}" → NHTSA "${nhtsa.model} ${demotedTrim}"`,
+          );
+          merged.model = nhtsa.model;
+          merged.trim = demotedTrim;
+        }
+      }
+
       // Batch-6 fix: NHTSA sometimes omits the Model for a VALID VIN (the 2009
       // Escalade: ErrorCode 4,14 "manufacturer did not submit some fields")
       // while Make + Year + Engine decode fine — and VDB may also be down/blank.
@@ -413,7 +440,25 @@ export const processVin = internalAction({
         });
         if (normalized) {
           if (normalized.model) finalModel = normalized.model;
-          if (normalized.trim) finalTrim = normalized.trim;
+          // Round 8 (batch-10): accept the LLM's trim only when it overlaps the
+          // decode evidence — the unconditional override stored a Lariat F-150
+          // as "FX4 SuperCrew" and a 745Li as "745i" (trims no decoder produced).
+          if (normalized.trim) {
+            if (
+              acceptNormalizedTrim(normalized.trim, [
+                merged.trim,
+                merged.trim2,
+                merged.series,
+                merged.series2,
+              ])
+            ) {
+              finalTrim = normalized.trim;
+            } else {
+              console.log(
+                `[decode] Normalizer trim "${normalized.trim}" rejected — no token overlap with decode evidence (kept "${finalTrim}")`,
+              );
+            }
+          }
           if (normalized.engine_code && !vdbCode && !isSyntheticEngineCode(normalized.engine_code)) {
             finalEngineCode = normalized.engine_code;
           }

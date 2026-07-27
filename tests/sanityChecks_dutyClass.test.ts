@@ -71,7 +71,7 @@ describe("duty-class sanity bands", () => {
     expect(flags.some((f) => f.field === "lug_nut_torque_ft_lbs")).toBe(true);
   });
 
-  test("light-duty coolant band unchanged (V8 typicalMax 16)", () => {
+  test("light-duty coolant band unchanged (V8 typicalMax 16 — see round-8 note in getCapacityBand)", () => {
     expect(getCapacityBand("coolant_capacity_qts", 8).typicalMax).toBe(16);
     expect(getCapacityBand("coolant_capacity_qts", 8, { dutyClass: "heavy" }).typicalMax).toBe(34);
     expect(getCapacityBand("coolant_capacity_qts", 8, { dutyClass: "medium" }).rejectMax).toBe(32);

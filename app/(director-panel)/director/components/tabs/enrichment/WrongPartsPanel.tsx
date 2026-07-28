@@ -22,13 +22,12 @@ import { api } from '@/convex/_generated/api'
 import type { FunctionReturnType } from 'convex/server'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Sidebar, MicroH, Input, IconSearch } from '../../Primitives'
-import { Panel, Empty, SkeletonBlock, CopyableMono, ConfirmPopup, TableWrap, th, td, thRight, tdRight, fmtWhen } from './helpers'
+import { Panel, Empty, SkeletonBlock, CopyableMono, ConfirmPopup, TableWrap, th, td, thRight, tdRight, fmtWhen, PageNav, RunChip, DateRangeFilter, dateInRange } from './helpers'
 
 type WrongPartFlag = FunctionReturnType<typeof api.directorPartQuality.scanWrongParts>['flags'][number]
 type ReasonFilter = 'all' | 'cross_make' | 'refuted'
 
 const PAGE_SIZE = 15
-const pageBtn: React.CSSProperties = { border: '1px solid var(--slate-200)', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', color: 'var(--slate-700)' }
 const drawerLinkBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--blue-700)', fontSize: 12, fontFamily: 'inherit', fontWeight: 500, whiteSpace: 'nowrap' }
 const drawerInput: React.CSSProperties = { border: '1px solid var(--slate-200)', borderRadius: 6, padding: '6px 8px', fontSize: 12, color: 'var(--slate-800)', background: '#fff', fontFamily: 'inherit', width: '100%' }
 
@@ -46,6 +45,8 @@ export function WrongPartsPanel({ token, goDeepDive }: {
   const data = useQuery(api.directorPartQuality.scanWrongParts, { token })
   const [search, setSearch] = useState('')
   const [reasonFilter, setReasonFilter] = useState<ReasonFilter>('all')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [page, setPage] = useState(0)
   const [selected, setSelected] = useState<WrongPartFlag | null>(null)
 
@@ -54,12 +55,13 @@ export function WrongPartsPanel({ token, goDeepDive }: {
     const q = search.trim().toLowerCase()
     return data.flags.filter(f => {
       if (reasonFilter !== 'all' && f.reasonKind !== reasonFilter) return false
+      if (!dateInRange(f.firstSeenAt, dateFrom, dateTo)) return false
       if (!q) return true
       const hay = [f.vin, f.configKey, f.oemNumber, f.partName, f.make, f.model, f.trim, String(f.year ?? '')]
         .filter(Boolean).join(' ').toLowerCase()
       return hay.includes(q)
     })
-  }, [data, search, reasonFilter])
+  }, [data, search, reasonFilter, dateFrom, dateTo])
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const clampedPage = Math.min(page, pageCount - 1)
@@ -87,6 +89,8 @@ export function WrongPartsPanel({ token, goDeepDive }: {
               </button>
             ))}
           </div>
+          <DateRangeFilter from={dateFrom} to={dateTo}
+            onFrom={v => { setDateFrom(v); setPage(0) }} onTo={v => { setDateTo(v); setPage(0) }} />
         </div>
       }>
       {!data ? <SkeletonBlock height={200} /> : filtered.length === 0 ? (
@@ -100,7 +104,8 @@ export function WrongPartsPanel({ token, goDeepDive }: {
               <th style={th}>Service</th>
               <th style={th}>Reason</th>
               <th style={thRight}>Confidence</th>
-              <th style={thRight}>Confirmed</th>
+              <th style={thRight}>First seen</th>
+              <th style={thRight}>Run</th>
             </tr></thead>
             <tbody>
               {pageRows.map(f => {
@@ -133,25 +138,18 @@ export function WrongPartsPanel({ token, goDeepDive }: {
                         </span>
                       ) : '—'}
                     </td>
-                    <td style={{ ...tdRight, padding: '16px 18px', color: 'var(--slate-500)' }}>{fmtWhen(f.confirmedAt)}</td>
+                    <td style={{ ...tdRight, padding: '16px 18px', color: 'var(--slate-500)' }} title={new Date(f.firstSeenAt).toLocaleString()}>{fmtWhen(f.firstSeenAt)}</td>
+                    <td style={{ ...tdRight, padding: '16px 18px' }}>
+                      <RunChip runId={f.runId} runStatus={f.runStatus} approx
+                        onOpen={() => goDeepDive(f.configId, f.configKey, f.runId ?? undefined)} />
+                    </td>
                   </tr>
                 )
               })}
             </tbody>
           </TableWrap>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, fontSize: 12, color: 'var(--slate-500)' }}>
-            <span>
-              {clampedPage * PAGE_SIZE + 1}–{Math.min(filtered.length, (clampedPage + 1) * PAGE_SIZE)} of {filtered.length}
-              {data.truncated ? ' (scan capped — older fitments excluded)' : ''}
-            </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <button disabled={clampedPage === 0} onClick={() => setPage(p => Math.max(0, p - 1))}
-                style={{ ...pageBtn, opacity: clampedPage === 0 ? 0.4 : 1 }}>← Prev</button>
-              <span>{clampedPage + 1} / {pageCount}</span>
-              <button disabled={clampedPage >= pageCount - 1} onClick={() => setPage(p => Math.min(pageCount - 1, p + 1))}
-                style={{ ...pageBtn, opacity: clampedPage >= pageCount - 1 ? 0.4 : 1 }}>Next →</button>
-            </div>
-          </div>
+          <PageNav page={clampedPage} pageCount={pageCount} total={filtered.length} pageSize={PAGE_SIZE}
+            note={data.truncated ? 'scan capped — older fitments excluded' : undefined} onPage={setPage} />
         </>
       )}
       <WrongPartDrawer key={selected?.fitmentId ?? 'none'} token={token} flag={selected}
@@ -183,7 +181,7 @@ function WrongPartDrawer({ token, flag, onClose, goDeepDive }: {
 
   const carLabel = [flag.year, flag.make, flag.model, flag.trim].filter(Boolean).join(' ')
 
-  const openDeepDive = () => { onClose(); goDeepDive(flag.configId, flag.configKey) }
+  const openDeepDive = () => { onClose(); goDeepDive(flag.configId, flag.configKey, flag.runId ?? undefined) }
 
   const requestAction = (action: 'approve' | 'dismiss' | 'adjust') => {
     if (reason.trim().length < 4) { setErr('A reason is required (at least a few words).'); return }
@@ -256,11 +254,16 @@ function WrongPartDrawer({ token, flag, onClose, goDeepDive }: {
               <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4 }}>
                 {flag.serviceType && <>Service: <span className="mono">{flag.serviceType}</span> · </>}
                 Confidence: <b style={{ color: 'var(--slate-700)' }}>{flag.confidence != null ? `${Math.round(flag.confidence * 100)}%` : '—'}</b>
-                {' · '}Confirmed {fmtWhen(flag.confirmedAt)}
+                {' · '}First seen {fmtWhen(flag.firstSeenAt)}{' · '}last confirmed {fmtWhen(flag.confirmedAt)}
               </div>
               {flag.partMakeName && flag.configMakeName && flag.partMakeName !== flag.configMakeName && (
                 <div style={{ fontSize: 12, color: 'var(--red-600)', marginTop: 4 }}>{flag.partMakeName} part on a {flag.configMakeName} vehicle</div>
               )}
+            </div>
+
+            <div>
+              <MicroH style={{ marginBottom: 7 }}>Run to investigate</MicroH>
+              <RunChip runId={flag.runId} runStatus={flag.runStatus} approx onOpen={openDeepDive} />
             </div>
 
             <div>

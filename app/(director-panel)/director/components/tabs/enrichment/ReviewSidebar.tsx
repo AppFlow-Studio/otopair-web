@@ -29,16 +29,18 @@ const inputStyle: React.CSSProperties = {
 }
 const linkBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--blue-700)', fontSize: 12, fontFamily: 'inherit', fontWeight: 500, whiteSpace: 'nowrap' }
 
-const RESOLVE_FIELD_ERRORS: Record<string, string> = {
+const DIRECTOR_ACTION_ERRORS: Record<string, string> = {
   source_url_required: 'Enter a source link (where you verified this value).',
   invalid_source_url: 'That doesn’t look like a valid link (needs http:// or https://).',
   value_required: 'Enter a value.',
   invalid_number: 'Enter a valid number.',
+  invalid_price: 'Enter a valid price.',
   field_not_editable: 'This field can’t be auto-resolved from here.',
   config_not_found: 'This vehicle config no longer exists.',
+  part_not_found: 'This part no longer exists.',
 }
 function resolveFieldErrorMessage(reason: string | undefined): string {
-  return (reason && RESOLVE_FIELD_ERRORS[reason]) ?? 'Failed to save'
+  return (reason && DIRECTOR_ACTION_ERRORS[reason]) ?? 'Failed to save'
 }
 
 type FlagState = { mode: 'idle' | 'approving' | 'adjusting'; value: string; sourceUrl: string; saving: boolean; saved: string | null; error: string | null }
@@ -63,7 +65,7 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
 
   const [flagState, setFlagState] = useState<Record<string, FlagState>>({})
   const [gapForms, setGapForms] = useState<Record<string, { oem: string; name: string; saving: boolean; saved: boolean }>>({})
-  const [priceForms, setPriceForms] = useState<Record<string, { price: string; saving: boolean; saved: boolean }>>({})
+  const [priceForms, setPriceForms] = useState<Record<string, { price: string; sourceUrl: string; saving: boolean; saved: boolean; error: string }>>({})
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState<'resolved' | 'dismissed' | null>(null)
   const [err, setErr] = useState('')
@@ -139,17 +141,19 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
     }
   }
 
-  const priceState = (partId: string) => priceForms[partId] ?? { price: '', saving: false, saved: false }
+  const priceState = (partId: string) => priceForms[partId] ?? { price: '', sourceUrl: '', saving: false, saved: false, error: '' }
   const addManualPrice = async (partId: string) => {
     const st = priceState(partId)
     const price = Number(st.price)
-    if (!Number.isFinite(price) || price <= 0) return
-    setPriceForms(s => ({ ...s, [partId]: { ...st, saving: true } }))
+    if (!Number.isFinite(price) || price <= 0) { setPriceForms(s => ({ ...s, [partId]: { ...st, error: 'Enter a valid price' } })); return }
+    if (!st.sourceUrl.trim()) { setPriceForms(s => ({ ...s, [partId]: { ...st, error: 'Enter a source link (where you found this price)' } })); return }
+    setPriceForms(s => ({ ...s, [partId]: { ...st, saving: true, error: '' } }))
     try {
-      await addPrice({ token, partId: partId as Id<'oem_parts'>, price })
-      setPriceForms(s => ({ ...s, [partId]: { price: '', saving: false, saved: true } }))
-    } catch {
-      setPriceForms(s => ({ ...s, [partId]: { ...st, saving: false } }))
+      const res = await addPrice({ token, partId: partId as Id<'oem_parts'>, price, sourceUrl: st.sourceUrl.trim() })
+      if (!res.ok) { setPriceForms(s => ({ ...s, [partId]: { ...st, saving: false, error: resolveFieldErrorMessage(res.reason) } })); return }
+      setPriceForms(s => ({ ...s, [partId]: { price: '', sourceUrl: '', saving: false, saved: true, error: '' } }))
+    } catch (e) {
+      setPriceForms(s => ({ ...s, [partId]: { ...st, saving: false, error: e instanceof Error ? e.message : 'Failed to save' } }))
     }
   }
 
@@ -330,11 +334,16 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
                           <span className="mono">{g.oemNumber ?? '—'}</span>{g.partName ? ` · ${g.partName}` : ''}
                         </div>
                         {st.saved ? <div style={{ fontSize: 12, color: 'var(--green-700)' }}>✓ Price added</div> : (
-                          <div style={{ display: 'flex', gap: 8 }}>
-                            <span style={{ ...inputStyle, display: 'flex', alignItems: 'center', color: 'var(--slate-400)' }}>$</span>
-                            <input value={st.price} onChange={e => setPriceForms(s => ({ ...s, [g.partId]: { ...st, price: e.target.value } }))}
-                              placeholder="0.00" inputMode="decimal" style={{ ...inputStyle, width: 100 }} />
-                            <Button variant="primary" size="sm" disabled={st.saving || !st.price.trim()} onClick={() => addManualPrice(g.partId)}>{st.saving ? 'Adding…' : 'Add price'}</Button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                              <span style={{ ...inputStyle, display: 'flex', alignItems: 'center', color: 'var(--slate-400)' }}>$</span>
+                              <input value={st.price} onChange={e => setPriceForms(s => ({ ...s, [g.partId]: { ...st, price: e.target.value } }))}
+                                placeholder="0.00" inputMode="decimal" style={{ ...inputStyle, width: 100 }} />
+                              <Button variant="primary" size="sm" disabled={st.saving} onClick={() => addManualPrice(g.partId)}>{st.saving ? 'Adding…' : 'Add price'}</Button>
+                            </div>
+                            <input value={st.sourceUrl} onChange={e => setPriceForms(s => ({ ...s, [g.partId]: { ...st, sourceUrl: e.target.value } }))}
+                              placeholder="Source link — where you found this price" style={inputStyle} />
+                            {st.error && <div style={{ fontSize: 11, color: 'var(--red-600)' }}>{st.error}</div>}
                           </div>
                         )}
                       </div>

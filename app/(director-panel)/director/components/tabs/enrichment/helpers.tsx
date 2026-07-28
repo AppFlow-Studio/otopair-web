@@ -70,6 +70,64 @@ export function StatusPill({ status }: { status: string }) {
   return <Badge tone={statusTone(status)}>{status}</Badge>
 }
 
+// ─── run reference ───────────────────────────────────────────────────────────
+
+/** Status pill + last-8-of-id, clickable through to Deep-Dive. Shared by any
+ *  surface that can point at the enrichment_run behind a row so a director
+ *  can jump straight into investigating it. `approx` marks a best-effort
+ *  link (the LATEST run for this vehicle, not necessarily the exact run that
+ *  produced this specific row — part_fitments carries no run_id of its own,
+ *  unlike review_queue's consensus stream which does) — shown as a dashed
+ *  underline with a clarifying tooltip instead of claiming false precision. */
+export function RunChip({ runId, runStatus, onOpen, approx }: {
+  runId: string | null; runStatus: string | null; onOpen: () => void; approx?: boolean
+}) {
+  if (!runId) return <span style={{ fontSize: 11, color: 'var(--slate-300)' }}>—</span>
+  return (
+    <button type="button" onClick={e => { e.stopPropagation(); onOpen() }}
+      title={approx ? 'Latest enrichment run for this vehicle — not necessarily the exact run that produced this row. Opens in Deep-Dive.' : 'Open this run in Deep-Dive'}
+      style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontFamily: 'inherit' }}>
+      <StatusPill status={runStatus ?? 'unknown'} />
+      <span className="mono" style={{ fontSize: 11, color: 'var(--blue-700)', fontWeight: 500, textDecoration: approx ? 'underline dashed' : 'underline' }}>
+        …{runId.slice(-8)}
+      </span>
+    </button>
+  )
+}
+
+// ─── date-range filter ───────────────────────────────────────────────────────
+
+const dateFilterInput: CSSProperties = { border: '1px solid var(--slate-200)', borderRadius: 6, padding: '5px 8px', fontSize: 12, color: 'var(--slate-700)', background: '#fff', fontFamily: 'inherit', height: 30 }
+
+/** From/to native date pickers, shared by every table that lets a director
+ *  filter rows by when they appeared. Values are yyyy-mm-dd strings (native
+ *  <input type="date"> format) or '' for unset. */
+export function DateRangeFilter({ from, to, onFrom, onTo }: {
+  from: string; to: string; onFrom: (v: string) => void; onTo: (v: string) => void
+}) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <input type="date" value={from} onChange={e => onFrom(e.target.value)} style={dateFilterInput} title="From date" />
+      <span style={{ color: 'var(--slate-400)', fontSize: 12 }}>–</span>
+      <input type="date" value={to} onChange={e => onTo(e.target.value)} style={dateFilterInput} title="To date" />
+      {(from || to) && (
+        <button type="button" onClick={() => { onFrom(''); onTo('') }}
+          style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--slate-400)', fontSize: 12, fontFamily: 'inherit' }}>
+          ✕
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** Whether a timestamp falls within an (inclusive) yyyy-mm-dd from/to range.
+ *  Empty from/to means unbounded on that side. */
+export function dateInRange(ms: number, from: string, to: string): boolean {
+  if (from && ms < new Date(`${from}T00:00:00`).getTime()) return false
+  if (to && ms > new Date(`${to}T23:59:59.999`).getTime()) return false
+  return true
+}
+
 // ─── provenance (enrichment_evidence source_type + URL) ──────────────────────
 
 const SOURCE_TONE: Record<string, Tone> = {
@@ -218,6 +276,31 @@ export const td = tableStyles.td
 export const thRight: CSSProperties = { ...tableStyles.th, textAlign: 'right' }
 export const tdRight: CSSProperties = { ...tableStyles.td, textAlign: 'right' }
 export const tdMono: CSSProperties = { ...tableStyles.td }
+
+export const pageBtn: CSSProperties = { border: '1px solid var(--slate-200)', background: '#fff', borderRadius: 6, padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', color: 'var(--slate-700)' }
+
+/** Shared "X–Y of Z · ← Prev · page / count · Next →" strip for a paginated
+ *  table. One component so every searchable/filterable table in the
+ *  Needs Attention hub (Wrong parts, Unpriced parts, Open reviews) paginates
+ *  identically instead of hand-rolling its own prev/next markup. */
+export function PageNav({ page, pageCount, total, pageSize, note, onPage }: {
+  page: number; pageCount: number; total: number; pageSize: number; note?: string; onPage: (page: number) => void
+}) {
+  const start = total === 0 ? 0 : page * pageSize + 1
+  const end = Math.min(total, (page + 1) * pageSize)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 10, fontSize: 12, color: 'var(--slate-500)' }}>
+      <span>{start}–{end} of {total}{note ? ` (${note})` : ''}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button disabled={page === 0} onClick={() => onPage(Math.max(0, page - 1))}
+          style={{ ...pageBtn, opacity: page === 0 ? 0.4 : 1 }}>← Prev</button>
+        <span>{page + 1} / {pageCount}</span>
+        <button disabled={page >= pageCount - 1} onClick={() => onPage(Math.min(pageCount - 1, page + 1))}
+          style={{ ...pageBtn, opacity: page >= pageCount - 1 ? 0.4 : 1 }}>Next →</button>
+      </div>
+    </div>
+  )
+}
 
 /** Per-zone error boundary — one bad data shape can't blank the whole tab. */
 export class Zone extends Component<{ label: string; children: ReactNode }, { failed: boolean }> {

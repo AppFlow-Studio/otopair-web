@@ -16,10 +16,11 @@
 //  - Data Incidents: the manual-declare workflow for defect classes the
 //    system can't detect on its own (convex/dataProvenance.ts).
 
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
-import { Panel, Empty, StatusPill, SkeletonBlock, SubTabs, TableWrap, th, td, thRight, tdRight, fmtWhen, type OpenTrigger, type ReviewRow } from './helpers'
+import { Input, IconSearch } from '../../Primitives'
+import { Panel, Empty, StatusPill, SkeletonBlock, SubTabs, TableWrap, th, td, thRight, tdRight, fmtWhen, PageNav, RunChip, DateRangeFilter, dateInRange, type OpenTrigger, type ReviewRow } from './helpers'
 import { WrongPartsPanel } from './WrongPartsPanel'
 import { UnpricedPartsPanel } from './PartQualityPanel'
 import { IncidentsPanel } from './IncidentsPanel'
@@ -27,6 +28,7 @@ import { IncidentsPanel } from './IncidentsPanel'
 const STREAMS = ['consensus', 'correction', 'report', 'survey'] as const
 type StreamFilter = 'all' | (typeof STREAMS)[number]
 type Section = 'failed' | 'reviews' | 'wrong' | 'unpriced' | 'incidents'
+const REVIEWS_PAGE_SIZE = 15
 
 const linkBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--blue-700)', fontSize: 12, fontFamily: 'inherit', fontWeight: 500, whiteSpace: 'nowrap' }
 
@@ -54,6 +56,10 @@ export function NeedsAttentionTab({ token, goDeepDive, openTrigger, canWrite, ca
 }) {
   const [section, setSection] = useState<Section>('failed')
   const [stream, setStream] = useState<StreamFilter>('all')
+  const [reviewSearch, setReviewSearch] = useState('')
+  const [reviewDateFrom, setReviewDateFrom] = useState('')
+  const [reviewDateTo, setReviewDateTo] = useState('')
+  const [reviewPage, setReviewPage] = useState(0)
 
   const attention = useQuery(api.dataOverview.attention, { token })
   const openReviewsQ = useQuery(api.dataOverview.openReviews, { token })
@@ -64,12 +70,26 @@ export function NeedsAttentionTab({ token, goDeepDive, openTrigger, canWrite, ca
   const unpricedPartsQ = useQuery(api.directorPartQuality.scanUnpricedParts, { token })
   const incidentsQ = useQuery(api.dataProvenance.listIncidents, { token })
 
-  const rows = (openReviewsQ?.rows ?? []).filter(r => stream === 'all' || r.stream === stream)
+  const streamRows = (openReviewsQ?.rows ?? []).filter(r => stream === 'all' || r.stream === stream)
+  const rows = useMemo(() => {
+    const q = reviewSearch.trim().toLowerCase()
+    return streamRows.filter(r => {
+      if (!dateInRange(r.created_at, reviewDateFrom, reviewDateTo)) return false
+      if (!q) return true
+      const hay = [r.title, r.vin, r.config_key, r.make, r.model, r.trim, String(r.year ?? '')]
+        .filter(Boolean).join(' ').toLowerCase()
+      return hay.includes(q)
+    })
+  }, [streamRows, reviewSearch, reviewDateFrom, reviewDateTo])
   const streamCounts = STREAMS.reduce<Record<string, number>>((acc, s) => {
     acc[s] = (openReviewsQ?.rows ?? []).filter(r => r.stream === s).length
     return acc
   }, {})
   const openIncidentsCount = (incidentsQ ?? []).filter(i => i.status !== 'resolved').length
+
+  const reviewPageCount = Math.max(1, Math.ceil(rows.length / REVIEWS_PAGE_SIZE))
+  const reviewClampedPage = Math.min(reviewPage, reviewPageCount - 1)
+  const reviewPageRows = rows.slice(reviewClampedPage * REVIEWS_PAGE_SIZE, reviewClampedPage * REVIEWS_PAGE_SIZE + REVIEWS_PAGE_SIZE)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -116,20 +136,27 @@ export function NeedsAttentionTab({ token, goDeepDive, openTrigger, canWrite, ca
       )}
 
       {section === 'reviews' && (
-        <Panel title="Open reviews" sub={openReviewsQ ? `${rows.length}${stream !== 'all' ? ` of ${openReviewsQ.rows.length}` : ''} open` : undefined}
+        <Panel title="Open reviews" sub={openReviewsQ ? `${rows.length}${rows.length !== openReviewsQ.rows.length ? ` of ${openReviewsQ.rows.length}` : ''} open` : undefined}
           right={
-            <div style={{ display: 'inline-flex', gap: 2, background: '#fff', border: '1px solid var(--slate-200)', borderRadius: 8, padding: 3 }}>
-              {(['all', ...STREAMS] as const).map(s => (
-                <button key={s} onClick={() => setStream(s)}
-                  style={{ padding: '5px 10px', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 500, fontFamily: 'inherit',
-                    background: stream === s ? 'var(--blue-50)' : 'transparent', color: stream === s ? 'var(--blue-700)' : 'var(--slate-600)' }}>
-                  {s === 'all' ? 'All' : s}{s !== 'all' ? ` (${streamCounts[s] ?? 0})` : ''}
-                </button>
-              ))}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <Input icon={<IconSearch size={14} />} value={reviewSearch}
+                onChange={e => { setReviewSearch(e.target.value); setReviewPage(0) }}
+                placeholder="Search VIN, config, title…" style={{ width: 200, height: 30 }} />
+              <div style={{ display: 'inline-flex', gap: 2, background: '#fff', border: '1px solid var(--slate-200)', borderRadius: 8, padding: 3 }}>
+                {(['all', ...STREAMS] as const).map(s => (
+                  <button key={s} onClick={() => { setStream(s); setReviewPage(0) }}
+                    style={{ padding: '5px 10px', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 500, fontFamily: 'inherit',
+                      background: stream === s ? 'var(--blue-50)' : 'transparent', color: stream === s ? 'var(--blue-700)' : 'var(--slate-600)' }}>
+                    {s === 'all' ? 'All' : s}{s !== 'all' ? ` (${streamCounts[s] ?? 0})` : ''}
+                  </button>
+                ))}
+              </div>
+              <DateRangeFilter from={reviewDateFrom} to={reviewDateTo}
+                onFrom={v => { setReviewDateFrom(v); setReviewPage(0) }} onTo={v => { setReviewDateTo(v); setReviewPage(0) }} />
             </div>
           }>
           {!openReviewsQ ? <SkeletonBlock height={200} /> : rows.length === 0 ? (
-            <Empty>{stream === 'all' ? 'Review queue is clear.' : `No open ${stream} items.`}</Empty>
+            <Empty>{openReviewsQ.rows.length === 0 ? 'Review queue is clear.' : 'No items match this search/filter.'}</Empty>
           ) : (
             <>
               <TableWrap>
@@ -137,29 +164,27 @@ export function NeedsAttentionTab({ token, goDeepDive, openTrigger, canWrite, ca
                   <th style={th}>Stream</th>
                   <th style={th}>Vehicle</th>
                   <th style={th}>Status</th>
-                  <th style={thRight}>Age</th>
+                  <th style={thRight}>Created</th>
+                  <th style={thRight}>Run</th>
                   <th style={thRight}>Actions</th>
                 </tr></thead>
                 <tbody>
-                  {rows.map(r => (
+                  {reviewPageRows.map(r => (
                     <ReviewTableRow key={r.id} r={r} active={activeReviewId === r.id}
                       onOpen={() => onOpenReview(r.id, r.title)}
-                      canClaim={canWrite} onClaim={() => claimReview(r.id)} />
+                      canClaim={canWrite} onClaim={() => claimReview(r.id)} goDeepDive={goDeepDive} />
                   ))}
                 </tbody>
               </TableWrap>
-              {openReviewsQ.truncated && (
-                <div style={{ marginTop: 8, fontSize: 11, color: 'var(--slate-400)' }}>
-                  Showing the oldest 150 open/claimed items — resolve some to see the rest.
-                </div>
-              )}
+              <PageNav page={reviewClampedPage} pageCount={reviewPageCount} total={rows.length} pageSize={REVIEWS_PAGE_SIZE}
+                note={openReviewsQ.truncated ? 'showing the oldest 150 open/claimed items' : undefined} onPage={setReviewPage} />
             </>
           )}
         </Panel>
       )}
 
       {section === 'wrong' && <WrongPartsPanel token={token} goDeepDive={goDeepDive} />}
-      {section === 'unpriced' && <UnpricedPartsPanel token={token} />}
+      {section === 'unpriced' && <UnpricedPartsPanel token={token} goDeepDive={goDeepDive} />}
       {section === 'incidents' && <IncidentsPanel token={token} canWrite={canWrite} canTrigger={canTrigger} goDeepDive={goDeepDive} />}
     </div>
   )
@@ -170,12 +195,13 @@ export function NeedsAttentionTab({ token, goDeepDive, openTrigger, canWrite, ca
  *  stale-only slice opens — where a director works the flags with a required
  *  source link + confirmation popup per field, and resolves/dismisses the
  *  item with an audited reason. */
-function ReviewTableRow({ r, active, onOpen, canClaim, onClaim }: {
+function ReviewTableRow({ r, active, onOpen, canClaim, onClaim, goDeepDive }: {
   r: ReviewRow
   active: boolean
   onOpen: () => void
   canClaim?: boolean
   onClaim?: () => void
+  goDeepDive: (configId: string, configKey: string | null, runId?: string) => void
 }) {
   const carLabel = [r.year, r.make, r.model, r.trim].filter(Boolean).join(' ')
   return (
@@ -190,7 +216,15 @@ function ReviewTableRow({ r, active, onOpen, canClaim, onClaim }: {
         {r.status === 'claimed' ? <span style={{ color: 'var(--blue-700)', fontSize: 12 }}>● {r.claimed_by ?? 'claimed'}</span>
           : <span style={{ color: 'var(--slate-400)', fontSize: 12 }}>open</span>}
       </td>
-      <td style={{ ...tdRight, color: 'var(--slate-500)' }} title={new Date(r.created_at).toLocaleString()}>{r.age_h}h</td>
+      <td style={{ ...tdRight, color: 'var(--slate-500)' }} title={new Date(r.created_at).toLocaleString()}>
+        {fmtWhen(r.created_at)}<div style={{ fontSize: 10, color: 'var(--slate-400)' }}>{r.age_h}h ago</div>
+      </td>
+      <td style={tdRight}>
+        {r.config_id
+          ? <RunChip runId={r.run_id} runStatus={r.run_status}
+              onOpen={() => goDeepDive(r.config_id!, r.config_key, r.run_id ?? undefined)} />
+          : <span style={{ fontSize: 11, color: 'var(--slate-300)' }}>—</span>}
+      </td>
       <td style={tdRight}>
         {canClaim && r.status === 'open' && onClaim && (
           <button style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--blue-700)', fontSize: 12, fontFamily: 'inherit', fontWeight: 500, marginRight: 10 }}

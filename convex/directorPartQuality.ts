@@ -43,10 +43,16 @@ export type WrongPartFlag = {
   reasonKind: "cross_make" | "refuted";
   confidence: number | null;
   sourceDomains: string[];
-  // When this fitment was last confirmed by the pipeline (no direct run_id
-  // link on part_fitments — this is the closest "when did we find this"
-  // timestamp we have).
+  // When this fitment was last (re-)confirmed by the pipeline.
   confirmedAt: number;
+  // When it first appeared — the "created at" a director actually wants for
+  // triage (how long has this been sitting flagged?).
+  firstSeenAt: number;
+  // Best-effort pointer for "what run do I investigate": part_fitments
+  // carries no run_id of its own, so this is the LATEST enrichment_run for
+  // the vehicle, not necessarily the exact run that wrote this fitment.
+  runId: string | null;
+  runStatus: string | null;
   year: number | null;
   make: string | null;
   model: string | null;
@@ -54,6 +60,22 @@ export type WrongPartFlag = {
   vin: string | null;
   configKey: string | null;
 };
+
+/** Best-effort "what run do I investigate" pointer for a fitment-scan flag —
+ *  part_fitments has no run_id of its own, so this is the LATEST
+ *  enrichment_run for the vehicle (same index-backed lookup Deep-Dive itself
+ *  falls back to when opened without an explicit runId). */
+async function latestRunFor(
+  ctx: { db: any },
+  vehicleConfigId: any,
+): Promise<{ runId: string | null; runStatus: string | null }> {
+  const run = await ctx.db
+    .query("enrichment_runs")
+    .withIndex("by_vehicle_config", (q: any) => q.eq("vehicle_config_id", vehicleConfigId))
+    .order("desc")
+    .first();
+  return { runId: run ? String(run._id) : null, runStatus: run?.status ?? null };
+}
 
 export const scanWrongParts = query({
   args: { token: v.string() },
@@ -92,6 +114,7 @@ export const scanWrongParts = query({
 
       const partMake = part.make_id ? await ctx.db.get(part.make_id) : null;
       const car = await carInfoFor(ctx, "vehicle_config", String(f.vehicle_config_id));
+      const { runId, runStatus } = await latestRunFor(ctx, f.vehicle_config_id);
       flags.push({
         fitmentId: String(f._id),
         configId: String(f.vehicle_config_id),
@@ -106,6 +129,9 @@ export const scanWrongParts = query({
         confidence: f.confidence ?? null,
         sourceDomains: f.source_domains ?? [],
         confirmedAt: f.last_confirmed_at ?? f.created_at ?? f._creationTime,
+        firstSeenAt: f.first_confirmed_at ?? f.created_at ?? f._creationTime,
+        runId,
+        runStatus,
         year: car.year,
         make: car.make,
         model: car.model,
@@ -125,6 +151,11 @@ export type UnpricedPartFlag = {
   oemNumber: string;
   partName: string;
   serviceType: string | null;
+  // When this fitment first appeared unpriced.
+  firstSeenAt: number;
+  // Best-effort pointer for investigation — see latestRunFor's doc comment.
+  runId: string | null;
+  runStatus: string | null;
   year: number | null;
   make: string | null;
   model: string | null;
@@ -156,6 +187,7 @@ export const scanUnpricedParts = query({
       const part = await ctx.db.get(f.part_id);
       if (!part) continue;
       const car = await carInfoFor(ctx, "vehicle_config", String(f.vehicle_config_id));
+      const { runId, runStatus } = await latestRunFor(ctx, f.vehicle_config_id);
       flags.push({
         fitmentId: String(f._id),
         configId: String(f.vehicle_config_id),
@@ -163,6 +195,9 @@ export const scanUnpricedParts = query({
         oemNumber: part.oem_part_number,
         partName: part.name,
         serviceType: f.service_type ?? null,
+        firstSeenAt: f.first_confirmed_at ?? f.created_at ?? f._creationTime,
+        runId,
+        runStatus,
         year: car.year,
         make: car.make,
         model: car.model,

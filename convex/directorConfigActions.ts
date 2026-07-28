@@ -400,19 +400,26 @@ export const addConfigFitment = mutation({
 // quote. Stored with price_type "manual_seed" (the schema's existing
 // human-entered tier — see lib/priceTypes.ts) and source_domain stamped with
 // the acting director, so it reads in part_prices exactly like any other
-// trusted row while staying traceable to who typed it in and when (audit_log
-// carries the authoritative who/when).
+// trusted row while staying traceable to who typed it in and when. A source
+// link (where the director found this price — a dealer/retailer listing) is
+// REQUIRED and stored on the row's own source_url column, not just buried in
+// the audit log, so the price is traceable from part_prices alone. audit_log
+// carries the authoritative who/when/source on top of that.
 // ---------------------------------------------------------------------------
 
 export const addManualPartPrice = mutation({
   args: {
     partId: v.id("oem_parts"),
     price: v.number(),
+    sourceUrl: v.string(),
     ...tokenArg,
   },
-  handler: async (ctx, { partId, price, token }) => {
+  handler: async (ctx, { partId, price, sourceUrl, token }) => {
     const actor = await requireDirector(ctx, token, "data.write");
     if (!Number.isFinite(price) || price <= 0) return { ok: false as const, reason: "invalid_price" };
+    const trimmedSource = sourceUrl.trim();
+    if (!trimmedSource) return { ok: false as const, reason: "source_url_required" };
+    if (!isValidSourceUrl(trimmedSource)) return { ok: false as const, reason: "invalid_source_url" };
     const part = await ctx.db.get(partId);
     if (!part) return { ok: false as const, reason: "part_not_found" };
     const now = Date.now();
@@ -421,6 +428,7 @@ export const addManualPartPrice = mutation({
       price,
       price_type: "manual_seed",
       source_domain: `director_manual:${actor.name}`,
+      source_url: trimmedSource,
       refreshed_at: now,
       created_at: now,
     });
@@ -430,7 +438,7 @@ export const addManualPartPrice = mutation({
       action: "field_edit",
       actor: actor.name,
       actor_id: actor.userId,
-      detail: `Manual price added for ${part.name} (${part.oem_part_number}) · $${price.toFixed(2)}`,
+      detail: `Manual price added for ${part.name} (${part.oem_part_number}) · $${price.toFixed(2)} — source: ${trimmedSource}`,
       created_at: now,
     });
     return { ok: true as const, priceId };

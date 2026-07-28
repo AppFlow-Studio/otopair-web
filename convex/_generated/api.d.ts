@@ -371,6 +371,7 @@ import type * as vehicleEnrichment_fleetEval from "../vehicleEnrichment/fleetEva
 import type * as vehicleEnrichment_fluidBrandConsistency from "../vehicleEnrichment/fluidBrandConsistency.js";
 import type * as vehicleEnrichment_fuelTypeResolver from "../vehicleEnrichment/fuelTypeResolver.js";
 import type * as vehicleEnrichment_gapFill from "../vehicleEnrichment/gapFill.js";
+import type * as vehicleEnrichment_generationGate from "../vehicleEnrichment/generationGate.js";
 import type * as vehicleEnrichment_helpers from "../vehicleEnrichment/helpers.js";
 import type * as vehicleEnrichment_identityResolution from "../vehicleEnrichment/identityResolution.js";
 import type * as vehicleEnrichment_laborRelabor from "../vehicleEnrichment/laborRelabor.js";
@@ -423,6 +424,7 @@ import type * as vehicleEnrichment_utils_claudeClient from "../vehicleEnrichment
 import type * as vehicleEnrichment_utils_engineCodeLookup from "../vehicleEnrichment/utils/engineCodeLookup.js";
 import type * as vehicleEnrichment_utils_engineLookup from "../vehicleEnrichment/utils/engineLookup.js";
 import type * as vehicleEnrichment_utils_partFitmentVerifier from "../vehicleEnrichment/utils/partFitmentVerifier.js";
+import type * as vehicleEnrichment_utils_roleBackfill from "../vehicleEnrichment/utils/roleBackfill.js";
 import type * as vehicleEnrichment_utils_transFluidVerifier from "../vehicleEnrichment/utils/transFluidVerifier.js";
 import type * as vehicleEnrichment_utils_wheelSizeScraper from "../vehicleEnrichment/utils/wheelSizeScraper.js";
 import type * as vehicleEnrichment_v3TestSuite from "../vehicleEnrichment/v3TestSuite.js";
@@ -816,6 +818,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/fluidBrandConsistency": typeof vehicleEnrichment_fluidBrandConsistency;
   "vehicleEnrichment/fuelTypeResolver": typeof vehicleEnrichment_fuelTypeResolver;
   "vehicleEnrichment/gapFill": typeof vehicleEnrichment_gapFill;
+  "vehicleEnrichment/generationGate": typeof vehicleEnrichment_generationGate;
   "vehicleEnrichment/helpers": typeof vehicleEnrichment_helpers;
   "vehicleEnrichment/identityResolution": typeof vehicleEnrichment_identityResolution;
   "vehicleEnrichment/laborRelabor": typeof vehicleEnrichment_laborRelabor;
@@ -868,6 +871,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/utils/engineCodeLookup": typeof vehicleEnrichment_utils_engineCodeLookup;
   "vehicleEnrichment/utils/engineLookup": typeof vehicleEnrichment_utils_engineLookup;
   "vehicleEnrichment/utils/partFitmentVerifier": typeof vehicleEnrichment_utils_partFitmentVerifier;
+  "vehicleEnrichment/utils/roleBackfill": typeof vehicleEnrichment_utils_roleBackfill;
   "vehicleEnrichment/utils/transFluidVerifier": typeof vehicleEnrichment_utils_transFluidVerifier;
   "vehicleEnrichment/utils/wheelSizeScraper": typeof vehicleEnrichment_utils_wheelSizeScraper;
   "vehicleEnrichment/v3TestSuite": typeof vehicleEnrichment_v3TestSuite;

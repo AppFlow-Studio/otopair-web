@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCustomerInspectionSnapshot,
   convertRotorValue,
+  formatRotorReferenceMinimum,
   formatRotorValue,
   getTireTreadMinimum,
   rotorValueToMicrometers,
@@ -108,6 +109,11 @@ describe("rotor measurements", () => {
   it("formats inches to three decimals and millimeters to two", () => {
     expect(formatRotorValue(1.027, "in")).toBe("1.027");
     expect(formatRotorValue(26.09, "mm")).toBe("26.09");
+  });
+
+  it("formats rotor reference minimums in the selected unit", () => {
+    expect(formatRotorReferenceMinimum(8, "mm")).toBe("8.00 mm");
+    expect(formatRotorReferenceMinimum(8, "in")).toBe("0.315 in");
   });
 
   it("requires both rotor readings on a front-only brake booking", () => {

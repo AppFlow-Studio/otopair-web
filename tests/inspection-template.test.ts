@@ -13,6 +13,7 @@ import {
   patchInspectionZone,
   patchSharedInspectionText,
   requiredZonesForBooking,
+  toggleInspectionTreadMode,
   validateZoneForCompletion,
   type InspectionState,
   type ZoneId,
@@ -37,6 +38,42 @@ function completeCorner(
 }
 
 describe("multi-point inspection requirements", () => {
+  it("keeps detailed tread readings in the local zone state when returning to shallowest-only mode", () => {
+    const zone = createInspectionState({ isFirstVisit: true }).zones.FL!;
+    zone.select.tread_mode = "detailed";
+    zone.measures = {
+      ...zone.measures,
+      tread: "4",
+      tread_inner: "6",
+      tread_center: "4",
+      tread_outer: "5",
+    };
+
+    const patch = toggleInspectionTreadMode(zone);
+
+    expect(patch.select?.tread_mode).toBe("");
+    expect(patch.measures).toMatchObject({
+      tread_inner: "6",
+      tread_center: "4",
+      tread_outer: "5",
+    });
+  });
+
+  it("restores the shallowest reading when returning to detailed tread mode", () => {
+    const zone = createInspectionState({ isFirstVisit: true }).zones.FL!;
+    zone.measures = {
+      ...zone.measures,
+      tread_inner: "6",
+      tread_center: "4",
+      tread_outer: "5",
+    };
+
+    const patch = toggleInspectionTreadMode(zone);
+
+    expect(patch.select?.tread_mode).toBe("detailed");
+    expect(patch.measures?.tread).toBe("4");
+  });
+
   it("always requires all four corner zones because final validation requires all tires", () => {
     expect(requiredZonesForBooking(["Oil Change"])).toEqual([
       "FL",

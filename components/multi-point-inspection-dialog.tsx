@@ -37,14 +37,17 @@ import {
   deriveSuggestedRecommendations,
   gatherFindings,
   getDirtyIncompleteZones,
+  INSPECTION_NAV_ZONE_IDS,
   isFieldRequiredForZone,
   normalizeTireSize,
+  nextInspectionZoneAfterCompletion,
   patchInspectionZone,
   patchSharedInspectionText,
   zoneHasInput,
   INSPECTION_ZONES,
   INSPECTION_ZONES_BY_ID,
   requiredZonesForBooking,
+  toggleInspectionTreadMode,
   TRI_LABELS,
   validateZoneForCompletion,
   type BrakeAxleScope,
@@ -65,6 +68,7 @@ import {
 } from "@/lib/inspection-options";
 import {
   convertRotorValue,
+  formatRotorReferenceMinimum,
   formatRotorValue,
   getTireTreadMinimum,
   type RotorUnit,
@@ -126,15 +130,7 @@ const deleteInspectionPhotoRef = makeFunctionReference<"mutation">(
   "inspections:deleteInspectionPhoto",
 );
 
-const NAV_ZONE_IDS: Exclude<ZoneId, "OWNER">[] = [
-  "FL",
-  "FR",
-  "RL",
-  "RR",
-  "ENG",
-  "FRT",
-  "UND",
-];
+const NAV_ZONE_IDS = INSPECTION_NAV_ZONE_IDS;
 const CORNER_ZONE_IDS: ZoneId[] = ["FL", "FR", "RL", "RR"];
 
 // Diagram geometry (top-down car). Mirrors the prototype layout. OWNER is not a
@@ -669,21 +665,9 @@ function MultiPointInspectionDialogBody({
     }
     setError("");
     patchZone(zoneId, { done: true });
-    if (CORNER_ZONE_IDS.includes(zoneId)) {
-      const next = requiredZones.find(
-        (id) =>
-          CORNER_ZONE_IDS.includes(id) &&
-          id !== zoneId &&
-          !state.zones[id]?.done,
-      );
-      if (next) {
-        setActiveZone(next);
-        requestAnimationFrame(() =>
-          document
-            .getElementById("inspection-zone-panel")
-            ?.scrollIntoView({ behavior: "smooth", block: "start" }),
-        );
-      }
+    const next = nextInspectionZoneAfterCompletion(zoneId);
+    if (next) {
+      openZoneAtTop(next);
     }
   }
 
@@ -1826,22 +1810,7 @@ function MeasureField({
         ) : null}
         <button
           type="button"
-          onClick={() =>
-            onPatch({
-              select: {
-                ...zs.select,
-                tread_mode: detailed ? "" : "detailed",
-              },
-              measures: detailed
-                ? {
-                    ...zs.measures,
-                    tread_inner: "",
-                    tread_center: "",
-                    tread_outer: "",
-                  }
-                : { ...zs.measures, tread: "" },
-            })
-          }
+          onClick={() => onPatch(toggleInspectionTreadMode(zs))}
           className="mt-2 inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
         >
           {detailed ? (
@@ -1858,9 +1827,13 @@ function MeasureField({
 
   const isRotor = field.key === "rotor";
   const unit: RotorUnit = zs.select.rotor_unit === "in" ? "in" : "mm";
+  const hint =
+    isRotor && field.ref != null
+      ? `Reference min ${formatRotorReferenceMinimum(field.ref, unit)}`
+      : field.hint;
   return (
     <div className="border-b border-primary/10">
-      <Row label={field.label} hint={field.hint} required={required}>
+      <Row label={field.label} hint={hint} required={required}>
         <input
           id={`inspection-${zoneId}-${field.key}`}
           aria-invalid={!!errorMessage}

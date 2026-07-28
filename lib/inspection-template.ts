@@ -20,6 +20,7 @@ import type {
   TireCondition,
 } from "./vehicle-passport";
 import {
+  getTireTreadMinimum,
   rotorValueToMicrometers,
   type RotorThicknessMeasurements,
   type RotorUnit,
@@ -338,6 +339,25 @@ function cornerFields(opts: {
 export const DEFAULT_FRONT_ROTOR_MIN = 23.0;
 export const DEFAULT_REAR_ROTOR_MIN = 8.0;
 
+export const INSPECTION_NAV_ZONE_IDS: Exclude<ZoneId, "OWNER">[] = [
+  "FL",
+  "FR",
+  "RL",
+  "RR",
+  "ENG",
+  "FRT",
+  "UND",
+];
+
+export function nextInspectionZoneAfterCompletion(zoneId: ZoneId) {
+  const currentIndex = INSPECTION_NAV_ZONE_IDS.indexOf(
+    zoneId as Exclude<ZoneId, "OWNER">,
+  );
+  return currentIndex < 0
+    ? null
+    : INSPECTION_NAV_ZONE_IDS[currentIndex + 1] ?? null;
+}
+
 export const INSPECTION_ZONES: InspectionZone[] = [
   {
     id: "FL",
@@ -458,6 +478,25 @@ export type ZoneState = {
   select: Record<string, string>;
   photoIds: string[];
 };
+
+export function toggleInspectionTreadMode(zone: ZoneState): Partial<ZoneState> {
+  const detailed = zone.select.tread_mode === "detailed";
+  if (!detailed) {
+    const minimum = getTireTreadMinimum({
+      inner_32nds: zone.measures.tread_inner === "" ? null : Number(zone.measures.tread_inner),
+      center_32nds: zone.measures.tread_center === "" ? null : Number(zone.measures.tread_center),
+      outer_32nds: zone.measures.tread_outer === "" ? null : Number(zone.measures.tread_outer),
+    });
+    return {
+      select: { ...zone.select, tread_mode: "detailed" },
+      measures: { ...zone.measures, tread: minimum == null ? "" : String(minimum) },
+    };
+  }
+  return {
+    select: { ...zone.select, tread_mode: "" },
+    measures: { ...zone.measures },
+  };
+}
 
 export type InspectionState = {
   template_version: string;

@@ -110,6 +110,10 @@ export function formatRotorValue(value: number, unit: RotorUnit): string {
   return value.toFixed(unit === "in" ? 3 : 2);
 }
 
+export function formatRotorReferenceMinimum(valueMm: number, unit: RotorUnit): string {
+  return `${formatRotorValue(convertRotorValue(valueMm, "mm", unit), unit)} ${unit}`;
+}
+
 function validateTreadReading(
   position: TirePosition,
   reading: TireTreadReading | undefined,

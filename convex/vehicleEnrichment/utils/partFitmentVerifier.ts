@@ -114,6 +114,10 @@ A claim is REFUTED when the part number belongs to:
 
 A part is a phantom (REFUTED) when the vehicle's platform does not have that component at all (e.g. an electronic brake-pad WEAR SENSOR part on a platform that uses only mechanical wear indicators).
 
+**A NONEXISTENT part number is REFUTED.** The rule that "refuted requires placing the part on a different vehicle" applies to REAL numbers; a claimed OEM number with ZERO catalog or retail existence anywhere after searching (no OEM catalog row, no retailer listing, no cross-reference) is a fabrication — verdict "refuted", say "phantom" in your reason. (Distinguish from a real-but-obscure dealer-only number, which is "uncertain".)
+
+**Engine GASKETS carry their engine family in the part number — check it.** OEM gasket/seal numbers encode the engine family (Honda: -5A2-/-R40- are K-series, -6A0-/-59B- are L15 1.5T; a 17115-5A2 intake gasket cannot fit an L15BE). When a gasket/seal/o-ring's family code contradicts this vehicle's engine family, REFUTED — this class has survived three consecutive audit waves by being "a real Honda part on a real Honda page".
+
 **When the ENGINE or TRANSMISSION is built by a different company than the vehicle make, component-specific consumables follow the COMPONENT maker's spec, not the chassis brand.** E.g. a medium-duty Ford truck with a Cummins engine takes a Cummins-spec (Fleetguard) coolant/oil filter, NOT a Ford Motorcraft one; an Allison transmission takes Allison TES-spec fluid, not the chassis brand's ATF. If an engine/trans/coolant part is a chassis-brand part but the engine or transmission is a third-party unit, that is grounds for REFUTED.
 
 For a SPARK-PLUG line, also judge the QUANTITY. Some engines fire TWO plugs per cylinder (e.g. Chrysler HEMI, some twin-spark designs) — for those the correct total is 2× the cylinder count, not 1×. If the stated quantity equals the cylinder count but the engine is a known dual-plug design, the quantity is wrong (REFUTED) even if the part number itself is right; say the correct total in your reason.

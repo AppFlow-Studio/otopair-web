@@ -645,14 +645,35 @@ export const upsertPartAndFitment = internalMutation({
     // equivalent. Reject diff-service consumables when the config positively
     // has no differential (has_differential === false; unknown fails open).
     const DIFF_ONLY_SUBCATEGORIES = new Set(["gear_oil", "diff_fluid", "friction_modifier"]);
-    if (
-      (config as any)?.has_differential === false &&
-      DIFF_ONLY_SUBCATEGORIES.has(args.subcategory)
-    ) {
+    // Round 11 (batch-11 SRX, 4th recurrence): the gate required an explicit
+    // has_differential === false, which nothing sets — undefined sailed
+    // through and a fresh wrong gear-oil/friction-modifier number appeared
+    // every run. A FWD config with no explicit differential flag has no
+    // serviceable differential (transaxle final drive shares the ATF); derive
+    // the class from drivetrain so the gate fires without per-config setup.
+    const configDrivetrain = String((config as any)?.drivetrain ?? "").toUpperCase();
+    const hasNoDifferential =
+      (config as any)?.has_differential === false ||
+      ((config as any)?.has_differential == null && configDrivetrain === "FWD");
+    if (hasNoDifferential && DIFF_ONLY_SUBCATEGORIES.has(args.subcategory)) {
       console.log(
-        `[v8-parts] REJECTED diff-service part on no-differential config: ${args.oem_part_number} (${args.subcategory})`,
+        `[v8-parts] REJECTED diff-service part on no-differential config (${configDrivetrain || "?"}): ${args.oem_part_number} (${args.subcategory})`,
       );
       return { part_id: null, fitment_id: null, rejected: "no_differential" as const };
+    }
+
+    // Round 11 (batch-11 wave-3 Crosstrek): a telematics/DCM battery filled
+    // the battery role — a real part, right vehicle, wrong CATEGORY, which
+    // fitment verification structurally cannot catch. Reject non-starter
+    // batteries by name at the choke point.
+    if (
+      args.subcategory === "battery" &&
+      /telematic|\bdcm\b|auxiliar|backup|key\s?fob|remote|data.?communication/i.test(args.name ?? "")
+    ) {
+      console.log(
+        `[v8-parts] REJECTED wrong-category battery: ${args.oem_part_number} ("${args.name}") — not the starter battery`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "wrong_category" as const };
     }
 
     // Round 8 (batch-10): an unfindable drain-plug-gasket number persisted
@@ -1738,6 +1759,145 @@ export const flagRefutedFitments = internalMutation({
       flagged++;
     }
     return { flagged };
+  },
+});
+
+// Round 11: one-time seeding of the refute blocklist from batch-10/11
+// adjudicated verdicts. The round-10 blocklist only remembers kills made
+// AFTER its deploy — wave-3 SRX proved a pre-deploy correct kill (24236933)
+// walks back in priced. Entries below are ONLY parts a human-reviewed audit
+// confirmed wrong for that exact config (never refuted-candidates or
+// look-wrong-but-correct values). Idempotent; run via:
+//   npx convex run vehicleEnrichment/v3mutations:seedRefutedFitmentsFromHistory
+export const seedRefutedFitmentsFromHistory = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const SEED: Record<string, { oem: string; reason: string }[]> = {
+      "2014_cadillac_srx_luxury_collection_lfx": [
+        { oem: "24236933", reason: "6L80/6L90 truck trans filter, not the SRX 6T70 (batch-11)" },
+        { oem: "13508023", reason: "cabin filter fits ATS/CTS/XTS, not 2010-16 SRX (batch-10+11)" },
+        { oem: "12677093", reason: "2017-22 Colorado 3.6 LGZ belt (batch-10)" },
+        { oem: "12593774", reason: "2002-09 Trailblazer/Envoy 4.2L belt (batch-11)" },
+        { oem: "88900401", reason: "differential part on FWD SRX — no diff (batch-10/11)" },
+        { oem: "88863349", reason: "LSD friction modifier on FWD SRX — no diff/LSD (batch-11)" },
+        { oem: "88863089", reason: "gear oil on FWD SRX — no diff (batch-11)" },
+        { oem: "88900330", reason: "LSD friction modifier on FWD SRX — no diff/LSD (batch-11)" },
+      ],
+      "2009_chevrolet_cobalt_lt_lap": [
+        { oem: "PF2257G", reason: "Cruze/Sonic small-engine oil filter (batch-10)" },
+        { oem: "55593191", reason: "Cruze filter-housing o-ring — LAP is spin-on (batch-10)" },
+        { oem: "PF2232", reason: "not a 2.2 LAP application (batch-11 wave-3)" },
+        { oem: "97136425", reason: "unfindable drain-plug gasket PN (batch-10)" },
+      ],
+      "2024_chevrolet_equinox_premier_lsd": [
+        { oem: "84588699", reason: "phantom PN, zero catalog existence (batch-11)" },
+        { oem: "12260882", reason: "phantom DEXRON-VI PN, zero GM-catalog existence (batch-11 wave-3)" },
+      ],
+      "2025_subaru_crosstrek_limited_na": [
+        { oem: "16546AA12A", reason: "2009-14 SJ-gen air filter, wrong for GU (batch-11)" },
+        { oem: "26296SC011", reason: "2010-18 front pads, wrong for 2024+ GU (batch-11)" },
+        { oem: "26300SA001", reason: "legacy 2004-era front rotor, wrong for GU (batch-11)" },
+        { oem: "26700FJ000", reason: "2012-23 GT-gen rear rotor, wrong for GU (batch-11 wave-3)" },
+        { oem: "57433VC000", reason: "telematics DCM battery, not the starter battery (batch-11 wave-3)" },
+      ],
+      "2021_hyundai_tucson_ultimate_g4kj": [
+        { oem: "18871-11070", reason: "2020+ Smartstream plug, wrong for TL G4KJ (batch-11)" },
+        { oem: "26350-2S000", reason: "NX4-era 2.5 cartridge filter, TL 2.4 is spin-on (batch-11 wave-3)" },
+        { oem: "18847-11160", reason: "2011-16 Theta II plug, wrong year-band (batch-11 wave-3)" },
+        { oem: "28313-2B700", reason: "1.6L-family intake gasket, no 2021 US Tucson fitment (batch-11)" },
+        { oem: "26414-3F501", reason: "Genesis Tau cartridge-housing o-ring on a spin-on engine (batch-11)" },
+      ],
+      "2022_honda_accord_sport_se_l15be": [
+        { oem: "17220-64A-A00", reason: "11th-gen 2023+ air filter (batch-11 wave-2/3)" },
+        { oem: "80291-TF3-E01", reason: "11th-gen 2023+ cabin filter (batch-11 wave-2/3)" },
+        { oem: "17115-5A2-A01", reason: "K-series 2.0/2.4 intake gasket on the L15BE (3 waves)" },
+        { oem: "31500-SR1-100M", reason: "Group 51R battery decoy; 10th gen uses 47/H5 (batch-11)" },
+        { oem: "25420-5LJ-003", reason: "CVT strainer fits Accord 1.5 only 2018-20, not 2022 (batch-11 wave-3)" },
+      ],
+      "2024_toyota_grand_highlander_hybrid_15_series_a25a_fxs": [
+        { oem: "04152-YZZA1", reason: "cartridge filter — GH A25A-FXS is spin-on 90915-YZZN1 (batch-11)" },
+        { oem: "17801-F0050", reason: "Camry/gas air filter; GH = 17801-F0080 (batch-11)" },
+        { oem: "90916-A2030", reason: "2GR V6 belt on a beltless hybrid (batch-11 wave-3)" },
+        { oem: "00279-0WQTE-01", reason: "0W-20 quart on the 0W-8/GLV-1 engine (batch-11)" },
+      ],
+      "2019_toyota_camry_l_le_se_xle_a25a_fks": [
+        { oem: "17177-0H020", reason: "2AZ-era intake gasket, wrong gen (batch-11)" },
+        { oem: "90301-79006", reason: "cartridge-cap o-ring on a spin-on engine (batch-11)" },
+        { oem: "00279-0WQTE-01", reason: "0W-20 quart on the 0W-16 engine (batch-11, verifier-confirmed)" },
+      ],
+      "2015_honda_cr_v_ex_l_k24w9": [
+        { oem: "17055-R40-A01", reason: "K24Z injector-base gasket, 2014-only (batch-11)" },
+        { oem: "15312-R40-A01", reason: "K24Z oil-filter-base o-ring; 2015 is spin-on (batch-11)" },
+      ],
+      "2012_toyota_rav4_standard_2ar_fe": [
+        { oem: "90919-01259", reason: "wrong-year plug; correct 90919-01253 (batch-11)" },
+        { oem: "17801-0V020", reason: "wrong-year air filter; correct 17801-31120 (batch-11)" },
+        { oem: "87139-07020", reason: "wrong-vehicle cabin filter; correct 87139-02090 (batch-11)" },
+        { oem: "28800-28100", reason: "2015-18 RAV4 battery (batch-11)" },
+        { oem: "90919-A2002", reason: "2GR-FE V6 coil on the I4 (batch-11)" },
+      ],
+      "2006_ford_f_150_fx4_supercrew_995": [
+        { oem: "5L3Z-1125-BA", reason: "FRONT 7-lug rotor claimed as rear (batch-10)" },
+        { oem: "RT-1194", reason: "Duratec-family thermostat (batch-10)" },
+        { oem: "5L3Z-8620-BA", reason: "4.2L V6 belt on the 5.4 (batch-10/11)" },
+        { oem: "4L3Z-9461-AA", reason: "4.6L intake gasket on the 5.4 3V (batch-10/11)" },
+      ],
+      "2019_subaru_forester_touring_fb25d": [
+        { oem: "16546AA12A", reason: "SJ-gen air filter on the SK (batch-11)" },
+        { oem: "26296SC011", reason: "2010-18 front pads on the SK (batch-11)" },
+        { oem: "26300XC01A", reason: "Ascent-only front rotor (batch-11)" },
+        { oem: "26700XC00A", reason: "Ascent-only rear rotor (batch-11)" },
+        { oem: "23780AA10A", reason: "FA24 Ascent/Legacy belt (batch-11)" },
+        { oem: "SOA868V9210", reason: "old green Long Life coolant; SK uses Super Coolant (batch-11)" },
+      ],
+      "2014_acura_mdx_advance_pkg_w_entertainment_pkg_j35y5": [
+        { oem: "08798-9032", reason: "5W-20 blend on the 0W-20 J35Y5 (batch-10)" },
+        { oem: "19410-5J6-A00", reason: "thermostat housing/water passage, not the thermostat (batch-11)" },
+      ],
+      "2017_nissan_rogue_base_qr25de": [
+        { oem: "11060-3TA0B", reason: "thermostat housing/water outlet, not the element (batch-11)" },
+        { oem: "22401-JA01B", reason: "S35-generation plug on the T32 (batch-11 GT trap)" },
+      ],
+    };
+
+    let inserted = 0;
+    let skipped = 0;
+    let configsMissing = 0;
+    for (const [configKey, entries] of Object.entries(SEED)) {
+      const cfg = await ctx.db
+        .query("vehicle_configs")
+        .withIndex("by_config_key", (q) => q.eq("config_key", configKey))
+        .first();
+      if (!cfg) {
+        configsMissing++;
+        console.warn(`[blocklist-seed] config not found: ${configKey}`);
+        continue;
+      }
+      for (const e of entries) {
+        const normalized = normalizeOemNumber(e.oem);
+        const existing = await ctx.db
+          .query("refuted_fitments")
+          .withIndex("by_config_oem", (q) =>
+            q.eq("vehicle_config_id", cfg._id).eq("oem_part_number_normalized", normalized)
+          )
+          .first();
+        if (existing) {
+          if (existing.mode !== "block") await ctx.db.patch(existing._id, { mode: "block", reason: e.reason });
+          skipped++;
+          continue;
+        }
+        await ctx.db.insert("refuted_fitments", {
+          vehicle_config_id: cfg._id,
+          oem_part_number_normalized: normalized,
+          mode: "block",
+          reason: `[seeded] ${e.reason}`,
+          refuted_at: Date.now(),
+        });
+        inserted++;
+      }
+    }
+    console.log(`[blocklist-seed] inserted=${inserted} skipped=${skipped} configsMissing=${configsMissing}`);
+    return { inserted, skipped, configsMissing };
   },
 });
 

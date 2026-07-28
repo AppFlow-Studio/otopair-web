@@ -125,6 +125,10 @@ interface SuspiciousValue {
   currentValue: number | string;
   reason: string;
   serviceSlug?: string;
+  /** Round 11: which rule produced the suspect — only "chemistry_floor"
+   *  suspects may WRITE interval corrections (generic band/Z-score classes
+   *  went 1-for-3 in batch-11 wave-3 and are evidence-only). */
+  ruleClass?: "chemistry_floor";
   /** If we have population stats, include them */
   populationMean?: number;
   populationStdDev?: number;
@@ -205,6 +209,7 @@ export const writeVerificationResults = internalMutation({
       confidence: v.float64(),
       reasoning: v.string(),
       serviceSlug: v.optional(v.string()),
+      ruleClass: v.optional(v.string()),
     })),
   },
   handler: async (ctx, args) => {
@@ -262,13 +267,22 @@ export const writeVerificationResults = internalMutation({
             vehicle_config_id: args.vehicle_config_id,
             ...trimPatchFields,
           } as any);
-        } else if (result.table === "interval" && result.serviceSlug && isNumeric) {
+        } else if (
+          result.table === "interval" &&
+          result.serviceSlug &&
+          isNumeric &&
+          result.ruleClass === "chemistry_floor"
+        ) {
           // Round 10 (batch-11 Cobalt, 2nd recurrence): this branch was a
           // documented no-op stub, so a coolant-floor suspect (30k/24mo on
           // DEX-COOL) was detected, sent to Haiku, corrected — and never
           // written. Patch the interval row and downgrade it to "estimated":
           // an adversarially-corrected cadence is a defensible estimate, not
           // an OEM schedule.
+          // Round 11: gated to chemistry-floor suspects ONLY — the generic
+          // band/Z-score corrections went 1-for-3 in wave-3 (overwrote the
+          // Tucson's verbatim-correct coolant 120k and the Equinox's
+          // months-only brake fluid). Those classes are flag/evidence-only.
           await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchServiceIntervalBySlug, {
             vehicle_config_id: args.vehicle_config_id,
             service_slug: result.serviceSlug,
@@ -544,6 +558,10 @@ export const runAdversarialVerification = internalAction({
             currentValue: si.interval_miles ?? si.interval_months ?? 0,
             reason: `coolant_flush: ${si.interval_miles ?? "?"} mi / ${si.interval_months ?? "?"} mo is a conventional-coolant cadence but the stored coolant is long-life ("${engine.coolant_type}" — floor ${floor.minMiles} mi / ${floor.minMonths} mo)`,
             serviceSlug: slug,
+            // Round 11: only chemistry-floor suspects may WRITE interval
+            // corrections — the generic band/Z-score corrections went
+            // 1-for-3 in wave-3 (harmed two correct values).
+            ruleClass: "chemistry_floor",
           });
         }
       }
@@ -639,6 +657,7 @@ export const runAdversarialVerification = internalAction({
         confidence: number;
         reasoning: string;
         serviceSlug?: string;
+        ruleClass?: string;
       }> = [];
 
       for (let i = 0; i < suspects.length; i++) {
@@ -665,6 +684,7 @@ export const runAdversarialVerification = internalAction({
           confidence,
           reasoning: verdict.reasoning ?? "No reasoning provided",
           serviceSlug: suspect.serviceSlug,
+          ruleClass: (suspect as any).ruleClass,
         });
       }
 

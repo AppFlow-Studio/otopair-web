@@ -278,6 +278,9 @@ export const b8collect = internalAction({
         name: p?.name ?? null,
         qty: f.quantity_needed ?? null,
         sources: f.source_count ?? null,
+        // Round 11: carried so coreSignature can prefer unflagged rivals —
+        // a refute-demoted part must not read as "the" part for its role.
+        refute_flagged: f.refute_flagged === true,
       });
     }
     const runs: any[] = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getEnrichmentRuns, { vehicleConfigId: vcId });

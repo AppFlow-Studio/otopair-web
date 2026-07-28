@@ -100,6 +100,46 @@ const GENERATION_TABLE: Record<string, GenRange[]> = {
   ],
 };
 
+/**
+ * Round 11 (batch-11 Equinox): GM-style short engine codes (RPOs) have hard
+ * introduction years, and vPIC can return the NEXT year's RPO for the last
+ * year of an outgoing generation ("LSD" on a 2024 VIN). Adversarial search
+ * structurally cannot refute such a code — it is genuinely valid one model
+ * year later on the same nameplate — so validity is a table fact, not a
+ * search question. Conservative US-market ranges; absence = unknown.
+ */
+const ENGINE_CODE_YEAR_TABLE: Record<string, { from: number; to: number; note: string }> = {
+  LSD: { from: 2025, to: 2030, note: "GM 1.5T, 4th-gen Equinox (2025+)" },
+  LYX: { from: 2018, to: 2024, note: "GM 1.5T, 3rd-gen Equinox/Terrain" },
+  LTG: { from: 2013, to: 2021, note: "GM 2.0T" },
+  LFX: { from: 2012, to: 2017, note: "GM 3.6 V6 gen-2" },
+  LGX: { from: 2016, to: 2022, note: "GM 3.6 V6 gen-3" },
+  LAP: { from: 2008, to: 2010, note: "GM 2.2 Ecotec (Cobalt/HHR)" },
+  L84: { from: 2019, to: 2027, note: "GM 5.3 V8 DFM" },
+  L87: { from: 2019, to: 2027, note: "GM 6.2 V8 DFM" },
+};
+
+export type EngineCodeYearVerdict =
+  | { known: false }
+  | { known: true; ok: true }
+  | { known: true; ok: false; reason: string };
+
+export function validateEngineCodeYear(
+  code: string | null | undefined,
+  year: number | null | undefined,
+): EngineCodeYearVerdict {
+  if (!code || !year) return { known: false };
+  const row = ENGINE_CODE_YEAR_TABLE[norm(code).toUpperCase() as keyof typeof ENGINE_CODE_YEAR_TABLE]
+    ?? ENGINE_CODE_YEAR_TABLE[code.trim().toUpperCase()];
+  if (!row) return { known: false };
+  if (year >= row.from && year <= row.to) return { known: true, ok: true };
+  return {
+    known: true,
+    ok: false,
+    reason: `engine code "${code}" (${row.note}) is valid ${row.from}-${row.to}; MY${year} is outside that range`,
+  };
+}
+
 export type ChassisYearVerdict =
   | { ok: true }
   | { ok: false; reason: string; expectedForYear: string | null };
@@ -120,9 +160,19 @@ export function validateChassisCodeYear(
   if (!rows) return { ok: true };
   const code = norm(chassisCode);
   const matched = rows.find((r) => r.codes.some((c) => norm(c) === code));
-  if (!matched) return { ok: true }; // unknown code for a known nameplate — fail open
-  if (year >= matched.from && year <= matched.to) return { ok: true };
   const expected = rows.find((r) => year >= r.from && year <= r.to);
+  if (!matched) {
+    // Round 11 (batch-11 wave-3 Tucson "LET"): for a nameplate whose full
+    // generation set IS in the table, an unrecognized code is garbage, not a
+    // market variant — substitute the year's known code instead of failing
+    // open (fail-open remains for nameplates the table doesn't cover).
+    return {
+      ok: false,
+      reason: `chassis "${chassisCode}" is not a known generation code for this nameplate`,
+      expectedForYear: expected ? expected.codes[0] : null,
+    };
+  }
+  if (year >= matched.from && year <= matched.to) return { ok: true };
   return {
     ok: false,
     reason: `chassis "${chassisCode}" is the ${matched.from}-${matched.to} generation; MY${year} is ${expected ? expected.codes.join("/") : "a different generation"}`,

@@ -58,7 +58,7 @@ import {
 } from "../lib/vehicleDatabases";
 import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
-import { validateChassisCodeYear } from "./generationGate";
+import { validateChassisCodeYear, validateEngineCodeYear } from "./generationGate";
 import { hasOemCatalogDomain } from "../partSelector";
 import { backfillKilledRoles } from "./utils/roleBackfill";
 import { resolveEngineCode, isNhtsaDescriptor, verifyEngineCode } from "./utils/engineCodeLookup";
@@ -1742,13 +1742,25 @@ export const enrichVehicleBatchV3 = internalAction({
       // Round 10 (batch-11 Equinox): a SHORT decoder code (GM RPO shape —
       // "LSD", "LYX", "LFX") passed straight into the config key with zero
       // verification, and vPIC itself can return the WRONG YEAR's RPO (2025
-      // "LSD" on a 2024 VIN), anchoring next-generation content. Short codes
-      // get the adversarial year/model check; a refuted one is re-resolved
-      // and only a verified replacement is adopted.
-      const verdict = await verifyEngineCode(
-        args.engineCode, args.year, args.make, args.model, args.trim,
-        args.displacement, vPicData?.cylinders ?? 4,
-      );
+      // "LSD" on a 2024 VIN), anchoring next-generation content.
+      // Round 11: the deterministic RPO×year table decides first — wave-3
+      // proved adversarial search cannot refute a code that is genuinely
+      // valid one model year later on the same nameplate. Table-invalid →
+      // straight to re-resolution; table-valid → trusted (no LLM call);
+      // unknown codes keep the round-10 adversarial check.
+      const codeYear = validateEngineCodeYear(args.engineCode, args.year);
+      let verdict: "confirmed" | "refuted" | "uncertain";
+      if (codeYear.known) {
+        verdict = codeYear.ok ? "confirmed" : "refuted";
+        if (!codeYear.ok) {
+          console.warn(`[v8] RPO-YEAR GATE — ${(codeYear as any).reason}`);
+        }
+      } else {
+        verdict = await verifyEngineCode(
+          args.engineCode, args.year, args.make, args.model, args.trim,
+          args.displacement, vPicData?.cylinders ?? 4,
+        );
+      }
       if (verdict === "refuted") {
         console.warn(`[v8] Short engine code "${args.engineCode}" REFUTED for MY${args.year} — re-resolving`);
         const resolved = await resolveEngineCode(
@@ -2542,6 +2554,14 @@ async function runPollBatch1Body(
           actionMap,
         );
         let intervalCount = 0;
+        // Round 11 (batch-11 wave-3 Accord): VDB ships fixed mileage
+        // schedules; on Maintenance-Minder makes those are dealer-convention
+        // cadences, not the OEM system — they overwrote correct MM-derived
+        // semantics at conf 0.9 (oil 10k above the 5-9k MM band, brake fluid
+        // regaining a mileage on a months-only service). On MM makes, ingest
+        // as low-confidence "estimated" so extraction-derived rows win.
+        const MAINTENANCE_MINDER_MAKES = new Set(["honda", "acura"]);
+        const isMmMake = MAINTENANCE_MINDER_MAKES.has(args.make.toLowerCase());
         for (const { slug, interval_miles } of vdbResult.intervals) {
           const svc = await ctx.runQuery(
             internal.vehicleEnrichment.v3queries.getServiceBySlug,
@@ -2552,8 +2572,8 @@ async function runPollBatch1Body(
             vehicle_config_id: args.vehicleConfigId,
             service_id: svc._id,
             interval_miles,
-            status: "active",
-            confidence: 0.9,
+            status: isMmMake ? "estimated" : "active",
+            confidence: isMmMake ? 0.6 : 0.9,
             data_quality: "vdb_schedule",
           });
           intervalCount++;
@@ -4090,15 +4110,20 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
                 refuted: hardDelete.map((r) => ({ oem: r.oem, reason: r.reason })),
               },
             );
-
+          }
+          if (hardDelete.length > 0 || softFlag.length > 0) {
             // Round 10 (batch-11 Cobalt/Crosstrek): a kill used to leave a
             // permanent hole. One focused re-extraction call for the emptied
             // roles; answers flow through upsertPartAndFitment where the
             // fresh blocklist rows reject the refuted numbers, so this can
-            // only add a DIFFERENT part. Disable: PARTS_REFUTE_BACKFILL=0.
+            // only add a DIFFERENT part. Round 11: soft-flagged (demoted)
+            // roles are included too — a demoted part with no sourced rival
+            // still WINS selection (wave-3 Crosstrek resurrections), so every
+            // kill AND demote must source a replacement candidate.
+            // Disable: PARTS_REFUTE_BACKFILL=0.
             if ((process.env.PARTS_REFUTE_BACKFILL ?? "1") !== "0") {
               try {
-                const killed = hardDelete.slice(0, 4).map((r) => ({
+                const killed = [...hardDelete, ...softFlag].slice(0, 5).map((r) => ({
                   roleKey: r.roleKey,
                   killedOem: r.oem,
                 }));
@@ -4177,6 +4202,11 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // "mismatch" now only FLAGS for review + caps the field confidence — it
     // never changes the stored value. Disable with TRANS_FLUID_VERIFY=0.
     let transFluidErrors: string[] = [];
+    // Round 11: when the round-7 verifier positively names the correct fluid
+    // AND the deterministic family gate independently finds the same-direction
+    // contradiction, the two together authorize correction (captured here,
+    // consumed in the spec-reconcile block below).
+    let verifierClaimedCorrectFluid: string | null = null;
     const transmissionId = args.transmissionId;
     if (
       (process.env.TRANS_FLUID_VERIFY ?? "1") !== "0" &&
@@ -4231,6 +4261,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           transFluidErrors = [
             `trans_fluid_suspect:${action.suspectUnit}:stored=${storedFluid}:expected=${action.claimedCorrect}`,
           ];
+          verifierClaimedCorrectFluid = action.claimedCorrect;
           console.warn(
             `[trans-fluid-verify] FLAGGED (not changed) trans_fluid_type "${storedFluid}" — ` +
               `verifier expected "${action.claimedCorrect}" for ${action.suspectUnit} (${action.reason})`,
@@ -4317,6 +4348,31 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           );
           console.warn(
             `[trans-fluid-spec-reconcile] "${oldSpec}" → "${specRecon.correctedSpec}" (${specRecon.reason})`,
+          );
+        } else if (specRecon.action === "flag" && verifierClaimedCorrectFluid) {
+          // Round 11 (batch-11 Equinox): TWO independent gates agree the
+          // stored spec is the wrong FAMILY for this unit — the deterministic
+          // family reconcile (this gate) and the round-7 web verifier, which
+          // positively named both the unit and its required fluid. A
+          // multi-gate agreement on a family constant is a different evidence
+          // class from the single-verifier overwrites that round-6 banned
+          // (those failed on unit mis-ID; here the family conflict is
+          // decided without the verifier). Correct to the verifier's named
+          // fluid instead of shipping a flagged-but-live wrong family.
+          const oldSpec = String(allFields.trans_fluid_type.value);
+          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs, {
+            transmission_id: transmissionId,
+            fluid_type: verifierClaimedCorrectFluid,
+          });
+          allFields.trans_fluid_type = {
+            ...allFields.trans_fluid_type,
+            value: verifierClaimedCorrectFluid,
+          };
+          transFluidErrors.push(
+            `trans_fluid_corrected_multigate:stored=${oldSpec}:corrected=${verifierClaimedCorrectFluid}`,
+          );
+          console.warn(
+            `[trans-fluid-spec-reconcile] MULTI-GATE CORRECTED "${oldSpec}" → "${verifierClaimedCorrectFluid}" (${specRecon.reason})`,
           );
         } else if (specRecon.action === "flag") {
           allFields.trans_fluid_type = {

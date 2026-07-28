@@ -138,3 +138,37 @@ Per-vehicle detail: `reports/ground-truth-batch11/verdict-*.md` (fresh) and `ver
 
 ## Cost / mechanics
 9 runs ≈ $11 (wave-2), batch-11 total ≈ $17 across 14 runs. 5-parallel staggered launch worked; all CLI wrappers hit the known timeout artifact; results read via `b8collect` + `v3queries` dump script.
+
+---
+
+# Wave 3 — Jul 28 2026 (round-10 validation)
+
+**Code state:** `49f80bb` (round-10: identity layer + refute durability) + hotfix `4d53885` (missing `verifyEngineCode` import crashed the action on short engine codes — Equinox/Cobalt/SRX stuck at `pending` until fixed; caught only in live server logs, both typecheckers missed it). 7 re-runs (~$8.50): the 5 wave-2 fresh vehicles + Cobalt + SRX, delta-audited against their wave-2 verdicts (`verdict-*-w3.md` per vehicle).
+
+## Scorecard
+
+| Vehicle | Wave 2 | Wave 3 | Headline |
+|---|---|---|---|
+| Grand Highlander | FAIL | **PASS (cond.)** | Model identity restored + cascaded (spin-on filter, 0W-8, contamination purged); trim series-code artifact + coverage regression remain |
+| SRX | 2/5 | **4/5** | FFV gate FIRED; belt honest-null; cabin filter correct; FWD-diff class gate still missing; pre-round-10 correct kill reversed (blocklist needs seeding) |
+| Cobalt | 4/7 | **5/7** | FP-protection validated *and discriminating*; 1→17 parts; DEX-COOL 50k `adversarial_corrected` landed |
+| Accord | PARTIAL | **near-PASS** | Traps 11/12; 3 TP / 0 FP refutes; both 11th-gen parts killed w/ verified replacements; FP-deleted filter back |
+| Tucson | FAIL | PARTIAL | 0 false refutes, 2/2 right kills, all 3 wrongly-deleted parts restored; killed roles not refilled; corrector harmed a correct interval |
+| Equinox | FAIL | FAIL (narrowed) | 6 fixed, traps 4/7→6/7; LSD survives (search can't refute a code valid one MY later); fluid double-flagged but still ships |
+| Crosstrek | FAIL | FAIL | CVTF-III exact + speeds stripped; but keep-demoted retention resurrected 2 killed parts into core signature (no sourced rival to win instead) |
+
+## Round-10 mechanisms — validated vs. costed
+
+**Validated:** model-specificity preservation (GH), decode trim precedence (no new trim regressions), FFV gate (SRX, correct diagnosis text), sanity keep-with-flag (Equinox capacity kept-capped instead of dropped), year-band refutes on correct identities (Tucson 2/2, Accord 3/3, zero FPs on those cars), catalog-attested FP protection (Cobalt 25894265 + Accord PLM-A02 both back and kept while real kills continued), interval write-back mechanics (Cobalt DEX-COOL), role backfill produced 3 verified-correct new Accord parts.
+
+**Costed (the round-11 list):**
+1. **Retention needs a third state (top item).** Round-9 killed too much (nulls); round-10 keeps too much: on the Crosstrek, kept-demoted wrong parts WIN core signature because the correct rival was never sourced. A refute must be overridable only by year-scoped fitment evidence (price rows and domain counts must not count), and every kill/demote must trigger backfill; a demote without a sourced rival is a wrong winner.
+2. **Seed the blocklist from historical refutes.** It only remembers post-deploy kills — SRX's 24236933 (killed pre-deploy) walked back in priced. One-time migration from batch-10/wave-2 verdict records.
+3. **RPO×year table.** Adversarial search structurally cannot refute "LSD" (valid one model-year later on the same nameplate). Deterministic (RPO × MY) validity for GM-style short codes; 2024 Equinox → unique LYX.
+4. **Fluid correction authority.** Equinox CVT-fluid is now double-flagged (round-7 verifier `expected=DEXRON-VI` + round-10 mirror gate) and still ships. When ≥2 independent gates agree on a deterministic family constant, correct or null — the round-6 harm precedent doesn't apply to multi-gate family constants.
+5. **Interval corrector went 1-for-3.** DEX-COOL fix right; Tucson coolant 120k→50k and Equinox brake-fluid months→miles both harmed correct values — the round-6 corrector-harm signature in the path I just enabled. Restrict the write-back to chemistry-floor-class corrections only.
+6. **`no_differential` class gate (4th recurrence, SRX).** Number-blacklisting demonstrably can't fix a class problem — fresh wrong diff parts appear each run.
+7. Identity residue: Tucson chassis "LET" (unknown codes fail open — consider table-known-nameplate strictness), Crosstrek `_na` key (needs positive FB25D resolution + re-key), GH trim "Hybrid 15 Series" katashiki artifact, GH coverage regression (sibling-migration for verified-cross/universal parts after an identity correction).
+8. New defect classes surfaced: phantom PNs from advanceautoparts (2nd instance — domain-level distrust for unverifiable SKUs), wrong-CATEGORY part in a role (Crosstrek "battery" = telematics DCM battery — fitment gates can't see category), `vdb_schedule` rows overriding Maintenance-Minder semantics (Accord), K-series gasket on services (3-for-3 recurrence — verify accessory parts attached to service bundles).
+
+**Bottom line:** batch-11 closes with the identity layer proven fixable and largely fixed (GH reversal, zero identity-driven false refutes), the refute machinery's precision/memory now the dominant open class, and a crisply scoped round-11.

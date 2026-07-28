@@ -61,7 +61,7 @@ import { lookupChassisCode } from "./utils/chassisLookup";
 import { validateChassisCodeYear } from "./generationGate";
 import { hasOemCatalogDomain } from "../partSelector";
 import { backfillKilledRoles } from "./utils/roleBackfill";
-import { resolveEngineCode, isNhtsaDescriptor } from "./utils/engineCodeLookup";
+import { resolveEngineCode, isNhtsaDescriptor, verifyEngineCode } from "./utils/engineCodeLookup";
 import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/partFitmentVerifier";
 import { verifyTransFluid, decideTransFluidAction } from "./utils/transFluidVerifier";
 import { reconcileDrivetrain } from "./drivetrainReconcile";

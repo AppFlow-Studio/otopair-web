@@ -242,7 +242,7 @@ describe("resolveLaborHours Layer-3 sibling gate", () => {
 });
 
 describe("recomputeLaborForConfigService data_quality stamping", () => {
-  const repairpalObs = {
+  const estimatorObs = {
     _id: "obs1",
     vehicle_config_id: CFG,
     service_id: SVC,
@@ -254,7 +254,7 @@ describe("recomputeLaborForConfigService data_quality stamping", () => {
 
   it("patch path clears a stale clone stamp to data_quality 'aggregated'", async () => {
     const db = fakeDb({
-      labor_observations: [repairpalObs],
+      labor_observations: [estimatorObs],
       labor_times: [
         {
           _id: "lt1",
@@ -281,7 +281,7 @@ describe("recomputeLaborForConfigService data_quality stamping", () => {
 
   it("insert path stamps data_quality 'aggregated'", async () => {
     const db = fakeDb({
-      labor_observations: [repairpalObs],
+      labor_observations: [estimatorObs],
       labor_times: [],
     });
     await recomputeLaborForConfigService(
@@ -482,10 +482,10 @@ describe("labor_aggregation anchor = olp_labor", () => {
     expect(db.inserts[0].doc).toMatchObject({ book_hours: 1.2, source: "aggregated", confidence: 0.8 });
   });
 
-  it("a lone repairpal_motor observation is no longer an anchor (confidence 0.4)", async () => {
+  it("a lone estimator_book observation is no longer an anchor (confidence 0.4)", async () => {
     const db = fakeDb({
       labor_observations: [
-        { _id: "oa2", vehicle_config_id: CFG, service_id: SVC, tier: "catalog", hours: 1.2, weight: 0.8, source: "repairpal_motor" },
+        { _id: "oa2", vehicle_config_id: CFG, service_id: SVC, tier: "catalog", hours: 1.2, weight: 0.8, source: "estimator_book" },
       ],
       labor_times: [],
     });

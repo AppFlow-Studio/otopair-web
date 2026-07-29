@@ -2952,12 +2952,12 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         pricedPartsByService.set(slug, (pricedPartsByService.get(slug) ?? 0) + 1);
 
       // ── Multi-source labor (ONCE per car). The `laborAllSources` orchestrator
-      //    fans out to OLP + RepairPal + open-web (each flag-gated), merges the
+      //    fans out to OLP + Estimator + open-web (each flag-gated), merges the
       //    per-source hours into weighted `labor_observations`, and recomputes the
       //    weighted-median labor_times row — all internally. It REPLACES the old
       //    OLP-only resolution + write loop. The LLM book-time loop below (llm_web
       //    / llm_training) is a SEPARATE source the orchestrator does NOT handle,
-      //    so it stays. Flags: OLP on-by-default; RepairPal/web opt-in (read from
+      //    so it stays. Flags: OLP on-by-default; Estimator/web opt-in (read from
       //    env in ONE place via laborFlagsFromEnv so this path and the laborRelabor
       //    backfill can never drift).
       const laborFlags = laborFlagsFromEnv();
@@ -3022,7 +3022,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       }
 
       // Multi-source labor — written independently of the LLM loop so that every
-      // APPLICABLE MAPPED service gets resolved (OLP + RepairPal + web) regardless
+      // APPLICABLE MAPPED service gets resolved (OLP + Estimator + web) regardless
       // of whether the LLM provided labor_hours (Phase-2 parity with the backfill
       // in laborRelabor.ts). The orchestrator does the observation writes + recompute
       // internally; olp_labor lands at weight 0.7 here (the multi-source SOURCE_WEIGHTS
@@ -3032,7 +3032,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         slug: string;
         serviceId: Id<"services">;
         name: string;
-        repairpal_slug: string | null;
+        estimator_slug: string | null;
       }> = [];
       // resolveServiceId is serviceCache-memoized, so re-iterating `services` here
       // (after the LLM book-time loop above already resolved these slugs) reads from
@@ -3047,7 +3047,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           slug,
           serviceId,
           name: svc.service_name,
-          repairpal_slug: LABOR_SERVICE_CONFIG[slug]?.repairpal_slug ?? null,
+          estimator_slug: LABOR_SERVICE_CONFIG[slug]?.estimator_slug ?? null,
         });
       }
 

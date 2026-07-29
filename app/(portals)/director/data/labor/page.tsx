@@ -36,10 +36,10 @@ type Obs = {
 };
 
 // Observation source → display label + trust note (reality: labor_observations
-// sources; spec names repairpal_motor / vehicle_databases map onto these).
+// sources; spec names estimator_book / vehicle_databases map onto these).
 const SOURCE_META: Record<string, { label: string; note: string }> = {
-  repairpal_endpoint: {
-    label: "RepairPal / MOTOR",
+  estimator_endpoint: {
+    label: "Estimator / Book Rate",
     note: "high-confidence flat-rate — wins outright when present (Jun 18)",
   },
   olp_labor: { label: "OLP labor", note: "scraped book time — strong anchor" },
@@ -57,7 +57,7 @@ const SELECTION_REASON: Record<string, string> = {
   empirical:
     "Empirical post-job actuals at/over the sample gate — highest trust, bypasses the tier floor.",
   aggregated:
-    "Weighted robust median of the catalog sources below (RepairPal face value wins outright when present).",
+    "Weighted robust median of the catalog sources below (Estimator face value wins outright when present).",
   vdb: "Direct book row (quality-gated single source).",
   vdb_camry_baseline: "Camry anchor row (this config IS the baseline).",
   sibling: "Sibling-chassis book hours (platform-equivalent match).",
@@ -156,14 +156,14 @@ export default function LaborCommandCenterPage() {
     effSource === "vdb" ||
     effSource === "vdb_camry_baseline" ||
     effSource === "sibling";
-  // RepairPal face value drives the book value outright when present.
-  const repairpalDrivesBook =
-    bookEffective && (obsBySource.get("repairpal_endpoint")?.length ?? 0) > 0;
+  // Estimator face value drives the book value outright when present.
+  const estimatorDrivesBook =
+    bookEffective && (obsBySource.get("estimator_endpoint")?.length ?? 0) > 0;
 
   const ladderLoading = serviceId && selectedConfig && ladder === undefined;
 
   const catalogOrder = [
-    "repairpal_endpoint",
+    "estimator_endpoint",
     "olp_labor",
     "web_labor",
     "llm_web",
@@ -319,7 +319,7 @@ export default function LaborCommandCenterPage() {
                 if (!rows || rows.length === 0) return null;
                 const meta = SOURCE_META[src];
                 const isVdb = src === "vdb_repair_estimates";
-                const isRp = src === "repairpal_endpoint";
+                const isRp = src === "estimator_endpoint";
                 return (
                   <LadderRow
                     key={src}
@@ -336,8 +336,8 @@ export default function LaborCommandCenterPage() {
                         ? fmtHours(rows[0].hours)
                         : rows.map((r: Obs) => r.hours.toFixed(1)).join(" / ") + "h"
                     }
-                    highlighted={isRp && repairpalDrivesBook}
-                    reason="RepairPal face value drives book_hours outright when present."
+                    highlighted={isRp && estimatorDrivesBook}
+                    reason="Estimator face value drives book_hours outright when present."
                     meta={
                       <>
                         weight {rows[0].weight}
@@ -369,7 +369,7 @@ export default function LaborCommandCenterPage() {
                     )
                   }
                   hours={fmtHours(agg.book_hours)}
-                  highlighted={bookEffective && !repairpalDrivesBook}
+                  highlighted={bookEffective && !estimatorDrivesBook}
                   reason={effSource ? SELECTION_REASON[effSource] : undefined}
                   meta={
                     <>

@@ -499,16 +499,25 @@ export const shopInsights = query({
           .collect(),
       ]);
 
-    // Portfolio photos — content_id references cdn_assets (url + caption).
+    // Portfolio photos — legacy rows reference cdn_assets via content_id;
+    // owner-uploaded rows reference Convex storage via storage_id.
     const portfolio = (
       await Promise.all(
         portfolioRows
           .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
           .map(async (p) => {
-            const asset = (await ctx.db.get(
-              p.content_id as Id<"cdn_assets">,
-            )) as { url?: string; caption?: string } | null;
-            return { id: String(p._id), url: asset?.url ?? null, caption: asset?.caption ?? null };
+            let url: string | null = null;
+            let caption = p.caption ?? null;
+            if (p.storage_id) {
+              url = await ctx.storage.getUrl(p.storage_id);
+            } else if (p.content_id) {
+              const asset = (await ctx.db.get(
+                p.content_id as Id<"cdn_assets">,
+              )) as { url?: string; caption?: string } | null;
+              url = asset?.url ?? null;
+              caption = caption ?? asset?.caption ?? null;
+            }
+            return { id: String(p._id), url, caption };
           }),
       )
     ).filter((x): x is { id: string; url: string; caption: string | null } => x.url != null);

@@ -1,0 +1,313 @@
+'use client'
+
+import { Fragment, useState } from 'react'
+import { useQuery } from 'convex/react'
+import { api } from '@/convex/_generated/api'
+import type { Id } from '@/convex/_generated/dataModel'
+import { Badge, Button, Card, IconChevronDown, Modal } from '../Primitives'
+import { SectionAnchor } from '../Shell'
+
+const th: React.CSSProperties = {
+  fontSize: 11, fontWeight: 600, color: 'var(--slate-500)', textTransform: 'uppercase',
+  textAlign: 'left', padding: '9px 14px', borderBottom: '1px solid var(--slate-200)',
+  background: 'var(--slate-50)', whiteSpace: 'nowrap',
+}
+const td: React.CSSProperties = {
+  fontSize: 13, color: 'var(--slate-800)', padding: '9px 14px',
+  borderBottom: '1px solid var(--slate-100)', verticalAlign: 'top',
+}
+
+const fmtH = (h: number | null | undefined) => (h != null ? `${h.toFixed(1)}h` : '—')
+const fmtBand = (b: number[] | null, prefix = '') =>
+  b && b[0] != null ? `${prefix}${Math.round(b[0])}–${prefix}${Math.round(b[1])}` : '—'
+const fmtPartsBand = (b: { low: number; high: number } | null | undefined, prefix = '$') =>
+  b != null ? `${prefix}${Math.round(b.low)}–${prefix}${Math.round(b.high)}` : '—'
+
+/** Returns true when the real band diverges > 15% from the multiplier band
+ *  (compared on midpoints). */
+function partsBandDiverges(
+  mult: { low: number; high: number } | null | undefined,
+  real: { low: number; high: number } | null | undefined,
+): boolean {
+  if (!mult || !real) return false
+  const midMult = (mult.low + mult.high) / 2
+  const midReal = (real.low + real.high) / 2
+  if (midMult === 0) return false
+  return Math.abs(midReal - midMult) / midMult > 0.15
+}
+
+function MatchBadge({ q, via }: { q: string | null; via: string | null }) {
+  if (q === 'engine_sibling') return <Badge tone="orange" dot>sibling{via ? ` · ${via}` : ''}</Badge>
+  return <Badge tone="green" dot>exact</Badge>
+}
+
+function Stat({ label, value, tone }: { label: string; value?: number | string; tone?: any }) {
+  return (
+    <Card style={{ minWidth: 140, flex: '0 0 auto' }}>
+      <div style={{ fontSize: 11, color: 'var(--slate-500)', textTransform: 'uppercase', letterSpacing: 0.4 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: 'var(--slate-900)', marginTop: 4 }}>
+        {value === undefined ? '…' : tone ? <Badge tone={tone}>{value}</Badge> : value}
+      </div>
+    </Card>
+  )
+}
+
+export const TabEstimatorLabor = () => {
+  const overview = useQuery(api.directorEstimator.estimatorLaborOverview)
+  const [openId, setOpenId] = useState<Id<'vehicle_configs'> | null>(null)
+
+  return (
+    <SectionAnchor
+      id="estimatorLabor"
+      title="Estimator & Labor"
+      subtitle="Estimator estimate-endpoint data — the authoritative labor source when present (exact flat-rate). Other sources shown only as corroboration."
+    >
+      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+        <Stat label="Configs with data" value={overview?.configCount} />
+        <Stat label="Estimate rows" value={overview?.totalRows} />
+        <Stat label="Exact rows" value={overview?.exactRows} />
+        <Stat label="Engine-sibling rows" value={overview?.siblingRows} />
+        <Stat label="Services covered" value={overview?.serviceCount} />
+        <Stat
+          label="Endpoint labor live?"
+          value={overview ? (overview.endpointLaborLive ? 'Yes' : 'No · flag off') : undefined}
+          tone={overview ? (overview.endpointLaborLive ? 'green' : 'yellow') : undefined}
+        />
+      </div>
+
+      <Card padded={false}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={th}>Vehicle</th>
+              <th style={th}>Tier</th>
+              <th style={th}>Services</th>
+              <th style={th}>Match</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(overview?.configs ?? []).map((c: any) => (
+              <tr key={String(c.configId)} style={{ cursor: 'pointer' }} onClick={() => setOpenId(c.configId)}>
+                <td style={td}>{[c.year, c.make, c.model, c.trim].filter(Boolean).join(' ')}</td>
+                <td style={td}>{c.tier ?? '—'}</td>
+                <td style={td}>{c.serviceCount}</td>
+                <td style={td}><MatchBadge q={c.matchQuality} via={c.matchedVia} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {overview && overview.configs.length === 0 && (
+          <div style={{ padding: 20, textAlign: 'center', color: 'var(--slate-400)' }}>No Estimator endpoint data yet.</div>
+        )}
+      </Card>
+
+      {openId && <ConfigDetail configId={openId} onClose={() => setOpenId(null)} />}
+    </SectionAnchor>
+  )
+}
+
+function ConfigDetail({ configId, onClose }: { configId: Id<'vehicle_configs'>; onClose: () => void }) {
+  const rows = useQuery(api.directorEstimator.estimatorLaborByConfig, { vehicle_config_id: configId })
+  const shadowDiff = useQuery(api.directorEstimator.partsShadowDiff, { configIds: [configId] })
+  const [rawOpen, setRawOpen] = useState<Set<string>>(new Set())
+  const toggleRaw = (id: string) =>
+    setRawOpen((s) => {
+      const n = new Set(s)
+      n.has(id) ? n.delete(id) : n.add(id)
+      return n
+    })
+
+  // Build slug → shadow-diff row lookup for O(1) access in the table
+  const shadowBySlug = new Map<string, { parts_multiplier: { low: number; high: number } | null; parts_real: { low: number; high: number; source: string } | null }>()
+  for (const sd of shadowDiff ?? []) {
+    if (sd.service_slug) shadowBySlug.set(sd.service_slug, sd)
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      width={1400}
+      eyebrow={<span>Estimator endpoint — authoritative labor</span>}
+      title="Per-service labor &amp; parts"
+      footer={<Button variant="secondary" onClick={onClose}>Close</Button>}
+    >
+      {rows === undefined ? (
+        <div style={{ padding: 20, color: 'var(--slate-400)' }}>Loading…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ padding: 20, color: 'var(--slate-400)' }}>No endpoint rows for this config.</div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead>
+            <tr>
+              <th style={th}>Service</th>
+              <th style={th}>RP labor</th>
+              <th style={th}>RP labor $</th>
+              <th style={th}>Parts (role · $band)</th>
+              <th style={th}>Parts (mult)</th>
+              <th style={th}>Parts (real)</th>
+              <th style={th}>Variant / Match</th>
+              <th style={th}>Current book (secondary)</th>
+              <th style={th}>Corroboration</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(rows as any[]).map((r) => {
+              const sid = String(r.serviceId)
+              const pricedParts = r.rp.parts.filter((p: any) => p.role)
+              const sd = shadowBySlug.get(r.slug ?? '')
+              const diverges = partsBandDiverges(sd?.parts_multiplier, sd?.parts_real)
+              const rowStyle: React.CSSProperties = diverges
+                ? { background: 'rgba(234,179,8,0.07)' }
+                : {}
+              const isRawOpen = rawOpen.has(sid)
+              return (
+                <Fragment key={sid}>
+                <tr style={rowStyle}>
+                  <td style={td}>
+                    <div style={{ marginBottom: 6 }}>{r.serviceName}</div>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => toggleRaw(sid)}
+                      icon={
+                        <IconChevronDown
+                          size={13}
+                          style={{ transform: isRawOpen ? 'rotate(180deg)' : 'none', transition: 'transform 120ms' }}
+                        />
+                      }
+                    >
+                      {isRawOpen ? 'Hide raw' : 'Raw'}
+                    </Button>
+                  </td>
+                  <td style={{ ...td, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                    {r.rp.minutes != null ? `${r.rp.minutes}m / ${fmtH(r.rp.hours)}` : '—'}
+                  </td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>{fmtBand(r.rp.laborBand, '$')}</td>
+                  <td style={td}>
+                    {pricedParts.length === 0 ? '—' : pricedParts.map((p: any, i: number) => (
+                      <div key={i} style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+                        {p.role}{p.position ? ` ${p.position}` : ''} · {fmtBand(p.band, '$')}
+                        {p.qty && p.qty > 1 ? <span style={{ color: 'var(--slate-400)' }}> ({p.qty} pcs, total)</span> : ''}
+                      </div>
+                    ))}
+                  </td>
+                  <td style={{ ...td, whiteSpace: 'nowrap', color: 'var(--slate-500)' }}>
+                    {shadowDiff === undefined ? '…' : fmtPartsBand(sd?.parts_multiplier)}
+                  </td>
+                  <td style={{ ...td, whiteSpace: 'nowrap' }}>
+                    {shadowDiff === undefined ? '…' : (
+                      sd?.parts_real ? (
+                        <span>
+                          {fmtPartsBand(sd.parts_real)}
+                          {diverges && (
+                            <span style={{ marginLeft: 5 }}>
+                              <Badge tone="yellow">diverges</Badge>
+                            </span>
+                          )}
+                        </span>
+                      ) : <span style={{ color: 'var(--slate-400)' }}>—</span>
+                    )}
+                  </td>
+                  <td style={td}>
+                    <div style={{ fontSize: 12, color: 'var(--slate-500)' }}>{r.rp.variant ?? '—'}</div>
+                    <div style={{ marginTop: 4 }}><MatchBadge q={r.rp.matchQuality} via={r.rp.matchedVia} /></div>
+                  </td>
+                  <td style={td}>
+                    {r.current ? (
+                      <div style={{ color: 'var(--slate-500)' }}>
+                        <span style={{ fontSize: 12 }}>{fmtH(r.current.bookHours)} ({r.current.source ?? '—'})</span>
+                        {r.current.sourcesDisagree && (
+                          <div style={{ marginTop: 3 }}><Badge tone="yellow">disagree</Badge></div>
+                        )}
+                      </div>
+                    ) : <span style={{ color: 'var(--slate-400)' }}>none</span>}
+                  </td>
+                  <td style={{ ...td, fontSize: 11, color: 'var(--slate-500)' }}>
+                    {r.corroboration.length === 0 ? '—' : r.corroboration.map((o: any) => `${o.source} ${o.hours}h`).join(', ')}
+                  </td>
+                </tr>
+                {isRawOpen && (
+                  <tr>
+                    <td colSpan={9} style={{ ...td, background: 'var(--slate-50)', padding: '12px 14px' }}>
+                      <RawEndpoint rp={r.rp} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      )}
+    </Modal>
+  )
+}
+
+/**
+ * RawEndpoint — the unfiltered Estimator endpoint payload for one service, so a
+ * director can verify the mapper for themselves: EVERY part (including ones we
+ * could not map → role "(unmapped)"), the labor + totals bands, and the match
+ * metadata (variant, base_vehicle_id, zip, fetched_at). This is the source data
+ * behind the priced "Parts (role · $band)" column; an unmapped/wrong role here
+ * explains a missing or off real-parts band.
+ */
+function RawEndpoint({ rp }: { rp: any }) {
+  const meta: Array<[string, string]> = [
+    ['Variant', rp.variant ?? '—'],
+    ['Match', `${rp.matchQuality ?? 'exact'}${rp.matchedVia ? ` · ${rp.matchedVia}` : ''}`],
+    ['base_vehicle_id', rp.baseVehicleId != null ? String(rp.baseVehicleId) : '—'],
+    ['ZIP', rp.zip ?? '—'],
+    ['Labor', rp.minutes != null ? `${rp.minutes}m / ${fmtH(rp.hours)}` : '—'],
+    ['Labor $', fmtBand(rp.laborBand, '$')],
+    ['Total (independent)', fmtBand(rp.independentTotal, '$')],
+    ['Total (dealer)', fmtBand(rp.dealerTotal, '$')],
+    ['Fetched', rp.fetchedAt ? new Date(rp.fetchedAt).toISOString().slice(0, 10) : '—'],
+  ]
+  const parts: any[] = rp.parts ?? []
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 10 }}>
+        {meta.map(([k, val]) => (
+          <div key={k} style={{ fontSize: 11 }}>
+            <span style={{ color: 'var(--slate-500)', textTransform: 'uppercase', letterSpacing: 0.3 }}>{k}: </span>
+            <span style={{ color: 'var(--slate-800)', fontWeight: 600 }}>{val}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontSize: 11, color: 'var(--slate-500)', textTransform: 'uppercase', letterSpacing: 0.3, marginBottom: 4 }}>
+        Endpoint parts ({parts.length})
+      </div>
+      {parts.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--slate-400)' }}>No parts on this endpoint estimate.</div>
+      ) : (
+        <table style={{ width: '100%', borderCollapse: 'collapse', background: 'white', border: '1px solid var(--slate-200)' }}>
+          <thead>
+            <tr>
+              <th style={{ ...th, fontSize: 10 }}>RP part name</th>
+              <th style={{ ...th, fontSize: 10 }}>Mapped role</th>
+              <th style={{ ...th, fontSize: 10 }}>Position</th>
+              <th style={{ ...th, fontSize: 10 }}>Qty</th>
+              <th style={{ ...th, fontSize: 10 }}>Price (total band)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {parts.map((p, i) => (
+              <tr key={i}>
+                <td style={{ ...td, fontSize: 12 }}>{p.name}</td>
+                <td style={{ ...td, fontSize: 12 }}>
+                  {p.role
+                    ? <Badge tone="green">{p.role}</Badge>
+                    : <Badge tone="slate">(unmapped)</Badge>}
+                </td>
+                <td style={{ ...td, fontSize: 12, color: 'var(--slate-500)' }}>{p.position ?? '—'}</td>
+                <td style={{ ...td, fontSize: 12, color: 'var(--slate-500)' }}>{p.qty ?? '—'}</td>
+                <td style={{ ...td, fontSize: 12, whiteSpace: 'nowrap' }}>{fmtBand(p.band, '$')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}

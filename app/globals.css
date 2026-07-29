@@ -436,3 +436,153 @@ body {
 .schedule-calendar .rbc-selected-cell {
   background-color: color-mix(in srgb, var(--secondary) 14%, transparent);
 }
+
+/* ---- Flagship landing: live coverage map pins ---- */
+/* ------------------------------------------------------------------ */
+/*  OtoPair map pins — markup built in landing/coverage-map.tsx,        */
+/*  ported from the otopair-1 app's ShopMarker so both products use the */
+/*  same marker. Two states crossfade on zoom: the teardrop logo pin,   */
+/*  and a POI logo circle + shop name once names are readable.          */
+/* ------------------------------------------------------------------ */
+
+/* Mapbox anchors this box bottom-centre on the shop: the teardrop's tip sits
+   on that point, and the POI circle re-centres onto the same point. */
+.oto-pin {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+}
+.oto-pin:hover {
+  z-index: 2;
+}
+
+/* Ground ping — a radar ring on the basemap at the shop's point, which reads
+   better than a halo round the head on a pitched 3D map. Verified shops only. */
+.oto-pin__ping {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0 0 -8px -8px;
+  border-radius: 9999px;
+  background: rgba(82, 153, 254, 0.45);
+  animation: oto-pin-pulse 2.4s ease-out infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.oto-pin__teardrop {
+  position: absolute;
+  inset: 0;
+  display: block;
+  transform-origin: 50% 100%; /* grow from the tip, which marks the shop */
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  transition:
+    opacity 250ms ease,
+    transform 160ms ease;
+}
+.oto-pin:hover .oto-pin__teardrop {
+  transform: scale(1.1);
+}
+
+/* POI state — 24px logo circle centred on the shop point, name to its right. */
+.oto-pin__poi {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  /* Absolutely positioned with only `left`, this box would be shrink-to-fit
+     against a 34px containing block — squeezing the name to a couple of
+     characters no matter what max-width the label asks for. */
+  width: max-content;
+  opacity: 0;
+  transform: translate(-12px, 12px);
+  pointer-events: none;
+  transition: opacity 250ms ease;
+}
+.oto-pin__poi svg {
+  flex: none;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.25));
+  transition: transform 160ms ease;
+}
+.oto-pin:hover .oto-pin__poi svg {
+  transform: scale(1.1);
+}
+.oto-pin__label {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  /* The app clamps to 100px for a phone-width map; this cell is ~1000px, so
+     take the app's full marker container width (140px) instead. */
+  max-width: 140px;
+  padding-right: 10px;
+  font-size: 12px;
+  line-height: 14px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+/* Close enough to read names: swap the teardrop for the labelled POI. */
+.oto-map--near .oto-pin__teardrop {
+  opacity: 0;
+}
+.oto-map--near .oto-pin__poi {
+  opacity: 1;
+}
+.oto-map--near .oto-pin__ping {
+  display: none;
+}
+
+/* Onboarding shops don't ping — the pulse means "live". */
+.oto-pin--onboarding .oto-pin__ping {
+  display: none;
+}
+
+/* "Your address" — deliberately NOT the brand blue, so it never reads as a
+   shop pin on a map where every shop is blue. */
+.oto-map-you {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  box-sizing: content-box;
+  border: 3px solid #fff;
+  border-radius: 9999px;
+  background: #0f172a;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
+}
+.oto-map-you::before {
+  content: "";
+  position: absolute;
+  inset: -12px;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.18);
+  z-index: -1;
+}
+
+@keyframes oto-pin-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oto-pin__ping {
+    display: none;
+  }
+  .oto-pin__teardrop,
+  .oto-pin__poi,
+  .oto-pin__poi svg {
+    transition: none;
+  }
+}

@@ -623,7 +623,7 @@ export const rotorSpecsForBooking = query({
       .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
       .first();
     if (!vehicle?.vehicle_config_id) return none;
-    const cfg: any = await ctx.db.get(vehicle.vehicle_config_id);
+    const cfg = await ctx.db.get(vehicle.vehicle_config_id);
     if (!cfg) return none;
 
     let sourceDomain: string | null = null;
@@ -634,22 +634,29 @@ export const rotorSpecsForBooking = query({
         sourceDomain = null;
       }
     }
-    const axle = (side: "front" | "rear") => {
-      const minMm = cfg[`rotor_${side}_min_thickness_mm`] ?? null;
-      return {
-        minMm,
-        // A minimum with no recorded quality is still a real one; default to
-        // the sourced label rather than silently treating it as an estimate.
-        kind: minMm == null
-          ? ("none" as const)
-          : ((cfg[`rotor_${side}_min_quality`] ?? "oem_spec") as string),
-        nominalMm: cfg[`rotor_${side}_nominal_thickness_mm`] ?? null,
-        sourceDomain,
-      };
-    };
+    const axleRef = (
+      minMm: number | undefined,
+      quality: string | undefined,
+      nominalMm: number | undefined,
+    ) => ({
+      minMm: minMm ?? null,
+      // A minimum with no recorded quality is still a real one — default to the
+      // sourced label rather than silently demoting it to an estimate.
+      kind: minMm == null ? "none" : (quality ?? "oem_spec"),
+      nominalMm: nominalMm ?? null,
+      sourceDomain,
+    });
     return {
-      front: axle("front"),
-      rear: axle("rear"),
+      front: axleRef(
+        cfg.rotor_front_min_thickness_mm,
+        cfg.rotor_front_min_quality,
+        cfg.rotor_front_nominal_thickness_mm,
+      ),
+      rear: axleRef(
+        cfg.rotor_rear_min_thickness_mm,
+        cfg.rotor_rear_min_quality,
+        cfg.rotor_rear_nominal_thickness_mm,
+      ),
       configId: vehicle.vehicle_config_id,
     };
   },
@@ -695,21 +702,36 @@ export const recordCastRotorMinimum = mutation({
       return { ok: false as const, reason: "no_config" };
     }
 
-    const minCol = `rotor_${args.axle}_min_thickness_mm`;
-    const qualCol = `rotor_${args.axle}_min_quality`;
+    const isFront = args.axle === "front";
+    const minCol = isFront
+      ? "rotor_front_min_thickness_mm"
+      : "rotor_rear_min_thickness_mm";
+    const qualCol = isFront
+      ? "rotor_front_min_quality"
+      : "rotor_rear_min_quality";
     const write = async (configId: Id<"vehicle_configs">) => {
-      const cfg: any = await ctx.db.get(configId);
+      const cfg = await ctx.db.get(configId);
       if (!cfg) return false;
       // Never overwrite a director's confirmed value.
-      if (cfg[qualCol] === "director_verified") return false;
-      const verified = new Set((cfg.verified_fields ?? []) as string[]);
+      const curQuality = isFront
+        ? cfg.rotor_front_min_quality
+        : cfg.rotor_rear_min_quality;
+      if (curQuality === "director_verified") return false;
+      const verified = new Set(cfg.verified_fields ?? []);
       verified.add(minCol);
       verified.add(qualCol);
       await ctx.db.patch(configId, {
-        [minCol]: args.minMm,
-        [qualCol]: "mechanic_read",
+        ...(isFront
+          ? {
+              rotor_front_min_thickness_mm: args.minMm,
+              rotor_front_min_quality: "mechanic_read",
+            }
+          : {
+              rotor_rear_min_thickness_mm: args.minMm,
+              rotor_rear_min_quality: "mechanic_read",
+            }),
         verified_fields: [...verified],
-      } as any);
+      });
       return true;
     };
 
@@ -726,10 +748,7 @@ export const recordCastRotorMinimum = mutation({
         )
         .collect();
       const ownParts = await Promise.all(
-        ownFitments.map(async (f) => ({
-          f,
-          part: (await ctx.db.get(f.part_id)) as any,
-        })),
+        ownFitments.map(async (f) => ({ f, part: await ctx.db.get(f.part_id) })),
       );
       const normalized = ownParts.find(
         (p) => p.part?.subcategory === roleKey,

@@ -23,11 +23,13 @@
 import { v } from "convex/values";
 import { action, internalAction, internalMutation } from "./_generated/server";
 import { internal, api } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { extractPriceFirecrawl } from "./vehicleEnrichment/firecrawl";
 import { priceAllSources } from "./vehicleEnrichment/priceReextract";
 import { UNVERIFIED_PRICE_TYPE } from "./lib/priceTypes";
 import { roleHasCapability, type Capability, type DirectorRole } from "./directorGate";
+import { buildCacheKey } from "./vehicleEnrichment/scraperQueries";
+import { resolveRotorMinimums } from "./vehicleEnrichment/utils/rotorSpecResource";
 
 // ---------------------------------------------------------------------------
 // Audit-log writer (actions can't use ctx.db — go through a mutation).
@@ -91,6 +93,149 @@ async function requireDirector(
   }
   return { name: session.name, userId: session.userId };
 }
+
+// ---------------------------------------------------------------------------
+// 0. backfillRotorMinimums — deterministic re-parse of ALREADY-CACHED pages.
+//
+// The cheapest possible backfill: no scrape, no LLM, no spend. It re-reads the
+// parts markdown already on disk with the label-aware parser, so a page whose
+// minimum the extraction missed can still yield one. A page that only carries a
+// nominal produces NO minimum — that stays an honest gap.
+// ---------------------------------------------------------------------------
+
+export const _backfillRotorMinimumsRun = internalMutation({
+  args: { id: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const cfg = await ctx.db.get(args.id);
+    if (!cfg) return { status: "not_found" as const };
+
+    const [makeRow, modelRow] = await Promise.all([
+      ctx.db.get(cfg.make_id),
+      ctx.db.get(cfg.model_id),
+    ]);
+    const cacheKey = buildCacheKey(
+      makeRow?.name ?? "",
+      modelRow?.name ?? "",
+      cfg.year,
+      "parts_catalog",
+      cfg.trim_name ?? "",
+    );
+    const cached = await ctx.db
+      .query("scrape_cache")
+      .withIndex("by_cache_key", (q) => q.eq("cache_key", cacheKey))
+      .first();
+
+    // Only axles that actually carry a rotor fitment are candidates; a drum
+    // axle must never be reported as a gap.
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.id))
+      .collect();
+    const subcats = new Set(
+      (await Promise.all(fitments.map((f) => ctx.db.get(f.part_id)))).map(
+        (p) => p?.subcategory,
+      ),
+    );
+    const axlesWithFitment = (["front", "rear"] as const).filter((a) =>
+      subcats.has(a === "front" ? "front_rotor" : "rear_rotor"),
+    );
+
+    const resolutions = resolveRotorMinimums({
+      markdown: cached?.markdown ?? null,
+      existing: {
+        front: {
+          minMm: cfg.rotor_front_min_thickness_mm ?? null,
+          nominalMm: cfg.rotor_front_nominal_thickness_mm ?? null,
+          quality: cfg.rotor_front_min_quality ?? null,
+          observedLabel: cfg.rotor_min_observed_label ?? null,
+          sourceUrl: cfg.rotor_min_source_url ?? null,
+        },
+        rear: {
+          minMm: cfg.rotor_rear_min_thickness_mm ?? null,
+          nominalMm: cfg.rotor_rear_nominal_thickness_mm ?? null,
+          quality: cfg.rotor_rear_min_quality ?? null,
+          observedLabel: cfg.rotor_min_observed_label ?? null,
+          sourceUrl: cfg.rotor_min_source_url ?? null,
+        },
+      },
+      naRoleKeys: (cfg.na_role_keys ?? []) as string[],
+      axlesWithFitment: axlesWithFitment.length ? axlesWithFitment : undefined,
+    });
+
+    // verified_fields still guards the write, so a director's or a mechanic's
+    // value can't be overwritten even if the resolver were wrong.
+    const verified = new Set(cfg.verified_fields ?? []);
+    const patch: Partial<Doc<"vehicle_configs">> = {};
+    for (const r of resolutions) {
+      if (!r.changed) continue;
+      const isFront = r.axle === "front";
+      const minCol = isFront
+        ? "rotor_front_min_thickness_mm"
+        : "rotor_rear_min_thickness_mm";
+      const nomCol = isFront
+        ? "rotor_front_nominal_thickness_mm"
+        : "rotor_rear_nominal_thickness_mm";
+      if (r.minMm != null && !verified.has(minCol)) {
+        patch[minCol] = r.minMm;
+        if (isFront) patch.rotor_front_min_quality = r.quality ?? "oem_spec";
+        else patch.rotor_rear_min_quality = r.quality ?? "oem_spec";
+        if (r.observedLabel) patch.rotor_min_observed_label = r.observedLabel;
+      }
+      if (r.nominalMm != null && !verified.has(nomCol)) {
+        patch[nomCol] = r.nominalMm;
+      }
+    }
+    if (Object.keys(patch).length > 0) await ctx.db.patch(args.id, patch);
+
+    return {
+      status: "ok" as const,
+      hadCache: !!cached?.markdown,
+      outcomes: resolutions.map((r) => `${r.axle}:${r.outcome}`),
+      written: Object.keys(patch).length,
+    };
+  },
+});
+
+/** Explicit, because the action calls a mutation in its OWN module and the
+ *  inferred type would otherwise be circular. */
+type RotorBackfillRun =
+  | { status: "not_found" }
+  | { status: "ok"; hadCache: boolean; outcomes: string[]; written: number };
+
+export const backfillRotorMinimums = action({
+  args: backfillArgs,
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    | { status: "not_found"; message: string }
+    | { status: "done"; hadCache: boolean; outcomes: string[]; written: number }
+  > => {
+    const actor = await requireDirector(ctx, args.token, "data.trigger");
+    const res = (await ctx.runMutation(
+      internal.directorConfigBackfills._backfillRotorMinimumsRun,
+      { id: args.id },
+    )) as RotorBackfillRun;
+    if (res.status === "not_found") {
+      return { status: "not_found" as const, message: "Vehicle config not found" };
+    }
+    await ctx.runMutation(internal.directorConfigBackfills._writeBackfillAudit, {
+      id: args.id,
+      actorName: actor.name,
+      actorId: actor.userId,
+      detail:
+        `Rotor minimum backfill (cached-page re-parse, no spend): ` +
+        `${res.outcomes.join(", ")}; ${res.written} column(s) written` +
+        (res.hadCache ? "" : "; NO cached parts page on file"),
+    });
+    return {
+      status: "done" as const,
+      hadCache: res.hadCache,
+      outcomes: res.outcomes,
+      written: res.written,
+    };
+  },
+});
 
 // ---------------------------------------------------------------------------
 // 1. reEnrichConfig — FULL re-enrich (force + writeScope="full")

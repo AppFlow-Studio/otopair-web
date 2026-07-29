@@ -30,7 +30,7 @@ import {
   formatZonesForPdf,
   type RotorRef,
 } from "../lib/inspection-template";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { OWNER_PROFILE_QUESTIONS } from "../lib/owner-profile-questions";
 import { jobRecommendationInputValidator } from "./lib/vehicle_passports";
 import { submitRecommendationsForBooking } from "./jobRecommendations";
@@ -314,11 +314,11 @@ export const _isCallerAuthorizedShopUser = internalQuery({
  * makes classify() report the rotor ungraded instead of passing it.
  */
 async function rotorRefsForConfig(
-  ctx: any,
+  ctx: { db: { get: (id: Id<"vehicle_configs">) => Promise<Doc<"vehicle_configs"> | null> } },
   configId: Id<"vehicle_configs"> | null | undefined,
 ): Promise<{ frontRotor?: RotorRef; rearRotor?: RotorRef }> {
   if (!configId) return {};
-  const cfg: any = await ctx.db.get(configId);
+  const cfg = await ctx.db.get(configId);
   if (!cfg) return {};
   let sourceDomain: string | null = null;
   if (cfg.rotor_min_source_url) {
@@ -328,16 +328,28 @@ async function rotorRefsForConfig(
       sourceDomain = null;
     }
   }
-  const axle = (side: "front" | "rear"): RotorRef => {
-    const minMm = cfg[`rotor_${side}_min_thickness_mm`] ?? null;
-    return {
-      minMm,
-      kind: minMm == null ? "none" : (cfg[`rotor_${side}_min_quality`] ?? "oem_spec"),
-      nominalMm: cfg[`rotor_${side}_nominal_thickness_mm`] ?? null,
-      sourceDomain,
-    };
+  const axleRef = (
+    minMm: number | undefined,
+    quality: string | undefined,
+    nominalMm: number | undefined,
+  ): RotorRef => ({
+    minMm: minMm ?? null,
+    kind: (minMm == null ? "none" : (quality ?? "oem_spec")) as RotorRef["kind"],
+    nominalMm: nominalMm ?? null,
+    sourceDomain,
+  });
+  return {
+    frontRotor: axleRef(
+      cfg.rotor_front_min_thickness_mm,
+      cfg.rotor_front_min_quality,
+      cfg.rotor_front_nominal_thickness_mm,
+    ),
+    rearRotor: axleRef(
+      cfg.rotor_rear_min_thickness_mm,
+      cfg.rotor_rear_min_quality,
+      cfg.rotor_rear_nominal_thickness_mm,
+    ),
   };
-  return { frontRotor: axle("front"), rearRotor: axle("rear") };
 }
 
 export const _assembleInspectionData = internalQuery({

@@ -273,13 +273,21 @@ const RotorAxleRow = ({ axle, minMm, nominalMm, quality }: {
   )
 }
 
-const RotorSpecsBlock = ({ rotor }: { rotor: RotorSpecs | null | undefined }) => {
+const RotorSpecsBlock = ({ rotor, onBackfill, busy }: {
+  rotor: RotorSpecs | null | undefined
+  onBackfill?: () => void
+  busy?: boolean
+}) => {
   const r = rotor
   const nothing = !r || (r.frontMinMm == null && r.rearMinMm == null &&
     r.frontNominalMm == null && r.rearNominalMm == null)
   return (
     <div style={{ marginBottom:18 }}>
-      <SectionTitle label="Brakes — OEM rotor minimum" />
+      <SectionTitle label="Brakes — OEM rotor minimum" right={onBackfill && (
+        <Button size="sm" variant="secondary" disabled={busy} onClick={onBackfill}>
+          {busy ? 'Checking…' : 'Re-check cached page'}
+        </Button>
+      )} />
       {nothing ? (
         <div style={{ fontSize:12, color:'var(--slate-500)' }}>
           No OEM rotor minimum on file. Rotor readings are recorded but{' '}
@@ -576,10 +584,12 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   const reEnrichConfig     = useAction(api.directorConfigBackfills.reEnrichConfig)
   const backfillConfigParts = useAction(api.directorConfigBackfills.backfillConfigParts)
   const repriceConfigParts = useAction(api.directorConfigBackfills.repriceConfigParts)
+  const backfillRotorMinimums = useAction(api.directorConfigBackfills.backfillRotorMinimums)
   // Independent busy flags so one running backfill doesn't grey out the others.
   const [busyFull,   setBusyFull]   = useState(false)
   const [busyParts,  setBusyParts]  = useState(false)
   const [busyPrices, setBusyPrices] = useState(false)
+  const [busyRotorMin, setBusyRotorMin] = useState(false)
 
   // Refs + highlight state for scrolling from the action-row pill to the
   // matching Enrichment runs row.
@@ -679,6 +689,29 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     } catch (e) {
       setToast(`Reprice failed: ${(e as Error).message}`)
     } finally { setBusyPrices(false) }
+  }
+
+  // Re-parses the parts page ALREADY cached for this config with the
+  // label-aware parser. No scrape, no LLM, no spend — so it is safe to run
+  // freely. A page carrying only a nominal yields no minimum, by design.
+  const handleBackfillRotorMin = async () => {
+    if (!configId || busyRotorMin) return
+    setBusyRotorMin(true)
+    try {
+      const res = await backfillRotorMinimums({ id: configId, token: sessionToken }) as
+        { status?: string; message?: string; written?: number; hadCache?: boolean; outcomes?: string[] }
+      if (res?.status !== 'done') {
+        setToast(`Could not run: ${res?.message ?? res?.status ?? 'unknown'}.`)
+      } else if ((res.written ?? 0) > 0) {
+        setToast(`Rotor minimum backfilled — ${res.outcomes?.join(', ')}.`)
+      } else {
+        setToast(res.hadCache
+          ? 'No rotor minimum in the cached page (it likely publishes only the new thickness).'
+          : 'No cached parts page for this config — run a parts backfill first.')
+      }
+    } catch (e) {
+      setToast(`Rotor minimum backfill failed: ${(e as Error).message}`)
+    } finally { setBusyRotorMin(false) }
   }
 
   const ymmt = detail
@@ -801,7 +834,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                 ['Last enriched',         detail.chassisSpecs.last_enriched_at && fmtDate(detail.chassisSpecs.last_enriched_at)],
               ] : []} />
 
-              <RotorSpecsBlock rotor={detail.rotor} />
+              <RotorSpecsBlock rotor={detail.rotor} onBackfill={handleBackfillRotorMin} busy={busyRotorMin} />
 
               <TiresSection trim={detail.trimSpecs} />
 

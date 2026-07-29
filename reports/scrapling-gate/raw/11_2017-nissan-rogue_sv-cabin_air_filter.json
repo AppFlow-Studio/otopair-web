@@ -1,0 +1,61 @@
+{
+  "key": "2017-nissan-rogue_sv-cabin_air_filter",
+  "url": "https://nissan.oempartsonline.com/oem-2017-nissan-rogue_sv-cabin_air_filter.html",
+  "legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2464,
+      "content_len": 294648,
+      "title": "Online Nissan Parts Superstore | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3807
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 2966,
+      "content_len": 295240,
+      "title": "Online Nissan Parts Superstore | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3807
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 870,
+      "content_len": 192251,
+      "title": "Online Nissan Parts Superstore | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3618,
+      "content_len": 203326,
+      "title": "Online Nissan Parts Superstore | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

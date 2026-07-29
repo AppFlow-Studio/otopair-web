@@ -4,11 +4,13 @@
 // (NHTSA+VDB decode → scrape → Batch 1 → Batch 2 → finalize) with each batch's
 // prompt (request) and raw+parsed model output (response). Native panel styling.
 
+import { useMemo, useState } from 'react'
 import { useQuery } from 'convex/react'
 import type { FunctionReturnType } from 'convex/server'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Panel, Empty, TableSkeleton, StatusPill, fmtDuration, fmtCost, fmtWhen, fmtNum } from './helpers'
+import { JsonTree, tryParseJsonPrefix } from './JsonTree'
 
 type StepRow = FunctionReturnType<typeof api.directorEnrichment.stepsForRun>[number]
 
@@ -20,16 +22,70 @@ const STEP_LABEL: Record<string, string> = {
   finalize: '5 · Finalize',
 }
 
-function CodeBlock({ label, text }: { label: string; text: string }) {
+const rawPreStyle = { maxHeight: 380, overflow: 'auto', borderTop: '1px solid var(--slate-200)', background: '#fff', padding: '8px 12px', fontSize: 11, lineHeight: 1.5, color: 'var(--slate-700)', margin: 0, whiteSpace: 'pre-wrap' as const, wordBreak: 'break-word' as const }
+
+const truncatedNoteStyle = { padding: '6px 12px', fontSize: 11, color: 'var(--orange-700)', background: 'var(--orange-50)', borderTop: '1px solid var(--slate-200)' } as const
+
+/** Parses `text` as JSON once, only while the tree view is actually mounted
+ *  (block expanded + Formatted selected). `text` is always our own
+ *  `JSON.stringify` output server-side, EXCEPT when the step's capture was
+ *  truncated to fit runSteps.ts's per-field cap (200k chars) — that trims
+ *  the string mid-value, so it's no longer valid JSON. In that (regular,
+ *  not edge-case) situation, try recovering a tree from the still-valid
+ *  JSON prefix; only fall back to the identical raw dump if even that
+ *  fails, and say so explicitly rather than silently rendering the same
+ *  thing under a different tab. */
+function FormattedBody({ text }: { text: string }) {
+  const result = useMemo(() => {
+    try { return { kind: 'exact' as const, value: JSON.parse(text) } } catch { /* fall through */ }
+    const partial = tryParseJsonPrefix(text)
+    if (partial !== null) return { kind: 'partial' as const, value: partial }
+    return { kind: 'unparsable' as const, value: null }
+  }, [text])
+
+  if (result.kind === 'unparsable') {
+    return (
+      <div>
+        <div style={truncatedNoteStyle}>This capture was truncated when recorded and couldn&apos;t be reconstructed as JSON — showing raw text below.</div>
+        <pre className="mono" style={rawPreStyle}>{text}</pre>
+      </div>
+    )
+  }
   return (
-    <details style={{ marginTop: 8, border: '1px solid var(--slate-200)', borderRadius: 8, background: 'var(--slate-50)' }}>
-      <summary style={{ cursor: 'pointer', userSelect: 'none', padding: '6px 12px', fontSize: 12, fontWeight: 600, color: 'var(--slate-600)' }}>
-        {label} <span style={{ fontWeight: 400, color: 'var(--slate-400)' }}>({fmtNum(text.length)} chars)</span>
-      </summary>
-      <pre className="mono" style={{ maxHeight: 380, overflow: 'auto', borderTop: '1px solid var(--slate-200)', background: '#fff', padding: '8px 12px', fontSize: 11, lineHeight: 1.5, color: 'var(--slate-700)', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-        {text}
-      </pre>
-    </details>
+    <div>
+      {result.kind === 'partial' && (
+        <div style={truncatedNoteStyle}>This capture was truncated when recorded — showing the structure of what was captured before the cut.</div>
+      )}
+      <div style={{ maxHeight: 380, overflow: 'auto', borderTop: result.kind === 'exact' ? '1px solid var(--slate-200)' : 'none', background: '#fff', padding: '8px 12px' }}>
+        <JsonTree value={result.value} />
+      </div>
+    </div>
+  )
+}
+
+function CodeBlock({ label, text }: { label: string; text: string }) {
+  const [open, setOpen] = useState(false)
+  const [format, setFormat] = useState<'tree' | 'raw'>('tree')
+  return (
+    <div style={{ marginTop: 8, border: '1px solid var(--slate-200)', borderRadius: 8, background: 'var(--slate-50)' }}>
+      <div onClick={() => setOpen(o => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none', padding: '6px 12px', fontSize: 12, fontWeight: 600, color: 'var(--slate-600)' }}>
+        <span>{open ? '▾' : '▸'} {label} <span style={{ fontWeight: 400, color: 'var(--slate-400)' }}>({fmtNum(text.length)} chars)</span></span>
+        {open && (
+          <div onClick={e => e.stopPropagation()} style={{ marginLeft: 'auto', display: 'flex', gap: 2 }}>
+            <button type="button" onClick={() => setFormat('tree')}
+              style={{ border: 'none', background: 'none', padding: '2px 6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 600, color: format === 'tree' ? 'var(--blue-700)' : 'var(--slate-400)' }}>
+              Formatted
+            </button>
+            <button type="button" onClick={() => setFormat('raw')}
+              style={{ border: 'none', background: 'none', padding: '2px 6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11, fontWeight: 600, color: format === 'raw' ? 'var(--blue-700)' : 'var(--slate-400)' }}>
+              Raw
+            </button>
+          </div>
+        )}
+      </div>
+      {open && (format === 'tree' ? <FormattedBody text={text} /> : <pre className="mono" style={rawPreStyle}>{text}</pre>)}
+    </div>
   )
 }
 

@@ -1,0 +1,120 @@
+{
+  "sub": "ford",
+  "oem": "FL820S",
+  "search_url": "https://ford.oempartsonline.com/search?search_str=FL820S",
+  "search_legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2056,
+      "content_len": 775439,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://ford.oempartsonline.com/search?search_str=FL820S",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 1838
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": false,
+      "status": null,
+      "ms": 1501,
+      "content_len": 0,
+      "title": null,
+      "final_url": null,
+      "class": "error",
+      "has_price_class": false,
+      "has_jsonld_product": false,
+      "has_fitment_marker": false,
+      "error": "firecrawl_api_500: Internal Server Error"
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 359,
+      "content_len": 139530,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://ford.oempartsonline.com/search?search_str=FL820S",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3442,
+      "content_len": 872070,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://ford.oempartsonline.com/search?search_str=FL820S",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ],
+  "detail_url": "https://ford.oempartsonline.com/oem-parts/ford-filter-assembly-oil-fl820s",
+  "detail_legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 4213,
+      "content_len": 1237272,
+      "title": "Filter Assembly - Oil FL-820-S | OEM Parts Online",
+      "final_url": "https://ford.oempartsonline.com/oem-parts/ford-filter-assembly-oil-fl820s",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 22596
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 5066,
+      "content_len": 1239021,
+      "title": "Filter Assembly - Oil FL-820-S | OEM Parts Online",
+      "final_url": "https://ford.oempartsonline.com/oem-parts/ford-filter-assembly-oil-fl820s",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 22509
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 600,
+      "content_len": 439822,
+      "title": "Filter Assembly - Oil FL-820-S | OEM Parts Online",
+      "final_url": "https://ford.oempartsonline.com/oem-parts/ford-filter-assembly-oil-fl820s",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 4555,
+      "content_len": 1274458,
+      "title": "Filter Assembly - Oil FL-820-S | OEM Parts Online",
+      "final_url": "https://ford.oempartsonline.com/oem-parts/ford-filter-assembly-oil-fl820s",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

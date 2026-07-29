@@ -14,6 +14,12 @@
 // NOTE: relative imports (not the "@/" alias) so this module is safe to import
 // from the Convex bundler (convex/inspections.ts) as well as the Next app.
 import { getBookingServiceFlags } from "./vehicle-service-relevance";
+import { rotorValueToMicrometers } from "./inspection-measurements";
+import type {
+  RotorThicknessMeasurements,
+  TirePosition,
+  TireTreadMeasurements,
+} from "./inspection-measurements";
 import type {
   PreJobSurveyPayload,
   RotorCondition,
@@ -559,6 +565,68 @@ function minDefined(a: number | null, b: number | null): number | null {
   return Math.min(a, b);
 }
 
+// ---------------------------------------------------------------------------
+// Corner measurements -> the structured measurement blocks the server validates.
+//
+// `validatePrejobReport` (convex/bookings.ts) calls validateInspectionMeasurements
+// on EVERY prejob submit, and its tread loop runs before the hasBrakeWork
+// early-return — so a payload without `tire_tread` fails every job start, not
+// just brake jobs. The only other producer of these blocks was the legacy
+// pre-job-survey-dialog, which the MPI replaced without porting the mapping.
+// ---------------------------------------------------------------------------
+
+const CORNER_TIRE_POSITIONS: ReadonlyArray<readonly [ZoneId, TirePosition]> = [
+  ["FL", "front_left"],
+  ["FR", "front_right"],
+  ["RL", "rear_left"],
+  ["RR", "rear_right"],
+];
+
+/**
+ * Tread is recorded in whole 32nds — `isValidTreadDepth` rejects non-integers,
+ * so a mechanic typing "7.5" would hard-block the submit. Round to the nearest
+ * 32nd rather than drop the reading; out-of-range values are dropped so the
+ * server's own message explains the problem.
+ */
+function parseTread32nds(value: string | undefined): number | null {
+  const n = parseMm(value);
+  if (n == null) return null;
+  const rounded = Math.round(n);
+  return rounded >= 0 && rounded <= 32 ? rounded : null;
+}
+
+function buildTireTread(state: InspectionState): TireTreadMeasurements | null {
+  const out: TireTreadMeasurements = {};
+  let any = false;
+  for (const [zoneId, position] of CORNER_TIRE_POSITIONS) {
+    const value = parseTread32nds(state.zones[zoneId]?.measures.tread);
+    if (value == null) continue;
+    out[position] = { reported_min_32nds: value };
+    any = true;
+  }
+  return any ? out : null;
+}
+
+function buildRotorThickness(
+  state: InspectionState,
+): RotorThicknessMeasurements | null {
+  const out: RotorThicknessMeasurements = {};
+  let any = false;
+  for (const [zoneId, position] of CORNER_TIRE_POSITIONS) {
+    const value = parseMm(state.zones[zoneId]?.measures.rotor);
+    if (value == null || value <= 0) continue;
+    out[position] = {
+      entered_value: value,
+      entered_unit: "mm",
+      // `validateRotorReading` re-derives this and compares for exact equality —
+      // it must come from the shared helper, never a local rounding.
+      normalized_um: rotorValueToMicrometers(value, "mm"),
+    };
+    any = true;
+  }
+  return any ? out : null;
+}
+
 function deriveRotorCondition(state: InspectionState): RotorCondition | null {
   const corners: ZoneId[] = ["FL", "FR", "RL", "RR"];
   let worst: RotorCondition | null = null;
@@ -627,6 +695,9 @@ export function derivePrejobFromInspection(
     triToTireCondition(rr?.tri.wear),
   );
 
+  const tireTread = buildTireTread(state);
+  const rotorThickness = buildRotorThickness(state);
+
   const fluidOverrides = {
     oil_viscosity: eng?.select.oil_viscosity || null,
     oil_type: eng?.select.oil_type || null,
@@ -643,8 +714,9 @@ export function derivePrejobFromInspection(
     tire_size_rear: rl?.text.tire_size?.trim() || null,
     front_tire_condition: frontTire,
     rear_tire_condition: rearTire,
+    tire_tread: tireTread,
     brakes:
-      frontPad != null || rearPad != null || padBrand
+      frontPad != null || rearPad != null || padBrand || rotorThickness
         ? {
             pad_brand: padBrand,
             front_pad_mm: frontPad,
@@ -652,6 +724,7 @@ export function derivePrejobFromInspection(
             // Default to "good" once corners are inspected — server requires a
             // rotor_condition for brake work, and "no findings" means good.
             rotor_condition: deriveRotorCondition(state) ?? "good",
+            rotor_thickness: rotorThickness,
           }
         : null,
     fluids_match_oem: !hasFluidOverride,

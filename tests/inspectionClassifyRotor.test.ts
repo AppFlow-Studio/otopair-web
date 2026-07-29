@@ -125,6 +125,34 @@ describe("buildInspectionZones — hint text", () => {
   });
 });
 
+describe("cast-minimum capture", () => {
+  const castField = (ref: RotorRef | undefined, zoneId: string) => {
+    const zones = buildInspectionZones({ frontRotor: ref, rearRotor: ref });
+    const zone = zones.find((z) => z.id === zoneId)!;
+    return zone.fields.find(
+      (f) => f.type === "measure" && f.key === "rotor_min_cast",
+    );
+  };
+
+  it("asks for the cast minimum when none is on file", () => {
+    expect(castField(undefined, "FL")).toBeDefined();
+    expect(castField(undefined, "RL")).toBeDefined();
+  });
+
+  it("asks when the minimum we hold is only an estimate", () => {
+    expect(castField(ESTIMATED, "FL")).toBeDefined();
+  });
+
+  it("does NOT ask once a real minimum is on file", () => {
+    expect(castField(SOURCED, "FL")).toBeUndefined();
+  });
+
+  it("asks once per axle, not on every corner", () => {
+    expect(castField(undefined, "FR")).toBeUndefined();
+    expect(castField(undefined, "RR")).toBeUndefined();
+  });
+});
+
 describe("deriveSuggestedRecommendations — rotor", () => {
   const recFor = (state: InspectionState, ref: RotorRef | undefined) =>
     deriveSuggestedRecommendations(state, {

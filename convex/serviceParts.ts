@@ -597,6 +597,170 @@ export type PartsNeedingVerification = {
  * Walk-ins (which suppress the catalog cascade) and configless bookings are
  * skipped — the dialog then renders no verify gate.
  */
+/**
+ * Per-axle OEM rotor minimum for a booking's vehicle, shaped for
+ * lib/inspection-template.ts `buildInspectionZones`.
+ *
+ * Returned even when nothing is on file: `{minMm: null, kind: "none"}` is the
+ * signal that classify() must NOT grade the rotor. The mechanic then sees
+ * "No OEM minimum on file — read MIN TH cast on the rotor" instead of a made-up
+ * reference, which is the whole point — the fleet used to be graded against a
+ * hardcoded 23.0 / 8.0 labelled "OEM min".
+ */
+export const rotorSpecsForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const none = {
+      front: { minMm: null, kind: "none" as const, nominalMm: null, sourceDomain: null },
+      rear: { minMm: null, kind: "none" as const, nominalMm: null, sourceDomain: null },
+      configId: null as Id<"vehicle_configs"> | null,
+    };
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return none;
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+      .first();
+    if (!vehicle?.vehicle_config_id) return none;
+    const cfg: any = await ctx.db.get(vehicle.vehicle_config_id);
+    if (!cfg) return none;
+
+    let sourceDomain: string | null = null;
+    if (cfg.rotor_min_source_url) {
+      try {
+        sourceDomain = new URL(cfg.rotor_min_source_url).hostname;
+      } catch {
+        sourceDomain = null;
+      }
+    }
+    const axle = (side: "front" | "rear") => {
+      const minMm = cfg[`rotor_${side}_min_thickness_mm`] ?? null;
+      return {
+        minMm,
+        // A minimum with no recorded quality is still a real one; default to
+        // the sourced label rather than silently treating it as an estimate.
+        kind: minMm == null
+          ? ("none" as const)
+          : ((cfg[`rotor_${side}_min_quality`] ?? "oem_spec") as string),
+        nominalMm: cfg[`rotor_${side}_nominal_thickness_mm`] ?? null,
+        sourceDomain,
+      };
+    };
+    return {
+      front: axle("front"),
+      rear: axle("rear"),
+      configId: vehicle.vehicle_config_id,
+    };
+  },
+});
+
+/**
+ * Record the OEM minimum a mechanic read off the rotor casting.
+ *
+ * This is the highest-trust source we have: the number is cast into the part
+ * itself and a human is looking straight at it. It outranks every scrape and
+ * is stamped into verified_fields so no re-enrich can overwrite it.
+ *
+ * PROPAGATION IS BY OEM PART NUMBER ONLY — never by model, trim or chassis.
+ * Minimums differ across trims (a sports trim's rotor can have a higher
+ * minimum), but a different trim carries a DIFFERENT rotor part number, so
+ * part-number identity is the only key under which two configs provably share
+ * one casting. Configs that already carry a human-supplied value are skipped.
+ */
+export const recordCastRotorMinimum = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    axle: v.union(v.literal("front"), v.literal("rear")),
+    minMm: v.number(),
+  },
+  handler: async (ctx, args) => {
+    if (!Number.isFinite(args.minMm) || args.minMm <= 0) {
+      return { ok: false as const, reason: "invalid_value" };
+    }
+    // Same plausibility floor/ceiling the enrichment sanity rules apply, so a
+    // fat-fingered reading can't become a grading reference.
+    const band = args.axle === "front" ? [8, 40] : [4, 32];
+    if (args.minMm < band[0] || args.minMm > band[1]) {
+      return { ok: false as const, reason: "out_of_range" };
+    }
+
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return { ok: false as const, reason: "booking_not_found" };
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+      .first();
+    if (!vehicle?.vehicle_config_id) {
+      return { ok: false as const, reason: "no_config" };
+    }
+
+    const minCol = `rotor_${args.axle}_min_thickness_mm`;
+    const qualCol = `rotor_${args.axle}_min_quality`;
+    const write = async (configId: Id<"vehicle_configs">) => {
+      const cfg: any = await ctx.db.get(configId);
+      if (!cfg) return false;
+      // Never overwrite a director's confirmed value.
+      if (cfg[qualCol] === "director_verified") return false;
+      const verified = new Set((cfg.verified_fields ?? []) as string[]);
+      verified.add(minCol);
+      verified.add(qualCol);
+      await ctx.db.patch(configId, {
+        [minCol]: args.minMm,
+        [qualCol]: "mechanic_read",
+        verified_fields: [...verified],
+      } as any);
+      return true;
+    };
+
+    await write(vehicle.vehicle_config_id);
+
+    // Fan out to configs sharing the exact same rotor part number.
+    const roleKey = args.axle === "front" ? "front_rotor" : "rear_rotor";
+    let propagated = 0;
+    try {
+      const ownFitments = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_vehicle_config", (q) =>
+          q.eq("vehicle_config_id", vehicle.vehicle_config_id!),
+        )
+        .collect();
+      const ownParts = await Promise.all(
+        ownFitments.map(async (f) => ({
+          f,
+          part: (await ctx.db.get(f.part_id)) as any,
+        })),
+      );
+      const normalized = ownParts.find(
+        (p) => p.part?.subcategory === roleKey,
+      )?.part?.oem_part_number_normalized;
+
+      if (normalized) {
+        const siblings = await ctx.db
+          .query("part_fitments")
+          .withIndex("by_part", (q) =>
+            q.eq(
+              "part_id",
+              ownParts.find((p) => p.part?.subcategory === roleKey)!.f.part_id,
+            ),
+          )
+          .take(200);
+        const seen = new Set<string>([String(vehicle.vehicle_config_id)]);
+        for (const sib of siblings) {
+          const id = String(sib.vehicle_config_id);
+          if (seen.has(id)) continue;
+          seen.add(id);
+          if (await write(sib.vehicle_config_id)) propagated += 1;
+        }
+      }
+    } catch {
+      // Propagation is a bonus; the vehicle in the bay is already correct.
+    }
+
+    return { ok: true as const, propagated };
+  },
+});
+
 export const getPartsNeedingVerification = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args): Promise<PartsNeedingVerification> => {

@@ -303,6 +303,9 @@ function rotorHint(ref: RotorRef): string {
 
 function cornerFields(opts: {
   rotorRef: RotorRef;
+  /** Ask the mechanic to read the minimum cast on the rotor hat. Set on ONE
+   *  corner per axle, and only when we hold no trustworthy minimum. */
+  askCastMin?: boolean;
   firstVisitTexts?: InspectionField[];
 }): InspectionField[] {
   return [
@@ -364,6 +367,21 @@ function cornerFields(opts: {
       default: [],
       section: "Brakes",
     },
+    // The rotor is exposed and the mechanic is standing at it — this is the
+    // most authoritative source we have access to, and it costs nothing.
+    ...(opts.askCastMin
+      ? [
+          {
+            type: "measure" as const,
+            key: "rotor_min_cast",
+            label: "OEM min stamped on rotor",
+            default: "",
+            unit: "mm",
+            hint: 'Cast on the rotor hat as "MIN TH" / "MIN. THICKNESS". Leave blank if not legible. Saves this axle\'s spec for every future inspection of this vehicle.',
+            section: "Brakes",
+          },
+        ]
+      : []),
     ...(opts.firstVisitTexts ?? []),
   ];
 }
@@ -389,6 +407,11 @@ export function buildInspectionZones(
 ): InspectionZone[] {
   const frontRotor = opts?.frontRotor ?? NO_ROTOR_REF;
   const rearRotor = opts?.rearRotor ?? NO_ROTOR_REF;
+  // Ask for the cast minimum only when we don't already hold a trustworthy one.
+  // Once per axle (the left corner), so the mechanic isn't asked four times.
+  const askFront =
+    frontRotor.minMm == null || isEstimatedRotorRef(frontRotor.kind);
+  const askRear = rearRotor.minMm == null || isEstimatedRotorRef(rearRotor.kind);
   return [
   {
     id: "FL",
@@ -397,6 +420,7 @@ export function buildInspectionZones(
     corner: true,
     fields: cornerFields({
       rotorRef: frontRotor,
+      askCastMin: askFront,
       firstVisitTexts: [
         { type: "text", key: "tire_brand", label: "Tire brand", firstVisitOnly: true, section: "Tire" },
         { type: "text", key: "tire_model", label: "Tire model", firstVisitOnly: true, section: "Tire" },
@@ -419,6 +443,7 @@ export function buildInspectionZones(
     corner: true,
     fields: cornerFields({
       rotorRef: rearRotor,
+      askCastMin: askRear,
       firstVisitTexts: [
         { type: "text", key: "tire_size", label: "Tire size (rear axle)", firstVisitOnly: true, section: "Tire" },
       ],

@@ -8,6 +8,8 @@ import { api } from "@/convex/_generated/api";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { cn } from "@/lib/utils";
 import {
+  buildInspectionZones,
+  buildZonesById,
   classify,
   createInspectionState,
   defaultZoneState,
@@ -16,12 +18,17 @@ import {
   gatherFindings,
   getDirtyIncompleteZones,
   zoneHasInput,
-  INSPECTION_ZONES,
+  NO_ROTOR_REF,
+  // Structure-only reads (zone labels, the ENG fluid option lists) — these are
+  // identical across builds, so the static template is the right source there.
   INSPECTION_ZONES_BY_ID,
   requiredZonesForBooking,
   TRI_LABELS,
   type InspectionField,
   type InspectionState,
+  type InspectionZone,
+  type RotorRef,
+  type RotorRefKind,
   type TriValue,
   type ZoneId,
   type ZoneState,
@@ -203,6 +210,36 @@ function MultiPointInspectionDialogBody({
     api.serviceParts.getPartsNeedingVerification,
     bookingId ? { bookingId: bookingId as any } : "skip",
   );
+  // Per-axle OEM rotor minimum for THIS vehicle. Absent ⇒ rotor readings are
+  // recorded but not graded; the field hint says so instead of quoting a
+  // hardcoded number as the manufacturer's spec.
+  const rotorSpecs = useQuery(
+    api.serviceParts.rotorSpecsForBooking,
+    bookingId ? { bookingId: bookingId as any } : "skip",
+  );
+  const toRotorRef = (
+    a: { minMm: number | null; kind: string; nominalMm: number | null; sourceDomain: string | null } | undefined,
+  ): RotorRef =>
+    a
+      ? {
+          minMm: a.minMm,
+          kind: a.kind as RotorRefKind,
+          nominalMm: a.nominalMm,
+          sourceDomain: a.sourceDomain,
+        }
+      : NO_ROTOR_REF;
+  const zones = useMemo(
+    () =>
+      buildInspectionZones({
+        frontRotor: toRotorRef(rotorSpecs?.front),
+        rearRotor: toRotorRef(rotorSpecs?.rear),
+      }),
+    [rotorSpecs],
+  );
+  const zonesById = useMemo(() => buildZonesById(zones), [zones]);
+  const recordCastRotorMinimum = useMutation(
+    api.serviceParts.recordCastRotorMinimum,
+  );
   const verifyPart = useMutation(api.fitments.verifyPartForBooking);
   const markServiceNotApplicable = useMutation(
     api.fitments.markServiceNotApplicable,
@@ -266,7 +303,7 @@ function MultiPointInspectionDialogBody({
     if (savedInspection && Array.isArray(savedInspection.zones)) {
       for (const z of savedInspection.zones) {
         const id = z.zone_id as ZoneId;
-        if (!INSPECTION_ZONES_BY_ID[id] || id === "OWNER") continue;
+        if (!zonesById[id] || id === "OWNER") continue;
         next.zones[id] = {
           done: !!z.done,
           measures: { ...(z.measures ?? {}) },
@@ -312,14 +349,14 @@ function MultiPointInspectionDialogBody({
   // ---- helpers -----------------------------------------------------------
   const zoneState = useCallback(
     (id: ZoneId): ZoneState =>
-      state.zones[id] ?? defaultZoneState(INSPECTION_ZONES_BY_ID[id]),
+      state.zones[id] ?? defaultZoneState(zonesById[id]),
     [state],
   );
 
   const patchZone = useCallback((id: ZoneId, patch: Partial<ZoneState>) => {
     setState((prev) => {
       const current =
-        prev.zones[id] ?? defaultZoneState(INSPECTION_ZONES_BY_ID[id]);
+        prev.zones[id] ?? defaultZoneState(zonesById[id]);
       return {
         ...prev,
         zones: { ...prev.zones, [id]: { ...current, ...patch } },
@@ -350,14 +387,14 @@ function MultiPointInspectionDialogBody({
   // surfaces the moment its zone is marked complete (not after the whole
   // inspection) and never counts un-confirmed scratch input.
   const findings = useMemo(
-    () => gatherFindings(state, { onlyCompletedZones: true }),
-    [state],
+    () => gatherFindings(state, { onlyCompletedZones: true, zones }),
+    [state, zones],
   );
 
   // Suggested follow-up recommendations derived from threshold measurements,
   // each resolved to a real catalog service when possible.
   const suggestedRecs = useMemo<ResolvedSuggestion[]>(() => {
-    const list = deriveSuggestedRecommendations(state, { onlyCompletedZones: true });
+    const list = deriveSuggestedRecommendations(state, { onlyCompletedZones: true, zones });
     return list.map((s) => {
       // `match` holds exact catalog slugs — resolve straight to the service.
       const found = (services ?? []).find((svc: any) =>
@@ -378,7 +415,7 @@ function MultiPointInspectionDialogBody({
     prejob: PreJobSurveyPayload;
     inspection: InspectionInputPayload;
   } => {
-    const f = gatherFindings(state, { onlyCompletedZones: true });
+    const f = gatherFindings(state, { onlyCompletedZones: true, zones });
     const prejob = derivePrejobFromInspection(state, {
       mileage: mileage.trim() ? Number(mileage) : null,
       inspectionStatus: inspectionStatus
@@ -422,6 +459,26 @@ function MultiPointInspectionDialogBody({
     nextTip,
   ]);
 
+  // Save any OEM minimum the mechanic read off the rotor casting. Highest-trust
+  // source we have — the number is cast into the part and a human is looking at
+  // it — so it outranks every scrape and sticks via verified_fields.
+  const persistCastRotorMinimums = useCallback(async () => {
+    if (!bookingId) return;
+    for (const [zoneId, axle] of [
+      ["FL", "front"],
+      ["RL", "rear"],
+    ] as const) {
+      const raw = state.zones[zoneId]?.measures.rotor_min_cast;
+      const mm = raw && raw.trim() ? Number(raw) : NaN;
+      if (!Number.isFinite(mm) || mm <= 0) continue;
+      try {
+        await recordCastRotorMinimum({ bookingId: bookingId as any, axle, minMm: mm });
+      } catch {
+        // Never block a job start on this — it's an enrichment bonus.
+      }
+    }
+  }, [bookingId, state, recordCastRotorMinimum]);
+
   const persistOwnerAnswers = useCallback(async () => {
     if (!bookingId) return;
     const answers: Record<string, OwnerProfileAnswerValue> = {};
@@ -443,7 +500,7 @@ function MultiPointInspectionDialogBody({
     // "Mark zone complete", those values don't count — block and point them to it.
     const dirty = getDirtyIncompleteZones(state);
     if (dirty.length) {
-      const labels = dirty.map((id) => INSPECTION_ZONES_BY_ID[id].label).join(", ");
+      const labels = dirty.map((id) => zonesById[id].label).join(", ");
       setError(
         `Tap "Mark zone complete" in: ${labels}. Readings there won't be recorded until the zone is marked complete.`,
       );
@@ -465,6 +522,7 @@ function MultiPointInspectionDialogBody({
       return;
     }
     await persistOwnerAnswers();
+    await persistCastRotorMinimums();
     const { prejob, inspection } = buildPayloads();
     try {
       await onSubmit(prejob, inspection, action);
@@ -809,6 +867,7 @@ function MultiPointInspectionDialogBody({
             ) : (
               <ZonePanel
                 zoneId={activeZone}
+                zone={zonesById[activeZone]}
                 zs={zoneState(activeZone)}
                 isFirstVisit={isFirstVisit}
                 isRequired={requiredSet.has(activeZone)}
@@ -957,6 +1016,7 @@ function CarDiagram({
 
 function ZonePanel({
   zoneId,
+  zone,
   zs,
   isFirstVisit,
   isRequired,
@@ -967,6 +1027,8 @@ function ZonePanel({
   onToggleDone,
 }: {
   zoneId: ZoneId;
+  /** Vehicle-specific zone: carries this car's rotor minimum in field.ref. */
+  zone: InspectionZone;
   zs: ZoneState;
   isFirstVisit: boolean;
   isRequired: boolean;
@@ -976,7 +1038,6 @@ function ZonePanel({
   onPhoto: (file: File) => void;
   onToggleDone: () => void;
 }) {
-  const zone = INSPECTION_ZONES_BY_ID[zoneId];
   return (
     <div className="space-y-1">
       <div className="mb-2 flex items-center justify-between">

@@ -25,7 +25,12 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
-import { formatZonesForPdf } from "../lib/inspection-template";
+import {
+  buildInspectionZones,
+  formatZonesForPdf,
+  type RotorRef,
+} from "../lib/inspection-template";
+import type { Id } from "./_generated/dataModel";
 import { OWNER_PROFILE_QUESTIONS } from "../lib/owner-profile-questions";
 import { jobRecommendationInputValidator } from "./lib/vehicle_passports";
 import { submitRecommendationsForBooking } from "./jobRecommendations";
@@ -303,6 +308,38 @@ export const _isCallerAuthorizedShopUser = internalQuery({
   },
 });
 
+/**
+ * Per-axle rotor minimums for a config, shaped for buildInspectionZones.
+ * Returns empty refs when the config is missing or carries no minimum — which
+ * makes classify() report the rotor ungraded instead of passing it.
+ */
+async function rotorRefsForConfig(
+  ctx: any,
+  configId: Id<"vehicle_configs"> | null | undefined,
+): Promise<{ frontRotor?: RotorRef; rearRotor?: RotorRef }> {
+  if (!configId) return {};
+  const cfg: any = await ctx.db.get(configId);
+  if (!cfg) return {};
+  let sourceDomain: string | null = null;
+  if (cfg.rotor_min_source_url) {
+    try {
+      sourceDomain = new URL(cfg.rotor_min_source_url).hostname;
+    } catch {
+      sourceDomain = null;
+    }
+  }
+  const axle = (side: "front" | "rear"): RotorRef => {
+    const minMm = cfg[`rotor_${side}_min_thickness_mm`] ?? null;
+    return {
+      minMm,
+      kind: minMm == null ? "none" : (cfg[`rotor_${side}_min_quality`] ?? "oem_spec"),
+      nominalMm: cfg[`rotor_${side}_nominal_thickness_mm`] ?? null,
+      sourceDomain,
+    };
+  };
+  return { frontRotor: axle("front"), rearRotor: axle("rear") };
+}
+
 export const _assembleInspectionData = internalQuery({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -371,7 +408,13 @@ export const _assembleInspectionData = internalQuery({
       shopName: shop?.name ?? null,
       mechanicName,
       generatedAtMs: Date.now(),
-      zones: formatZonesForPdf(inspection.zones ?? []),
+      // Build zones with THIS vehicle's rotor minimums so the customer-facing
+      // PDF grades against the same reference the mechanic saw in the bay. With
+      // no minimum on file the rows read "not graded" rather than a false pass.
+      zones: formatZonesForPdf(
+        inspection.zones ?? [],
+        buildInspectionZones(await rotorRefsForConfig(ctx, vehicle?.vehicle_config_id)),
+      ),
       ownerRows,
       findingsAttention: inspection.findings_attention ?? [],
       findingsMonitor: inspection.findings_monitor ?? [],

@@ -33,6 +33,10 @@ export interface CompletionGateInput {
    *  the Crosstrek shipped rear-only brake data at quotability 0.82).
    *  Gated by ENRICHMENT_AXLE_GATE. */
   axlePairGaps?: readonly string[];
+  /** "front" / "rear" for each disc axle carrying a rotor fitment but no OEM
+   *  minimum thickness on file. Surfaced by ENRICHMENT_ROTOR_MIN_GATE
+   *  (off | log) — reported only, NEVER enforced. See explainGateDecision. */
+  rotorMinGaps?: readonly string[];
 }
 
 export type EnrichmentTerminalStatus = "complete" | "partial";
@@ -113,6 +117,19 @@ export function explainGateDecision(input: CompletionGateInput): string {
     const outcome = n === 0 ? "PASS" : stage === "enforce" ? "FAIL" : "LOG-ONLY";
     legs.push(
       `${label}=${n}${n > 0 ? ` [${(entries ?? []).slice(0, 6).join(", ")}${n > 6 ? ", …" : ""}]` : ""} (stage ${stage}) ${outcome}`,
+    );
+  }
+  // Rotor minimums are REPORTED but never gate completion, so this leg has no
+  // enforce stage and computeEnrichmentStatus does not consult it. bookings.ts
+  // books parts services only on status exactly "complete", so enforcing a
+  // brand-new field would silently un-book working configs — and the failure is
+  // benign either way: a missing rotor PART NUMBER makes a quote impossible,
+  // while a missing MINIMUM only makes the inspection honestly ungraded, which
+  // the mechanic can resolve in the bay by reading the number off the casting.
+  if (envStage("ENRICHMENT_ROTOR_MIN_GATE") !== "off") {
+    const n = input.rotorMinGaps?.length ?? 0;
+    legs.push(
+      `rotor_min_gaps=${n}${n > 0 ? ` [${(input.rotorMinGaps ?? []).join(", ")}]` : ""} LOG-ONLY`,
     );
   }
   return legs.join(", ");

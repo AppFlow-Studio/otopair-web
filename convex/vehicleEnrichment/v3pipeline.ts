@@ -38,6 +38,13 @@ import { BLOCKED_DOMAINS, isMarketplaceUrl } from "./sourceRegistry";
 import { applyApplicabilityRules, applyVerifiedEngineFields, applyKnownEngineFacts, applyFinalizeApplicability, applyEpsSuppression, IDENTITY_DEPENDENT_FIELDS } from "./applicabilityRules";
 import { deriveIdentityFromTrim, mergeIdentity } from "./identityResolution";
 import { computeEnrichmentStatus, explainGateDecision } from "./completionGate";
+import {
+  resolveRotorMinimums,
+  rotorErrorTag,
+  rotorGapReason,
+  rotorMinGaps,
+  type RotorAxleResolution,
+} from "./utils/rotorSpecResource";
 import { scrapeVehicleSources } from "./scraper";
 import { normalizeOemNumber } from "./priceParser";
 import { reextractPartPrice, isAffirmativeRejection, priceAllSources } from "./priceReextract";
@@ -4862,6 +4869,52 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // rejected multiple parts at once on its first vehicle. We can't predict
     // what car arrives next, so the run self-reports instead of waiting for a
     // human to read gap lists.
+    // Rotor minimums — REPORTED, never gated. classify() refuses to grade a
+    // rotor with no minimum on file, so an unresolved axle is an honest gap
+    // (the mechanic reads the number off the casting) rather than a silent
+    // pass. A drum axle is not a gap. Batch 1 already saw the parts markdown,
+    // so this pass only classifies what landed; the deterministic re-parse of
+    // cached pages lives in the backfill action.
+    let rotorResolutions: RotorAxleResolution[] = [];
+    try {
+      const cfgForRotor: any = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getVehicleConfigById,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+      rotorResolutions = resolveRotorMinimums({
+        existing: {
+          front: {
+            minMm: cfgForRotor?.rotor_front_min_thickness_mm ?? null,
+            nominalMm: cfgForRotor?.rotor_front_nominal_thickness_mm ?? null,
+            quality: cfgForRotor?.rotor_front_min_quality ?? null,
+            observedLabel: cfgForRotor?.rotor_min_observed_label ?? null,
+            sourceUrl: cfgForRotor?.rotor_min_source_url ?? null,
+          },
+          rear: {
+            minMm: cfgForRotor?.rotor_rear_min_thickness_mm ?? null,
+            nominalMm: cfgForRotor?.rotor_rear_nominal_thickness_mm ?? null,
+            quality: cfgForRotor?.rotor_rear_min_quality ?? null,
+            observedLabel: cfgForRotor?.rotor_min_observed_label ?? null,
+            sourceUrl: cfgForRotor?.rotor_min_source_url ?? null,
+          },
+        },
+        naRoleKeys: (cfgForRotor?.na_role_keys ?? []) as string[],
+      });
+    } catch (e) {
+      console.warn("[v8/rotor-min] resolution read failed (non-fatal):", e);
+    }
+    const rotorGapEntries = rotorResolutions.flatMap((r) => {
+      const reason = rotorGapReason(r.outcome);
+      return reason
+        ? [{ field: `rotor_${r.axle}_min_thickness_mm`, reason }]
+        : [];
+    });
+    const rotorErrors = rotorResolutions.flatMap((r) => {
+      const tag = rotorErrorTag(r);
+      return tag ? [tag] : [];
+    });
+    const rotorGapAxles = rotorMinGaps(rotorResolutions);
+
     const finalGaps = [
       ...classifyFieldGaps(allFields, sanityFlags, finalIdentity),
       ...priceGaps,
@@ -4869,6 +4922,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       // lifetime attempt cap; resource_not_applicable documents drum-brake-
       // class findings alongside the durable na_role_keys write.
       ...roleResourceGaps,
+      ...rotorGapEntries,
     ];
     const partRejectCount = finalGaps.filter((g) =>
       g.reason.startsWith("validation_dropped:oem_part_rejected"),
@@ -4931,6 +4985,9 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         // be the wrong family/generation for this unit — FLAGGED for review,
         // value left unchanged (the verifier isn't trusted to overwrite).
         ...transFluidErrors,
+        // Rotor minimums we could not source. Bucketed under one `rotor_min`
+        // prefix so a fleet-wide coverage gap reads as one flag, not noise.
+        ...rotorErrors,
         ...sanityFlags.map((f) => `sanity:${f.field}:${f.reason}`),
         ...oemFlags.map((f) => `oem:${f.field}:${f.reason}`),
       ],
@@ -5044,6 +5101,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           // log) — see completionGate.ts for the enforce rollout contract.
           missingCoreRoles: missingCoreRoleStrings,
           axlePairGaps: axlePairGapStrings,
+          rotorMinGaps: rotorGapAxles,
         };
         const status = computeEnrichmentStatus(gate);
         console.log(`[v8] Completion gate → ${status}: ${explainGateDecision(gate)}`);

@@ -432,6 +432,7 @@ import type * as vehicleEnrichment_utils_engineLookup from "../vehicleEnrichment
 import type * as vehicleEnrichment_utils_partFitmentVerifier from "../vehicleEnrichment/utils/partFitmentVerifier.js";
 import type * as vehicleEnrichment_utils_roleBackfill from "../vehicleEnrichment/utils/roleBackfill.js";
 import type * as vehicleEnrichment_utils_roleResource from "../vehicleEnrichment/utils/roleResource.js";
+import type * as vehicleEnrichment_utils_rotorSpecResource from "../vehicleEnrichment/utils/rotorSpecResource.js";
 import type * as vehicleEnrichment_utils_transFluidVerifier from "../vehicleEnrichment/utils/transFluidVerifier.js";
 import type * as vehicleEnrichment_utils_wheelSizeScraper from "../vehicleEnrichment/utils/wheelSizeScraper.js";
 import type * as vehicleEnrichment_v3TestSuite from "../vehicleEnrichment/v3TestSuite.js";
@@ -886,6 +887,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/utils/partFitmentVerifier": typeof vehicleEnrichment_utils_partFitmentVerifier;
   "vehicleEnrichment/utils/roleBackfill": typeof vehicleEnrichment_utils_roleBackfill;
   "vehicleEnrichment/utils/roleResource": typeof vehicleEnrichment_utils_roleResource;
+  "vehicleEnrichment/utils/rotorSpecResource": typeof vehicleEnrichment_utils_rotorSpecResource;
   "vehicleEnrichment/utils/transFluidVerifier": typeof vehicleEnrichment_utils_transFluidVerifier;
   "vehicleEnrichment/utils/wheelSizeScraper": typeof vehicleEnrichment_utils_wheelSizeScraper;
   "vehicleEnrichment/v3TestSuite": typeof vehicleEnrichment_v3TestSuite;

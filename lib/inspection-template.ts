@@ -34,9 +34,59 @@ export const INSPECTION_TEMPLATE_VERSION = "mpi-v1";
 
 export type ClassifyType = "tread" | "pad" | "rotor" | "batt";
 
-export type GradeLevel = "ok" | "warn" | "bad" | "none";
+/**
+ * "unknown" — we hold no OEM minimum for this rotor, so the reading is NOT
+ * graded. Distinct from "none" (the field isn't gradeable at all): an ungraded
+ * rotor still has to be reported honestly to the mechanic and the PDF.
+ */
+export type GradeLevel = "ok" | "warn" | "bad" | "none" | "unknown";
 
 export type ClassifyResult = { lvl: GradeLevel; txt: string };
+
+/**
+ * Provenance of an OEM rotor minimum.
+ *
+ * "derived_from_nominal" / "default_fallback" are ESTIMATES. classify() caps
+ * them at "warn" so an unverified reference can never read as a clean pass, and
+ * deriveSuggestedRecommendations never auto-sells a rotor job off one. Getting
+ * this wrong is expensive in both directions: a ref that is too high condemns
+ * healthy rotors, one that is too low passes worn ones.
+ */
+export type RotorRefKind =
+  | "oem_spec"
+  | "mechanic_read"
+  | "director_verified"
+  | "derived_from_nominal"
+  | "default_fallback"
+  | "none";
+
+export type RotorRef = {
+  /** Discard / replace-at minimum in mm. Null ⇒ nothing on file; do not grade. */
+  minMm: number | null;
+  kind: RotorRefKind;
+  /**
+   * New (nominal) thickness in mm — display and audit only, NEVER graded
+   * against. OEM storefronts publish diameter x nominal ("330x22mm"); treating
+   * that nominal as a minimum is the failure this whole type exists to prevent.
+   */
+  nominalMm?: number | null;
+  /** Domain the minimum was read from, surfaced in the field hint. */
+  sourceDomain?: string | null;
+};
+
+export const NO_ROTOR_REF: RotorRef = { minMm: null, kind: "none" };
+
+export function isEstimatedRotorRef(kind: RotorRefKind): boolean {
+  return kind === "derived_from_nominal" || kind === "default_fallback";
+}
+
+function toRotorRef(ref: number | RotorRef | null | undefined): RotorRef {
+  if (ref == null) return NO_ROTOR_REF;
+  // A bare number carries no provenance, so it is treated as an estimate —
+  // never as a sourced OEM spec.
+  if (typeof ref === "number") return { minMm: ref, kind: "default_fallback" };
+  return ref;
+}
 
 export type SelectOption = { value: string; label: string };
 
@@ -49,8 +99,11 @@ export type InspectionField =
       unit: string;
       required?: boolean;
       classify?: ClassifyType;
-      /** Reference value for classification (e.g. OEM rotor minimum, rated CCA). */
-      ref?: number | null;
+      /**
+       * Reference for classification: rated CCA for `batt`, or a RotorRef
+       * descriptor for `rotor` (carries provenance so estimates grade honestly).
+       */
+      ref?: number | RotorRef | null;
       hint?: string;
       /** Sub-group header rendered above the first field of each section. */
       section?: string;
@@ -126,7 +179,7 @@ export const TRI_LABELS: Record<TriValue, string> = {
 export function classify(
   cls: ClassifyType | undefined,
   val: string | number | null | undefined,
-  ref?: number | null,
+  ref?: number | RotorRef | null,
 ): ClassifyResult {
   if (!cls) return { lvl: "none", txt: "" };
   const v = typeof val === "number" ? val : parseFloat(String(val ?? ""));
@@ -143,8 +196,18 @@ export function classify(
     return { lvl: "bad", txt: "Replace soon" };
   }
   if (cls === "rotor") {
-    const r = typeof ref === "number" ? ref : 0;
-    const d = v - r;
+    const rr = toRotorRef(ref);
+    // No OEM minimum on file — refuse to grade. The previous `ref ?? 0`
+    // fallback silently graded every such rotor as "In spec".
+    if (rr.minMm == null) return { lvl: "unknown", txt: "No OEM min" };
+    const d = v - rr.minMm;
+    if (isEstimatedRotorRef(rr.kind)) {
+      // An unverified reference may never produce a clean pass — the worst
+      // case is condemning a healthy rotor, so cap the good news at "warn".
+      if (d >= 1) return { lvl: "warn", txt: "In spec (est. min)" };
+      if (d >= 0) return { lvl: "warn", txt: "Near min (est.)" };
+      return { lvl: "bad", txt: "Below min (est.)" };
+    }
     if (d >= 1) return { lvl: "ok", txt: "In spec" };
     if (d >= 0) return { lvl: "warn", txt: "Near min" };
     return { lvl: "bad", txt: "Below min" };
@@ -220,8 +283,26 @@ const TRANSMISSION_FLUID_OPTIONS: SelectOption[] = [
 // the mechanic the same brand four times.
 // ---------------------------------------------------------------------------
 
+/**
+ * What the mechanic reads under the rotor field. The old copy rendered
+ * `OEM min 23.0` for every vehicle in the fleet off a hardcoded constant —
+ * presenting an invented number as the manufacturer's spec.
+ */
+function rotorHint(ref: RotorRef): string {
+  if (ref.minMm == null) {
+    return ref.nominalMm != null
+      ? `No OEM minimum on file. New thickness ${ref.nominalMm.toFixed(1)} mm is NOT the minimum — read MIN TH cast on the rotor.`
+      : "No OEM minimum on file — read MIN TH cast on the rotor.";
+  }
+  if (isEstimatedRotorRef(ref.kind)) {
+    return `Est. min ${ref.minMm.toFixed(1)} mm — UNVERIFIED. Confirm against the rotor before recommending replacement.`;
+  }
+  const base = `OEM min ${ref.minMm.toFixed(1)} mm`;
+  return ref.sourceDomain ? `${base} · ${ref.sourceDomain}` : base;
+}
+
 function cornerFields(opts: {
-  rotorRef: number;
+  rotorRef: RotorRef;
   firstVisitTexts?: InspectionField[];
 }): InspectionField[] {
   return [
@@ -272,7 +353,7 @@ function cornerFields(opts: {
       unit: "mm",
       classify: "rotor",
       ref: opts.rotorRef,
-      hint: `OEM min ${opts.rotorRef.toFixed(1)}`,
+      hint: rotorHint(opts.rotorRef),
       section: "Brakes",
     },
     {
@@ -287,21 +368,35 @@ function cornerFields(opts: {
   ];
 }
 
-/**
- * Default rotor OEM-minimums used when the vehicle config has no real spec.
- * The dialog overrides `ref` per-corner when a true minimum is available.
- */
-export const DEFAULT_FRONT_ROTOR_MIN = 23.0;
-export const DEFAULT_REAR_ROTOR_MIN = 8.0;
+export type BuildZonesOptions = {
+  /** OEM minimum for the front axle. Omitted ⇒ rotors are reported ungraded. */
+  frontRotor?: RotorRef;
+  /** OEM minimum for the rear axle. Omitted ⇒ rotors are reported ungraded. */
+  rearRotor?: RotorRef;
+};
 
-export const INSPECTION_ZONES: InspectionZone[] = [
+/**
+ * Build the zone template for a specific vehicle.
+ *
+ * Rotor minimums differ by trim and brake package (a sports trim's minimum can
+ * be higher than the base trim's), so they are injected per build rather than
+ * baked in. Callers that GRADE a rotor — the dialog, findings, recommendations,
+ * the PDF — must pass the vehicle's resolved refs. Anything that only reads the
+ * template's structure can use the INSPECTION_ZONES default below.
+ */
+export function buildInspectionZones(
+  opts?: BuildZonesOptions,
+): InspectionZone[] {
+  const frontRotor = opts?.frontRotor ?? NO_ROTOR_REF;
+  const rearRotor = opts?.rearRotor ?? NO_ROTOR_REF;
+  return [
   {
     id: "FL",
     label: "Front-left corner",
     short: "FL",
     corner: true,
     fields: cornerFields({
-      rotorRef: DEFAULT_FRONT_ROTOR_MIN,
+      rotorRef: frontRotor,
       firstVisitTexts: [
         { type: "text", key: "tire_brand", label: "Tire brand", firstVisitOnly: true, section: "Tire" },
         { type: "text", key: "tire_model", label: "Tire model", firstVisitOnly: true, section: "Tire" },
@@ -315,7 +410,7 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     label: "Front-right corner",
     short: "FR",
     corner: true,
-    fields: cornerFields({ rotorRef: DEFAULT_FRONT_ROTOR_MIN }),
+    fields: cornerFields({ rotorRef: frontRotor }),
   },
   {
     id: "RL",
@@ -323,7 +418,7 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     short: "RL",
     corner: true,
     fields: cornerFields({
-      rotorRef: DEFAULT_REAR_ROTOR_MIN,
+      rotorRef: rearRotor,
       firstVisitTexts: [
         { type: "text", key: "tire_size", label: "Tire size (rear axle)", firstVisitOnly: true, section: "Tire" },
       ],
@@ -334,7 +429,7 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     label: "Rear-right corner",
     short: "RR",
     corner: true,
-    fields: cornerFields({ rotorRef: DEFAULT_REAR_ROTOR_MIN }),
+    fields: cornerFields({ rotorRef: rearRotor }),
   },
   {
     id: "ENG",
@@ -398,13 +493,27 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     dynamic: true,
     fields: [],
   },
-];
+  ];
+}
 
-export const INSPECTION_ZONES_BY_ID: Record<ZoneId, InspectionZone> =
-  INSPECTION_ZONES.reduce((acc, zone) => {
+export function buildZonesById(
+  zones: InspectionZone[],
+): Record<ZoneId, InspectionZone> {
+  return zones.reduce((acc, zone) => {
     acc[zone.id] = zone;
     return acc;
   }, {} as Record<ZoneId, InspectionZone>);
+}
+
+/**
+ * Structure-only default: identical field layout, but NO rotor minimum, so a
+ * rotor reading graded against it comes back "unknown" rather than silently
+ * passing. Safe for state creation, required-zone lists and dirty detection.
+ */
+export const INSPECTION_ZONES: InspectionZone[] = buildInspectionZones();
+
+export const INSPECTION_ZONES_BY_ID: Record<ZoneId, InspectionZone> =
+  buildZonesById(INSPECTION_ZONES);
 
 // ---------------------------------------------------------------------------
 // Inspection runtime state
@@ -498,13 +607,13 @@ export type Findings = { attention: Finding[]; monitor: Finding[] };
 
 export function gatherFindings(
   state: InspectionState,
-  opts?: { onlyCompletedZones?: boolean },
+  opts?: { onlyCompletedZones?: boolean; zones?: InspectionZone[] },
 ): Findings {
   const attention: Finding[] = [];
   const monitor: Finding[] = [];
   const onlyDone = !!opts?.onlyCompletedZones;
 
-  for (const zone of INSPECTION_ZONES) {
+  for (const zone of opts?.zones ?? INSPECTION_ZONES) {
     if (zone.dynamic) continue;
     const zs = state.zones[zone.id];
     if (!zs) continue;
@@ -627,7 +736,10 @@ function buildRotorThickness(
   return any ? out : null;
 }
 
-function deriveRotorCondition(state: InspectionState): RotorCondition | null {
+function deriveRotorCondition(
+  state: InspectionState,
+  zonesById: Record<ZoneId, InspectionZone> = INSPECTION_ZONES_BY_ID,
+): RotorCondition | null {
   const corners: ZoneId[] = ["FL", "FR", "RL", "RR"];
   let worst: RotorCondition | null = null;
   const rank: Record<RotorCondition, number> = {
@@ -641,8 +753,8 @@ function deriveRotorCondition(state: InspectionState): RotorCondition | null {
   for (const id of corners) {
     const zs = state.zones[id];
     if (!zs) continue;
-    const zone = INSPECTION_ZONES_BY_ID[id];
-    const rotorField = zone.fields.find(
+    const zone = zonesById[id];
+    const rotorField = zone?.fields.find(
       (f) => f.type === "measure" && f.classify === "rotor",
     );
     if (rotorField && rotorField.type === "measure") {
@@ -663,6 +775,8 @@ export type DerivePrejobOptions = {
   modifications?: PreJobSurveyPayload["modifications"];
   flaggedVehicleSpecs?: boolean;
   nextMechanicTip?: string | null;
+  /** Vehicle-specific zones, so rotor_condition grades against the real minimum. */
+  zones?: InspectionZone[];
 };
 
 export function derivePrejobFromInspection(
@@ -723,7 +837,11 @@ export function derivePrejobFromInspection(
             rear_pad_mm: rearPad,
             // Default to "good" once corners are inspected — server requires a
             // rotor_condition for brake work, and "no findings" means good.
-            rotor_condition: deriveRotorCondition(state) ?? "good",
+            rotor_condition:
+              deriveRotorCondition(
+                state,
+                opts.zones ? buildZonesById(opts.zones) : undefined,
+              ) ?? "good",
             rotor_thickness: rotorThickness,
           }
         : null,
@@ -754,6 +872,12 @@ export type SuggestedRecommendation = {
   label: string;
   urgency: SuggestedRecUrgency;
   reason: string;
+  /**
+   * Set when the suggestion rests on an ESTIMATED rotor minimum. The mechanic
+   * must confirm against the number cast on the rotor before this is offered to
+   * the customer — we do not sell a brake job off a derived reference.
+   */
+  requires_confirmation?: boolean;
 };
 
 // Canonical live service slugs (from the services catalog) so suggestions map
@@ -774,17 +898,33 @@ function measuresAcrossCorners(
   state: InspectionState,
   key: string,
   onlyDone = false,
-): { values: number[]; worst: GradeLevel; min: number | null; ref?: number | null } {
+  zonesById: Record<ZoneId, InspectionZone> = INSPECTION_ZONES_BY_ID,
+): {
+  values: number[];
+  worst: GradeLevel;
+  min: number | null;
+  /** Provenance of the reference graded against, when there is one. */
+  refKind: RotorRefKind | null;
+} {
   const corners: ZoneId[] = ["FL", "FR", "RL", "RR"];
-  const rank: Record<GradeLevel, number> = { none: 0, ok: 1, warn: 2, bad: 3 };
+  // "unknown" ranks with "none": an ungraded rotor must never escalate the
+  // worst level, so it cannot reach a recommendation.
+  const rank: Record<GradeLevel, number> = {
+    none: 0,
+    unknown: 0,
+    ok: 1,
+    warn: 2,
+    bad: 3,
+  };
   let worst: GradeLevel = "none";
   let min: number | null = null;
+  let refKind: RotorRefKind | null = null;
   const values: number[] = [];
   for (const id of corners) {
     const zs = state.zones[id];
     if (!zs) continue;
     if (onlyDone && !zs.done) continue;
-    const field = INSPECTION_ZONES_BY_ID[id].fields.find(
+    const field = zonesById[id]?.fields.find(
       (f) => f.type === "measure" && f.key === key,
     );
     if (!field || field.type !== "measure") continue;
@@ -795,23 +935,31 @@ function measuresAcrossCorners(
     min = min == null ? n : Math.min(min, n);
     const res = classify(field.classify, raw, field.ref);
     if (rank[res.lvl] > rank[worst]) worst = res.lvl;
+    if (field.classify === "rotor") {
+      const kind = toRotorRef(field.ref).kind;
+      // Least-trusted provenance across the axles wins the guard.
+      if (refKind == null || isEstimatedRotorRef(kind)) refKind = kind;
+    }
   }
-  return { values, worst, min };
+  return { values, worst, min, refKind };
 }
 
 export function deriveSuggestedRecommendations(
   state: InspectionState,
-  opts?: { onlyCompletedZones?: boolean },
+  opts?: { onlyCompletedZones?: boolean; zones?: InspectionZone[] },
 ): SuggestedRecommendation[] {
   const out: SuggestedRecommendation[] = [];
   const onlyDone = !!opts?.onlyCompletedZones;
+  const zonesById = opts?.zones
+    ? buildZonesById(opts.zones)
+    : INSPECTION_ZONES_BY_ID;
   const gradeUrgency = (lvl: GradeLevel): SuggestedRecUrgency | null =>
     lvl === "bad" ? "soon" : lvl === "warn" ? "within_3_months" : null;
   const triUrgency = (v: TriValue | undefined): SuggestedRecUrgency | null =>
     v === "r" ? "soon" : v === "y" ? "within_3_months" : null;
 
   // --- Measure-based (exact measurements) ---
-  const pad = measuresAcrossCorners(state, "pad", onlyDone);
+  const pad = measuresAcrossCorners(state, "pad", onlyDone, zonesById);
   const padUrg = gradeUrgency(pad.worst);
   if (padUrg) {
     out.push({
@@ -824,22 +972,31 @@ export function deriveSuggestedRecommendations(
     });
   }
 
-  const rotor = measuresAcrossCorners(state, "rotor", onlyDone);
-  const rotorUrg = gradeUrgency(rotor.worst);
+  // An ungraded rotor grades "unknown", which never escalates `worst`, so it
+  // cannot reach this branch at all — no OEM minimum means no suggestion.
+  const rotor = measuresAcrossCorners(state, "rotor", onlyDone, zonesById);
+  const rotorEstimated =
+    rotor.refKind != null && isEstimatedRotorRef(rotor.refKind);
+  const rotorGrade = gradeUrgency(rotor.worst);
+  // An estimated minimum may raise it for confirmation but must never drive an
+  // automatic replacement — we do not sell a brake job off a derived number.
+  const rotorUrg = rotorGrade && rotorEstimated ? "next_visit" : rotorGrade;
   if (rotorUrg) {
     out.push({
       key: "rotors",
       match: [SERVICE_SLUGS.rotors],
       label: "Rotor Replacement",
       urgency: rotorUrg,
-      reason:
-        rotor.min != null
+      ...(rotorEstimated ? { requires_confirmation: true } : {}),
+      reason: rotorEstimated
+        ? `Rotor at ${rotor.min}mm vs an ESTIMATED minimum — confirm against the number cast on the rotor before recommending replacement`
+        : rotor.min != null
           ? `Rotor at ${rotor.min}mm (near/below OEM minimum)`
           : "Rotor near/below minimum",
     });
   }
 
-  const tread = measuresAcrossCorners(state, "tread", onlyDone);
+  const tread = measuresAcrossCorners(state, "tread", onlyDone, zonesById);
   const treadUrg = gradeUrgency(tread.worst);
   if (treadUrg) {
     out.push({
@@ -854,7 +1011,7 @@ export function deriveSuggestedRecommendations(
   // --- Engine-bay measurements + eye-level (R/Y/G) checks ---
   const eng = state.zones.ENG;
   if (eng && (!onlyDone || eng.done)) {
-    const battField = INSPECTION_ZONES_BY_ID.ENG.fields.find(
+    const battField = zonesById.ENG?.fields.find(
       (f) => f.type === "measure" && f.key === "batt",
     );
     if (battField && battField.type === "measure") {
@@ -973,11 +1130,18 @@ export function getDirtyIncompleteZones(state: InspectionState): ZoneId[] {
   return out;
 }
 
-export function formatZonesForPdf(storedZones: StoredZone[]): PdfZone[] {
+/**
+ * `zones` must be the same template the mechanic filled in — otherwise the PDF
+ * grades a rotor against a different minimum than the one shown in the bay.
+ */
+export function formatZonesForPdf(
+  storedZones: StoredZone[],
+  zones: InspectionZone[] = INSPECTION_ZONES,
+): PdfZone[] {
   const byId = new Map(storedZones.map((z) => [z.zone_id, z]));
   const out: PdfZone[] = [];
 
-  for (const zone of INSPECTION_ZONES) {
+  for (const zone of zones) {
     if (zone.dynamic) continue;
     const stored = byId.get(zone.id);
     if (!stored) continue;

@@ -96,6 +96,8 @@ const GRADE_TAG: Record<string, string> = {
   warn: "bg-amber-50 text-amber-700 border-amber-200",
   bad: "bg-red-50 text-red-700 border-red-200",
   none: "bg-muted text-muted-foreground border-transparent",
+  // No OEM minimum on file — deliberately neutral, not a pass.
+  unknown: "bg-muted text-muted-foreground border-dashed border-muted-foreground/40",
 };
 
 const TRI_DOT: Record<TriValue, string> = {

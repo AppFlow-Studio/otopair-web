@@ -191,6 +191,65 @@ function parseInterval(raw: any): { miles: FieldResult; months: FieldResult; sta
   };
 }
 
+/**
+ * One axle of the Batch-1 `rotor_specs` block.
+ *
+ * This only DESTRUCTURES — it routes the reported value into the minimum or the
+ * nominal column according to the kind the model claimed, and carries the
+ * claimed kind plus the verbatim label through as metadata. Whether the claim
+ * is believable is decided in validation/sanityChecks.ts, so a rejection shows
+ * up as a sanity flag instead of vanishing silently here.
+ *
+ * A `machine_to` answer fills neither column: it is a refinish limit, higher
+ * than the discard minimum, and grading against it condemns healthy rotors.
+ */
+function parseRotorSpecAxle(spec: any): {
+  min: FieldResult;
+  nominal: FieldResult;
+  kind: FieldResult;
+  label: FieldResult;
+} {
+  const provenance = {
+    source_url: spec?.source_url ?? null,
+    source_type: spec?.source_type ?? (spec?.source_url ? "scraped" : null),
+    confidence: spec?.confidence ?? null,
+  };
+  const kind =
+    typeof spec?.thickness_kind === "string" ? spec.thickness_kind.trim() : null;
+  const label =
+    typeof spec?.observed_label === "string" ? spec.observed_label.trim() : null;
+  const value = typeof spec?.value_mm === "number" ? spec.value_mm : null;
+
+  const nominalValue =
+    typeof spec?.nominal_mm === "number"
+      ? spec.nominal_mm
+      : kind === "nominal"
+        ? value
+        : null;
+
+  const meta = (v: string | null): FieldResult => ({
+    value: v,
+    source_url: null,
+    source_type: null,
+    confidence: null,
+    flagged: false,
+    flag_reason: null,
+  });
+
+  return {
+    min:
+      kind === "discard_min" && value != null
+        ? parseField({ value, ...provenance })
+        : emptyField(),
+    nominal:
+      nominalValue != null
+        ? parseField({ value: nominalValue, ...provenance })
+        : emptyField(),
+    kind: meta(kind),
+    label: meta(label ? label.slice(0, 120) : null),
+  };
+}
+
 // ─── Parsers (same as pipelineBatch.ts) ──────────────────────────
 
 function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
@@ -281,6 +340,16 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
   f.spark_plug_quantity = parseField(spark.quantity);
   f.spark_plug_gap = parseField(spark.gap_mm);
   f.parking_brake_type = parseField(data.parking_brake_type);
+
+  // Rotor thickness (per axle) — three different numbers, never interchangeable.
+  const rotorSpecs = data.rotor_specs ?? {};
+  for (const axle of ["front", "rear"] as const) {
+    const parsed = parseRotorSpecAxle(rotorSpecs[axle]);
+    f[`rotor_${axle}_min_thickness_mm`] = parsed.min;
+    f[`rotor_${axle}_nominal_thickness_mm`] = parsed.nominal;
+    f[`rotor_${axle}_min_kind`] = parsed.kind;
+    f[`rotor_${axle}_min_observed_label`] = parsed.label;
+  }
 
   // Trim specs
   const trim = data.trim_specs ?? {};
@@ -390,10 +459,26 @@ function mergeBatch1(
  *  asking Batch 2 to re-search it resurrected impossible data (chain cars
  *  grew timing-belt parts, and FWD diff fields could come back the same way).
  *  Jun-9 review medium finding; exported for tests. */
+/**
+ * Rotor DISCARD minimums are deliberately excluded from Batch-2 / gap-fill
+ * re-asks. Those paths carry a flat {value, source_url} shape with no room for
+ * the verbatim label, and an unlabelled minimum is indistinguishable from a
+ * nominal — the one failure that condemns healthy rotors. They are filled only
+ * by paths that can quote a label: Batch 1, the rotor-spec resource tiers, a
+ * mechanic reading the casting, or a director with a source link.
+ * Nominals stay gap-fillable; they are never graded against.
+ */
+const GAP_FILL_EXCLUDED_FIELDS: ReadonlySet<string> = new Set([
+  "rotor_front_min_thickness_mm",
+  "rotor_rear_min_thickness_mm",
+]);
+
 export function getNullFields(fields: Record<string, FieldResult>): string[] {
   return V4_FIELD_KEYS.filter(
     (k) =>
-      fields[k]?.value == null && fields[k]?.flag_reason !== "not_applicable",
+      !GAP_FILL_EXCLUDED_FIELDS.has(k) &&
+      fields[k]?.value == null &&
+      fields[k]?.flag_reason !== "not_applicable",
   );
 }
 
@@ -1295,6 +1380,26 @@ async function writeNormalizedData(
       psType && psType !== "electric"
         ? asNumber(fields.ps_fluid_capacity_oz?.value)
         : undefined,
+    // Rotor thickness. A minimum that is still non-null here passed the label
+    // cross-check in sanityChecks — anything unlabelled or backed by a nominal
+    // label was nulled there — so surviving to this point IS what "sourced"
+    // means. Nominal is written to its own column and never promoted.
+    rotor_front_min_thickness_mm: asNumber(fields.rotor_front_min_thickness_mm?.value),
+    rotor_rear_min_thickness_mm: asNumber(fields.rotor_rear_min_thickness_mm?.value),
+    rotor_front_nominal_thickness_mm: asNumber(fields.rotor_front_nominal_thickness_mm?.value),
+    rotor_rear_nominal_thickness_mm: asNumber(fields.rotor_rear_nominal_thickness_mm?.value),
+    rotor_front_min_quality:
+      fields.rotor_front_min_thickness_mm?.value != null ? "oem_spec" : undefined,
+    rotor_rear_min_quality:
+      fields.rotor_rear_min_thickness_mm?.value != null ? "oem_spec" : undefined,
+    rotor_min_source_url:
+      fields.rotor_front_min_thickness_mm?.source_url ??
+      fields.rotor_rear_min_thickness_mm?.source_url ??
+      undefined,
+    rotor_min_observed_label:
+      asString(fields.rotor_front_min_observed_label?.value) ??
+      asString(fields.rotor_rear_min_observed_label?.value) ??
+      undefined,
   });
 
   // E2. chassis_specs — dual-write platform-level fields.

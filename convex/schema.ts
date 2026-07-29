@@ -246,6 +246,32 @@ export default defineSchema({
         v.literal("carbon_ceramic"),
       ),
     ),
+    // OEM rotor thickness. THREE different numbers exist per rotor — nominal
+    // (new), machine-to (refinish limit) and discard/minimum (replace-at, the
+    // number cast on the rotor hat). Storefront listings publish diameter x
+    // NOMINAL ("330x22mm"); the discard minimum is not published there.
+    // These are NEVER interchangeable: a nominal fed to classify("rotor") in
+    // lib/inspection-template.ts makes healthy rotors read "Below min" and has
+    // us recommending brake jobs that aren't needed. Nominal is stored ONLY as
+    // the derivation input and the contamination comparator — no code path
+    // promotes it to a minimum. Scoped per-config (not chassis) because the
+    // minimum differs by trim and brake package: a sports trim's rotor can have
+    // a higher minimum than the base trim's.
+    rotor_front_min_thickness_mm: v.optional(v.number()),
+    rotor_rear_min_thickness_mm: v.optional(v.number()),
+    rotor_front_nominal_thickness_mm: v.optional(v.number()),
+    rotor_rear_nominal_thickness_mm: v.optional(v.number()),
+    // Per-axle provenance for the MINIMUM — drives the "est." badge, the
+    // passport source tag and the classify() warn-cap. One of:
+    //   "oem_spec" | "mechanic_read" | "director_verified"
+    //   | "derived_from_nominal" | "default_fallback"
+    rotor_front_min_quality: v.optional(v.string()),
+    rotor_rear_min_quality: v.optional(v.string()),
+    rotor_min_source_url: v.optional(v.string()),
+    // VERBATIM label the minimum was read under ("Minimum Thickness", "MIN TH").
+    // Mirrors the observed_title pattern — lets a director audit whether we read
+    // a real minimum or a bare "Thickness". Null => not sourced from a page.
+    rotor_min_observed_label: v.optional(v.string()),
     ps_fluid_type: v.optional(v.string()),
     ps_fluid_capacity_oz: v.optional(v.number()),
     enrichment_status: v.optional(v.string()),
@@ -292,6 +318,12 @@ export default defineSchema({
     // axle-pair invariant never force-fill or eternally flag a physically
     // absent role. Durable across re-runs (run-level field_gaps are not).
     na_role_keys: v.optional(v.array(v.string())),
+    // Column names a human has confirmed or corrected. patchVehicleConfig skips
+    // these, exactly as updateEngineSpecs skips engines.verified_fields. Without
+    // it a director's rotor minimum is clobbered by the next finalize — as
+    // drivetrain, brake_fluid_capacity_oz and ps_fluid_capacity_oz are today.
+    // Durable across re-runs, same as na_role_keys above.
+    verified_fields: v.optional(v.array(v.string())),
     created_at: v.optional(v.number()),
   })
     .index("by_config_key", ["config_key"])

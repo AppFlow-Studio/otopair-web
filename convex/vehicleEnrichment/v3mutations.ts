@@ -158,6 +158,16 @@ export const patchVehicleConfig = internalMutation({
         v.literal("carbon_ceramic"),
       ),
     ),
+    // Rotor thickness — see the schema comment on vehicle_configs. The minimum
+    // and the nominal are separate columns and nothing promotes one to the other.
+    rotor_front_min_thickness_mm: v.optional(v.float64()),
+    rotor_rear_min_thickness_mm: v.optional(v.float64()),
+    rotor_front_nominal_thickness_mm: v.optional(v.float64()),
+    rotor_rear_nominal_thickness_mm: v.optional(v.float64()),
+    rotor_front_min_quality: v.optional(v.string()),
+    rotor_rear_min_quality: v.optional(v.string()),
+    rotor_min_source_url: v.optional(v.string()),
+    rotor_min_observed_label: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { vehicle_config_id, ...fields } = args;
@@ -165,6 +175,18 @@ export const patchVehicleConfig = internalMutation({
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined) {
         patch[key] = value;
+      }
+    }
+    // Columns a human confirmed or corrected are never overwritten by the
+    // pipeline, mirroring how updateEngineSpecs respects engines.verified_fields.
+    // Without this a director's rotor minimum — and today their drivetrain /
+    // brake_fluid_capacity_oz / ps_fluid_capacity_oz corrections — is silently
+    // clobbered by the next finalize.
+    if (Object.keys(patch).length > 0) {
+      const cfg = await ctx.db.get(vehicle_config_id);
+      const verified: string[] = (cfg as any)?.verified_fields ?? [];
+      for (const key of verified) {
+        if (key in patch) delete patch[key];
       }
     }
     if (Object.keys(patch).length > 0) {

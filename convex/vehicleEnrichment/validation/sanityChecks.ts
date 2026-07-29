@@ -9,6 +9,7 @@
 
 import type { FieldResult } from "../types";
 import { sanitizeCapacityQuarts } from "../contentSanitization";
+import { labelSupportsKind } from "../rotorThickness";
 import { isLowAuthorityDomain, isHighAuthorityDomain } from "./sourceAuthority";
 
 interface SanityRule {
@@ -133,6 +134,24 @@ const SANITY_RULES: SanityRule[] = [
     reason: "Tire pressure outside typical range (28-44 psi)" },
   { field: "spark_plug_gap", type: "range", min: 0.4, max: 1.5, severity: "flag",
     reason: "Spark plug gap outside typical range (0.4-1.5mm)" },
+
+  // ── Brakes ── rotor DISCARD minimums (the replace-at number the inspection
+  // grades against). The reject ceiling catches a DIAMETER read as a thickness
+  // ("330x22mm" → 330), the single most likely extraction failure; the reject
+  // floor catches inches read as mm (0.945 in = 24 mm).
+  { field: "rotor_front_min_thickness_mm", type: "range", min: 15, max: 32, severity: "flag",
+    reason: "Front rotor minimum outside typical range (15-32mm)" },
+  { field: "rotor_front_min_thickness_mm", type: "range", min: 8, max: 40, severity: "reject",
+    reason: "Front rotor minimum outside valid range (8-40mm) — likely a diameter, a nominal, or inches read as mm" },
+  { field: "rotor_rear_min_thickness_mm", type: "range", min: 6, max: 24, severity: "flag",
+    reason: "Rear rotor minimum outside typical range (6-24mm)" },
+  { field: "rotor_rear_min_thickness_mm", type: "range", min: 4, max: 32, severity: "reject",
+    reason: "Rear rotor minimum outside valid range (4-32mm) — likely a diameter, a nominal, or inches read as mm" },
+  // Nominal is never graded against, so it needs only a loose plausibility net.
+  { field: "rotor_front_nominal_thickness_mm", type: "range", min: 8, max: 45, severity: "reject",
+    reason: "Front rotor nominal thickness outside valid range (8-45mm) — likely a diameter" },
+  { field: "rotor_rear_nominal_thickness_mm", type: "range", min: 5, max: 40, severity: "reject",
+    reason: "Rear rotor nominal thickness outside valid range (5-40mm) — likely a diameter" },
 
   // ── Attributes ──
   { field: "timing_system", type: "enum", allowed: ["chain", "belt", "gear"], severity: "reject",
@@ -459,6 +478,103 @@ export function runSanityChecks(
         confidence: Math.min(fuel.confidence ?? 0.6, 0.6),
       };
     }
+  }
+
+  // ── Rotor thickness: the structural nominal-vs-minimum guard ──
+  //
+  // Three different numbers exist per rotor (nominal / machine-to / discard) and
+  // only the DISCARD minimum may be graded against. A minimum is believed ONLY
+  // when the extraction quoted a label that actually reads as a minimum —
+  // "Minimum Thickness" yes, a bare "Thickness" no. OEM storefronts publish
+  // diameter x NOMINAL ("330x22mm"), so an unguarded extraction populates the
+  // minimum column with nominals, and a nominal graded as a minimum condemns
+  // healthy rotors and sells brake jobs that aren't needed. Runs BEFORE the
+  // range rules so a rejected value isn't also range-flagged.
+  const rotorReject = (field: string, reason: string, cur: FieldResult) => {
+    flags.push({ field, severity: "reject", reason, value: String(cur.value) });
+    fields[field] = {
+      ...cur,
+      value: null,
+      flagged: true,
+      flag_reason: reason.split(":")[0],
+    };
+  };
+  const rotorFlag = (field: string, reason: string, cur: FieldResult) => {
+    flags.push({ field, severity: "flag", reason, value: String(cur.value) });
+    fields[field] = {
+      ...cur,
+      flagged: true,
+      flag_reason: reason.split(":")[0],
+      confidence: Math.min(cur.confidence ?? 0.6, 0.6),
+    };
+  };
+
+  for (const axle of ["front", "rear"] as const) {
+    const key = `rotor_${axle}_min_thickness_mm`;
+    const minField = fields[key];
+    if (!minField || minField.value == null) continue;
+    const minVal = Number(minField.value);
+    const kind = fields[`rotor_${axle}_min_kind`]?.value;
+    const label = fields[`rotor_${axle}_min_observed_label`]?.value;
+    const labelText = typeof label === "string" ? label.trim() : "";
+
+    if (!Number.isFinite(minVal)) {
+      rotorReject(key, "rotor_min_not_numeric", minField);
+      continue;
+    }
+    if (typeof kind === "string" && kind && kind !== "discard_min") {
+      // A machine-to or nominal figure reached the minimum column.
+      rotorReject(key, `rotor_min_wrong_kind:${kind}`, minField);
+      continue;
+    }
+    if (!labelText) {
+      // Unlabelled means unauditable: nothing distinguishes it from a nominal.
+      rotorReject(key, "rotor_min_unlabelled", minField);
+      continue;
+    }
+    if (!labelSupportsKind(labelText, "discard_min")) {
+      rotorReject(key, `rotor_min_label_mismatch:${labelText}`, minField);
+      continue;
+    }
+
+    const nominalRaw = fields[`rotor_${axle}_nominal_thickness_mm`]?.value;
+    const nominalVal = nominalRaw != null ? Number(nominalRaw) : null;
+    if (nominalVal != null && Number.isFinite(nominalVal)) {
+      if (minVal >= nominalVal) {
+        // Definitionally impossible — the labels were swapped.
+        rotorReject(
+          key,
+          `rotor_min_gte_nominal:${minVal}>=${nominalVal}`,
+          minField,
+        );
+        continue;
+      }
+      const delta = Math.round((nominalVal - minVal) * 100) / 100;
+      if (delta < 0.5 || delta > 4.0) {
+        rotorFlag(
+          key,
+          `rotor_min_delta_implausible:${delta}mm below nominal ${nominalVal}mm`,
+          minField,
+        );
+      }
+    }
+  }
+
+  // Front rotors are normally thicker than rear. FLAG, never reject: a pair
+  // violation doesn't say WHICH side is wrong, and rejecting both would destroy
+  // a correct value to punish an incorrect one.
+  const frontMin = fields["rotor_front_min_thickness_mm"];
+  const rearMin = fields["rotor_rear_min_thickness_mm"];
+  if (
+    frontMin?.value != null &&
+    rearMin?.value != null &&
+    Number(frontMin.value) < Number(rearMin.value)
+  ) {
+    rotorFlag(
+      "rotor_front_min_thickness_mm",
+      `rotor_min_front_below_rear: front ${frontMin.value}mm < rear ${rearMin.value}mm`,
+      frontMin,
+    );
   }
 
   // Convert fluid-capacity fields to US quarts BEFORE the range rules run. A source

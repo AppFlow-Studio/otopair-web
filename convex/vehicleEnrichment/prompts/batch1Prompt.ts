@@ -275,6 +275,17 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
     "gap_mm": { "value": 0.7, "source_url": "...", "source_type": "scraped", "confidence": 0.9 }
   },
   "parking_brake_type": { "value": "electronic", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
+  "rotor_specs": {
+    "front": {
+      "thickness_kind": "discard_min",
+      "value_mm": 24.0,
+      "observed_label": "Minimum Thickness",
+      "observed_value_text": "24.0 mm",
+      "nominal_mm": 26.0,
+      "source_url": "...", "source_type": "scraped", "confidence": 0.9
+    },
+    "rear": { "thickness_kind": null, "value_mm": null, "observed_label": null, "observed_value_text": null, "nominal_mm": null, "source_url": null, "source_type": null, "confidence": null }
+  },
   "trim_specs": {
     "tire_pressure_front_psi": { "value": 35, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
     "tire_pressure_rear_psi": { "value": 38, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
@@ -289,6 +300,17 @@ REMINDERS:
 - spark_plug quantity = cylinder count from NHTSA if available (use source_type: "nhtsa").
 - If status is "not_applicable" (e.g., timing belt on a chain engine), set miles/months values to null.
 - For rotor_front_oem and rotor_rear_oem: both may appear on the same "brake_disc" page. Extract front and rear part numbers separately if they differ by axle position.
+- ROTOR THICKNESS (rotor_specs) — THREE DIFFERENT NUMBERS, NEVER INTERCHANGEABLE:
+  (a) NOMINAL / new thickness. Parts listings print this inside the size string ("330x22mm" = 330 mm DIAMETER x 22 mm NOMINAL thickness) and under labels like "Thickness", "Disc Thickness", "New Thickness".
+  (b) MACHINE-TO / refinish limit — the thinnest a rotor may be machined TO. Labels: "Machining Limit", "Refinish Thickness", "Machine to".
+  (c) DISCARD / MINIMUM — the replace-at number, cast on the rotor hat. Labels: "Minimum Thickness", "Min. Thickness", "Discard Thickness", "Discard at", "Wear Limit", "MIN TH".
+  ONLY (c) is a minimum. Reporting (a) as a minimum makes us condemn healthy rotors and recommend brake jobs that are not needed — a WORSE outcome than returning null.
+- thickness_kind MUST be the category of the label you ACTUALLY READ. A thickness with no qualifying label — a bare "22mm", a size string, or a table row labelled only "Thickness" — is "nominal". NEVER "discard_min".
+- observed_label MUST be copied VERBATIM from the page, and observed_value_text must keep the source's own unit ("0.945 in"). If you cannot quote a label you literally saw, return the whole rotor_specs entry as null — a composed label is a fabricated audit trail, and an unlabelled minimum is discarded downstream anyway.
+- NEVER derive one rotor number from another. Do not subtract an allowance from the nominal to produce a minimum. Nominal-only is a complete, correct answer: return it as nominal_mm with thickness_kind "nominal" and leave value_mm null.
+- The FIRST number in "330x22mm" is the DIAMETER. Never return it as a thickness.
+- Convert inches to mm for value_mm and nominal_mm (mm = in × 25.4), keeping the original in observed_value_text.
+- rotor_specs is per AXLE and can differ by trim and brake package — use the figures for THIS vehicle's rotors, and return null for an axle with drum brakes.
 - Capacities can differ BY DRIVETRAIN on the same engine (2024 Equinox 1.5T: FWD 4.2 qt vs AWD 5.3 qt oil). Use the figure for THIS vehicle's drivetrain (stated in the vehicle description); if the source only gives the other drivetrain's figure, return null.
 - oil_capacity_qts / coolant_capacity_qts must be in US quarts for THIS exact engine. If the source lists the capacity in liters, convert (qts = L × 1.057); never copy a liter figure as a quart figure. Do not use a capacity for a different engine option.
 - coolant_capacity_qts is the TOTAL cooling-system capacity (initial fill). Owner's manuals usually print both "total fill" and "drain and refill" — use total fill (a coolant flush exchanges the full system), never the smaller drain-and-refill figure.

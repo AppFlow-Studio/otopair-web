@@ -408,6 +408,7 @@ import type * as vehicleEnrichment_resourceRoles from "../vehicleEnrichment/reso
 import type * as vehicleEnrichment_reverseFitment from "../vehicleEnrichment/reverseFitment.js";
 import type * as vehicleEnrichment_roleIdentity from "../vehicleEnrichment/roleIdentity.js";
 import type * as vehicleEnrichment_roleIdentityAudit from "../vehicleEnrichment/roleIdentityAudit.js";
+import type * as vehicleEnrichment_rotorThickness from "../vehicleEnrichment/rotorThickness.js";
 import type * as vehicleEnrichment_rpCatalog from "../vehicleEnrichment/rpCatalog.js";
 import type * as vehicleEnrichment_runHeadless from "../vehicleEnrichment/runHeadless.js";
 import type * as vehicleEnrichment_runPublic from "../vehicleEnrichment/runPublic.js";
@@ -861,6 +862,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/reverseFitment": typeof vehicleEnrichment_reverseFitment;
   "vehicleEnrichment/roleIdentity": typeof vehicleEnrichment_roleIdentity;
   "vehicleEnrichment/roleIdentityAudit": typeof vehicleEnrichment_roleIdentityAudit;
+  "vehicleEnrichment/rotorThickness": typeof vehicleEnrichment_rotorThickness;
   "vehicleEnrichment/rpCatalog": typeof vehicleEnrichment_rpCatalog;
   "vehicleEnrichment/runHeadless": typeof vehicleEnrichment_runHeadless;
   "vehicleEnrichment/runPublic": typeof vehicleEnrichment_runPublic;

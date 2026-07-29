@@ -80,6 +80,14 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = {
   rear_brake_pad_oem: "OEM rear brake pad part number",
   rotor_front_oem: "OEM front brake rotor part number",
   rotor_rear_oem: "OEM rear brake rotor part number",
+  // NOTE: the rotor DISCARD MINIMUM is deliberately NOT gap-fillable here — this
+  // contract has no slot for the verbatim label, and an unlabelled minimum is
+  // indistinguishable from a nominal (see getNullFields in v3pipeline.ts). Only
+  // the nominal, which is never graded against, may be filled from this path.
+  rotor_front_nominal_thickness_mm:
+    "Front brake rotor NOMINAL (new) thickness in mm — the SECOND number in a '330x22mm' size string (the first is the diameter). This is NOT a minimum: do not return a discard/minimum figure here, and never derive one from it.",
+  rotor_rear_nominal_thickness_mm:
+    "Rear brake rotor NOMINAL (new) thickness in mm — same rule as front. Null when the rear axle has drum brakes.",
   drain_plug_gasket_oem: "OEM oil drain plug gasket part number",
   serpentine_belt_oem: "OEM serpentine belt part number",
   timing_belt_oem: "OEM timing belt part number (null if chain engine)",

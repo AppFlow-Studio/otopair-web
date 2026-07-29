@@ -101,16 +101,49 @@ function StepCard({ s }: { s: Step }) {
       </div>
 
       {s.systemPrompt && (
-        <details style={{ marginTop: 10, border: '1px solid var(--slate-200)', borderRadius: 8, background: 'var(--slate-50)' }}>
-          <summary style={{ cursor: 'pointer', userSelect: 'none', padding: '6px 12px', fontSize: 12, fontWeight: 600, color: 'var(--slate-600)' }}>
-            System prompt <span style={{ fontWeight: 400, color: 'var(--slate-400)' }}>({fmtNum(s.systemPrompt.length)} chars)</span>
-          </summary>
-          <pre style={{ maxHeight: 360, overflow: 'auto', borderTop: '1px solid var(--slate-200)', background: '#fff', padding: '10px 12px', fontSize: 12, lineHeight: 1.55, color: 'var(--slate-700)', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'inherit' }}>
-            {s.systemPrompt}
-          </pre>
-        </details>
+        <PromptDisclosure label="System prompt" text={s.systemPrompt} />
       )}
+
+      {/* The user message is where the per-field rules actually live — rotor
+          nominal-vs-minimum, capacity conversions, CVT conditioning, the output
+          schema. Showing only the system prompt hid all of it. */}
+      {s.userPrompt ? (
+        <PromptDisclosure
+          label="User message"
+          text={s.userPrompt}
+          note={s.userPromptNote}
+          tone="blue"
+        />
+      ) : s.userPromptNote ? (
+        <div style={{ marginTop: 8, fontSize: 11, color: 'var(--slate-500)', lineHeight: 1.5 }}>
+          {s.userPromptNote}
+        </div>
+      ) : null}
     </div>
+  )
+}
+
+function PromptDisclosure({ label, text, note, tone }: {
+  label: string
+  text: string
+  note?: string | null
+  tone?: 'blue'
+}) {
+  const accent = tone === 'blue' ? 'var(--blue-700)' : 'var(--slate-600)'
+  return (
+    <details style={{ marginTop: 10, border: '1px solid var(--slate-200)', borderRadius: 8, background: 'var(--slate-50)' }}>
+      <summary style={{ cursor: 'pointer', userSelect: 'none', padding: '6px 12px', fontSize: 12, fontWeight: 600, color: accent }}>
+        {label} <span style={{ fontWeight: 400, color: 'var(--slate-400)' }}>({fmtNum(text.length)} chars)</span>
+      </summary>
+      {note && (
+        <div style={{ borderTop: '1px solid var(--slate-200)', padding: '7px 12px', fontSize: 11, lineHeight: 1.5, color: 'var(--slate-500)', background: 'var(--slate-50)' }}>
+          {note}
+        </div>
+      )}
+      <pre style={{ maxHeight: 360, overflow: 'auto', borderTop: '1px solid var(--slate-200)', background: '#fff', padding: '10px 12px', fontSize: 12, lineHeight: 1.55, color: 'var(--slate-700)', margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'inherit' }}>
+        {text}
+      </pre>
+    </details>
   )
 }
 
@@ -176,7 +209,7 @@ export function PipelineTab({ token }: { token: string }) {
         )}
       </Panel>
 
-      <Panel title="LLM prompts" sub="the real batch system prompts (in sync with the code)">
+      <Panel title="LLM prompts" sub="the real system prompts AND user messages (in sync with the code)">
         {!ref ? <SkeletonBlock height={240} /> : ref.llmSteps.length === 0 ? <Empty>No prompt reference available.</Empty> : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {ref.llmSteps.map(s => <StepCard key={s.id} s={s} />)}

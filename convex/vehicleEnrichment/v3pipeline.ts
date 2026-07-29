@@ -475,7 +475,7 @@ function mergeBatch1(
  * mechanic reading the casting, or a director with a source link.
  * Nominals stay gap-fillable; they are never graded against.
  */
-const GAP_FILL_EXCLUDED_FIELDS: ReadonlySet<string> = new Set([
+export const GAP_FILL_EXCLUDED_FIELDS: ReadonlySet<string> = new Set([
   "rotor_front_min_thickness_mm",
   "rotor_rear_min_thickness_mm",
 ]);

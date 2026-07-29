@@ -35,14 +35,37 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireDirector, logAudit } from "./directorGate";
 // Field-key maps reused for the provenance joins (import precedent:
 // priceRefresh.ts imports PART_FIELD_MAP the same way).
-import { PART_FIELD_MAP, INTERVAL_TO_SERVICE } from "./vehicleEnrichment/v3pipeline";
-// Real prompt constants — imported so the Pipeline reference visual never drifts
-// from the code. (batch1c's system prompt lives in the heavier vehicleDatabases
-// module and is summarized inline below rather than imported.)
-import { BATCH_1_SYSTEM } from "./vehicleEnrichment/prompts/batch1Prompt";
-import { BATCH_1B_SYSTEM } from "./vehicleEnrichment/prompts/batch1bPrompt";
-import { BATCH_2_SYSTEM } from "./vehicleEnrichment/prompts/batch2Prompt";
-import { GAP_FILL_SYSTEM } from "./vehicleEnrichment/prompts/gapFillPrompt";
+import {
+  PART_FIELD_MAP,
+  INTERVAL_TO_SERVICE,
+  GAP_FILL_EXCLUDED_FIELDS,
+} from "./vehicleEnrichment/v3pipeline";
+import { V4_FIELD_KEYS } from "./vehicleEnrichment/types";
+import type { VehicleIdentity } from "./vehicleEnrichment/types";
+// Real prompt constants AND the real prompt BUILDERS — imported so the Pipeline
+// reference visual never drifts from the code. The system prompts are static;
+// the user message is assembled per vehicle, so it is rendered by running the
+// actual builder against a synthetic vehicle (see samplePrompts below). Most
+// per-field instructions — the rotor three-numbers rules, the capacity
+// conversions, the CVT conditioning — live in the USER message, so showing only
+// the system prompt hid them. (batch1c's system prompt lives in the heavier
+// vehicleDatabases module and is summarized inline below rather than imported.)
+import {
+  BATCH_1_SYSTEM,
+  buildBatch1Prompt,
+} from "./vehicleEnrichment/prompts/batch1Prompt";
+import {
+  BATCH_1B_SYSTEM,
+  buildBatch1bPrompt,
+} from "./vehicleEnrichment/prompts/batch1bPrompt";
+import {
+  BATCH_2_SYSTEM,
+  buildBatch2Prompt,
+} from "./vehicleEnrichment/prompts/batch2Prompt";
+import {
+  GAP_FILL_SYSTEM,
+  buildGapFillPrompt,
+} from "./vehicleEnrichment/prompts/gapFillPrompt";
 import { BLOCKED_DOMAINS } from "./vehicleEnrichment/blockedDomains";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -1218,6 +1241,11 @@ export type PipelineStepRef = {
   purpose: string;
   inputs: string[];
   systemPrompt: string | null;
+  /** The real user message, produced by running the actual builder against a
+   *  synthetic vehicle. This is where the per-field rules live. */
+  userPrompt: string | null;
+  /** What was substituted to build the sample, so nobody reads it as live data. */
+  userPromptNote: string | null;
 };
 export type FirecrawlSourceRef = {
   category: string;
@@ -1239,9 +1267,58 @@ export type PipelineReferenceResult = {
   };
 };
 
-/** Static "how the pipeline works" reference — the real batch system prompts +
- *  the Firecrawl scraping flow. Token-gated; the system-prompt text is imported
- *  from the actual prompt constants so it stays in sync with the code. */
+/**
+ * A representative vehicle used ONLY to render sample user prompts. Chosen to
+ * exercise the conditional branches: a conventional automatic (so the CVT-filter
+ * conditioning fires) with a real engine code.
+ */
+const SAMPLE_VEHICLE = {
+  vehicleId: "sample",
+  year: 2019,
+  make: "Subaru",
+  model: "Crosstrek",
+  trim: "Premium",
+  engineCode: "FB20",
+  displacement: "2.0",
+  cylinders: 4,
+  fuelType: "Gasoline",
+} as const;
+
+const SAMPLE_VPIC: VehicleIdentity = {
+  drivetrain: "AWD",
+  turbo: false,
+  transmission_type: "CVT",
+  fuel_injection_type: "direct",
+  timing_system: "chain",
+  cylinders: 4,
+  displacement_l: 2.0,
+  fuel_type: "Gasoline",
+  gvwr_lbs: 4400,
+  engine_manufacturer: "Subaru",
+  body_class: "Sport Utility Vehicle (SUV)/Multi-Purpose Vehicle (MPV)",
+  engine_config: "Flat",
+  make: "Subaru",
+  model: "Crosstrek",
+  model_year: 2019,
+  plant_city: "Gunma",
+  plant_country: "Japan",
+};
+
+/**
+ * Fields Batch 2 / gap-fill are actually allowed to ask for. Derived from the
+ * live registry minus the live exclusion set, so the rendered sample shows the
+ * true lexicon — including that rotor DISCARD minimums are withheld (their flat
+ * {value, source_url} contract has no slot for the verbatim label, and an
+ * unlabelled minimum is indistinguishable from a nominal).
+ */
+function sampleGapFillFields(): string[] {
+  return V4_FIELD_KEYS.filter((k) => !GAP_FILL_EXCLUDED_FIELDS.has(k));
+}
+
+/** Static "how the pipeline works" reference — the real batch system prompts,
+ *  the real user messages (built from a synthetic vehicle), and the Firecrawl
+ *  scraping flow. Token-gated; every prompt string is imported or produced by
+ *  the actual code so it stays in sync. */
 export const pipelineReference = query({
   args: { token: v.string() },
   handler: async (ctx, { token }): Promise<PipelineReferenceResult> => {
@@ -1254,15 +1331,18 @@ export const pipelineReference = query({
         { id: "batch1", label: "Batch 1", detail: "1a extract (scraped) · 1b web-search specs · 1c Haiku VDB→slug", kind: "llm" },
         { id: "batch2", label: "Batch 2", detail: "gap-fill still-null fields + per-part pricing + labor (web search)", kind: "llm" },
         { id: "gapfill", label: "Gap-fill re-ask", detail: "final bounded web-search pass over fields still null", kind: "llm" },
-        { id: "finalize", label: "Finalize", detail: "validate · sanity · quotability → normalized tables", kind: "finalize" },
+        { id: "finalize", label: "Finalize", detail: "validate · sanity (incl. nominal-vs-minimum guard) · quotability → normalized tables", kind: "finalize" },
       ],
       llmSteps: [
         {
           id: "batch1a", title: "Batch 1A · extract from scraped pages", phase: "batch1",
           model: "Claude Sonnet", maxTokens: 8192, webSearch: "none",
-          purpose: "Structured extraction of specs, fluids, capacities, intervals, OEM part numbers from the pre-scraped markdown — no web search.",
-          inputs: ["Vehicle identity (year/make/model/trim/engine)", "NHTSA vPIC facts (drivetrain, transmission, injection, timing)", "Variant constraints (fuel class, build source, chassis)", "Scraped OEM parts catalog markdown (≤20k chars)", "Scraped owner's-manual markdown (≤20k chars)", "Detected packages", "Target JSON schema"],
+          purpose: "Structured extraction of specs, fluids, capacities, intervals, OEM part numbers, and rotor thickness (nominal / machine-to / discard minimum, kept strictly apart) from the pre-scraped markdown — no web search.",
+          inputs: ["Vehicle identity (year/make/model/trim/engine)", "NHTSA vPIC facts (drivetrain, transmission, injection, timing)", "Variant constraints (fuel class, build source, chassis)", "Scraped OEM parts catalog markdown (≤20k chars)", "Scraped owner's-manual markdown (≤20k chars)", "Detected packages", "Target JSON schema (incl. rotor_specs per axle)"],
           systemPrompt: BATCH_1_SYSTEM,
+          userPrompt: buildBatch1Prompt(SAMPLE_VEHICLE, SAMPLE_VPIC, "", "", []),
+          userPromptNote:
+            "Built from a synthetic 2019 Subaru Crosstrek Premium. The scraped-markdown sections show their empty-source placeholders; on a real run each carries up to 20k chars of page text. Everything else — the output schema and all REMINDERS rules — is verbatim what the model receives.",
         },
         {
           id: "batch1b", title: "Batch 1B · web-search specs", phase: "batch1",
@@ -1270,6 +1350,8 @@ export const pipelineReference = query({
           purpose: "Web-search intervals, fluid specs, drivetrain fluids, battery + tire specs. Runs independent of 1A (fills its nulls; scraped wins).",
           inputs: ["Vehicle identity only (no scraped content — parallel to 1A)", "Example search queries", "Target JSON schema"],
           systemPrompt: BATCH_1B_SYSTEM,
+          userPrompt: buildBatch1bPrompt(SAMPLE_VEHICLE),
+          userPromptNote: "Built from a synthetic 2019 Subaru Crosstrek Premium.",
         },
         {
           id: "batch1c", title: "Batch 1C · VDB action → service slug", phase: "batch1",
@@ -1278,13 +1360,23 @@ export const pipelineReference = query({
           inputs: ["Vehicle label", "Otopair service-slug list", "Verbatim VDB action strings"],
           systemPrompt:
             "You are a vehicle service classifier. You will receive a list of VDB action strings from a maintenance schedule, plus the target vehicle context. For each action, return the Otopair service slug it represents, or null if the action is not a serviceable maintenance item we track.\n\n(Full text lives in convex/lib/vehicleDatabases.ts · HAIKU_SYSTEM.)",
+          userPrompt: null,
+          userPromptNote:
+            "Assembled inline in convex/lib/vehicleDatabases.ts from the VDB action strings for the specific vehicle — there is no standalone builder to render.",
         },
         {
           id: "batch2", title: "Batch 2 · gap-fill + pricing", phase: "batch2",
           model: "Claude Sonnet", maxTokens: 16384, webSearch: "2–5 (1 + 1 per missing numeric spec, capped 5)",
-          purpose: "Two jobs: web-search each still-null field, and look up per-OEM-part retail pricing + labor hours across the 25-service list.",
-          inputs: ["Vehicle identity", "\"Fields needing gap fill\" list", "OEM part numbers from Batch 1 (for pricing)", "Per-service schema + 25-item service list"],
+          purpose:
+            "Two jobs: web-search each still-null field, and look up per-OEM-part retail pricing + labor hours across the 25-service list. Not every null field is eligible — rotor DISCARD minimums are deliberately withheld from this pass because the flat {value, source_url} contract cannot carry the verbatim label, and an unlabelled minimum is indistinguishable from a nominal.",
+          inputs: ["Vehicle identity", "\"Fields needing gap fill\" list (V4 registry minus the gap-fill exclusions)", "OEM part numbers from Batch 1 (for pricing)", "Per-service schema + 25-item service list"],
           systemPrompt: BATCH_2_SYSTEM,
+          userPrompt: buildBatch2Prompt(SAMPLE_VEHICLE, sampleGapFillFields(), {
+            oil_filter_oem: "15208AA160",
+            rotor_front_oem: "26300FN010",
+          }),
+          userPromptNote:
+            "Built from a synthetic 2019 Subaru Crosstrek Premium with EVERY gap-fillable field requested, so the list doubles as the live field lexicon. A real run asks only for the fields still null after Batch 1.",
         },
         {
           id: "gapfill", title: "Gap-fill re-ask · final pass", phase: "gapfill",
@@ -1292,6 +1384,9 @@ export const pipelineReference = query({
           purpose: "Final bounded, ranked web-search pass over fields still null after Batch 2 (gap-fill only — no pricing). Synchronous, not batched.",
           inputs: ["Vehicle identity", "\"Fields still missing after two passes\" list"],
           systemPrompt: GAP_FILL_SYSTEM,
+          userPrompt: buildGapFillPrompt(SAMPLE_VEHICLE, sampleGapFillFields()),
+          userPromptNote:
+            "Built from a synthetic 2019 Subaru Crosstrek Premium with every gap-fillable field requested. A real run asks only for what is still null after Batch 2.",
         },
       ],
       firecrawl: {

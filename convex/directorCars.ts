@@ -570,6 +570,13 @@ export const vehicleConfigsList = query({
           lastVerifiedAt:      cfg.last_verified_at,
           verificationCount:   cfg.verification_count ?? 0,
           packagesCount:       cfg.packages_available?.length ?? 0,
+          // Rotor-minimum coverage at a glance — a config with no minimum
+          // grades its rotors ungraded in the bay.
+          rotorFrontMinMm:     cfg.rotor_front_min_thickness_mm ?? null,
+          rotorRearMinMm:      cfg.rotor_rear_min_thickness_mm ?? null,
+          rotorMinEstimated:
+            cfg.rotor_front_min_quality === "derived_from_nominal" ||
+            cfg.rotor_rear_min_quality === "derived_from_nominal",
           vehicleCount:        vehiclesForConfig.length,
           latestRunStatus:     latestRun?.status,
           latestRunAt:         latestRun?.created_at,
@@ -877,6 +884,22 @@ export const vehicleConfigDetail = query({
       brakeFluidCapacityOz: cfg.brake_fluid_capacity_oz,
       psFluidType:         cfg.ps_fluid_type,
       psFluidCapacityOz:   cfg.ps_fluid_capacity_oz,
+
+      // OEM rotor thickness. Minimum and nominal are surfaced SEPARATELY and
+      // labelled as such — a nominal read as a minimum condemns healthy rotors.
+      // `observedLabel` is the verbatim text the minimum was read under so a
+      // director can audit whether we read a real minimum or a bare "Thickness".
+      rotor: {
+        frontMinMm:     cfg.rotor_front_min_thickness_mm ?? null,
+        rearMinMm:      cfg.rotor_rear_min_thickness_mm ?? null,
+        frontNominalMm: cfg.rotor_front_nominal_thickness_mm ?? null,
+        rearNominalMm:  cfg.rotor_rear_nominal_thickness_mm ?? null,
+        frontQuality:   cfg.rotor_front_min_quality ?? null,
+        rearQuality:    cfg.rotor_rear_min_quality ?? null,
+        sourceUrl:      cfg.rotor_min_source_url ?? null,
+        observedLabel:  cfg.rotor_min_observed_label ?? null,
+      },
+      verifiedFields:      cfg.verified_fields ?? [],
 
       enrichment: {
         status:            cfg.enrichment_status,

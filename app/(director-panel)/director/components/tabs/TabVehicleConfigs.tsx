@@ -218,6 +218,102 @@ const SpecsBlock = ({ title, rows, empty }: { title: string; rows: [string, unkn
 }
 
 // ---------------------------------------------------------------------------
+// OEM rotor minimum thickness.
+//
+// Deliberately NOT folded into SpecsBlock: that helper hides empty rows, and a
+// MISSING minimum is the thing we most need visible — it's what tells the
+// director this vehicle grades ungraded in the bay. Minimum and nominal are
+// always shown apart and captioned, because a nominal ("330x22mm" → 22) read as
+// a minimum makes healthy rotors read "Below min" and has us recommending brake
+// jobs that aren't needed.
+// ---------------------------------------------------------------------------
+
+type RotorSpecs = {
+  frontMinMm: number | null
+  rearMinMm: number | null
+  frontNominalMm: number | null
+  rearNominalMm: number | null
+  frontQuality: string | null
+  rearQuality: string | null
+  sourceUrl: string | null
+  observedLabel: string | null
+}
+
+const ROTOR_QUALITY_BADGE: Record<string, { tone: string; label: string; title: string }> = {
+  oem_spec:            { tone:'green',  label:'sourced',        title:'Read from a source that labelled it a minimum' },
+  mechanic_read:       { tone:'green',  label:'read off rotor', title:'A mechanic read the number cast on the rotor hat' },
+  director_verified:   { tone:'green',  label:'verified',       title:'A director confirmed this against a source link' },
+  derived_from_nominal:{ tone:'orange', label:'est.',           title:'Derived from the nominal — NOT an OEM minimum. Never auto-recommends replacement.' },
+  default_fallback:    { tone:'orange', label:'est.',           title:'Fallback estimate — NOT an OEM minimum.' },
+}
+
+const RotorAxleRow = ({ axle, minMm, nominalMm, quality }: {
+  axle: string; minMm: number | null; nominalMm: number | null; quality: string | null
+}) => {
+  const badge = quality ? ROTOR_QUALITY_BADGE[quality] : undefined
+  return (
+    <div style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:6, padding:'8px 10px' }}>
+      <div style={{ fontSize:10, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em', marginBottom:4 }}>{axle}</div>
+      {minMm != null ? (
+        <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
+          <span style={{ fontSize:14, fontWeight:600, color:'var(--slate-900)' }}>{minMm.toFixed(1)} mm</span>
+          {badge && <span title={badge.title}><Badge tone={badge.tone as never}>{badge.label}</Badge></span>}
+        </div>
+      ) : (
+        <div style={{ fontSize:12, color:'var(--amber-700, #b45309)', marginBottom:4 }}>
+          No OEM minimum on file
+        </div>
+      )}
+      <div style={{ fontSize:11, color:'var(--slate-500)' }}>
+        {nominalMm != null
+          ? <>New thickness {nominalMm.toFixed(1)} mm <span style={{ fontStyle:'italic' }}>— not a minimum</span></>
+          : <span style={{ color:'var(--slate-400)' }}>New thickness unknown</span>}
+      </div>
+    </div>
+  )
+}
+
+const RotorSpecsBlock = ({ rotor }: { rotor: RotorSpecs | null | undefined }) => {
+  const r = rotor
+  const nothing = !r || (r.frontMinMm == null && r.rearMinMm == null &&
+    r.frontNominalMm == null && r.rearNominalMm == null)
+  return (
+    <div style={{ marginBottom:18 }}>
+      <SectionTitle label="Brakes — OEM rotor minimum" />
+      {nothing ? (
+        <div style={{ fontSize:12, color:'var(--slate-500)' }}>
+          No OEM rotor minimum on file. Rotor readings are recorded but{' '}
+          <strong>not graded</strong> in the inspection until one is supplied —
+          add it with a source link, or a mechanic can enter the number cast on
+          the rotor hat.
+        </div>
+      ) : (
+        <>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+            <RotorAxleRow axle="Front" minMm={r!.frontMinMm} nominalMm={r!.frontNominalMm} quality={r!.frontQuality} />
+            <RotorAxleRow axle="Rear"  minMm={r!.rearMinMm}  nominalMm={r!.rearNominalMm}  quality={r!.rearQuality} />
+          </div>
+          {(r!.observedLabel || r!.sourceUrl) && (
+            <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:8, marginTop:6, fontSize:11, color:'var(--slate-500)' }}>
+              {r!.observedLabel && (
+                // Verbatim, so a director can tell a real minimum from a bare
+                // "Thickness" without opening the source.
+                <span>Read under label: <span className="mono" style={{ color:'var(--slate-700)' }}>&ldquo;{r!.observedLabel}&rdquo;</span></span>
+              )}
+              {r!.sourceUrl && (
+                <a href={r!.sourceUrl} target="_blank" rel="noreferrer" style={{ color:'var(--blue-700)' }}>
+                  {(() => { try { return new URL(r!.sourceUrl!).hostname } catch { return 'source' } })()}
+                </a>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Detail modal — every spec on a vehicle_config
 // ---------------------------------------------------------------------------
 
@@ -704,6 +800,8 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                 ['Data quality',          detail.chassisSpecs.data_quality],
                 ['Last enriched',         detail.chassisSpecs.last_enriched_at && fmtDate(detail.chassisSpecs.last_enriched_at)],
               ] : []} />
+
+              <RotorSpecsBlock rotor={detail.rotor} />
 
               <TiresSection trim={detail.trimSpecs} />
 
@@ -1728,6 +1826,9 @@ type ConfigRow = {
   lastVerifiedAt?:   number
   verificationCount: number
   packagesCount:     number
+  rotorFrontMinMm:   number | null
+  rotorRearMinMm:    number | null
+  rotorMinEstimated: boolean
   vehicleCount:      number
   latestRunStatus?:  string
   latestRunAt?:      number
@@ -1797,6 +1898,7 @@ export const TabVehicleConfigs = () => {
             <th style={tableStyles.th}>Trans</th>
             <th style={tableStyles.th}>Chassis</th>
             <th style={tableStyles.th}>Enrichment</th>
+            <th style={tableStyles.th}>Rotor min</th>
             <th style={{ ...tableStyles.th, textAlign:'right' }}># VINs</th>
             <th style={{ ...tableStyles.th, textAlign:'right' }}># Packages</th>
             <th style={tableStyles.th}>Last enriched</th>
@@ -1804,9 +1906,9 @@ export const TabVehicleConfigs = () => {
           </tr></thead>
           <tbody>
             {configs === undefined
-              ? <tr><td colSpan={9} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>Loading…</td></tr>
+              ? <tr><td colSpan={10} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>Loading…</td></tr>
               : filtered.length === 0
-                ? <tr><td colSpan={9} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>No configs match.</td></tr>
+                ? <tr><td colSpan={10} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>No configs match.</td></tr>
                 : filtered.map(c => (
                   <tr key={String(c.id)} onClick={() => setOpenId(c.id)} style={{ cursor:'pointer' }}>
                     <td style={tableStyles.td}>
@@ -1828,6 +1930,21 @@ export const TabVehicleConfigs = () => {
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)', fontSize:12 }}>{c.transmissionType ?? '—'}</td>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)' }} className="mono">{c.chassisCode ?? '—'}</td>
                     <td style={tableStyles.td}>{enrichmentChip(c.enrichmentStatus, c.fillRate)}</td>
+                    <td style={{ ...tableStyles.td, fontSize:12 }} className="mono"
+                        title={c.rotorFrontMinMm == null && c.rotorRearMinMm == null
+                          ? 'No OEM rotor minimum — inspection records rotor readings but does not grade them'
+                          : 'front / rear OEM minimum (mm)'}>
+                      {c.rotorFrontMinMm == null && c.rotorRearMinMm == null
+                        ? <span style={{ color:'var(--slate-400)' }}>—</span>
+                        : <>
+                            <span style={{ color:'var(--slate-700)' }}>
+                              {c.rotorFrontMinMm != null ? c.rotorFrontMinMm.toFixed(1) : '—'}
+                              {' / '}
+                              {c.rotorRearMinMm != null ? c.rotorRearMinMm.toFixed(1) : '—'}
+                            </span>
+                            {c.rotorMinEstimated && <span style={{ display:'block', fontSize:10, color:'var(--amber-700, #b45309)' }}>est.</span>}
+                          </>}
+                    </td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} className="mono">{c.vehicleCount}</td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} className="mono">{c.packagesCount}</td>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)', fontSize:12 }}>

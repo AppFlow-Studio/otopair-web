@@ -16,6 +16,12 @@ export interface FieldResult {
   confidence: number | null; // 0.0–1.0
   flagged: boolean;
   flag_reason: string | null;
+  /** Round 12, *_oem fields only: the source page's VERBATIM product listing
+   *  title for the extracted part number ("Battery Cable / Ground Extension").
+   *  Component-identity evidence for the role-identity gate + verifier; null
+   *  when the page shows no product title. Deterministic JSON-LD names take
+   *  precedence over this LLM echo at the write site. */
+  observed_title?: string | null;
 }
 
 // ─── NHTSA vPIC Identity ─────────────────────────────────────────

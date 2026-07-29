@@ -25,7 +25,7 @@ import { Button, Sidebar, MicroH, Input, IconSearch } from '../../Primitives'
 import { Panel, Empty, SkeletonBlock, CopyableMono, ConfirmPopup, TableWrap, th, td, thRight, tdRight, fmtWhen, PageNav, RunChip, DateRangeFilter, dateInRange } from './helpers'
 
 type WrongPartFlag = FunctionReturnType<typeof api.directorPartQuality.scanWrongParts>['flags'][number]
-type ReasonFilter = 'all' | 'cross_make' | 'refuted'
+type ReasonFilter = 'all' | 'cross_make' | 'refuted' | 'role_identity'
 
 const PAGE_SIZE = 15
 const drawerLinkBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--blue-700)', fontSize: 12, fontFamily: 'inherit', fontWeight: 500, whiteSpace: 'nowrap' }
@@ -57,7 +57,7 @@ export function WrongPartsPanel({ token, goDeepDive }: {
       if (reasonFilter !== 'all' && f.reasonKind !== reasonFilter) return false
       if (!dateInRange(f.firstSeenAt, dateFrom, dateTo)) return false
       if (!q) return true
-      const hay = [f.vin, f.configKey, f.oemNumber, f.partName, f.make, f.model, f.trim, String(f.year ?? '')]
+      const hay = [f.vin, f.configKey, f.oemNumber, f.partName, f.scrapedName, f.make, f.model, f.trim, String(f.year ?? '')]
         .filter(Boolean).join(' ').toLowerCase()
       return hay.includes(q)
     })
@@ -69,6 +69,7 @@ export function WrongPartsPanel({ token, goDeepDive }: {
 
   const crossMakeCount = (data?.flags ?? []).filter(f => f.reasonKind === 'cross_make').length
   const refutedCount = (data?.flags ?? []).filter(f => f.reasonKind === 'refuted').length
+  const roleIdentityCount = (data?.flags ?? []).filter(f => f.reasonKind === 'role_identity').length
 
   return (
     <Panel title="Wrong parts" sub={data ? `${data.flags.length}${data.truncated ? '+' : ''} flagged` : undefined}
@@ -81,6 +82,7 @@ export function WrongPartsPanel({ token, goDeepDive }: {
               ['all', `All (${data?.flags.length ?? 0})`],
               ['cross_make', `Cross-make (${crossMakeCount})`],
               ['refuted', `Refuted (${refutedCount})`],
+              ['role_identity', `Wrong component (${roleIdentityCount})`],
             ] as const).map(([v, label]) => (
               <button key={v} onClick={() => { setReasonFilter(v); setPage(0) }}
                 style={{ padding: '5px 10px', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, fontWeight: 500, fontFamily: 'inherit',
@@ -122,13 +124,18 @@ export function WrongPartsPanel({ token, goDeepDive }: {
                     <td style={{ ...td, padding: '16px 18px' }}>
                       <CopyableMono value={f.oemNumber} style={{ fontWeight: 600 }} />
                       <div style={{ fontSize: 11, color: 'var(--slate-500)' }}>{f.partName}</div>
+                      {f.scrapedName && f.scrapedName !== f.partName && (
+                        <div style={{ fontSize: 11, color: 'var(--slate-400)', fontStyle: 'italic' }}>
+                          listed as “{f.scrapedName}”
+                        </div>
+                      )}
                     </td>
                     <td style={{ ...td, padding: '16px 18px' }}>{f.serviceType ?? '—'}</td>
                     <td style={{ ...td, padding: '16px 18px' }}>
                       <span style={{ fontSize: 10, fontWeight: 600, textTransform: 'uppercase', padding: '2px 7px', borderRadius: 999,
-                        background: f.reasonKind === 'cross_make' ? 'var(--red-50)' : 'var(--orange-50)',
-                        color: f.reasonKind === 'cross_make' ? 'var(--red-700)' : 'var(--orange-700)' }}>
-                        {f.reasonKind === 'cross_make' ? 'Cross-make' : 'Refuted'}
+                        background: f.reasonKind === 'cross_make' ? 'var(--red-50)' : f.reasonKind === 'role_identity' ? 'var(--purple-50, #f5f3ff)' : 'var(--orange-50)',
+                        color: f.reasonKind === 'cross_make' ? 'var(--red-700)' : f.reasonKind === 'role_identity' ? 'var(--purple-700, #6d28d9)' : 'var(--orange-700)' }}>
+                        {f.reasonKind === 'cross_make' ? 'Cross-make' : f.reasonKind === 'role_identity' ? 'Wrong component' : 'Refuted'}
                       </span>
                     </td>
                     <td style={{ ...thRight, padding: '16px 18px' }}>
@@ -251,6 +258,11 @@ function WrongPartDrawer({ token, flag, onClose, goDeepDive }: {
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--slate-800)' }}>
                 <CopyableMono value={flag.oemNumber} style={{ fontWeight: 600 }} /> — {flag.partName}
               </div>
+              {flag.scrapedName && flag.scrapedName !== flag.partName && (
+                <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 2, fontStyle: 'italic' }}>
+                  Source listing title: “{flag.scrapedName}”
+                </div>
+              )}
               <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 4 }}>
                 {flag.serviceType && <>Service: <span className="mono">{flag.serviceType}</span> · </>}
                 Confidence: <b style={{ color: 'var(--slate-700)' }}>{flag.confidence != null ? `${Math.round(flag.confidence * 100)}%` : '—'}</b>

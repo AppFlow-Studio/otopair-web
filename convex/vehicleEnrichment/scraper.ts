@@ -3,10 +3,17 @@
  *
  * Two scraping modes:
  *
- * 1. Parts pages — DIRECT URL FETCH via fetchUrl() on known registry URLs.
- *    URLs are deterministic from make/model/trim/year. Each page returns:
- *    OEM part number + discount price + MSRP + supersession chain + fitment years.
- *    Fallback chain: year-specific URL → generic URL → skip (Batch 2 fills via web_search).
+ * 1. Parts pages — SITE-SCOPED SERP DISCOVERY of the registry's
+ *    RevolutionParts stores: one Firecrawl /search per part slug
+ *    ("site:{store} Forester oil filter") whose results are the store's
+ *    /oem-parts/… detail pages, returned already scraped. Each detail page
+ *    yields: OEM part number + price (JSON-LD) + supersession chain +
+ *    fitment years. Two dead ends led here (both verified Jul 28 2026,
+ *    reports/scrapling_vs_firecrawl_probe_2026-07-28.md): the pre-Jul-2026
+ *    deterministic category URLs 30x-chain to the storefront homepage, and
+ *    the storefront's own /search serves datacenter IPs a results-stripped
+ *    200. Every ingested page is guarded by isStorefrontHomepage; slugs with
+ *    no usable result are skipped (Batch 2 fills via web_search).
  *
  * 2. Owner's manual / maintenance schedule — SEARCH via searchAndFetch().
  *    No single known URL for maintenance schedules across all makes.
@@ -21,15 +28,17 @@
 
 import type { ActionCtx } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { fetchUrl, fetchUrlWithHtml, searchAndFetch } from "./firecrawl";
+import { searchAndFetch } from "./firecrawl";
 import {
   getSourceConfig,
-  getPartsPageUrls,
-  getGenericPartsPageUrls,
+  getPartsSearchPlans,
   getManualSearchQueries,
   BLOCKED_DOMAINS,
+  type MakeSourceConfig,
 } from "./sourceRegistry";
+import { isStorefrontHomepage } from "./rpCatalog";
 import { parsePartPrices, parseSupersessions, type ParsedPartPrice, type ParsedSupersession } from "./priceParser";
+import { checkRoleIdentity, ROLEKEYS_BY_PART_SLUG } from "./roleIdentity";
 import { CACHE_FORMAT_VERSION } from "./scraperQueries";
 import type { VehicleInput } from "./types";
 import { scrapeWheelSizeOptions, type WheelSizeResult } from "./utils/wheelSizeScraper";
@@ -99,18 +108,17 @@ export async function scrapeVehicleSources(
     );
   }
 
-  // Parts: ANY make with a registry template (the RevolutionParts family —
-  // *partsdeal.com / {brand}.oempartsonline.com) gets the structured direct-URL
-  // fetch; makes with no template fall back to open-web search. Template pages
-  // that return nothing still fall back to search.
+  // Parts: ANY make with a registry storefront ({brand}.oempartsonline.com)
+  // gets the structured search→detail fetch; makes with no entry fall back to
+  // open-web search. Storefront lookups that return nothing usable (homepage
+  // redirects included — the guard yields empty markdown) still fall back to
+  // search.
   const scrapePartsFor = (v: VehicleInput): Promise<PartsScrapeResult> => {
     const cfg = getSourceConfig(v.make);
     if (cfg) {
-      const yearSpecificUrls = getPartsPageUrls(cfg, v);
-      const genericUrls = getGenericPartsPageUrls(cfg, v);
-      return scrapePartsPages(ctx, v, yearSpecificUrls, genericUrls).then(async (result) => {
+      return scrapePartsPages(ctx, v, cfg).then(async (result) => {
         if (result.markdown.length === 0) {
-          console.log(`[scraper] ${v.make} template returned 0 chars — falling back to search`);
+          console.log(`[scraper] ${v.make} storefront returned 0 chars — falling back to search`);
           return searchPartsPages(ctx, v);
         }
         return result;
@@ -225,6 +233,9 @@ async function searchPartsPages(
       for (const r of results) {
         const host = (() => { try { return new URL(r.url).hostname.replace(/^www\./, ""); } catch { return ""; } })();
         if (BLOCKED_DOMAINS.some((d) => host === d || host.endsWith("." + d))) continue;
+        // A search hit that is really a RevolutionParts storefront HOMEPAGE
+        // (redirect rot) carries featured-product tiles — never ingest it.
+        if (isStorefrontHomepage(r.html ?? null, r.markdown ?? null)) continue;
 
         // Parse deterministic prices from the FULL raw HTML of any result that
         // has structured data — each domain becomes its own price source.
@@ -287,13 +298,18 @@ async function searchPartsPages(
   return { markdown, urls: sourceUrls, partPrices: allPartPrices, supersessions: allSupersessions };
 }
 
-// ─── Parts: direct URL fetch with generic fallback ────────────────
+// ─── Parts: storefront search → detail fetch ──────────────────────
+
+/** Detail pages fetched per search: brake slugs list front+rear as separate
+ *  products, so they get the top TWO results; everything else takes the top hit. */
+function detailLinkBudget(partSlug: string): number {
+  return partSlug.includes("brake") ? 2 : 1;
+}
 
 async function scrapePartsPages(
   ctx: ActionCtx,
   vehicle: VehicleInput,
-  yearSpecificUrls: string[],
-  genericUrls: string[],
+  config: MakeSourceConfig,
 ): Promise<PartsScrapeResult> {
   // Check cache first. Only a CURRENT-format row is a hit for the price path —
   // older markdown-only rows (no part_prices_json) are treated as a miss so we
@@ -313,8 +329,12 @@ async function scrapePartsPages(
     return { markdown: cached.markdown ?? "", urls: cached.url ? [cached.url] : [], partPrices: cachedPrices, supersessions: cachedSupersessions };
   }
 
-  const hostname = yearSpecificUrls[0] ? new URL(yearSpecificUrls[0]).hostname : vehicle.make;
-  console.log(`[scraper] Cache miss: parts_catalog — fetching ${yearSpecificUrls.length} pages from ${hostname}`);
+  const plans = getPartsSearchPlans(config, vehicle);
+  const storeBase = config.parts.storeBaseUrl;
+  const storeHost = new URL(storeBase).hostname.replace(/^www\./, "");
+  console.log(
+    `[scraper] Cache miss: parts_catalog — ${plans.length} site-scoped part searches for ${storeHost}`,
+  );
 
   const markdownParts: string[] = [];
   const sourceUrls: string[] = [];
@@ -322,78 +342,154 @@ async function scrapePartsPages(
   const allSupersessions: ParsedSupersession[] = [];
   const seenNumbers = new Set<string>();
   const seenSupersessions = new Set<string>();
+  const seenDetailUrls = new Set<string>();
   let totalChars = 0;
 
-  // Hard time budget for the registry fetch loop. The whole pre-batch phase
+  // Hard time budget for the storefront fetch loop. The whole pre-batch phase
   // (chassis lookup, VDB, wheel-size, this scrape, batch build) must fit the
-  // 600s Convex action cap — without a budget, a dead registry source (each
-  // page = up to 2 slow Firecrawl attempts) eats the entire cap before the
-  // batch is even submitted, and the config is left stuck 'enriching' with no
-  // failure handler (observed live: 2018 Civic vs a TLS-dead retailer, twice,
+  // 600s Convex action cap — without a budget, a dead source (each page = up
+  // to 2 slow Firecrawl attempts) eats the entire cap before the batch is
+  // even submitted, and the config is left stuck 'enriching' with no failure
+  // handler (observed live: 2018 Civic vs a TLS-dead retailer, twice,
   // Jun 10 2026). On budget exhaustion we stop fetching and proceed — Batch 2
   // fills the gaps via web_search, and the search fallback still runs if the
-  // registry produced nothing at all.
+  // storefront produced nothing at all.
   const deadlineAt = Date.now() + PARTS_SCRAPE_BUDGET_MS;
 
-  for (let i = 0; i < yearSpecificUrls.length; i++) {
+  let plansDone = 0;
+  for (const plan of plans) {
     if (totalChars >= MAX_MARKDOWN_CHARS) break;
     if (Date.now() >= deadlineAt) {
       console.warn(
-        `[scraper] Parts scrape budget (${PARTS_SCRAPE_BUDGET_MS / 1000}s) exhausted after ${i}/${yearSpecificUrls.length} pages — skipping the rest (Batch 2 fills via web_search)`,
+        `[scraper] Parts scrape budget (${PARTS_SCRAPE_BUDGET_MS / 1000}s) exhausted after ${plansDone}/${plans.length} searches — skipping the rest (Batch 2 fills via web_search)`,
       );
       break;
     }
+    plansDone++;
 
-    // Try year-specific URL first, fall back to generic if empty/blocked
-    let fetched = await fetchUrlWithHtml(yearSpecificUrls[i]);
-    let usedUrl = yearSpecificUrls[i];
+    // 1) SERP discovery, site-scoped to the storefront. The storefront's OWN
+    //    /search endpoint serves datacenter IPs a results-stripped 200
+    //    (verified Jul 28 2026: identical URL → 18 detail links from a
+    //    residential TLS-impersonated fetch, 0 links in Firecrawl's rawHtml,
+    //    rendered html AND markdown), so discovery goes through the search
+    //    engine instead. Detail pages themselves fetch fine via Firecrawl,
+    //    and searchAndFetch returns them already scraped — one API call per
+    //    slug, no second hop. The YEAR stays in the query on purpose: detail
+    //    page titles carry literal fitment year ranges ("2018-2021 Hyundai
+    //    Oil Filter …"), so the year token steers the SERP toward
+    //    right-generation pages (a year-less Tucson query surfaced 2022+
+    //    NX4-generation parts on the 2021 TL — observed live Jul 28 2026).
+    const serpQuery = `site:${storeHost} ${plan.query}`;
+    const results = await searchAndFetch(serpQuery, 4, true);
 
-    if (
-      (!fetched.markdown || fetched.markdown.length < 100) &&
-      genericUrls[i] &&
-      Date.now() < deadlineAt
-    ) {
-      console.warn(`[scraper] Year-specific URL empty (${fetched.markdown?.length ?? 0} chars), trying generic: ${genericUrls[i]}`);
-      fetched = await fetchUrlWithHtml(genericUrls[i]);
-      usedUrl = genericUrls[i];
-    }
-
-    // Parse deterministic prices from the FULL raw HTML, BEFORE any markdown
-    // truncation — JSON-LD <script> blocks frequently sit past the 8k cut.
-    if (fetched.html) {
+    const isDetailUrl = (u: string): boolean => {
       try {
-        for (const p of parsePartPrices(fetched.html, usedUrl)) {
-          if (!seenNumbers.has(p.oem_part_number)) {
-            seenNumbers.add(p.oem_part_number);
-            allPartPrices.push(p);
-          }
-        }
-        for (const s of parseSupersessions(fetched.html, usedUrl)) {
-          const sKey = `${s.old_number}->${s.new_number}`;
-          if (!seenSupersessions.has(sKey)) {
-            seenSupersessions.add(sKey);
-            allSupersessions.push(s);
-          }
-        }
-      } catch (e) {
-        console.warn(`[scraper] price parse failed for ${usedUrl}:`, e);
+        const parsed = new URL(u);
+        return (
+          parsed.hostname.replace(/^www\./, "") === storeHost &&
+          parsed.pathname.startsWith("/oem-parts/")
+        );
+      } catch {
+        return false;
       }
+    };
+    const detailResults = results.filter((r) => isDetailUrl(r.url) && !seenDetailUrls.has(r.url));
+
+    // Round 12: role-identity title screen. A detail page whose TITLE names an
+    // accessory for the slug's role must not be the page we scrape — it feeds
+    // Batch-1 the wrong product wholesale (the Equinox battery search's top
+    // hit was "Battery Cable / Ground Extension", and 84257919 became the
+    // battery). Hard-blocked titles are dropped even if that leaves zero
+    // results — an honest gap Batch 2 fills via web_search beats a poisoned
+    // scrape. Untitled results and unmapped slugs pass (fail-open).
+    const roleKeys = ROLEKEYS_BY_PART_SLUG[plan.partSlug] ?? [];
+    const hardBlockedTitle = (title: string | null | undefined): boolean => {
+      if (!title || roleKeys.length === 0) return false;
+      return roleKeys.every((rk) => {
+        const v = checkRoleIdentity(rk, title);
+        return v.verdict === "reject" && v.mode === "reject";
+      });
+    };
+    const notBlocked = detailResults.filter((r) => !hardBlockedTitle(r.title));
+    if (notBlocked.length < detailResults.length) {
+      console.log(
+        `[scraper] role-identity dropped ${detailResults.length - notBlocked.length} wrong-component detail link(s) for "${plan.partSlug}"`,
+      );
     }
 
-    const md = fetched.markdown;
-    if (!md || md.length < 100) {
-      console.warn(`[scraper] Both URLs returned short/empty content — skipping (Batch 2 will fill via web_search)`);
+    // Rank the survivors. URL slug naming the part beats SERP ordering (the
+    // slug encodes the product name); position-split slugs ("front_brake_pads")
+    // also try the position-stripped base token since RP URLs write
+    // "…disc-brake-pad-set…" without the axle word — the axle preference then
+    // comes from the position word in URL/title. A require-matching TITLE is
+    // the strongest signal of all.
+    const slugToken = plan.partSlug.replace(/_/g, "-");
+    const baseToken = slugToken.replace(/^(front|rear)-/, "");
+    const positionWord = /^(front|rear)_/.exec(plan.partSlug)?.[1] ?? null;
+    const titlePasses = (r: { title?: string | null }): boolean =>
+      !!r.title && roleKeys.some((rk) => checkRoleIdentity(rk, r.title).verdict === "pass");
+    const urlNamesPart = (r: { url: string }): boolean =>
+      r.url.includes(slugToken) || (baseToken !== slugToken && r.url.includes(baseToken));
+    const matchesPosition = (r: { url: string; title?: string | null }): boolean =>
+      positionWord != null &&
+      (r.url.toLowerCase().includes(positionWord) ||
+        (r.title ?? "").toLowerCase().includes(positionWord));
+    const rank = (r: { url: string; title?: string | null }): number =>
+      (titlePasses(r) ? 4 : 0) + (urlNamesPart(r) ? 2 : 0) + (matchesPosition(r) ? 1 : 0);
+    const chosen = [...notBlocked]
+      .sort((a, b) => rank(b) - rank(a)) // stable — SERP order breaks ties
+      .slice(0, detailLinkBudget(plan.partSlug));
+    if (chosen.length === 0) {
+      console.warn(`[scraper] no ${storeHost} detail results for "${serpQuery}" — skipping (Batch 2 fills via web_search)`);
       continue;
     }
 
-    const chunk = md.slice(0, MAX_PER_PAGE_CHARS);
-    markdownParts.push(`\n\n--- Parts Page: ${usedUrl} ---\n${chunk}`);
-    sourceUrls.push(usedUrl);
-    totalChars += chunk.length;
+    // 2) Detail page content: JSON-LD price + supersession prose + fitment-rich
+    //    markdown for the Batch-1 extraction.
+    for (const r of chosen) {
+      if (totalChars >= MAX_MARKDOWN_CHARS) break;
+      seenDetailUrls.add(r.url);
+      if (isStorefrontHomepage(r.html ?? null, r.markdown)) {
+        console.warn(`[scraper] detail result is the storefront homepage — skipping ${r.url}`);
+        continue;
+      }
+
+      // Parse deterministic prices from the FULL raw HTML, BEFORE any markdown
+      // truncation — JSON-LD <script> blocks frequently sit past the 8k cut.
+      if (r.html) {
+        try {
+          for (const p of parsePartPrices(r.html, r.url)) {
+            if (!seenNumbers.has(p.oem_part_number)) {
+              seenNumbers.add(p.oem_part_number);
+              allPartPrices.push(p);
+            }
+          }
+          for (const s of parseSupersessions(r.html, r.url)) {
+            const sKey = `${s.old_number}->${s.new_number}`;
+            if (!seenSupersessions.has(sKey)) {
+              seenSupersessions.add(sKey);
+              allSupersessions.push(s);
+            }
+          }
+        } catch (e) {
+          console.warn(`[scraper] price parse failed for ${r.url}:`, e);
+        }
+      }
+
+      if (!r.markdown || r.markdown.length < 100) {
+        console.warn(`[scraper] detail result returned short/empty content — skipping ${r.url}`);
+        continue;
+      }
+
+      const chunk = r.markdown.slice(0, MAX_PER_PAGE_CHARS);
+      markdownParts.push(`\n\n--- Parts Page (${plan.query}): ${r.url} ---\n${chunk}`);
+      sourceUrls.push(r.url);
+      totalChars += chunk.length;
+    }
   }
 
   const markdown = markdownParts.join("").trim();
-  console.log(`[scraper] Parts pages: ${sourceUrls.length}/${yearSpecificUrls.length} fetched, ${markdown.length} chars, ${allPartPrices.length} prices`);
+  console.log(`[scraper] Parts pages: ${sourceUrls.length} detail pages from ${plansDone}/${plans.length} searches, ${markdown.length} chars, ${allPartPrices.length} prices`);
 
   // Cache when we got markdown OR deterministic prices (a page may carry JSON-LD
   // prices even if its markdown is thin). storeScrapeCache stamps the current
@@ -401,7 +497,7 @@ async function scrapePartsPages(
   if (markdown.length > 0 || allPartPrices.length > 0) {
     const now = Date.now();
     await ctx.runMutation(internal.vehicleEnrichment.scraperQueries.storeScrapeCache, {
-      url: sourceUrls[0] ?? yearSpecificUrls[0],
+      url: sourceUrls[0] ?? storeBase,
       scrapedAt: now,
       markdown,
       vehicleMake: vehicle.make,

@@ -52,6 +52,12 @@ export const VERIFY_PRIORITY_ROLE_KEYS = new Set([
   "thermostat",
   "intake_manifold_gasket",
   "ignition_coil",
+  // Round 12 (batch-12 Equinox): battery was NEVER a priority role, so under
+  // the cap it was rarely sampled — 84257919, a battery ground-extension
+  // CABLE, held the battery role through eleven rounds of gates. Battery is
+  // a headline service; the cable class is exactly what the component-type
+  // clause below exists to catch.
+  "battery",
 ]);
 
 /** Batch-2 audit: a wrong-model o-ring (Genesis V6 part on a Soul) shipped
@@ -59,8 +65,9 @@ export const VERIFY_PRIORITY_ROLE_KEYS = new Set([
  *  part is now eligible, priority roles first, up to this cap. Raised 14→16
  *  in batch-3 to fit the added rotor/trans-filter priority roles, 16→24 in
  *  batch-10 so the four added same-platform-risk roles never evict the base
- *  consumables on parts-dense vehicles. */
-export const VERIFY_MAX_PARTS = 24;
+ *  consumables on parts-dense vehicles, 24→25 in round 12 for the added
+ *  battery priority role (same never-evict-base rationale). */
+export const VERIFY_MAX_PARTS = 25;
 
 /** Back-compat alias (v3pipeline imported this name in round 1). */
 export const VERIFY_ROLE_KEYS = VERIFY_PRIORITY_ROLE_KEYS;
@@ -72,6 +79,10 @@ export interface FitmentToVerify {
   /** For spark plugs and other per-cylinder parts: the stored total quantity,
    *  so the verifier can judge dual-plug engines (2× cylinders). */
   quantity?: number | null;
+  /** Round 12: the source page's listing title (oem_parts.scraped_name) —
+   *  without it the checker only ever saw the generic role label ("Battery")
+   *  and the component-type clause had nothing to fire on. */
+  observedTitle?: string | null;
 }
 
 export interface FitmentVerdict {
@@ -110,7 +121,7 @@ A claim is REFUTED when the part number belongs to:
 
 **A year-band PAGE TITLE is not a fitment range.** Dealer/retail pages are often titled with a broad make-level band ("2012-2018 Toyota …", "Fits 2014-2020 Nissan …") that spans MANY models whose individual fitment windows differ — a part sold on a "2012-2018 Toyota" page may fit RAV4 only from 2013 (the band came from Camry). Judge the part's model-specific fitment years, never the page-title band; a part whose model-specific fitment starts after (or ends before) this model year is REFUTED even when the page title's band contains the year.
 
-**Wrong COMPONENT TYPE under a role is REFUTED.** The part must be the component itself, not adjacent hardware for it: a thermostat HOUSING / water outlet claimed as the thermostat, a filter housing or cap claimed as the filter, a sensor bracket claimed as the sensor. Name what the part actually is in your reason.
+**Wrong COMPONENT TYPE under a role is REFUTED.** The part must be the component itself, not adjacent hardware or an accessory FOR it: a thermostat HOUSING / water outlet claimed as the thermostat, a filter housing or cap claimed as the filter, a sensor bracket claimed as the sensor — and for the battery role, a battery CABLE, ground strap/extension, terminal, hold-down, tray, bracket, vent tube, heat blanket, or current sensor claimed as the 12V starter battery (as are telematics/DCM/auxiliary/key-fob batteries). Fitting the vehicle is IRRELEVANT here — a genuine, fitment-correct cable is still not a battery. When a part line includes a [listed as: "…"] title and that title names a DIFFERENT component than the role claims, that title is decisive evidence: verdict "refuted", and begin your reason with "role_identity: " followed by what the part actually is.
 
 A part is a phantom (REFUTED) when the vehicle's platform does not have that component at all (e.g. an electronic brake-pad WEAR SENSOR part on a platform that uses only mechanical wear indicators).
 
@@ -192,7 +203,11 @@ export async function verifyPartFitments(
       const qty = p.quantity != null && p.quantity > 1 ? ` [stored qty: ${p.quantity}]` : "";
       const pos = positionForRoleKey(p.roleKey);
       const posNote = pos ? ` [claimed position: ${pos.toUpperCase()} axle]` : "";
-      return `${i + 1}. ${p.roleKey}: ${p.oem} (${p.name})${qty}${posNote}`;
+      const listed =
+        p.observedTitle && p.observedTitle.trim()
+          ? ` [listed as: "${p.observedTitle.trim().slice(0, 120)}"]`
+          : "";
+      return `${i + 1}. ${p.roleKey}: ${p.oem} (${p.name})${qty}${posNote}${listed}`;
     })
     .join("\n");
 

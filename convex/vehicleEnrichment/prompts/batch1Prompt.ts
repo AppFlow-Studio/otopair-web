@@ -229,9 +229,9 @@ Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, t
     "transmission_type": { "value": "automatic", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 }
   },
   "oem_parts": {
-    "oil_filter_oem": { "value": "11427583220", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-    "air_filter_oem": { "value": "...", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "cabin_filter_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
+    "oil_filter_oem": { "value": "11427583220", "observed_title": "2018-2023 BMW Oil Filter Element 11427583220", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
+    "air_filter_oem": { "value": "...", "observed_title": "...", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
+    "cabin_filter_oem": { "value": null, "observed_title": null, "source_url": null, "source_type": null, "confidence": null },
     "spark_plug_oem": { "value": "...", ... },
     "front_brake_pad_oem": { "value": "...", ... },
     "rear_brake_pad_oem": { "value": "...", ... },
@@ -307,7 +307,8 @@ REMINDERS:
 - brake_pads interval: the manufacturer's INSPECTION / typical pad-life guidance (wear-based, not a hard schedule) — use status "inspect_only" unless the schedule explicitly mandates replacement. tire_rotation: the rotation schedule (typically 5,000-8,000 miles).
 - INTERVALS ARE MODEL-YEAR-SPECIFIC: manufacturers routinely changed schedules at a generation or model-year boundary (e.g. Toyota moved many nameplates from 5,000-mile to 10,000-mile oil intervals at MY2013). Use the schedule published for THIS exact model year; a schedule for the same nameplate's later/earlier years is WRONG. If the source's year coverage does not include this model year, return null rather than the wrong-year value.
 - Interval status "scheduled" is a claim that the cadence is the OEM maintenance schedule (owner's manual / warranty & maintenance guide). A dealer-site or aftermarket convention with no OEM schedule behind it (e.g. "brake fluid every 2 years" on a make whose guide says inspect-only, "transmission service every 60k" when the OEM schedule lists none under normal driving) must use status "inspect_only" or "conditional_severe" — never "scheduled".
-- battery_oem is the 12V STARTER battery (or its OEM group-size part). NEVER a telematics/DCM battery, key-fob battery, auxiliary/backup battery, or hybrid HV pack component.
+- battery_oem is the 12V STARTER battery (or its OEM group-size part). NEVER a telematics/DCM battery, key-fob battery, auxiliary/backup battery, or hybrid HV pack component — and NEVER battery-adjacent hardware: a battery CABLE, ground strap/extension, terminal, hold-down, tray, bracket, vent tube, or sensor is not a battery.
+- For EVERY *_oem field, also return "observed_title": the EXACT product listing title/heading the source page shows for that part number, copied VERBATIM (null if the page shows no product title). Do not paraphrase or normalize it, and NEVER compose or infer a title — a title you did not literally see on the page must be null (observed_title is evidence, and a composed one corrupts the evidence chain). The title is evidence of WHAT the part is — if the listing's title names an accessory or adjacent hardware (cable, bracket, tray, housing, cap, sensor, hose) instead of the component the field asks for, that number is the WRONG part for the field: return null for value and keep looking in the sources.
 - Conditional existence IS the data: returning null for any of the above means the vehicle does not use that part — do not guess a substitute.
 - Return null for any field not found in sources and not in the 4 allowed training data fields.`;
 }

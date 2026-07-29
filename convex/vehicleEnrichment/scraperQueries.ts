@@ -18,8 +18,19 @@ import { internalQuery, internalMutation } from "../_generated/server";
  * v4 (Jul 2026): `supersessions_json` — deterministic part-replacement chains
  * parsed from the same registry HTML as prices; older rows re-fetch so
  * supersession capture runs on them too.
+ * v5 (Jul 28 2026): storefront URL-rot purge — the retired RevolutionParts
+ * category-URL scheme had been 30x-chaining to storefront HOMEPAGES, so v4
+ * parts_catalog rows for registry makes hold homepage markdown/prices
+ * (reports/scrapling_vs_firecrawl_probe_2026-07-28.md). The bump invalidates
+ * them; the new search→detail scrape (scraper.ts + rpCatalog.ts) refills.
+ *
+ * v6 (Jul 29 2026, round 12): position-split pad/rotor searches + JSON-LD
+ * Product.name capture. v5 parts_catalog rows hold single-axle brake markdown
+ * (the Crosstrek rear-only defect), no rotor pages for non-BMW makes, and
+ * name-less part_prices_json (no role-identity evidence) — all three matter
+ * to the new gates, so stale rows must re-scrape, not serve.
  */
-export const CACHE_FORMAT_VERSION = 4;
+export const CACHE_FORMAT_VERSION = 6;
 
 /** Build a deterministic cache key from vehicle identity + source type.
  *  Exported for unit tests — the key IS the contamination boundary. */

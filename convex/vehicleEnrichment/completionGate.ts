@@ -25,6 +25,14 @@ export interface CompletionGateInput {
   quotabilityPct: number | null | undefined;
   /** Whether the run ledgered any part_price:* gaps (undefined-quotability policy). */
   hasPriceGaps?: boolean;
+  /** Round 12: "<service>:<roleKey>" for every binding core role with no
+   *  fitment (missingCoreRoles). Gated by ENRICHMENT_CORE_ROLE_GATE. */
+  missingCoreRoles?: readonly string[];
+  /** Round 12: "<service>:<missingRole>" for every front/rear pair with
+   *  exactly one side filled (axlePairGaps — the half-a-brake-job invariant;
+   *  the Crosstrek shipped rear-only brake data at quotability 0.82).
+   *  Gated by ENRICHMENT_AXLE_GATE. */
+  axlePairGaps?: readonly string[];
 }
 
 export type EnrichmentTerminalStatus = "complete" | "partial";
@@ -36,6 +44,18 @@ function envNumber(name: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+/** Round-12 gates are STAGED because bookings.ts only books parts services on
+ *  status exactly "complete": `enforce` before the fleet is repaired would
+ *  silently un-book real configs. Default "log" = compute + surface in
+ *  explainGateDecision without touching status; flip via
+ *  `npx convex env set ENRICHMENT_AXLE_GATE enforce` (then CORE_ROLE). */
+export type RoleGateStage = "off" | "log" | "enforce";
+
+function envStage(name: string): RoleGateStage {
+  const raw = String(process.env[name] ?? "").toLowerCase();
+  return raw === "enforce" || raw === "off" ? raw : "log";
+}
+
 export function computeEnrichmentStatus(
   input: CompletionGateInput,
 ): EnrichmentTerminalStatus {
@@ -43,6 +63,19 @@ export function computeEnrichmentStatus(
   const quotabilityMin = envNumber("ENRICHMENT_COMPLETE_QUOTABILITY_MIN", 0.8);
 
   if (input.fillRate < fillMin) return "partial";
+
+  if (
+    envStage("ENRICHMENT_AXLE_GATE") === "enforce" &&
+    (input.axlePairGaps?.length ?? 0) > 0
+  ) {
+    return "partial";
+  }
+  if (
+    envStage("ENRICHMENT_CORE_ROLE_GATE") === "enforce" &&
+    (input.missingCoreRoles?.length ?? 0) > 0
+  ) {
+    return "partial";
+  }
 
   if (input.quotabilityPct == null) {
     // No quotability computed on this path — fail the leg only when we KNOW
@@ -68,6 +101,18 @@ export function explainGateDecision(input: CompletionGateInput): string {
   } else {
     legs.push(
       `quotability=${input.quotabilityPct} (min ${quotabilityMin}) ${input.quotabilityPct >= quotabilityMin ? "PASS" : "FAIL"}`,
+    );
+  }
+  for (const [envName, entries, label] of [
+    ["ENRICHMENT_AXLE_GATE", input.axlePairGaps, "axle_gaps"],
+    ["ENRICHMENT_CORE_ROLE_GATE", input.missingCoreRoles, "core_roles_missing"],
+  ] as const) {
+    const stage = envStage(envName);
+    if (stage === "off") continue;
+    const n = entries?.length ?? 0;
+    const outcome = n === 0 ? "PASS" : stage === "enforce" ? "FAIL" : "LOG-ONLY";
+    legs.push(
+      `${label}=${n}${n > 0 ? ` [${(entries ?? []).slice(0, 6).join(", ")}${n > 6 ? ", …" : ""}]` : ""} (stage ${stage}) ${outcome}`,
     );
   }
   return legs.join(", ");

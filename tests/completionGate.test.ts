@@ -12,6 +12,8 @@ import {
 afterEach(() => {
   delete process.env.ENRICHMENT_COMPLETE_FILL_MIN;
   delete process.env.ENRICHMENT_COMPLETE_QUOTABILITY_MIN;
+  delete process.env.ENRICHMENT_AXLE_GATE;
+  delete process.env.ENRICHMENT_CORE_ROLE_GATE;
 });
 
 describe("computeEnrichmentStatus", () => {
@@ -77,10 +79,95 @@ describe("computeEnrichmentStatus", () => {
   });
 });
 
+describe("round-12 role gates — staged enforcement", () => {
+  // The Crosstrek shape: healthy fill + quotability ≥ 0.8, but the front
+  // brake axle is empty. The legacy gate said "complete".
+  const crosstrek = {
+    fillRate: 88,
+    quotabilityPct: 0.82,
+    axlePairGaps: [
+      "brake_pad_replacement:front_brake_pad",
+      "rotor_replacement:front_rotor",
+    ],
+    missingCoreRoles: [
+      "brake_pad_replacement:front_brake_pad",
+      "rotor_replacement:front_rotor",
+      "rotor_replacement:front_brake_pad",
+    ],
+  };
+
+  it("default stage is log — status semantics unchanged (dark launch)", () => {
+    expect(computeEnrichmentStatus(crosstrek)).toBe("complete");
+  });
+
+  it("ENRICHMENT_AXLE_GATE=enforce fails a half-covered axle to partial", () => {
+    process.env.ENRICHMENT_AXLE_GATE = "enforce";
+    expect(computeEnrichmentStatus(crosstrek)).toBe("partial");
+    expect(
+      computeEnrichmentStatus({ ...crosstrek, axlePairGaps: [] }),
+    ).toBe("complete"); // core-role gate still at log
+  });
+
+  it("ENRICHMENT_CORE_ROLE_GATE=enforce fails any missing binding core role", () => {
+    process.env.ENRICHMENT_CORE_ROLE_GATE = "enforce";
+    expect(computeEnrichmentStatus(crosstrek)).toBe("partial");
+    expect(
+      computeEnrichmentStatus({
+        fillRate: 88,
+        quotabilityPct: 0.82,
+        missingCoreRoles: ["battery_replacement:battery"],
+      }),
+    ).toBe("partial");
+    expect(
+      computeEnrichmentStatus({ ...crosstrek, missingCoreRoles: [], axlePairGaps: [] }),
+    ).toBe("complete");
+  });
+
+  it("stage off ignores gaps entirely; garbage stage values behave as log", () => {
+    process.env.ENRICHMENT_AXLE_GATE = "off";
+    process.env.ENRICHMENT_CORE_ROLE_GATE = "off";
+    expect(computeEnrichmentStatus(crosstrek)).toBe("complete");
+    process.env.ENRICHMENT_AXLE_GATE = "banana";
+    expect(computeEnrichmentStatus(crosstrek)).toBe("complete"); // log, not enforce
+  });
+
+  it("undefined gap arrays never trip enforcement (paths that don't compute them)", () => {
+    process.env.ENRICHMENT_AXLE_GATE = "enforce";
+    process.env.ENRICHMENT_CORE_ROLE_GATE = "enforce";
+    expect(
+      computeEnrichmentStatus({ fillRate: 90, quotabilityPct: 0.9 }),
+    ).toBe("complete");
+  });
+});
+
 describe("explainGateDecision", () => {
   it("names the failing leg", () => {
     const s = explainGateDecision({ fillRate: 72, quotabilityPct: 0.42 });
     expect(s).toContain("fill=72% (min 70) PASS");
     expect(s).toContain("quotability=0.42 (min 0.8) FAIL");
+  });
+
+  it("shows role-gate legs with stage and named roles (log stage = LOG-ONLY)", () => {
+    const s = explainGateDecision({
+      fillRate: 88,
+      quotabilityPct: 0.82,
+      axlePairGaps: ["brake_pad_replacement:front_brake_pad"],
+      missingCoreRoles: ["brake_pad_replacement:front_brake_pad"],
+    });
+    expect(s).toContain("axle_gaps=1 [brake_pad_replacement:front_brake_pad] (stage log) LOG-ONLY");
+    expect(s).toContain("core_roles_missing=1");
+  });
+
+  it("enforce stage marks a populated leg FAIL; off stage omits the leg", () => {
+    process.env.ENRICHMENT_AXLE_GATE = "enforce";
+    process.env.ENRICHMENT_CORE_ROLE_GATE = "off";
+    const s = explainGateDecision({
+      fillRate: 88,
+      quotabilityPct: 0.82,
+      axlePairGaps: ["rotor_replacement:front_rotor"],
+      missingCoreRoles: ["rotor_replacement:front_rotor"],
+    });
+    expect(s).toContain("axle_gaps=1 [rotor_replacement:front_rotor] (stage enforce) FAIL");
+    expect(s).not.toContain("core_roles_missing");
   });
 });

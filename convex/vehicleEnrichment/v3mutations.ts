@@ -9,6 +9,7 @@ import { isLaborOnlyService } from "../lib/servicePartsReference";
 import { partFitsConfigMake } from "../partSelector";
 import { makesSameFamily, sanitizePartNumber } from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
+import { checkRoleIdentity } from "./roleIdentity";
 import { isMarketplaceDomain, isMarketplaceUrl } from "./sourceRegistry";
 import { WEAR_ITEM_SERVICE_SLUGS } from "./types";
 
@@ -621,6 +622,11 @@ export const upsertPartAndFitment = internalMutation({
      *  EITHER the config make OR this builder brand, so the correct builder OEM
      *  numbers aren't rejected as "foreign" to the badge make. */
     build_source_make: v.optional(v.string()),
+    /** Round 12: the source page's verbatim listing title for this number
+     *  (JSON-LD Product.name, or the extraction's observed_title echo).
+     *  Component-identity evidence for the role-identity gate below; persisted
+     *  as oem_parts.scraped_name. `name` stays the generic role label. */
+    observed_title: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -662,18 +668,25 @@ export const upsertPartAndFitment = internalMutation({
       return { part_id: null, fitment_id: null, rejected: "no_differential" as const };
     }
 
-    // Round 11 (batch-11 wave-3 Crosstrek): a telematics/DCM battery filled
-    // the battery role — a real part, right vehicle, wrong CATEGORY, which
-    // fitment verification structurally cannot catch. Reject non-starter
-    // batteries by name at the choke point.
-    if (
-      args.subcategory === "battery" &&
-      /telematic|\bdcm\b|auxiliar|backup|key\s?fob|remote|data.?communication/i.test(args.name ?? "")
-    ) {
+    // Round 12: role-identity gate — a genuine, fitment-correct part can still
+    // be the WRONG COMPONENT for its role: a battery ground-extension CABLE
+    // stored as the battery (Equinox 84257919), a telematics/DCM battery
+    // (round-11 Crosstrek — that battery-only guard is folded into
+    // ROLE_IDENTITY_LEXICON.battery.block, strict superset). Deterministic:
+    // rejects only on POSITIVE wrong-component evidence in the observed
+    // listing title (falling back to caller name for legacy paths). Flag-mode
+    // roles and require-misses never reject here — those promote to the
+    // fitment verifier instead (round-6 lesson: reject/flag on positive
+    // evidence only; never substitute). Deliberately NO refuted_fitments
+    // write: the regex re-fires identically every run, so it is its own
+    // durable memory and a lexicon bug is reversible by one file edit.
+    const titleForGate = args.observed_title ?? args.name;
+    const idVerdict = checkRoleIdentity(args.subcategory, titleForGate);
+    if (idVerdict.verdict === "reject" && idVerdict.mode === "reject") {
       console.log(
-        `[v8-parts] REJECTED wrong-category battery: ${args.oem_part_number} ("${args.name}") — not the starter battery`,
+        `[v8-parts] REJECTED role-identity: ${args.oem_part_number} (${args.subcategory}) titled "${titleForGate}" — matched wrong-component term "${idVerdict.matched}"`,
       );
-      return { part_id: null, fitment_id: null, rejected: "wrong_category" as const };
+      return { part_id: null, fitment_id: null, rejected: "role_identity" as const };
     }
 
     // Round 8 (batch-10): an unfindable drain-plug-gasket number persisted
@@ -793,6 +806,26 @@ export const upsertPartAndFitment = internalMutation({
       return { part_id: null, fitment_id: null, rejected: "cross_make" as const };
     }
 
+    // Round 12b (live purge+re-run finding): when this config already carries
+    // a role_identity refute for this number, the STORED adjudicated title is
+    // the evidence of record — Batch-2's web-search echoed a COMPOSED title
+    // ("Battery — Equinox 1.5l Primary (Labeled 84257919)") that asserted
+    // battery-ness, passed the lexicon, and overwrote the sweep's verified
+    // "Negative Battery Extension Cable". So: (a) re-run the identity gate on
+    // the STORED title, which the caller cannot fabricate away; (b) never let
+    // a caller title overwrite evidence on a role_identity-contested part.
+    const roleIdentityContested =
+      !!refutedRow && String(refutedRow.reason ?? "").startsWith("role_identity");
+    if (roleIdentityContested && part?.scraped_name) {
+      const storedVerdict = checkRoleIdentity(args.subcategory, part.scraped_name);
+      if (storedVerdict.verdict === "reject" && storedVerdict.mode === "reject") {
+        console.log(
+          `[v8-parts] REJECTED role-identity (stored evidence): ${args.oem_part_number} (${args.subcategory}) — adjudicated title "${part.scraped_name}" matched "${storedVerdict.matched}"`,
+        );
+        return { part_id: null, fitment_id: null, rejected: "role_identity" as const };
+      }
+    }
+
     let partId;
     if (part) {
       partId = part._id;
@@ -809,6 +842,15 @@ export const upsertPartAndFitment = internalMutation({
         oem_part_number_normalized: normalizeOemNumber(part.oem_part_number),
         last_confirmed_at: now,
         source_count: (part.source_count ?? 0) + 1,
+        // Round 12: observed listing title. Never clobbered with null — a
+        // titleless re-confirm keeps the prior evidence. (After a supersession
+        // redirect this stamps the OLD listing's title on the successor row:
+        // same product family, acceptable evidence.) Round 12b: a
+        // role_identity-contested part keeps its ADJUDICATED title — caller
+        // echoes must not overwrite the evidence of record.
+        ...(args.observed_title && !roleIdentityContested
+          ? { scraped_name: args.observed_title }
+          : {}),
       });
     } else {
       partId = await ctx.db.insert("oem_parts", {
@@ -824,6 +866,7 @@ export const upsertPartAndFitment = internalMutation({
         source_count: 1,
         data_quality: "scraped",
         created_at: now,
+        ...(args.observed_title ? { scraped_name: args.observed_title } : {}),
       });
     }
 
@@ -1448,6 +1491,7 @@ export const updateEnrichmentRun = internalMutation({
             core_total: v.number(),
             core_with_fitment: v.number(),
             core_with_price: v.number(),
+            missing_roles: v.optional(v.array(v.string())),
           }),
         ),
       }),
@@ -1509,6 +1553,7 @@ export const patchRunPriceHealth = internalMutation({
           core_total: v.number(),
           core_with_fitment: v.number(),
           core_with_price: v.number(),
+          missing_roles: v.optional(v.array(v.string())),
         }),
       ),
     }),
@@ -1558,6 +1603,132 @@ export const patchRunPriceHealth = internalMutation({
         );
       }
     }
+  },
+});
+
+// ============================================================================
+// 12a-ter. patchRunRoleHealth — reconcile run health after a role repair
+// ============================================================================
+
+/** Round 12: the standalone repairMissingRoles action's run-row reconcile.
+ *  Mirrors patchRunPriceHealth's shape but touches ONLY role-resource state:
+ *  price gaps are left alone (patchRunPriceHealth with empty
+ *  still_unpriced_keys would wrongly declare every part priced). Replaces the
+ *  run's prior "role_resource:" and "axle_pair_gap:" error entries and its
+ *  resource_* field_gaps with the post-repair truth. */
+export const patchRunRoleHealth = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    quotability: v.object({
+      pct: v.number(),
+      services: v.array(
+        v.object({
+          slug: v.string(),
+          core_total: v.number(),
+          core_with_fitment: v.number(),
+          core_with_price: v.number(),
+          missing_roles: v.optional(v.array(v.string())),
+        }),
+      ),
+    }),
+    role_gaps: v.array(v.object({ field: v.string(), reason: v.string() })),
+    role_errors: v.array(v.string()),
+    /** Post-repair gate facts — the heal-only promotion below must respect an
+     *  enforce-stage role gate (no promoting a config that still has gaps). */
+    missing_core_roles: v.array(v.string()),
+    axle_pair_gaps: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) =>
+        q.eq("vehicle_config_id", args.vehicle_config_id),
+      )
+      .order("desc")
+      .first();
+    if (run) {
+      const RESOURCE_REASONS = new Set([
+        "resourced",
+        "resource_never_found",
+        "resource_refuted_no_replacement",
+        "resource_not_applicable",
+        "resource_skipped_budget",
+      ]);
+      const repairedFields = new Set(args.role_gaps.map((g) => g.field));
+      const keptGaps = (((run as any).field_gaps ?? []) as Array<{ field: string; reason: string }>).filter(
+        (g) =>
+          // Drop stale resource_* entries for fields this repair re-adjudicated
+          // (and any field the repair FILLED — its role_gaps entry is absent).
+          !(RESOURCE_REASONS.has(g.reason) && (repairedFields.has(g.field) || !args.role_gaps.some((n) => n.field === g.field))),
+      );
+      const keptErrors = (((run as any).errors ?? []) as string[]).filter(
+        (e) => !e.startsWith("role_resource:") && !e.startsWith("axle_pair_gap:") && !e.startsWith("quotability:"),
+      );
+      if (args.quotability.pct < 0.8) keptErrors.push(`quotability:${args.quotability.pct}`);
+      await ctx.db.patch(run._id, {
+        quotability: args.quotability,
+        quotability_updated_at: Date.now(),
+        field_gaps: [...keptGaps, ...args.role_gaps],
+        errors: [...keptErrors, ...args.role_errors],
+      });
+    }
+
+    // Heal-only completion-gate re-run (same contract as patchRunPriceHealth):
+    // only partial → complete, and only if the gate — including the round-12
+    // role legs at their current env stage — now passes.
+    const config = await ctx.db.get(args.vehicle_config_id);
+    if (config && (config as any).enrichment_status === "partial") {
+      const newStatus = computeEnrichmentStatus({
+        fillRate: (config as any).fill_rate ?? 0,
+        quotabilityPct: args.quotability.pct,
+        missingCoreRoles: args.missing_core_roles,
+        axlePairGaps: args.axle_pair_gaps,
+      });
+      if (newStatus === "complete") {
+        console.log(
+          `[role-repair] config ${args.vehicle_config_id} partial → complete (quotability ${args.quotability.pct})`,
+        );
+        await ctx.db.patch(args.vehicle_config_id, { enrichment_status: "complete" });
+        await ctx.scheduler.runAfter(
+          0,
+          internal.vehicleEnrichment.v3mutations.notifyEnrichmentComplete,
+          { vehicle_config_id: args.vehicle_config_id },
+        );
+      }
+    }
+    return { patchedRun: !!run };
+  },
+});
+
+// ============================================================================
+// 12a-bis. addNaRoleKeys — durable role-level not-applicable memory (round 12)
+// ============================================================================
+
+/** Merge positively-established not-applicable roleKeys onto the config
+ *  (rear drums → rear_rotor/rear_brake_pad). Written only from a role
+ *  re-source research finding; read into quotability's naRoleKeys so the
+ *  completeness gates and axle-pair invariant stop asking for a component the
+ *  vehicle physically lacks. Additive-only — removing a wrong entry is a
+ *  director action, not an enrichment one. */
+export const addNaRoleKeys = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    role_keys: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (args.role_keys.length === 0) return { added: 0 };
+    const config = await ctx.db.get(args.vehicle_config_id);
+    if (!config) return { added: 0 };
+    const existing: string[] = ((config as any).na_role_keys ?? []) as string[];
+    const merged = [...new Set([...existing, ...args.role_keys])];
+    const added = merged.length - existing.length;
+    if (added > 0) {
+      await ctx.db.patch(args.vehicle_config_id, { na_role_keys: merged });
+      console.log(
+        `[role-resource] na_role_keys += ${args.role_keys.join(",")} on config ${args.vehicle_config_id}`,
+      );
+    }
+    return { added };
   },
 });
 

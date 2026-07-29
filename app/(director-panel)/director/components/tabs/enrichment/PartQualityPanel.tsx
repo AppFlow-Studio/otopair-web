@@ -114,6 +114,11 @@ export function UnpricedPartsPanel({ token, goDeepDive }: {
                     <td style={{ ...td, padding: '16px 18px' }}>
                       <CopyableMono value={f.oemNumber} style={{ fontWeight: 600 }} />
                       <div style={{ fontSize: 11, color: 'var(--slate-500)' }}>{f.partName}</div>
+                      {f.scrapedName && f.scrapedName !== f.partName && (
+                        <div style={{ fontSize: 11, color: 'var(--slate-400)', fontStyle: 'italic' }}>
+                          listed as “{f.scrapedName}”
+                        </div>
+                      )}
                     </td>
                     <td style={{ ...td, padding: '16px 18px' }}>{f.serviceType ?? '—'}</td>
                     <td style={{ ...thRight, padding: '16px 18px', color: 'var(--slate-500)' }} title={new Date(f.firstSeenAt).toLocaleString()}>{fmtWhen(f.firstSeenAt)}</td>

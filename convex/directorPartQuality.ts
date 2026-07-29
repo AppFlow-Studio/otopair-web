@@ -40,9 +40,14 @@ export type WrongPartFlag = {
   configMakeName: string | null;
   serviceType: string | null;
   reason: string;
-  reasonKind: "cross_make" | "refuted";
+  reasonKind: "cross_make" | "refuted" | "role_identity";
   confidence: number | null;
   sourceDomains: string[];
+  /** Round 12: the source page's own listing title (oem_parts.scraped_name) —
+   *  the evidence a human needs to spot a wrong-component part ("84257919 —
+   *  Battery" reads fine until you see it was listed as "Battery Cable /
+   *  Ground Extension"). */
+  scrapedName: string | null;
   // When this fitment was last (re-)confirmed by the pipeline.
   confirmedAt: number;
   // When it first appeared — the "created at" a director actually wants for
@@ -82,22 +87,43 @@ export const scanWrongParts = query({
   handler: async (ctx, { token }): Promise<{ flags: WrongPartFlag[]; truncated: boolean }> => {
     await requireDirector(ctx, token);
     const rows = await ctx.db.query("part_fitments").order("desc").take(WRONG_SCAN_WINDOW);
-    const flags: WrongPartFlag[] = [];
-    const seen = new Set<string>();
-    for (const f of rows) {
-      if (flags.length >= WRONG_MAX_FLAGS) break;
-      if (f.package_code != null) continue;
-      if (f.mechanic_verified) continue; // a human already confirmed this — trust it
-      if (f.flag_dismissed_at != null) continue; // director already reviewed and dismissed
-      const key = `${f.vehicle_config_id}:${f.part_id}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
 
-      const part = await ctx.db.get(f.part_id);
+    // Cheap in-memory filtering + dedup first, so the DB round-trips below
+    // only run once per candidate row instead of once per raw row.
+    const seen = new Set<string>();
+    const candidates = rows.filter((f) => {
+      if (f.package_code != null) return false;
+      if (f.mechanic_verified) return false; // a human already confirmed this — trust it
+      if (f.flag_dismissed_at != null) return false; // director already reviewed and dismissed
+      const key = `${f.vehicle_config_id}:${f.part_id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    // Batch the two independent lookups every candidate needs across ALL
+    // candidates at once (Promise.all), instead of a sequential per-row
+    // await chain — with up to WRONG_SCAN_WINDOW candidates, sequential
+    // part→cfg→configMake round-trips were enough dependent awaits to trip
+    // Convex's "too many system operations" limit before a single flag was
+    // even found.
+    const [parts, cfgs] = await Promise.all([
+      Promise.all(candidates.map((f) => ctx.db.get(f.part_id))),
+      Promise.all(candidates.map((f) => ctx.db.get(f.vehicle_config_id))),
+    ]);
+    const configMakes = await Promise.all(
+      cfgs.map((cfg) => (cfg?.make_id ? ctx.db.get(cfg.make_id) : null)),
+    );
+
+    const flags: WrongPartFlag[] = [];
+    for (let i = 0; i < candidates.length; i++) {
+      if (flags.length >= WRONG_MAX_FLAGS) break;
+      const f = candidates[i];
+      const part = parts[i];
       if (!part) continue;
-      const cfg = await ctx.db.get(f.vehicle_config_id);
+      const cfg = cfgs[i];
       if (!cfg) continue;
-      const configMake = cfg.make_id ? await ctx.db.get(cfg.make_id) : null;
+      const configMake = configMakes[i];
 
       const guardOk = passesI1ReadGuard({
         partMakeId: part.make_id,
@@ -106,11 +132,27 @@ export const scanWrongParts = query({
         configMakeName: configMake?.name,
         mechanicVerified: false, // already excluded above; keep the guard strict here
       });
-      const reasonKind: "cross_make" | "refuted" | null = !guardOk ? "cross_make" : f.refute_flagged ? "refuted" : null;
+      // Round 12: component-identity refutes carry the machine-readable
+      // "role_identity: " reason prefix (written by the fitment verifier's
+      // component-type clause and the roleIdentityAudit sweep) — split them
+      // out of the generic refuted bucket so a fitment-correct wrong-component
+      // part (the Equinox battery CABLE) gets its own triage chip.
+      const isRoleIdentity =
+        !!f.refute_flagged && String(f.refute_reason ?? "").startsWith("role_identity");
+      const reasonKind: "cross_make" | "refuted" | "role_identity" | null = !guardOk
+        ? "cross_make"
+        : isRoleIdentity
+          ? "role_identity"
+          : f.refute_flagged
+            ? "refuted"
+            : null;
       if (!reasonKind) continue;
-      const reason = reasonKind === "cross_make"
-        ? "Cross-make: part make doesn't match this vehicle's make (or the OEM number carries another brand's pattern)"
-        : `Refuted by the adversarial fitment verifier${f.refute_reason ? `: ${f.refute_reason}` : ""} — kept only because multiple sources attested it`;
+      const reason =
+        reasonKind === "cross_make"
+          ? "Cross-make: part make doesn't match this vehicle's make (or the OEM number carries another brand's pattern)"
+          : reasonKind === "role_identity"
+            ? `Wrong component for its role${f.refute_reason ? `: ${f.refute_reason}` : ""} — a real, fitment-correct part, but not the ${f.service_type ?? "service"} component`
+            : `Refuted by the adversarial fitment verifier${f.refute_reason ? `: ${f.refute_reason}` : ""} — kept only because multiple sources attested it`;
 
       const partMake = part.make_id ? await ctx.db.get(part.make_id) : null;
       const car = await carInfoFor(ctx, "vehicle_config", String(f.vehicle_config_id));
@@ -128,6 +170,7 @@ export const scanWrongParts = query({
         reasonKind,
         confidence: f.confidence ?? null,
         sourceDomains: f.source_domains ?? [],
+        scrapedName: (part as any).scraped_name ?? null,
         confirmedAt: f.last_confirmed_at ?? f.created_at ?? f._creationTime,
         firstSeenAt: f.first_confirmed_at ?? f.created_at ?? f._creationTime,
         runId,
@@ -150,6 +193,8 @@ export type UnpricedPartFlag = {
   partId: string;
   oemNumber: string;
   partName: string;
+  /** Round 12: observed listing title — see WrongPartFlag.scrapedName. */
+  scrapedName: string | null;
   serviceType: string | null;
   // When this fitment first appeared unpriced.
   firstSeenAt: number;
@@ -169,20 +214,28 @@ export const scanUnpricedParts = query({
   handler: async (ctx, { token }): Promise<{ flags: UnpricedPartFlag[]; truncated: boolean }> => {
     await requireDirector(ctx, token);
     const rows = await ctx.db.query("part_fitments").order("desc").take(SCAN_WINDOW);
-    const flags: UnpricedPartFlag[] = [];
+
     const seen = new Set<string>();
-    for (const f of rows) {
-      if (flags.length >= MAX_FLAGS) break;
-      if (f.package_code != null) continue;
+    const candidates = rows.filter((f) => {
+      if (f.package_code != null) return false;
       // as_needed/kit roles are discovery items — not expected to always
       // carry a price the way a CORE (every-invoice) part must.
-      if (f.service_role !== "core") continue;
+      if (f.service_role !== "core") return false;
       const key = `${f.vehicle_config_id}:${f.part_id}`;
-      if (seen.has(key)) continue;
+      if (seen.has(key)) return false;
       seen.add(key);
+      return true;
+    });
 
-      const summary = await summarizePartPrices(ctx, f.part_id);
-      if (summary.sample_size > 0) continue;
+    // Batched (Promise.all), not a sequential per-row await chain — same
+    // "too many system operations" risk as scanWrongParts at this scan size.
+    const summaries = await Promise.all(candidates.map((f) => summarizePartPrices(ctx, f.part_id)));
+
+    const flags: UnpricedPartFlag[] = [];
+    for (let i = 0; i < candidates.length; i++) {
+      if (flags.length >= MAX_FLAGS) break;
+      const f = candidates[i];
+      if (summaries[i].sample_size > 0) continue;
 
       const part = await ctx.db.get(f.part_id);
       if (!part) continue;
@@ -194,6 +247,7 @@ export const scanUnpricedParts = query({
         partId: String(f.part_id),
         oemNumber: part.oem_part_number,
         partName: part.name,
+        scrapedName: (part as any).scraped_name ?? null,
         serviceType: f.service_type ?? null,
         firstSeenAt: f.first_confirmed_at ?? f.created_at ?? f._creationTime,
         runId,

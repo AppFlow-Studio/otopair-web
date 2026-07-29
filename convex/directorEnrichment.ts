@@ -757,6 +757,10 @@ export type ConfigLatestRun = {
   fillRate: number | null;
   applicableFillRate: number | null;
   quotabilityPct: number | null;
+  /** Round 12: "service:roleKey" for every binding core role the run ended
+   *  without (quotability.services[].missing_roles flattened) — the Crosstrek
+   *  shipped rear-only brake data behind a healthy pct. */
+  missingRoles: string[];
   errors: string[];
   sanityFlags: { field: string; severity: string; reason: string; value: string | null }[];
   fieldGaps: { field: string; reason: string }[];
@@ -808,6 +812,9 @@ export const configOverview = query({
             fillRate: latest.fill_rate ?? null,
             applicableFillRate: latest.applicable_fill_rate ?? null,
             quotabilityPct: latest.quotability?.pct ?? null,
+            missingRoles: (latest.quotability?.services ?? []).flatMap((s: any) =>
+              ((s.missing_roles ?? []) as string[]).map((r) => `${s.slug}:${r}`),
+            ),
             errors: latest.errors ?? [],
             sanityFlags: (latest.sanity_flags ?? []).map((s) => ({
               field: s.field,

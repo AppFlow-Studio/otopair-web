@@ -55,6 +55,7 @@ import type * as dataVehicleResolve from "../dataVehicleResolve.js";
 import type * as dataVerification from "../dataVerification.js";
 import type * as dataVins from "../dataVins.js";
 import type * as devOnly_auditConfigs from "../devOnly/auditConfigs.js";
+import type * as devOnly_auditCoreRoles from "../devOnly/auditCoreRoles.js";
 import type * as devOnly_auditPartRejections from "../devOnly/auditPartRejections.js";
 import type * as devOnly_backfillBrakeSystem from "../devOnly/backfillBrakeSystem.js";
 import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
@@ -403,7 +404,11 @@ import type * as vehicleEnrichment_repairpalEndpointMatch from "../vehicleEnrich
 import type * as vehicleEnrichment_repairpalEndpointMutations from "../vehicleEnrichment/repairpalEndpointMutations.js";
 import type * as vehicleEnrichment_repairpalEndpointProbe from "../vehicleEnrichment/repairpalEndpointProbe.js";
 import type * as vehicleEnrichment_repairpalEndpointSibling from "../vehicleEnrichment/repairpalEndpointSibling.js";
+import type * as vehicleEnrichment_resourceRoles from "../vehicleEnrichment/resourceRoles.js";
 import type * as vehicleEnrichment_reverseFitment from "../vehicleEnrichment/reverseFitment.js";
+import type * as vehicleEnrichment_roleIdentity from "../vehicleEnrichment/roleIdentity.js";
+import type * as vehicleEnrichment_roleIdentityAudit from "../vehicleEnrichment/roleIdentityAudit.js";
+import type * as vehicleEnrichment_rpCatalog from "../vehicleEnrichment/rpCatalog.js";
 import type * as vehicleEnrichment_runHeadless from "../vehicleEnrichment/runHeadless.js";
 import type * as vehicleEnrichment_runPublic from "../vehicleEnrichment/runPublic.js";
 import type * as vehicleEnrichment_runSteps from "../vehicleEnrichment/runSteps.js";
@@ -425,6 +430,7 @@ import type * as vehicleEnrichment_utils_engineCodeLookup from "../vehicleEnrich
 import type * as vehicleEnrichment_utils_engineLookup from "../vehicleEnrichment/utils/engineLookup.js";
 import type * as vehicleEnrichment_utils_partFitmentVerifier from "../vehicleEnrichment/utils/partFitmentVerifier.js";
 import type * as vehicleEnrichment_utils_roleBackfill from "../vehicleEnrichment/utils/roleBackfill.js";
+import type * as vehicleEnrichment_utils_roleResource from "../vehicleEnrichment/utils/roleResource.js";
 import type * as vehicleEnrichment_utils_transFluidVerifier from "../vehicleEnrichment/utils/transFluidVerifier.js";
 import type * as vehicleEnrichment_utils_wheelSizeScraper from "../vehicleEnrichment/utils/wheelSizeScraper.js";
 import type * as vehicleEnrichment_v3TestSuite from "../vehicleEnrichment/v3TestSuite.js";
@@ -502,6 +508,7 @@ declare const fullApi: ApiFromModules<{
   dataVerification: typeof dataVerification;
   dataVins: typeof dataVins;
   "devOnly/auditConfigs": typeof devOnly_auditConfigs;
+  "devOnly/auditCoreRoles": typeof devOnly_auditCoreRoles;
   "devOnly/auditPartRejections": typeof devOnly_auditPartRejections;
   "devOnly/backfillBrakeSystem": typeof devOnly_backfillBrakeSystem;
   "devOnly/dataFixes": typeof devOnly_dataFixes;
@@ -850,7 +857,11 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/repairpalEndpointMutations": typeof vehicleEnrichment_repairpalEndpointMutations;
   "vehicleEnrichment/repairpalEndpointProbe": typeof vehicleEnrichment_repairpalEndpointProbe;
   "vehicleEnrichment/repairpalEndpointSibling": typeof vehicleEnrichment_repairpalEndpointSibling;
+  "vehicleEnrichment/resourceRoles": typeof vehicleEnrichment_resourceRoles;
   "vehicleEnrichment/reverseFitment": typeof vehicleEnrichment_reverseFitment;
+  "vehicleEnrichment/roleIdentity": typeof vehicleEnrichment_roleIdentity;
+  "vehicleEnrichment/roleIdentityAudit": typeof vehicleEnrichment_roleIdentityAudit;
+  "vehicleEnrichment/rpCatalog": typeof vehicleEnrichment_rpCatalog;
   "vehicleEnrichment/runHeadless": typeof vehicleEnrichment_runHeadless;
   "vehicleEnrichment/runPublic": typeof vehicleEnrichment_runPublic;
   "vehicleEnrichment/runSteps": typeof vehicleEnrichment_runSteps;
@@ -872,6 +883,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/utils/engineLookup": typeof vehicleEnrichment_utils_engineLookup;
   "vehicleEnrichment/utils/partFitmentVerifier": typeof vehicleEnrichment_utils_partFitmentVerifier;
   "vehicleEnrichment/utils/roleBackfill": typeof vehicleEnrichment_utils_roleBackfill;
+  "vehicleEnrichment/utils/roleResource": typeof vehicleEnrichment_utils_roleResource;
   "vehicleEnrichment/utils/transFluidVerifier": typeof vehicleEnrichment_utils_transFluidVerifier;
   "vehicleEnrichment/utils/wheelSizeScraper": typeof vehicleEnrichment_utils_wheelSizeScraper;
   "vehicleEnrichment/v3TestSuite": typeof vehicleEnrichment_v3TestSuite;

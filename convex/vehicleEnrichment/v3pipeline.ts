@@ -43,7 +43,13 @@ import { normalizeOemNumber } from "./priceParser";
 import { reextractPartPrice, isAffirmativeRejection, priceAllSources } from "./priceReextract";
 import { extractPriceFirecrawl } from "./firecrawl";
 import { discoverPriceUrls, prioritizeDiscoveryQueue, type DiscoveryQueueItem } from "./priceDiscovery";
-import { computeQuotability, type QuotabilityResult } from "./quotability";
+import {
+  axlePairGaps,
+  computeQuotability,
+  missingCoreRoles,
+  type QuotabilityResult,
+} from "./quotability";
+import { resourceMissingRoles, soleFlaggedWinnerRoles } from "./utils/roleResource";
 import { SERVICE_PARTS_REFERENCE, type PartRoleSpec } from "../lib/servicePartsReference";
 import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import { sanitizeString, sanitizeNumber, sanitizePartNumber, sanitizeUrl } from "./contentSanitization";
@@ -63,6 +69,7 @@ import { hasOemCatalogDomain } from "../partSelector";
 import { backfillKilledRoles } from "./utils/roleBackfill";
 import { resolveEngineCode, isNhtsaDescriptor, verifyEngineCode } from "./utils/engineCodeLookup";
 import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/partFitmentVerifier";
+import { checkRoleIdentity } from "./roleIdentity";
 import { verifyTransFluid, decideTransFluidAction } from "./utils/transFluidVerifier";
 import { reconcileDrivetrain } from "./drivetrainReconcile";
 import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
@@ -164,6 +171,13 @@ export function parseField(raw: any, fieldKey?: string): FieldResult {
     confidence: raw.confidence ?? null,
     flagged: false,
     flag_reason: null,
+    // Round 12: verbatim listing title echoed by the prompts for *_oem fields —
+    // component-identity evidence (the Equinox battery slot held a CABLE whose
+    // page title said so; nothing retained it).
+    observed_title:
+      typeof raw.observed_title === "string" && raw.observed_title.trim()
+        ? raw.observed_title.trim().slice(0, 200)
+        : null,
   };
 }
 
@@ -985,6 +999,43 @@ const vehicleArgs = {
 
 // ─── Write normalized data from parsed fields ────────────────────
 
+/** Round 12: normalized OEM number → JSON-LD Product.name from the cached
+ *  parts_catalog scrape. Deterministic component-identity evidence — takes
+ *  precedence over the LLM's observed_title echo at the write site. Fail-open:
+ *  cache miss / legacy cache rows (pre-`name` capture) yield an empty map. */
+async function loadJsonLdTitlesByOem(
+  ctx: any,
+  vehicle: { make: string; model: string; year: number; trim?: string | null },
+): Promise<Map<string, string>> {
+  const titles = new Map<string, string>();
+  try {
+    const cached = await ctx.runQuery(
+      internal.vehicleEnrichment.scraperQueries.getCachedScrape,
+      {
+        vehicleMake: vehicle.make,
+        vehicleModel: vehicle.model,
+        vehicleYear: vehicle.year,
+        vehicleTrim: vehicle.trim ?? "",
+        sourceType: "parts_catalog",
+      },
+    );
+    if (cached?.part_prices_json) {
+      const arr = JSON.parse(cached.part_prices_json) as Array<{
+        oem_part_number?: string;
+        name?: string | null;
+      }>;
+      for (const p of arr) {
+        if (p?.oem_part_number && typeof p.name === "string" && p.name.trim()) {
+          titles.set(normalizeOemNumber(p.oem_part_number), p.name.trim().slice(0, 200));
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[v8-parts] JSON-LD title load failed (non-fatal):", e);
+  }
+  return titles;
+}
+
 async function writeNormalizedData(
   ctx: any,
   fields: Record<string, FieldResult>,
@@ -1013,6 +1064,9 @@ async function writeNormalizedData(
    *  the OEM-format guard, which otherwise validates only against the badge make
    *  and NULLs the correct Mazda parts the source-redirected scrape surfaced. */
   partSanitizeBrand?: string | null,
+  /** Round 12: normalized OEM → deterministic JSON-LD listing title
+   *  (loadJsonLdTitlesByOem). Wins over the field's observed_title echo. */
+  jsonLdTitlesByOem?: Map<string, string> | null,
 ) {
   const now = Date.now();
   const partsOnly = writeScope === "parts";
@@ -1329,7 +1383,14 @@ async function writeNormalizedData(
 
     console.log(`[v8-parts] Writing part: ${val} as ${meta.subcategory} for service ${meta.serviceSlug ?? meta.subcategory}`);
 
-    await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartAndFitment, {
+    // Round 12: component-identity evidence — deterministic JSON-LD listing
+    // title first, the extraction's verbatim observed_title echo second.
+    const observedTitle =
+      jsonLdTitlesByOem?.get(normalizeOemNumber(val)) ??
+      fields[fieldKey]?.observed_title ??
+      undefined;
+
+    const writeRes: any = await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartAndFitment, {
       oem_part_number: val,
       name: meta.name,
       category: meta.category,
@@ -1343,7 +1404,20 @@ async function writeNormalizedData(
       confidence: fields[fieldKey]?.confidence ?? 0.7,
       source_domain: extractDomain(fields[fieldKey]?.source_url),
       build_source_make: partSanitizeBrand ?? undefined,
+      observed_title: observedTitle,
     });
+    // Round 12: a role-identity rejection must not leave the field "filled" —
+    // null + flag re-enters it into Batch-2 gap-fill (same self-healing path
+    // as oem_part_rejected above; the re-ask finds the REAL component, never a
+    // silent substitution). Finalize scans this flag prefix into run_errors.
+    if (writeRes?.rejected === "role_identity") {
+      fields[fieldKey] = {
+        ...(fields[fieldKey] ?? {}),
+        value: null,
+        flagged: true,
+        flag_reason: `role_identity_rejected: ${val} ("${observedTitle ?? meta.name}")`,
+      } as any;
+    }
   }
 
   // F2. Package-specific OEM parts + fitments.
@@ -1371,7 +1445,7 @@ async function writeNormalizedData(
 
         console.log(`[v8-packages] Writing ${packageCode}/${meta.subcategory}: ${val}`);
 
-        await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartAndFitment, {
+        const pkgWriteRes: any = await ctx.runMutation(internal.vehicleEnrichment.v3mutations.upsertPartAndFitment, {
           oem_part_number: val,
           name: meta.name,
           category: meta.category,
@@ -1386,7 +1460,15 @@ async function writeNormalizedData(
           confidence: pkgFields[fieldKey]?.confidence ?? 0.7,
           source_domain: extractDomain(pkgFields[fieldKey]?.source_url),
           build_source_make: partSanitizeBrand ?? undefined,
+          observed_title:
+            jsonLdTitlesByOem?.get(normalizeOemNumber(val)) ??
+            pkgFields[fieldKey]?.observed_title ??
+            undefined,
         });
+        if (pkgWriteRes?.rejected === "role_identity") {
+          // Package fields have no gap-fill re-ask loop — log the honest gap.
+          console.log(`[v8-packages] role-identity REJECTED ${packageCode}/${fieldKey}: ${val}`);
+        }
       }
     }
   }
@@ -2743,6 +2825,8 @@ async function runPollBatch1Body(
       // P2.5: for a badge-engineered car, also accept the builder's OEM numbers
       // (the source-redirected scrape pulls Mazda parts for a Toyota Yaris).
       resolveScrapeRedirect({ make: args.make, model: args.model, model_year: args.year })?.make ?? null,
+      // Round 12: deterministic JSON-LD listing titles for the role-identity gate.
+      await loadJsonLdTitlesByOem(ctx, { make: args.make, model: args.model, year: args.year, trim: args.trim }),
     );
     // Batch-1 data is now in the normalized tables — a failure from here on
     // restores 'partial', not 'pending' (see the catch-all in the handler).
@@ -3252,6 +3336,8 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         "full",    // writeScope
         // P2.5: accept the builder's OEM numbers on a badge-engineered car.
         resolveScrapeRedirect({ make: args.make, model: args.model, model_year: args.year })?.make ?? null,
+        // Round 12: deterministic JSON-LD listing titles for the role-identity gate.
+        await loadJsonLdTitlesByOem(ctx, { make: args.make, model: args.model, year: args.year, trim: args.trim }),
       );
 
       // Deterministic per-SKU prices parsed from the registry HTML (JSON-LD) at
@@ -3967,6 +4053,8 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           domainCount: number;
           catalogAttested: boolean;
           quantity: number | null;
+          observedTitle: string | null;
+          requireMiss: boolean;
         }[] = [];
         const seenOem = new Set<string>();
         for (const f of allFitments) {
@@ -3987,6 +4075,12 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           // re-scrape of the same wrong year-band listing as "support" (the
           // Forester's refuted 2010-2018 pads survived on page count alone).
           // quantity feeds the dual-plug count check (batch-5: HEMI = 2×cyl).
+          // Round 12: observedTitle (oem_parts.scraped_name) gives the checker
+          // the LISTING's own component identity; a require-miss verdict
+          // (title present but missing the role's noun) promotes the part into
+          // the priority sort so the soft signal always gets adjudicated.
+          const observedTitle: string | null = part?.scraped_name ?? null;
+          const idVerdict = checkRoleIdentity(sub, observedTitle);
           candidates.push({
             roleKey: sub,
             oem,
@@ -3997,10 +4091,16 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               : 0,
             catalogAttested: hasOemCatalogDomain((f as any).source_domains ?? undefined),
             quantity: (f as any).quantity_needed ?? null,
+            observedTitle,
+            requireMiss:
+              idVerdict.verdict === "require_miss" ||
+              (idVerdict.verdict === "reject" && idVerdict.mode === "flag"),
           });
         }
-        candidates.sort((a, b) =>
-          Number(VERIFY_ROLE_KEYS.has(b.roleKey)) - Number(VERIFY_ROLE_KEYS.has(a.roleKey)),
+        candidates.sort(
+          (a, b) =>
+            Number(VERIFY_ROLE_KEYS.has(b.roleKey) || b.requireMiss) -
+            Number(VERIFY_ROLE_KEYS.has(a.roleKey) || a.requireMiss),
         );
         const toVerify = candidates.slice(0, VERIFY_MAX_PARTS);
         if (candidates.length > toVerify.length) {
@@ -4040,6 +4140,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               oem: c.oem,
               name: c.name,
               quantity: c.quantity,
+              observedTitle: c.observedTitle,
             })),
           );
           const refuted = verdicts.filter((vd) => vd.verdict === "refuted");
@@ -4163,6 +4264,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
                         service_role: meta.serviceRole,
                         confidence: 0.7,
                         source_domain: extractDomain(r.source_url),
+                        // Round 12: the researcher's found NAME is the listing
+                        // title evidence — a backfill returning "Battery
+                        // Ground Cable" now gets role-identity gated too.
+                        observed_title: r.name ?? undefined,
                       },
                     );
                     console.log(
@@ -4182,6 +4287,227 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         }
       } catch (e) {
         console.warn("[fitment-verify] pass failed (non-fatal):", e);
+      }
+    }
+
+    // ── Round 12: STATE-based core-role completeness (repair + fresh facts) ──
+    // Two prior bugs live here. (1) backfillKilledRoles above is EVENT-based:
+    // on a re-run the blocklisted numbers are rejected at WRITE time, no kill
+    // event fires, and empty roles stay empty forever (the Crosstrek's front
+    // pads/rotor). (2) The persisted quotability snapshot was computed BEFORE
+    // the verifier's kills, so the completion gate consumed pre-kill data.
+    // This block asks the state question from a FRESH fitment read, repairs
+    // missing binding core roles via resourceMissingRoles (empty-fill only),
+    // persists positive not-applicable findings to na_role_keys, then
+    // RECOMPUTES quotability + missing_roles + axle-pair gaps from another
+    // fresh read for the run row and the completion gate.
+    // Disable: PARTS_ROLE_RESOURCE=0 (detection still runs; only repair stops).
+    let roleResourceGaps: Array<{ field: string; reason: string }> = [];
+    let roleResourceErrors: string[] = [];
+    let missingCoreRoleStrings: string[] = [];
+    let axlePairGapStrings: string[] = [];
+    let axleGapSanityFlags: Array<{ field: string; severity: "flag"; reason: string }> = [];
+    if (!timedOut) {
+      try {
+        const metaBySubcategory: Record<string, any> = Object.fromEntries(
+          Object.values(PART_FIELD_MAP).map((m: any) => [m.subcategory, m]),
+        );
+        const fieldBySubcategory: Record<string, string> = {};
+        for (const [fieldKey, m] of Object.entries(PART_FIELD_MAP)) {
+          fieldBySubcategory[(m as any).subcategory] = fieldKey;
+        }
+        let applicableSlugsForRoles = (services ?? [])
+          .filter((s: any) => s.is_applicable)
+          .map((s: any) => SERVICE_NAME_TO_SLUG[s.service_name])
+          .filter((x: any): x is string => !!x);
+        // Round 12b: an EMPTY applicable set from Batch-2 (observed live —
+        // Crosstrek re-run returned services: []) must not read as "nothing
+        // to check": fall back to the last run whose snapshot had one, and
+        // say so loudly. With no prior truth either, detection is skipped —
+        // an honest unknown, not a clean bill.
+        if (applicableSlugsForRoles.length === 0) {
+          const prior: string[] = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getPriorApplicableSlugs,
+            { vehicleConfigId: args.vehicleConfigId, excludeRunId: args.runId },
+          );
+          if (prior.length > 0) {
+            console.warn(
+              `[role-resource] batch returned NO applicable services — falling back to prior run's ${prior.length} slugs`,
+            );
+            applicableSlugsForRoles = prior;
+            roleResourceErrors.push("applicable_services_empty_fallback_used");
+          } else {
+            roleResourceErrors.push("applicable_services_unknown");
+          }
+        }
+        const configRowForRoles: any = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getVehicleConfigById,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        // N/A union: run-level applicability nulls ∪ the config's durable
+        // role-level N/A memory (rear drums survive re-runs only here).
+        const naKeys = new Set<string>([
+          ...naRoleKeysFromFields(allFields),
+          ...(((configRowForRoles?.na_role_keys ?? []) as string[]) ?? []),
+        ]);
+
+        const freshFitments = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        let missing = missingCoreRoles(freshFitments, applicableSlugsForRoles, naKeys);
+
+        // Round 13: sole-flagged-winner roles from the verify pass that just
+        // ran — a soft-flagged wrong part with no rival wins selection
+        // unopposed (batch-11's "demoted-wrong-winner"; live: the Crosstrek's
+        // 2022-2023-only pad 26296FL032). Research + verify a RIVAL; the
+        // selector's refute-demotion layer swaps winners; the incumbent is
+        // never touched. Disable: PARTS_ROLE_RIVAL=0.
+        let rivalTargets: Array<{
+          serviceSlug: string;
+          roleKey: string;
+          fitmentService: string;
+          kind: "rival";
+          flaggedOems: string[];
+        }> = [];
+        if ((process.env.PARTS_ROLE_RIVAL ?? "1") !== "0") {
+          const candidateRows: any[] = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getFitmentCandidateRows,
+            { vehicleConfigId: args.vehicleConfigId },
+          );
+          rivalTargets = soleFlaggedWinnerRoles(candidateRows)
+            .filter((r) => !naKeys.has(r.roleKey))
+            .map((r) => ({
+              serviceSlug: r.serviceType,
+              roleKey: r.roleKey,
+              fitmentService: r.serviceType,
+              kind: "rival" as const,
+              flaggedOems: r.flaggedOems,
+            }));
+          if (rivalTargets.length > 0) {
+            console.log(
+              `[role-resource] ${rivalTargets.length} sole-flagged-winner role(s) to rival: ` +
+                rivalTargets.map((t) => `${t.roleKey} (vs ${t.flaggedOems.join(",")})`).join(", "),
+            );
+          }
+        }
+
+        if ((missing.length > 0 || rivalTargets.length > 0) && (process.env.PARTS_ROLE_RESOURCE ?? "1") !== "0") {
+          console.log(
+            `[role-resource] ${missing.length} missing binding core role(s): ` +
+              missing.map((m) => `${m.serviceSlug}:${m.roleKey}`).join(", "),
+          );
+          const attemptsByField: Record<string, number> = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getRoleResourceAttempts,
+            { vehicleConfigId: args.vehicleConfigId },
+          );
+          const priorAttemptsByRole = new Map<string, number>();
+          for (const [fieldKey, n] of Object.entries(attemptsByField)) {
+            const sub = (PART_FIELD_MAP as any)[fieldKey]?.subcategory;
+            if (sub) priorAttemptsByRole.set(sub, n);
+          }
+          const blockedRows: any[] = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getBlockedOemsForConfig,
+            { vehicleConfigId: args.vehicleConfigId },
+          );
+          const blockedOems = new Set<string>(
+            blockedRows.map((b) => b.oem_part_number_normalized),
+          );
+          // Rival incumbents join the exclusion set — the researcher must not
+          // re-derive the very number that is flagged.
+          for (const t of rivalTargets) for (const oem of t.flaggedOems) blockedOems.add(oem);
+          const outcomes = await resourceMissingRoles(
+            ctx,
+            {
+              year: args.year,
+              make: args.make,
+              model: args.model,
+              trim: args.trim,
+              engineCode: vehicle.engineCode,
+              displacement: args.displacement,
+              transmissionType:
+                (allFields.transmission_type?.value as string | null) ?? undefined,
+              vehicleConfigId: args.vehicleConfigId,
+              makeId: args.makeId,
+              buildSourceMake:
+                resolveScrapeRedirect({ make: args.make, model: args.model, model_year: args.year })
+                  ?.make ?? null,
+            },
+            // Fills first — an EMPTY role outranks a flagged-but-present one.
+            [...missing, ...rivalTargets],
+            metaBySubcategory,
+            { priorAttemptsByRole, blockedOems },
+          );
+          const naFound = outcomes.filter((o) => o.outcome === "not_applicable");
+          if (naFound.length > 0) {
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.addNaRoleKeys, {
+              vehicle_config_id: args.vehicleConfigId,
+              role_keys: naFound.map((o) => o.roleKey),
+            });
+            for (const o of naFound) naKeys.add(o.roleKey);
+          }
+          for (const o of outcomes) {
+            const field = fieldBySubcategory[o.roleKey] ?? o.roleKey;
+            const reason =
+              o.outcome === "written"
+                ? "resourced"
+                : o.outcome === "not_applicable"
+                  ? "resource_not_applicable"
+                  : o.outcome === "rejected_refuted"
+                    ? "resource_refuted_no_replacement"
+                    : o.outcome === "skipped_budget"
+                      ? "resource_skipped_budget"
+                      : "resource_never_found";
+            // Rival misses are not field gaps — the role is occupied (by the
+            // flagged incumbent); the flag already carries the review signal.
+            if (o.outcome !== "written" && o.kind !== "rival") {
+              roleResourceGaps.push({ field, reason });
+            }
+            roleResourceErrors.push(
+              `role_resource:${o.roleKey}:${o.kind === "rival" ? (o.outcome === "written" ? "rivaled" : `rival_${o.outcome}`) : o.outcome}`,
+            );
+          }
+        }
+
+        // Fresh post-repair facts — what the run row and completion gate see.
+        const fitmentsAfter = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        missing = missingCoreRoles(fitmentsAfter, applicableSlugsForRoles, naKeys);
+        const axleGaps = axlePairGaps(fitmentsAfter, applicableSlugsForRoles, naKeys);
+        missingCoreRoleStrings = missing.map((m) => `${m.serviceSlug}:${m.roleKey}`);
+        axlePairGapStrings = axleGaps.map((g) => `${g.serviceSlug}:${g.missingRole}`);
+        axleGapSanityFlags = axleGaps.map((g) => ({
+          field: fieldBySubcategory[g.missingRole] ?? g.missingRole,
+          severity: "flag" as const,
+          reason: `axle_pair_gap:${g.serviceSlug}:${g.filledRole}_present_${g.missingRole}_missing`,
+        }));
+        roleResourceErrors.push(
+          ...axleGaps.map((g) => `axle_pair_gap:${g.serviceSlug}:${g.missingRole}`),
+        );
+
+        const missingBySlug = new Map<string, string[]>();
+        for (const m of missing) {
+          missingBySlug.set(m.serviceSlug, [...(missingBySlug.get(m.serviceSlug) ?? []), m.roleKey]);
+        }
+        const freshQuotability = computeQuotability(fitmentsAfter, applicableSlugsForRoles, naKeys);
+        quotability = {
+          pct: freshQuotability.pct,
+          services: freshQuotability.services.map((s) => ({
+            ...s,
+            ...(missingBySlug.has(s.slug) ? { missing_roles: missingBySlug.get(s.slug) } : {}),
+          })),
+        } as any;
+        console.log(
+          `[role-resource] post-repair quotability ${Math.round(freshQuotability.pct * 100)}%` +
+            (missingCoreRoleStrings.length > 0
+              ? ` — still missing: ${missingCoreRoleStrings.join(", ")}`
+              : " — all binding core roles filled") +
+            (axlePairGapStrings.length > 0 ? ` — AXLE GAPS: ${axlePairGapStrings.join(", ")}` : ""),
+        );
+      } catch (e) {
+        console.warn("[role-resource] pass failed (non-fatal):", e);
       }
     }
 
@@ -4431,7 +4757,14 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // rejected multiple parts at once on its first vehicle. We can't predict
     // what car arrives next, so the run self-reports instead of waiting for a
     // human to read gap lists.
-    const finalGaps = [...classifyFieldGaps(allFields, sanityFlags, finalIdentity), ...priceGaps];
+    const finalGaps = [
+      ...classifyFieldGaps(allFields, sanityFlags, finalIdentity),
+      ...priceGaps,
+      // Round 12: role re-source outcomes — resource_never_found feeds the
+      // lifetime attempt cap; resource_not_applicable documents drum-brake-
+      // class findings alongside the durable na_role_keys write.
+      ...roleResourceGaps,
+    ];
     const partRejectCount = finalGaps.filter((g) =>
       g.reason.startsWith("validation_dropped:oem_part_rejected"),
     ).length;
@@ -4441,6 +4774,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           `likely a pattern gap, triage via devOnly/auditPartRejections:audit`,
       );
     }
+
+    // Round 12: role-identity rejections (wrong COMPONENT in a role — the
+    // Equinox battery-cable class). classifyFieldGaps already ledgers each as
+    // validation_dropped:role_identity_rejected:…; mirror them into errors[]
+    // so the run lands in the review queue. A make-wide spike here means a
+    // lexicon bug (one-file revert), not bad data.
+    const roleIdentityRejects = finalGaps.filter((g) =>
+      g.reason.startsWith("validation_dropped:role_identity_rejected"),
+    );
 
     // Update enrichment run. A batch-2 timeout still finalizes (batch-1 data
     // is real and the config gets its normal terminal status below) but the
@@ -4470,6 +4812,12 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         // Repeated part rejections on one run = suspect make pattern, not bad
         // data — routes to review so unknown formats on NEW makes surface.
         ...(partRejectCount >= 2 ? [`part_pattern_suspect:${args.make}:${partRejectCount}`] : []),
+        // Round 12: each wrong-component rejection, named per field.
+        ...roleIdentityRejects.map((g) => `role_identity_rejected:${g.field}`),
+        // Round 12: role re-source outcomes + half-covered axle pairs — the
+        // Crosstrek's rear-only brake data now routes to review even while the
+        // status gates are still in log stage.
+        ...roleResourceErrors,
         // Fitment-verification refutations: wrong-vehicle parts removed at
         // finalize (the fitment rows are already deleted; this is the audit
         // trail + review-queue routing).
@@ -4497,6 +4845,9 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           reason: f.reason,
           value: f.value != null ? String(f.value) : undefined,
         })),
+        // Round 12: half-covered axle pairs — deterministic and threshold-
+        // free, so the Crosstrek shape surfaces in review regardless of pct.
+        ...axleGapSanityFlags,
       ],
       field_gaps: finalGaps,
       quotability,
@@ -4584,6 +4935,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           fillRate,
           quotabilityPct: quotability?.pct,
           hasPriceGaps: priceGaps.length > 0,
+          // Round 12: post-repair completeness facts. Env-staged (default
+          // log) — see completionGate.ts for the enforce rollout contract.
+          missingCoreRoles: missingCoreRoleStrings,
+          axlePairGaps: axlePairGapStrings,
         };
         const status = computeEnrichmentStatus(gate);
         console.log(`[v8] Completion gate → ${status}: ${explainGateDecision(gate)}`);

@@ -285,6 +285,13 @@ export default defineSchema({
         }),
       ),
     ),
+    // Round 12: roleKeys (== oem_parts.subcategory) positively established as
+    // NOT existing on this vehicle (rear drums → no rear_rotor/rear_brake_pad).
+    // Written when role re-source research returns a not_applicable finding;
+    // merged into quotability's naRoleKeys so completeness enforcement and the
+    // axle-pair invariant never force-fill or eternally flag a physically
+    // absent role. Durable across re-runs (run-level field_gaps are not).
+    na_role_keys: v.optional(v.array(v.string())),
     created_at: v.optional(v.number()),
   })
     .index("by_config_key", ["config_key"])
@@ -404,6 +411,13 @@ export default defineSchema({
     last_confirmed_at: v.optional(v.number()),
     source_count: v.optional(v.number()),
     data_quality: v.optional(v.string()),
+    // Round 12: observed product LISTING title for this part number (JSON-LD
+    // Product.name or the extraction's verbatim observed_title). Evidence for
+    // the role-identity gate, fitment verifier, and director review — `name`
+    // stays the generic role label ("Battery") and is what customers see;
+    // scraped_name is what the SOURCE called it ("Battery Cable / Ground
+    // Extension" — the Equinox 84257919 defect was invisible without it).
+    scraped_name: v.optional(v.string()),
   })
     .index("by_part_number", ["oem_part_number"])
     .index("by_part_number_normalized", ["oem_part_number_normalized"])
@@ -849,6 +863,10 @@ export default defineSchema({
             core_total: v.number(),
             core_with_fitment: v.number(),
             core_with_price: v.number(),
+            // Round 12: names of binding core roles with NO fitment (and no
+            // satisfied-when-absent excuse) at snapshot time — the Crosstrek
+            // shipped rear-only brake data behind a healthy-looking pct.
+            missing_roles: v.optional(v.array(v.string())),
           }),
         ),
       }),

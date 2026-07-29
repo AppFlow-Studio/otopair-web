@@ -162,6 +162,11 @@ export function DeepDiveTab({ token, selected, onSelect, openTrigger, focusRunId
                 <div style={{ fontSize: 13, color: 'var(--slate-700)', lineHeight: 1.7 }}>
                   <div>Fill: <b>{fmtPct(ov.latestRun.fillRate)}</b> · Applicable: <b>{fmtPct(ov.latestRun.applicableFillRate)}</b></div>
                   <div>Quotability: <b>{fmtPct(ov.latestRun.quotabilityPct)}</b></div>
+                  {(ov.latestRun.missingRoles?.length ?? 0) > 0 && (
+                    <div style={{ color: 'var(--red-600)' }}>
+                      Missing core roles: <span className="mono" style={{ fontSize: 11 }}>{ov.latestRun.missingRoles.join(', ')}</span>
+                    </div>
+                  )}
                   <div>Cost: <b>{fmtCost(ov.latestRun.costUsd)}</b></div>
                 </div>
                 <div>

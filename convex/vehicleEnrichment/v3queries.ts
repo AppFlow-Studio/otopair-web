@@ -208,6 +208,131 @@ export const getLatestRunForConfig = internalQuery({
   },
 });
 
+/** Round 13: per-fitment candidate rows for the sole-flagged-winner detector
+ *  (soleFlaggedWinnerRoles in utils/roleResource.ts). Joined with the part's
+ *  subcategory + normalized number; pricing deliberately excluded (identity
+ *  and flag state are all the detector needs). */
+export const getFitmentCandidateRows = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicleConfigId))
+      .collect();
+    const out: Array<{
+      serviceType: string | null;
+      subcategory: string | null;
+      serviceRole: string | null;
+      refuteFlagged: boolean;
+      refuteReason: string | null;
+      mechanicVerified: boolean;
+      packageCode: string | null;
+      oemNormalized: string;
+    }> = [];
+    for (const f of fitments) {
+      const part: any = await ctx.db.get(f.part_id);
+      if (!part) continue;
+      out.push({
+        serviceType: (f as any).service_type ?? null,
+        subcategory: part.subcategory ?? null,
+        serviceRole: (f as any).service_role ?? null,
+        refuteFlagged: !!(f as any).refute_flagged,
+        refuteReason: ((f as any).refute_reason ?? null) as string | null,
+        mechanicVerified: !!(f as any).mechanic_verified,
+        packageCode: ((f as any).package_code ?? null) as string | null,
+        oemNormalized:
+          part.oem_part_number_normalized ??
+          String(part.oem_part_number ?? "").toUpperCase().replace(/[^A-Z0-9]/g, ""),
+      });
+    }
+    return out;
+  },
+});
+
+/** Round 12b: the most recent run whose quotability snapshot carries a
+ *  NON-EMPTY services list — the last known applicable-services set. A live
+ *  Crosstrek re-run returned an EMPTY services array from Batch-2 (variance,
+ *  not a parse break — the sibling Equinox run was fine), which made
+ *  quotability vacuously 1 and blinded the completeness layer: nothing to
+ *  check against means "nothing missing". This fallback restores the prior
+ *  truth so an empty batch response can't erase the completeness contract. */
+export const getPriorApplicableSlugs = internalQuery({
+  args: {
+    vehicleConfigId: v.id("vehicle_configs"),
+    excludeRunId: v.optional(v.id("enrichment_runs")),
+  },
+  handler: async (ctx, args) => {
+    const runs = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) =>
+        q.eq("vehicle_config_id", args.vehicleConfigId),
+      )
+      .order("desc")
+      .take(6);
+    for (const run of runs) {
+      if (args.excludeRunId && run._id === args.excludeRunId) continue;
+      const slugs = (((run as any).quotability?.services ?? []) as any[]).map(
+        (s: any) => s.slug,
+      );
+      if (slugs.length > 0) return slugs as string[];
+    }
+    return [] as string[];
+  },
+});
+
+/** Round 12: this config's hard-blocked OEM numbers (refuted_fitments mode
+ *  "block"), keyed for the Tier-2 researcher's exclusion list. Observed live
+ *  on the first Crosstrek repair: the researcher returned 26300SA001 — the
+ *  exact blocklisted 2004-era rotor (it dominates the open web for the
+ *  query) — and while the write gate rejected it safely, without the
+ *  exclusion the researcher would re-find it on every retry. */
+export const getBlockedOemsForConfig = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("refuted_fitments")
+      .withIndex("by_config", (q) => q.eq("vehicle_config_id", args.vehicleConfigId))
+      .collect();
+    return rows
+      .filter((r) => (r as any).mode === "block")
+      .map((r) => ({
+        oem_part_number_normalized: (r as any).oem_part_number_normalized as string,
+        service_type: ((r as any).service_type ?? null) as string | null,
+        reason: (r as any).reason as string,
+      }));
+  },
+});
+
+/** Round 12: per-field count of FAILED role re-source attempts across this
+ *  config's recent runs (reasons resource_never_found /
+ *  resource_refuted_no_replacement in field_gaps). Feeds the lifetime attempt
+ *  cap so a genuinely-unfindable role stops burning search credits — while
+ *  `resourced` / `resource_not_applicable` end the need and don't count. */
+export const getRoleResourceAttempts = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const runs = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) =>
+        q.eq("vehicle_config_id", args.vehicleConfigId),
+      )
+      .order("desc")
+      .take(10);
+    const counts: Record<string, number> = {};
+    for (const run of runs) {
+      for (const gap of ((run as any).field_gaps ?? []) as Array<{ field: string; reason: string }>) {
+        if (
+          gap?.reason === "resource_never_found" ||
+          gap?.reason === "resource_refuted_no_replacement"
+        ) {
+          counts[gap.field] = (counts[gap.field] ?? 0) + 1;
+        }
+      }
+    }
+    return counts;
+  },
+});
+
 export const resolveConfigForBackfill = internalQuery({
   args: { vehicleConfigId: v.id("vehicle_configs") },
   handler: async (ctx, args) => {

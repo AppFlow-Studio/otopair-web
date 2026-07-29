@@ -196,6 +196,47 @@ export const backfillConfigParts = action({
 });
 
 // ---------------------------------------------------------------------------
+// 2b. repairConfigRoles — round 12: fill EMPTY binding core roles in place
+// ---------------------------------------------------------------------------
+//
+// No purge, no re-run: detects missing binding core roles from live fitments
+// (the Crosstrek shipped rear-only brake data as "complete") and repairs them
+// via the state-based re-source loop — Tier-1 year-scoped storefront lookup,
+// Tier-2 verified research with a drum-brake not_applicable escape. Empty-fill
+// only; every write passes the blocklist/cross-make/role-identity chokepoints.
+// Fire-and-return like the other backfills; the internal action logs its own
+// summary and reconciles the run row via patchRunRoleHealth.
+
+export const repairConfigRoles = action({
+  args: backfillArgs,
+  handler: async (ctx, args) => {
+    const actor = await requireDirector(ctx, args.token, "data.trigger");
+    const resolved = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
+      { vehicleConfigId: args.id },
+    );
+    if (!resolved) {
+      return { status: "not_found" as const, message: "Vehicle config not found" };
+    }
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.vehicleEnrichment.resourceRoles.repairMissingRoles,
+      { vehicleConfigId: args.id },
+    );
+
+    await ctx.runMutation(internal.directorConfigBackfills._writeBackfillAudit, {
+      id: args.id,
+      actorName: actor.name,
+      actorId: actor.userId,
+      detail: `Role-completeness repair scheduled for ${resolved.year} ${resolved.make} ${resolved.model} ${resolved.trim}`.trim(),
+    });
+
+    return { status: "scheduled" as const, scope: "roles" as const };
+  },
+});
+
+// ---------------------------------------------------------------------------
 // 3. repriceConfigParts — PRICES-ONLY, self-contained (no LLM, no pipeline)
 // ---------------------------------------------------------------------------
 //

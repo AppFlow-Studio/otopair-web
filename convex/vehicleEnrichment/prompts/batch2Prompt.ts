@@ -192,6 +192,11 @@ ${fieldList}
 Search for each missing field with 1-2 targeted queries. Return each as:
 { "field_name": { "value": ..., "source_url": "...", "source_type": "web_search", "confidence": 0.9 } }
 
+For *_oem part-number fields, ALSO include "observed_title": the EXACT product listing title the source shows for that number, verbatim (null if no product title is visible):
+{ "battery_oem": { "value": "...", "observed_title": "ACDelco Gold 47AGM Battery", "source_url": "...", "source_type": "web_search", "confidence": 0.9 } }
+NEVER compose, paraphrase, or infer a title — if you did not literally see a product listing title for that exact number, observed_title MUST be null. A composed title (e.g. "Battery — <model> Primary (Labeled <number>)") corrupts the component-identity evidence chain and is worse than no title.
+The title is evidence of WHAT the part is. If the listing's title names an accessory or adjacent hardware (cable, bracket, tray, housing, cap, sensor, hose) rather than the component the field asks for, that number is the WRONG part: return null for the value and keep searching.
+
 === OEM PART NUMBERS (from Batch 1, for pricing lookup) ===
 ${partsList}
 

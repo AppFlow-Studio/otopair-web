@@ -50,6 +50,15 @@ export const FIELD_SPECS: Record<string, FieldSpec> = {
   drivetrain:               { valueType: "string", targets: [{ t: "vehicle_config", col: "drivetrain" }] },
   brake_fluid_capacity_oz:  { valueType: "number", targets: [{ t: "vehicle_config", col: "brake_fluid_capacity_oz" }] },
   ps_fluid_capacity_oz:     { valueType: "number", targets: [{ t: "vehicle_config", col: "ps_fluid_capacity_oz" }] },
+  // Rotor DISCARD minimums — the replace-at number the inspection grades
+  // against. This is the ONLY interactive path that can fill one, because
+  // resolveReviewField requires a source URL; the extraction paths that don't
+  // carry a quotable label are blocked upstream (getNullFields). Resolving one
+  // here stamps quality "director_verified" and adds the column to
+  // vehicle_configs.verified_fields so the next re-enrich cannot clobber it.
+  // NEVER map the nominal here — it is not a minimum and is never graded.
+  rotor_front_min_thickness_mm: { valueType: "number", targets: [{ t: "vehicle_config", col: "rotor_front_min_thickness_mm" }] },
+  rotor_rear_min_thickness_mm:  { valueType: "number", targets: [{ t: "vehicle_config", col: "rotor_rear_min_thickness_mm" }] },
   // trim_specs
   lug_nut_torque_ft_lbs:    { valueType: "number", targets: [{ t: "trim_specs", col: "lug_nut_torque_ft_lbs" }] },
   tire_pressure_front_psi:  { valueType: "number", targets: [{ t: "trim_specs", col: "recommended_tire_pressure_front_psi" }] },

@@ -490,6 +490,14 @@ function isValidSourceUrl(url: string): boolean {
   }
 }
 
+/** vehicle_configs column → axle, for the rotor-minimum provenance stamp.
+ *  Note both axles share one rotor_min_source_url: the most recent authority
+ *  wins there, while the per-axle *_min_quality badges stay independent. */
+const ROTOR_MIN_COLUMN_AXLE: Record<string, "front" | "rear" | undefined> = {
+  rotor_front_min_thickness_mm: "front",
+  rotor_rear_min_thickness_mm: "rear",
+};
+
 /** Apply one field target's write + its own audit_log row. Returns the
  *  before/after label for the caller's summary, or null when it was a no-op. */
 async function applyFieldTarget(
@@ -537,7 +545,27 @@ async function applyFieldTarget(
   if (target.t === "vehicle_config") {
     const cur = (cfg as any)[target.col];
     if (cur === parsedValue) return null;
-    await ctx.db.patch(cfg._id, { [target.col]: parsedValue } as any);
+    // Stamp the column as human-verified so the pipeline's patchVehicleConfig
+    // skips it on the next finalize. Without this the correction is silently
+    // overwritten — which is exactly what happened to drivetrain /
+    // brake_fluid_capacity_oz / ps_fluid_capacity_oz before the guard existed.
+    const verified = new Set(((cfg as any).verified_fields ?? []) as string[]);
+    verified.add(target.col);
+    const patch: Record<string, unknown> = { [target.col]: parsedValue };
+    // A rotor minimum a director confirmed against a source outranks any
+    // scrape, and carries its provenance so the inspection grades it as real
+    // rather than as an estimate. The observed label is cleared because the
+    // value is now attested by a human, not read off a page — leaving a stale
+    // scrape label would misrepresent the audit trail.
+    const rotorAxle = ROTOR_MIN_COLUMN_AXLE[target.col];
+    if (rotorAxle) {
+      patch[`rotor_${rotorAxle}_min_quality`] = "director_verified";
+      patch.rotor_min_source_url = sourceUrl;
+      patch.rotor_min_observed_label = undefined;
+      verified.add(`rotor_${rotorAxle}_min_quality`);
+    }
+    patch.verified_fields = [...verified];
+    await ctx.db.patch(cfg._id, patch as any);
     await ctx.db.insert("audit_log", {
       entity_type: "vehicle_config", entity_id: String(cfg._id), action: "field_edit",
       actor: actor.name, actor_id: actor.userId,

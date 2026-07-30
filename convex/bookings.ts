@@ -4964,8 +4964,23 @@ function validatePrejobReport(
   if (typeof prejob.mileage !== "number" || !Number.isFinite(prejob.mileage)) {
     throw new Error("Mileage is required before starting this booking.");
   }
-  if (replaced.size < 4 && !hasText(prejob.tire_brand)) {
-    throw new Error("Tire brand is required before starting this booking.");
+  const tireDetails = prejob.tire_details ?? {};
+  const tireLabels: Record<TirePosition, string> = {
+    front_left: "Front-left",
+    front_right: "Front-right",
+    rear_left: "Rear-left",
+    rear_right: "Rear-right",
+  };
+  for (const position of Object.keys(tireLabels) as TirePosition[]) {
+    if (
+      !replaced.has(position) &&
+      !hasText(tireDetails[position]?.brand) &&
+      !hasText(prejob.tire_brand)
+    ) {
+      throw new Error(
+        `${tireLabels[position]} tire brand is required before starting this booking.`,
+      );
+    }
   }
   if (!hasText(prejob.tire_size_front)) {
     throw new Error("Front tire size is required before starting this booking.");

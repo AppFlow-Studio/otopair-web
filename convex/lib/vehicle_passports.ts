@@ -68,6 +68,18 @@ export const tireTreadMeasurementsValidator = v.object({
   rear_right: v.optional(tireTreadReadingValidator),
 });
 
+export const tireIdentityValidator = v.object({
+  brand: v.optional(nullableStringValidator),
+  model: v.optional(nullableStringValidator),
+});
+
+export const tireIdentityByPositionValidator = v.object({
+  front_left: v.optional(tireIdentityValidator),
+  front_right: v.optional(tireIdentityValidator),
+  rear_left: v.optional(tireIdentityValidator),
+  rear_right: v.optional(tireIdentityValidator),
+});
+
 export const rotorUnitValidator = v.union(v.literal("in"), v.literal("mm"));
 
 export const rotorThicknessReadingValidator = v.object({
@@ -176,6 +188,7 @@ export const vehiclePassportUpdateValidator = v.object({
 
 export const prejobReportValidator = v.object({
   mileage: v.union(v.float64(), v.null()),
+  tire_details: v.optional(v.union(tireIdentityByPositionValidator, v.null())),
   tire_brand: v.optional(nullableStringValidator),
   tire_model: v.optional(nullableStringValidator),
   tire_size_front: v.optional(nullableStringValidator),

@@ -275,7 +275,7 @@ describe("multi-point inspection requirements", () => {
     expect(getDirtyIncompleteZones(state)).toEqual([]);
   });
 
-  it("synchronizes shared fields from either corner and invalidates completed targets", () => {
+  it("shares axle tire sizes but keeps tire brands in their entered corner", () => {
     const state = createInspectionState();
     state.zones.FL!.done = true;
 
@@ -303,7 +303,7 @@ describe("multi-point inspection requirements", () => {
       ["FL", "FR", "RL", "RR"].map(
         (id) => withBrand.zones[id as ZoneId]!.text.tire_brand,
       ),
-    ).toEqual(["michelin", "michelin", "michelin", "michelin"]);
+    ).toEqual(["", "", "", "michelin"]);
   });
 
   it("shows the shared tire and brake metadata once in every corner", () => {
@@ -368,7 +368,13 @@ describe("multi-point inspection payload derivation", () => {
       rotor: "9",
     });
     state.zones.FL!.text.tire_brand = "michelin";
-    state.zones.FL!.text.tire_model = "michelin_defender";
+    state.zones.FL!.text.tire_model = "defender";
+    state.zones.FR!.text.tire_brand = "goodyear";
+    state.zones.FR!.text.tire_model = "assurance";
+    state.zones.RL!.text.tire_brand = "continental";
+    state.zones.RL!.text.tire_model = "truecontact";
+    state.zones.RR!.text.tire_brand = "bridgestone";
+    state.zones.RR!.text.tire_model = "turanza";
     state.zones.FL!.text.tire_size = "225/45R18";
     state.zones.RL!.text.tire_size = "245/40R18";
 
@@ -402,7 +408,12 @@ describe("multi-point inspection payload derivation", () => {
         normalized_um: 9_000,
       },
     });
-    expect(payload.tire_model).toBe("michelin_defender");
+    expect(payload.tire_details).toEqual({
+      front_left: { brand: "michelin", model: "defender" },
+      front_right: { brand: "goodyear", model: "assurance" },
+      rear_left: { brand: "continental", model: "truecontact" },
+      rear_right: { brand: "bridgestone", model: "turanza" },
+    });
   });
 
   it("derives the reported tread from complete inner, center, and outer readings", () => {

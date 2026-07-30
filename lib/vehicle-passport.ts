@@ -187,6 +187,15 @@ export type JobActualPartPayload = {
 
 export type PreJobSurveyPayload = {
   mileage: number | null;
+  /** Tire identity recorded at each inspected corner. */
+  tire_details?: Partial<
+    Record<
+      "front_left" | "front_right" | "rear_left" | "rear_right",
+      { brand?: string | null; model?: string | null }
+    >
+  > | null;
+  // Legacy vehicle-passport fields. New multi-point inspections use
+  // `tire_details` so different corners are not flattened into one value.
   tire_brand?: string | null;
   tire_model?: string | null;
   tire_size_front?: string | null;

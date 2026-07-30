@@ -9,7 +9,7 @@
 //
 // The inspection is the new pre-job flow. To keep the existing persistence spine
 // (passport patch + job_actuals.prejob_report) untouched, `derivePrejobFromInspection`
-// maps inspection state back into the legacy `PreJobSurveyPayload`.
+// maps inspection state into `PreJobSurveyPayload`.
 
 // NOTE: relative imports (not the "@/" alias) so this module is safe to import
 // from the Convex bundler (convex/inspections.ts) as well as the Next app.
@@ -633,7 +633,9 @@ export function patchSharedInspectionText(
       ? sourceId === "FL" || sourceId === "FR"
         ? (["FL", "FR"] as ZoneId[])
         : (["RL", "RR"] as ZoneId[])
-      : CORNER_IDS;
+      : key === "pad_brand"
+        ? CORNER_IDS
+        : [sourceId];
   let next = state;
   for (const id of targets) {
     const current =
@@ -964,6 +966,22 @@ export function derivePrejobFromInspection(
     .map((zone) => zone?.text.tire_size?.trim())
     .find(Boolean);
   const padBrand = sharedText("pad_brand");
+  const tireDetails: NonNullable<PreJobSurveyPayload["tire_details"]> = {};
+  for (const [position, zone] of corners) {
+    if (!zone) continue;
+    const brand = zone.text.tire_brand?.trim();
+    const model = zone.text.tire_model?.trim();
+    if (
+      (!brand || brand === OTHER_INSPECTION_OPTION) &&
+      (!model || model === OTHER_INSPECTION_OPTION)
+    ) {
+      continue;
+    }
+    tireDetails[position] = {
+      ...(brand && brand !== OTHER_INSPECTION_OPTION ? { brand } : {}),
+      ...(model && model !== OTHER_INSPECTION_OPTION ? { model } : {}),
+    };
+  }
 
   const frontTire = worstTireCondition(
     triToTireCondition(fl?.tri.wear),
@@ -985,8 +1003,9 @@ export function derivePrejobFromInspection(
 
   return {
     mileage: opts.mileage,
-    tire_brand: sharedText("tire_brand"),
-    tire_model: sharedText("tire_model"),
+    tire_details: Object.keys(tireDetails).length ? tireDetails : null,
+    tire_brand: null,
+    tire_model: null,
     tire_size_front: frontSize ? normalizeTireSize(frontSize) : null,
     tire_size_rear: rearSize ? normalizeTireSize(rearSize) : null,
     front_tire_condition: frontTire,

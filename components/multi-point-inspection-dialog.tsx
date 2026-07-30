@@ -1692,6 +1692,10 @@ function FieldRow({
       field.key === "tire_size" && next !== OTHER_INSPECTION_OPTION
         ? normalizeTireSize(next)
         : next;
+    if (field.key === "tire_brand" || field.key === "tire_model") {
+      onPatch({ text: { ...zs.text, [field.key]: normalized } });
+      return;
+    }
     onSharedText(field.key, normalized);
   };
   return (

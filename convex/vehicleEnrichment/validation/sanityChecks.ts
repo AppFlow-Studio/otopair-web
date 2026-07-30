@@ -41,6 +41,96 @@ const BASE_CAPACITY_FLAG_BANDS: Record<string, [number, number]> = {
   transfer_case_fluid_capacity_qts: [0.5, 3],
 };
 
+/** Fields the capacity resolver actively re-fetches/corroborates. Two rules key
+ *  on this: (1) the in-base-band forum rescue below only KEEPS a flagged value
+ *  when a resolver will re-resolve it — for any other field nothing downstream
+ *  would ever correct a kept-wrong forum value, so those keep the hard drop;
+ *  (2) the mid-tier single-source cap skips these fields (the resolver's full
+ *  path adds nothing there). */
+const RESOLVER_OWNED_CAPACITY_FIELDS: ReadonlySet<string> = new Set([
+  "oil_capacity_qts",
+  "coolant_capacity_qts",
+]);
+
+// ── Rotor thickness bands ─── single source of truth, mirrored by the
+// SANITY_RULES entries below (kept as data rules so the generic loop still
+// covers the batch-extraction path). validateRotorResolution exists for write
+// paths that DON'T flow through runSanityChecks: the director backfill and the
+// finalize persist of resolver output.
+export const ROTOR_MIN_BANDS = {
+  front: { rejectMin: 8, rejectMax: 40, flagMin: 15, flagMax: 32 },
+  rear: { rejectMin: 4, rejectMax: 32, flagMin: 6, flagMax: 24 },
+} as const;
+export const ROTOR_NOMINAL_BANDS = {
+  front: { rejectMin: 8, rejectMax: 45 },
+  rear: { rejectMin: 5, rejectMax: 40 },
+} as const;
+
+export type RotorResolutionVerdict = {
+  /** Reject reasons per axle — a rejected axle must NOT be written. */
+  rejects: Partial<Record<"front" | "rear", string>>;
+  /** Flag reasons per axle — write allowed, but quality must be demoted to
+   *  "oem_spec_flagged" so classify() warn-caps it like an estimate. */
+  flags: Partial<Record<"front" | "rear", string>>;
+};
+
+/**
+ * Pure rotor-minimum validation for resolver/backfill writes. Applies the same
+ * physics as the in-run rules: reject bands (diameter / inches-as-mm catches),
+ * min >= nominal impossibility, delta plausibility, front-below-rear pairing.
+ * Label/kind checks are NOT repeated here — parseRotorThickness only emits a
+ * minimum under a label that classified as discard_min.
+ */
+export function validateRotorResolution(input: {
+  front?: { minMm?: number | null; nominalMm?: number | null };
+  rear?: { minMm?: number | null; nominalMm?: number | null };
+}): RotorResolutionVerdict {
+  const verdict: RotorResolutionVerdict = { rejects: {}, flags: {} };
+  for (const axle of ["front", "rear"] as const) {
+    const minMm = input[axle]?.minMm;
+    const nominalMm = input[axle]?.nominalMm;
+    if (minMm == null) continue;
+    if (!Number.isFinite(minMm)) {
+      verdict.rejects[axle] = "rotor_min_not_numeric";
+      continue;
+    }
+    const band = ROTOR_MIN_BANDS[axle];
+    if (minMm < band.rejectMin || minMm > band.rejectMax) {
+      verdict.rejects[axle] =
+        `rotor_min_out_of_range:${minMm}mm outside ${band.rejectMin}-${band.rejectMax}`;
+      continue;
+    }
+    if (nominalMm != null && Number.isFinite(nominalMm)) {
+      const nomBand = ROTOR_NOMINAL_BANDS[axle];
+      if (nominalMm >= nomBand.rejectMin && nominalMm <= nomBand.rejectMax) {
+        if (minMm >= nominalMm) {
+          verdict.rejects[axle] = `rotor_min_gte_nominal:${minMm}>=${nominalMm}`;
+          continue;
+        }
+        const delta = Math.round((nominalMm - minMm) * 100) / 100;
+        if (delta < 0.5 || delta > 4.0) {
+          verdict.flags[axle] =
+            `rotor_min_delta_implausible:${delta}mm below nominal ${nominalMm}mm`;
+        }
+      }
+    }
+    if (minMm < band.flagMin || minMm > band.flagMax) {
+      verdict.flags[axle] ??=
+        `rotor_min_atypical:${minMm}mm outside typical ${band.flagMin}-${band.flagMax}`;
+    }
+  }
+  const f = input.front?.minMm;
+  const r = input.rear?.minMm;
+  if (
+    f != null && r != null && Number.isFinite(f) && Number.isFinite(r) &&
+    !verdict.rejects.front && !verdict.rejects.rear && f < r
+  ) {
+    // Pair violation can't say which side is wrong — flag the front, never reject.
+    verdict.flags.front ??= `rotor_min_front_below_rear: front ${f}mm < rear ${r}mm`;
+  }
+  return verdict;
+}
+
 const SANITY_RULES: SanityRule[] = [
   // ── Fluids ──
   { field: "oil_capacity_qts", type: "range", min: 3, max: 16, severity: "flag",
@@ -497,6 +587,7 @@ export function runSanityChecks(
       value: null,
       flagged: true,
       flag_reason: reason.split(":")[0],
+      rejected: true,
     };
   };
   const rotorFlag = (field: string, reason: string, cur: FieldResult) => {
@@ -643,7 +734,10 @@ export function runSanityChecks(
         const numVal = Number(field.value);
         const inBaseBand =
           baseBand != null && !isNaN(numVal) && numVal >= baseBand[0] && numVal <= baseBand[1];
-        if (inBaseBand) {
+        // The rescue is only sound for fields a resolver re-resolves from
+        // authoritative sources; elsewhere a kept-wrong forum value would
+        // never be corrected, so the hard drop stands.
+        if (inBaseBand && RESOLVER_OWNED_CAPACITY_FIELDS.has(rule.field)) {
           reason = `${rule.reason} — kept (in base band) but sole source is a low-authority page (${field.source_url}); confidence capped`;
           fields[rule.field] = {
             ...field,
@@ -660,7 +754,7 @@ export function runSanityChecks(
 
       flags.push({ field: rule.field, severity, reason, value: field.value });
       if (severity === "reject") {
-        fields[rule.field] = { ...field, value: null, flagged: true, flag_reason: reason };
+        fields[rule.field] = { ...field, value: null, flagged: true, flag_reason: reason, rejected: true };
       } else {
         // A fired flag means "suspicious, needs review" — it must not persist
         // at extraction confidence (batch-2 audit: a flagged out-of-band
@@ -724,14 +818,6 @@ export function runSanityChecks(
 
   return flags;
 }
-
-/** Fields the capacity resolver actively re-fetches/corroborates — the mid-tier
- *  cap above would only pre-flag them into the resolver's slower full-resolution
- *  path for no accuracy gain. */
-const RESOLVER_OWNED_CAPACITY_FIELDS: ReadonlySet<string> = new Set([
-  "oil_capacity_qts",
-  "coolant_capacity_qts",
-]);
 
 /** Numeric fluid-capacity fields subject to the forum-corroboration rule. */
 const CAPACITY_FIELDS = [

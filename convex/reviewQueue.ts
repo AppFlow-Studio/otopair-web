@@ -89,7 +89,10 @@ async function backfillConsensusImpl(ctx: MutationCtx) {
   const runs = await ctx.db.query("enrichment_runs").collect();
   let inserted = 0;
   for (const r of runs) {
-    const flagged = (r.sanity_flags?.length ?? 0) > 0;
+    // W1.5: severity "info" sanity_flags entries (completion-gate decision
+    // record etc.) exist on EVERY finalized run — not a review signal.
+    const reviewFlags = (r.sanity_flags ?? []).filter((f) => f.severity !== "info");
+    const flagged = reviewFlags.length > 0;
     if (!(r.status === "pending" || r.status === "needs_review" || flagged)) continue;
     if (
       await insertIfNew(ctx, {
@@ -98,7 +101,7 @@ async function backfillConsensusImpl(ctx: MutationCtx) {
         entity_type: "vehicle_config",
         entity_id: String(r.vehicle_config_id),
         title: flagged
-          ? `Run flagged: ${r.sanity_flags!.map((f) => f.field).slice(0, 3).join(", ")}${r.sanity_flags!.length > 3 ? "…" : ""}`
+          ? `Run flagged: ${reviewFlags.map((f) => f.field).slice(0, 3).join(", ")}${reviewFlags.length > 3 ? "…" : ""}`
           : `Enrichment run ${r.status}`,
         priority: flagged ? "high" : "normal",
       })

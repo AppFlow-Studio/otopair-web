@@ -220,4 +220,28 @@ crons.daily(
   {},
 );
 
+// Zombie enrichment-run reaper: any in-progress run whose chain has been
+// silent past 30 min (2x the 15-min liveness window; healthy chains heartbeat
+// every 60s fast / 10 min slow) is marked failed and its config restored to
+// pending/partial. STEP 0's stuck valve only fires when a NEW enrichment hits
+// the same config_key, so without this sweep an unpopular config stays
+// soft-locked forever (the Jul-21 batch2 zombie). DB-only; never spends.
+crons.interval(
+  "reap-stale-enrichment-runs",
+  { minutes: 15 },
+  internal.vehicleEnrichment.v3mutations.reapStaleRuns,
+  {},
+);
+
+// NHTSA ODI (Phase 0.1): re-pull recalls + complaint signals for configs whose
+// ODI data is > 30 days old. Free public API (no auth); the sweep schedules
+// each config as its own staggered action, so a modest limit keeps the daily
+// request volume trivial. Fail-open — an NHTSA outage stores nothing.
+crons.interval(
+  "refresh-nhtsa-odi",
+  { hours: 24 },
+  (internal as any).vehicleEnrichment.nhtsaOdi.refreshStaleOdi,
+  { limit: 50 },
+);
+
 export default crons;

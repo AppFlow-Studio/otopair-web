@@ -126,7 +126,12 @@ export const processVin = internalAction({
       // ════════════════════════════════════════════════════════════
       // SOURCE 2: NHTSA vPIC (fallback — free, always available)
       // ════════════════════════════════════════════════════════════
-      const nhtsaResp = await fetch(`${NHTSA_API}/${args.vin}?format=json`);
+      // 15s cap: vPIC normally answers in ~1s; a hung socket otherwise eats
+      // the whole decode action. The enclosing try/catch fails open (null →
+      // caller reports decode_failed) — no retry, NHTSA is free to re-hit.
+      const nhtsaResp = await fetch(`${NHTSA_API}/${args.vin}?format=json`, {
+        signal: AbortSignal.timeout(15_000),
+      });
       const nhtsaData = await nhtsaResp.json();
 
       const errorCode = getValue(nhtsaData, "ErrorCode");
@@ -1736,6 +1741,10 @@ async function fetchAnthropicWithRetry(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
+      // Dead-socket bound only — web_search generations legitimately run
+      // minutes, so this must sit above any plausible completion time. The
+      // abort throws into each caller's existing fail-open try/catch.
+      signal: AbortSignal.timeout(300_000),
     });
     lastResponse = response;
     if (response.status === 429) {

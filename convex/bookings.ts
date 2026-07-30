@@ -4843,20 +4843,23 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       transmission?.fluid_type,
       "oem_default"
     ),
-    // A derived minimum is tagged "estimated", never "oem_default" — it is not
-    // an OEM figure, and the tag is what downstream surfaces key on to avoid
-    // presenting it as the manufacturer's spec.
+    // A derived OR sanity-flagged minimum is tagged "estimated", never
+    // "oem_default" — neither is a clean OEM figure, and the tag is what
+    // downstream surfaces key on to avoid presenting it as the manufacturer's
+    // spec.
     "brakes.rotor_min_front_mm": buildSourceTag(
       null,
       vehicleConfig?.rotor_front_min_thickness_mm,
-      vehicleConfig?.rotor_front_min_quality === "derived_from_nominal"
+      vehicleConfig?.rotor_front_min_quality === "derived_from_nominal" ||
+        vehicleConfig?.rotor_front_min_quality === "oem_spec_flagged"
         ? "estimated"
         : "oem_default"
     ),
     "brakes.rotor_min_rear_mm": buildSourceTag(
       null,
       vehicleConfig?.rotor_rear_min_thickness_mm,
-      vehicleConfig?.rotor_rear_min_quality === "derived_from_nominal"
+      vehicleConfig?.rotor_rear_min_quality === "derived_from_nominal" ||
+        vehicleConfig?.rotor_rear_min_quality === "oem_spec_flagged"
         ? "estimated"
         : "oem_default"
     ),

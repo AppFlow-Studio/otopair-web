@@ -263,15 +263,21 @@ export default defineSchema({
     rotor_rear_nominal_thickness_mm: v.optional(v.number()),
     // Per-axle provenance for the MINIMUM — drives the "est." badge, the
     // passport source tag and the classify() warn-cap. One of:
-    //   "oem_spec" | "mechanic_read" | "director_verified"
+    //   "oem_spec" | "oem_spec_flagged" | "mechanic_read" | "director_verified"
     //   | "derived_from_nominal" | "default_fallback"
+    // "oem_spec_flagged" = sourced but sanity-flagged (delta-implausible or
+    // front<rear) — graded like an estimate (warn-capped), never as a clean spec.
     rotor_front_min_quality: v.optional(v.string()),
     rotor_rear_min_quality: v.optional(v.string()),
     rotor_min_source_url: v.optional(v.string()),
     // VERBATIM label the minimum was read under ("Minimum Thickness", "MIN TH").
     // Mirrors the observed_title pattern — lets a director audit whether we read
     // a real minimum or a bare "Thickness". Null => not sourced from a page.
+    // DEPRECATED (2026-07-29): one shared column let a front label vouch for a
+    // rear value. Kept read-only for unmigrated rows; new writes go per-axle.
     rotor_min_observed_label: v.optional(v.string()),
+    rotor_front_min_observed_label: v.optional(v.string()),
+    rotor_rear_min_observed_label: v.optional(v.string()),
     ps_fluid_type: v.optional(v.string()),
     ps_fluid_capacity_oz: v.optional(v.number()),
     enrichment_status: v.optional(v.string()),
@@ -864,9 +870,15 @@ export default defineSchema({
       v.array(
         v.object({
           field: v.string(),
-          severity: v.string(), // "reject" | "flag"
+          severity: v.string(), // "reject" | "flag" | "info" ("info" = observability record, never a review signal)
           reason: v.string(),
           value: v.optional(v.string()),
+          // W1.5 (G32/G33): which POST-write finalize gate emitted this entry —
+          // "trans_fluid" | "fluid_brand" | "fitment_refute" | "role_identity" |
+          // "rotor_resolver" | "completion_gate" (taxonomy owned by
+          // vehicleEnrichment/utils/lateSanityFlags.ts). Absent on pre-W1.5
+          // rows and on the early sanity/OEM flags — additive only.
+          stage: v.optional(v.string()),
         }),
       ),
     ),
@@ -5099,4 +5111,46 @@ export default defineSchema({
     source: v.string(), // 'spec_v2_locked' | 'empirical_correction'
     updated_at: v.number(),
   }).index("by_category_tier", ["labor_category_id", "tier"]),
+
+  // ===== NHTSA ODI (Phase 0.1) — recalls + complaint reliability signals =====
+  // Free public-domain data from api.nhtsa.gov (no auth). Written only by
+  // vehicleEnrichment/nhtsaOdi.ts; fail-open — an NHTSA outage stores nothing.
+
+  // One row per (vehicle_config, NHTSA campaign). Upsert keyed on that pair —
+  // re-fetches update fetched_at and text fields, never duplicate a campaign.
+  vehicle_recalls: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    nhtsa_campaign_number: v.string(), // e.g. "20V682000"
+    component: v.string(), // verbatim ODI component, e.g. "FUEL SYSTEM, GASOLINE:DELIVERY:FUEL PUMP"
+    summary: v.string(),
+    consequence: v.optional(v.string()),
+    remedy: v.optional(v.string()),
+    report_received_date: v.optional(v.string()), // verbatim "MM/DD/YYYY" from ODI
+    source: v.literal("nhtsa"),
+    fetched_at: v.number(),
+  })
+    .index("by_config", ["vehicle_config_id"])
+    .index("by_campaign", ["nhtsa_campaign_number"]),
+
+  // One row per vehicle_config: complaint volume rolled up by normalized
+  // top-level component group (see normalizeComponentName in nhtsaOdi.ts).
+  // by_fetched_at drives the daily stale scan (refreshStaleOdi) — oldest
+  // rows first via index order, .take(limit), no unbounded .collect().
+  config_reliability_signals: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    complaint_total: v.number(),
+    complaints_by_component: v.array(
+      v.object({
+        component: v.string(), // normalized group, e.g. "FUEL SYSTEM, GASOLINE"
+        count: v.number(),
+        crash_count: v.number(),
+        fire_count: v.number(),
+      }),
+    ),
+    top_component: v.optional(v.string()),
+    fetched_at: v.number(),
+    source: v.literal("nhtsa_odi"),
+  })
+    .index("by_config", ["vehicle_config_id"])
+    .index("by_fetched_at", ["fetched_at"]),
 });

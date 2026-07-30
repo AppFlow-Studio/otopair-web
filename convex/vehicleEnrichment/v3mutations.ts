@@ -11,6 +11,7 @@ import { makesSameFamily, sanitizePartNumber } from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
 import { checkRoleIdentity } from "./roleIdentity";
 import { isMarketplaceDomain, isMarketplaceUrl } from "./sourceRegistry";
+import { isRunStale, RUN_IN_PROGRESS_STATUSES, stripVerifiedFields } from "./runFence";
 import { WEAR_ITEM_SERVICE_SLUGS } from "./types";
 
 /**
@@ -93,7 +94,14 @@ export const upsertVehicleConfig = internalMutation({
       if (args.nhtsa_vin_key && !existing.nhtsa_vin_key) {
         patch.nhtsa_vin_key = args.nhtsa_vin_key;
       }
-      await ctx.db.patch(existing._id, patch);
+      // F31: finalize calls THIS mutation, not patchVehicleConfig — without
+      // the same verified_fields filter a director-verified drivetrain was
+      // re-clobbered every re-enrich. Operational keys (enrichment_status,
+      // fill_rate, ...) are hard-exempt inside stripVerifiedFields.
+      await ctx.db.patch(
+        existing._id,
+        stripVerifiedFields(patch, (existing as any).verified_fields),
+      );
       return existing._id;
     }
 
@@ -121,6 +129,22 @@ export const upsertVehicleConfig = internalMutation({
 // ============================================================================
 // 1b. patchVehicleConfig — patch individual fields on vehicle_configs
 // ============================================================================
+
+/** The only columns `clear_fields` may remove — a sanity-rejected rotor value
+ *  must not survive as a stale stored spec (a pre-gate-era diameter-as-thickness
+ *  otherwise outlives every re-run because the re-extracted bad value nulls →
+ *  undefined → skipped). Generalizing beyond rotor columns requires its own
+ *  reject-provenance design; do not add fields casually. */
+const CLEARABLE_ROTOR_COLUMNS: ReadonlySet<string> = new Set([
+  "rotor_front_min_thickness_mm",
+  "rotor_rear_min_thickness_mm",
+  "rotor_front_min_quality",
+  "rotor_rear_min_quality",
+  "rotor_front_min_observed_label",
+  "rotor_rear_min_observed_label",
+  "rotor_min_observed_label",
+  "rotor_min_source_url",
+]);
 
 export const patchVehicleConfig = internalMutation({
   args: {
@@ -168,26 +192,35 @@ export const patchVehicleConfig = internalMutation({
     rotor_rear_min_quality: v.optional(v.string()),
     rotor_min_source_url: v.optional(v.string()),
     rotor_min_observed_label: v.optional(v.string()),
+    rotor_front_min_observed_label: v.optional(v.string()),
+    rotor_rear_min_observed_label: v.optional(v.string()),
+    // Explicit clears for columns whose stored value a sanity REJECT invalidated
+    // this run. Whitelisted to rotor columns only — the global undefined-skip
+    // below stays untouched because it is what protects every other field from
+    // batch-null erasure. verified_fields still outranks a clear.
+    clear_fields: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const { vehicle_config_id, ...fields } = args;
-    const patch: Record<string, unknown> = {};
+    const { vehicle_config_id, clear_fields, ...fields } = args;
+    let patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined) {
         patch[key] = value;
       }
     }
+    for (const key of clear_fields ?? []) {
+      if (!CLEARABLE_ROTOR_COLUMNS.has(key)) continue;
+      if (key in patch && patch[key] !== undefined) continue; // a fresh value wins over a clear
+      patch[key] = undefined; // ctx.db.patch removes the field
+    }
     // Columns a human confirmed or corrected are never overwritten by the
     // pipeline, mirroring how updateEngineSpecs respects engines.verified_fields.
     // Without this a director's rotor minimum — and today their drivetrain /
     // brake_fluid_capacity_oz / ps_fluid_capacity_oz corrections — is silently
-    // clobbered by the next finalize.
+    // clobbered by the next finalize. Shared with upsertVehicleConfig (F31).
     if (Object.keys(patch).length > 0) {
       const cfg = await ctx.db.get(vehicle_config_id);
-      const verified: string[] = (cfg as any)?.verified_fields ?? [];
-      for (const key of verified) {
-        if (key in patch) delete patch[key];
-      }
+      patch = stripVerifiedFields(patch, (cfg as any)?.verified_fields);
     }
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(vehicle_config_id, patch);
@@ -1493,6 +1526,8 @@ export const updateEnrichmentRun = internalMutation({
           severity: v.string(),
           reason: v.string(),
           value: v.optional(v.string()),
+          // W1.5 (G32/G33): emitting late-gate stage — see utils/lateSanityFlags.ts.
+          stage: v.optional(v.string()),
         }),
       ),
     ),
@@ -1804,6 +1839,93 @@ export const failEnrichmentRun = internalMutation({
       return { config_restored: true };
     }
     return { config_restored: false };
+  },
+});
+
+// ============================================================================
+// 12c. reapStaleRuns — zombie-run reaper (15-min cron)
+// ============================================================================
+
+/**
+ * A poll chain can die without ANY exit path firing (deploy restart between
+ * scheduled ticks, scheduler state loss) — the run then sits in an in-progress
+ * status forever and its config stays soft-locked. STEP 0's STUCK_MS valve
+ * only fires when a NEW enrichment arrives for the same key, so an unpopular
+ * config never heals (the Jul-21 batch2 zombie). This cron is the sweep that
+ * actually reaps: any in-progress run silent past REAP_MS (30 min; healthy
+ * chains heartbeat every 60s fast / 10 min slow) is marked failed.
+ *
+ * Config restore mirrors failEnrichmentRun's guard: only the LATEST run for a
+ * config may touch it, and only while it still reads in-progress — "pending"
+ * when the chain died before batch-1 data landed (started/scraping), else
+ * "partial". Never schedules a new enrichment (spend is a human/caller
+ * decision) and never writes config data fields.
+ */
+export const reapStaleRuns = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const reaped: Array<{
+      run_id: string;
+      run_status: string;
+      vehicle_config_id: string;
+      config_restored_to: string | null;
+    }> = [];
+
+    for (const status of RUN_IN_PROGRESS_STATUSES) {
+      const runs = await ctx.db
+        .query("enrichment_runs")
+        .withIndex("by_status", (q) => q.eq("status", status))
+        .take(50);
+
+      for (const run of runs) {
+        if (!isRunStale(run, now)) continue;
+
+        await ctx.db.patch(run._id, {
+          status: "failed",
+          errors: [...((run as any).errors ?? []), "reaped_stale_heartbeat"],
+          completed_at: now,
+        });
+
+        // Restore the config ONLY when this run is its latest — reaping an
+        // old orphan must never demote a config a successor run now owns.
+        let restoredTo: string | null = null;
+        const latest = await ctx.db
+          .query("enrichment_runs")
+          .withIndex("by_vehicle_config", (q) =>
+            q.eq("vehicle_config_id", run.vehicle_config_id),
+          )
+          .order("desc")
+          .first();
+        if (latest && latest._id === run._id) {
+          const config = await ctx.db.get(run.vehicle_config_id);
+          if (
+            config &&
+            CONFIG_IN_PROGRESS_STATUSES.has((config as any).enrichment_status ?? "")
+          ) {
+            restoredTo =
+              status === "started" || status === "scraping" ? "pending" : "partial";
+            await ctx.db.patch(run.vehicle_config_id, {
+              enrichment_status: restoredTo,
+            });
+          }
+        }
+
+        console.warn(
+          `[reaper] reaped stale run ${run._id} (was ${status}, silent ${Math.round(
+            (now - Math.max((run as any).started_at ?? run._creationTime, (run as any).last_heartbeat_at ?? 0)) / 60000,
+          )}min)${restoredTo ? ` — config → ${restoredTo}` : ""}`,
+        );
+        reaped.push({
+          run_id: String(run._id),
+          run_status: status,
+          vehicle_config_id: String(run.vehicle_config_id),
+          config_restored_to: restoredTo,
+        });
+      }
+    }
+
+    return { reaped_count: reaped.length, reaped };
   },
 });
 

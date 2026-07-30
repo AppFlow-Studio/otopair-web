@@ -24,14 +24,21 @@ import type {
   VehicleIdentity,
 } from "./types";
 import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS, ON_DEMAND_SERVICE_SLUGS, WEAR_ITEM_SERVICE_SLUGS } from "./types";
-import { submitBatch, getBatchStatus, getBatchResults } from "./utils/batchClient";
+import { submitBatch, getBatchStatus, getBatchResults, type BatchRequest } from "./utils/batchClient";
+import {
+  buildBatch1aOutputSchema,
+  buildBatch1bOutputSchema,
+  buildBatch2OutputSchema,
+  buildVdbMappingOutputSchema,
+} from "./utils/batchSchemas";
+import { mergeBlockedDomains } from "./utils/enrichmentFlags";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
 import { GAP_FILL_SYSTEM, buildGapFillPrompt } from "./prompts/gapFillPrompt";
 import { callClaudeWithWebSearch } from "./utils/claudeClient";
 import { deriveEngineFamily } from "./laborSibling";
-import { runSanityChecks, normalizeOilViscosity, aggregateFieldConfidence } from "./validation/sanityChecks";
+import { runSanityChecks, normalizeOilViscosity, aggregateFieldConfidence, validateRotorResolution, ROTOR_NOMINAL_BANDS } from "./validation/sanityChecks";
 import { resolveCapacities } from "./capacityResolver";
 import { validateAllOemParts } from "./validation/oemValidation";
 import { BLOCKED_DOMAINS, isMarketplaceUrl } from "./sourceRegistry";
@@ -43,6 +50,8 @@ import {
   rotorErrorTag,
   rotorGapReason,
   rotorMinGaps,
+  computeAxlesWithFitment,
+  type RotorAxle,
   type RotorAxleResolution,
 } from "./utils/rotorSpecResource";
 import { scrapeVehicleSources } from "./scraper";
@@ -86,6 +95,8 @@ import { reconcileTransFluidSpecWithPart } from "./transFluidSpecReconcile";
 import { resolveScrapeRedirect } from "./buildSourceResolver";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { laborFlagsFromEnv } from "./laborResearch";
+import { shouldAbortChain } from "./runFence";
+import { buildLateSanityFlag, type LateSanityFlag } from "./utils/lateSanityFlags";
 import type { Id } from "../_generated/dataModel";
 
 // ─── Authored return types ─────────────────────────────────────────
@@ -103,6 +114,45 @@ export type EnrichVehicleBatchV3Result =
   | { status: "cache_hit"; configId: Id<"vehicle_configs"> }
   | { status: "error"; reason: string }
   | { status: "batch_submitted"; configKey: string; batchId: string };
+
+// ─── Poll-chain write fence ────────────────────────────────────────
+// An orphaned chain (superseded by force-unstick/stuck-bypass, reaped by the
+// zombie cron, or purged) must self-abort BEFORE writing — its finalize or
+// catch-all failEnrichmentRun would otherwise clobber the successor run's
+// config. Reads only; the fence itself never patches config status. Fail-open
+// on read errors: a transient query failure must not kill a healthy paid run.
+async function chainFenced(
+  ctx: any,
+  args: { runId: Id<"enrichment_runs">; vehicleConfigId: Id<"vehicle_configs"> },
+  lateCollect: boolean,
+  site: string,
+): Promise<boolean> {
+  try {
+    const ownRun = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.getEnrichmentRunById,
+      { runId: args.runId },
+    );
+    const latestRun = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+      { vehicleConfigId: args.vehicleConfigId },
+    );
+    const verdict = shouldAbortChain(
+      ownRun,
+      latestRun?._id ?? null,
+      args.runId,
+      lateCollect,
+    );
+    if (verdict.abort) {
+      console.log(
+        `[fence] chain cancelled (${verdict.reason}) at ${site} — run=${args.runId}`,
+      );
+    }
+    return verdict.abort;
+  } catch (e) {
+    console.warn(`[fence] check failed at ${site} (non-fatal, continuing):`, e);
+    return false;
+  }
+}
 
 // ─── Run-step trace (best-effort, non-fatal) ───────────────────────
 // Writes one enrichment_run_steps row per stage for the Enrichment Console
@@ -715,6 +765,33 @@ function isBlockedDomain(url: string | null | undefined): boolean {
     const hostname = new URL(url).hostname.replace(/^www\./, "");
     return BLOCKED_DOMAINS.some((d) => hostname === d || hostname.endsWith("." + d));
   } catch { return false; }
+}
+
+/**
+ * Live block-list for web_search requests (audit F18): hardcoded
+ * BLOCKED_DOMAINS merged with the `blocked_domains` Convex table, so domains
+ * quarantined at runtime (evidenceConsensus writes them) actually affect the
+ * batch path. Fail-open to the static list — a table read failure must never
+ * block an enrichment run.
+ */
+async function loadRuntimeBlockedDomains(ctx: { runQuery: any }): Promise<string[]> {
+  try {
+    const docs = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getBlockedDomains, {});
+    const merged = mergeBlockedDomains(
+      BLOCKED_DOMAINS,
+      (docs ?? []).map((d: any) => d?.domain),
+    );
+    if (merged.length > BLOCKED_DOMAINS.length) {
+      console.log(
+        `[v8] blocked_domains: ${BLOCKED_DOMAINS.length} static + ` +
+        `${merged.length - BLOCKED_DOMAINS.length} from table → ${merged.length} total`,
+      );
+    }
+    return merged;
+  } catch (e) {
+    console.warn("[v8] blocked_domains table read failed — using static BLOCKED_DOMAINS only:", e);
+    return mergeBlockedDomains(BLOCKED_DOMAINS, []);
+  }
 }
 
 /** Batch-2 URL rejection: spec-quality blocklist + marketplaces. A marketplace
@@ -1391,22 +1468,56 @@ async function writeNormalizedData(
     // cross-check in sanityChecks — anything unlabelled or backed by a nominal
     // label was nulled there — so surviving to this point IS what "sourced"
     // means. Nominal is written to its own column and never promoted.
+    // A value that survived only WITH a sanity flag (delta-implausible,
+    // front-below-rear) is stamped "oem_spec_flagged": classify() grades it
+    // like an estimate (warn-capped), never as a clean spec.
     rotor_front_min_thickness_mm: asNumber(fields.rotor_front_min_thickness_mm?.value),
     rotor_rear_min_thickness_mm: asNumber(fields.rotor_rear_min_thickness_mm?.value),
     rotor_front_nominal_thickness_mm: asNumber(fields.rotor_front_nominal_thickness_mm?.value),
     rotor_rear_nominal_thickness_mm: asNumber(fields.rotor_rear_nominal_thickness_mm?.value),
     rotor_front_min_quality:
-      fields.rotor_front_min_thickness_mm?.value != null ? "oem_spec" : undefined,
+      fields.rotor_front_min_thickness_mm?.value != null
+        ? (fields.rotor_front_min_thickness_mm?.flagged ? "oem_spec_flagged" : "oem_spec")
+        : undefined,
     rotor_rear_min_quality:
-      fields.rotor_rear_min_thickness_mm?.value != null ? "oem_spec" : undefined,
+      fields.rotor_rear_min_thickness_mm?.value != null
+        ? (fields.rotor_rear_min_thickness_mm?.flagged ? "oem_spec_flagged" : "oem_spec")
+        : undefined,
     rotor_min_source_url:
       fields.rotor_front_min_thickness_mm?.source_url ??
       fields.rotor_rear_min_thickness_mm?.source_url ??
       undefined,
+    // Per-axle labels (the shared column let a front label vouch for a rear
+    // value); the legacy column still receives front-first for old readers.
+    rotor_front_min_observed_label:
+      asString(fields.rotor_front_min_observed_label?.value) ?? undefined,
+    rotor_rear_min_observed_label:
+      asString(fields.rotor_rear_min_observed_label?.value) ?? undefined,
     rotor_min_observed_label:
       asString(fields.rotor_front_min_observed_label?.value) ??
       asString(fields.rotor_rear_min_observed_label?.value) ??
       undefined,
+    // A sanity REJECT this run invalidates the stored value too — without the
+    // explicit clear, a pre-gate-era diameter-as-thickness survives every
+    // re-run (nulled value → undefined → undefined-skip).
+    clear_fields: (() => {
+      const clears: string[] = [];
+      if (fields.rotor_front_min_thickness_mm?.rejected) {
+        clears.push(
+          "rotor_front_min_thickness_mm",
+          "rotor_front_min_quality",
+          "rotor_front_min_observed_label",
+        );
+      }
+      if (fields.rotor_rear_min_thickness_mm?.rejected) {
+        clears.push(
+          "rotor_rear_min_thickness_mm",
+          "rotor_rear_min_quality",
+          "rotor_rear_min_observed_label",
+        );
+      }
+      return clears.length ? clears : undefined;
+    })(),
   });
 
   // E2. chassis_specs — dual-write platform-level fields.
@@ -1790,7 +1901,9 @@ export const enrichVehicleBatchV3 = internalAction({
         // Check if it's been stuck for >4 hours (safety valve)
         const STUCK_MS = 4 * 60 * 60 * 1000;
         const runAge = Date.now() - (existingConfig.last_enriched_at ?? existingConfig._creationTime);
-        let bypassInProgress = runAge >= STUCK_MS;
+        const stuckBypass = runAge >= STUCK_MS;
+        let bypassInProgress = stuckBypass;
+        const LIVE_RUN_STATUSES = new Set(["started", "scraping", "batch1", "batch2"]);
 
         // Director force-unstick (Jun-9 review item 3 follow-up): a crashed
         // run (action killed at the 10-min cap, deploy restart) leaves the
@@ -1804,7 +1917,6 @@ export const enrichVehicleBatchV3 = internalAction({
         // cap, director-triggered only, and upserts are idempotent.)
         if (!bypassInProgress && args.force) {
           const LIVE_WINDOW_MS = 15 * 60 * 1000; // > 10-min action cap + poll gap
-          const LIVE_RUN_STATUSES = new Set(["started", "scraping", "batch1", "batch2"]);
           const latestRun = await ctx.runQuery(
             internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
             { vehicleConfigId: existingConfig._id },
@@ -1827,6 +1939,25 @@ export const enrichVehicleBatchV3 = internalAction({
               });
             }
             bypassInProgress = true;
+          }
+        }
+
+        // The >4h age bypass re-enriches WITHOUT marking the old run failed
+        // (only the force path did) — the orphaned chain kept polling and
+        // could finalize over this successor. Mirror the force path; the
+        // poll-body fence is the second lock.
+        if (stuckBypass) {
+          const latestRun = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+            { vehicleConfigId: existingConfig._id },
+          );
+          if (latestRun && LIVE_RUN_STATUSES.has(latestRun.status)) {
+            await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+              run_id: latestRun._id,
+              status: "failed",
+              errors: ["superseded_by_stuck_bypass"],
+              completed_at: Date.now(),
+            });
           }
         }
 
@@ -2447,16 +2578,10 @@ export const enrichVehicleBatchV3 = internalAction({
       status: "batch1",
     });
 
-    const batch1Requests: Array<{
-      customId: string;
-      system: string;
-      userPrompt: string;
-      maxTokens: number;
-      temperature: number;
-      maxSearchUses: number;
-      blockedDomains?: string[];
-      model?: string;
-    }> = [
+    // Audit F18: block-list = hardcoded BLOCKED_DOMAINS + blocked_domains table.
+    const runtimeBlockedDomains = await loadRuntimeBlockedDomains(ctx);
+
+    const batch1Requests: BatchRequest[] = [
       {
         customId: "batch1a",
         system: BATCH_1_SYSTEM,
@@ -2464,6 +2589,7 @@ export const enrichVehicleBatchV3 = internalAction({
         maxTokens: 8192,
         temperature: 0,
         maxSearchUses: 0,
+        outputSchema: buildBatch1aOutputSchema(detectedPackages.map((p) => p.code)),
       },
       {
         customId: "batch1b",
@@ -2472,7 +2598,8 @@ export const enrichVehicleBatchV3 = internalAction({
         maxTokens: 16384,
         temperature: 0,
         maxSearchUses: 1,
-        blockedDomains: BLOCKED_DOMAINS,
+        blockedDomains: runtimeBlockedDomains,
+        outputSchema: buildBatch1bOutputSchema(),
       },
     ];
 
@@ -2491,6 +2618,7 @@ export const enrichVehicleBatchV3 = internalAction({
         temperature: 0,
         maxSearchUses: 0,
         model: MODEL_HAIKU,
+        outputSchema: buildVdbMappingOutputSchema(),
       });
       console.log(`[v8] Batch 1C (VDB mapping) added: ${vdbRepairRaw.actions.length} actions to map`);
     }
@@ -2679,6 +2807,10 @@ async function runPollBatch1Body(
     } catch (e) {
       console.warn(`[v8/_pollBatch1] heartbeat stamp failed (non-fatal):`, e);
     }
+
+    // Write fence: abort silently if this chain's run was purged, marked
+    // terminal (force-unstick/reaper), or superseded by a newer run.
+    if (await chainFenced(ctx, args, false, "pollBatch1")) return;
 
     // A transient API error on a status poll must not kill a paid batch run —
     // treat it as "not ended" and let the bounded retry loop continue.
@@ -3035,6 +3167,8 @@ async function runPollBatch1Body(
     const batch2SearchUses = Math.min(1 + numericSpecGaps, 5);
 
     const batch2UserPrompt = buildBatch2Prompt(vehicle, nullFields, oemParts);
+    // Audit F18: block-list = hardcoded BLOCKED_DOMAINS + blocked_domains table.
+    const batch2BlockedDomains = await loadRuntimeBlockedDomains(ctx);
     let batch2Id: string;
     try {
       batch2Id = await submitBatch([
@@ -3045,7 +3179,8 @@ async function runPollBatch1Body(
           maxTokens: 16384,
           temperature: 0,
           maxSearchUses: batch2SearchUses,
-          blockedDomains: BLOCKED_DOMAINS,
+          blockedDomains: batch2BlockedDomains,
+          outputSchema: buildBatch2OutputSchema(nullFields),
         },
       ]);
     } catch (e) {
@@ -3177,6 +3312,11 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     } catch (e) {
       console.warn(`[v8/_pollBatch2] heartbeat stamp failed (non-fatal):`, e);
     }
+
+    // Write fence: abort silently if this chain's run was purged, marked
+    // terminal, or superseded. lateCollect runs are legitimately "timeout" —
+    // they abort only on failed/purged/newer-run (runFence semantics).
+    if (await chainFenced(ctx, args, args.lateCollect === true, "pollBatch2")) return;
 
     // A transient API error on a status poll must not kill a paid batch run —
     // treat it as "not ended" and let the bounded retry loop continue.
@@ -3434,6 +3574,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // Parts-side quotability — computed after pricing (below), persisted on
     // the run so a "complete · 93%" can no longer hide an unquotable service.
     let quotability: QuotabilityResult | undefined;
+
+    // W1.5 (G32/G33): structured provenance for the finalize gates below.
+    // writeNormalizedData runs early; the late gates (fitment refute,
+    // trans-fluid, fluid-brand, role-identity, rotor resolver, completion
+    // gate) then mutate allFields/fitments and used to record their outcomes
+    // ONLY as strings in errors[] — unqueryable, because the structured
+    // sanity_flags array was snapshotted before they ran. Each late gate now
+    // pushes a structured entry here ALONGSIDE its errors[] string
+    // (dual-channel during transition); the accumulator is merged into the
+    // ONE existing updateEnrichmentRun finalize call — no second write.
+    const lateSanityFlags: LateSanityFlag[] = [];
 
     // Write sanitized data to normalized tables
     if (r2) {
@@ -4396,6 +4547,27 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             ...hardDelete.map((r) => `fitment_refuted:${r.roleKey}:${r.oem}`),
             ...softFlag.map((r) => `fitment_refute_kept_multisource:${r.roleKey}:${r.oem}`),
           ];
+          // W1.5 (G33): structured mirror of the strings above.
+          lateSanityFlags.push(
+            ...hardDelete.map((r) =>
+              buildLateSanityFlag(
+                "fitment_refute",
+                r.roleKey,
+                "reject",
+                `fitment_refuted:${r.roleKey}:${r.oem}`,
+                r.oem,
+              ),
+            ),
+            ...softFlag.map((r) =>
+              buildLateSanityFlag(
+                "fitment_refute",
+                r.roleKey,
+                "flag",
+                `fitment_refute_kept_multisource:${r.roleKey}:${r.oem}`,
+                r.oem,
+              ),
+            ),
+          );
         }
       } catch (e) {
         console.warn("[fitment-verify] pass failed (non-fatal):", e);
@@ -4620,6 +4792,21 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         );
       } catch (e) {
         console.warn("[role-resource] pass failed (non-fatal):", e);
+        // G38: if this pass died before the post-repair recompute, the
+        // `quotability` variable still holds the PRE-kill snapshot (computed
+        // before the fitment verifier's deletes) — the completion gate would
+        // silently consume stale data. Clear it so the gate's null-branch
+        // decides honestly, and record the failure on both channels.
+        quotability = undefined;
+        roleResourceErrors.push("quotability_recompute_failed");
+        lateSanityFlags.push(
+          buildLateSanityFlag(
+            "completion_gate",
+            "quotability",
+            "flag",
+            "quotability_recompute_failed",
+          ),
+        );
       }
     }
 
@@ -4699,6 +4886,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           transFluidErrors = [
             `trans_fluid_suspect:${action.suspectUnit}:stored=${storedFluid}:expected=${action.claimedCorrect}`,
           ];
+          // W1.5 (G32): the flag+cap above mutates allFields AFTER
+          // writeNormalizedData — persist the outcome structurally too.
+          lateSanityFlags.push(
+            buildLateSanityFlag(
+              "trans_fluid",
+              "trans_fluid_type",
+              "flag",
+              `trans_fluid_suspect:${action.suspectUnit}:stored=${storedFluid}:expected=${action.claimedCorrect}`,
+              storedFluid,
+            ),
+          );
           verifierClaimedCorrectFluid = action.claimedCorrect;
           console.warn(
             `[trans-fluid-verify] FLAGGED (not changed) trans_fluid_type "${storedFluid}" — ` +
@@ -4784,6 +4982,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           transFluidErrors.push(
             `trans_fluid_spec_reconciled:stored=${oldSpec}:part_implies=${specRecon.correctedSpec}`,
           );
+          lateSanityFlags.push(
+            buildLateSanityFlag(
+              "trans_fluid",
+              "trans_fluid_type",
+              "flag",
+              `trans_fluid_spec_reconciled:stored=${oldSpec}:part_implies=${specRecon.correctedSpec}`,
+              specRecon.correctedSpec,
+            ),
+          );
           console.warn(
             `[trans-fluid-spec-reconcile] "${oldSpec}" → "${specRecon.correctedSpec}" (${specRecon.reason})`,
           );
@@ -4809,6 +5016,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           transFluidErrors.push(
             `trans_fluid_corrected_multigate:stored=${oldSpec}:corrected=${verifierClaimedCorrectFluid}`,
           );
+          lateSanityFlags.push(
+            buildLateSanityFlag(
+              "trans_fluid",
+              "trans_fluid_type",
+              "flag",
+              `trans_fluid_corrected_multigate:stored=${oldSpec}:corrected=${verifierClaimedCorrectFluid}`,
+              verifierClaimedCorrectFluid,
+            ),
+          );
           console.warn(
             `[trans-fluid-spec-reconcile] MULTI-GATE CORRECTED "${oldSpec}" → "${verifierClaimedCorrectFluid}" (${specRecon.reason})`,
           );
@@ -4821,6 +5037,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           };
           transFluidErrors.push(
             `trans_fluid_spec_family_conflict:stored=${String(allFields.trans_fluid_type.value)}`,
+          );
+          lateSanityFlags.push(
+            buildLateSanityFlag(
+              "trans_fluid",
+              "trans_fluid_type",
+              "flag",
+              `trans_fluid_spec_family_conflict: ${specRecon.reason}`,
+              String(allFields.trans_fluid_type.value),
+            ),
           );
           console.warn(`[trans-fluid-spec-reconcile] FLAGGED: ${specRecon.reason}`);
         }
@@ -4848,6 +5073,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         transFluidErrors.push(
           `fluid_brand_mismatch:${typeKey}:names_${foreign}_on_${args.make.toLowerCase()}`,
         );
+        // W1.5 (G32): field = the PART field routed to brand review (the
+        // flag+cap below lands there); reason carries the spec field name.
+        lateSanityFlags.push(
+          buildLateSanityFlag(
+            "fluid_brand",
+            partKey,
+            "flag",
+            `fluid_brand_mismatch:${typeKey}:names_${foreign}_on_${args.make.toLowerCase()}`,
+            String(typeVal),
+          ),
+        );
         const pf = allFields[partKey];
         if (pf && pf.value != null) {
           allFields[partKey] = {
@@ -4869,37 +5105,173 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // rejected multiple parts at once on its first vehicle. We can't predict
     // what car arrives next, so the run self-reports instead of waiting for a
     // human to read gap lists.
-    // Rotor minimums — REPORTED, never gated. classify() refuses to grade a
-    // rotor with no minimum on file, so an unresolved axle is an honest gap
-    // (the mechanic reads the number off the casting) rather than a silent
-    // pass. A drum axle is not a gap. Batch 1 already saw the parts markdown,
-    // so this pass only classifies what landed; the deterministic re-parse of
-    // cached pages lives in the backfill action.
+    // Rotor minimums — resolved AND persisted, never gated. classify() refuses
+    // to grade a rotor with no minimum on file, so an unresolved axle is an
+    // honest gap (the mechanic reads the number off the casting) rather than a
+    // silent pass. A drum axle is not a gap. The resolver gets the cached
+    // parts markdown (deterministic Tier-0 re-parse — previously backfill-only)
+    // and the real fitted-axle set (previously assumed both, producing
+    // spurious rear gaps on drum-rear cars). Sourced values persist through
+    // patchVehicleConfig, double-gated by the label-aware parse inside the
+    // resolver and validateRotorResolution; verified_fields still outranks.
     let rotorResolutions: RotorAxleResolution[] = [];
+    const rotorResolverEvents: string[] = [];
     try {
       const cfgForRotor: any = await ctx.runQuery(
         internal.vehicleEnrichment.v3queries.getVehicleConfigById,
         { vehicleConfigId: args.vehicleConfigId },
       );
+      let rotorMarkdown: string | null = null;
+      try {
+        const cachedForRotor = await ctx.runQuery(
+          internal.vehicleEnrichment.scraperQueries.getCachedScrape,
+          {
+            vehicleMake: args.make,
+            vehicleModel: args.model,
+            vehicleYear: args.year,
+            vehicleTrim: args.trim ?? "",
+            sourceType: "parts_catalog",
+          },
+        );
+        rotorMarkdown = cachedForRotor?.markdown ?? null;
+      } catch {
+        // fail open — resolver degrades to classification-only
+      }
+      let rotorAxles: RotorAxle[] | undefined;
+      try {
+        const fitRows = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        const axles = computeAxlesWithFitment(fitRows);
+        rotorAxles = axles.length ? axles : undefined;
+      } catch {
+        // fail open — assume both axles fitted
+      }
       rotorResolutions = resolveRotorMinimums({
+        markdown: rotorMarkdown,
         existing: {
           front: {
             minMm: cfgForRotor?.rotor_front_min_thickness_mm ?? null,
             nominalMm: cfgForRotor?.rotor_front_nominal_thickness_mm ?? null,
             quality: cfgForRotor?.rotor_front_min_quality ?? null,
-            observedLabel: cfgForRotor?.rotor_min_observed_label ?? null,
+            observedLabel:
+              cfgForRotor?.rotor_front_min_observed_label ??
+              cfgForRotor?.rotor_min_observed_label ??
+              null,
             sourceUrl: cfgForRotor?.rotor_min_source_url ?? null,
           },
           rear: {
             minMm: cfgForRotor?.rotor_rear_min_thickness_mm ?? null,
             nominalMm: cfgForRotor?.rotor_rear_nominal_thickness_mm ?? null,
             quality: cfgForRotor?.rotor_rear_min_quality ?? null,
-            observedLabel: cfgForRotor?.rotor_min_observed_label ?? null,
+            observedLabel:
+              cfgForRotor?.rotor_rear_min_observed_label ??
+              cfgForRotor?.rotor_min_observed_label ??
+              null,
             sourceUrl: cfgForRotor?.rotor_min_source_url ?? null,
           },
         },
         naRoleKeys: (cfgForRotor?.na_role_keys ?? []) as string[],
+        axlesWithFitment: rotorAxles,
       });
+
+      // Persist what the resolver sourced (previously discarded — healing was
+      // human-only via the director backfill).
+      const changedRes = rotorResolutions.filter((r) => r.changed);
+      if (changedRes.length > 0) {
+        const byAxle: Partial<Record<RotorAxle, RotorAxleResolution>> =
+          Object.fromEntries(rotorResolutions.map((r) => [r.axle, r]));
+        const verdict = validateRotorResolution({
+          front: { minMm: byAxle.front?.minMm, nominalMm: byAxle.front?.nominalMm },
+          rear: { minMm: byAxle.rear?.minMm, nominalMm: byAxle.rear?.nominalMm },
+        });
+        const rotorPatch: {
+          rotor_front_min_thickness_mm?: number;
+          rotor_rear_min_thickness_mm?: number;
+          rotor_front_nominal_thickness_mm?: number;
+          rotor_rear_nominal_thickness_mm?: number;
+          rotor_front_min_quality?: string;
+          rotor_rear_min_quality?: string;
+          rotor_front_min_observed_label?: string;
+          rotor_rear_min_observed_label?: string;
+        } = {};
+        for (const r of changedRes) {
+          const isFront = r.axle === "front";
+          if (r.minMm != null) {
+            const rejectReason = verdict.rejects[r.axle];
+            if (rejectReason) {
+              rotorResolverEvents.push(
+                `rotor_min:resolver_rejected:${r.axle}:${rejectReason}`,
+              );
+              lateSanityFlags.push(
+                buildLateSanityFlag(
+                  "rotor_resolver",
+                  `rotor_${r.axle}_min_thickness_mm`,
+                  "reject",
+                  `rotor_min:resolver_rejected:${r.axle}:${rejectReason}`,
+                  String(r.minMm),
+                ),
+              );
+            } else {
+              const flagReason = verdict.flags[r.axle];
+              const quality =
+                flagReason && r.quality === "oem_spec"
+                  ? "oem_spec_flagged"
+                  : r.quality ?? "oem_spec";
+              if (isFront) {
+                rotorPatch.rotor_front_min_thickness_mm = r.minMm;
+                rotorPatch.rotor_front_min_quality = quality;
+                if (r.observedLabel)
+                  rotorPatch.rotor_front_min_observed_label = r.observedLabel;
+              } else {
+                rotorPatch.rotor_rear_min_thickness_mm = r.minMm;
+                rotorPatch.rotor_rear_min_quality = quality;
+                if (r.observedLabel)
+                  rotorPatch.rotor_rear_min_observed_label = r.observedLabel;
+              }
+              if (flagReason) {
+                rotorResolverEvents.push(
+                  `rotor_min:resolver_flagged:${r.axle}:${flagReason}`,
+                );
+                lateSanityFlags.push(
+                  buildLateSanityFlag(
+                    "rotor_resolver",
+                    `rotor_${r.axle}_min_thickness_mm`,
+                    "flag",
+                    `rotor_min:resolver_flagged:${r.axle}:${flagReason}`,
+                    String(r.minMm),
+                  ),
+                );
+              }
+            }
+          }
+          if (r.nominalMm != null) {
+            const nomBand = ROTOR_NOMINAL_BANDS[r.axle];
+            if (r.nominalMm >= nomBand.rejectMin && r.nominalMm <= nomBand.rejectMax) {
+              if (isFront) rotorPatch.rotor_front_nominal_thickness_mm = r.nominalMm;
+              else rotorPatch.rotor_rear_nominal_thickness_mm = r.nominalMm;
+            }
+          }
+        }
+        if (Object.keys(rotorPatch).length > 0) {
+          await ctx.runMutation(
+            internal.vehicleEnrichment.v3mutations.patchVehicleConfig,
+            { vehicle_config_id: args.vehicleConfigId, ...rotorPatch },
+          );
+          rotorResolverEvents.push(
+            `rotor_min:resolver_persisted:${Object.keys(rotorPatch).join(",")}`,
+          );
+          lateSanityFlags.push(
+            buildLateSanityFlag(
+              "rotor_resolver",
+              "rotor_min",
+              "info",
+              `rotor_min:resolver_persisted:${Object.keys(rotorPatch).join(",")}`,
+            ),
+          );
+        }
+      }
     } catch (e) {
       console.warn("[v8/rotor-min] resolution read failed (non-fatal):", e);
     }
@@ -4909,10 +5281,13 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         ? [{ field: `rotor_${r.axle}_min_thickness_mm`, reason }]
         : [];
     });
-    const rotorErrors = rotorResolutions.flatMap((r) => {
-      const tag = rotorErrorTag(r);
-      return tag ? [tag] : [];
-    });
+    const rotorErrors = [
+      ...rotorResolutions.flatMap((r) => {
+        const tag = rotorErrorTag(r);
+        return tag ? [tag] : [];
+      }),
+      ...rotorResolverEvents,
+    ];
     const rotorGapAxles = rotorMinGaps(rotorResolutions);
 
     const finalGaps = [
@@ -4941,6 +5316,47 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // lexicon bug (one-file revert), not bad data.
     const roleIdentityRejects = finalGaps.filter((g) =>
       g.reason.startsWith("validation_dropped:role_identity_rejected"),
+    );
+    // W1.5 (G33): structured mirror — the gap's full reason carries the
+    // observed listing title, richer than the errors[] string below.
+    lateSanityFlags.push(
+      ...roleIdentityRejects.map((g) =>
+        buildLateSanityFlag("role_identity", g.field, "reject", g.reason),
+      ),
+    );
+
+    // Write fence, second check: the discretionary stages above can run for
+    // minutes — re-verify this chain still owns the run before the finalize
+    // writes (run status, config status, quotability) land. The additive
+    // part/price writes above are deliberately NOT fenced individually.
+    if (await chainFenced(ctx, args, args.lateCollect === true, "pollBatch2:finalize")) return;
+
+    // W1.5 (G38 transparency): ONE completion-gate evaluation, hoisted from
+    // the upsertVehicleConfig args below — computed once here, recorded once
+    // (structured info flag on the run row), applied once (the config's
+    // enrichment_status). Previously the decision string only ever reached
+    // the console. Pure inputs; nothing between here and the upsert mutates
+    // them, so the applied status is byte-identical to the old inline IIFE.
+    const completionGateInput = {
+      fillRate,
+      quotabilityPct: quotability?.pct,
+      hasPriceGaps: priceGaps.length > 0,
+      // Round 12: post-repair completeness facts. Env-staged (default
+      // log) — see completionGate.ts for the enforce rollout contract.
+      missingCoreRoles: missingCoreRoleStrings,
+      axlePairGaps: axlePairGapStrings,
+      rotorMinGaps: rotorGapAxles,
+    };
+    const completionGateStatus = computeEnrichmentStatus(completionGateInput);
+    const completionGateExplain = explainGateDecision(completionGateInput);
+    console.log(`[v8] Completion gate → ${completionGateStatus}: ${completionGateExplain}`);
+    lateSanityFlags.push(
+      buildLateSanityFlag(
+        "completion_gate",
+        "__completion_gate",
+        "info",
+        completionGateExplain,
+      ),
     );
 
     // Update enrichment run. A batch-2 timeout still finalizes (batch-1 data
@@ -5010,6 +5426,11 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         // Round 12: half-covered axle pairs — deterministic and threshold-
         // free, so the Crosstrek shape surfaces in review regardless of pct.
         ...axleGapSanityFlags,
+        // W1.5 (G32/G33): the post-write finalize gates' structured outcomes
+        // (trans_fluid / fluid_brand / fitment_refute / role_identity /
+        // rotor_resolver / completion_gate) — previously string-only in
+        // errors[] because this array was snapshotted before they ran.
+        ...lateSanityFlags,
       ],
       field_gaps: finalGaps,
       quotability,
@@ -5092,21 +5513,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         "FWD",
       trim_name: args.trim,
       trim_slug: slugify(args.trim),
-      enrichment_status: (() => {
-        const gate = {
-          fillRate,
-          quotabilityPct: quotability?.pct,
-          hasPriceGaps: priceGaps.length > 0,
-          // Round 12: post-repair completeness facts. Env-staged (default
-          // log) — see completionGate.ts for the enforce rollout contract.
-          missingCoreRoles: missingCoreRoleStrings,
-          axlePairGaps: axlePairGapStrings,
-          rotorMinGaps: rotorGapAxles,
-        };
-        const status = computeEnrichmentStatus(gate);
-        console.log(`[v8] Completion gate → ${status}: ${explainGateDecision(gate)}`);
-        return status;
-      })(),
+      // W1.5: evaluated ONCE just before the finalize updateEnrichmentRun
+      // (see completionGateStatus above) — same inputs, same decision; the
+      // explain string is persisted as a structured completion_gate flag.
+      enrichment_status: completionGateStatus,
       fill_rate: fillRate,
       enrichment_version: "v8",
     });
@@ -5344,6 +5754,19 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       console.log("[v8] Adversarial verification scheduled");
     } catch (e) {
       console.warn("[v8] Adversarial verification trigger failed (non-fatal):", e);
+    }
+
+    // NHTSA ODI (recalls + complaint signals) — free public-domain data,
+    // refreshed per config after enrichment. Fail-open end to end; the daily
+    // refresh-nhtsa-odi cron keeps it current afterward.
+    try {
+      await ctx.scheduler.runAfter(
+        15_000,
+        internal.vehicleEnrichment.nhtsaOdi.refreshOdiForConfig,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.warn("[v8] NHTSA ODI refresh trigger failed (non-fatal):", e);
     }
 
     // Post-enrichment: backfill engine_id / transmission_id onto the vehicles row,

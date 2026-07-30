@@ -22,6 +22,11 @@ export interface FieldResult {
    *  when the page shows no product title. Deterministic JSON-LD names take
    *  precedence over this LLM echo at the write site. */
   observed_title?: string | null;
+  /** Set by runSanityChecks when a REJECT rule nulled this field's value —
+   *  distinguishes "rejected this run" from "never extracted". The write path
+   *  uses it to clear a previously-stored bad value (patchVehicleConfig's
+   *  undefined-skip otherwise preserves stale rejects forever). */
+  rejected?: boolean;
 }
 
 // ─── NHTSA vPIC Identity ─────────────────────────────────────────

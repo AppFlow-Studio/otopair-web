@@ -86,7 +86,11 @@ describe("runSanityChecks — coolant capacity", () => {
     expect(fields.coolant_capacity_qts.value).toBeCloseTo(13.85, 1);
   });
 
-  test("DROPS the 16.9 forum coolant value on a V8 (source-authority escalation)", () => {
+  test("KEEPS-flags-caps the in-base-band 16.9 forum value on a V8 (R10 resolver-owned rescue)", () => {
+    // Round 10 (batch-11 F-150): the old hard drop destroyed the CORRECT 20.9 qt
+    // whose sole source was f150forum. In-base-band forum values on resolver-owned
+    // fields are now kept flagged at conf 0.5 — the capacity resolver re-resolves
+    // coolant/oil from authoritative sources and never accepts forum-only data.
     const fields: Record<string, FieldResult> = {
       coolant_capacity_qts: field(16.9, {
         source_url: "https://www.silveradosierra.com/threads/coolant-capacity.728147/",
@@ -94,8 +98,27 @@ describe("runSanityChecks — coolant capacity", () => {
       }),
     };
     const flags = runSanityChecks(fields, 8);
+    expect(fields.coolant_capacity_qts.value).toBe(16.9);
+    expect(fields.coolant_capacity_qts.flagged).toBe(true);
+    expect(fields.coolant_capacity_qts.confidence).toBe(0.5);
+    expect(flags.find((f) => f.field === "coolant_capacity_qts")?.severity).toBe("flag");
+  });
+
+  test("still DROPS an out-of-BASE-band forum value (23 qt) on a V8", () => {
+    // 23 qt is outside the static base flag band (4-22) but inside the reject
+    // band (3-24): the flag rule fires and the forum-only source escalates it
+    // to a hard drop — the rescue only covers in-base-band values.
+    const fields: Record<string, FieldResult> = {
+      coolant_capacity_qts: field(23, {
+        source_url: "https://www.silveradosierra.com/threads/coolant-capacity.728147/",
+        source_type: "web_search",
+      }),
+    };
+    const flags = runSanityChecks(fields, 8);
     expect(fields.coolant_capacity_qts.value).toBeNull();
-    expect(flags.find((f) => f.field === "coolant_capacity_qts")?.severity).toBe("reject");
+    expect(
+      flags.some((f) => f.field === "coolant_capacity_qts" && f.severity === "reject"),
+    ).toBe(true);
   });
 
   test("KEEPS-but-flags the same 16.9 from a reputable source", () => {

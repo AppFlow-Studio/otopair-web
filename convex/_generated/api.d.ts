@@ -382,6 +382,7 @@ import type * as vehicleEnrichment_laborWebSearch from "../vehicleEnrichment/lab
 import type * as vehicleEnrichment_marketplaceScraper from "../vehicleEnrichment/marketplaceScraper.js";
 import type * as vehicleEnrichment_mutations from "../vehicleEnrichment/mutations.js";
 import type * as vehicleEnrichment_nhtsa from "../vehicleEnrichment/nhtsa.js";
+import type * as vehicleEnrichment_nhtsaOdi from "../vehicleEnrichment/nhtsaOdi.js";
 import type * as vehicleEnrichment_olpLabor from "../vehicleEnrichment/olpLabor.js";
 import type * as vehicleEnrichment_olpLaborScrape from "../vehicleEnrichment/olpLaborScrape.js";
 import type * as vehicleEnrichment_olpRelabor from "../vehicleEnrichment/olpRelabor.js";
@@ -410,6 +411,7 @@ import type * as vehicleEnrichment_roleIdentity from "../vehicleEnrichment/roleI
 import type * as vehicleEnrichment_roleIdentityAudit from "../vehicleEnrichment/roleIdentityAudit.js";
 import type * as vehicleEnrichment_rotorThickness from "../vehicleEnrichment/rotorThickness.js";
 import type * as vehicleEnrichment_rpCatalog from "../vehicleEnrichment/rpCatalog.js";
+import type * as vehicleEnrichment_runFence from "../vehicleEnrichment/runFence.js";
 import type * as vehicleEnrichment_runHeadless from "../vehicleEnrichment/runHeadless.js";
 import type * as vehicleEnrichment_runPublic from "../vehicleEnrichment/runPublic.js";
 import type * as vehicleEnrichment_runSteps from "../vehicleEnrichment/runSteps.js";
@@ -425,10 +427,13 @@ import type * as vehicleEnrichment_transFluidSpecReconcile from "../vehicleEnric
 import type * as vehicleEnrichment_transmissionTypeReconcile from "../vehicleEnrichment/transmissionTypeReconcile.js";
 import type * as vehicleEnrichment_types from "../vehicleEnrichment/types.js";
 import type * as vehicleEnrichment_utils_batchClient from "../vehicleEnrichment/utils/batchClient.js";
+import type * as vehicleEnrichment_utils_batchSchemas from "../vehicleEnrichment/utils/batchSchemas.js";
 import type * as vehicleEnrichment_utils_chassisLookup from "../vehicleEnrichment/utils/chassisLookup.js";
 import type * as vehicleEnrichment_utils_claudeClient from "../vehicleEnrichment/utils/claudeClient.js";
 import type * as vehicleEnrichment_utils_engineCodeLookup from "../vehicleEnrichment/utils/engineCodeLookup.js";
 import type * as vehicleEnrichment_utils_engineLookup from "../vehicleEnrichment/utils/engineLookup.js";
+import type * as vehicleEnrichment_utils_enrichmentFlags from "../vehicleEnrichment/utils/enrichmentFlags.js";
+import type * as vehicleEnrichment_utils_lateSanityFlags from "../vehicleEnrichment/utils/lateSanityFlags.js";
 import type * as vehicleEnrichment_utils_partFitmentVerifier from "../vehicleEnrichment/utils/partFitmentVerifier.js";
 import type * as vehicleEnrichment_utils_roleBackfill from "../vehicleEnrichment/utils/roleBackfill.js";
 import type * as vehicleEnrichment_utils_roleResource from "../vehicleEnrichment/utils/roleResource.js";
@@ -837,6 +842,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/marketplaceScraper": typeof vehicleEnrichment_marketplaceScraper;
   "vehicleEnrichment/mutations": typeof vehicleEnrichment_mutations;
   "vehicleEnrichment/nhtsa": typeof vehicleEnrichment_nhtsa;
+  "vehicleEnrichment/nhtsaOdi": typeof vehicleEnrichment_nhtsaOdi;
   "vehicleEnrichment/olpLabor": typeof vehicleEnrichment_olpLabor;
   "vehicleEnrichment/olpLaborScrape": typeof vehicleEnrichment_olpLaborScrape;
   "vehicleEnrichment/olpRelabor": typeof vehicleEnrichment_olpRelabor;
@@ -865,6 +871,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/roleIdentityAudit": typeof vehicleEnrichment_roleIdentityAudit;
   "vehicleEnrichment/rotorThickness": typeof vehicleEnrichment_rotorThickness;
   "vehicleEnrichment/rpCatalog": typeof vehicleEnrichment_rpCatalog;
+  "vehicleEnrichment/runFence": typeof vehicleEnrichment_runFence;
   "vehicleEnrichment/runHeadless": typeof vehicleEnrichment_runHeadless;
   "vehicleEnrichment/runPublic": typeof vehicleEnrichment_runPublic;
   "vehicleEnrichment/runSteps": typeof vehicleEnrichment_runSteps;
@@ -880,10 +887,13 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/transmissionTypeReconcile": typeof vehicleEnrichment_transmissionTypeReconcile;
   "vehicleEnrichment/types": typeof vehicleEnrichment_types;
   "vehicleEnrichment/utils/batchClient": typeof vehicleEnrichment_utils_batchClient;
+  "vehicleEnrichment/utils/batchSchemas": typeof vehicleEnrichment_utils_batchSchemas;
   "vehicleEnrichment/utils/chassisLookup": typeof vehicleEnrichment_utils_chassisLookup;
   "vehicleEnrichment/utils/claudeClient": typeof vehicleEnrichment_utils_claudeClient;
   "vehicleEnrichment/utils/engineCodeLookup": typeof vehicleEnrichment_utils_engineCodeLookup;
   "vehicleEnrichment/utils/engineLookup": typeof vehicleEnrichment_utils_engineLookup;
+  "vehicleEnrichment/utils/enrichmentFlags": typeof vehicleEnrichment_utils_enrichmentFlags;
+  "vehicleEnrichment/utils/lateSanityFlags": typeof vehicleEnrichment_utils_lateSanityFlags;
   "vehicleEnrichment/utils/partFitmentVerifier": typeof vehicleEnrichment_utils_partFitmentVerifier;
   "vehicleEnrichment/utils/roleBackfill": typeof vehicleEnrichment_utils_roleBackfill;
   "vehicleEnrichment/utils/roleResource": typeof vehicleEnrichment_utils_roleResource;

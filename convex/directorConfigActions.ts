@@ -554,13 +554,16 @@ async function applyFieldTarget(
     const patch: Record<string, unknown> = { [target.col]: parsedValue };
     // A rotor minimum a director confirmed against a source outranks any
     // scrape, and carries its provenance so the inspection grades it as real
-    // rather than as an estimate. The observed label is cleared because the
-    // value is now attested by a human, not read off a page — leaving a stale
-    // scrape label would misrepresent the audit trail.
+    // rather than as an estimate. Only the VERIFIED AXLE's observed label is
+    // cleared (the value is now attested by a human, not read off a page) —
+    // the other axle's scrape provenance must survive. The legacy shared
+    // label is cleared too: after a human verification it no longer reliably
+    // describes either axle.
     const rotorAxle = ROTOR_MIN_COLUMN_AXLE[target.col];
     if (rotorAxle) {
       patch[`rotor_${rotorAxle}_min_quality`] = "director_verified";
       patch.rotor_min_source_url = sourceUrl;
+      patch[`rotor_${rotorAxle}_min_observed_label`] = undefined;
       patch.rotor_min_observed_label = undefined;
       verified.add(`rotor_${rotorAxle}_min_quality`);
     }

@@ -68,6 +68,21 @@ export const ROTOR_ROLE_KEY: Record<RotorAxle, string> = {
 };
 
 /**
+ * Axles that actually carry a rotor fitment, from any row set that exposes the
+ * part subcategory. Shared by the pipeline finalize and the director backfill —
+ * the two call sites disagreed before this existed (the finalize assumed both
+ * axles fitted and reported spurious rear gaps on drum-rear cars).
+ */
+export function computeAxlesWithFitment(
+  rows: readonly { subcategory?: string | null }[],
+): RotorAxle[] {
+  const subcats = new Set(rows.map((r) => r.subcategory).filter(Boolean));
+  return (["front", "rear"] as const).filter((a) =>
+    subcats.has(ROTOR_ROLE_KEY[a]),
+  );
+}
+
+/**
  * Derivation is OFF unless explicitly enabled
  * (`npx convex env set ENRICHMENT_ROTOR_MIN_DERIVE on`).
  *

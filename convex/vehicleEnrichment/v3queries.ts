@@ -208,6 +208,16 @@ export const getLatestRunForConfig = internalQuery({
   },
 });
 
+/** Own-run read for the poll-chain write fence (runFence.shouldAbortChain).
+ *  Returns null when the run row was purged — the fence treats that as an
+ *  abort, which is what kills still-scheduled chain ticks after purgeAndRerun. */
+export const getEnrichmentRunById = internalQuery({
+  args: { runId: v.id("enrichment_runs") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.runId);
+  },
+});
+
 /** Round 13: per-fitment candidate rows for the sole-flagged-winner detector
  *  (soleFlaggedWinnerRoles in utils/roleResource.ts). Joined with the part's
  *  subcategory + normalized number; pricing deliberately excluded (identity

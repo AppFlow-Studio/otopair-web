@@ -46,14 +46,18 @@ export type ClassifyResult = { lvl: GradeLevel; txt: string };
 /**
  * Provenance of an OEM rotor minimum.
  *
- * "derived_from_nominal" / "default_fallback" are ESTIMATES. classify() caps
- * them at "warn" so an unverified reference can never read as a clean pass, and
- * deriveSuggestedRecommendations never auto-sells a rotor job off one. Getting
+ * "derived_from_nominal" / "default_fallback" / "oem_spec_flagged" are
+ * ESTIMATES. classify() caps them at "warn" so an unverified reference can
+ * never read as a clean pass, and deriveSuggestedRecommendations never
+ * auto-sells a rotor job off one. "oem_spec_flagged" is a sourced value that
+ * survived only WITH a sanity flag (delta-implausible / front-below-rear) —
+ * suspect provenance grades like an estimate, never as a clean spec. Getting
  * this wrong is expensive in both directions: a ref that is too high condemns
  * healthy rotors, one that is too low passes worn ones.
  */
 export type RotorRefKind =
   | "oem_spec"
+  | "oem_spec_flagged"
   | "mechanic_read"
   | "director_verified"
   | "derived_from_nominal"
@@ -77,7 +81,11 @@ export type RotorRef = {
 export const NO_ROTOR_REF: RotorRef = { minMm: null, kind: "none" };
 
 export function isEstimatedRotorRef(kind: RotorRefKind): boolean {
-  return kind === "derived_from_nominal" || kind === "default_fallback";
+  return (
+    kind === "derived_from_nominal" ||
+    kind === "default_fallback" ||
+    kind === "oem_spec_flagged"
+  );
 }
 
 function toRotorRef(ref: number | RotorRef | null | undefined): RotorRef {

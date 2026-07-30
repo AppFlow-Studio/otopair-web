@@ -27,6 +27,7 @@ import { internalAction, internalMutation, internalQuery } from "../_generated/s
 import { internal } from "../_generated/api";
 import {
   ADAPTER_FETCHABILITY,
+  PART_KEYED_ADAPTERS,
   SOURCE_ADAPTERS,
   byField,
 } from "./sourceAdapters/registry";
@@ -38,6 +39,21 @@ import type { AdapterVehicle, Claim, SourceAdapter } from "./sourceAdapters/type
  *  so the whole lookup needs its own bound or one slow catalogue can eat the
  *  calling action's budget. */
 const ADAPTER_DEADLINE_MS = Number(process.env.CLAIM_ADAPTER_DEADLINE_MS ?? "45000");
+
+/**
+ * Wall-clock ceiling for the WHOLE fan-out, not just one adapter.
+ *
+ * Per-adapter bounds alone do not bound the call: five fetchable adapters at
+ * 45s each is 225s, and this runs inside the finalize action that already
+ * budgets PARTS_PRICE_PASS_DEADLINE_MS (360s) and is hard-killed by Convex at
+ * 600s. Without this, a few slow catalogues could cost the run its finalize
+ * writes — trading a nice-to-have evidence layer for the actual enrichment,
+ * which is a terrible trade.
+ *
+ * On expiry the remaining adapters are recorded as skipped (never silently
+ * dropped) and everything gathered so far is still persisted and reconciled.
+ */
+const GATHER_DEADLINE_MS = Number(process.env.CLAIM_GATHER_DEADLINE_MS ?? "120000");
 
 /** Convex mutations are transactions; a few hundred claims in one call risks
  *  the write limit. Same slicing idiom the evidence writer uses. */
@@ -261,6 +277,22 @@ export const gatherClaims = internalAction({
         }),
       ),
     ),
+    /**
+     * OEM part numbers already on file, for PART-KEYED adapters (RockAuto).
+     *
+     * Those adapters cannot walk a vehicle cascade — they answer "is this
+     * number real, and what is it" — so without this they are inert by design
+     * rather than falling back to a lookup they cannot perform.
+     */
+    knownParts: v.optional(
+      v.array(
+        v.object({
+          field_key: v.string(),
+          part_number: v.string(),
+          role_key: v.optional(v.union(v.string(), v.null())),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args): Promise<GatherResult> => {
     const result: GatherResult = {
@@ -286,13 +318,45 @@ export const gatherClaims = internalAction({
         engine_code: args.engineCode ?? null,
         displacement_l: args.displacementL ?? null,
         cylinders: args.cylinders ?? null,
+        known_parts: (args.knownParts ?? []).map((p) => ({
+          field_key: p.field_key,
+          part_number: p.part_number,
+          role_key: p.role_key ?? null,
+        })),
       };
 
       // Claims carry no adapter name of their own (a Claim is a source's
       // assertion, not a record of who fetched it), so attribution is tracked
       // alongside rather than guessed from the result set.
       const pending: Array<{ claim: Claim; adapter: string }> = [];
+      const gatherStartedAt = Date.now();
       for (const adapter of selected) {
+        const elapsed = Date.now() - gatherStartedAt;
+        if (elapsed >= GATHER_DEADLINE_MS) {
+          // Budget spent. Record the skip rather than dropping it silently —
+          // a shrinking adapter roster must never look like a clean run.
+          result.adapters.push({
+            adapter: adapter.name,
+            ok: false,
+            claims: 0,
+            error: `skipped: gather budget exhausted after ${Math.round(elapsed / 1000)}s`,
+          });
+          continue;
+        }
+        if (
+          PART_KEYED_ADAPTERS.has(adapter.name) &&
+          (vehicle.known_parts?.length ?? 0) === 0
+        ) {
+          // Inert without part numbers — skip rather than pay for a lookup
+          // that can only return empty.
+          result.adapters.push({
+            adapter: adapter.name,
+            ok: true,
+            claims: 0,
+            error: "skipped: part-keyed adapter with no known_parts",
+          });
+          continue;
+        }
         if (ADAPTER_FETCHABILITY[adapter.name] === "needs_headless") {
           // Not attempted. There is no headless tier reachable from Convex, so
           // this would be a guaranteed 20s timeout, not a chance of data.
@@ -307,7 +371,13 @@ export const gatherClaims = internalAction({
           continue;
         }
 
-        const outcome = await withDeadline(adapter, vehicle, ADAPTER_DEADLINE_MS);
+        // Never let one adapter's ceiling overrun what's left of the total.
+        const remaining = GATHER_DEADLINE_MS - (Date.now() - gatherStartedAt);
+        const outcome = await withDeadline(
+          adapter,
+          vehicle,
+          Math.min(ADAPTER_DEADLINE_MS, Math.max(1000, remaining)),
+        );
         result.ran.push(adapter.name);
         result.adapters.push({
           adapter: adapter.name,
@@ -406,6 +476,88 @@ export const gatherClaims = internalAction({
 });
 
 /**
+ * Config-resolved gather: look up the vehicle and its OEM part numbers from the
+ * DB, run the adapters, and persist the claims.
+ *
+ * `gatherClaims` takes its vehicle and part numbers as ARGUMENTS because the
+ * pipeline already has them in memory at finalize. Every other caller — fleet
+ * heals, re-gathers after an adapter fix, a config that finalized before the
+ * ledger worked — would otherwise have to assemble that arg list by hand from
+ * three tables, which is exactly the kind of manual step that gets a
+ * `displacement` string passed into a number field.
+ */
+export const _gatherInputsForConfig = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const cfg: any = await ctx.db.get(args.vehicleConfigId);
+    if (!cfg) return null;
+    const [make, model, engine] = await Promise.all([
+      cfg.make_id ? ctx.db.get(cfg.make_id) : null,
+      cfg.model_id ? ctx.db.get(cfg.model_id) : null,
+      cfg.engine_id ? ctx.db.get(cfg.engine_id) : null,
+    ]);
+
+    // OEM numbers already on file, for the part-keyed adapters.
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicleConfigId))
+      .collect();
+    const knownParts: Array<{ field_key: string; part_number: string; role_key: string | null }> = [];
+    const seen = new Set<string>();
+    for (const f of fitments) {
+      const part: any = await ctx.db.get(f.part_id);
+      const oem = part?.oem_part_number ?? "";
+      const sub = part?.subcategory ?? null;
+      if (!oem || oem.startsWith("OTOPAIR-UNIV") || seen.has(oem)) continue;
+      seen.add(oem);
+      knownParts.push({
+        // The adapters route on the PART_FIELD_MAP key; `${subcategory}_oem` is
+        // its shape for the slots that matter here.
+        field_key: sub ? `${sub}_oem` : "unknown_oem",
+        part_number: oem,
+        role_key: sub,
+      });
+    }
+
+    const eng = engine as any;
+    const rawDisp = eng?.displacement_l ?? eng?.displacement_liters ?? null;
+    return {
+      year: cfg.year as number,
+      make: (make as any)?.name ?? "",
+      model: (model as any)?.name ?? "",
+      trim: (cfg.trim_name as string) ?? null,
+      engineCode: (engine as any)?.engine_code ?? null,
+      displacementL: rawDisp == null ? null : Number(rawDisp) || null,
+      cylinders: (engine as any)?.cylinders ?? null,
+      knownParts,
+    };
+  },
+});
+
+/** Gather claims for one config, resolving every input from the DB. */
+export const gatherClaimsForConfig = internalAction({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args): Promise<GatherResult | { error: string }> => {
+    const inp: any = await ctx.runQuery(
+      internal.vehicleEnrichment.claimGathering._gatherInputsForConfig,
+      { vehicleConfigId: args.vehicleConfigId },
+    );
+    if (!inp) return { error: "config_not_found" };
+    return await ctx.runAction(internal.vehicleEnrichment.claimGathering.gatherClaims, {
+      vehicleConfigId: args.vehicleConfigId,
+      year: inp.year,
+      make: inp.make,
+      model: inp.model,
+      trim: inp.trim,
+      engineCode: inp.engineCode,
+      displacementL: inp.displacementL,
+      cylinders: inp.cylinders,
+      knownParts: inp.knownParts,
+    });
+  },
+});
+
+/**
  * One-shot adapter probe. Runs each fetchable adapter against a vehicle and
  * reports what came back WITHOUT writing anything.
  *
@@ -423,6 +575,24 @@ export const probeAdapters = internalAction({
     trim: v.optional(v.union(v.string(), v.null())),
     displacementL: v.optional(v.union(v.float64(), v.null())),
     cylinders: v.optional(v.union(v.float64(), v.null())),
+    /**
+     * Part numbers to hand the adapters that need them.
+     *
+     * Required to probe the CORROBORATING adapters at all: rockauto is
+     * part-keyed, and wix_filters short-circuits before its first request when
+     * it has no number to confirm (see THE LAW in wixFilters.ts). Without this
+     * a probe reports them inert and answers nothing about their fetch paths —
+     * which is the one question this probe exists to answer.
+     */
+    knownParts: v.optional(
+      v.array(
+        v.object({
+          field_key: v.string(),
+          part_number: v.string(),
+          role_key: v.optional(v.union(v.string(), v.null())),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const vehicle: AdapterVehicle = {
@@ -432,6 +602,11 @@ export const probeAdapters = internalAction({
       trim: args.trim ?? null,
       displacement_l: args.displacementL ?? null,
       cylinders: args.cylinders ?? null,
+      known_parts: (args.knownParts ?? []).map((p) => ({
+        field_key: p.field_key,
+        part_number: p.part_number,
+        role_key: p.role_key ?? null,
+      })),
     };
     const out: Array<AdapterRunRecord & { fields: string[]; sample: string[] }> = [];
     for (const adapter of SOURCE_ADAPTERS) {

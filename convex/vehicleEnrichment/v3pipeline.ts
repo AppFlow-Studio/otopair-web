@@ -4738,11 +4738,35 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // config already stamped "complete". Two of the canary's three broken legs
     // were exactly this (drain_plug_gasket, rear_brake_pad).
     //
-    // Count EVERY price gap, not just the deferred subset, and let the backfill
-    // decide what is actually retryable — it already scans for zero-price rows
-    // and is bounded by its own per-action cap and chain depth, so widening the
-    // trigger cannot run away.
-    const unpricedCount = priceGaps.length;
+    // Round 13b — THE HEAL MUST NOT BE DRIVEN BY THE GAP LEDGER.
+    //
+    // Counting price GAPS looks right and is subtly useless: a gap is only
+    // recorded by the price pass, and the price pass lives inside `if (r2)`
+    // alongside everything else keyed off batch-2's `services[]`. When batch 2
+    // returns nothing — which happened on THREE of four canary runs — the pass
+    // never executes, so it records ZERO gaps while leaving parts unpriced.
+    //
+    // Measured on the 2019 Forester: 10 of 27 parts with no trusted price and
+    // `field_gaps` containing **zero** price entries. A heal triggered on
+    // `priceGaps.length` was therefore a no-op in precisely the case that
+    // needed it most.
+    //
+    // Ask the DATABASE what is unpriced instead. `getFitmentsWithPriceFlag`
+    // already computes `has_trusted_price` with the same poison/non-pooled
+    // exclusions quotability uses, so this counts exactly what the triangle
+    // counts — and it is true regardless of which upstream stage ran.
+    let unpricedCount = 0;
+    try {
+      const pricedFlags = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+      unpricedCount = pricedFlags.filter((f: any) => !f.has_trusted_price).length;
+    } catch (e) {
+      // Fail open to the old signal rather than skipping the heal entirely.
+      console.warn("[v8/price] unpriced census failed, falling back to gap count:", e);
+      unpricedCount = priceGaps.length;
+    }
     const priceHealCount = Math.max(deferredPriceCount, unpricedCount);
     if (priceHealCount > 0) {
       const immediateCap = Number(process.env.PARTS_PRICE_IMMEDIATE_BACKFILL_CAP ?? "12");
@@ -4753,8 +4777,22 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         maxChainDepth: Number(process.env.PARTS_PRICE_BACKFILL_CHAIN_DEPTH ?? "2"),
       });
       console.log(
-        `[v8/price] scheduled follow-up backfill for ${priceHealCount} unpriced part(s) ` +
-          `(${deferredPriceCount} deferred/budget-skipped, ${unpricedCount} total price gaps)`,
+        `[v8/price] scheduled follow-up backfill for ${priceHealCount} part(s) — ` +
+          `${unpricedCount} unpriced in DB, ${deferredPriceCount} deferred/budget-skipped, ` +
+          `${priceGaps.length} gaps ledgered`,
+      );
+    }
+    // A config that finished with unpriced parts but recorded NO price gaps is
+    // the signature of a skipped price pass, not of clean pricing. Surface it.
+    if (unpricedCount > 0 && priceGaps.length === 0) {
+      lateSanityFlags.push(
+        buildLateSanityFlag(
+          "completion_gate",
+          "__price_pass_skipped",
+          "flag",
+          `${unpricedCount} part(s) unpriced but zero price gaps ledgered — the price pass ` +
+            `did not run (batch-2 services empty?)`,
+        ),
       );
     }
 
@@ -5727,7 +5765,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             model: args.model,
             trim: args.trim ?? null,
             engineCode: vehicle.engineCode ?? null,
-            displacementL: args.displacement ?? null,
+            // `args.displacement` is a STRING through the whole pipeline
+            // (`displacement: v.string()`), e.g. "2.4" or "2.4L". The adapters
+            // want litres as a NUMBER for their displacement filters, and
+            // passing the raw string here threw ArgumentValidationError and
+            // killed the entire gather — silently, because the call is
+            // wrapped non-fatally. Parse it, and treat an unparseable value as
+            // absent rather than coercing it to 0, which would match nothing.
+            displacementL: (() => {
+              const n = parseFloat(String(args.displacement ?? "").replace(/[^0-9.]/g, ""));
+              return Number.isFinite(n) && n > 0 ? n : null;
+            })(),
             cylinders: enginePicData?.cylinders ?? null,
             // This run's own extracted values, entered as the web_search
             // family so the adapters have something to agree WITH. Without
@@ -5743,6 +5791,21 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
                 source_domain: fv.source_url
                   ? (extractDomain(fv.source_url) ?? undefined)
                   : undefined,
+              })),
+            // OEM numbers for the part-KEYED adapters (RockAuto), which can
+            // only answer "is this number real, and what is it". Taken from
+            // PART_FIELD_MAP so the field_key and role_key are the pipeline's
+            // own, not a guess at RockAuto's naming.
+            knownParts: Object.keys(PART_FIELD_MAP)
+              .filter((key) => {
+                const val = allFields[key]?.value;
+                return typeof val === "string" && val.trim() !== "" &&
+                  !val.startsWith("OTOPAIR-UNIV");
+              })
+              .map((key) => ({
+                field_key: key,
+                part_number: String(allFields[key]!.value),
+                role_key: PART_FIELD_MAP[key].subcategory,
               })),
           },
         );
@@ -5778,7 +5841,21 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           );
         }
       } catch (e) {
+        // Non-fatal, but NOT invisible: a gather that never ran looks exactly
+        // like a gather that found nothing (both leave field_claims empty), and
+        // that ambiguity cost this round a full canary pass — an
+        // ArgumentValidationError killed every gather while the run still
+        // reported clean. The flag makes "the ledger failed" queryable on the
+        // run row instead of only greppable in deploy logs.
         console.warn("[claim-ledger] gather failed (non-fatal):", e);
+        lateSanityFlags.push(
+          buildLateSanityFlag(
+            "claim_ledger",
+            "__claim_ledger",
+            "flag",
+            `gather failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`,
+          ),
+        );
       }
     }
 

@@ -252,6 +252,48 @@ describe("rankManualCandidates", () => {
     expect(ranked[1].doc_kind).toBe("owners_manual");
   });
 
+  // Regression: 2019 Subaru Forester, canary round Jul 30 2026.
+  // `MSA5B1906A_STIS.pdf` on Subaru's own techinfo host won on the OEM bonus
+  // alone — it names neither the model nor the year — and turned out to be the
+  // 2019 BRZ Quick Guide. The extractor caught it, but only after paying for a
+  // 2.75 MB download and a Files API upload.
+  it("an ANONYMOUS OEM candidate loses to a self-identifying OEM candidate", () => {
+    const FORESTER = { make: "Subaru", model: "Forester", year: 2019 };
+    const ranked = rankManualCandidates(
+      [
+        // Real PDF, real OEM host, but nothing ties it to this vehicle.
+        { url: "https://techinfo.subaru.com/stis/doc/ownerManual/MSA5B1906A_STIS.pdf", title: "" },
+        // Same host, same doc kind, but it says what it is.
+        {
+          url: "https://techinfo.subaru.com/stis/doc/ownerManual/2019_Forester_OM.pdf",
+          title: "2019 Forester Owner's Manual",
+        },
+      ],
+      FORESTER,
+    );
+    expect(ranked[0].url).toContain("2019_Forester_OM.pdf");
+    expect(ranked[1].url).toContain("MSA5B1906A_STIS.pdf");
+  });
+
+  it("the anonymity penalty never outweighs OEM provenance", () => {
+    // The penalty must only re-order WITHIN a provenance tier. An anonymous OEM
+    // document is still better than a third-party one that names the vehicle —
+    // provenance is the product requirement.
+    const FORESTER = { make: "Subaru", model: "Forester", year: 2019 };
+    const ranked = rankManualCandidates(
+      [
+        {
+          url: "https://www.manualslib.com/subaru/2019-forester-owners-manual.pdf",
+          title: "2019 Subaru Forester Owner's Manual",
+        },
+        { url: "https://techinfo.subaru.com/stis/doc/ownerManual/MSA5B1906A_STIS.pdf", title: "" },
+      ],
+      FORESTER,
+    );
+    expect(ranked[0].is_oem_domain).toBe(true);
+    expect(ranked[0].url).toContain("techinfo.subaru.com");
+  });
+
   it("within the OEM tier, a maintenance schedule beats an owner's manual", () => {
     const ranked = rankManualCandidates(
       [
@@ -386,6 +428,59 @@ describe("shouldSkipManualLookup", () => {
 });
 
 // ─── Write precedence (table-driven) ─────────────────────────────
+
+// Regression: 2019 Subaru Forester, canary round Jul 30 2026. The extractor
+// read the downloaded PDF and reported it was the BRZ Quick Guide, but the row
+// still carried a file_id — so the wrong document was cached as this vehicle's
+// manual for 180 days. Rejection clears the file_id; these tests pin what the
+// skip logic must then do.
+describe("shouldSkipManualLookup — rejection loop", () => {
+  const rejected = (rejections: number, ageDays = 0) => ({
+    file_id: null,
+    failure_reason:
+      "rejected_after_extraction: The uploaded document is the 2019 Subaru BRZ Quick Guide",
+    rejected_urls: Array.from({ length: rejections }, (_, i) => `https://x/${i}.pdf`),
+    fetched_at: Date.now() - ageDays * 24 * 60 * 60 * 1000,
+  });
+
+  it("retries IMMEDIATELY after a rejection — the loop must not wait 14 days", () => {
+    const d = shouldSkipManualLookup(rejected(1));
+    expect(d.skip).toBe(false);
+    expect(d.reason).toBe("retry_after_rejection");
+  });
+
+  it("keeps retrying while untried candidates remain", () => {
+    expect(shouldSkipManualLookup(rejected(2)).skip).toBe(false);
+  });
+
+  it("stops paying once the rejection limit is reached", () => {
+    const d = shouldSkipManualLookup(rejected(3));
+    expect(d.skip).toBe(true);
+    expect(d.reason).toBe("rejection_limit_reached");
+  });
+
+  it("reopens the exhausted vehicle after the negative-cache TTL", () => {
+    expect(shouldSkipManualLookup(rejected(3, 30)).skip).toBe(false);
+  });
+
+  it("an ORDINARY failure still uses the plain negative cache", () => {
+    // A dead host must not get the fast-retry path — nothing has changed that
+    // would make the next attempt more likely to work.
+    const d = shouldSkipManualLookup({
+      file_id: null,
+      failure_reason: "download_error:timeout",
+      fetched_at: Date.now(),
+    });
+    expect(d.skip).toBe(true);
+    expect(d.reason).toBe("negative_cache");
+  });
+
+  it("a successful manual is still reused — rejection logic doesn't touch it", () => {
+    expect(
+      shouldSkipManualLookup({ file_id: "file_abc", fetched_at: Date.now() }).skip,
+    ).toBe(true);
+  });
+});
 
 describe("shouldOverwriteInterval", () => {
   const cases: Array<{

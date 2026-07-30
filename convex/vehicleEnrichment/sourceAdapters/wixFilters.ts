@@ -38,14 +38,47 @@
 //   - Several engine rows can match a Y/M/M/E query (Camry 2.5L gas vs
 //     hybrid). Parts are fetched for EVERY matching engine and a filter type
 //     is used only when all engines agree on the same WIX part set.
-//   - A WIX part usually replaces SEVERAL OE numbers (supersessions, market
-//     variants). ALL of them are emitted as claims: the claim ledger's
-//     strictly-more-families rule means WIX alone then yields NO consensus
-//     (single-family tie → null), while an OEM-catalog claim matching any of
-//     them gets true 2-family corroboration — rival-on-confirm, exactly.
+//
+// ── THE LAW THIS FILE EXISTS TO ENFORCE ────────────────────────────────────
+//
+// A WIX part's OE cross-reference list belongs to ONE AFTERMARKET PART. It is
+// WIX's list of the OEM numbers its single filter replaces, spanning every
+// vehicle that filter fits — supersessions, market variants, and sibling
+// platforms alike. It is NOT a set of numbers interchangeable ON THIS VEHICLE.
+//
+// Emitting all of them as claims asserts that one vehicle's oil filter is
+// simultaneously ten mutually exclusive numbers. Observed live on the 2016
+// CR-V SE: 16 rival values on `cabin_filter_oem` and 10 on `oil_filter_oem`.
+// The ledger's strictly-more-families rule then returns `conflict_tie`, so no
+// wrong value is written — but nothing right is either: every rival sits in
+// one family at one weight, so the top bucket always holds several clusters.
+// WIX could never corroborate anything, and worse, it BURIED the pipeline's
+// own (lower-weight, web_search) claim under a tie it manufactured itself.
+//
+// So: this adapter emits a claim ONLY for a number the pipeline already holds
+// for that field, and only when that number appears in the cross-reference set
+// of a WIX part WIX's own fitment cascade says fits this vehicle. That is a
+// genuinely strong independent voice — "the filter that fits this car replaces
+// this OE number" — and it is corroboration, never substitution. The remaining
+// numbers are kept as `siblings` metadata for supersession-aware price search
+// and never become claims. Same law as rockauto.ts, same reason.
+//
+// DELIBERATELY REJECTED: proposing when the candidate set collapses to exactly
+// ONE number. A singleton is not certainty — it is equally the shape of an
+// interchange row WIX simply never recorded for the sibling platform, and the
+// one number left standing may be the SIBLING's. One WIX filter serves a CR-V
+// and a Civic; publishing the Civic's number into the CR-V's slot is precisely
+// the present-but-wrong this pipeline forbids. WIX rows carry no vehicle
+// qualifier (PartNumber / Manufacturer / ChildPartNumber / Status only), so
+// there is no disambiguation available at any set size.
+//
+// CONSEQUENCE: with no known filter numbers on file this adapter is inert and
+// skips its fetches, exactly as rockauto is. That costs nothing — its previous
+// output on those fields was ties, which are worth less than silence.
 // =============================================================================
 
 import type {
+  AdapterKnownPart,
   AdapterResult,
   AdapterVehicle,
   Claim,
@@ -344,8 +377,16 @@ export function agreedPartsByField(
 }
 
 /**
- * THE claim parser: one InterchangeSearch response → Claims for one field.
- * A row is emitted only when ALL of:
+ * The CANDIDATE ENUMERATOR: one InterchangeSearch response → the OE numbers
+ * this vehicle's WIX part(s) replace, in Claim shape, for one field.
+ *
+ * NOT the claim boundary. Every row here is a member of one aftermarket part's
+ * cross-reference set, and those members are mutually exclusive as values of a
+ * single vehicle's field — see THE LAW at the top of this file. Enumerating
+ * them is correct and useful; ASSERTING them is not. `applyInterchangeLaw`
+ * turns this list into the at-most-one claim per field that may be emitted.
+ *
+ * A row is enumerated only when ALL of:
  *   - Manufacturer is one of the make's OE brand strings,
  *   - ChildPartNumber equals (normalized) one of the vehicle's WIX parts
  *     for this field,
@@ -432,6 +473,83 @@ export function parseInterchangeClaims(
   }
 }
 
+/** What the cross-reference set said about one field, after the law. */
+export type WixInterchange = {
+  field_key: string;
+  /** Our own number, when WIX's cross set for this vehicle contains it. */
+  corroborated: string | null;
+  /**
+   * The other OE numbers the vehicle's WIX part replaces, EXCLUDING ours.
+   *
+   * Supersession candidates for PRICE SEARCH only. They are numbers one filter
+   * replaces across many vehicles, so they are not fitment-equivalent here and
+   * must never be written into a field.
+   */
+  siblings: string[];
+};
+
+/**
+ * THE CLAIM BOUNDARY: candidate cross-references + the numbers the pipeline
+ * already holds → at most ONE claim per field.
+ *
+ * A candidate becomes a claim only by matching a known part number for the
+ * same field. The claim's value is therefore our own number, carrying WIX's
+ * verbatim `observed_label` ("WIX 51394 OE cross-reference (TOYOTA)") as the
+ * context it was confirmed under — an independent aftermarket catalogue
+ * agreeing with what we already believe, which is exactly what the ledger
+ * needs to lift a field from single_source to multi-family consensus.
+ *
+ * Everything else is returned as `siblings` and never claimed. Pure, total,
+ * order-independent; a field with no known number yields no claim rather than
+ * the set's first or shortest member.
+ */
+export function applyInterchangeLaw(
+  candidates: readonly Claim[],
+  knownParts: readonly AdapterKnownPart[],
+): { claims: Claim[]; interchange: WixInterchange[] } {
+  // field → the normalized numbers we already hold for it. A Set because the
+  // caller's shape does not forbid two rows on one field, and picking one of
+  // them would be a choice this function has no basis to make.
+  const wanted = new Map<string, Set<string>>();
+  for (const p of knownParts) {
+    const n = normalizeOemNumber(p.part_number ?? "");
+    if (n === "") continue;
+    const set = wanted.get(p.field_key) ?? new Set<string>();
+    set.add(n);
+    wanted.set(p.field_key, set);
+  }
+
+  const claims: Claim[] = [];
+  const byField = new Map<string, WixInterchange>();
+  for (const c of candidates) {
+    const entry = byField.get(c.field_key) ?? {
+      field_key: c.field_key,
+      corroborated: null,
+      siblings: [],
+    };
+    if (wanted.get(c.field_key)?.has(c.value)) {
+      // Guard against a duplicate candidate emitting a second identical claim:
+      // one source confirming one number once is one voice, not two.
+      if (entry.corroborated === null) {
+        entry.corroborated = c.value;
+        claims.push(c);
+      }
+    } else if (!entry.siblings.includes(c.value)) {
+      entry.siblings.push(c.value);
+    }
+    byField.set(c.field_key, entry);
+  }
+
+  const order = (a: { field_key: string }, b: { field_key: string }) =>
+    a.field_key < b.field_key ? -1 : a.field_key > b.field_key ? 1 : 0;
+  return {
+    claims: claims.sort(order),
+    interchange: [...byField.values()]
+      .map((e) => ({ ...e, siblings: [...e.siblings].sort() }))
+      .sort(order),
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Fetch plumbing.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -491,6 +609,21 @@ async function lookupWixFilters(
   vehicle: AdapterVehicle,
 ): Promise<AdapterResult> {
   try {
+    // Corroboration-only (THE LAW): without a number to confirm, every fetch
+    // below can only enumerate a candidate set nothing may be claimed from.
+    // Checked before the cascade so the inert case costs no requests at all.
+    const known = (vehicle.known_parts ?? []).filter((p) =>
+      (WIX_FILTER_FIELDS as readonly string[]).includes(p.field_key),
+    );
+    if (known.length === 0) {
+      return empty(
+        `no known filter part numbers supplied — a WIX cross-reference set can ` +
+          `CONFIRM one of our numbers but cannot pick one of its own (see THE ` +
+          `LAW), so the adapter is inert without them`,
+      );
+    }
+    const knownFields = new Set(known.map((p) => p.field_key));
+
     const seed = WIX_OE_SEEDS[normName(vehicle.make)];
     if (!seed) {
       return empty(
@@ -577,9 +710,12 @@ async function lookupWixFilters(
       );
     }
 
-    // 5) OE enumeration per field via interchange prefix queries
-    const claims: Claim[] = [];
+    // 5) OE enumeration per field via interchange prefix queries. Only fields
+    //    we hold a number for are queried — the rest can produce nothing
+    //    claimable, so paying for their prefix scans would be pure waste.
+    const candidates: Claim[] = [];
     for (const fieldKey of WIX_FILTER_FIELDS) {
+      if (!knownFields.has(fieldKey)) continue;
       const wixParts = agreed.get(fieldKey);
       if (!wixParts || wixParts.length === 0) continue;
       for (const prefix of seed.prefixes[fieldKey]) {
@@ -589,7 +725,7 @@ async function lookupWixFilters(
         if (looksBlocked(interRes)) {
           return fail(`blocked at InterchangeSearch (HTTP ${interRes.status})`, true);
         }
-        claims.push(
+        candidates.push(
           ...parseInterchangeClaims(interRes.body, {
             fieldKey,
             wixPartNumbers: wixParts,
@@ -601,24 +737,37 @@ async function lookupWixFilters(
         );
       }
     }
-    if (claims.length === 0) {
+    if (candidates.length === 0) {
       return empty(
         `WIX parts found (${[...agreed.values()].flat().join(", ")}) but no OE ` +
           `cross-references under the seeded prefixes`,
       );
     }
-    // Deterministic order; dedupe across prefixes within a field is inherent
-    // (prefix anchoring makes prefix result sets disjoint per field).
-    claims.sort((a, b) =>
-      a.field_key === b.field_key
-        ? a.value < b.value
-          ? -1
-          : 1
-        : a.field_key < b.field_key
-          ? -1
-          : 1,
-    );
-    return { adapter: ADAPTER_NAME, ok: true, claims };
+
+    // 6) THE LAW: a cross-reference set confirms our number or says nothing.
+    const { claims, interchange } = applyInterchangeLaw(candidates, known);
+    const siblings = interchange.reduce((n, e) => n + e.siblings.length, 0);
+    if (claims.length === 0) {
+      return empty(
+        `${candidates.length} OE cross-reference(s) enumerated across ` +
+          `${interchange.map((e) => e.field_key).join(", ")} but none matched ` +
+          `the number(s) on file (${known
+            .map((p) => `${p.field_key}=${p.part_number}`)
+            .join(", ")}) — a cross-reference set is one aftermarket part's ` +
+          `replacement list, not this vehicle's options, so enumeration alone ` +
+          `is never a claim`,
+      );
+    }
+    return {
+      adapter: ADAPTER_NAME,
+      ok: true,
+      claims,
+      // Suppression is reported, never silent: a shrunken claim count must be
+      // readable as the law working rather than as the source going quiet.
+      error:
+        `corroborated ${claims.length}/${candidates.length} enumerated OE ` +
+        `number(s); ${siblings} sibling(s) kept as interchange metadata, not claims`,
+    };
   } catch (e) {
     return fail(e instanceof Error ? e.message : String(e));
   }

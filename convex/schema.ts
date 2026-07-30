@@ -5231,6 +5231,19 @@ export default defineSchema({
      *  dead source instead of re-paying for it every run (negative caching). */
     failure_reason: v.optional(v.string()),
     attempts: v.optional(v.number()),
+    /**
+     * URLs already tried and REJECTED for this vehicle, so a retry picks a
+     * different candidate instead of re-uploading the same useless PDF.
+     *
+     * Needed because a successful download is not a successful manual. The 2019
+     * Forester resolved `MSA5B1906A_STIS.pdf` from Subaru's own techinfo host —
+     * OEM domain, real PDF, uploaded fine — and it turned out to be the 2019
+     * BRZ Quick Guide. The extractor caught it ("the file is mislabeled"), but
+     * the row still carried a `file_id`, so shouldSkipManualLookup read
+     * `fresh_manual` and would have skipped this vehicle for 180 days. A wrong
+     * document cached as a success is worse than no document.
+     */
+    rejected_urls: v.optional(v.array(v.string())),
     fetched_at: v.number(),
     /** Files API entries expire; refresh when older than the TTL. */
     expires_at: v.optional(v.number()),

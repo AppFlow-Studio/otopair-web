@@ -146,6 +146,11 @@ export const MIN_MANUAL_BYTES = 40 * 1024;
 
 /** Negative caching: a failed (make, model, year) is not retried for this long. */
 export const MANUAL_FAILURE_TTL_DAYS = 14;
+
+/** How many candidate PDFs may be rejected for one vehicle before we stop
+ *  paying for uploads and accept an honest gap. Each rejection costs a
+ *  multi-MB download plus a Files API upload plus an extraction. */
+export const MANUAL_MAX_REJECTIONS = 3;
 /** A stored manual is re-resolved once it is older than this. */
 export const MANUAL_REFRESH_DAYS = 180;
 
@@ -402,8 +407,20 @@ export function rankManualCandidates(
       score += 4;
     }
     const modelKey = normalizeMakeKey(vehicle.model).replace(/[^a-z0-9]/g, "");
-    if (modelKey.length >= 2 && hay.replace(/[^a-z0-9]/g, "").includes(modelKey)) score += 10;
+    const modelEchoed =
+      modelKey.length >= 2 && hay.replace(/[^a-z0-9]/g, "").includes(modelKey);
+    if (modelEchoed) score += 10;
     if (normalizeMakeKey(vehicle.make).length > 0 && hay.includes(normalizeMakeKey(vehicle.make))) score += 5;
+    // A candidate that names NEITHER the model nor the year is anonymous: there
+    // is nothing in it tying the document to this vehicle. Subaru's
+    // `MSA5B1906A_STIS.pdf` is exactly that shape — it won on the OEM bonus
+    // alone and turned out to be the BRZ Quick Guide.
+    //
+    // A penalty rather than a filter, because some OEM hosts really do publish
+    // opaque part-number filenames and the correct document can be among them;
+    // this only has to move an anonymous candidate BELOW a self-identifying one
+    // when both exist. It cannot exceed the OEM bonus, so provenance still wins.
+    if (!modelEchoed && !hay.includes(String(vehicle.year))) score -= 30;
 
     out.push({
       url,
@@ -463,7 +480,14 @@ export type ManualRowLike = {
   attempts?: number | null;
   fetched_at?: number | null;
   expires_at?: number | null;
+  rejected_urls?: readonly string[] | null;
 } | null | undefined;
+
+/** Prefix `rejectManualRow` writes into `failure_reason`. A rejection is a
+ *  different kind of failure from a dead host: it means the document we read
+ *  was the WRONG one, so there are untried candidates and the retry is cheap
+ *  and likely to succeed. */
+export const MANUAL_REJECTION_PREFIX = "rejected_after_extraction";
 
 export type ManualSkipDecision = { skip: boolean; reason: string };
 
@@ -497,6 +521,26 @@ export function shouldSkipManualLookup(
   }
 
   if (typeof row.failure_reason === "string" && row.failure_reason.length > 0) {
+    // A REJECTION is not a dead end. It means the document we downloaded was
+    // the wrong one for this vehicle (the 2019 Forester got the BRZ Quick
+    // Guide), so there are untried candidates and the rejected URL is now
+    // excluded from ranking — the very next attempt tries something different.
+    // Holding that behind the 14-day negative cache would make the
+    // self-correcting loop take two weeks per candidate.
+    //
+    // Still bounded: once MANUAL_MAX_REJECTIONS candidates have been read and
+    // found wrong, this falls back to the ordinary negative cache rather than
+    // paying for a download + upload + extraction on every run forever.
+    if (row.failure_reason.startsWith(MANUAL_REJECTION_PREFIX)) {
+      const rejections = row.rejected_urls?.length ?? 0;
+      if (rejections < MANUAL_MAX_REJECTIONS) {
+        return { skip: false, reason: "retry_after_rejection" };
+      }
+      if (now - fetchedAt < failureTtl) {
+        return { skip: true, reason: "rejection_limit_reached" };
+      }
+      return { skip: false, reason: "negative_cache_expired" };
+    }
     if (now - fetchedAt < failureTtl) return { skip: true, reason: "negative_cache" };
     return { skip: false, reason: "negative_cache_expired" };
   }
@@ -958,6 +1002,57 @@ export const upsertManualRow = internalMutation({
 });
 
 /**
+ * Reject the manual currently on file for a vehicle, so the next resolve tries
+ * a DIFFERENT candidate instead of skipping.
+ *
+ * A successful download is not a successful manual. The 2019 Forester resolved
+ * a real PDF from Subaru's own techinfo host that turned out to be the 2019 BRZ
+ * Quick Guide; the extractor caught it, but the row still carried a `file_id`,
+ * which shouldSkipManualLookup reads as `fresh_manual` — so the wrong document
+ * would have been cached as this vehicle's manual for 180 days.
+ *
+ * Clearing `file_id` and recording the URL in `rejected_urls` turns that into a
+ * self-correcting loop: the vehicle becomes eligible again, and the candidate
+ * that wasted the attempt is skipped next time.
+ */
+export const rejectManualRow = internalMutation({
+  args: {
+    make: v.string(),
+    model: v.string(),
+    year: v.float64(),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const make = normalizeMakeKey(args.make);
+    const model = normalizeMakeKey(args.model);
+    const row = await ctx.db
+      .query("vehicle_manuals")
+      .withIndex("by_ymm", (q) => q.eq("make", make).eq("model", model).eq("year", args.year))
+      .first();
+    if (!row) return { rejected: false, reason: "no_row" };
+
+    const rejected = new Set<string>((row as any).rejected_urls ?? []);
+    if (row.source_url) rejected.add(row.source_url);
+
+    await ctx.db.patch(row._id, {
+      // Cleared so the row stops reading as a fresh success.
+      file_id: undefined,
+      // Recorded as a FAILURE so the negative cache still applies — a vehicle
+      // whose every candidate is wrong must not be re-searched every single
+      // run. The 14-day TTL is the right bound for "try again later".
+      failure_reason: `rejected_after_extraction: ${args.reason}`.slice(0, 400),
+      rejected_urls: [...rejected],
+      fetched_at: Date.now(),
+    });
+    console.warn(
+      `[manual-library] REJECTED ${args.year} ${args.make} ${args.model} — ` +
+        `${row.source_url} (${args.reason.slice(0, 160)})`,
+    );
+    return { rejected: true, rejected_count: rejected.size };
+  },
+});
+
+/**
  * Everything extractIntervalsFromManual needs in one read: the config's YMM,
  * the resolved manual row, the service slug → id map, and the current
  * interval rows the precedence rule will be evaluated against.
@@ -1344,9 +1439,22 @@ export const resolveManualForVehicle = internalAction({
         if (ranked.length > 0 && ranked[0].is_oem_domain && ranked[0].is_pdf) break;
       }
 
-      const candidates = rankManualCandidates(found, args).filter((c) => c.is_pdf);
+      // Candidates already read and found wrong for THIS vehicle. Retrying one
+      // costs a multi-MB download plus an upload plus an extraction to reach
+      // the same verdict, so a rejection has to actually remove it from play.
+      const rejectedUrls = new Set<string>(((existing as any)?.rejected_urls ?? []) as string[]);
+      const candidates = rankManualCandidates(found, args)
+        .filter((c) => c.is_pdf)
+        .filter((c) => !rejectedUrls.has(c.url));
+      if (rejectedUrls.size > 0) {
+        console.log(
+          `[manual-library] ${label}: skipping ${rejectedUrls.size} previously-rejected candidate(s)`,
+        );
+      }
       if (candidates.length === 0) {
-        return await fail(`no_pdf_candidates(searched=${found.length})`);
+        return await fail(
+          `no_pdf_candidates(searched=${found.length}, rejected=${rejectedUrls.size})`,
+        );
       }
 
       // ── 2. Download the best candidate (then the runner-up) ───
@@ -1548,9 +1656,40 @@ export const extractIntervalsFromManual = internalAction({
       const rows = dedupeIntervalsByService(parseManualIntervals(payload));
       const citations = collectCitationSpans(json);
       if (rows.length === 0) {
+        const notes = String(payload.notes ?? "").slice(0, 300);
         console.log(
-          `[manual-library] ${label}: no storable intervals (schedule_found=${payload.schedule_found}, notes=${String(payload.notes ?? "").slice(0, 160)})`,
+          `[manual-library] ${label}: no storable intervals (schedule_found=${payload.schedule_found}, notes=${notes.slice(0, 160)})`,
         );
+        // The extractor has just READ the document and reported that it carries
+        // no maintenance schedule. That verdict is the most authoritative signal
+        // available about whether this PDF was the right one — and it used to be
+        // discarded, leaving a `file_id` on the row so shouldSkipManualLookup
+        // read `fresh_manual` and skipped the vehicle for 180 days.
+        //
+        // Reject the document so the next resolve tries a different candidate.
+        // Bounded by MANUAL_MAX_REJECTIONS: a vehicle whose every candidate is
+        // wrong must stop costing uploads, and at that point an honest gap beats
+        // burning the budget forever.
+        if (payload.schedule_found === false) {
+          const priorRejections = ((context.manual as any)?.rejected_urls ?? []).length;
+          if (priorRejections < MANUAL_MAX_REJECTIONS) {
+            try {
+              await ctx.runMutation(selfApi().rejectManualRow, {
+                make: context.make,
+                model: context.model,
+                year: context.year,
+                reason: notes || "schedule_found=false",
+              });
+            } catch (e) {
+              console.warn(`[manual-library] ${label}: could not record rejection:`, e);
+            }
+          } else {
+            console.warn(
+              `[manual-library] ${label}: ${priorRejections} candidate(s) already rejected — ` +
+                `not rejecting again, leaving an honest gap`,
+            );
+          }
+        }
         return none("skipped", "no_intervals_extracted");
       }
 

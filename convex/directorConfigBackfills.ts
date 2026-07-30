@@ -31,6 +31,7 @@ import { roleHasCapability, type Capability, type DirectorRole } from "./directo
 import { buildCacheKey } from "./vehicleEnrichment/scraperQueries";
 import { resolveRotorMinimums, computeAxlesWithFitment } from "./vehicleEnrichment/utils/rotorSpecResource";
 import { validateRotorResolution } from "./vehicleEnrichment/validation/sanityChecks";
+import { reconcileClaims } from "./vehicleEnrichment/sourceAdapters/claimLedger";
 
 // ---------------------------------------------------------------------------
 // Audit-log writer (actions can't use ctx.db — go through a mutation).
@@ -144,8 +145,43 @@ export const _backfillRotorMinimumsRun = internalMutation({
       fitParts.map((p) => ({ subcategory: p?.subcategory ?? null })),
     );
 
+    // Aftermarket-catalogue minimums from the claim ledger, reconciled with the
+    // SAME deterministic function the pipeline uses so the two call sites can
+    // never disagree about what the evidence says.
+    //
+    // This is what makes rotor minimums healable WITHOUT a full re-enrich: the
+    // network work (gatherClaims) already happened and persisted, so this
+    // mutation only has to read and reconcile. A conflict_tie yields
+    // `value: null` and is therefore correctly absent — a tie must contribute
+    // nothing.
+    const claimRows = await ctx.db
+      .query("field_claims")
+      .withIndex("by_config", (q) => q.eq("vehicle_config_id", args.id))
+      .collect();
+    const catalogClaimFor = (axle: "front" | "rear") => {
+      const pick = (fieldKey: string) => {
+        const forField = claimRows.filter((c) => c.field_key === fieldKey);
+        if (forField.length === 0) return null;
+        const verdict = reconcileClaims(fieldKey, forField as any);
+        return verdict.value != null ? verdict : null;
+      };
+      const min = pick(`rotor_${axle}_min_thickness_mm`);
+      const nominal = pick(`rotor_${axle}_nominal_thickness_mm`);
+      if (!min && !nominal) return undefined;
+      return {
+        minMm: min?.value != null ? Number(min.value) : null,
+        nominalMm: nominal?.value != null ? Number(nominal.value) : null,
+        observedLabel: null,
+        sourceUrl: min?.source_urls?.[0] ?? nominal?.source_urls?.[0] ?? null,
+      };
+    };
+
     const resolutions = resolveRotorMinimums({
       markdown: cached?.markdown ?? null,
+      catalogClaims: {
+        front: catalogClaimFor("front"),
+        rear: catalogClaimFor("rear"),
+      },
       existing: {
         front: {
           minMm: cfg.rotor_front_min_thickness_mm ?? null,

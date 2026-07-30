@@ -55,6 +55,17 @@ export interface Claim {
   observed_at: number;
 }
 
+/** One part number the pipeline already believes in, offered to adapters that
+ *  are keyed by PART rather than by vehicle. */
+export interface AdapterKnownPart {
+  /** The field/role slot the number currently fills, e.g. "front_brake_pad_oem". */
+  field_key: string;
+  /** Verbatim OEM number as stored, e.g. "45022-T0A-A01". */
+  part_number: string;
+  /** Role key for a category cross-check, e.g. "front_brake_pad". */
+  role_key?: string | null;
+}
+
 /** What an adapter needs to look a vehicle up. */
 export interface AdapterVehicle {
   year: number;
@@ -65,6 +76,17 @@ export interface AdapterVehicle {
   engine_code?: string | null;
   displacement_l?: number | null;
   cylinders?: number | null;
+  /**
+   * Part numbers already on file for this vehicle.
+   *
+   * Most adapters are keyed by vehicle: give them Y/M/M and they walk a
+   * catalogue cascade to a part. A PART-NUMBER-KEYED source (RockAuto) inverts
+   * that — it can only answer "is this number real, and what is it?" — so it
+   * needs the numbers as input. Adapters that don't use this ignore it, and an
+   * adapter that needs it emits nothing when it is absent rather than falling
+   * back to a vehicle search it cannot perform.
+   */
+  known_parts?: readonly AdapterKnownPart[];
 }
 
 export interface AdapterResult {

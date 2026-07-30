@@ -17,11 +17,14 @@
  * The laws under test: WIX numbers are never field values (only the OE
  * numbers they replace are), prefix anchoring drops legacy concatenations,
  * child equality + Manufacturer filtering keep foreign rows out, engine
- * disagreement drops a field, malformed input fails open to [].
+ * disagreement drops a field, malformed input fails open to [], and — the
+ * law added 2026-07-30 — a cross-reference set may CONFIRM a number we hold
+ * but may never propose one of its own.
  */
 import { describe, expect, test } from "vitest";
 import {
   agreedPartsByField,
+  applyInterchangeLaw,
   filterTypeFieldKey,
   matchEngines,
   matchOption,
@@ -182,7 +185,13 @@ describe("agreedPartsByField", () => {
   });
 });
 
-describe("parseInterchangeClaims — the OE cross-reference law", () => {
+// NOTE: parseInterchangeClaims is the CANDIDATE ENUMERATOR, not the claim
+// boundary. Enumerating every OE number a WIX part replaces is correct — the
+// set is real. Asserting them all as one vehicle's field value is not, and
+// that filtering happens in applyInterchangeLaw (next block). These tests
+// therefore still expect several rows out of one response; what changed is
+// that "row" now means "candidate", not "claim".
+describe("parseInterchangeClaims — enumerating the OE cross-reference set", () => {
   const camryOilOpts = {
     fieldKey: "oil_filter_oem" as const,
     wixPartNumbers: ["51394", "51394XP"],
@@ -296,5 +305,183 @@ describe("parseInterchangeClaims — the OE cross-reference law", () => {
         camryOilOpts,
       ),
     ).toEqual([]);
+  });
+});
+
+describe("THE INTERCHANGE LAW — WIX corroborates, never proposes", () => {
+  // The live candidate set for the Camry's oil filter: every Toyota OE number
+  // WIX says 51394/51394XP replaces, across every vehicle those filters fit.
+  const candidates = parseInterchangeClaims(j(inter90915), {
+    fieldKey: "oil_filter_oem",
+    wixPartNumbers: ["51394", "51394XP"],
+    oePrefixes: ["90915"],
+    manufacturers: ["TOYOTA", "LEXUS", "SCION"],
+    observedAt: 1_753_000_000_000,
+  });
+  /** A number really in the set — stands in for "what the pipeline holds". */
+  const OURS = "9091503001";
+
+  test("the set is genuinely multi-valued — the defect this law fixes", () => {
+    // If this ever drops to 1 the rest of the block proves nothing.
+    expect(candidates.length).toBeGreaterThan(3);
+    expect(candidates.map((c) => c.value)).toContain(OURS);
+  });
+
+  test("ONE claim per field — never one per cross-reference member", () => {
+    const { claims } = applyInterchangeLaw(candidates, [
+      { field_key: "oil_filter_oem", part_number: "90915-03001" },
+    ]);
+    expect(claims).toHaveLength(1);
+    expect(claims[0].value).toBe(OURS);
+  });
+
+  test("the claim's value is OUR number — corroboration, not substitution", () => {
+    const { claims } = applyInterchangeLaw(candidates, [
+      { field_key: "oil_filter_oem", part_number: OURS },
+    ]);
+    const claim = claims[0];
+    expect(claim.field_key).toBe("oil_filter_oem");
+    expect(claim.value).toBe(OURS);
+    // WIX's own provenance rides along: this is an independent aftermarket
+    // catalogue agreeing, which is what lifts the field to two families.
+    expect(claim.source_family).toBe("aftermarket_catalog");
+    expect(claim.source_domain).toBe("m.wixfilters.com");
+    expect(claim.method).toBe("deterministic_parse");
+    expect(claim.observed_label).toMatch(/^WIX 51394(XP)? OE cross-reference/);
+  });
+
+  test("every other member becomes a sibling, and none becomes a claim", () => {
+    const { claims, interchange } = applyInterchangeLaw(candidates, [
+      { field_key: "oil_filter_oem", part_number: OURS },
+    ]);
+    const entry = interchange.find((e) => e.field_key === "oil_filter_oem")!;
+    expect(entry.corroborated).toBe(OURS);
+    expect(entry.siblings).toHaveLength(candidates.length - 1);
+    // Siblings exclude our own number, so they cannot self-corroborate.
+    expect(entry.siblings).not.toContain(OURS);
+    // Nothing outside our number was ever claimed.
+    expect(claims.map((c) => c.value)).toEqual([OURS]);
+    expect(entry.siblings).toEqual([...entry.siblings].sort());
+  });
+
+  test("a number we do NOT hold is never claimed, however unopposed", () => {
+    const { claims, interchange } = applyInterchangeLaw(candidates, [
+      { field_key: "oil_filter_oem", part_number: "15400-RTA-003" }, // a Honda number
+    ]);
+    expect(claims).toEqual([]);
+    expect(interchange[0].corroborated).toBeNull();
+    expect(interchange[0].siblings).toHaveLength(candidates.length);
+  });
+
+  test("a singleton candidate set still proposes nothing", () => {
+    // The rejected shortcut: one number left standing is equally the shape of
+    // an interchange row WIX never recorded for the sibling platform.
+    const [only] = candidates;
+    expect(applyInterchangeLaw([only], []).claims).toEqual([]);
+    expect(
+      applyInterchangeLaw([only], [
+        { field_key: "oil_filter_oem", part_number: "SOMETHING-ELSE" },
+      ]).claims,
+    ).toEqual([]);
+  });
+
+  test("a field with no known number yields no claim for that field", () => {
+    const cabin = parseInterchangeClaims(j(inter87139), {
+      fieldKey: "cabin_filter_oem",
+      wixPartNumbers: ["WP10320", "WP10322"],
+      oePrefixes: ["87139"],
+      manufacturers: ["TOYOTA", "LEXUS", "SCION"],
+      observedAt: 1,
+    });
+    expect(cabin.length).toBeGreaterThan(1);
+    const { claims } = applyInterchangeLaw([...candidates, ...cabin], [
+      { field_key: "oil_filter_oem", part_number: OURS },
+    ]);
+    expect(claims.map((c) => c.field_key)).toEqual(["oil_filter_oem"]);
+  });
+
+  test("fields are matched independently and ordered deterministically", () => {
+    const cabin = parseInterchangeClaims(j(inter87139), {
+      fieldKey: "cabin_filter_oem",
+      wixPartNumbers: ["WP10320", "WP10322"],
+      oePrefixes: ["87139"],
+      manufacturers: ["TOYOTA", "LEXUS", "SCION"],
+      observedAt: 1,
+    });
+    const { claims, interchange } = applyInterchangeLaw(
+      [...candidates, ...cabin],
+      [
+        { field_key: "oil_filter_oem", part_number: OURS },
+        { field_key: "cabin_filter_oem", part_number: "87139-0K070" },
+      ],
+    );
+    expect(claims.map((c) => c.field_key)).toEqual([
+      "cabin_filter_oem",
+      "oil_filter_oem",
+    ]);
+    expect(claims.map((c) => c.value)).toEqual(["871390K070", OURS]);
+    expect(interchange.map((e) => e.field_key)).toEqual([
+      "cabin_filter_oem",
+      "oil_filter_oem",
+    ]);
+  });
+
+  test("a repeated candidate confirms once — one source is one voice", () => {
+    const mine = candidates.find((c) => c.value === OURS)!;
+    const { claims, interchange } = applyInterchangeLaw([mine, mine, mine], [
+      { field_key: "oil_filter_oem", part_number: OURS },
+    ]);
+    expect(claims).toHaveLength(1);
+    expect(interchange[0].siblings).toEqual([]);
+  });
+
+  test("known parts are matched on normalized form, not verbatim", () => {
+    for (const raw of ["90915-03001", "90915 03001", "9091503001", "90915_03001"]) {
+      const { claims } = applyInterchangeLaw(candidates, [
+        { field_key: "oil_filter_oem", part_number: raw },
+      ]);
+      expect(claims.map((c) => c.value)).toEqual([OURS]);
+    }
+  });
+
+  test("empty / blank inputs fail open to no claims", () => {
+    expect(applyInterchangeLaw([], []).claims).toEqual([]);
+    expect(applyInterchangeLaw([], []).interchange).toEqual([]);
+    expect(applyInterchangeLaw(candidates, []).claims).toEqual([]);
+    expect(
+      applyInterchangeLaw(candidates, [
+        { field_key: "oil_filter_oem", part_number: "   " },
+      ]).claims,
+    ).toEqual([]);
+  });
+});
+
+describe("adapter is inert without known parts (no network)", () => {
+  test("returns ok with zero claims and a diagnostic, without fetching", async () => {
+    const result = await wixFiltersAdapter.lookup({
+      year: 2016,
+      make: "Honda",
+      model: "CR-V",
+      trim: "SE",
+      displacement_l: 2.4,
+      cylinders: 4,
+      // No known_parts: nothing to corroborate, so nothing may be claimed.
+    });
+    expect(result.ok).toBe(true);
+    expect(result.claims).toEqual([]);
+    expect(result.error).toMatch(/inert without them/);
+  });
+
+  test("part numbers on unrelated fields do not wake it up", async () => {
+    const result = await wixFiltersAdapter.lookup({
+      year: 2016,
+      make: "Honda",
+      model: "CR-V",
+      known_parts: [
+        { field_key: "front_brake_pad_oem", part_number: "45022-T0A-A01" },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.claims).toEqual([]);
   });
 });

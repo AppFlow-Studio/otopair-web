@@ -59,6 +59,7 @@ import type * as devOnly_auditCoreRoles from "../devOnly/auditCoreRoles.js";
 import type * as devOnly_auditPartRejections from "../devOnly/auditPartRejections.js";
 import type * as devOnly_auditRunFlow from "../devOnly/auditRunFlow.js";
 import type * as devOnly_backfillBrakeSystem from "../devOnly/backfillBrakeSystem.js";
+import type * as devOnly_canaryRun from "../devOnly/canaryRun.js";
 import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
 import type * as devOnly_dedupeConfig from "../devOnly/dedupeConfig.js";
 import type * as devOnly_endpointBackfill from "../devOnly/endpointBackfill.js";
@@ -429,6 +430,7 @@ import type * as vehicleEnrichment_sourceAdapters_amsoil from "../vehicleEnrichm
 import type * as vehicleEnrichment_sourceAdapters_brembo from "../vehicleEnrichment/sourceAdapters/brembo.js";
 import type * as vehicleEnrichment_sourceAdapters_claimLedger from "../vehicleEnrichment/sourceAdapters/claimLedger.js";
 import type * as vehicleEnrichment_sourceAdapters_registry from "../vehicleEnrichment/sourceAdapters/registry.js";
+import type * as vehicleEnrichment_sourceAdapters_rockauto from "../vehicleEnrichment/sourceAdapters/rockauto.js";
 import type * as vehicleEnrichment_sourceAdapters_summitCentric from "../vehicleEnrichment/sourceAdapters/summitCentric.js";
 import type * as vehicleEnrichment_sourceAdapters_sylvaniaBulbs from "../vehicleEnrichment/sourceAdapters/sylvaniaBulbs.js";
 import type * as vehicleEnrichment_sourceAdapters_tricoWipers from "../vehicleEnrichment/sourceAdapters/tricoWipers.js";
@@ -534,6 +536,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/auditPartRejections": typeof devOnly_auditPartRejections;
   "devOnly/auditRunFlow": typeof devOnly_auditRunFlow;
   "devOnly/backfillBrakeSystem": typeof devOnly_backfillBrakeSystem;
+  "devOnly/canaryRun": typeof devOnly_canaryRun;
   "devOnly/dataFixes": typeof devOnly_dataFixes;
   "devOnly/dedupeConfig": typeof devOnly_dedupeConfig;
   "devOnly/endpointBackfill": typeof devOnly_endpointBackfill;
@@ -904,6 +907,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/sourceAdapters/brembo": typeof vehicleEnrichment_sourceAdapters_brembo;
   "vehicleEnrichment/sourceAdapters/claimLedger": typeof vehicleEnrichment_sourceAdapters_claimLedger;
   "vehicleEnrichment/sourceAdapters/registry": typeof vehicleEnrichment_sourceAdapters_registry;
+  "vehicleEnrichment/sourceAdapters/rockauto": typeof vehicleEnrichment_sourceAdapters_rockauto;
   "vehicleEnrichment/sourceAdapters/summitCentric": typeof vehicleEnrichment_sourceAdapters_summitCentric;
   "vehicleEnrichment/sourceAdapters/sylvaniaBulbs": typeof vehicleEnrichment_sourceAdapters_sylvaniaBulbs;
   "vehicleEnrichment/sourceAdapters/tricoWipers": typeof vehicleEnrichment_sourceAdapters_tricoWipers;

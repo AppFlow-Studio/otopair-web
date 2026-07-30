@@ -23,6 +23,7 @@ import { summitCentricAdapter } from "./summitCentric";
 import { sylvaniaBulbsAdapter } from "./sylvaniaBulbs";
 import { tricoWipersAdapter } from "./tricoWipers";
 import { amsoilAdapter } from "./amsoil";
+import { rockautoAdapter } from "./rockauto";
 
 /** How an adapter's domain can be fetched — used to pick the fetch tier. */
 export type Fetchability = "plain_fetch" | "json_endpoint" | "needs_headless";
@@ -35,6 +36,7 @@ export const SOURCE_ADAPTERS: readonly SourceAdapter[] = [
   sylvaniaBulbsAdapter,
   tricoWipersAdapter,
   amsoilAdapter,
+  rockautoAdapter,
 ];
 
 /** Fetch-tier routing hints, keyed by adapter name. */
@@ -45,7 +47,26 @@ export const ADAPTER_FETCHABILITY: Readonly<Record<string, Fetchability>> = {
   [sylvaniaBulbsAdapter.name]: "json_endpoint",
   [tricoWipersAdapter.name]: "plain_fetch",
   [amsoilAdapter.name]: "needs_headless",
+  [rockautoAdapter.name]: "plain_fetch",
 };
+
+/**
+ * Adapters keyed by PART NUMBER rather than by vehicle. They read
+ * `AdapterVehicle.known_parts` and are inert without it, so a caller that
+ * cannot supply part numbers should skip them rather than pay for a lookup
+ * that can only return empty.
+ *
+ * NOT wix_filters, deliberately. It reads `known_parts` too — its OE
+ * cross-reference sets may only CONFIRM a number we hold, never propose one
+ * (see THE LAW in wixFilters.ts) — but it is still keyed by VEHICLE: the
+ * cascade that decides which WIX filter fits is Y/M/M/E, and the part numbers
+ * only gate the claim boundary at the end. It short-circuits before its first
+ * request when it has nothing to confirm, so listing it here would buy no
+ * saved fetches and would misdescribe how it is keyed.
+ */
+export const PART_KEYED_ADAPTERS: ReadonlySet<string> = new Set([
+  rockautoAdapter.name,
+]);
 
 /** Adapters that can attest the given field key (registry order preserved). */
 export function byField(fieldKey: string): SourceAdapter[] {

@@ -1472,13 +1472,13 @@ function ZonePanel({
                     Preview unavailable
                   </div>
                 )}
-                <div className="absolute inset-x-0 bottom-0 flex justify-end bg-gradient-to-t from-black/65 to-transparent p-2 pt-6">
+                <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-end bg-gradient-to-t from-black/65 to-transparent p-2 pt-6">
                   <button
                     type="button"
                     aria-label="Remove inspection photo"
                     disabled={photoBusy === storageId}
                     onClick={() => onRemovePhoto(storageId)}
-                    className="rounded-md bg-white/90 p-1.5 text-red-600 hover:bg-white disabled:opacity-60"
+                    className="pointer-events-auto rounded-md bg-white/90 p-1.5 text-red-600 hover:bg-white disabled:opacity-60"
                   >
                     {photoBusy === storageId ? (
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />

@@ -289,7 +289,7 @@ function cornerFields(opts: {
     {
       type: "text",
       key: "tire_size",
-      label: `Tire size (${opts.axle} axle)`,
+      label: `Installed tire size (${opts.axle} axle)`,
       firstVisitOnly: true,
       section: "Tire",
     },
@@ -520,7 +520,6 @@ export function defaultZoneState(zone: InspectionZone): ZoneState {
   const state = emptyZoneState();
   for (const field of zone.fields) {
     if (field.type === "measure") state.measures[field.key] = field.default ?? "";
-    else if (field.type === "tri") state.tri[field.key] = field.default;
     else if (field.type === "descriptors")
       state.descriptors[field.key] = [...field.default];
     else if (field.type === "text") state.text[field.key] = field.default ?? "";
@@ -553,6 +552,9 @@ export type BrakeAxleScope = {
 export type ZoneCompletionContext = {
   serviceNames: string[];
   brakeScope: BrakeAxleScope;
+  tireReplacementPositions?: ReadonlyArray<
+    Extract<ZoneId, "FL" | "FR" | "RL" | "RR">
+  >;
 };
 
 export type ZoneCompletionResult =
@@ -572,8 +574,13 @@ export function isFieldRequiredForZone(
   context: ZoneCompletionContext,
 ): boolean {
   if (CORNER_IDS.includes(zoneId)) {
-    if (["tread", "wear", "tire_brand", "tire_size"].includes(fieldKey)) {
+    if (fieldKey === "tire_size") {
       return true;
+    }
+    if (["tread", "wear", "tire_brand"].includes(fieldKey)) {
+      return !context.tireReplacementPositions?.includes(
+        zoneId as Extract<ZoneId, "FL" | "FR" | "RL" | "RR">,
+      );
     }
     if (fieldKey === "pad" || fieldKey === "rotor") {
       const front = zoneId === "FL" || zoneId === "FR";
@@ -660,8 +667,18 @@ export function validateZoneForCompletion(
   });
 
   if (CORNER_IDS.includes(zoneId)) {
+    const treadRequired = isFieldRequiredForZone(
+      zoneId,
+      "tread",
+      context,
+    );
     const detailed = zs.select.tread_mode === "detailed";
-    if (detailed) {
+    const hasDetailedTread = [
+      zs.measures.tread_inner,
+      zs.measures.tread_center,
+      zs.measures.tread_outer,
+    ].some((value) => (value ?? "").trim() !== "");
+    if (detailed && (treadRequired || hasDetailedTread)) {
       for (const [key, label] of [
         ["tread_inner", "inner"],
         ["tread_center", "center"],
@@ -683,17 +700,25 @@ export function validateZoneForCompletion(
       if (Number(zs.measures.tread) !== minimum) {
         return fail("tread", "Shallowest tread must match the lowest detailed reading.");
       }
-    } else {
+    } else if (!detailed) {
       if ((zs.measures.tread ?? "").trim() === "") {
-        return fail("tread", "Tire tread depth is required.");
-      }
-      const tread = Number(zs.measures.tread);
-      if (!Number.isInteger(tread) || tread < 0 || tread > 32) {
-        return fail("tread", "Tire tread depth must be a whole number from 0 to 32.");
+        if (treadRequired) {
+          return fail("tread", "Tire tread depth is required.");
+        }
+      } else {
+        const tread = Number(zs.measures.tread);
+        if (!Number.isInteger(tread) || tread < 0 || tread > 32) {
+          return fail("tread", "Tire tread depth must be a whole number from 0 to 32.");
+        }
       }
     }
 
-    if (!(zs.text.tire_brand ?? "").trim()) {
+    const tireBrandRequired = isFieldRequiredForZone(
+      zoneId,
+      "tire_brand",
+      context,
+    );
+    if (tireBrandRequired && !(zs.text.tire_brand ?? "").trim()) {
       return fail("tire_brand", "Tire brand is required.");
     }
     if (zs.text.tire_brand === OTHER_INSPECTION_OPTION) {
@@ -729,6 +754,10 @@ export function validateZoneForCompletion(
       }
     } else if (field.type === "select") {
       if (required && !(zs.select[field.key] ?? "").trim()) {
+        return fail(field.key, `${field.label} is required.`);
+      }
+    } else if (field.type === "tri") {
+      if (required && !zs.tri[field.key]) {
         return fail(field.key, `${field.label} is required.`);
       }
     }
@@ -980,7 +1009,7 @@ export function derivePrejobFromInspection(
               : null,
           }
         : null,
-    fluids_match_oem: !hasFluidOverride,
+    fluids_match_oem: hasFluidOverride ? false : undefined,
     fluid_overrides: hasFluidOverride ? fluidOverrides : null,
     inspection: opts.inspectionStatus ?? null,
     modifications: opts.modifications ?? null,
@@ -1209,8 +1238,7 @@ export function zoneHasInput(zoneId: ZoneId, zs: ZoneState): boolean {
     if (field.type === "measure") {
       if ((zs.measures[field.key] ?? "").trim() !== "") return true;
     } else if (field.type === "tri") {
-      // Differs from the template default (e.g. flagged y/r).
-      if (zs.tri[field.key] && zs.tri[field.key] !== field.default) return true;
+      if (zs.tri[field.key]) return true;
     } else if (field.type === "descriptors") {
       if ((zs.descriptors[field.key] ?? []).length > 0) return true;
     } else if (field.type === "text") {

@@ -815,6 +815,9 @@ export default function MechanicDashboard() {
             : ""
         }
         bookingServices={selectedWorkflowBooking?.serviceNames ?? []}
+        tireReplacementPositions={
+          selectedWorkflowBooking?.tireSpecs?.positions ?? []
+        }
         passportData={selectedWorkflowPassport ?? null}
         prefillData={selectedWorkflowBooking?.jobActuals?.prejobReport ?? null}
         isSubmitting={

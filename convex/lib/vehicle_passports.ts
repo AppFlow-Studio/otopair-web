@@ -339,6 +339,16 @@ export const jobRecommendationInputValidator = v.object({
         type: v.string(),
         tier: v.string(),
         quantity: v.number(),
+        positions: v.optional(
+          v.array(
+            v.union(
+              v.literal("FL"),
+              v.literal("FR"),
+              v.literal("RL"),
+              v.literal("RR"),
+            ),
+          ),
+        ),
       }),
       v.null()
     )

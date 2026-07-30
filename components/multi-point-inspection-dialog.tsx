@@ -91,6 +91,7 @@ import {
 } from "@/lib/vehicle-mod-systems";
 
 type SubmitIntent = "close" | "start";
+type BookedTirePosition = "FL" | "FR" | "RL" | "RR";
 
 export type InspectionInputPayload = {
   template_version: string;
@@ -131,7 +132,6 @@ const deleteInspectionPhotoRef = makeFunctionReference<"mutation">(
 );
 
 const NAV_ZONE_IDS = INSPECTION_NAV_ZONE_IDS;
-const CORNER_ZONE_IDS: ZoneId[] = ["FL", "FR", "RL", "RR"];
 
 // Diagram geometry (top-down car). Mirrors the prototype layout. OWNER is not a
 // physical location, so it renders as a chip below the diagram, not on the car.
@@ -229,6 +229,7 @@ export default function MultiPointInspectionDialog(props: {
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
+  tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
   isSubmitting: boolean;
@@ -258,6 +259,7 @@ function MultiPointInspectionDialogBody({
   bookingLabel,
   bookingSubLabel,
   bookingServices = [],
+  tireReplacementPositions = [],
   passportData,
   prefillData,
   isSubmitting,
@@ -270,6 +272,7 @@ function MultiPointInspectionDialogBody({
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
+  tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
   isSubmitting: boolean;
@@ -389,8 +392,12 @@ function MultiPointInspectionDialogBody({
     [bookingServices, savedBrakeScope],
   );
   const completionContext = useMemo(
-    () => ({ serviceNames: bookingServices, brakeScope }),
-    [bookingServices, brakeScope],
+    () => ({
+      serviceNames: bookingServices,
+      brakeScope,
+      tireReplacementPositions,
+    }),
+    [bookingServices, brakeScope, tireReplacementPositions],
   );
 
   useEffect(() => {
@@ -411,7 +418,7 @@ function MultiPointInspectionDialogBody({
     [ownerProfile],
   );
 
-  // ---- hydrate from saved inspection or legacy prefill -------------------
+  // ---- resume values entered for this booking's saved inspection ----------
   useEffect(() => {
     if (hydrated) return;
     // Wait for the saved-inspection query to resolve (undefined = loading).
@@ -435,37 +442,20 @@ function MultiPointInspectionDialogBody({
           photoIds: Array.isArray(z.photo_ids) ? [...z.photo_ids] : [],
         };
       }
-    } else {
-      applyLegacyPrefill(next, prefillData, passportData);
+      const pf = prefillData;
+      if (typeof pf?.mileage === "number") setMileage(String(pf.mileage));
+      if (pf?.inspection?.status) setInspectionStatus(pf.inspection.status);
+      if (pf?.inspection?.expires_at) setInspectionExpires(pf.inspection.expires_at);
+      if (pf?.modifications?.has_mods) setModAftermarket(true);
+      if (pf?.modifications?.notes) setModNotes(pf.modifications.notes);
+      setModAffectedSystems(pf?.modifications?.affected_systems ?? []);
+      if (pf?.next_mechanic_tip) setNextTip(pf.next_mechanic_tip);
     }
 
     setState(next);
 
-    // Header fields from prefill / passport.
-    const pf = prefillData;
-    const baselineMileage =
-      pf?.mileage ?? passportData?.passport.mileage ?? null;
-    if (typeof baselineMileage === "number") setMileage(String(baselineMileage));
-    if (pf?.inspection?.status) setInspectionStatus(pf.inspection.status);
-    if (pf?.inspection?.expires_at) setInspectionExpires(pf.inspection.expires_at);
-    if (
-      pf?.modifications?.has_mods ??
-      passportData?.passport.modifications.has_mods
-    ) {
-      setModAftermarket(true);
-    }
-    const seedNotes =
-      pf?.modifications?.notes ?? passportData?.passport.modifications.notes;
-    if (seedNotes) setModNotes(seedNotes);
-    setModAffectedSystems(
-      pf?.modifications?.affected_systems ??
-        passportData?.passport.modifications.affected_systems ??
-        []
-    );
-    if (pf?.next_mechanic_tip) setNextTip(pf.next_mechanic_tip);
-
     setHydrated(true);
-  }, [hydrated, bookingId, savedInspection, prefillData, passportData]);
+  }, [hydrated, bookingId, savedInspection, prefillData]);
 
   // ---- helpers -----------------------------------------------------------
   const zoneState = useCallback(
@@ -567,11 +557,13 @@ function MultiPointInspectionDialogBody({
             expires_at: inspectionExpires.trim() || null,
           }
         : null,
-      modifications: {
-        has_mods: modAftermarket,
-        notes: modAftermarket ? modNotes.trim() || null : null,
-        affected_systems: modAftermarket ? modAffectedSystems : [],
-      },
+      modifications: modAftermarket
+        ? {
+            has_mods: true,
+            notes: modNotes.trim() || null,
+            affected_systems: modAffectedSystems,
+          }
+        : null,
       nextMechanicTip: nextTip.trim() || null,
     });
     const inspection: InspectionInputPayload = {
@@ -1346,6 +1338,7 @@ function ZonePanel({
   completionContext: {
     serviceNames: string[];
     brakeScope: BrakeAxleScope;
+    tireReplacementPositions?: BookedTirePosition[];
   };
   fieldError?: { fieldKey: string; message: string };
   canPhoto: boolean;
@@ -1361,6 +1354,9 @@ function ZonePanel({
   onNext: () => void;
 }) {
   const zone = INSPECTION_ZONES_BY_ID[zoneId];
+  const tireReplacementScheduled =
+    (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
+    completionContext.tireReplacementPositions?.includes(zoneId);
   return (
     <div className="space-y-1">
       <div className="sticky top-0 z-20 -mx-2 mb-2 flex items-center justify-between gap-2 border-b border-primary/10 bg-card/95 px-2 py-2 backdrop-blur">
@@ -1400,6 +1396,16 @@ function ZonePanel({
           </button>
         </div>
       </div>
+
+      {tireReplacementScheduled ? (
+        <p className="rounded-lg border border-primary/15 bg-primary/5 px-3 py-2 text-[12px] text-muted-foreground">
+          <span className="font-semibold text-foreground">
+            Tire replacement scheduled.
+          </span>{" "}
+          Outgoing-tire details are optional. Installed axle size is still
+          required.
+        </p>
+      ) : null}
 
       {zone.fields.map((field, i) => {
         const prevSection = i > 0 ? zone.fields[i - 1].section : undefined;
@@ -2534,115 +2540,4 @@ function FindingList({
       ))}
     </div>
   );
-}
-
-// ---------------------------------------------------------------------------
-// Legacy prefill — seed corner/engine zones from the last PreJobSurveyPayload
-// or passport so non-first-visit jobs don't start blank (and validation passes).
-// ---------------------------------------------------------------------------
-
-function applyLegacyPrefill(
-  state: InspectionState,
-  prefill: PreJobSurveyPayload | null | undefined,
-  passport: VehiclePassportData | null | undefined,
-) {
-  const tires = passport?.passport.tires;
-  const brakes = prefill?.brakes ?? passport?.passport.brakes;
-  const fluids = prefill?.fluid_overrides ?? passport?.passport.fluids;
-  const tread = prefill?.tire_tread ?? tires?.tread_depths;
-
-  const setText = (id: ZoneId, key: string, value: unknown) => {
-    if (typeof value === "string" && value.trim() && state.zones[id]) {
-      state.zones[id]!.text[key] =
-        key === "tire_size" ? normalizeTireSize(value) : value;
-    }
-  };
-  const setMeasure = (id: ZoneId, key: string, value: unknown) => {
-    if (typeof value === "number" && Number.isFinite(value) && state.zones[id]) {
-      state.zones[id]!.measures[key] = String(value);
-    }
-  };
-  const setSelect = (key: string, value: unknown) => {
-    if (typeof value === "string" && value.trim() && state.zones.ENG) {
-      state.zones.ENG.select[key] = value;
-    }
-  };
-
-  for (const id of CORNER_ZONE_IDS) {
-    setText(id, "tire_brand", prefill?.tire_brand ?? tires?.brand);
-    setText(id, "tire_model", prefill?.tire_model ?? tires?.model);
-    setText(id, "pad_brand", brakes?.pad_brand);
-  }
-  for (const id of ["FL", "FR"] as const) {
-    setText(id, "tire_size", prefill?.tire_size_front ?? tires?.size_front);
-  }
-  for (const id of ["RL", "RR"] as const) {
-    setText(id, "tire_size", prefill?.tire_size_rear ?? tires?.size_rear);
-  }
-
-  setMeasure("FL", "pad", brakes?.front_pad_mm);
-  setMeasure("FR", "pad", brakes?.front_pad_mm);
-  setMeasure("RL", "pad", brakes?.rear_pad_mm);
-  setMeasure("RR", "pad", brakes?.rear_pad_mm);
-
-  const positionToZone = {
-    front_left: "FL",
-    front_right: "FR",
-    rear_left: "RL",
-    rear_right: "RR",
-  } as const;
-  for (const [position, id] of Object.entries(positionToZone) as Array<
-    [keyof typeof positionToZone, (typeof positionToZone)[keyof typeof positionToZone]]
-  >) {
-    const reading = tread?.[position];
-    if (reading?.reported_min_32nds != null) {
-      setMeasure(id, "tread", reading.reported_min_32nds);
-    }
-    if (
-      reading?.inner_32nds != null &&
-      reading.center_32nds != null &&
-      reading.outer_32nds != null
-    ) {
-      setMeasure(id, "tread_inner", reading.inner_32nds);
-      setMeasure(id, "tread_center", reading.center_32nds);
-      setMeasure(id, "tread_outer", reading.outer_32nds);
-      state.zones[id]!.select.tread_mode = "detailed";
-    }
-    const rotor = brakes?.rotor_thickness?.[position];
-    if (rotor) {
-      setMeasure(id, "rotor", rotor.entered_value);
-      state.zones[id]!.select.rotor_unit = rotor.entered_unit;
-    }
-  }
-
-  const conditionToTri = (
-    condition: PreJobSurveyPayload["front_tire_condition"],
-  ): TriValue | undefined =>
-    condition === "good"
-      ? "g"
-      : condition === "fair"
-        ? "y"
-        : condition === "replace_soon"
-          ? "r"
-          : undefined;
-  const frontCondition = conditionToTri(
-    prefill?.front_tire_condition ?? tires?.front_condition ?? null,
-  );
-  const rearCondition = conditionToTri(
-    prefill?.rear_tire_condition ?? tires?.rear_condition ?? null,
-  );
-  if (frontCondition) {
-    state.zones.FL!.tri.wear = frontCondition;
-    state.zones.FR!.tri.wear = frontCondition;
-  }
-  if (rearCondition) {
-    state.zones.RL!.tri.wear = rearCondition;
-    state.zones.RR!.tri.wear = rearCondition;
-  }
-
-  setSelect("oil_viscosity", fluids?.oil_viscosity);
-  setSelect("oil_type", fluids?.oil_type);
-  setSelect("coolant_type", fluids?.coolant_type);
-  setSelect("brake_fluid_type", fluids?.brake_fluid_type);
-  setSelect("transmission_fluid_type", fluids?.transmission_fluid_type);
 }

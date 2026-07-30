@@ -177,6 +177,7 @@ type RecRowState = {
     type: string;
     tier: string;
     quantity: number;
+    positions?: Array<"FL" | "FR" | "RL" | "RR">;
   } | null;
 };
 

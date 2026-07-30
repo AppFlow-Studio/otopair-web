@@ -249,6 +249,7 @@ export type RecommendationTireSpecs = {
   type: string;
   tier: string;
   quantity: number;
+  positions?: Array<"FL" | "FR" | "RL" | "RR">;
 };
 
 export type JobRecommendationInput = {

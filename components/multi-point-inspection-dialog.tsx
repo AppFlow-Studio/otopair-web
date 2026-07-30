@@ -9,7 +9,6 @@ import {
   ChevronRight,
   ChevronUp,
   Download,
-  ExternalLink,
   Loader2,
   Trash2,
 } from "lucide-react";
@@ -17,6 +16,7 @@ import { useMutation, useQuery, useAction } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import ConfirmationDialog from "@/components/confirmation-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
 import { TireSizeInput } from "@/components/ui/tire-size-input";
@@ -339,6 +339,10 @@ function MultiPointInspectionDialogBody({
   const [downloading, setDownloading] = useState(false);
   const [photoPreviews, setPhotoPreviews] = useState<Record<string, string>>({});
   const [photoBusy, setPhotoBusy] = useState<string | null>(null);
+  const [photoToRemove, setPhotoToRemove] = useState<{
+    zoneId: ZoneId;
+    storageId: string;
+  } | null>(null);
   const photoPreviewsRef = useRef(photoPreviews);
 
   // Global header fields that don't belong to a single wheel.
@@ -871,9 +875,6 @@ function MultiPointInspectionDialogBody({
 
   async function handleRemovePhoto(id: ZoneId, storageId: string) {
     if (!bookingId) return;
-    if (!window.confirm("Remove this photo permanently? This cannot be undone.")) {
-      return;
-    }
     setPhotoBusy(storageId);
     setError("");
     try {
@@ -932,7 +933,8 @@ function MultiPointInspectionDialogBody({
   );
 
   return (
-    <SurveyDialogShell
+    <>
+      <SurveyDialogShell
       open={open}
       onClose={onClose}
       title="Multi-point inspection"
@@ -1153,7 +1155,7 @@ function MultiPointInspectionDialogBody({
                 }
                 onPhoto={(file) => handlePhotoUpload(activeZone, file)}
                 onRemovePhoto={(storageId) =>
-                  handleRemovePhoto(activeZone, storageId)
+                  setPhotoToRemove({ zoneId: activeZone, storageId })
                 }
                 onToggleDone={() => handleToggleZone(activeZone)}
                 onPrevious={() => {
@@ -1199,7 +1201,30 @@ function MultiPointInspectionDialogBody({
           />
         </div>
       )}
-    </SurveyDialogShell>
+      </SurveyDialogShell>
+      <ConfirmationDialog
+        open={photoToRemove !== null}
+        title="Remove this photo?"
+        description="This photo will be permanently deleted and cannot be recovered."
+        onClose={() => setPhotoToRemove(null)}
+        zIndexClassName="z-[100]"
+        secondaryAction={{
+          label: "Cancel",
+          onAction: () => setPhotoToRemove(null),
+          variant: "outline",
+        }}
+        primaryAction={{
+          label: "Remove photo",
+          variant: "destructive",
+          onAction: () => {
+            if (!photoToRemove) return;
+            const target = photoToRemove;
+            setPhotoToRemove(null);
+            void handleRemovePhoto(target.zoneId, target.storageId);
+          },
+        }}
+      />
+    </>
   );
 }
 
@@ -1422,29 +1447,26 @@ function ZonePanel({
                 className="relative overflow-hidden rounded-lg border border-primary/15 bg-muted"
               >
                 {src ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={src}
-                    alt={`${zone.label} inspection`}
-                    className="aspect-[4/3] w-full object-cover"
-                  />
+                  <a
+                    href={src}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="Enlarge inspection photo"
+                    className="block"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={src}
+                      alt={`${zone.label} inspection`}
+                      className="aspect-[4/3] w-full cursor-zoom-in object-cover"
+                    />
+                  </a>
                 ) : (
                   <div className="flex aspect-[4/3] items-center justify-center text-[11px] text-muted-foreground">
                     Preview unavailable
                   </div>
                 )}
-                <div className="absolute inset-x-0 bottom-0 flex justify-end gap-1 bg-gradient-to-t from-black/65 to-transparent p-2 pt-6">
-                  {src ? (
-                    <a
-                      href={src}
-                      target="_blank"
-                      rel="noreferrer"
-                      aria-label="Enlarge inspection photo"
-                      className="rounded-md bg-white/90 p-1.5 text-slate-700 hover:bg-white"
-                    >
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                  ) : null}
+                <div className="absolute inset-x-0 bottom-0 flex justify-end bg-gradient-to-t from-black/65 to-transparent p-2 pt-6">
                   <button
                     type="button"
                     aria-label="Remove inspection photo"

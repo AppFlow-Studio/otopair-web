@@ -29,6 +29,13 @@ export type RotorAxle = "front" | "rear";
 export type RotorMinOutcome =
   | "already_present"
   | "sourced_markdown"
+  /** Discard minimum read from an aftermarket disc catalogue (Brembo et al.)
+   *  via the claim ledger. A real, label-verified discard spec — but for THAT
+   *  manufacturer's disc, which can differ from the OEM rotor's stamped
+   *  minimum (Camry XV70 front: Brembo 25mm vs Toyota 26mm). Ranks below
+   *  markdown-sourced OEM text and is graded as an estimate, never a clean
+   *  spec. See the quality stamp in resolveRotorMinimums. */
+  | "sourced_catalog"
   | "derived_from_nominal"
   | "nominal_only"
   | "not_applicable"
@@ -107,6 +114,17 @@ export function rotorMinDeriveEnabled(): boolean {
  */
 export const DERIVE_ALLOWANCE_MM = 1.5;
 
+/** A discard minimum reconciled from the claim ledger, per axle. Supplied only
+ *  when the ledger reached a consensus; a conflict_tie must arrive as absent,
+ *  because a tie means no value at all. */
+export type CatalogRotorClaim = {
+  minMm?: number | null;
+  nominalMm?: number | null;
+  /** Verbatim label the value was read under, e.g. "Min. thickness". */
+  observedLabel?: string | null;
+  sourceUrl?: string | null;
+};
+
 export type ResolveRotorInput = {
   /** Cached parts-page markdown for this vehicle, if any. */
   markdown?: string | null;
@@ -115,6 +133,10 @@ export type ResolveRotorInput = {
   naRoleKeys?: readonly string[];
   /** Axles that actually carry a rotor fitment. Omitted ⇒ assume both. */
   axlesWithFitment?: readonly RotorAxle[];
+  /** Aftermarket-catalogue minimums from the claim ledger, per axle. Consulted
+   *  only AFTER the markdown parse fails, never before: OEM page text outranks
+   *  a third-party disc spec. */
+  catalogClaims?: Partial<Record<RotorAxle, CatalogRotorClaim>>;
 };
 
 function num(v: number | null | undefined): number | null {
@@ -177,6 +199,36 @@ export function resolveRotorMinimums(
       };
     }
 
+    // Aftermarket disc catalogue (claim ledger). Ranked BELOW the markdown
+    // parse — an OEM page's own discard text always wins — and above deriving
+    // a number from nominal, because this is a real published minimum read
+    // under a real discard label rather than an arithmetic guess.
+    //
+    // Stamped "oem_spec_flagged", never "oem_spec": the value is Brembo's
+    // discard spec for Brembo's disc, and the vehicle may be wearing the OEM
+    // rotor whose stamped minimum differs. classify() warn-caps a flagged
+    // value, so it can never auto-sell a rotor job — but it CAN stop grading a
+    // rotor against nothing, which is what a null minimum does today.
+    const catalog = input.catalogClaims?.[axle];
+    const catalogMin = num(catalog?.minMm);
+    if (catalogMin != null) {
+      const catalogNominal = nominal ?? num(catalog?.nominalMm);
+      // A minimum that meets or exceeds its own nominal is incoherent — refuse
+      // both rather than store a figure that condemns every healthy rotor.
+      if (catalogNominal == null || catalogMin < catalogNominal) {
+        return {
+          axle,
+          outcome: "sourced_catalog",
+          minMm: catalogMin,
+          nominalMm: catalogNominal,
+          quality: "oem_spec_flagged",
+          observedLabel: catalog?.observedLabel ?? null,
+          sourceUrl: catalog?.sourceUrl ?? cur.sourceUrl ?? null,
+          changed: true,
+        };
+      }
+    }
+
     if (nominal != null) {
       if (!rotorMinDeriveEnabled()) {
         // Honest gap: we know the new thickness and NOT the minimum. Saying so
@@ -228,6 +280,11 @@ export function rotorErrorTag(r: RotorAxleResolution): string | null {
       return `rotor_min:missing:${r.axle}`;
     case "derived_from_nominal":
       return `rotor_min:estimated:${r.axle}:${r.minMm ?? "?"}`;
+    case "sourced_catalog":
+      // Not a gap — a real minimum landed — but it is a third-party disc spec
+      // graded as an estimate, so it stays visible in the run's error tally
+      // rather than reading as a clean OEM resolution.
+      return `rotor_min:catalog:${r.axle}:${r.minMm ?? "?"}`;
     default:
       return null;
   }

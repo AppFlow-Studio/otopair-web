@@ -244,4 +244,45 @@ crons.interval(
   { limit: 50 },
 );
 
+// EPA fuel economy (Phase 0.5): re-pull configs whose fueleconomy.gov row is
+// > 90 days old (EPA figures are static per model year — this is generous).
+// Free public API (no auth); the sweep schedules each config as its own
+// staggered action. Fail-open — an outage or ambiguous engine match stores
+// nothing rather than a guess.
+crons.interval(
+  "refresh-epa-economy",
+  { hours: 24 },
+  (internal as any).vehicleEnrichment.epaFuelEconomy.refreshStaleEpa,
+  { limit: 50 },
+);
+
+// OEM manual library (P2.2): nightly micro-batch of configs missing
+// `interval_months` on a core service. Each config costs a multi-MB PDF
+// download + a Files-API upload + a large-context extraction call, so the
+// batch is deliberately tiny (3/night by default) and the sweep schedules
+// each config as its own staggered action. Set MANUAL_LIBRARY_DAILY_LIMIT in
+// Convex env to resize it — 0 turns the cron into a no-op without redeploying.
+// Fail-open: a failed resolve writes a failure_reason (14-day negative cache)
+// and the extraction no-ops rather than storing a guess.
+crons.interval(
+  "backfill-manual-intervals",
+  { hours: 24 },
+  (internal as any).vehicleEnrichment.manualLibrary.backfillManualIntervals,
+  { dryRun: false },
+);
+
+// Part-number existence oracle: weekly re-crawl of every (make, source) catalog
+// sitemap already present in part_index_status. Weekly because the oracle may
+// only fail closed on an index younger than 30 days — this keeps that
+// entitlement alive without ever granting it to a make nobody deliberately
+// ingested. Free (no API, no LLM spend); the ingest self-continues one child
+// sitemap per tick at the robots.txt crawl delay, and a crawl that cannot read
+// every child ends "failed" so a partial index can never answer "absent".
+crons.interval(
+  "refresh-part-index",
+  { hours: 168 },
+  (internal as any).vehicleEnrichment.partIndex.refreshIndexedMakes,
+  { limit: 10 },
+);
+
 export default crons;

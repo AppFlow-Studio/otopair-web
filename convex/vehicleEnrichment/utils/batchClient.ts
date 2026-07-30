@@ -182,6 +182,44 @@ export async function getBatchStatus(batchId: string): Promise<"in_progress" | "
 // ─── Results ─────────────────────────────────────────────────────
 
 /**
+ * Serialized-content length above which an empty parse result is treated as a
+ * failure rather than a legitimately empty payload. `JSON.stringify(content)`
+ * of a real extraction response runs to thousands of characters; an genuinely
+ * empty/near-empty block array serializes to well under this.
+ */
+export const EMPTY_PARSE_RAWTEXT_FLOOR = 200;
+
+/**
+ * Decide whether a SUCCEEDED batch request whose body we parsed should still
+ * be reported as an error. Pure, so the contract is unit-testable.
+ *
+ * Returns the error string, or null when the result is genuinely fine.
+ *
+ * `parseThrew` — extractJsonFromContentBlocks threw.
+ * `parsedKeyCount` — keys recovered; 0 means nothing usable came back.
+ * `rawTextLength` — length of the serialized content blocks.
+ *
+ * The empty-object case is the subtle one. `{}` is a legitimate result for a
+ * trivially empty response, so it is only an error when there was substantial
+ * text that we failed to turn into anything — which is precisely the shape of
+ * a model that answered in prose instead of JSON.
+ */
+export function classifyParseOutcome(input: {
+  parseThrew: boolean;
+  parseErrorMessage?: string;
+  parsedKeyCount: number;
+  rawTextLength: number;
+}): string | null {
+  if (input.parseThrew) {
+    return `json_extraction_failed: ${input.parseErrorMessage ?? "unknown"}`.slice(0, 300);
+  }
+  if (input.parsedKeyCount === 0 && input.rawTextLength > EMPTY_PARSE_RAWTEXT_FLOOR) {
+    return `json_extraction_empty: no JSON object recovered from ${input.rawTextLength} chars of content`;
+  }
+  return null;
+}
+
+/**
  * Retrieve and parse all results from a completed batch.
  * Returns a map of customId → { data, usage, error }.
  */
@@ -196,9 +234,13 @@ export async function getBatchResults(batchId: string): Promise<Record<string, B
       const webSearches = (message as any).usage?.server_tool_use?.web_search_requests ?? 0;
 
       let data: Record<string, any> = {};
+      let parseThrew = false;
+      let parseErrorMessage: string | undefined;
       try {
         data = extractJsonFromContentBlocks(Array.isArray(content) ? content : [content]);
       } catch (e) {
+        parseThrew = true;
+        parseErrorMessage = e instanceof Error ? e.message : String(e);
         console.error(`[batch] JSON extraction failed for ${item.custom_id}:`, e);
       }
 
@@ -207,6 +249,29 @@ export async function getBatchResults(batchId: string): Promise<Record<string, B
         rawText = JSON.stringify(content);
       } catch {
         rawText = undefined;
+      }
+
+      // A request the API SUCCEEDED on whose body we could not read is a
+      // failure of this pipeline, and it must be reported as one. Before this,
+      // `error` was hardcoded null: an unparseable batch-2 body produced
+      // `data = {}` with `error: null`, so v3pipeline's `if (r2?.error)` branch
+      // never fired, the step trace recorded status "ok", and every consumer of
+      // the parsed payload silently received nothing. That is exactly how the
+      // 2020 Yaris canary reached "complete / fill 83" while its batch-2
+      // `services[]` was empty — which starved labor (100% default_fallback),
+      // quotability (`{pct: 1, services: []}`) and role applicability
+      // (`applicable_services_unknown`) all at once, with no error anywhere.
+      const parseError = classifyParseOutcome({
+        parseThrew,
+        parseErrorMessage,
+        parsedKeyCount: Object.keys(data).length,
+        rawTextLength: rawText?.length ?? 0,
+      });
+      if (parseError != null && !parseThrew) {
+        console.error(
+          `[batch] JSON extraction yielded {} for ${item.custom_id} from ` +
+            `${rawText?.length ?? 0} chars — treating as an error`,
+        );
       }
 
       results[item.custom_id] = {
@@ -218,16 +283,28 @@ export async function getBatchResults(batchId: string): Promise<Record<string, B
           tokensOut: (message as any).usage?.output_tokens ?? 0,
           webSearches,
         },
-        error: null,
+        error: parseError,
       };
     } else {
       console.error(`[batch] Request ${item.custom_id} ${item.result.type}`);
       console.error(`[batch] ERROR detail: ${JSON.stringify(item.result)}`);
+      // Carry the API's own message into the returned entry, not just the
+      // bare type. The type alone ("errored") is what the run row and the
+      // step trace persist, so a schema/shape rejection was only findable by
+      // tailing deploy logs — which is how a batch-wide failure (structured
+      // outputs exceeding the 16-union-parameter limit, Jul 30 2026) stayed
+      // opaque until someone went looking in the console.
+      const detail =
+        (item.result as any)?.error?.error?.message ??
+        (item.result as any)?.error?.message ??
+        null;
       results[item.custom_id] = {
         customId: item.custom_id,
         data: {},
         usage: { tokensIn: 0, tokensOut: 0, webSearches: 0 },
-        error: item.result.type,
+        error: detail
+          ? `${item.result.type}: ${String(detail).slice(0, 400)}`
+          : item.result.type,
       };
     }
   }

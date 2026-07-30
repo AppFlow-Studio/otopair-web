@@ -294,30 +294,226 @@ export function buildNhtsaVinKey(input: {
 
 // ─── Field Lists (for fill rate calculation) ─────────────────────
 
+// ─── P2.4 · Field-level sibling inheritance ──────────────────────
+//
+// AUDIT (2026-07-30). The v7 list below was written when "sibling" meant
+// "another row that happened to share an engine code" and nothing downstream
+// could tell an inherited value from a sourced one. Rounds R1–R13 were fought
+// almost entirely over VARIANT MIS-ID — the same year/make/model resolving to
+// the wrong trim/drivetrain/gearbox — and variantFingerprint.ts states the
+// governing law outright: "a confident WRONG facet has a bigger blast radius
+// than a gap". Inheritance is exactly a confident-facet generator, so the
+// admission test is absolute:
+//
+//   A field is sibling-safe ONLY if it CANNOT differ between two configs that
+//   share the sibling key. "Usually the same" is not safe. Anything that
+//   varies by TRIM, DRIVETRAIN, PACKAGE or GEARBOX is excluded — those are the
+//   precise axes the pipeline has repeatedly mis-identified.
+//
+// That test removes 13 of the 17 v7 members (see SIBLING_UNSAFE_FIELDS for the
+// per-field reasoning) and leaves four ENGINE-INTRINSIC facts. Every survivor
+// is keyed on the engine, never the chassis: no chassis-scoped candidate
+// survived the audit (a chassis code spans trims, gearboxes, drivetrains and
+// several model years), so the chassis donor route is deliberately NOT built.
+
+/** Where a donor value is read from. Engine-scoped only — see the audit note
+ *  above for why no chassis-scoped field qualified. */
+export type SiblingDonorScope = "engine";
+
+export interface SiblingInheritRule {
+  /** Sibling key that may donate this field. */
+  scope: SiblingDonorScope;
+  /** Column on the donor's `engines` row that holds the value. */
+  column: string;
+  /** Column value → FieldResult value. Returns null to refuse the donation
+   *  (unknown token, out-of-band number). Pure; never throws. */
+  fromColumn: (raw: unknown) => string | number | boolean | null;
+  /** Why this field cannot differ between configs sharing the key. */
+  why: string;
+}
+
+const timingRule: SiblingInheritRule = {
+  scope: "engine",
+  column: "timing_system",
+  // Verbatim pass-through of a recognised token only. Belt-vs-chain is cast
+  // into the block; it is the single most engine-intrinsic fact we store, and
+  // an engine cannot be both. (It is NOT chassis-safe: one chassis routinely
+  // offers a belt diesel and a chain petrol.)
+  fromColumn: (raw) =>
+    typeof raw === "string" && /\b(belt|chain|gear)\b/i.test(raw) ? raw : null,
+  why: "belt/chain/gear drive is a physical property of the engine casting",
+};
+
+const turboRule: SiblingInheritRule = {
+  scope: "engine",
+  column: "aspiration",
+  // Only the three tokens writeNormalizedData round-trips. "supercharged" and
+  // anything unknown are REFUSED: turbo=false would be written back as
+  // aspiration="natural" and erase a supercharged donor's own truth.
+  fromColumn: (raw) =>
+    raw === "turbo" ? true
+    : raw === "twin-turbo" ? "twin-turbo"
+    : raw === "natural" ? false
+    : null,
+  why: "forced induction is built into the engine; one engine code cannot be both",
+};
+
+const fuelInjectionRule: SiblingInheritRule = {
+  scope: "engine",
+  column: "fuel_injection",
+  // Whitelist of injection families. A free-form string is refused rather than
+  // inherited — present-but-wrong is forbidden.
+  fromColumn: (raw) =>
+    typeof raw === "string" &&
+    /(direct|port|sequential|multi[- ]?point|mpi|gdi|tbi|throttle[- ]?body|common[- ]?rail|indirect|carbur)/i.test(raw)
+      ? raw
+      : null,
+  why: "injection architecture (DI/PFI/dual) is designed into the head and rails",
+};
+
+const sparkPlugQtyRule: SiblingInheritRule = {
+  scope: "engine",
+  column: "spark_plug_quantity",
+  // Integer 1..16 (16 covers twin-plug V8s: Hemi 5.7, M113/M156).
+  fromColumn: (raw) => {
+    const n = typeof raw === "number" ? raw : Number(raw);
+    return Number.isInteger(n) && n >= 1 && n <= 16 ? n : null;
+  },
+  why: "plug count is fixed by the engine's cylinder count and plugs-per-cylinder",
+};
+
 /**
- * Fields that are safe to copy from sibling engine records across model years.
- * These are physical/mechanical facts tied to the engine or platform that
- * cannot change between years. Everything else must be freshly sourced.
+ * The audited sibling-safe set: field key → donation rule.
+ * ONLY these four fields may be inherited from a sibling config.
  */
-export const SIBLING_SAFE_FIELDS = new Set([
-  "timing_system",            // chain vs belt — engine-specific, never changes
-  "drivetrain",               // AWD/RWD — platform-specific
-  "turbo",                    // turbo vs NA — engine-specific
-  "power_steering_type",      // electric vs hydraulic — platform-specific
-  "parking_brake_type",       // electronic vs manual — platform-specific
-  "spark_plug_quantity",      // determined by cylinder count
-  "fuel_injection_type",      // direct vs port — engine-specific
-  "transmission_type",        // auto vs manual — platform-specific
-  "trans_fluid_type",         // ZF Lifetime, Dexron VI — transmission-specific
-  "diff_fluid_type",          // gear oil spec — axle-specific
-  "transfer_case_fluid_type", // transfer case fluid — platform-specific
-  // Fluid capacities — physical facts of the unit/platform, stable across years
-  "diff_fluid_capacity_qts",
-  "transfer_case_fluid_capacity_qts",
-  "brake_fluid_capacity_oz",
-  "ps_fluid_capacity_oz",
-  "transmission_fluid_capacity_qts",
-]);
+export const SIBLING_INHERIT_RULES: Readonly<Record<string, SiblingInheritRule>> = {
+  timing_system: timingRule,
+  turbo: turboRule,
+  fuel_injection_type: fuelInjectionRule,
+  spark_plug_quantity: sparkPlugQtyRule,
+};
+
+/**
+ * Fields that may be copied from a sibling record. Derived from
+ * SIBLING_INHERIT_RULES so the set and the rules can never drift apart.
+ *
+ * Narrowed 2026-07-30 from the v7 list — see SIBLING_UNSAFE_FIELDS for every
+ * member that was removed and why. Still consumed by the deprecated v7
+ * pipelineBatch.fillFromSiblings, which simply inherits less now.
+ */
+export const SIBLING_SAFE_FIELDS: ReadonlySet<string> = new Set(
+  Object.keys(SIBLING_INHERIT_RULES),
+);
+
+/**
+ * Fields REJECTED by the audit, with the counter-example that disqualifies
+ * each. Exported so tests can encode the exclusion rule (and so the next
+ * person to "just add one more field" has to argue with a named case first).
+ * Every entry was a member of the v7 SIBLING_SAFE_FIELDS list.
+ */
+export const SIBLING_UNSAFE_FIELDS: Readonly<Record<string, string>> = {
+  drivetrain:
+    "varies by trim/package on one chassis AND one engine (RAV4 FWD vs AWD). " +
+    "It is also the axis drivetrainReconcile exists to fix — inheriting it " +
+    "would manufacture the exact mis-ID R1–R13 fought, and it gates diff and " +
+    "transfer-case applicability.",
+  transmission_type:
+    "the same chassis+engine ships manual, torque-converter auto, CVT and DCT " +
+    "(Civic Si vs Civic, GTI 6MT vs DSG). Gearbox is a trim choice.",
+  trans_fluid_type:
+    "a property of the GEARBOX, not the engine or chassis — and the sibling " +
+    "key is neither. Two configs sharing an engine can run a DCT and a CVT; " +
+    "the wrong ATF family destroys the unit.",
+  transmission_fluid_capacity_qts:
+    "per-gearbox volume; same objection as trans_fluid_type.",
+  diff_fluid_type:
+    "axle-specific, and whether a differential exists at all is a DRIVETRAIN " +
+    "variant (an FWD sibling has none).",
+  diff_fluid_capacity_qts:
+    "same objection as diff_fluid_type — axle hardware varies with the " +
+    "drivetrain/tow package.",
+  transfer_case_fluid_type:
+    "a transfer case only exists on AWD/4WD variants, and part-time vs " +
+    "full-time cases take different fluids on the same platform.",
+  transfer_case_fluid_capacity_qts:
+    "same objection as transfer_case_fluid_type.",
+  parking_brake_type:
+    "varies by TRIM within one chassis — the manual-lever base/manual-gearbox " +
+    "trims vs the EPB automatics (Crosstrek, Golf). It also changes the rear " +
+    "brake procedure (EPB retraction), so a wrong value mis-quotes labor.",
+  power_steering_type:
+    "varies by ENGINE within a chassis (2011-14 F-150: EPAS on some engines, " +
+    "hydraulic on others) and by platform for a shared engine. It gates PS " +
+    "fluid suppression, so a wrong value ships a phantom PS flush — the " +
+    "batch-10 Cobalt failure. The deterministic EPS platform list owns this.",
+  brake_fluid_capacity_oz:
+    "brake-package dependent (caliper/ABS volume). vehicle_configs scopes " +
+    "rotor minimums per-config for exactly this reason — 'the minimum differs " +
+    "by trim and brake package'.",
+  ps_fluid_capacity_oz:
+    "presupposes power_steering_type (excluded above) and varies with the " +
+    "rack/pump fitted to the variant.",
+  spark_plug_gap:
+    "superseded by plug PART NUMBER, which changes across model years for one " +
+    "engine code (copper → iridium service replacements carry different gaps).",
+  oil_spec_standard:
+    "OEM approval specs supersede by model year on an unchanged engine " +
+    "(dexos1 → dexos1 Gen2 → Gen3); a sibling donor spans years.",
+  battery_group:
+    "battery size varies by trim/package (start-stop AGM, cold-weather " +
+    "package) on one chassis.",
+  lug_nut_torque_ft_lbs:
+    "stud/wheel hardware varies by trim (steel vs alloy, 6- vs 8-lug on one " +
+    "truck platform).",
+  battery_location:
+    "moves between variants of one chassis (hybrid vs ICE 12V placement).",
+};
+
+// ─── Front wiper sizes ───────────────────────────────────────────
+
+/** Plausible front blade length in inches. Anything outside is not a size —
+ *  a millimetre figure ("650mm") or a stray year must never be stored. */
+const FRONT_WIPER_MIN_IN = 10;
+const FRONT_WIPER_MAX_IN = 34;
+
+/**
+ * Split the single `front_wiper_size` extraction field into the DRIVER and
+ * PASSENGER blade lengths.
+ *
+ * A front wiper set has TWO sizes and they routinely differ (26"/18" is the
+ * commonest pair on earth), but the field is one string and the write sites
+ * used bare `parseFloat`, which keeps the first number and silently drops the
+ * second — the census found chassis_specs.wiper_blade_driver_size_in filled
+ * 100% while wiper_blade_passenger_size_in sat at 0%.
+ *
+ * Convention (matches prompts/batch1Prompt and sourceAdapters/tricoWipers):
+ * the DRIVER size is stated first. So:
+ *   "26/18", "26 and 18", `26"/18"` → { driver: 26, passenger: 18 }
+ *   "26", "26 inches"              → { driver: 26 }  ← passenger stays NULL
+ *   "650mm/450mm", "", null        → {}              ← no plausible inches
+ *
+ * The one-value case NEVER copies driver→passenger: the two blades genuinely
+ * differ, so a copied value would be present-but-wrong, which is worse than
+ * the null it replaces. Pure; never throws.
+ */
+export function parseFrontWiperSizes(
+  raw: string | number | null | undefined,
+): { driver?: number; passenger?: number } {
+  if (raw == null) return {};
+  const text = typeof raw === "number" ? String(raw) : raw;
+  if (typeof text !== "string" || text.trim() === "") return {};
+  const sizes: number[] = [];
+  for (const m of text.matchAll(/\d{1,3}(?:\.\d+)?/g)) {
+    const n = Number(m[0]);
+    if (!Number.isFinite(n)) continue;
+    if (n < FRONT_WIPER_MIN_IN || n > FRONT_WIPER_MAX_IN) continue;
+    sizes.push(n);
+    if (sizes.length === 2) break;
+  }
+  if (sizes.length === 0) return {};
+  if (sizes.length === 1) return { driver: sizes[0] };
+  return { driver: sizes[0], passenger: sizes[1] };
+}
 
 /** All flat FieldResult field keys for fill rate counting. */
 export const V4_FIELD_KEYS = [
@@ -404,7 +600,15 @@ export const V4_FIELD_KEYS = [
   "estimated_labor_brake_fluid_flush_hrs", "estimated_labor_timing_service_hrs",
 ] as const;
 
-/** Service names for pricing (22 services). */
+/**
+ * Service names Batch 2 prices/labors (25 services). SINGLE SOURCE OF TRUTH —
+ * prompts/batch2Prompt.ts re-exports this list and utils/batchSchemas.ts pins
+ * the structured-output service_name enum to it. Two divergent copies (22 here
+ * vs 25 in batch2Prompt) previously meant this one silently rotted; census
+ * P0.1 (2026-07-30) unified them. Every name must have a SERVICE_NAME_TO_SLUG
+ * entry in v3pipeline.ts resolving to a seeded services.slug, or its pricing +
+ * labor are silently dropped (tests/serviceRouting.test.ts enforces this).
+ */
 export const SERVICE_LIST = [
   "Oil Change",
   "Spark Plug Replacement",
@@ -417,16 +621,19 @@ export const SERVICE_LIST = [
   "Brake Fluid Flush",
   "Coolant Flush",
   "Transmission Fluid Service",
-  "Power Steering Fluid Flush",
   "Serpentine Belt Replacement",
   "Timing Belt/Chain Service",
   "Battery Replacement",
   "Tire Rotation",
   "Wheel Alignment (4-wheel)",
   "Wiper Blade Replacement (set)",
+  "Power Steering Fluid Flush",
+  "Differential Fluid Service",
+  "Transfer Case Fluid Service",
   "Engine Air Intake Cleaning",
   "Fuel System Cleaning",
   "AC Recharge / Service",
+  "Wheel Bearing Replacement",
   "Multi-Point Inspection / Diagnostic",
 ] as const;
 

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Slice of https://www.toyotapartsdeal.com/sitemap/sitemap_partsinfo1.xml.gz
+  (inflated), captured live Jul 30 2026. The first five entries are the five
+  VERIFIED Camry numbers, located by scanning all 17 children (829,693 <loc>
+  entries). The next four are untouched samples showing the shape spread:
+  a three-group number (71874-0c010-b0) and slugs whose own words end in
+  digits ("no~1", "no~2").
+
+  The last two entries are SYNTHETIC, appended to exercise the parser:
+   - a second url for 90919-01298 under a different slug (dedupe collapses it),
+   - a catalog url whose final tilde token is a word, not a number, which the
+     grammar must refuse rather than index as a part.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~replaceable~element~04152-yzza1.html</loc><lastmod>2025-05-17</lastmod></url>
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~element~sub~assy~ai~17801-0p051.html</loc><lastmod>2025-05-17</lastmod></url>
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~pad~kit~disc~brake~04465-33471.html</loc><lastmod>2025-05-17</lastmod></url>
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~plug~spark~90919-01298.html</loc><lastmod>2025-05-17</lastmod></url>
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~disc~fr~43512-33150.html</loc><lastmod>2025-05-17</lastmod></url>
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~shield~front~seat~cushion~lower~lh~71874-0c010-b0.html</loc><lastmod>2025-05-17</lastmod></url>
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~stripe~side~rh~no~1~75985-89137.html</loc><lastmod>2025-05-17</lastmod></url>
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~hose~ventilation~no~2~90445-15063.html</loc><lastmod>2025-05-17</lastmod></url>
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~sheet~heater~control~name~55519-60180.html</loc><lastmod>2025-05-17</lastmod></url>
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~plug~spark~iridium~90919-01298.html</loc><lastmod>2025-05-17</lastmod></url>
+<url><loc>https://www.toyotapartsdeal.com/oem/toyota~camry.html</loc><lastmod>2025-05-17</lastmod></url>
+</urlset>

@@ -72,7 +72,7 @@ describe("buildLateSanityFlag shape", () => {
 });
 
 describe("taxonomy freeze — the shipped stage/severity unions", () => {
-  it("stages are exactly the six finalize gates", () => {
+  it("stages are exactly the nine finalize-stage producers", () => {
     expect([...LATE_SANITY_STAGES]).toEqual([
       "trans_fluid",
       "fluid_brand",
@@ -80,6 +80,14 @@ describe("taxonomy freeze — the shipped stage/severity unions", () => {
       "role_identity",
       "rotor_resolver",
       "completion_gate",
+      // P2.4 sibling inheritance — emits one "info" record per inherited field.
+      "sibling_inherit",
+      // Round 13 claim ledger — "info" per reached consensus (which families
+      // agreed), "flag" per cross-family conflict_tie (which yields no value).
+      "claim_ledger",
+      // Round 13 interval-provenance floor — one "info" census record of how
+      // many intervals rest on nothing better than the default table.
+      "interval_provenance",
     ]);
   });
 

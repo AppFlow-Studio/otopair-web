@@ -37,6 +37,23 @@ export interface CompletionGateInput {
    *  minimum thickness on file. Surfaced by ENRICHMENT_ROTOR_MIN_GATE
    *  (off | log) — reported only, NEVER enforced. See explainGateDecision. */
   rotorMinGaps?: readonly string[];
+  /** Service slugs whose interval rests on nothing better than the industry
+   *  default table — `data_quality: "default_fallback"`, or a real miles value
+   *  whose MONTHS came only from the default top-up
+   *  (`interval_months_source: "default_fallback"`).
+   *
+   *  The canary carried 11 of 27. An invented cadence is not neutral: it reads
+   *  as a schedule to the owner and it is what a buyer of this data would be
+   *  paying for, so the floor exists to make the proportion visible.
+   *
+   *  Gated by ENRICHMENT_INTERVAL_PROVENANCE_GATE (off | log | enforce),
+   *  DEFAULT LOG — see the note on RoleGateStage below. Enforcing this at
+   *  finalize would fail essentially every fresh config by construction: the
+   *  only source of a high-provenance interval is the manual extraction, which
+   *  is a scheduled follow-up arriving minutes later and cannot fit inside the
+   *  600s finalize action. Census the fleet in log mode first; if it is ever
+   *  enforced it should be from a post-manual re-evaluation, not from here. */
+  intervalProvenanceGaps?: readonly string[];
 }
 
 export type EnrichmentTerminalStatus = "complete" | "partial";
@@ -80,6 +97,17 @@ export function computeEnrichmentStatus(
   ) {
     return "partial";
   }
+  // Interval provenance floor. Defaults to "off" rather than "log" at the
+  // STATUS layer — envStage's own default is "log", which for the other gates
+  // means "compute and report but do not enforce", and that is exactly what
+  // happens here too: this branch only ever fires on an explicit "enforce".
+  if (
+    envStage("ENRICHMENT_INTERVAL_PROVENANCE_GATE") === "enforce" &&
+    (input.intervalProvenanceGaps?.length ?? 0) >
+      envNumber("ENRICHMENT_INTERVAL_PROVENANCE_MAX", 0)
+  ) {
+    return "partial";
+  }
 
   if (input.quotabilityPct == null) {
     // No quotability computed on this path — fail the leg only when we KNOW
@@ -110,11 +138,20 @@ export function explainGateDecision(input: CompletionGateInput): string {
   for (const [envName, entries, label] of [
     ["ENRICHMENT_AXLE_GATE", input.axlePairGaps, "axle_gaps"],
     ["ENRICHMENT_CORE_ROLE_GATE", input.missingCoreRoles, "core_roles_missing"],
+    [
+      "ENRICHMENT_INTERVAL_PROVENANCE_GATE",
+      input.intervalProvenanceGaps,
+      "interval_provenance_gaps",
+    ],
   ] as const) {
     const stage = envStage(envName);
     if (stage === "off") continue;
     const n = entries?.length ?? 0;
-    const outcome = n === 0 ? "PASS" : stage === "enforce" ? "FAIL" : "LOG-ONLY";
+    const allowed =
+      envName === "ENRICHMENT_INTERVAL_PROVENANCE_GATE"
+        ? envNumber("ENRICHMENT_INTERVAL_PROVENANCE_MAX", 0)
+        : 0;
+    const outcome = n <= allowed ? "PASS" : stage === "enforce" ? "FAIL" : "LOG-ONLY";
     legs.push(
       `${label}=${n}${n > 0 ? ` [${(entries ?? []).slice(0, 6).join(", ")}${n > 6 ? ", …" : ""}]` : ""} (stage ${stage}) ${outcome}`,
     );

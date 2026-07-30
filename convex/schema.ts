@@ -1140,6 +1140,11 @@ export default defineSchema({
     repairpal_slug: v.optional(v.union(v.string(), v.null())),
     has_options: v.optional(v.boolean()),
     is_labor_only: v.optional(v.boolean()),
+    // Dataset-only services (serpentine_belt, wiper_blade_replacement, …) are
+    // seeded is_bookable:false — their intervals/labor/parts still land in the
+    // enrichment dataset, but every booking-menu query filters them out.
+    // Undefined = bookable (the 23 original services never set it).
+    is_bookable: v.optional(v.boolean()),
     requires_parts: v.optional(v.boolean()),
     requires_fluids: v.optional(v.boolean()),
     requires_ice_engine: v.optional(v.boolean()),
@@ -1290,6 +1295,20 @@ export default defineSchema({
     source_count: v.optional(v.number()),
     mechanic_verified: v.optional(v.boolean()),
     data_quality: v.optional(v.string()),
+    // Provenance of interval_months SPECIFICALLY, when it differs from the
+    // row's data_quality. A row can legitimately carry a well-sourced
+    // interval_miles and a months value that only came from the industry
+    // default table (ensureAllServiceIntervals' months top-up) — one
+    // data_quality field cannot express two provenances, and stamping the
+    // whole row down would erase real miles provenance while stamping it up
+    // would launder an invented months as OEM-sourced. Both are
+    // present-but-wrong, which is forbidden.
+    //
+    // UNSET means "same provenance as data_quality" — that is the normal case
+    // and no existing row needs backfilling. Only the top-up sets it, and any
+    // writer that lands a REAL months (manual extraction, batch enrichment)
+    // must clear it back to undefined.
+    interval_months_source: v.optional(v.string()),
     created_at: v.optional(v.number()),
   })
     .index("by_vehicle_config", ["vehicle_config_id"])
@@ -5153,4 +5172,185 @@ export default defineSchema({
   })
     .index("by_config", ["vehicle_config_id"])
     .index("by_fetched_at", ["fetched_at"]),
+
+  // ===== EPA fuel economy (Phase 0.5) — fueleconomy.gov join =====
+  // Free public-domain data from www.fueleconomy.gov web services (no auth).
+  // Written only by vehicleEnrichment/epaFuelEconomy.ts; one row per config,
+  // stored ONLY when the config's engine matches exactly one EPA menu option
+  // (ambiguous → nothing: present-but-wrong is forbidden). The epa_* engine
+  // fields are the EPA record's own identity attributes — a government-backed
+  // second opinion on the engines row. coherence_mismatch is set when they
+  // DISAGREE with the stored engines row (cylinders unequal or displacement
+  // > 0.1 L apart); the P0.3 identity-coherence gate consumes it.
+  config_epa_economy: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    epa_vehicle_id: v.string(), // fueleconomy.gov vehicle id, e.g. "42015"
+    mpg_city: v.optional(v.number()), // city08
+    mpg_highway: v.optional(v.number()), // highway08
+    mpg_combined: v.optional(v.number()), // comb08
+    fuel_cost_per_year_usd: v.optional(v.number()), // fuelCost08
+    co2_gpm: v.optional(v.number()), // co2TailpipeGpm (grams/mile)
+    epa_fuel_type: v.optional(v.string()), // verbatim fuelType1, e.g. "Regular Gasoline"
+    epa_displacement_l: v.optional(v.number()), // displ
+    epa_cylinders: v.optional(v.number()),
+    epa_turbo: v.optional(v.boolean()), // tCharger
+    // Human-readable disagreement vs the engines row, e.g.
+    // "cylinders: engines row 6 vs EPA 4". Absent when coherent.
+    coherence_mismatch: v.optional(v.string()),
+    source: v.literal("epa_fueleconomy"),
+    fetched_at: v.number(),
+  })
+    .index("by_config", ["vehicle_config_id"])
+    .index("by_fetched_at", ["fetched_at"]),
+
+  // ── P2: manual library ────────────────────────────────────────────────────
+  // One row per (make, model, year) owner's-manual / maintenance-guide PDF,
+  // uploaded ONCE to the Anthropic Files API and reused across every sibling
+  // config's extraction. Manuals are the only OEM-backed source for the two
+  // things dealer parts pages structurally cannot carry: real maintenance
+  // schedules (our months values sit at 32% fill) and torque/procedure specs.
+  // We store the file reference and metadata — never redistributable manual
+  // text (facts extracted from it are ours; the document is not).
+  vehicle_manuals: defineTable({
+    make: v.string(),          // lowercase canonical
+    model: v.string(),         // lowercase canonical
+    year: v.number(),
+    /** Publisher URL the PDF came from. */
+    source_url: v.string(),
+    source_domain: v.string(),
+    /** True when the host is the manufacturer's own domain — the provenance
+     *  tier that lets an extracted interval count as OEM-backed. */
+    is_oem_domain: v.boolean(),
+    /** Anthropic Files API id (file_...) for reuse without re-upload. */
+    file_id: v.optional(v.string()),
+    file_bytes: v.optional(v.number()),
+    page_count: v.optional(v.number()),
+    /** "owners_manual" | "maintenance_schedule" | "warranty_guide" */
+    doc_kind: v.string(),
+    /** Set when a fetch/upload attempt failed — lets the resolver skip a known
+     *  dead source instead of re-paying for it every run (negative caching). */
+    failure_reason: v.optional(v.string()),
+    attempts: v.optional(v.number()),
+    fetched_at: v.number(),
+    /** Files API entries expire; refresh when older than the TTL. */
+    expires_at: v.optional(v.number()),
+  })
+    .index("by_ymm", ["make", "model", "year"])
+    .index("by_fetched_at", ["fetched_at"]),
+
+  // ── Part-number existence oracle ──────────────────────────────────────────
+  // Catalog sitemaps enumerate every part number a storefront sells, with the
+  // number encoded in the URL — so "does this part number exist for this make"
+  // becomes an offline lookup instead of a model's opinion. Research (Jul 30
+  // 2026) counted 829,693 sitemap URLs → 556,792 distinct Toyota part numbers,
+  // and caught 3 confabulated numbers out of 8 in its own test set.
+  //
+  // SCOPED BY MAKE ON PURPOSE: a part number is only meaningful inside its
+  // make's catalog, and the write gate may only fail closed for a make whose
+  // index is present and fresh (see part_index_status). Absence of an index is
+  // NOT evidence of absence of a part.
+  part_url_index: defineTable({
+    make: v.string(),                    // lowercase canonical
+    part_number_normalized: v.string(),  // normalizeOemNumber form
+    part_number_raw: v.optional(v.string()),
+    /** Which catalog family the URL came from — the two grammars differ
+     *  (partsdeal keeps dashes and lowercases; RevolutionParts strips them). */
+    source: v.string(),
+    url: v.optional(v.string()),
+    fetched_at: v.number(),
+  })
+    .index("by_make_part", ["make", "part_number_normalized"])
+    .index("by_make", ["make"]),
+
+  // Per-(make, source) ingestion state. The write gate reads this to decide
+  // whether it is ENTITLED to fail closed: only a `ok` status with a
+  // sufficiently recent completed_at may quarantine an unresolved part.
+  part_index_status: defineTable({
+    make: v.string(),
+    source: v.string(),
+    /** "ok" | "running" | "failed" */
+    status: v.string(),
+    url_count: v.optional(v.number()),
+    part_count: v.optional(v.number()),
+    sitemaps_processed: v.optional(v.number()),
+    last_error: v.optional(v.string()),
+    /** Cursor state so a multi-hour ingest can resume across action ticks. */
+    resume_state: v.optional(v.string()),
+    started_at: v.number(),
+    completed_at: v.optional(v.number()),
+  })
+    .index("by_make_source", ["make", "source"])
+    .index("by_status", ["status"]),
+
+  // ── Claim ledger ──────────────────────────────────────────────────────────
+  // One row per (config, field, source) assertion gathered by a rival source
+  // adapter (sourceAdapters/*). Adapters never decide truth — they fetch,
+  // parse and emit; reconcileClaims (sourceAdapters/claimLedger.ts) computes
+  // consensus and confidence from SOURCE-FAMILY DIVERSITY, and within a family
+  // from the OPERATOR, because one operator selling under four storefronts is
+  // one voice, not four.
+  //
+  // This is the durable evidence behind a corroborated field. Two independent
+  // families agreeing is the thing a buyer of this data is actually paying
+  // for, and until now the pipeline had nowhere to record that it happened.
+  //
+  // Rows are keyed by config so a re-run can supersede a stale claim without a
+  // fleet-wide sweep; `run_id` records which run observed it.
+  field_claims: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    /** V4_FIELD_KEYS name or oem_parts role key, e.g. "rotor_front_min_thickness_mm". */
+    field_key: v.string(),
+    /** Normalized comparable value — the string the ledger clusters on. */
+    value: v.string(),
+    /** Verbatim value as printed on the page, for audit. */
+    value_raw: v.optional(v.string()),
+    /** SourceFamily: oem_catalog | aftermarket_catalog | aggregator |
+     *  owners_manual | gov | web_search | human. Stored as a plain string
+     *  rather than a literal union so adding a family is not a schema
+     *  migration; the TS type in sourceAdapters/types.ts is the contract. */
+    source_family: v.string(),
+    /** Hostname, verbatim. The ledger dedups on resolveOperator(source_domain). */
+    source_domain: v.string(),
+    /** Operator id resolved at write time — stored so an audit can see the
+     *  collapse that was applied without re-deriving it. */
+    source_operator: v.optional(v.string()),
+    source_url: v.string(),
+    /** ClaimMethod: deterministic_parse | llm_extraction | api | human_entry. */
+    method: v.string(),
+    /** Which adapter produced it (registry name), for per-source health. */
+    adapter: v.optional(v.string()),
+    /** Verbatim label the value was read under. REQUIRED in spirit for rotor
+     *  minimums — a thickness without a discard-supporting label is not a
+     *  minimum, and the parsers refuse to emit one. */
+    observed_label: v.optional(v.string()),
+    observed_at: v.number(),
+    run_id: v.optional(v.id("enrichment_runs")),
+  })
+    .index("by_config_field", ["vehicle_config_id", "field_key"])
+    .index("by_config", ["vehicle_config_id"])
+    .index("by_run", ["run_id"]),
+
+  // ── P2: determinism probes ────────────────────────────────────────────────
+  // Same VIN enriched N times → identical core signature, or the variance is a
+  // tracked defect. The Jul-21 variant-identification scope named same-VIN
+  // nondeterminism as the root the whole program was patching around; this is
+  // the measurement that closes it.
+  determinism_probes: defineTable({
+    vin: v.string(),
+    label: v.optional(v.string()),      // sentinel name, e.g. "wrangler-ecodiesel"
+    target_runs: v.number(),
+    /** One core signature per completed run, in order. */
+    signatures: v.array(v.string()),
+    run_ids: v.optional(v.array(v.string())),
+    /** "running" | "complete" | "failed" */
+    status: v.string(),
+    /** Field keys that varied across runs — empty ⇒ deterministic. */
+    varied_fields: v.optional(v.array(v.string())),
+    deterministic: v.optional(v.boolean()),
+    notes: v.optional(v.string()),
+    started_at: v.number(),
+    completed_at: v.optional(v.number()),
+  })
+    .index("by_vin", ["vin"])
+    .index("by_status", ["status"]),
 });

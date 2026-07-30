@@ -31,6 +31,21 @@ export const LATE_SANITY_STAGES = [
   "role_identity",
   "rotor_resolver",
   "completion_gate",
+  // P2.4: one "info" record per field filled from a sibling engine. Info, not
+  // flag — an inherited value is audited, not queued for review (the review
+  // list admits any non-info entry, so "flag" would drown it). The value's
+  // weakness is carried where it bites: confidence capped at 0.7 and
+  // source_type "sibling_engine".
+  "sibling_inherit",
+  // Rival source adapters reconciled through the claim ledger. "info" for a
+  // reached consensus (the audit record of WHICH families agreed), "flag" for
+  // a cross-family conflict_tie — a tie yields no value at all, and a gap a
+  // human can close beats a coin-flip that quotes a wrong part.
+  "claim_ledger",
+  // The interval-provenance floor: how many of this config's intervals rest on
+  // nothing better than the industry default table. Reported, staged off by
+  // default — see ENRICHMENT_INTERVAL_PROVENANCE_GATE.
+  "interval_provenance",
 ] as const;
 export type LateSanityStage = (typeof LATE_SANITY_STAGES)[number];
 

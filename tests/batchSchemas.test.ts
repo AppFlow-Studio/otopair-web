@@ -125,11 +125,16 @@ describe("batch 1B schema", () => {
     ]);
   });
 
-  it("adds diff_fluid + transfer_case_fluid on top of the 1A interval set", () => {
-    expect(BATCH_1B_INTERVAL_KEYS).toHaveLength(13);
+  it("adds diff_fluid + transfer_case_fluid + ps_fluid on top of the 1A interval set", () => {
+    // ps_fluid joined in the P0.1 routing fixes: it previously had no slot in
+    // ANY request (1A, 1B, or their schemas) and reached the field store only
+    // via batch-2's null sweep — 1B is the searching request, so power-steering
+    // intervals belong here.
+    expect(BATCH_1B_INTERVAL_KEYS).toHaveLength(14);
     const keys = Object.keys(schema.properties.intervals.properties);
     expect(keys).toContain("diff_fluid");
     expect(keys).toContain("transfer_case_fluid");
+    expect(keys).toContain("ps_fluid");
   });
 
   it("battery section covers group/cca/type/location", () => {

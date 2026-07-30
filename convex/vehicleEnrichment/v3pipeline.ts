@@ -23,13 +23,17 @@ import type {
   CallLogEntry,
   VehicleIdentity,
 } from "./types";
-import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS, ON_DEMAND_SERVICE_SLUGS, WEAR_ITEM_SERVICE_SLUGS } from "./types";
+import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS, SIBLING_INHERIT_RULES, parseFrontWiperSizes, ON_DEMAND_SERVICE_SLUGS, WEAR_ITEM_SERVICE_SLUGS } from "./types";
 import { submitBatch, getBatchStatus, getBatchResults, type BatchRequest } from "./utils/batchClient";
 import {
   buildBatch1aOutputSchema,
   buildBatch1bOutputSchema,
   buildBatch2OutputSchema,
   buildVdbMappingOutputSchema,
+  BATCH_1A_INTERVAL_KEYS,
+  BATCH_1B_INTERVAL_KEYS,
+  BATCH_1B_FLUID_KEYS,
+  TRIM_SPEC_KEYS,
 } from "./utils/batchSchemas";
 import { mergeBlockedDomains } from "./utils/enrichmentFlags";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
@@ -96,7 +100,8 @@ import { resolveScrapeRedirect } from "./buildSourceResolver";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { laborFlagsFromEnv } from "./laborResearch";
 import { shouldAbortChain } from "./runFence";
-import { buildLateSanityFlag, type LateSanityFlag } from "./utils/lateSanityFlags";
+import { buildLateSanityFlag, type LateSanityFlag, type LateSanityStage } from "./utils/lateSanityFlags";
+import type { ClaimConsensus } from "./sourceAdapters/claimLedger";
 import type { Id } from "../_generated/dataModel";
 
 // ─── Authored return types ─────────────────────────────────────────
@@ -309,6 +314,42 @@ function parseRotorSpecAxle(spec: any): {
 
 // ─── Parsers (same as pipelineBatch.ts) ──────────────────────────
 
+/**
+ * Parse a batch response's `intervals` block for the given schema keys into
+ * `${prefix}_miles` / `${prefix}_months` / `${prefix}_status` FieldResults.
+ * Shared by parseBatch1a (BATCH_1A_INTERVAL_KEYS) and parseBatch1b
+ * (BATCH_1B_INTERVAL_KEYS) — census P0.1 R7: 1B previously re-ran the whole
+ * 1A parser over 40+ fields its schema can't return.
+ *
+ * The schema key "timing_belt_or_chain_service" lands under the field prefix
+ * "timing_service" — every other key IS its prefix.
+ *
+ * Round 9 (batch-11): the model's per-interval status ("inspect_only",
+ * "conditional_severe") was parsed and then dropped, so every interval wrote
+ * as "scheduled". Carry it through to the G-section writer.
+ */
+function parseIntervalFields(
+  intervals: Record<string, any>,
+  keys: readonly string[],
+): Record<string, FieldResult> {
+  const f: Record<string, FieldResult> = {};
+  for (const key of keys) {
+    const prefix = key === "timing_belt_or_chain_service" ? "timing_service" : key;
+    const iv = parseInterval(intervals[key]);
+    f[`${prefix}_miles`] = iv.miles;
+    f[`${prefix}_months`] = iv.months;
+    f[`${prefix}_status`] = {
+      value: iv.status,
+      source_url: null,
+      source_type: null,
+      confidence: null,
+      flagged: false,
+      flag_reason: null,
+    };
+  }
+  return f;
+}
+
 function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
   const f: Record<string, FieldResult> = {};
   if (!data) return f;
@@ -325,35 +366,8 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
   f.ps_fluid_capacity_oz = parseField(fluids.ps_fluid_capacity_oz);
   f.transmission_fluid_capacity_qts = parseField(fluids.transmission_fluid_capacity_qts);
 
-  // Intervals
-  const intervals = data.intervals ?? {};
-  for (const key of ["oil_change", "spark_plug", "transmission_service", "coolant_flush", "air_filter", "cabin_filter", "brake_fluid_flush", "serpentine_belt", "brake_pads", "tire_rotation"]) {
-    const iv = parseInterval(intervals[key]);
-    f[`${key}_miles`] = iv.miles;
-    f[`${key}_months`] = iv.months;
-    // Round 9 (batch-11): the model's per-interval status ("inspect_only",
-    // "conditional_severe") was parsed and then dropped, so every interval
-    // wrote as "scheduled". Carry it through to the G-section writer.
-    f[`${key}_status`] = {
-      value: iv.status,
-      source_url: null,
-      source_type: null,
-      confidence: null,
-      flagged: false,
-      flag_reason: null,
-    };
-  }
-  const timing = parseInterval(intervals.timing_belt_or_chain_service);
-  f.timing_service_miles = timing.miles;
-  f.timing_service_months = timing.months;
-  f.timing_service_status = {
-    value: timing.status,
-    source_url: null,
-    source_type: null,
-    confidence: null,
-    flagged: false,
-    flag_reason: null,
-  };
+  // Intervals (incl. timing_belt_or_chain_service → timing_service_*)
+  Object.assign(f, parseIntervalFields(data.intervals ?? {}, BATCH_1A_INTERVAL_KEYS));
 
   // Attributes
   const attrs = data.attributes ?? {};
@@ -381,11 +395,11 @@ function parseBatch1a(data: Record<string, any>): Record<string, FieldResult> {
     f[k] = parseField(parts[k], k);
   }
 
-  // Pricing from parts pages
-  const pricing = data.oem_pricing ?? data.pricing ?? {};
-  for (const k of ["rotor_front_price", "rotor_rear_price", "battery_price"]) {
-    f[k] = parseField(pricing[k]);
-  }
+  // Census P0.1 R6: the old `data.oem_pricing ?? data.pricing` parse for
+  // rotor_front_price / rotor_rear_price / battery_price was DEAD CODE — the
+  // 1A schema (additionalProperties: false) forbids any pricing block, so the
+  // read could never produce a value. Those fields fill from Batch-2 services
+  // via SERVICE_FIELD_MAP / mapPricingToFields.
 
   // Battery & electrical
   const battery = data.battery ?? {};
@@ -471,25 +485,52 @@ function parsePackageParts(data: Record<string, any>): Map<string, Record<string
   return out;
 }
 
+/**
+ * Parse the Batch-1B (web search) response. Census P0.1 R7: this used to call
+ * parseBatch1a(data) wholesale, "parsing" 40+ fields the 1B structured-output
+ * schema (buildBatch1bOutputSchema) forbids — oem_parts, rotor_specs, pricing,
+ * drivetrain/turbo/fuel_injection_type/transmission_type, spark quantity —
+ * all of which could only ever come back empty. It now parses exactly the
+ * sections the 1B schema can return: intervals (incl. diff/TC/PS fluid),
+ * fluids, battery (group/cca/type/location), attributes (timing_system +
+ * parking_brake_type — which 1B nests under `attributes`, unlike 1A's
+ * top-level slot, so the old code silently dropped it), trim specs, and
+ * spark plug gap.
+ */
 function parseBatch1b(data: Record<string, any>): Record<string, FieldResult> {
-  const f = parseBatch1a(data);
+  const f: Record<string, FieldResult> = {};
   if (!data) return f;
 
-  // Additional 1B fields: new fluid types + capacities + intervals
-  const fluids = data.fluids ?? {};
-  f.trans_fluid_type = parseField(fluids.trans_fluid_type);
-  f.diff_fluid_type = parseField(fluids.diff_fluid_type);
-  f.transfer_case_fluid_type = parseField(fluids.transfer_case_fluid_type);
-  f.diff_fluid_capacity_qts = parseField(fluids.diff_fluid_capacity_qts);
-  f.transfer_case_fluid_capacity_qts = parseField(fluids.transfer_case_fluid_capacity_qts);
+  // Intervals — the 1A set plus diff_fluid / transfer_case_fluid / ps_fluid
+  Object.assign(f, parseIntervalFields(data.intervals ?? {}, BATCH_1B_INTERVAL_KEYS));
 
-  const intervals = data.intervals ?? {};
-  const diff = parseInterval(intervals.diff_fluid);
-  f.diff_fluid_miles = diff.miles;
-  f.diff_fluid_months = diff.months;
-  const tc = parseInterval(intervals.transfer_case_fluid);
-  f.transfer_case_fluid_miles = tc.miles;
-  f.transfer_case_fluid_months = tc.months;
+  // Fluids — types + capacities (keys are the V4 field keys 1:1)
+  const fluids = data.fluids ?? {};
+  for (const k of BATCH_1B_FLUID_KEYS) {
+    f[k] = parseField(fluids[k]);
+  }
+
+  // Battery
+  const battery = data.battery ?? {};
+  f.battery_group = parseField(battery.battery_group, "battery_group");
+  f.battery_cca = parseField(battery.battery_cca);
+  f.battery_type = parseField(battery.battery_type);
+  f.battery_location = parseField(battery.battery_location);
+
+  // Attributes (1B returns only these two)
+  const attrs = data.attributes ?? {};
+  f.timing_system = parseField(attrs.timing_system);
+  f.parking_brake_type = parseField(attrs.parking_brake_type);
+
+  // Trim specs (keys are the V4 field keys 1:1)
+  const trim = data.trim_specs ?? {};
+  for (const k of TRIM_SPEC_KEYS) {
+    f[k] = parseField(trim[k]);
+  }
+
+  // Spark plug gap (1B has no quantity slot)
+  const spark = data.spark_plug ?? {};
+  f.spark_plug_gap = parseField(spark.gap_mm);
 
   return f;
 }
@@ -883,8 +924,19 @@ function mapPricingToFields(services: ServicePricingResult[]): Record<string, Fi
 
 // ─── V3 Write Helpers ────────────────────────────────────────────
 
-/** Map service name from Batch 2 pricing to our service slug. */
-const SERVICE_NAME_TO_SLUG: Record<string, string> = {
+/**
+ * Map service name from Batch 2 pricing to our service slug.
+ *
+ * INVARIANT (census P0.1 R2, enforced by tests/serviceRouting.test.ts): every
+ * SERVICE_LIST name has an entry here, and every slug resolves to a seeded
+ * services row (seeds/seedServices.ts SEEDED_SERVICE_SLUGS). A missing entry
+ * or unseeded slug makes the pricing + labor loops silently `continue` — that
+ * is how differential labor, wiper pricing, and five other services' data
+ * dropped on every run. Dataset-only slugs (serpentine_belt, transfer_case_
+ * service, …) are seeded is_bookable:false: the DATASET keeps the data, the
+ * booking menu never shows them.
+ */
+export const SERVICE_NAME_TO_SLUG: Record<string, string> = {
   "Oil Change": "oil_change",
   "Spark Plug Replacement": "spark_plugs",
   "Air Filter Replacement": "filter_replacement",
@@ -903,14 +955,18 @@ const SERVICE_NAME_TO_SLUG: Record<string, string> = {
   "Tire Rotation": "tire_rotation",
   "Wheel Alignment (4-wheel)": "wheel_alignment",
   "Fuel System Cleaning": "fuel_system_cleaning",
-  // Batch-2's prompt SERVICE_LIST asks about this service, but the map had no
-  // entry — so `SERVICE_NAME_TO_SLUG[name]` returned undefined and the pricing
-  // + labor loops silently `continue`d: gear_oil / friction_modifier fitments
-  // were NEVER priced and differential labor estimates were dropped.
-  // ("Transfer Case Fluid Service" stays unmapped on purpose: there is no
-  // separate TC service in the 23 and conflating its labor into
-  // differential_service would skew the anchor.)
   "Differential Fluid Service": "differential_service",
+  // Census P0.1 R2 (2026-07-30): the six names below were in SERVICE_LIST but
+  // had no map entry — their pricing + labor silently dropped on every run.
+  // Transfer case now has its OWN dataset-only service row (previously left
+  // unmapped on purpose so its labor wouldn't skew the differential_service
+  // anchor — the dedicated row removes that conflation risk).
+  "Wiper Blade Replacement (set)": "wiper_blade_replacement",
+  "Transfer Case Fluid Service": "transfer_case_service",
+  "AC Recharge / Service": "ac_recharge",
+  "Engine Air Intake Cleaning": "engine_intake_cleaning",
+  "Multi-Point Inspection / Diagnostic": "multi_point_inspection",
+  "Wheel Bearing Replacement": "wheel_bearing_replacement",
 };
 
 /**
@@ -1089,6 +1145,303 @@ export function rankGapFillFields(
     .map((e) => e.k);
 }
 
+// ─── P2.4 · Field-level sibling inheritance ──────────────────────
+//
+// v8 clones whole ROWS from a sibling config but never a single field, so
+// engine-intrinsic facts a verified sibling already holds are re-asked of an
+// LLM on every config (live census: timing_system 76% filled). This pass fills
+// ONLY the audited SIBLING_INHERIT_RULES fields (types.ts), ONLY where the run
+// ended null, and stamps everything it writes so an inherited value can never
+// be mistaken for a directly-sourced one:
+//
+//   source_type "sibling_engine" · confidence capped at 0.7 (below the 0.75
+//   quote gate, so inheritance alone can never make a service quotable) ·
+//   flagged with the donor config key · one lateSanityFlags entry each.
+//
+// It never touches a field that is human-verified, was REJECTED this run, or
+// was ruled not_applicable — the three ways the run already knows better.
+
+/** Ceiling on an inherited field's confidence. Inherited data must never
+ *  outrank directly-sourced data, nor clear the 0.75 quote gate on its own. */
+export const SIBLING_INHERIT_CONFIDENCE_CAP = 0.7;
+
+/** One donor candidate as returned by v3queries.findSiblingFieldDonors, after
+ *  the rule's `fromColumn` decode. Plain data — no Convex types. */
+export interface SiblingDonorCandidate {
+  config_id: string;
+  config_key: string;
+  /** Decoded FieldResult value (never null — nulls are dropped upstream). */
+  value: string | number | boolean;
+  /** Donor CONFIG confidence_avg, or null when unknown. */
+  confidence: number | null;
+  /** Donor's engines.verified_fields names this column/field — a human said so. */
+  verified: boolean;
+  last_enriched_at: number | null;
+  via: string;
+}
+
+/**
+ * Pick the single best donor for one field. Precedence, in order:
+ *   1. human-verified donor (verified_fields) beats everything
+ *   2. higher confidence
+ *   3. more recently enriched
+ *   4. stable tiebreak on config_key so the choice is deterministic run-to-run
+ *
+ * Candidates with a null/undefined value are ignored. Returns null when no
+ * candidate qualifies. Pure; exported for tests.
+ */
+export function selectSiblingDonor(
+  candidates: readonly SiblingDonorCandidate[] | null | undefined,
+  field: string,
+): SiblingDonorCandidate | null {
+  if (!candidates || candidates.length === 0) return null;
+  if (!SIBLING_SAFE_FIELDS.has(field)) return null;
+  const usable = candidates.filter((c) => c && c.value != null);
+  if (usable.length === 0) return null;
+  const ranked = [...usable].sort((a, b) => {
+    if (!!b.verified !== !!a.verified) return b.verified ? 1 : -1;
+    const ca = a.confidence ?? 0;
+    const cb = b.confidence ?? 0;
+    if (cb !== ca) return cb - ca;
+    const ta = a.last_enriched_at ?? 0;
+    const tb = b.last_enriched_at ?? 0;
+    if (tb !== ta) return tb - ta;
+    return String(a.config_key).localeCompare(String(b.config_key));
+  });
+  return ranked[0];
+}
+
+/** Why an inheritance was allowed or refused — recorded verbatim in the flag. */
+export type SiblingInheritDecision =
+  | { inherit: true; reason: "inherited" }
+  | {
+      inherit: false;
+      reason:
+        | "not_sibling_safe"
+        | "no_donor"
+        | "already_filled"
+        | "rejected_this_run"
+        | "not_applicable"
+        | "human_verified";
+    };
+
+/**
+ * Decide whether `field` may be filled from `donor`. Pure; exported for tests.
+ *
+ * `verifiedFields` accepts BOTH naming conventions in play: the FieldResult
+ * key (`fuel_injection_type`) and the engines column a director actually
+ * stamps (`fuel_injection`).
+ */
+export function shouldInheritField(
+  field: string,
+  existing: FieldResult | null | undefined,
+  donor: SiblingDonorCandidate | null | undefined,
+  verifiedFields: readonly string[] | null | undefined,
+): SiblingInheritDecision {
+  if (!SIBLING_SAFE_FIELDS.has(field)) return { inherit: false, reason: "not_sibling_safe" };
+  if (!donor || donor.value == null) return { inherit: false, reason: "no_donor" };
+
+  const verified = new Set(verifiedFields ?? []);
+  const column = SIBLING_INHERIT_RULES[field]?.column;
+  // A human's word is final — checked BEFORE the null test, because a director
+  // who verified a field to null meant that null.
+  if (verified.has(field) || (column && verified.has(column))) {
+    return { inherit: false, reason: "human_verified" };
+  }
+  // Applicability ruled the field off this vehicle; resurrecting it is the
+  // "N/A fields resurrected impossible data" failure getNullFields exists for.
+  if (existing?.flag_reason === "not_applicable") {
+    return { inherit: false, reason: "not_applicable" };
+  }
+  // A value this run examined and threw out must not come back through a side
+  // door — the sibling is not new evidence against our own rejection.
+  if (existing?.rejected === true) return { inherit: false, reason: "rejected_this_run" };
+  // Fill NULLS ONLY. Sourced data always outranks inherited data.
+  if (existing?.value != null) return { inherit: false, reason: "already_filled" };
+
+  return { inherit: true, reason: "inherited" };
+}
+
+/** Build the FieldResult an inheritance writes. Pure; exported for tests. */
+export function buildInheritedField(
+  field: string,
+  donor: SiblingDonorCandidate,
+): FieldResult {
+  const capped = Math.min(
+    typeof donor.confidence === "number" && donor.confidence > 0
+      ? donor.confidence
+      : SIBLING_INHERIT_CONFIDENCE_CAP,
+    SIBLING_INHERIT_CONFIDENCE_CAP,
+  );
+  return {
+    value: donor.value,
+    source_url: null,
+    source_type: "sibling_engine",
+    confidence: capped,
+    // Flagged on purpose: an inherited value is review-visible until something
+    // sources it directly.
+    flagged: true,
+    flag_reason: `sibling_inherit:donor=${donor.config_key}:via=${donor.via}`,
+  };
+}
+
+/** Effective per-run cap. Read at CALL time so an env change takes effect
+ *  without a redeploy of the module. 0 disables; garbage falls back to 12. */
+export function siblingInheritMax(env: Record<string, string | undefined>): number {
+  const raw = env.ENRICHMENT_SIBLING_INHERIT_MAX;
+  if (raw == null || raw === "") return 12;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 12;
+}
+
+/** Kill switch — ON unless explicitly "off". Read at CALL time. */
+export function siblingInheritEnabled(env: Record<string, string | undefined>): boolean {
+  return env.ENRICHMENT_SIBLING_INHERIT !== "off";
+}
+
+/** A donor row exactly as v3queries.findSiblingFieldDonors returns it — the
+ *  column value is still RAW (undecoded). */
+export interface RawSiblingDonor {
+  config_id: string;
+  config_key: string;
+  raw_value: unknown;
+  confidence?: number | null;
+  verified?: boolean;
+  last_enriched_at?: number | null;
+  via?: string;
+}
+
+/**
+ * The whole inheritance decision as ONE pure function: decode each donor
+ * through its rule, pick the best, apply the gating rules, and stop at `cap`.
+ * Returns the fields to write, in evaluation order. Never mutates its inputs.
+ * Exported for tests.
+ */
+export function planSiblingInheritance(
+  fields: Record<string, FieldResult>,
+  donorsByField: Record<string, RawSiblingDonor[] | undefined>,
+  verifiedFields: readonly string[],
+  cap: number,
+): Array<{ field: string; donor: SiblingDonorCandidate; result: FieldResult }> {
+  const plan: Array<{ field: string; donor: SiblingDonorCandidate; result: FieldResult }> = [];
+  if (!Number.isFinite(cap) || cap <= 0) return plan;
+
+  for (const field of Object.keys(SIBLING_INHERIT_RULES)) {
+    if (plan.length >= cap) break;
+    const rule = SIBLING_INHERIT_RULES[field];
+    // Decode first: an unrecognised column token is REFUSED here rather than
+    // inherited (present-but-wrong is forbidden).
+    const decoded: SiblingDonorCandidate[] = (donorsByField[field] ?? []).flatMap((d) => {
+      if (!d) return [];
+      const value = rule.fromColumn(d.raw_value);
+      return value == null
+        ? []
+        : [{
+            config_id: String(d.config_id),
+            config_key: String(d.config_key),
+            value,
+            confidence: typeof d.confidence === "number" ? d.confidence : null,
+            verified: d.verified === true,
+            last_enriched_at: typeof d.last_enriched_at === "number" ? d.last_enriched_at : null,
+            via: String(d.via ?? "engine"),
+          }];
+    });
+
+    const donor = selectSiblingDonor(decoded, field);
+    const decision = shouldInheritField(field, fields[field], donor, verifiedFields);
+    if (!decision.inherit || !donor) continue;
+    plan.push({ field, donor, result: buildInheritedField(field, donor) });
+  }
+  return plan;
+}
+
+/**
+ * Stage tag for the P2.4 flags. `LATE_SANITY_STAGES` lives in
+ * utils/lateSanityFlags.ts, which this task does not own, so the new stage is
+ * asserted here instead of added there; the persisted column is
+ * `stage: v.optional(v.string())`, so the value round-trips unchanged. Fold
+ * "sibling_inherit" into LATE_SANITY_STAGES when that file is next edited.
+ */
+const SIBLING_INHERIT_STAGE = "sibling_inherit" as unknown as LateSanityStage;
+
+/**
+ * Severity for the P2.4 flags: "info", per lateSanityFlags.ts's own semantics —
+ * "observability record, NOT a review signal". Inheritance is a routine,
+ * deterministic, capped fill from an already-complete sibling, not a gate that
+ * caught something suspicious. manual_review_queue.list admits any run with a
+ * non-"info" flag, so "flag" here would push EVERY inheriting run into the
+ * human queue and drown the real rejects. The value's own weakness is carried
+ * where it actually bites: confidence capped below the quote gate, flagged:true
+ * and source_type "sibling_engine" on the FieldResult.
+ */
+export const SIBLING_INHERIT_FLAG_SEVERITY = "info" as const;
+
+/**
+ * Fill still-null sibling-safe fields from a complete/verified sibling config.
+ * Mutates `fields` in place, appends one structured flag per inheritance, and
+ * returns how many fields were filled. Non-fatal by construction: any failure
+ * logs and leaves the field map untouched.
+ */
+async function applySiblingInheritance(
+  ctx: any,
+  opts: { vehicleConfigId: any; verifiedFields: readonly string[] },
+  fields: Record<string, FieldResult>,
+  lateSanityFlags: LateSanityFlag[],
+): Promise<number> {
+  if (!siblingInheritEnabled(process.env)) {
+    console.log("[v8/sibling-inherit] disabled via ENRICHMENT_SIBLING_INHERIT=off");
+    return 0;
+  }
+  const cap = siblingInheritMax(process.env);
+  if (cap <= 0) return 0;
+
+  // Pre-filter: only ask the DB about fields that could actually be filled.
+  // `null` donor here means "no donor yet" — every refusal except no_donor is
+  // already decidable from local state.
+  const wanted = Object.keys(SIBLING_INHERIT_RULES).filter((f) => {
+    const d = shouldInheritField(f, fields[f], { value: "probe" } as any, opts.verifiedFields);
+    return d.inherit;
+  });
+  if (wanted.length === 0) return 0;
+
+  let donorsByField: Record<string, any[]> = {};
+  try {
+    donorsByField = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.findSiblingFieldDonors,
+      {
+        target_config_id: opts.vehicleConfigId,
+        requests: wanted.map((f) => ({ field: f, column: SIBLING_INHERIT_RULES[f].column })),
+      },
+    );
+  } catch (e) {
+    console.warn("[v8/sibling-inherit] donor lookup failed (non-fatal):", e);
+    return 0;
+  }
+
+  const plan = planSiblingInheritance(fields, donorsByField, opts.verifiedFields, cap);
+  for (const { field, donor, result } of plan) {
+    fields[field] = result;
+    lateSanityFlags.push(
+      buildLateSanityFlag(
+        SIBLING_INHERIT_STAGE,
+        field,
+        SIBLING_INHERIT_FLAG_SEVERITY,
+        `sibling_inherit:donor=${donor.config_key}:via=${donor.via}` +
+          `:donor_verified=${donor.verified}:confidence=${result.confidence}`,
+        String(donor.value),
+      ),
+    );
+  }
+
+  if (plan.length > 0) {
+    console.log(
+      `[v8/sibling-inherit] filled ${plan.length}/${wanted.length} sibling-safe field(s) ` +
+        `(cap ${cap}): ${plan.map((p) => `${p.field}←${p.donor.config_key}`).join(", ")}`,
+    );
+  }
+  return plan.length;
+}
+
 /** Map interval field prefix to service slug. */
 export const INTERVAL_TO_SERVICE: Record<string, string> = {
   oil_change: "oil_change",
@@ -1101,7 +1454,11 @@ export const INTERVAL_TO_SERVICE: Record<string, string> = {
   serpentine_belt: "serpentine_belt",
   timing_service: "timing_belt",
   diff_fluid: "differential_service",
-  transfer_case_fluid: "differential_service",
+  // Census P0.1 R4: transfer_case_fluid previously ALSO mapped to
+  // differential_service — both prefixes upserted the same service row, so
+  // whichever wrote last (loop order: transfer case) overwrote the
+  // differential interval. It now writes its own dataset-only service row.
+  transfer_case_fluid: "transfer_case_service",
   ps_fluid: "power_steering_flush",
   // Wear/rotation guidance (2026-07): brake pads are wear-based — the value
   // is the manufacturer's INSPECTION/typical-life guidance, not a hard
@@ -1349,7 +1706,10 @@ async function writeNormalizedData(
     });
   }
 
-  // C. Drivetrain config — resolve drivetrain from Batch 1B before setting diff/TC
+  // C. Drivetrain config — resolve drivetrain from the Batch-1 LLM fields
+  // before setting diff/TC. (Census P0.1 R7 comment fix: the drivetrain
+  // attribute arrives via Batch 1A's attributes block — the 1B schema has no
+  // drivetrain slot, despite what these comments used to claim.)
   const batch1Drivetrain = asString(fields.drivetrain?.value);
   const diffFluid = asString(fields.diff_fluid_type?.value);
   const tcFluid = asString(fields.transfer_case_fluid_type?.value);
@@ -1362,11 +1722,12 @@ async function writeNormalizedData(
   const existingDrivetrain = currentVc?.drivetrain;
 
   // Priority: the NHTSA-decoded value stored on the config (existingDrivetrain)
-  // is authoritative on the 2WD-vs-4WD axle count; Batch-1B only refines within
-  // that axle class. Batch-3 audit: the Sienna (4x2 FWD) and F-150 (4x2) had
-  // their correct 2WD decode overwritten by a Batch-1B "AWD" guess, shipping
-  // phantom diff/transfer-case service. reconcileDrivetrain keeps NHTSA's axle
-  // count and takes Batch-1B's specific label only when they agree on the axle.
+  // is authoritative on the 2WD-vs-4WD axle count; the Batch-1 LLM value only
+  // refines within that axle class. Batch-3 audit: the Sienna (4x2 FWD) and
+  // F-150 (4x2) had their correct 2WD decode overwritten by an LLM "AWD"
+  // guess, shipping phantom diff/transfer-case service. reconcileDrivetrain
+  // keeps NHTSA's axle count and takes the LLM's specific label only when
+  // they agree on the axle.
   const isResolved = (val: string | undefined | null): val is string =>
     !!val && val !== "unknown";
 
@@ -1384,8 +1745,8 @@ async function writeNormalizedData(
     console.log(
       `[v8] Drivetrain "${existingDrivetrain}" → "${resolvedDrivetrain}"` +
         (overrode
-          ? ` (kept NHTSA axle over Batch-1B guess "${batch1Drivetrain}")`
-          : ` (Batch 1B)`),
+          ? ` (kept NHTSA axle over Batch-1 guess "${batch1Drivetrain}")`
+          : ` (Batch 1)`),
     );
     // Update vehicle_config with the reconciled drivetrain
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
@@ -1393,7 +1754,7 @@ async function writeNormalizedData(
       drivetrain: resolvedDrivetrain,
     });
   } else if (existingDrivetrain === "unknown") {
-    console.log(`[v8] Drivetrain still unknown after Batch 1B — defaulting to FWD`);
+    console.log(`[v8] Drivetrain still unknown after Batch 1 — defaulting to FWD`);
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchVehicleConfig, {
       vehicle_config_id: vehicleConfigId,
       drivetrain: "FWD",
@@ -1529,7 +1890,13 @@ async function writeNormalizedData(
       { vehicleConfigId },
     );
     if (chassisCfg?.chassis_code) {
-      const frontWiper = parseFloat(asString(fields.front_wiper_size?.value) ?? "") || undefined;
+      // A front set has TWO blades and they usually differ (26"/18"). The old
+      // bare parseFloat kept only the first number, which is why
+      // wiper_blade_passenger_size_in was 0%-filled while the driver column
+      // was 100%. When only one size is known we write the driver and leave
+      // passenger NULL — never a driver→passenger copy.
+      const frontWipers = parseFrontWiperSizes(asString(fields.front_wiper_size?.value));
+      const frontWiper = frontWipers.driver;
       const rearWiper  = parseFloat(asString(fields.rear_wiper_size?.value)  ?? "") || undefined;
       const steeringType = psType === "electric" ? "electric"
         : psType ? "hydraulic"
@@ -1540,6 +1907,7 @@ async function writeNormalizedData(
         chassis_code: chassisCfg.chassis_code,
         ...(asNumber(fields.lug_nut_torque_ft_lbs?.value) !== undefined ? { lug_nut_torque_ft_lbs: asNumber(fields.lug_nut_torque_ft_lbs?.value) } : {}),
         ...(frontWiper ? { wiper_blade_driver_size_in: frontWiper } : {}),
+        ...(frontWipers.passenger ? { wiper_blade_passenger_size_in: frontWipers.passenger } : {}),
         ...(rearWiper  ? { wiper_blade_rear_size_in: rearWiper } : {}),
         ...(asString(fields.battery_group?.value)    ? { battery_group: asString(fields.battery_group?.value)! } : {}),
         ...(asString(fields.battery_type?.value)     ? { battery_type: asString(fields.battery_type?.value)! } : {}),
@@ -2268,14 +2636,15 @@ export const enrichVehicleBatchV3 = internalAction({
 
     // STEP 4: Upsert vehicle_config
     // Do NOT default drivetrain to "FWD" here — NHTSA often returns null.
-    // The real drivetrain value comes from Batch 1B. Use "unknown" as placeholder.
+    // The real drivetrain value comes from the Batch-1 LLM extraction (the
+    // attributes block of Batch 1A). Use "unknown" as placeholder.
     // Priority: args.drivetrain (from processVin) > vPicData (from getIdentity) > "unknown"
     const nhtsDrivetrain = args.drivetrain ?? vPicData?.drivetrain ?? null;
     const drivetrainVal = nhtsDrivetrain ?? "unknown";
     if (nhtsDrivetrain) {
       console.log(`[v8] Drivetrain from decode: ${nhtsDrivetrain}`);
     } else {
-      console.log(`[v8] Drivetrain unknown — deferring to Batch 1B`);
+      console.log(`[v8] Drivetrain unknown — deferring to Batch 1`);
     }
     let vehicleConfigId;
     if (args.targetConfigId) {
@@ -2377,7 +2746,7 @@ export const enrichVehicleBatchV3 = internalAction({
 
     // STEP 6: Upsert drivetrain_config — only if we have a REAL value from NHTSA.
     // If drivetrain is unknown, skip this. _pollBatch1V3 will create it after
-    // Batch 1B resolves the drivetrain.
+    // Batch 1 resolves the drivetrain (the Batch-1A attributes block).
     if (nhtsDrivetrain) {
       const hasDiffNhtsa = nhtsDrivetrain !== "FWD";
       const hasTCNhtsa = nhtsDrivetrain === "AWD" || nhtsDrivetrain === "4WD";
@@ -3586,8 +3955,91 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // ONE existing updateEnrichmentRun finalize call — no second write.
     const lateSanityFlags: LateSanityFlag[] = [];
 
+    // Labor outcome, declared OUTSIDE the `if (r2)` branch below so the
+    // finalize triggers can see whether the inline labor pass produced anything.
+    // Null means the inline pass never ran at all (batch-2 absent → the else
+    // branch at the bottom of this block). See the labor follow-up scheduler
+    // near the NHTSA/adversarial triggers: labor must not be a child of batch-2
+    // success, because OLP + the RepairPal estimate endpoint need only
+    // make/model/year/engine — all of which come from batch 1 and the DB.
+    let laborOutcome: {
+      resolved: boolean;
+      written: number;
+      failed: string[];
+      sources: { olp: number; web: number; repairpalEndpoint: number };
+    } | null = null;
+
+    // Structural applicable-service slugs, derived from the DB rather than from
+    // the batch-2 LLM payload, resolved at most once per run.
+    //
+    // Three finalize consumers key off "which services apply to this vehicle"
+    // and all three read it from the batch-2 `services[]` array, so an empty or
+    // unparseable batch-2 body silently blanks all three at once: quotability
+    // computed over zero services (canary: `{pct: 1, services: []}` — a vacuous
+    // PASS, the worst possible failure shape for a completion gate), the
+    // role-resource pass logging `applicable_services_unknown`, and labor
+    // resolution dropping every fetched row.
+    //
+    // getApplicableServices (via _laborConfigInputs) is the CANONICAL gate —
+    // the same one the booking surface and Oto use — and it fails open by
+    // returning [] when it cannot evaluate, which callers must treat as
+    // "unknown", never as "nothing applies".
+    let _dbApplicableSlugs: string[] | null = null;
+    const dbApplicableSlugs = async (): Promise<string[]> => {
+      if (_dbApplicableSlugs !== null) return _dbApplicableSlugs;
+      try {
+        const inputs: any = await ctx.runQuery(
+          internal.vehicleEnrichment.laborRelabor._laborConfigInputs,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        _dbApplicableSlugs = ((inputs?.services ?? []) as Array<{ slug: string }>)
+          .map((s) => s.slug)
+          .filter((s): s is string => !!s);
+      } catch (e) {
+        console.warn("[v8] DB applicable-slug resolution failed (non-fatal):", e);
+        _dbApplicableSlugs = [];
+      }
+      return _dbApplicableSlugs;
+    };
+
     // Write sanitized data to normalized tables
     if (r2) {
+      // P2.4: field-level sibling inheritance. Placed HERE deliberately —
+      // after extraction, batch-2/batch-3 gap-fill, applicability, sanity and
+      // the capacity resolver (so every "rejected this run" and
+      // "not_applicable" marker already exists and is honoured), and
+      // immediately BEFORE writeNormalizedData so an inherited value flows
+      // through the normal write path and is persisted, not just counted.
+      // Well before the completion gate, which therefore sees the filled map.
+      // Applicability is NOT re-run afterwards: an inherited timing_system
+      // informs the NEXT run rather than resurrecting parts in this one.
+      try {
+        const engineForInherit = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getEngine,
+          { engineId: args.engineId },
+        );
+        const configForInherit = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getVehicleConfigById,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        await applySiblingInheritance(
+          ctx,
+          {
+            vehicleConfigId: args.vehicleConfigId,
+            // Union of both human-verification ledgers — engine columns and
+            // config columns — so neither can be overwritten by a sibling.
+            verifiedFields: [
+              ...(((engineForInherit as any)?.verified_fields ?? []) as string[]),
+              ...(((configForInherit as any)?.verified_fields ?? []) as string[]),
+            ],
+          },
+          allFields,
+          lateSanityFlags,
+        );
+      } catch (e) {
+        console.warn("[v8/sibling-inherit] pass failed (non-fatal):", e);
+      }
+
       const serviceCache = new Map<string, Id<"services">>();
       await writeNormalizedData(
         ctx, allFields,
@@ -3764,6 +4216,45 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         });
       }
 
+      // ── Empty-services fallback (2020 Yaris canary, Jul 30 2026) ──────────
+      // `services` comes from the batch-2 LLM payload and is [] whenever that
+      // payload fails to parse. The old code then called laborAllSources with
+      // `services: []`, which makes the orchestrator's write loop drop EVERY
+      // fetched row (`if (!serviceId) continue;`, laborResearch.ts) — OLP and
+      // RepairPal were paid for over the network and their hours thrown away,
+      // silently. The seeder then stamped all 27 rows `default_fallback`.
+      //
+      // The labor source list must not depend on LLM output at all: it is a
+      // structural property of the vehicle. `_laborConfigInputs` already
+      // computes it correctly from the `services` table gated by the CANONICAL
+      // getApplicableServices helper (the same gate the booking surface uses),
+      // and fails open. Reuse it rather than growing a second ladder.
+      //
+      // Used only as a FALLBACK, not unconditionally: when batch 2 parsed, the
+      // existing list is preserved byte-for-byte so the happy path is unchanged.
+      if (laborServices.length === 0) {
+        try {
+          const dbInputs: any = await ctx.runQuery(
+            internal.vehicleEnrichment.laborRelabor._laborConfigInputs,
+            { vehicleConfigId: args.vehicleConfigId },
+          );
+          for (const s of (dbInputs?.services ?? []) as Array<{
+            slug: string;
+            serviceId: Id<"services">;
+            name: string;
+            repairpal_slug: string | null;
+          }>) {
+            laborServices.push(s);
+          }
+          console.warn(
+            `[v8/labor] batch-2 returned NO services — fell back to the DB-derived ` +
+              `applicable list (${laborServices.length} service(s))`,
+          );
+        } catch (e) {
+          console.warn("[v8/labor] DB-derived service fallback failed (non-fatal):", e);
+        }
+      }
+
       // Resolve the OLP Next.js buildId only when OLP is enabled (it's the one
       // shared input across all OLP service pages); undefined if OLP off/unresolved.
       let laborBuildId: string | undefined = undefined;
@@ -3774,14 +4265,18 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
 
       console.log(
         `[v8/labor] laborAllSources for ${args.make} ${args.model} ${args.trim ?? ""}: ` +
-        `flags={olp:${laborFlags.olp},web:${laborFlags.web}}, ` +
+        `flags={olp:${laborFlags.olp},web:${laborFlags.web},repairpalEndpoint:${laborFlags.repairpalEndpoint}}, ` +
         `${laborServices.length} services, buildId=${laborBuildId ? "resolved" : "none"}`,
       );
 
       // Wrapped in try/catch so a total orchestrator failure NEVER aborts the
       // downstream part-price writes (graceful degradation, like the old OLP block).
+      // The RESULT is captured (it used to be discarded): `written === 0` is the
+      // signal that every labor source came back empty, and it is what decides
+      // whether the scheduled labor retry below fires. Without this there was no
+      // forensic evidence anywhere that labor had failed.
       try {
-        await ctx.runAction(internal.vehicleEnrichment.laborResearch.laborAllSources, {
+        laborOutcome = await ctx.runAction(internal.vehicleEnrichment.laborResearch.laborAllSources, {
           vehicleConfigId: args.vehicleConfigId,
           make: args.make,
           model: args.model,
@@ -3800,6 +4295,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       } catch (e) {
         console.warn("[v3pipeline] laborAllSources failed (non-fatal):", e);
       }
+      console.log(
+        `[v8/labor] laborAllSources result: ` +
+          (laborOutcome
+            ? `resolved=${laborOutcome.resolved} written=${laborOutcome.written} ` +
+              `sources={olp:${laborOutcome.sources.olp},web:${laborOutcome.sources.web},` +
+              `repairpalEndpoint:${laborOutcome.sources.repairpalEndpoint}}` +
+              (laborOutcome.failed.length > 0 ? ` failed=[${laborOutcome.failed.join(", ")}]` : "")
+            : "threw — no result"),
+      );
 
       // Write part prices from Batch 2 pricing.
       //
@@ -4164,10 +4668,20 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       // Quotability snapshot — after all price writes so it reflects what a
       // customer could actually be quoted right now. Non-fatal.
       try {
-        const applicableSlugs = services
+        let applicableSlugs = services
           .filter((s: any) => s.is_applicable)
           .map((s: any) => SERVICE_NAME_TO_SLUG[s.service_name])
           .filter((x: any): x is string => !!x);
+        // An empty applicable set makes computeQuotability return pct 1 over
+        // zero services — a vacuous pass that reads as perfect coverage and
+        // sails through the completion gate. Fall back to the structural list.
+        if (applicableSlugs.length === 0) {
+          applicableSlugs = await dbApplicableSlugs();
+          console.warn(
+            `[v8/quotability] batch-2 gave no applicable services — using the ` +
+              `DB-derived list (${applicableSlugs.length} slug(s))`,
+          );
+        }
         const qFitments = await ctx.runQuery(
           internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
           { vehicleConfigId: args.vehicleConfigId },
@@ -4216,16 +4730,31 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         g.reason === "price_budget_exhausted" ||
         g.reason === "price_unverified_sources",
     ).length;
-    if (deferredPriceCount > 0) {
+    // Round 13 (parts triangle, 7/10 on the canary): the self-heal above only
+    // retried parts whose pricing was DEFERRED. A part whose price discovery
+    // simply came up empty produced no deferred gap, so it was never retried at
+    // all — it just sat with no trusted price until the nightly cron, and the
+    // triangle (fitment ⇒ verified part ⇒ trusted price) stayed broken on a
+    // config already stamped "complete". Two of the canary's three broken legs
+    // were exactly this (drain_plug_gasket, rear_brake_pad).
+    //
+    // Count EVERY price gap, not just the deferred subset, and let the backfill
+    // decide what is actually retryable — it already scans for zero-price rows
+    // and is bounded by its own per-action cap and chain depth, so widening the
+    // trigger cannot run away.
+    const unpricedCount = priceGaps.length;
+    const priceHealCount = Math.max(deferredPriceCount, unpricedCount);
+    if (priceHealCount > 0) {
       const immediateCap = Number(process.env.PARTS_PRICE_IMMEDIATE_BACKFILL_CAP ?? "12");
       await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.priceRefresh.refreshStalePrices, {
         budget: 0,
-        backfillBudget: Math.min(deferredPriceCount, immediateCap),
+        backfillBudget: Math.min(priceHealCount, immediateCap),
         vehicleConfigId: args.vehicleConfigId,
         maxChainDepth: Number(process.env.PARTS_PRICE_BACKFILL_CHAIN_DEPTH ?? "2"),
       });
       console.log(
-        `[v8/price] scheduled follow-up backfill for ${deferredPriceCount} deferred/budget-skipped part(s)`,
+        `[v8/price] scheduled follow-up backfill for ${priceHealCount} unpriced part(s) ` +
+          `(${deferredPriceCount} deferred/budget-skipped, ${unpricedCount} total price gaps)`,
       );
     }
 
@@ -4475,6 +5004,47 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               },
             );
           }
+
+          // ── Refute RESOLVE (2020 Yaris canary) ────────────────────────────
+          // A soft flag had no route back: three writers set refute_flagged and
+          // nothing ever cleared it, so one flag broke that part's quotability
+          // triangle forever — even when a later pass confirmed the same
+          // number. This is that route. Only parts this pass CONFIRMED are
+          // offered, and the mutation itself refuses to overturn an
+          // adjudicated `block`.
+          const confirmedVerdicts = verdicts.filter((vd) => vd.verdict === "confirmed");
+          if (confirmedVerdicts.length > 0) {
+            try {
+              const cleared = await ctx.runMutation(
+                internal.vehicleEnrichment.v3mutations.resolveRefutedFitment,
+                {
+                  vehicle_config_id: args.vehicleConfigId,
+                  confirmed: confirmedVerdicts.map((vd) => ({
+                    oem: vd.oem,
+                    reason: (vd as any).reason ?? "confirmed by fitment verification",
+                  })),
+                },
+              );
+              if (cleared.resolved > 0) {
+                fitmentRefutedErrors.push(
+                  `fitment_refute_resolved:${cleared.resolved}`,
+                );
+                lateSanityFlags.push(
+                  buildLateSanityFlag(
+                    "fitment_refute",
+                    "__refute_resolved",
+                    "info",
+                    `cleared ${cleared.resolved} soft refute flag(s) on re-confirmation` +
+                      (cleared.blocked_kept > 0
+                        ? `; kept ${cleared.blocked_kept} adjudicated block(s)`
+                        : ""),
+                  ),
+                );
+              }
+            } catch (e) {
+              console.warn("[fitment-verify] refute resolve failed (non-fatal):", e);
+            }
+          }
           if (hardDelete.length > 0 || softFlag.length > 0) {
             // Round 10 (batch-11 Cobalt/Crosstrek): a kill used to leave a
             // permanent hole. One focused re-extraction call for the emptied
@@ -4621,7 +5191,25 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
             applicableSlugsForRoles = prior;
             roleResourceErrors.push("applicable_services_empty_fallback_used");
           } else {
-            roleResourceErrors.push("applicable_services_unknown");
+            // Round 13: a FIRST run has no prior snapshot, so the fallback above
+            // cannot fire and detection was skipped entirely — which is exactly
+            // what happened on the 2020 Yaris canary
+            // (`applicable_services_unknown`, zero roles checked). Applicability
+            // is structural, so the DB can answer it without any prior run:
+            // getApplicableServices is the same canonical gate the booking
+            // surface uses. Only a genuinely unanswerable case (helper failed or
+            // returned nothing) still records the honest unknown.
+            const structural = await dbApplicableSlugs();
+            if (structural.length > 0) {
+              console.warn(
+                `[role-resource] batch returned NO applicable services and there is no prior run — ` +
+                  `falling back to the DB-derived structural list (${structural.length} slugs)`,
+              );
+              applicableSlugsForRoles = structural;
+              roleResourceErrors.push("applicable_services_structural_fallback_used");
+            } else {
+              roleResourceErrors.push("applicable_services_unknown");
+            }
           }
         }
         const configRowForRoles: any = await ctx.runQuery(
@@ -5114,6 +5702,103 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // spurious rear gaps on drum-rear cars). Sourced values persist through
     // patchVehicleConfig, double-gated by the label-aware parse inside the
     // resolver and validateRotorResolution; verified_fields still outranks.
+    // ── Claim ledger: rival source adapters ────────────────────────────────
+    // Runs BEFORE the rotor resolver so a catalogue-sourced discard minimum is
+    // available to it, and before the completion gate so consensus outcomes
+    // reach the same terminal run write as every other late gate.
+    //
+    // Gathering is evidence-only: it writes field_claims and returns consensus,
+    // and never touches a vehicle field itself. Rotor minimums are the one
+    // consumer wired today, under the resolver's existing double validation.
+    //
+    // Default ON but killable without a deploy. Adapters fail open individually
+    // and the whole call is wrapped, so the worst case is an empty consensus —
+    // which callers read as "no evidence", never as "no value".
+    let claimConsensus: ClaimConsensus[] = [];
+    if (process.env.ENRICHMENT_CLAIM_LEDGER !== "off" && !timedOut) {
+      try {
+        const gathered = await ctx.runAction(
+          internal.vehicleEnrichment.claimGathering.gatherClaims,
+          {
+            vehicleConfigId: args.vehicleConfigId,
+            runId: args.runId,
+            year: args.year,
+            make: args.make,
+            model: args.model,
+            trim: args.trim ?? null,
+            engineCode: vehicle.engineCode ?? null,
+            displacementL: args.displacement ?? null,
+            cylinders: enginePicData?.cylinders ?? null,
+            // This run's own extracted values, entered as the web_search
+            // family so the adapters have something to agree WITH. Without
+            // them every field carries one family and the ledger can only ever
+            // report single_source — real corroboration needs two independent
+            // families on the SAME field.
+            pipelineClaims: Object.entries(allFields)
+              .filter(([, fv]) => fv?.value != null && fv.value !== "")
+              .map(([key, fv]) => ({
+                field_key: key,
+                value: String(fv.value),
+                source_url: fv.source_url ?? undefined,
+                source_domain: fv.source_url
+                  ? (extractDomain(fv.source_url) ?? undefined)
+                  : undefined,
+              })),
+          },
+        );
+        claimConsensus = gathered.consensus;
+        for (const c of claimConsensus) {
+          if (c.outcome === "conflict_tie") {
+            lateSanityFlags.push(
+              buildLateSanityFlag(
+                "claim_ledger",
+                c.field_key,
+                "flag",
+                `cross-family conflict: ${c.dissent
+                  .map((d) => `${d.value}[${d.families.join("+")}]`)
+                  .join(" vs ")}`,
+              ),
+            );
+          } else if (c.outcome === "consensus") {
+            lateSanityFlags.push(
+              buildLateSanityFlag(
+                "claim_ledger",
+                c.field_key,
+                "info",
+                `consensus across ${c.families.length} famil${c.families.length === 1 ? "y" : "ies"} ` +
+                  `(${c.families.join("+")}), ${c.operators.length} operator(s), conf ${c.confidence}`,
+                c.value ?? undefined,
+              ),
+            );
+          }
+        }
+        if (gathered.skipped_headless.length > 0) {
+          console.log(
+            `[claim-ledger] ${gathered.skipped_headless.join(", ")} skipped — no headless fetch tier`,
+          );
+        }
+      } catch (e) {
+        console.warn("[claim-ledger] gather failed (non-fatal):", e);
+      }
+    }
+
+    /** Reconciled catalogue minimum for one axle, or undefined when the ledger
+     *  reached no consensus. A conflict_tie yields `value: null` and is
+     *  therefore correctly absent — a tie must contribute nothing. */
+    const catalogRotorClaim = (axle: "front" | "rear") => {
+      const pick = (key: string) =>
+        claimConsensus.find((c) => c.field_key === key && c.value != null);
+      const min = pick(`rotor_${axle}_min_thickness_mm`);
+      const nominal = pick(`rotor_${axle}_nominal_thickness_mm`);
+      if (!min && !nominal) return undefined;
+      return {
+        minMm: min?.value != null ? Number(min.value) : null,
+        nominalMm: nominal?.value != null ? Number(nominal.value) : null,
+        observedLabel: null,
+        sourceUrl: min?.source_urls?.[0] ?? nominal?.source_urls?.[0] ?? null,
+      };
+    };
+
     let rotorResolutions: RotorAxleResolution[] = [];
     const rotorResolverEvents: string[] = [];
     try {
@@ -5174,6 +5859,10 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         },
         naRoleKeys: (cfgForRotor?.na_role_keys ?? []) as string[],
         axlesWithFitment: rotorAxles,
+        catalogClaims: {
+          front: catalogRotorClaim("front"),
+          rear: catalogRotorClaim("rear"),
+        },
       });
 
       // Persist what the resolver sourced (previously discarded — healing was
@@ -5337,6 +6026,42 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // enrichment_status). Previously the decision string only ever reached
     // the console. Pure inputs; nothing between here and the upsert mutates
     // them, so the applied status is byte-identical to the old inline IIFE.
+    // Interval-provenance census. An interval whose data_quality is
+    // "default_fallback", or whose months came only from the default top-up, is
+    // an invented cadence wearing the same shape as a real OEM schedule — the
+    // canary carried 11 of 27 and nothing surfaced it, because the fill metric
+    // counts a fallback row as filled. Computed here so it lands in the ONE
+    // terminal run write alongside the other late-gate facts.
+    let intervalProvenanceGapStrings: string[] = [];
+    try {
+      const intervalRows = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getIntervalProvenance,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+      intervalProvenanceGapStrings = intervalRows
+        .filter((row) => row.data_quality === "default_fallback" || row.months_from_default)
+        .map((row) =>
+          row.data_quality === "default_fallback"
+            ? `${row.slug || "?"}:interval`
+            : `${row.slug || "?"}:months`,
+        )
+        .sort();
+      if (intervalProvenanceGapStrings.length > 0) {
+        lateSanityFlags.push(
+          buildLateSanityFlag(
+            "interval_provenance",
+            "__interval_provenance",
+            "info",
+            `${intervalProvenanceGapStrings.length}/${intervalRows.length} interval(s) rest on the ` +
+              `default table: ${intervalProvenanceGapStrings.slice(0, 12).join(", ")}` +
+              (intervalProvenanceGapStrings.length > 12 ? ", …" : ""),
+          ),
+        );
+      }
+    } catch (e) {
+      console.warn("[v8/interval-provenance] census failed (non-fatal):", e);
+    }
+
     const completionGateInput = {
       fillRate,
       quotabilityPct: quotability?.pct,
@@ -5346,6 +6071,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       missingCoreRoles: missingCoreRoleStrings,
       axlePairGaps: axlePairGapStrings,
       rotorMinGaps: rotorGapAxles,
+      intervalProvenanceGaps: intervalProvenanceGapStrings,
     };
     const completionGateStatus = computeEnrichmentStatus(completionGateInput);
     const completionGateExplain = explainGateDecision(completionGateInput);
@@ -5767,6 +6493,79 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       );
     } catch (e) {
       console.warn("[v8] NHTSA ODI refresh trigger failed (non-fatal):", e);
+    }
+
+    // ── Labor retry (2020 Yaris canary, Jul 30 2026) ────────────────────────
+    // The inline labor pass lives inside `if (r2)`, so a batch-2 timeout or an
+    // unparseable batch-2 body means NO labor source is ever contacted — and
+    // `ensureAllLaborTimes` above then stamps every row `default_fallback`
+    // (canary: 27/27, worse than the 64% fleet baseline). Labor does not need
+    // batch 2: OLP and the RepairPal estimate endpoint key off make/model/year/
+    // engine/drivetrain, all of which come from batch 1 and the DB.
+    //
+    // `laborRelaborConfig` is the existing per-config driver that resolves the
+    // OLP buildId and calls the same `laborAllSources` orchestrator with the
+    // DB-derived, applicability-gated service list. Scheduling it (rather than
+    // inlining) keeps it out of this action's 600s budget — the RepairPal
+    // resolver alone sleeps 140ms per service plus retry backoff.
+    //
+    // Ordering is safe against the fallback seeder that just ran:
+    // recomputeLaborForConfigService PATCHES an existing row when catalog
+    // observations drive book_hours, relabelling source/data_quality to
+    // "aggregated". So a default_fallback row seeded a moment ago is upgraded,
+    // not duplicated, when real hours land.
+    //
+    // Fires only when the inline pass produced nothing — never both, so the
+    // happy path pays for OLP/RepairPal exactly once.
+    const laborNeedsRetry = laborOutcome == null || laborOutcome.written === 0;
+    if (laborNeedsRetry) {
+      try {
+        await ctx.scheduler.runAfter(
+          20_000,
+          internal.vehicleEnrichment.laborRelabor.laborRelaborConfig,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        console.warn(
+          `[v8/labor] inline labor produced ${laborOutcome == null ? "NOTHING (batch-2 absent)" : "0 rows"} ` +
+            `— scheduled laborRelaborConfig retry`,
+        );
+      } catch (e) {
+        console.warn("[v8/labor] labor retry trigger failed (non-fatal):", e);
+      }
+    }
+
+    // ── Manual library (months intervals) ───────────────────────────────────
+    // OEM maintenance PDFs are the only source that carries real MONTHS
+    // intervals; storefront listings and the LLM's own schedule guesses carry
+    // miles. Until now manualLibrary was reachable ONLY from the nightly
+    // backfill cron (3 configs/night), so a fresh config finalized with
+    // has_manual:false and months at 19%.
+    //
+    // Scheduled, never inline: the chain is a multi-MB PDF download plus a
+    // Files API upload plus a large-context extraction, and this action is hard
+    // -killed at 600s. Resolve first, then extract — the two are separate
+    // actions, and extract no-ops with "no_manual_file" if resolve found
+    // nothing, so the delay gap is a safe coupling rather than a race that can
+    // corrupt anything.
+    //
+    // `force` is NOT set: shouldSkipManualLookup's negative cache is the whole
+    // point of not re-paying for a manual that is known to be missing.
+    if (process.env.ENRICHMENT_MANUAL_LIBRARY !== "off") {
+      try {
+        await ctx.scheduler.runAfter(
+          25_000,
+          internal.vehicleEnrichment.manualLibrary.resolveManualForVehicle,
+          { make: args.make, model: args.model, year: args.year },
+        );
+        await ctx.scheduler.runAfter(
+          Number(process.env.ENRICHMENT_MANUAL_EXTRACT_DELAY_MS ?? "180000"),
+          internal.vehicleEnrichment.manualLibrary.extractIntervalsFromManual,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        console.log("[v8] Manual library resolve + extract scheduled");
+      } catch (e) {
+        console.warn("[v8] Manual library trigger failed (non-fatal):", e);
+      }
     }
 
     // Post-enrichment: backfill engine_id / transmission_id onto the vehicles row,

@@ -11,6 +11,10 @@
 // agreeing is weaker evidence than one storefront + one aftermarket catalog,
 // because storefronts share an upstream (the OEM's own catalog). Confidence is
 // a function of DISTINCT FAMILIES in agreement, never of repetition within one.
+//
+// Inside a family the unit is the OPERATOR, not the hostname — a hostname is a
+// brand, and one operator sells under many. See resolveOperator in
+// claimLedger.ts for the mapping and the evidence behind it.
 // =============================================================================
 
 /** Independence classes for corroboration math. */
@@ -39,7 +43,9 @@ export interface Claim {
   /** Verbatim value as seen on the page, for audit. */
   value_raw?: string;
   source_family: SourceFamily;
-  /** Hostname the claim came from — the dedup unit WITHIN a family. */
+  /** Hostname the claim came from. Recorded verbatim for audit; the ledger
+   *  dedups on resolveOperator(source_domain), because four sibling storefronts
+   *  on one catalog backend are one voice, not four. */
   source_domain: string;
   source_url: string;
   method: ClaimMethod;

@@ -27,7 +27,9 @@
  * number silently drops leading zeros (see batch1Prompt rule 5).
  */
 
-import { SERVICE_LIST } from "../prompts/batch2Prompt";
+// Single source of truth for the service_name enum (types.ts also feeds the
+// Batch-2 prompt's service list — census P0.1 unification).
+import { SERVICE_LIST } from "../types";
 
 export type JsonSchema = Record<string, any>;
 
@@ -117,8 +119,11 @@ export const BATCH_1A_INTERVAL_KEYS = [
   "timing_belt_or_chain_service", "brake_pads", "tire_rotation",
 ] as const;
 
+// ps_fluid added census P0.1 R5 (2026-07-30): power-steering intervals are
+// search-findable but had no slot in the searching (1B) request — the
+// INTERVAL_TO_SERVICE ps_fluid → power_steering_flush write never fired.
 export const BATCH_1B_INTERVAL_KEYS = [
-  ...BATCH_1A_INTERVAL_KEYS, "diff_fluid", "transfer_case_fluid",
+  ...BATCH_1A_INTERVAL_KEYS, "diff_fluid", "transfer_case_fluid", "ps_fluid",
 ] as const;
 
 export const BATCH_1A_FLUID_KEYS = [

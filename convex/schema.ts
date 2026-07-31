@@ -2609,7 +2609,12 @@ export default defineSchema({
     .index("by_source_recommendation", ["source_recommendation_id"])
     .index("by_payment_approval_state", ["payment_approval_state"])
     .index("by_vin", ["vin"])
-    .index("by_sla_expires_at", ["sla_expires_at_ms"]),
+    .index("by_sla_expires_at", ["sla_expires_at_ms"])
+    // Shop portal /payouts mechanic filter. `payments` carries no mechanic_id
+    // and denormalizing it would go stale on reassignment, so mechanic-scoped
+    // transaction lists drive off bookings and join back via
+    // payments.by_booking_id.
+    .index("by_shop_and_mechanic", ["shop_id", "mechanic_id"]),
 
   // Tire quote responses — one row per shop response to a quote-stage
   // booking (status === "pending_quote"). The user picks one to accept,
@@ -2781,6 +2786,25 @@ export default defineSchema({
     // flow. Lets operators tell historical-import rows apart from rows
     // produced by current bookings without touching status semantics.
     backfilled_at_ms: v.optional(v.number()),
+
+    // Cumulative refunded total in CENTS, recomputed as SUM(payment_refunds)
+    // on every settle — never incremented in place, so a lagging write can
+    // never permit an over-refund. This is the authoritative source for
+    // "partially refunded" in the shop UI: `status` deliberately stays
+    // "completed" until the refund is FULL, because "refunded" is a terminal
+    // state in payment_status_history's FSM and every `status === "completed"`
+    // reader (invoices.ts receipt gates, transactions.createFromPayment)
+    // would silently drop partially-refunded rows if we introduced a new
+    // status. Derive the display state from
+    // `refunded_amount_cents > 0 && status === "completed"`.
+    refunded_amount_cents: v.optional(v.number()),
+    last_refunded_at_ms: v.optional(v.number()),
+
+    // Captured off the charge at capture time. Needed to (a) target refunds by
+    // charge and (b) eventually join a payment to the Stripe payout that paid
+    // it out — the last two timeline steps are not derivable without these.
+    stripe_charge_id: v.optional(v.string()),
+    stripe_balance_transaction_id: v.optional(v.string()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_user_id", ["user_id"])
@@ -2788,7 +2812,72 @@ export default defineSchema({
     .index("by_idempotency_key", ["idempotency_key"])
     .index("by_stripe_payment_intent_id", ["stripe_payment_intent_id"])
     .index("by_created_at", ["created_at"])
-    .index("by_receipt_token", ["receipt_token"]),
+    .index("by_receipt_token", ["receipt_token"])
+    // Shop portal /payouts: newest-first transaction list + every date-windowed
+    // aggregate. Ranged on `created_at` (the business date), NOT _creationTime
+    // — payments_backfill_helpers.ts and the seed.ts sites both backdate
+    // created_at, so _creationTime would file every Stripe-imported charge
+    // under its import date and collapse all demo data onto the seed run.
+    //
+    // NULL-ORDERING: created_at is optional and `undefined` sorts before every
+    // number in Convex, so undated rows land LAST under .order("desc") and are
+    // EXCLUDED by any .gte() bound. Callers must either omit the bound (and
+    // report `undatedCount`) or report `undatedExcluded`. See convex/lib/money.ts.
+    .index("by_shop_and_created_at", ["shop_id", "created_at"])
+    // Status-pill filtering without a post-index scan.
+    .index("by_shop_status_created_at", ["shop_id", "status", "created_at"])
+    // New-vs-returning probe: .first() on (shop, customer) is that customer's
+    // earliest payment at this shop — exactly one row read per distinct
+    // customer instead of collecting their history.
+    .index("by_shop_user_created_at", ["shop_id", "user_id", "created_at"]),
+
+  // One row per refund attempt against a payments row. Shop owners issue full
+  // and partial refunds from /payouts; refunds issued directly in the Stripe
+  // dashboard are back-filled here by the charge.refunded webhook (with
+  // reason "stripe_dashboard" and no requested_by_user_id).
+  //
+  // This table — not payments.refunded_amount_cents — is the authority for the
+  // refund ceiling, because it is read inside the same serializable mutation
+  // that inserts the next refund. ALL AMOUNTS ARE CENTS.
+  payment_refunds: defineTable({
+    payment_id: v.id("payments"),
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    amount_cents: v.number(),
+    // payments has no currency field; PI creation hardcodes usd.
+    currency: v.optional(v.string()),
+    // Our taxonomy is a superset of Stripe's 3-value enum. Values outside
+    // Stripe's set go to refund metadata instead of the `reason` param:
+    // "requested_by_customer" | "duplicate" | "fraudulent" | "goodwill"
+    // | "service_issue" | "shop_error" | "dispute_resolution" | "stripe_dashboard"
+    reason: v.optional(v.string()),
+    // Owner's free-text justification, surfaced in the payment audit trail.
+    note: v.optional(v.string()),
+    // "pending" | "succeeded" | "failed" | "canceled" (mirrors Stripe's refund
+    // status). Only "pending" and "succeeded" count toward the ceiling.
+    status: v.string(),
+    stripe_refund_id: v.optional(v.string()),
+    stripe_payment_intent_id: v.optional(v.string()),
+    stripe_charge_id: v.optional(v.string()),
+    failure_reason: v.optional(v.string()),
+    // Stripe prorates both of these on a partial refund. Recorded rather than
+    // recomputed so the net-to-shop math matches what actually moved.
+    application_fee_refunded_cents: v.optional(v.number()),
+    transfer_reversal_cents: v.optional(v.number()),
+    requested_by_user_id: v.optional(v.id("users")),
+    requested_at_ms: v.number(),
+    settled_at_ms: v.optional(v.number()),
+    // Key handed to Stripe. Derived from a client-generated requestId minted
+    // once per refund dialog, so a timeout-then-retry cannot refund twice.
+    idempotency_key: v.string(),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_payment_id", ["payment_id"])
+    .index("by_booking_id", ["booking_id"])
+    .index("by_shop_and_created_at", ["shop_id", "created_at"])
+    .index("by_stripe_refund_id", ["stripe_refund_id"])
+    .index("by_idempotency_key", ["idempotency_key"]),
 
   // Single-row-per-year counter for sequential invoice numbering
   // (INV-<YYYY>-<6-digit zero-padded>). Allocated transactionally inside

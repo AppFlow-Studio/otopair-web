@@ -81,7 +81,27 @@ export interface RoleResourceOutcome {
     | "rejected_other"
     | "never_found"
     | "not_applicable"
-    | "skipped_budget";
+    /**
+     * DEPRECATED as an emitted value — kept so historical run rows still type.
+     * It conflated two opposite situations and made them indistinguishable in
+     * the run record:
+     *
+     *   - this run ran out of per-run budget (the role is untried and a bigger
+     *     budget, or simply another run, would attempt it); versus
+     *   - this role has burned its lifetime attempts (trying again is futile
+     *     and more budget changes nothing).
+     *
+     * Diagnosing the Round 14 part shortfall required knowing which — six roles
+     * on the Altima read `skipped_budget` and the log could not say whether
+     * raising the cap would help. Use the two members below.
+     */
+    | "skipped_budget"
+    /** Untried this run: the per-run cap (PARTS_ROLE_RESOURCE_MAX) was reached.
+     *  More budget WOULD attempt it. */
+    | "skipped_run_budget"
+    /** Untried and not worth retrying: this role has already used its lifetime
+     *  attempts across runs. More budget changes nothing. */
+    | "skipped_lifetime_cap";
   tier?: 1 | 2;
   oem?: string;
   sourceUrl?: string | null;
@@ -227,11 +247,22 @@ export async function resourceMissingRoles(
   for (const role of uniqueRoles) {
     const prior = opts?.priorAttemptsByRole?.get(role.roleKey) ?? 0;
     if (prior >= lifetimeCap) {
-      outcomes.push({ roleKey: role.roleKey, outcome: "skipped_budget", kind: role.kind ?? "fill" });
+      // Exhausted across runs — raising the per-run budget would not help.
+      outcomes.push({
+        roleKey: role.roleKey,
+        outcome: "skipped_lifetime_cap",
+        kind: role.kind ?? "fill",
+      });
       continue;
     }
     if (eligible.length >= maxRoles) {
-      outcomes.push({ roleKey: role.roleKey, outcome: "skipped_budget", kind: role.kind ?? "fill" });
+      // Untried purely because this run ran out of room. A larger
+      // PARTS_ROLE_RESOURCE_MAX, or simply the next run, WILL attempt it.
+      outcomes.push({
+        roleKey: role.roleKey,
+        outcome: "skipped_run_budget",
+        kind: role.kind ?? "fill",
+      });
       continue;
     }
     eligible.push(role);
@@ -349,7 +380,21 @@ export async function resourceMissingRoles(
         const candidate = products.find((p) => {
           if (opts?.blockedOems?.has(p.oem_part_number)) return false; // already refuted
           const title = p.name ?? pageTitle;
-          return checkRoleIdentity(role.roleKey, title).verdict === "pass";
+          // Reject ONLY on positive evidence that this listing is a different
+          // component. roleIdentity.ts's own contract says so verbatim: a
+          // require-miss "is only a soft signal (dealer titles like
+          // '84257919 - GM Genuine Part' carry no noun); callers promote
+          // require-misses to the adversarial verifier, never reject on them."
+          //
+          // Testing `=== "pass"` inverted that. `unknown_role` (the roleKey has
+          // no lexicon entry at all), `no_title` (the listing carried no name)
+          // and `require_miss` are all NOT "pass", so every candidate on the
+          // page was discarded and the repair fell through to `never_found` —
+          // indistinguishable from a storefront that listed nothing. Nine
+          // SERVICE_PARTS_REFERENCE roles have no lexicon entry, so those were
+          // unfillable by this path on EVERY vehicle, of every make.
+          const v = checkRoleIdentity(role.roleKey, title);
+          return !(v.verdict === "reject" && v.mode === "reject");
         });
         if (!candidate) continue;
         written = await writeCandidate(

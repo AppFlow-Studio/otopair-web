@@ -29,6 +29,42 @@ describe("deriveEngineFamily", () => {
   it("passes through an already-family-shaped code", () => {
     expect(deriveEngineFamily("N63")).toBe("N63");
   });
+
+  // Round 14: the original rule was /^[A-Z]+\d+/, which requires LEADING
+  // LETTERS. Every digit-leading code returned undefined — silently — taking
+  // the whole Toyota V6/V8 range with it, plus Mitsubishi and JLR. An
+  // undefined family makes siblingMatches short-circuit, so sibling labor
+  // inheritance was dark for those engines with nothing recorded to say why.
+  it("resolves DIGIT-LEADING codes that used to return undefined", () => {
+    expect(deriveEngineFamily("2GR-FKS")).toBe("2GR");
+    expect(deriveEngineFamily("1GR-FE")).toBe("1GR");
+    expect(deriveEngineFamily("3UR-FE")).toBe("3UR");
+    expect(deriveEngineFamily("4B12")).toBe("4B12");   // Mitsubishi
+    expect(deriveEngineFamily("306DT")).toBe("306DT"); // Jaguar Land Rover
+    expect(deriveEngineFamily("ETK")).toBe("ETK");     // Mopar sales code
+  });
+
+  // The documented grain is FAMILY, not sub-variant. Splitting naively on the
+  // separator would have returned the whole variant for undashed BMW codes.
+  it("keeps the family grain for undashed codes", () => {
+    expect(deriveEngineFamily("N63B44O2")).toBe("N63");
+    expect(deriveEngineFamily("B58B30M0")).toBe("B58");
+    expect(deriveEngineFamily("QR25DE")).toBe("QR25");
+    expect(deriveEngineFamily("K24W9")).toBe("K24");
+    expect(deriveEngineFamily("FB25D")).toBe("FB25");
+  });
+
+  it("honours an explicit separator as the family boundary", () => {
+    expect(deriveEngineFamily("A25A-FKS")).toBe("A25A");
+  });
+
+  it("never returns non-code garbage as a family", () => {
+    // A junk family would key sibling inheritance on nonsense and let
+    // unrelated vehicles inherit each other's labor.
+    expect(deriveEngineFamily("???")).toBeUndefined();
+    expect(deriveEngineFamily("   ")).toBeUndefined();
+    expect(deriveEngineFamily("--")).toBeUndefined();
+  });
 });
 
 const target = { chassis_code: "G30", engine_family: "N63" };

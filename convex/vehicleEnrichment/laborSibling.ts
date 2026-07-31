@@ -21,8 +21,31 @@ export type PlatformKey = { chassis_code?: string; engine_family?: string };
  */
 export function deriveEngineFamily(engineCode?: string): string | undefined {
   if (!engineCode) return undefined;
-  const m = engineCode.match(/^[A-Z]+\d+/);
-  return m ? m[0] : undefined;
+  const code = engineCode.trim().toUpperCase();
+  if (!code) return undefined;
+
+  // 1. A separator already marks the family/variant boundary, so honour it:
+  //    Toyota 2GR-FKS -> 2GR, A25A-FKS -> A25A.
+  const beforeSeparator = code.split(/[-\s_]/)[0];
+  if (beforeSeparator !== code && beforeSeparator.length > 0) return beforeSeparator;
+
+  // 2. No separator: the original letters-then-digits rule, which is the one
+  //    that produces the documented BMW grain (N63B44O2 -> N63, B58B30M0 ->
+  //    B58) and also handles QR25DE -> QR25, K24W9 -> K24, FB25D -> FB25.
+  const m = code.match(/^[A-Z]+\d+/);
+  if (m) return m[0];
+
+  // 3. DIGIT-LEADING codes reach here and used to return undefined, silently:
+  //    the whole Toyota V6/V8 range (2GR-FKS, 1GR-FE, 3UR-FE — when passed
+  //    without their dash), Mitsubishi 4B12/4J12, JLR 306DT, RAM ETK. An
+  //    undefined family flows onto the labor observation with no flag and
+  //    siblingMatches short-circuits on `!!target.engine_family`, so sibling
+  //    labor inheritance was dark for those engines with nothing to show for
+  //    it. The code itself is a better family key than nothing — but ONLY when
+  //    it actually looks like a code. Returning arbitrary text ("???") as an
+  //    engine family would key sibling inheritance on garbage and let unrelated
+  //    vehicles inherit each other's labor, which is worse than no family.
+  return /^[A-Z0-9]{2,12}$/.test(code) ? code : undefined;
 }
 
 /** Which platform key(s) a service's labor depends on. */

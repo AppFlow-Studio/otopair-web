@@ -1927,11 +1927,17 @@ export const patchRunRoleHealth = internalMutation({
       .order("desc")
       .first();
     if (run) {
+      // Every reason gapReasonFor can emit. A member missing here is not
+      // cosmetic: the stale entry survives re-adjudication and the run keeps
+      // reporting a gap the repair has already resolved.
       const RESOURCE_REASONS = new Set([
         "resourced",
         "resource_never_found",
         "resource_refuted_no_replacement",
         "resource_not_applicable",
+        "resource_skipped_run_budget",
+        "resource_skipped_lifetime_cap",
+        // Legacy label, still present on runs recorded before the split.
         "resource_skipped_budget",
       ]);
       const repairedFields = new Set(args.role_gaps.map((g) => g.field));

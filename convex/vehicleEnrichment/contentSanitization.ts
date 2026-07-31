@@ -201,8 +201,11 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   volkswagen: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
   audi: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
   porsche: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
-  // Subaru: various letter-digit combos (deliberately broad)
-  subaru: /^[A-Z0-9]{5,12}$/i,
+  // Subaru: various letter-digit combos (deliberately broad). The optional
+  // dashed tail matters — Subaru's catalog prints 26296-AL03A and 15208-AA160,
+  // and without it this pattern could not rescue its own make's numbers when
+  // the signature matcher flagged them.
+  subaru: /^[A-Z0-9]{5,12}(?:-[A-Z0-9]{3,6})?$/i,
   // Nissan/Infiniti: XXXXX-XXXXX + chemical/fluid SKUs whose first block mixes
   // letters and digits (999MP-A9001 ATF, KE908-99931 oil).
   // Audit findings (Jul 11 2026): brake-part first blocks letter+4digits
@@ -263,12 +266,28 @@ const BMW_FAMILY = new Set(["bmw", "mini", "rollsroyce"]);
 // though their hard-part format is 5-3-3. Without them here, a genuine Honda
 // fluid reads as a foreign signature on a Honda config (observed in the
 // Jul 2026 quarantine dry-run: 2 false positives on Acura).
+// Makes whose catalogs print the 5-digit-dash-5 shape. Membership decides
+// whether a number matching that signature is OUR make's or another's — a
+// non-member whose number matches is treated as cross-make contamination and
+// DROPPED.
+//
+// `subaru` was missing, and Subaru prints exactly this shape (26296-AL03A,
+// 15208-AA160). Its numbers matched the asian_5_5 signature, failed the
+// membership test, and were deleted as contamination — destroying correct,
+// present values rather than merely failing to find them, which the pipeline
+// law ranks as the worse error. The escape hatch below could not save them
+// either: subaru's own pattern admitted no dash.
+//
+// NOT mazda, deliberately: its numbers are 4-char alphanumeric blocks
+// (L3K9-14-302, PE01-14-302) and do not match this signature at all, so adding
+// it would widen the set for no benefit.
 const ASIAN_5_5_FAMILY = new Set([
   "toyota", "lexus", "scion",
   "hyundai", "kia", "genesis",
   "nissan", "infiniti",
   "mitsubishi", "suzuki",
   "honda", "acura",
+  "subaru",
 ]);
 const HONDA_FAMILY = new Set(["honda", "acura"]);
 const MERCEDES_FAMILY = new Set(["mercedes", "mercedesbenz", "maybach", "smart"]);

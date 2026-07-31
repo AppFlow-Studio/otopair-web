@@ -5365,9 +5365,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
                   ? "resource_not_applicable"
                   : o.outcome === "rejected_refuted"
                     ? "resource_refuted_no_replacement"
-                    : o.outcome === "skipped_budget"
-                      ? "resource_skipped_budget"
-                      : "resource_never_found";
+                    // Two DIFFERENT situations that used to share one label, and
+                    // the confusion cost a diagnosis: "untried, more budget
+                    // would try it" versus "tried its lifetime allowance,
+                    // more budget changes nothing".
+                    : o.outcome === "skipped_run_budget"
+                      ? "resource_skipped_run_budget"
+                      : o.outcome === "skipped_lifetime_cap"
+                        ? "resource_skipped_lifetime_cap"
+                        : o.outcome === "skipped_budget"
+                          ? "resource_skipped_budget"
+                          : "resource_never_found";
             // Rival misses are not field gaps — the role is occupied (by the
             // flagged incumbent); the flag already carries the review signal.
             if (o.outcome !== "written" && o.kind !== "rival") {
@@ -5384,6 +5392,51 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
           { vehicleConfigId: args.vehicleConfigId },
         );
+
+        // ── Post-repair price heal ────────────────────────────────────────
+        // The earlier heal is scheduled ~570 lines above, BEFORE the role-
+        // resource repair writes the parts it re-sources. Two things follow,
+        // and both deny a first pricing attempt to exactly the parts that most
+        // need one:
+        //
+        //   1. its budget is sized from a census taken before those parts
+        //      existed, so they are not in the count; and
+        //   2. it is scheduled runAfter(0), racing the repair's own writes.
+        //
+        // The canary evidence is the confidence-0.7 signature (roleResource's
+        // stamp): five Forester parts — atf_fluid, front_brake_pad,
+        // front_rotor, intake_manifold_gasket, rear_rotor — plus the Grand
+        // Highlander's three, on a run that logged role_resource:5 and ZERO web
+        // searches. All landed unpriced with no part_prices row of any type.
+        //
+        // `fitmentsAfter` is already fetched here for the quotability recompute,
+        // so this costs one filter and no extra query. The earlier schedule
+        // stays as the fallback for runs where this block is env-gated off
+        // (PARTS_ROLE_RESOURCE=0) or throws.
+        try {
+          const stillUnpriced = fitmentsAfter.filter((f: any) => !f.has_trusted_price).length;
+          if (stillUnpriced > 0) {
+            const cap = Number(process.env.PARTS_PRICE_IMMEDIATE_BACKFILL_CAP ?? "12");
+            await ctx.scheduler.runAfter(
+              0,
+              internal.vehicleEnrichment.priceRefresh.refreshStalePrices,
+              {
+                budget: 0,
+                backfillBudget: Math.min(stillUnpriced, cap),
+                vehicleConfigId: args.vehicleConfigId,
+                maxChainDepth: Number(process.env.PARTS_PRICE_BACKFILL_CHAIN_DEPTH ?? "2"),
+              },
+            );
+            console.log(
+              `[v8/price] post-repair heal scheduled for ${stillUnpriced} unpriced part(s) ` +
+                `(includes parts written by the role-resource repair, which the pre-repair ` +
+                `heal could not have seen)`,
+            );
+          }
+        } catch (e) {
+          console.warn("[v8/price] post-repair heal scheduling failed (non-fatal):", e);
+        }
+
         missing = missingCoreRoles(fitmentsAfter, applicableSlugsForRoles, naKeys);
         const axleGaps = axlePairGaps(fitmentsAfter, applicableSlugsForRoles, naKeys);
         missingCoreRoleStrings = missing.map((m) => `${m.serviceSlug}:${m.roleKey}`);

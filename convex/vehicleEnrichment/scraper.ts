@@ -204,7 +204,14 @@ async function searchPartsPages(
     return { markdown: cached.markdown ?? "", urls: cached.url ? [cached.url] : [], partPrices: cachedPrices, supersessions: cachedSupersessions };
   }
 
-  const v = `${vehicle.year} ${vehicle.make} ${vehicle.trim || vehicle.model}`;
+  // MODEL, not trim. `trim || model` put the trim first and the trim is almost
+  // always present, so the search query stopped naming the vehicle: a 2020
+  // Acura TLX searched "2020 Acura Base OEM oil filter air filter part number",
+  // a 2019 MINI Cooper S searched "2019 MINI S ...". This is the fallback path
+  // every make without a storefront entry in sourceRegistry lands on, so the
+  // makes with the least coverage were also the ones searching for a vehicle
+  // that does not exist.
+  const v = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
   const partsQueries = [
     `${v} OEM oil filter air filter part number`,
     `${v} OEM brake pads rotors spark plugs part number`,

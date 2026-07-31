@@ -73,11 +73,19 @@ RULES:
    - parking_brake_type (electronic vs manual)
    - timing_system (chain vs belt)
 3. If a value is not present in the source documents and is not one of the 4 allowed training data fields, return null. A null is always better than a guess.
-4. For OEM part numbers, validate the format for this vehicle's make:
+4. Transcribe OEM part numbers EXACTLY as the source prints them. Every manufacturer
+   uses its own format; these three are illustrations of that variety, NOT an allowlist:
    - BMW: 11 digits numeric (e.g., 11427583220) OR alphanumeric up to 13 chars (e.g., 64115A1BDB6)
    - Toyota: 5-5 alphanumeric (e.g., 04152-YZZA1)
    - Honda: segmented alphanumeric (e.g., 15400-PLM-A02)
-   If the format doesn't match, return null.
+   If this vehicle's make is not listed above, that means only that no example was given
+   for it — NOT that its numbers are invalid. Return the number as printed.
+   Nissan 16546-6CB0A, Mopar 68453097AB, Subaru 26296FJ020 and Mercedes 0019828008 are
+   all perfectly valid part numbers.
+   Return null ONLY when the source does not show a part number for that role. Never
+   return null because a number "looks wrong" for the make — format checking is done
+   downstream against a per-make pattern table covering 19 makes plus a general
+   fallback, and a number you discard here can never be recovered by it.
 5. Return OEM part numbers as JSON STRINGS exactly as printed, preserving leading zeros (e.g. "07119963130", never the bare number 7119963130 — an unquoted number silently loses the leading zero and the part is rejected).
 6. Return VALID JSON only. No markdown fences, no explanation, no preamble.
 

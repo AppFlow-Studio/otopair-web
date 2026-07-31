@@ -33,6 +33,13 @@ function gapReasonFor(outcome: string): string {
       return "resource_not_applicable";
     case "rejected_refuted":
       return "resource_refuted_no_replacement";
+    // Untried this run, but a bigger budget or the next run WILL attempt it.
+    case "skipped_run_budget":
+      return "resource_skipped_run_budget";
+    // Untried and futile to retry — lifetime attempts exhausted.
+    case "skipped_lifetime_cap":
+      return "resource_skipped_lifetime_cap";
+    // Legacy: historical rows only. Kept so old runs still map to something.
     case "skipped_budget":
       return "resource_skipped_budget";
     default:

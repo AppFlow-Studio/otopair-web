@@ -227,7 +227,19 @@ export async function resourceMissingRoles(
     blockedOems?: ReadonlySet<string>;
   },
 ): Promise<RoleResourceOutcome[]> {
-  const maxRoles = opts?.maxRoles ?? Number(process.env.PARTS_ROLE_RESOURCE_MAX ?? "4");
+  // Default raised 4 -> 10 on measured evidence, not intuition. A 2016 Altima
+  // arrived at this stage with ELEVEN missing roles; at 4 it repaired 3 and
+  // logged six `skipped_budget`, finishing with 4 parts. Re-run at 12 it
+  // attempted the six it had skipped and wrote ALL SIX — they were never a
+  // sourcing failure, the repair simply was not allowed to try. Parts went
+  // 4 -> 11, all priced, fill 77 -> 88.
+  //
+  // 10 rather than 12: with the BASE slug set now covering all 13 core roles
+  // deterministically, far fewer roles should reach this stage at all, so this
+  // is a safety net for the bad case rather than the primary source of parts.
+  // The cost is bounded — each attempt is one search plus one extraction, and
+  // only ever for roles that are genuinely empty.
+  const maxRoles = opts?.maxRoles ?? Number(process.env.PARTS_ROLE_RESOURCE_MAX ?? "10");
   const lifetimeCap = opts?.lifetimeCap ?? 3;
   const outcomes: RoleResourceOutcome[] = [];
 

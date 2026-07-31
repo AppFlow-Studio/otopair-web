@@ -154,77 +154,91 @@ export function getManualSearchQueries(config: MakeSourceConfig, vehicle: Vehicl
 // ("2025 Crosstrek front brake pads"), and the scraper's rank step prefers
 // position-matching URLs/titles. Rotor slugs were previously BMW-only —
 // every other make NEVER deterministically scraped rotors.
-const BMW_PART_SLUGS: Record<string, string> = {
+/**
+ * THE BASE SLUG SET — every make gets this unless its catalog uses different
+ * words for the same part.
+ *
+ * Derived from SERVICE_PARTS_REFERENCE rather than from habit. Of the 23
+ * bookable services, 8 are labor-only and 1 is a dedicated flow; the remaining
+ * 14 need exactly 13 CORE roles that require a real looked-up part number.
+ * Everything here backs one of those 13, or is a cheap consumable whose real
+ * OEM number beats the synthesised universal fallback. Nothing else earns a
+ * slot.
+ *
+ * Why one map instead of per-make maps: the previous TOYOTA/HONDA maps carried
+ * 10 slugs each and omitted battery, coolant and engine_oil — all CORE roles.
+ * A field with no slug is never searched at all (getPartsSearchPlans maps over
+ * Object.values), with no plan, no query and no warning, so Toyota could not
+ * deterministically scrape a battery and nothing said so. Per-make maps meant
+ * per-make blind spots that nobody could see.
+ *
+ * ORDER IS LOAD-BEARING. Plan order follows insertion order and BOTH budgets
+ * cut the TAIL — PARTS_SCRAPE_BUDGET_MS (210s) and MAX_MARKDOWN_CHARS (40k,
+ * already exceeded by real scrapes). So the axle- and quote-critical searches
+ * come first and the nice-to-haves last.
+ *
+ * REMOVED: wiper_blade. Wiper replacement was made a data-only, non-bookable
+ * service, so its part could never be quoted — yet it consumed a search and a
+ * share of the markdown cap on every vehicle of every make.
+ */
+const BASE_PART_SLUGS: Record<string, string> = {
+  // ── Core, quote-binding. These must never be truncated. ──
   oil_filter_oem:        "oil_filter",
   air_filter_oem:        "air_filter",
   cabin_filter_oem:      "cabin_air_filter",
   spark_plug_oem:        "spark_plug",
   front_brake_pad_oem:   "front_brake_pads",
   rear_brake_pad_oem:    "rear_brake_pads",
-  rotor_front_oem:       "front_brake_disc", // BMW catalogs say "brake disc"
-  rotor_rear_oem:        "rear_brake_disc",
-  serpentine_belt_oem:   "serpentine_belt",
+  rotor_front_oem:       "front_brake_rotor",
+  rotor_rear_oem:        "rear_brake_rotor",
   battery_group:         "battery",
   battery_oem:           "battery",      // deduped — same page as battery_group
   coolant_oem:           "coolant",
+  // ── Core roles that had NO scrape source on any make until now. Each is the
+  //    sole core part of its service, so without them that service could never
+  //    be quoted from deterministic data. Both timing_belt and atf_fluid are
+  //    conditional in reality (chain engines, sealed transmissions) and
+  //    applicability nulls them where they do not apply — a wasted search on
+  //    those vehicles, and the only way to have the part on the ones where it
+  //    does. ──
+  atf_fluid_oem:                "transmission_fluid",
+  timing_belt_oem:              "timing_belt",
+  oil_filter_housing_oring_oem: "oil_filter_housing_o_ring",
+  // ── Universal-fallback roles: a synthesised consumable already satisfies
+  //    quotability, so these are last. A real OEM number is simply better. ──
   drain_plug_gasket_oem: "drain_plug",
-  wiper_blade_set_oem:   "wiper_blade",
   engine_oil_oem:        "engine_oil",
 };
 
-const TOYOTA_PART_SLUGS: Record<string, string> = {
-  oil_filter_oem:        "oil_filter",
-  air_filter_oem:        "air_filter",
-  cabin_filter_oem:      "cabin_air_filter",
-  spark_plug_oem:        "spark_plug",
-  front_brake_pad_oem:   "front_brake_pads",
-  rear_brake_pad_oem:    "rear_brake_pads",
-  rotor_front_oem:       "front_brake_rotor",
-  rotor_rear_oem:        "rear_brake_rotor",
-  drain_plug_gasket_oem: "drain_plug",
-  wiper_blade_set_oem:   "wiper_blade",
+/** BMW catalogs say "brake disc" where everyone else says "brake rotor", and
+ *  BMW's storefront does serve a serpentine-belt page (a `kit` role, kept
+ *  because it costs nothing extra here and BMW belt jobs are common). */
+const BMW_PART_SLUGS: Record<string, string> = {
+  ...BASE_PART_SLUGS,
+  rotor_front_oem:       "front_brake_disc",
+  rotor_rear_oem:        "rear_brake_disc",
+  serpentine_belt_oem:   "serpentine_belt",
 };
 
-const HONDA_PART_SLUGS: Record<string, string> = {
-  oil_filter_oem:        "oil_filter",
-  air_filter_oem:        "air_filter",
-  cabin_filter_oem:      "cabin_air_filter",
-  spark_plug_oem:        "spark_plug",
-  front_brake_pad_oem:   "front_brake_pads",
-  rear_brake_pad_oem:    "rear_brake_pads",
-  rotor_front_oem:       "front_brake_rotor",
-  rotor_rear_oem:        "rear_brake_rotor",
-  drain_plug_gasket_oem: "drain_plug",
-  wiper_blade_set_oem:   "wiper_blade",
-};
+// Toyota and Honda use the base catalog vocabulary verbatim — no overrides.
+// They previously had bespoke 10-slug maps missing three core roles.
+const TOYOTA_PART_SLUGS: Record<string, string> = { ...BASE_PART_SLUGS };
+const HONDA_PART_SLUGS: Record<string, string> = { ...BASE_PART_SLUGS };
 
 // ─── Phase 2/3: oempartsonline.com subdomains ─────────────────────
 
-const OEM_PARTS_ONLINE_SLUGS: Record<string, string> = {
-  oil_filter_oem:        "oil_filter",
-  air_filter_oem:        "air_filter",
-  cabin_filter_oem:      "cabin_air_filter",
-  spark_plug_oem:        "spark_plug",
-  // Round 12: position-split pads + rotor slugs (see BMW map comment). Listed
-  // BEFORE the tail consumables on purpose — plan order follows insertion
-  // order, and the scrape time/char budgets cut the TAIL, so the axle-critical
-  // searches must not sit behind wipers.
-  front_brake_pad_oem:   "front_brake_pads",
-  rear_brake_pad_oem:    "rear_brake_pads",
-  rotor_front_oem:       "front_brake_rotor",
-  rotor_rear_oem:        "rear_brake_rotor",
-  // Battery + fluids, mirrored from BMW_PART_SLUGS — same RevolutionParts
-  // platform, same slug conventions. battery_oem was absent here, so no OLP
-  // subdomain make could EVER price a battery deterministically (Jul 2026 A4:
-  // battery at 0 prices while the oil filter, which IS listed, got priced).
-  // A slug the site doesn't serve just yields an empty scrape — fail-safe.
-  battery_group:         "battery",
-  battery_oem:           "battery",      // deduped — same page as battery_group
-  drain_plug_gasket_oem: "drain_plug",
-  wiper_blade_set_oem:   "wiper_blade",
-  coolant_oem:           "coolant",
-  engine_oil_oem:        "engine_oil",
-};
+/**
+ * Every oempartsonline.com subdomain make uses the base set verbatim — same
+ * RevolutionParts platform, same slug vocabulary as the base.
+ *
+ * This was a fourth hand-maintained copy that had already drifted: it carried
+ * wiper_blade (a non-bookable service) and lacked all three of the core roles
+ * with no scrape source anywhere. Since this is the map EVERY make without a
+ * bespoke entry lands on, its blind spots were the default experience for most
+ * of the fleet. Sharing one definition is what makes coverage a property of
+ * the pipeline rather than of how recently someone edited a make's map.
+ */
+const OEM_PARTS_ONLINE_SLUGS: Record<string, string> = { ...BASE_PART_SLUGS };
 
 /** Maps make name → oempartsonline.com subdomain. */
 const OEM_PARTS_ONLINE_SUBDOMAINS: Record<string, string> = {

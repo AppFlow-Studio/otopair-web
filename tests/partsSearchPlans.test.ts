@@ -52,8 +52,16 @@ describe("getPartsSearchPlans — position-split brake slugs", () => {
       make: "Chevrolet",
       model: "Equinox",
     }).map((p) => p.partSlug);
-    expect(slugs.indexOf("rear_brake_rotor")).toBeLessThan(slugs.indexOf("wiper_blade"));
-    expect(slugs.indexOf("battery")).toBeLessThan(slugs.indexOf("wiper_blade"));
+    // The tail is now engine_oil / drain_plug — both back universal-fallback
+    // roles, so truncating them costs nothing a quote depends on. wiper_blade
+    // used to be the tail marker here; it was removed from every map because
+    // wiper replacement is a data-only, non-bookable service, so its part could
+    // never be quoted while it consumed a search and a share of the 40k
+    // markdown cap on every vehicle.
+    expect(slugs).not.toContain("wiper_blade");
+    expect(slugs.indexOf("rear_brake_rotor")).toBeLessThan(slugs.indexOf("engine_oil"));
+    expect(slugs.indexOf("battery")).toBeLessThan(slugs.indexOf("engine_oil"));
+    expect(slugs.indexOf("front_brake_pads")).toBeLessThan(slugs.indexOf("drain_plug"));
   });
 
   it("Toyota/Honda/BMW maps are position-split too (rotors no longer BMW-only)", () => {

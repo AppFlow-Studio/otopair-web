@@ -258,6 +258,7 @@ import type * as payment_disputes from "../payment_disputes.js";
 import type * as payment_status_history from "../payment_status_history.js";
 import type * as payments from "../payments.js";
 import type * as payments_backfill from "../payments_backfill.js";
+import type * as payments_backfill_created_at from "../payments_backfill_created_at.js";
 import type * as payments_backfill_helpers from "../payments_backfill_helpers.js";
 import type * as payments_stripe from "../payments_stripe.js";
 import type * as platform_settings from "../platform_settings.js";
@@ -747,6 +748,7 @@ declare const fullApi: ApiFromModules<{
   payment_status_history: typeof payment_status_history;
   payments: typeof payments;
   payments_backfill: typeof payments_backfill;
+  payments_backfill_created_at: typeof payments_backfill_created_at;
   payments_backfill_helpers: typeof payments_backfill_helpers;
   payments_stripe: typeof payments_stripe;
   platform_settings: typeof platform_settings;

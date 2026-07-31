@@ -762,10 +762,22 @@ export const getByShopId = query({
  *
  * Returns an array of length `days` (oldest → newest, gaps filled with zeros)
  * shaped: { date: YYYY-MM-DD, total: number, completed: number, revenue: number }
+ *
+ * Staff-gated: this returns a shop's revenue and previously accepted any
+ * shopId from any signed-in caller. Returns [] rather than throwing so the
+ * chart renders empty instead of blowing up the page.
  */
 export const getShopBookingSeries = query({
   args: { shopId: v.id("shops"), days: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    const viewer = await getCurrentUserOrNull(ctx);
+    if (!viewer) return [];
+    try {
+      await requireShopStaff(ctx, viewer._id, args.shopId);
+    } catch {
+      return [];
+    }
+
     const days = Math.max(1, Math.min(args.days ?? 30, 180));
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);

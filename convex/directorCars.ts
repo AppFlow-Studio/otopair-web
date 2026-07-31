@@ -13,6 +13,7 @@ import { query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { partFitsConfigMake } from "./partSelector";
+import { normalizeMakeKey } from "./vehicleEnrichment/manualLibrary";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -777,8 +778,64 @@ export const vehicleConfigDetail = query({
         confidence:  row.confidence,
         verified:    row.mechanic_verified,
         display:     row.display_string,
+        // Provenance, so the UI can mark which rows the manual actually
+        // produced. months carries its own source because a row can legitimately
+        // have OEM-manual miles and a weaker months (see the schema note on
+        // interval_months_source); UNSET means "same provenance as data_quality".
+        dataQuality:  row.data_quality ?? null,
+        monthsSource: row.interval_months_source ?? null,
       })),
     );
+
+    // OEM manuals for this vehicle. vehicle_manuals is keyed by (make, model,
+    // year) rather than by config — one PDF serves every config of the same
+    // YMM — so the lookup has to normalize its key exactly the way
+    // upsertManualRow does, or nothing matches.
+    //
+    // Failed rows are returned, not filtered: "we tried this URL and it was the
+    // wrong document" is the negative cache driving shouldSkipManualLookup, and
+    // a director looking at an empty intervals table needs to see that the
+    // library tried and why it gave up.
+    const manualMake = normalizeMakeKey(makeRow?.name);
+    const manualModel = normalizeMakeKey(modelRow?.name);
+    const manualRows =
+      manualMake && manualModel
+        ? await ctx.db
+            .query("vehicle_manuals")
+            .withIndex("by_ymm", (q) =>
+              q.eq("make", manualMake).eq("model", manualModel).eq("year", cfg.year),
+            )
+            .collect()
+        : [];
+
+    const manuals = manualRows
+      .map((m) => ({
+        id:             m._id,
+        sourceUrl:      m.source_url,
+        domain:         m.source_domain,
+        isOemDomain:    m.is_oem_domain,
+        docKind:        m.doc_kind,
+        pageCount:      m.page_count ?? null,
+        fileBytes:      m.file_bytes ?? null,
+        // A file_id is what makes a manual extractable; without one the row is
+        // a record of an attempt, not a usable document.
+        hasFile:        !!m.file_id,
+        failureReason:  m.failure_reason ?? null,
+        attempts:       m.attempts ?? null,
+        rejectedCount:  m.rejected_urls?.length ?? 0,
+        fetchedAt:      m.fetched_at,
+        expiresAt:      m.expires_at ?? null,
+      }))
+      // Usable documents first, then most recently fetched.
+      .sort((a, b) =>
+        a.hasFile === b.hasFile ? b.fetchedAt - a.fetchedAt : a.hasFile ? -1 : 1,
+      );
+
+    // How many interval rows this library actually produced — the honest
+    // headline for "did the manual do anything for this car".
+    const manualBackedIntervals = intervalsRows.filter(
+      (r) => r.data_quality === "oem_manual" || r.interval_months_source === "oem_manual",
+    ).length;
 
     // Labor times — per-service rollup (book hours + source + confidence), so a
     // director can audit which services have real (OLP-backed) labor vs the
@@ -1004,6 +1061,8 @@ export const vehicleConfigDetail = query({
 
       packages: cfg.packages_available ?? [],
       serviceIntervals,
+      manuals,
+      manualBackedIntervals,
       laborTimes,
       fitmentSummary,
       fitmentTotal: fitments.length,

@@ -340,7 +340,50 @@ type ServiceIntervalRow = {
   confidence?: number
   verified?: boolean
   display?: string
+  dataQuality?: string | null
+  monthsSource?: string | null
 }
+
+type ManualRow = {
+  id: string
+  sourceUrl: string
+  domain: string
+  isOemDomain: boolean
+  docKind: string
+  pageCount?: number | null
+  fileBytes?: number | null
+  hasFile: boolean
+  failureReason?: string | null
+  attempts?: number | null
+  rejectedCount: number
+  fetchedAt: number
+  expiresAt?: number | null
+}
+
+const MANUAL_DOC_KIND_LABEL: Record<string, string> = {
+  owners_manual: "Owner's manual",
+  maintenance_schedule: 'Maintenance schedule',
+  warranty_guide: 'Warranty guide',
+}
+
+const fmtMb = (bytes?: number | null): string | null =>
+  bytes == null ? null : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+
+/** Mirrors MANUAL_REJECTION_PREFIX / MANUAL_MAX_REJECTIONS in manualLibrary.ts.
+ *  A rejected-after-extraction row is NOT an ordinary failure: the PDF fetched
+ *  and uploaded fine and was only unmasked as the wrong document once the
+ *  extractor read it (the Forester that resolved a BRZ quick guide). Worth its
+ *  own label, because "download failed" and "we had the wrong book" lead a
+ *  director to completely different next steps. */
+const MANUAL_REJECTED_PREFIX = 'rejected_after_extraction'
+const MANUAL_MAX_REJECTIONS = 3
+const isWrongDocument = (m: ManualRow): boolean =>
+  !!m.failureReason?.startsWith(MANUAL_REJECTED_PREFIX)
+
+/** True when the manual library is what produced this interval — either the
+ *  whole row, or just its months (which carries its own provenance). */
+const fromManual = (r: ServiceIntervalRow): boolean =>
+  r.dataQuality === 'oem_manual' || r.monthsSource === 'oem_manual'
 
 type LaborTimeRow = {
   serviceName: string
@@ -867,7 +910,12 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
               {/* Service intervals */}
               {detail.serviceIntervals && detail.serviceIntervals.length > 0 && (
                 <div style={{ marginBottom:18 }}>
-                  <SectionTitle label={`OEM service intervals (${detail.serviceIntervals.length})`} />
+                  <SectionTitle
+                    label={`OEM service intervals (${detail.serviceIntervals.length})`}
+                    right={detail.manualBackedIntervals > 0
+                      ? <Badge tone="indigo">{detail.manualBackedIntervals} from manual</Badge>
+                      : undefined}
+                  />
                   <div style={{ border:'1px solid var(--slate-200)', borderRadius:8, overflow:'hidden' }}>
                     <div style={{ display:'grid', gridTemplateColumns:'1.6fr 90px 90px 100px 80px', padding:'8px 12px', background:'var(--slate-25)', borderBottom:'1px solid var(--slate-200)', fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
                       <span>Service</span>
@@ -883,11 +931,97 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                         borderBottom: i < detail.serviceIntervals.length - 1 ? '1px solid var(--slate-100)' : 'none',
                         fontSize:12, color:'var(--slate-700)',
                       }}>
-                        <span style={{ fontWeight:500, color:'var(--slate-900)' }}>{r.serviceName}</span>
+                        <span style={{ fontWeight:500, color:'var(--slate-900)', display:'flex', alignItems:'center', gap:6, minWidth:0 }}>
+                          <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.serviceName}</span>
+                          {fromManual(r) && (
+                            <span title={r.dataQuality === 'oem_manual'
+                              ? 'Extracted from the OEM manual PDF'
+                              : 'Months interval extracted from the OEM manual PDF'}>
+                              <Badge tone="indigo">manual</Badge>
+                            </span>
+                          )}
+                        </span>
                         <span className="mono" style={{ textAlign:'right' }}>{r.miles != null ? r.miles.toLocaleString() : '—'}</span>
                         <span className="mono" style={{ textAlign:'right' }}>{r.months ?? '—'}</span>
                         <span style={{ textAlign:'center' }}>{r.verified ? <Badge tone="green">✓</Badge> : <span style={{ color:'var(--slate-400)' }}>—</span>}</span>
                         <span className="mono" style={{ textAlign:'right' }}>{r.confidence != null ? r.confidence.toFixed(2) : '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* OEM manuals — the documents behind the "manual" interval rows
+                  above. Keyed by year/make/model, so this is the same library
+                  every config of this YMM shares. Failed lookups are listed on
+                  purpose: an empty intervals table plus "wrong document" here
+                  is a diagnosis, whereas silence is a mystery. */}
+              {detail.manuals && detail.manuals.length > 0 && (
+                <div style={{ marginBottom:18 }}>
+                  <SectionTitle
+                    label={`OEM manuals (${detail.manuals.length})`}
+                    right={(() => {
+                      // A rejected-after-extraction row still carries a file_id,
+                      // so hasFile alone would overcount it as usable.
+                      const usable = (detail.manuals as ManualRow[])
+                        .filter(m => m.hasFile && !isWrongDocument(m)).length
+                      return usable === 0
+                        ? <Badge tone="yellow">none usable</Badge>
+                        : <Badge tone="slate">{usable} usable</Badge>
+                    })()}
+                  />
+                  <div style={{ border:'1px solid var(--slate-200)', borderRadius:8, overflow:'hidden' }}>
+                    {(detail.manuals as ManualRow[]).map((m, i) => (
+                      <div key={m.id} style={{
+                        padding:'10px 12px',
+                        borderBottom: i < detail.manuals.length - 1 ? '1px solid var(--slate-100)' : 'none',
+                        background: m.hasFile && !isWrongDocument(m) ? 'transparent' : 'var(--slate-25)',
+                      }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                          <span style={{ fontSize:12, fontWeight:600, color:'var(--slate-900)' }}>
+                            {MANUAL_DOC_KIND_LABEL[m.docKind] ?? m.docKind}
+                          </span>
+                          {m.isOemDomain
+                            ? <span title="Hosted on the manufacturer's own domain — the provenance tier that lets an extracted interval count as OEM-backed"><Badge tone="green">OEM domain</Badge></span>
+                            : <span title="Third-party mirror — usable, but not manufacturer-hosted"><Badge tone="slate">mirror</Badge></span>}
+                          {isWrongDocument(m)
+                            ? <span title="Downloaded and uploaded fine, but the extractor found it was not this vehicle's manual"><Badge tone="red">wrong document</Badge></span>
+                            : !m.hasFile && <Badge tone="yellow">not usable</Badge>}
+                          {m.rejectedCount > 0 && (
+                            <span title={m.rejectedCount >= MANUAL_MAX_REJECTIONS
+                              ? `Rejection limit reached (${m.rejectedCount}) — the library has stopped retrying this vehicle until the negative cache expires`
+                              : `${m.rejectedCount} URL(s) already tried and rejected, so a retry picks a different candidate`}>
+                              <Badge tone={m.rejectedCount >= MANUAL_MAX_REJECTIONS ? 'yellow' : 'slate'}>
+                                {m.rejectedCount} rejected{m.rejectedCount >= MANUAL_MAX_REJECTIONS ? ' · gave up' : ''}
+                              </Badge>
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ marginTop:4, fontSize:11, color:'var(--slate-500)', display:'flex', gap:10, flexWrap:'wrap' }}>
+                          <span className="mono">{m.domain}</span>
+                          {m.pageCount != null && <span>{m.pageCount} pp</span>}
+                          {fmtMb(m.fileBytes) && <span>{fmtMb(m.fileBytes)}</span>}
+                          <span>fetched {fmtDate(m.fetchedAt)}</span>
+                          {m.attempts != null && m.attempts > 1 && <span>{m.attempts} attempts</span>}
+                        </div>
+
+                        {m.failureReason && (
+                          <div style={{ marginTop:6, fontSize:11, color:'var(--amber-700, #b45309)' }}>
+                            {m.failureReason}
+                          </div>
+                        )}
+
+                        <div style={{ marginTop:6 }}>
+                          <a
+                            href={m.sourceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize:11, color:'var(--indigo-600, #4f46e5)', wordBreak:'break-all' }}
+                          >
+                            {m.sourceUrl}
+                          </a>
+                        </div>
                       </div>
                     ))}
                   </div>

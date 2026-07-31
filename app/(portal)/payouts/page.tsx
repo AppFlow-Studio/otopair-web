@@ -1,285 +1,455 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import { useMutation, useQuery } from "convex/react";
-import { motion } from "framer-motion";
-import { ArrowUpRight, CheckCircle2, Loader2 } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
+import { useQuery } from "convex/react";
+import { motion, useReducedMotion } from "framer-motion";
+import { Loader2, RefreshCw } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { PayoutsHero } from "@/components/payouts/payouts-hero";
-import { RevenueAreaChart } from "@/components/payouts/revenue-area-chart";
+import { cn } from "@/lib/utils";
+
+import { KpiRow } from "@/components/payouts/kpi-row";
+import { NetRevenueChart } from "@/components/payouts/net-revenue-chart";
 import { OrderVolumeChart } from "@/components/payouts/order-volume-chart";
 import { PayoutCadenceCard } from "@/components/payouts/payout-cadence-card";
-import { LastPayoutsTable } from "@/components/payouts/last-payouts-table";
-import { BankScheduleCard } from "@/components/payouts/bank-schedule-card";
-import type { PayoutsOverview } from "@/components/payouts/types";
+import { DestinationCard } from "@/components/payouts/destination-card";
+import { RecentPayoutsCard } from "@/components/payouts/recent-payouts-card";
+import { TransactionsCard } from "@/components/payouts/transactions-card";
+import { PaymentDetailPanel } from "@/components/payouts/payment-detail-panel";
+import { PayoutsEmptyState } from "@/components/payouts/payouts-empty-state";
+import {
+  StripeActionNeededBanner,
+  StripeErrorBanner,
+  StripeStatusPill,
+} from "@/components/payouts/stripe-status-banner";
+import { SectionHeader } from "@/components/payouts/section-header";
+import {
+  Skeleton,
+  formatRelative,
+  rangeWindow,
+  usePreviousDefined,
+  useDebouncedValue,
+} from "@/components/payouts/shared";
+import {
+  RANGE_DAYS,
+  type RangeKey,
+  type ShopTxnListItem,
+  type StatusPill,
+} from "@/components/payouts/types";
+import {
+  createManualPayout,
+  openStripeExpressDashboard,
+  useStripeOverview,
+} from "./use-payouts-data";
 
-type DemoSeedVersion = "v1" | "v2";
+/* The three Payments-tab charts sit behind a tab, so deferring them costs
+ * nothing on first paint. NetRevenueChart is deliberately NOT deferred — it's
+ * above the fold and lazy-loading it would hurt LCP. */
+const PaymentOriginCard = dynamic(
+  () =>
+    import("@/components/payouts/sources/payment-origin-card").then(
+      (m) => m.PaymentOriginCard,
+    ),
+  { ssr: false, loading: () => <Skeleton className="h-72 w-full rounded-2xl" /> },
+);
+const RevenueByCard = dynamic(
+  () =>
+    import("@/components/payouts/sources/revenue-by-card").then(
+      (m) => m.RevenueByCard,
+    ),
+  { ssr: false, loading: () => <Skeleton className="h-72 w-full rounded-2xl" /> },
+);
+const NewVsReturningCard = dynamic(
+  () =>
+    import("@/components/payouts/sources/new-vs-returning-card").then(
+      (m) => m.NewVsReturningCard,
+    ),
+  { ssr: false, loading: () => <Skeleton className="h-72 w-full rounded-2xl" /> },
+);
+
+const RANGES: RangeKey[] = ["7d", "30d", "90d"];
+const TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "payments", label: "Payments" },
+] as const;
+type TabKey = (typeof TABS)[number]["key"];
 
 export default function PayoutsPage() {
-  const onboardingData = useQuery(api.shops.getMyOnboardingData);
-  const shopId = onboardingData?.shop?._id;
-  const bookingSeries = useQuery(
-    api.bookings.getShopBookingSeries,
-    shopId ? { shopId, days: 30 } : "skip"
+  const [range, setRange] = useState<RangeKey>("30d");
+  const [tab, setTab] = useState<TabKey>("overview");
+  const [selected, setSelected] = useState<Id<"payments"> | null>(null);
+  const [rawSearch, setRawSearch] = useState("");
+  const [status, setStatus] = useState<StatusPill>("all");
+  const [mechanicId, setMechanicId] = useState("all");
+  const [payoutBusy, setPayoutBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const reduced = useReducedMotion();
+
+  const search = useDebouncedValue(rawSearch, 250);
+  const days = RANGE_DAYS[range];
+  const window = useMemo(() => rangeWindow(range, days), [range, days]);
+
+  const ctx = useQuery(api.shopPayments.getMyPayoutsContext);
+  const shopId = ctx?.shopId;
+
+  const stripe = useStripeOverview(
+    ctx === undefined ? undefined : (ctx?.stripeConnectAccountId ?? null),
   );
 
-  const seedBookings = useMutation(api.seed.seedDashboardBookings);
-  const clearDashboardBookingsBatch = useMutation(api.seed.clearDashboardBookingsBatch);
+  const bookingSeries = useQuery(
+    api.bookings.getShopBookingSeries,
+    shopId ? { shopId, days } : "skip",
+  );
 
-  const [overview, setOverview] = useState<PayoutsOverview | null>(null);
-  const [overviewError, setOverviewError] = useState<string | null>(null);
-  const [overviewLoading, setOverviewLoading] = useState(true);
+  const insightsRaw = useQuery(
+    api.shopPayments.getPaymentInsights,
+    ctx ? { startMs: window.startMs, endMs: window.endMs } : "skip",
+  );
+  // Hold the previous window's numbers while a new one loads, so changing the
+  // range dims the cards instead of blanking four of them at once.
+  const insights = usePreviousDefined(insightsRaw);
 
-  const [seedAction, setSeedAction] = useState<"clear" | "seed-v1" | "seed-v2" | null>(null);
-  const [seedError, setSeedError] = useState<string | null>(null);
+  const txnsRaw = useQuery(
+    api.shopPayments.listTransactions,
+    ctx
+      ? {
+          paginationOpts: { numItems: 50, cursor: null },
+          status,
+          startMs: window.startMs,
+          endMs: window.endMs,
+          ...(mechanicId !== "all"
+            ? { mechanicId: mechanicId as Id<"mechanics"> }
+            : {}),
+          ...(search.trim() ? { search: search.trim() } : {}),
+        }
+      : "skip",
+  );
+  const txns = usePreviousDefined(txnsRaw);
 
-  const stripeReady = onboardingData?.shop?.stripeConnectReady === true;
-  const stripeAccountId = onboardingData?.shop?.stripeConnectAccountId ?? null;
+  const mechanics = useQuery(
+    api.shopPayments.listShopMechanics,
+    ctx ? {} : "skip",
+  );
 
-  const fetchOverview = useCallback(async () => {
-    if (!stripeAccountId) return;
-    setOverviewLoading(true);
-    setOverviewError(null);
-    try {
-      const res = await fetch("/api/stripe/payouts/overview", { cache: "no-store" });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? "Failed to load payouts.");
-      setOverview(data as PayoutsOverview);
-    } catch (error) {
-      setOverviewError(error instanceof Error ? error.message : "Failed to load payouts.");
-    } finally {
-      setOverviewLoading(false);
-    }
-  }, [stripeAccountId]);
+  const detail = useQuery(
+    api.shopPayments.getPaymentDetail,
+    selected ? { paymentId: selected } : "skip",
+  );
 
-  useEffect(() => {
-    if (stripeAccountId) {
-      void fetchOverview();
-    } else if (onboardingData !== undefined) {
-      setOverviewLoading(false);
-    }
-  }, [stripeAccountId, fetchOverview, onboardingData]);
+  const handleOpenStripe = useCallback(async () => {
+    const err = await openStripeExpressDashboard();
+    if (err) setActionError(err);
+  }, []);
 
-  async function handleOpenStripeDashboard() {
-    const targetWindow = window.open("", "_blank");
-    if (targetWindow) targetWindow.opener = null;
-    try {
-      const response = await fetch("/api/stripe/connect/login", { method: "POST" });
-      const data = (await response.json()) as { error?: string; url?: string };
-      if (!response.ok || !data.url) throw new Error(data.error ?? "Failed to open Stripe.");
-      if (targetWindow) targetWindow.location.href = data.url;
-      else window.location.assign(data.url);
-    } catch (error) {
-      targetWindow?.close();
-      setOverviewError(error instanceof Error ? error.message : "Failed to open Stripe Express.");
-    }
-  }
+  const handleManualPayout = useCallback(async () => {
+    setPayoutBusy(true);
+    setActionError(null);
+    const err = await createManualPayout();
+    if (err) setActionError(err);
+    else await stripe.refresh();
+    setPayoutBusy(false);
+  }, [stripe]);
 
-  async function handleManualPayout() {
-    const response = await fetch("/api/stripe/payouts/create", { method: "POST" });
-    const data = await response.json();
-    if (!response.ok) {
-      setOverviewError(data?.error ?? "Failed to create payout.");
-      return;
-    }
-    await fetchOverview();
-  }
-
-  async function clearDemoBookings(id: Id<"shops">) {
-    for (let attempts = 0; attempts < 200; attempts += 1) {
-      const result = await clearDashboardBookingsBatch({ shopId: id });
-      if (result.done) return;
-      if (attempts === 199) throw new Error("Timed out while clearing demo bookings.");
-    }
-  }
-
-  async function handleSeedDemoBookings(version: DemoSeedVersion) {
-    if (!shopId) return;
-    setSeedError(null);
-    setSeedAction(version === "v1" ? "seed-v1" : "seed-v2");
-    try {
-      await clearDemoBookings(shopId);
-      await seedBookings({ shopId, clearExisting: false, seedDemo: true, version });
-    } catch (error) {
-      setSeedError(error instanceof Error ? error.message : "Failed to seed demo bookings.");
-    } finally {
-      setSeedAction(null);
-    }
-  }
-
-  async function handleClearDemoBookings() {
-    if (!shopId) return;
-    setSeedError(null);
-    setSeedAction("clear");
-    try {
-      await clearDemoBookings(shopId);
-    } catch (error) {
-      setSeedError(error instanceof Error ? error.message : "Failed to clear demo bookings.");
-    } finally {
-      setSeedAction(null);
-    }
-  }
-
-  if (onboardingData === undefined) {
+  /* ---- Loading the shop context ---- */
+  if (ctx === undefined) {
     return (
-      <div className="flex min-h-[40vh] items-center justify-center">
-        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+      <div className="mx-auto max-w-6xl space-y-6 pb-16">
+        <Skeleton className="h-9 w-48" />
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-5">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <Skeleton key={i} className="h-32 rounded-2xl" />
+          ))}
+        </div>
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+          <Skeleton className="h-[380px] rounded-2xl lg:col-span-2" />
+          <Skeleton className="h-[380px] rounded-2xl" />
+        </div>
       </div>
     );
   }
 
-  const showDemoBookingActions = process.env.NODE_ENV === "development" && !!shopId;
+  if (ctx === null) {
+    return (
+      <div className="mx-auto max-w-6xl pb-16">
+        <p className="rounded-2xl border border-border bg-card p-10 text-center text-sm text-muted-foreground">
+          You don&apos;t have access to a shop&apos;s payments.
+        </p>
+      </div>
+    );
+  }
+
+  const hasAccount = !!ctx.stripeConnectAccountId;
+  const panelOpen = selected !== null;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 pb-16">
+    <div className="mx-auto max-w-6xl pb-16">
+      {/* Header */}
       <motion.div
-        initial={{ opacity: 0, y: -6 }}
+        initial={reduced ? false : { opacity: 0, y: -6 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
+        transition={{ duration: 0.3 }}
         className="flex flex-wrap items-end justify-between gap-4"
       >
         <div>
-          <p className="text-sm font-medium uppercase tracking-[0.24em] text-blue-600">Finance</p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-gray-900">Payouts</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
-            Live revenue, transfers, and order volume for{" "}
-            <span className="font-medium text-gray-700">
-              {onboardingData?.shop?.name ?? "your shop"}
-            </span>
-            .
+          <p className="text-sm font-medium uppercase tracking-[0.24em] text-primary">
+            Finance
+          </p>
+          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">
+            Payments
+          </h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+            Every payment, where it came from, and when it lands for{" "}
+            <span className="font-medium text-foreground">{ctx.shopName}</span>.
           </p>
         </div>
-
-        <StripeStatusPill ready={stripeReady} hasAccount={!!stripeAccountId} />
+        <div className="flex flex-col items-end gap-2">
+          <StripeStatusPill
+            hasAccount={hasAccount}
+            ready={ctx.stripeConnectReady}
+          />
+          {stripe.lastUpdatedAt ? (
+            <button
+              type="button"
+              onClick={() => void stripe.refresh()}
+              disabled={stripe.isRefreshing}
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+            >
+              <RefreshCw
+                className={cn("size-3", stripe.isRefreshing && "animate-spin")}
+                aria-hidden="true"
+              />
+              Updated {formatRelative(stripe.lastUpdatedAt)}
+            </button>
+          ) : null}
+        </div>
       </motion.div>
 
-      {!stripeAccountId ? (
-        <EmptyState />
+      {!hasAccount ? (
+        <div className="mt-6">
+          <PayoutsEmptyState />
+        </div>
       ) : (
         <>
-          <PayoutsHero overview={overview} bookingSeries={bookingSeries} loading={overviewLoading} />
+          {/* One range control, scoping everything below it. */}
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+            <div
+              className="flex rounded-full bg-muted p-1"
+              role="group"
+              aria-label="Date range"
+            >
+              {RANGES.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setRange(r)}
+                  aria-pressed={range === r}
+                  className={cn(
+                    "relative rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    range === r ? "text-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  {range === r && (
+                    <motion.span
+                      layoutId={reduced ? undefined : "payouts-range-pill"}
+                      className="absolute inset-0 rounded-full bg-card shadow-sm"
+                      transition={{ type: "spring", stiffness: 400, damping: 32 }}
+                    />
+                  )}
+                  <span className="relative">{r}</span>
+                </button>
+              ))}
+            </div>
 
-          <RevenueAreaChart
-            series={overview?.series ?? []}
-            currency={overview?.currency ?? "usd"}
-            loading={overviewLoading}
-          />
+            <div
+              className="flex gap-1 rounded-lg bg-muted p-1"
+              role="tablist"
+              aria-label="Payments views"
+            >
+              {TABS.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === t.key}
+                  onClick={() => setTab(t.key)}
+                  className={cn(
+                    "rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    tab === t.key
+                      ? "bg-card text-foreground shadow-sm"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
-          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <OrderVolumeChart series={bookingSeries} loading={bookingSeries === undefined} />
-            <PayoutCadenceCard
-              payouts={overview?.payouts ?? []}
-              schedule={overview?.payoutSchedule ?? null}
-              currency={overview?.currency ?? "usd"}
+          {/* Non-blocking Stripe notices. The Convex-fed sections below keep
+              working regardless of what Stripe says. */}
+          <div className="mt-4 space-y-3">
+            {hasAccount && !ctx.stripeConnectReady ? (
+              <StripeActionNeededBanner
+                requirementsDue={ctx.requirementsDue}
+                onOpenStripe={() => void handleOpenStripe()}
+              />
+            ) : null}
+            {stripe.error ? (
+              <StripeErrorBanner
+                message={stripe.error}
+                onRetry={() => void stripe.refresh()}
+                retrying={stripe.isRefreshing}
+              />
+            ) : null}
+            {actionError ? (
+              <div
+                role="alert"
+                className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive"
+              >
+                {actionError}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="mt-6">
+            <KpiRow
+              overview={stripe.overview}
+              insights={insights}
+              range={range}
+              loading={stripe.loading && insightsRaw === undefined}
             />
           </div>
 
-          <BankScheduleCard
-            externalAccount={overview?.externalAccount ?? null}
-            schedule={overview?.payoutSchedule ?? null}
-            availableBalance={overview?.balance.available ?? 0}
-            currency={overview?.currency ?? "usd"}
-            onOpenStripe={handleOpenStripeDashboard}
-            onManualPayout={overview?.payoutSchedule?.interval === "manual" ? handleManualPayout : undefined}
-          />
+          {tab === "overview" ? (
+            <>
+              <section className="mt-8">
+                <SectionHeader
+                  title="Analytics"
+                  description="Revenue, job volume, and how your payouts are running."
+                />
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <div className="lg:col-span-2">
+                    <NetRevenueChart
+                      overview={stripe.overview}
+                      range={range}
+                      loading={stripe.loading}
+                      isRefreshing={stripe.isRefreshing}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-4">
+                    <OrderVolumeChart
+                      series={bookingSeries}
+                      loading={bookingSeries === undefined}
+                    />
+                    <PayoutCadenceCard
+                      overview={stripe.overview}
+                      loading={stripe.loading}
+                    />
+                  </div>
+                </div>
+              </section>
 
-          <LastPayoutsTable payouts={overview?.payouts ?? []} loading={overviewLoading} />
+              <section className="mt-8">
+                <SectionHeader
+                  title="Where the money lands"
+                  description="Your payout account and the transfers that have already left Stripe."
+                />
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                  <DestinationCard
+                    overview={stripe.overview}
+                    loading={stripe.loading}
+                    onOpenStripe={() => void handleOpenStripe()}
+                    onManualPayout={() => void handleManualPayout()}
+                    payoutBusy={payoutBusy}
+                  />
+                  <RecentPayoutsCard
+                    overview={stripe.overview}
+                    loading={stripe.loading}
+                  />
+                </div>
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="mt-8">
+                <SectionHeader
+                  title="Where your payments come from"
+                  description="Payment methods, top-earning work, and repeat business."
+                />
+                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <PaymentOriginCard
+                    insights={insights}
+                    loading={insightsRaw === undefined && !insights}
+                  />
+                  <RevenueByCard
+                    insights={insights}
+                    loading={insightsRaw === undefined && !insights}
+                  />
+                  <NewVsReturningCard
+                    insights={insights}
+                    loading={insightsRaw === undefined && !insights}
+                  />
+                </div>
+                {insights?.coverage.uncapturedRowsSkipped ? (
+                  <p className="mt-3 text-xs text-muted-foreground">
+                    {insights.coverage.uncapturedRowsSkipped} authorized-but-not-yet-captured
+                    payment
+                    {insights.coverage.uncapturedRowsSkipped === 1 ? " is" : "s are"}{" "}
+                    excluded from these figures — they haven&apos;t taken any money
+                    yet.
+                  </p>
+                ) : null}
+              </section>
 
-          {overviewError ? (
-            <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {overviewError}
-            </div>
-          ) : null}
+              {/* Split pane: the list narrows and the detail slides in beside
+                  it at lg+, and stacks as a full-width panel below that. */}
+              <section className="mt-8">
+                <div className="flex gap-4">
+                  <div
+                    className={cn(
+                      "min-w-0 transition-[width] duration-200",
+                      panelOpen ? "hidden lg:block lg:w-3/5" : "w-full",
+                    )}
+                  >
+                    <TransactionsCard
+                      result={txns}
+                      loading={txnsRaw === undefined && !txns}
+                      mechanics={(mechanics ?? []).map((m) => ({
+                        id: String(m.id),
+                        name: m.name,
+                      }))}
+                      selectedId={selected ? String(selected) : null}
+                      onSelect={(t: ShopTxnListItem) => setSelected(t.id)}
+                      search={rawSearch}
+                      onSearchChange={setRawSearch}
+                      status={status}
+                      onStatusChange={setStatus}
+                      mechanicId={mechanicId}
+                      onMechanicChange={setMechanicId}
+                    />
+                  </div>
+
+                  {panelOpen ? (
+                    <aside
+                      aria-label="Payment detail"
+                      className="w-full min-w-0 rounded-2xl border border-border bg-card shadow-sm lg:w-2/5"
+                    >
+                      <PaymentDetailPanel
+                        detail={detail}
+                        loading={detail === undefined}
+                        onClose={() => setSelected(null)}
+                        onOpenStripe={() => void handleOpenStripe()}
+                        onRefunded={() => void stripe.refresh()}
+                      />
+                    </aside>
+                  ) : null}
+                </div>
+              </section>
+            </>
+          )}
         </>
       )}
-
-      {showDemoBookingActions ? (
-        <details className="rounded-3xl border border-amber-200 bg-amber-50/60 p-6 shadow-sm">
-          <summary className="cursor-pointer list-none">
-            <span className="text-xs font-medium uppercase tracking-[0.24em] text-amber-700">Dev Tools</span>
-            <span className="mt-1 block text-base font-semibold text-gray-900">Demo booking seeding</span>
-          </summary>
-          <p className="mt-3 text-sm text-gray-600">
-            Version 1 restores last week&apos;s dashboard seed distribution. Version 2 keeps the newer higher-volume booking spread.
-          </p>
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => void handleSeedDemoBookings("v1")}
-              disabled={seedAction !== null}
-              className="inline-flex items-center gap-2 rounded-full bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            >
-              {seedAction === "seed-v1" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Seed demo bookings 1
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleSeedDemoBookings("v2")}
-              disabled={seedAction !== null}
-              className="inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-            >
-              {seedAction === "seed-v2" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Seed demo bookings 2
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleClearDemoBookings()}
-              disabled={seedAction !== null}
-              className="inline-flex items-center gap-2 rounded-full border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 disabled:opacity-60"
-            >
-              {seedAction === "clear" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Clear demo bookings
-            </button>
-          </div>
-          {seedError ? (
-            <div className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {seedError}
-            </div>
-          ) : null}
-        </details>
-      ) : null}
     </div>
-  );
-}
-
-function StripeStatusPill({ ready, hasAccount }: { ready: boolean; hasAccount: boolean }) {
-  if (!hasAccount) {
-    return (
-      <span className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">
-        Stripe not connected
-      </span>
-    );
-  }
-  return (
-    <span
-      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${
-        ready
-          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-          : "border-amber-200 bg-amber-50 text-amber-800"
-      }`}
-    >
-      <CheckCircle2 className="h-3.5 w-3.5" />
-      {ready ? "Connected · Payouts enabled" : "Connected · Action needed"}
-    </span>
-  );
-}
-
-function EmptyState() {
-  return (
-    <section className="rounded-3xl border border-gray-200 bg-white p-10 text-center shadow-sm">
-      <h2 className="text-lg font-semibold text-gray-900">Connect Stripe to see payouts</h2>
-      <p className="mt-2 text-sm text-gray-500">
-        Once your Stripe Connect account is linked, this page will fill with live balance, payout history, and revenue analytics.
-      </p>
-      <Link
-        href="/settings"
-        className="mt-5 inline-flex items-center gap-2 rounded-full bg-blue-600 px-4 py-2 text-sm font-semibold text-white"
-      >
-        Open settings
-        <ArrowUpRight className="h-4 w-4" />
-      </Link>
-    </section>
   );
 }

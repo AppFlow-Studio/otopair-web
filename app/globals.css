@@ -34,11 +34,31 @@ body {
   --border: rgb(214, 218, 222);
   --input: rgb(214, 218, 222);
   --ring: rgb(82, 153, 254);
-  --chart-1: rgb(82, 153, 254);
-  --chart-2: rgb(20, 28, 36);
-  --chart-3: rgb(10, 126, 164);
-  --chart-4: rgb(104, 112, 118);
-  --chart-5: rgb(17, 24, 28);
+  /* Categorical chart palette.
+   *
+   * The previous values were --primary, two near-blacks and a grey: unusable
+   * as a categorical set (three of five sat below the chroma floor, and the
+   * two near-blacks were indistinguishable as adjacent marks). They had zero
+   * consumers, so redefining them costs nothing.
+   *
+   * Slot order is green → blue → amber → indigo → red rather than blue-first:
+   * with blue in slot 1 the amber/green adjacency lands at ΔE 7.9 under
+   * protanopia, which needs a secondary encoding. This order clears every
+   * adjacency check outright.
+   *
+   * Semantics, so charts across the app agree: 1 money/positive,
+   * 2 activity/volume, 3 attention/pending, 4 alternate series,
+   * 5 failure/refund/dispute.
+   *
+   * Deliberately NOT --primary for marks: rgb(82,153,254) measures 2.86:1 on
+   * a white card, below the 3:1 floor for a graphical object. */
+  --chart-1: rgb(5, 150, 105);
+  --chart-2: rgb(37, 99, 235);
+  --chart-3: rgb(217, 119, 6);
+  --chart-4: rgb(79, 70, 229);
+  --chart-5: rgb(220, 38, 38);
+  --chart-grid: rgb(241, 245, 249);
+  --chart-axis: rgb(156, 163, 175);
   --sidebar: rgb(255, 255, 255);
   --sidebar-foreground: rgb(17, 24, 28);
   --sidebar-primary: rgb(82, 153, 254);
@@ -96,6 +116,12 @@ body {
   --chart-3: rgb(20, 28, 36);
   --chart-4: rgb(155, 161, 166);
   --chart-5: rgb(236, 237, 238);
+  /* Defined so the vars are never undefined in dark. The dark chart-1..5 set
+   * above is NOT a validated categorical palette — the shop portal is
+   * light-only today, and picking dark mark colours needs measuring against
+   * the dark card surface, not translating the light ones. */
+  --chart-grid: rgb(52, 58, 64);
+  --chart-axis: rgb(155, 161, 166);
   --sidebar: rgb(20, 28, 36);
   --sidebar-foreground: rgb(236, 237, 238);
   --sidebar-primary: rgb(82, 153, 254);
@@ -178,6 +204,8 @@ body {
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  --color-chart-grid: var(--chart-grid);
+  --color-chart-axis: var(--chart-axis);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);

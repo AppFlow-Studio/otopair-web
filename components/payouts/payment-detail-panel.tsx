@@ -86,7 +86,11 @@ export function PaymentDetailPanel({
   }
 
   const p = detail.payment;
-  const receiptHref = p.receiptToken
+  // The merchant invoice, not /receipts/[bookingId] — that one is the
+  // customer's copy and computes its own fee figures. This is itemized,
+  // dual-branded, printable, and its money comes off the Stripe charge.
+  const invoiceHref = `/payouts/invoice/${String(p.id)}`;
+  const customerReceiptHref = p.receiptToken
     ? `/receipts/${String(p.bookingId)}?t=${p.receiptToken}`
     : `/receipts/${String(p.bookingId)}`;
 
@@ -139,13 +143,11 @@ export function PaymentDetailPanel({
         {/* Primary actions */}
         <div className="flex gap-2">
           <Link
-            href={receiptHref}
-            target="_blank"
-            rel="noopener noreferrer"
+            href={invoiceHref}
             className="inline-flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-primary text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             <FileText className="size-4" aria-hidden="true" />
-            View receipt
+            View invoice
           </Link>
           <Link
             href={`/bookings?id=${String(p.bookingId)}`}
@@ -155,6 +157,14 @@ export function PaymentDetailPanel({
             View booking
           </Link>
         </div>
+        <Link
+          href={customerReceiptHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="-mt-1 text-center text-xs font-medium text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+        >
+          See the customer&apos;s copy
+        </Link>
 
         <PaymentTimeline steps={detail.timeline} />
         <PaymentBreakdown detail={detail} />

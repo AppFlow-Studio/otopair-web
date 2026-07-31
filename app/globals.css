@@ -12,6 +12,36 @@ body {
   color: var(--destructive);
 }
 
+/* Merchant invoice printing (components/payouts/shop-invoice-document.tsx).
+ * "Download PDF" is the browser's own print-to-PDF rather than a second
+ * server-side PDF pipeline — no stored artifact to keep in sync with the
+ * payment it describes. Global rather than styled-jsx so it works regardless
+ * of how the sheet is mounted. */
+@media print {
+  body.invoice-printing * {
+    visibility: hidden;
+  }
+  body.invoice-printing .invoice-sheet,
+  body.invoice-printing .invoice-sheet * {
+    visibility: visible;
+  }
+  body.invoice-printing .invoice-sheet {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    max-width: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .no-print {
+    display: none !important;
+  }
+  @page {
+    margin: 16mm;
+  }
+}
+
 :root {
   --background: rgb(245, 245, 247);
   --foreground: rgb(17, 24, 28);

@@ -2805,6 +2805,34 @@ export default defineSchema({
     // it out — the last two timeline steps are not derivable without these.
     stripe_charge_id: v.optional(v.string()),
     stripe_balance_transaction_id: v.optional(v.string()),
+
+    // ---- Stripe settlement facts: what Stripe ACTUALLY moved. -------------
+    //
+    // These exist because our own pricing formulas do not agree with Stripe
+    // and cannot be used on a document a merchant relies on. invoices.ts
+    // computes the platform fee as 7% of the TOTAL with no floor, while
+    // finalizeAndChargeForBooking hands Stripe max(subtotal × 7%, $4.99) as
+    // application_fee_amount — on a small ticket those differ, and the old
+    // receipt then derived "tax" as whatever was left over, which made the
+    // tax line a plug rather than a tax.
+    //
+    // Everything below is read off the Charge (and its expanded
+    // balance_transaction / application_fee / transfer) so the invoice states
+    // what happened rather than what we predicted.
+    //
+    // NOTE on who pays what, for destination charges: Stripe's processing fee
+    // is debited from the PLATFORM's balance, and the connected account
+    // receives the transfer amount. So transfer_cents — not
+    // captured − application_fee − processing_fee — is what the shop got.
+    stripe_application_fee_cents: v.optional(v.number()),
+    stripe_processing_fee_cents: v.optional(v.number()),
+    stripe_transfer_cents: v.optional(v.number()),
+    /** Stripe's own hosted receipt for the charge. */
+    stripe_receipt_url: v.optional(v.string()),
+    stripe_settlement_currency: v.optional(v.string()),
+    /** When the settlement above was last read from Stripe. Absent = never
+     *  synced, and the invoice says so rather than showing blanks as zeroes. */
+    stripe_settlement_synced_at_ms: v.optional(v.number()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_user_id", ["user_id"])

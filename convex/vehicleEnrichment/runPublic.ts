@@ -16,6 +16,8 @@ import { internal, api } from "../_generated/api";
 import type { Doc } from "../_generated/dataModel";
 import { scrapeWheelSizeOptions } from "./utils/wheelSizeScraper";
 import { buildEngineKey } from "./types";
+import { coreSignature } from "./determinismGate";
+import { lastActivityMs, LIVE_WINDOW_MS, RUN_IN_PROGRESS_STATUSES } from "./runFence";
 
 const TEST_CLERK_ID = "user_39FwQkrjpFYGOQ0gkPIk1DEf0FW";
 const POLL_MS = 30_000;
@@ -239,6 +241,99 @@ export const refreshTireOptions = internalAction({
   },
 });
 
+/**
+ * Batch-8 audit collector — reads the CURRENT enriched state for a VIN with NO
+ * polling (go's 20-min poll loop exceeds the Convex action time limit and the
+ * CLI wrapper reports a bare "Error" even though enrichment finished server-
+ * side). Returns the fields an audit needs, incl. run errors so round-6
+ * `trans_fluid_corrected:*` / fitment refutations are visible.
+ * Usage: npx convex run vehicleEnrichment/runPublic:b8collect '{"vin":"..."}'
+ */
+export const b8collect = internalAction({
+  args: { vin: v.string() },
+  handler: async (ctx, args): Promise<any> => {
+    const vin = args.vin.toUpperCase().trim();
+    const vDoc: any = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleByVin, { vin });
+    if (!vDoc) return { vin, status: "no_vehicle" };
+    const vcId = vDoc.vehicle_config_id;
+    if (!vcId) return { vin, status: "no_config" };
+    const vc: any = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfigById, {
+      vehicleConfigId: vcId,
+    });
+    const eng: any = vDoc.engine_id
+      ? await ctx.runQuery(internal.vehicleEnrichment.v3queries.getEngine, { engineId: vDoc.engine_id })
+      : null;
+    const trans: any = vDoc.transmission_id
+      ? await ctx.runQuery(internal.vehicleEnrichment.v3queries.getTransmission, {
+          transmissionId: vDoc.transmission_id,
+        })
+      : null;
+    const dt: any = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getDrivetrainConfig, { vehicleConfigId: vcId });
+    const fits: any[] = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getPartFitments, { vehicleConfigId: vcId });
+    const parts: any[] = [];
+    for (const f of fits) {
+      const p: any = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getOemPartById, { partId: f.part_id });
+      parts.push({
+        role: p?.subcategory ?? null,
+        oem: p?.oem_part_number ?? null,
+        name: p?.name ?? null,
+        qty: f.quantity_needed ?? null,
+        sources: f.source_count ?? null,
+        // Round 11: carried so coreSignature can prefer unflagged rivals —
+        // a refute-demoted part must not read as "the" part for its role.
+        refute_flagged: f.refute_flagged === true,
+      });
+    }
+    const runs: any[] = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getEnrichmentRuns, { vehicleConfigId: vcId });
+    const run = runs.find((r: any) => r.status === "complete") ?? runs[0];
+    const assembled = {
+      engine: eng
+        ? {
+            code: eng.engine_code,
+            oil_viscosity: eng.oil_viscosity,
+            oil_capacity_qts: eng.oil_capacity_qts,
+            coolant_type: eng.coolant_type,
+            spark_plug_quantity: eng.spark_plug_quantity,
+            fuel: eng.fuel_type,
+          }
+        : null,
+      transmission: trans
+        ? { type: trans.transmission_type ?? trans.type, fluid: trans.fluid_type, speeds: trans.speeds }
+        : null,
+      drivetrain: dt?.drivetrain_type ?? vc?.drivetrain,
+      parts,
+    };
+    return {
+      vin,
+      vehicle: `${vc?.year ?? ""} ${vc?.config_key ?? ""}`,
+      config_key: vc?.config_key,
+      transmission_id: vDoc.transmission_id ?? null,
+      status: vc?.enrichment_status,
+      // Determinism-gate signature (P5): stable, normalized fingerprint of the
+      // enriched config so N runs of one VIN can be diffed via compareSignatures.
+      core_signature: coreSignature(assembled),
+      fill_rate: vc?.fill_rate,
+      engine: eng
+        ? {
+            code: eng.engine_code,
+            oil_viscosity: eng.oil_viscosity,
+            oil_capacity_qts: eng.oil_capacity_qts,
+            coolant_type: eng.coolant_type,
+            spark_plug_quantity: eng.spark_plug_quantity,
+            fuel: eng.fuel_type,
+          }
+        : null,
+      transmission: trans
+        ? { type: trans.transmission_type ?? trans.type, fluid: trans.fluid_type, speeds: trans.speeds }
+        : null,
+      drivetrain: dt?.drivetrain_type ?? vc?.drivetrain,
+      parts,
+      run_errors: run?.errors ?? [],
+      run_status: run?.status ?? null,
+    };
+  },
+});
+
 /** Insert a minimal user row for the test Clerk ID. */
 /** Purge all enrichment data for a VIN and re-run from scratch. */
 export const purgeAndRerun = internalAction({
@@ -273,7 +368,35 @@ export const purgeAndRerun = internalAction({
         displacement: decoded.displacement ?? "",
       });
       config = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfigByKey, { configKey });
-      if (!config) return { status: "error", reason: "no_config_found", configKey };
+      if (!config) {
+        // BATCH11: nothing to purge is not an error — a VIN that never got a
+        // config just needs the fresh enrichment it was asking for.
+        console.log(`[purge] No config for ${vin} (key=${configKey}) — running fresh enrichment`);
+        return await ctx.runAction(internal.vehicleEnrichment.runPublic.go, { vin });
+      }
+    }
+
+    // Live-chain guard (F7): purging deletes the run rows a live poll chain
+    // is keyed on — the chain's next tick would then rebuild/finalize over
+    // the fresh run (the write fence aborts it, but only because the row is
+    // gone; a LIVE chain deserves refusal, not a silent kill mid-batch).
+    // Stale in-progress runs are marked failed first so the fence retires
+    // their chain, then the purge proceeds.
+    const latestRun: any = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+      { vehicleConfigId: config._id },
+    );
+    if (latestRun && RUN_IN_PROGRESS_STATUSES.includes(latestRun.status)) {
+      if (Date.now() - lastActivityMs(latestRun) < LIVE_WINDOW_MS) {
+        console.warn(`[purge] REFUSED: live run ${latestRun._id} (${latestRun.status}) on ${(config as any).config_key}`);
+        return { status: "refused_live_run", runId: latestRun._id };
+      }
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+        run_id: latestRun._id,
+        status: "failed",
+        errors: ["superseded_by_purge"],
+        completed_at: Date.now(),
+      });
     }
 
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.purgeVehicleConfig, {

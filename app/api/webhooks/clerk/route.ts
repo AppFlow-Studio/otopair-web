@@ -41,6 +41,30 @@ export async function POST(req: NextRequest) {
       ) ?? phone_numbers?.[0];
       const primaryPhone = primaryPhoneObj?.phone_number;
 
+      // Signup method + verification/username — Clerk sends these on evt.data
+      // but they aren't on the narrow SDK type, so read them defensively.
+      // external OAuth wins (oauth_google / oauth_apple / …), else a password
+      // account, else a phone-only signup. providerLabel() already maps these.
+      const data = evt.data as unknown as {
+        external_accounts?: { provider?: string }[];
+        password_enabled?: boolean;
+        username?: string | null;
+      };
+      const externalProvider = data.external_accounts?.[0]?.provider;
+      const authProvider = externalProvider
+        ? String(externalProvider)
+        : data.password_enabled
+          ? "password"
+          : primaryPhone
+            ? "phone"
+            : undefined;
+      const emailConfirmed =
+        (primaryEmailObj as { verification?: { status?: string } } | undefined)
+          ?.verification?.status === "verified";
+      const phoneVerified =
+        (primaryPhoneObj as { verification?: { status?: string } } | undefined)
+          ?.verification?.status === "verified";
+
       await fetchMutation(api.users.upsertFromClerk, {
         clerkUserId: id,
         email: primaryEmail,
@@ -49,6 +73,10 @@ export async function POST(req: NextRequest) {
         last_name: last_name ?? undefined,
         profile_photo_url: image_url ?? undefined,
         role,
+        authProvider,
+        emailConfirmed,
+        phoneVerified,
+        username: data.username ?? undefined,
       });
 
       // If this event has an invitation token, attempt to accept the invitation.

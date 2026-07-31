@@ -64,6 +64,10 @@ describe("upsertPartAndFitment write-time guard", () => {
     const res = await t.mutation(upsert, {
       ...baseArgs(alfaMake, configId),
       oem_part_number: "68318394AA",
+      // Role-consistent name: the round-12 identity gate runs first and would
+      // (correctly) reject a "Front Brake Pad" name in the battery slot — this
+      // test must reach the make-id guard specifically.
+      name: "Battery",
       subcategory: "battery",
       service_type: "battery_replacement",
     });
@@ -91,6 +95,7 @@ describe("upsertPartAndFitment write-time guard", () => {
     const res = await t.mutation(upsert, {
       ...baseArgs(alfaMake, configId),
       oem_part_number: "BAGM-94RH7-800",
+      name: "Battery", // role-consistent (see cross-make test note)
       subcategory: "battery",
       service_type: "battery_replacement",
     });
@@ -182,6 +187,147 @@ describe("upsertPartAndFitment write-time guard", () => {
       "moparonlineparts.com",
     ]);
     expect(fitments[0].source_count).toBe(3);
+  });
+});
+
+describe("role-identity gate (round 12 — the Equinox 84257919 cable-as-battery class)", () => {
+  async function seedChevy(t: ReturnType<typeof makeT>) {
+    return t.run(async (ctx) => {
+      const gmMake = await ctx.db.insert("makes", { name: "Chevrolet" } as any);
+      const modelId = await ctx.db.insert("models", { make_id: gmMake, name: "Equinox" } as any);
+      const configId = await ctx.db.insert("vehicle_configs", {
+        config_key: `2024_chevrolet_equinox_${Date.now()}`,
+        year: 2024,
+        make_id: gmMake,
+        model_id: modelId,
+      } as any);
+      return { gmMake, configId };
+    });
+  }
+
+  const batteryArgs = (makeId: any, configId: any) => ({
+    oem_part_number: "84257919", // genuine 8-digit GM number — passes every legacy gate
+    name: "Battery",
+    category: "electrical",
+    subcategory: "battery",
+    make_id: makeId,
+    vehicle_config_id: configId,
+    service_type: "battery_replacement",
+    quantity_needed: 1,
+    confidence: 0.9,
+    source_domain: "g.oempartsonline.com",
+  });
+
+  test("a fitment-correct CABLE titled as such is rejected from the battery role", async () => {
+    const t = makeT();
+    const { gmMake, configId } = await seedChevy(t);
+
+    const res = await t.mutation(upsert, {
+      ...batteryArgs(gmMake, configId),
+      observed_title: "Battery Cable / Ground Extension",
+    });
+
+    expect((res as any).rejected).toBe("role_identity");
+    expect(res.part_id).toBeNull();
+    // Rejected BEFORE any row is created — no part, no fitment.
+    expect(await t.run((ctx) => ctx.db.query("oem_parts").collect())).toHaveLength(0);
+    expect(await t.run((ctx) => ctx.db.query("part_fitments").collect())).toHaveLength(0);
+  });
+
+  test("a real battery title writes and persists scraped_name evidence", async () => {
+    const t = makeT();
+    const { gmMake, configId } = await seedChevy(t);
+
+    const res = await t.mutation(upsert, {
+      ...batteryArgs(gmMake, configId),
+      observed_title: "ACDelco Gold 47AGM Battery",
+    });
+
+    expect((res as any).rejected).toBeUndefined();
+    const parts = await t.run((ctx) => ctx.db.query("oem_parts").collect());
+    expect(parts).toHaveLength(1);
+    expect((parts[0] as any).scraped_name).toBe("ACDelco Gold 47AGM Battery");
+    // A later titleless re-confirm must NOT clobber the stored evidence.
+    await t.mutation(upsert, batteryArgs(gmMake, configId));
+    const after = await t.run((ctx) => ctx.db.query("oem_parts").collect());
+    expect((after[0] as any).scraped_name).toBe("ACDelco Gold 47AGM Battery");
+  });
+
+  test("round-11 superset regression: a telematics battery NAME still rejects without a title", async () => {
+    const t = makeT();
+    const { gmMake, configId } = await seedChevy(t);
+
+    const res = await t.mutation(upsert, {
+      ...batteryArgs(gmMake, configId),
+      name: "Telematics Battery", // legacy path: no observed_title, name carries the evidence
+    });
+
+    expect((res as any).rejected).toBe("role_identity");
+  });
+
+  test("generic role-label names pass (legacy callers unaffected)", async () => {
+    const t = makeT();
+    const { gmMake, configId } = await seedChevy(t);
+    const res = await t.mutation(upsert, batteryArgs(gmMake, configId));
+    expect((res as any).rejected).toBeUndefined();
+    expect(res.part_id).not.toBeNull();
+  });
+
+  test("round 12b: a role_identity-contested number cannot re-enter on a COMPOSED title", async () => {
+    // Live purge+re-run finding: Batch-2 echoed a fabricated title ("Battery —
+    // Equinox 1.5l Primary (Labeled 84257919)") that asserted battery-ness,
+    // passed the lexicon, overwrote the sweep's adjudicated evidence, and let
+    // the cable back into the role. The stored-evidence gate must reject on
+    // the ADJUDICATED title and must not let the caller overwrite it.
+    const t = makeT();
+    const { gmMake, configId } = await seedChevy(t);
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert("oem_parts", {
+        oem_part_number: "84257919",
+        oem_part_number_normalized: "84257919",
+        name: "Battery",
+        make_id: gmMake,
+        is_current: true,
+        scraped_name: "Negative Battery Extension Cable 84257919", // adjudicated evidence
+      } as any);
+      await ctx.db.insert("refuted_fitments", {
+        vehicle_config_id: configId,
+        oem_part_number_normalized: "84257919",
+        service_type: "battery_replacement",
+        mode: "flag",
+        reason: "role_identity: Negative Battery Cable",
+        refuted_at: Date.now(),
+      } as any);
+    });
+
+    const res = await t.mutation(upsert, {
+      ...batteryArgs(gmMake, configId),
+      observed_title: "Battery — Equinox 1.5l Primary (Labeled 84257919)", // composed echo
+    });
+
+    expect((res as any).rejected).toBe("role_identity");
+    const part = await t.run(async (ctx) => (await ctx.db.query("oem_parts").collect())[0]);
+    expect((part as any).scraped_name).toBe("Negative Battery Extension Cable 84257919");
+    expect(await t.run((ctx) => ctx.db.query("part_fitments").collect())).toHaveLength(0);
+  });
+
+  test("flag-mode roles never hard-reject at the write boundary (thermostat gasket)", async () => {
+    const t = makeT();
+    const { gmMake, configId } = await seedChevy(t);
+
+    const res = await t.mutation(upsert, {
+      ...batteryArgs(gmMake, configId),
+      oem_part_number: "12693541",
+      name: "Thermostat",
+      category: "cooling",
+      subcategory: "thermostat",
+      service_type: "coolant_flush",
+      observed_title: "Thermostat Gasket", // block hit, but thermostat is mode "flag"
+    });
+
+    expect((res as any).rejected).toBeUndefined();
+    expect(res.part_id).not.toBeNull();
   });
 });
 

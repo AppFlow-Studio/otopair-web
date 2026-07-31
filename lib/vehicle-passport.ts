@@ -77,6 +77,13 @@ export type VehiclePassportBrakes = {
   rear_pad_mm?: number | null;
   rotor_condition?: RotorCondition | null;
   rotor_thickness?: RotorThicknessMeasurements | null;
+  /** OEM DISCARD minimum per axle (mm) — the replace-at figure, not the new
+   *  thickness. Null ⇒ the reading is recorded but not graded. */
+  rotor_min_front_mm?: number | null;
+  rotor_min_rear_mm?: number | null;
+  rotor_min_quality_front?: string | null;
+  rotor_min_quality_rear?: string | null;
+  rotor_min_source_url?: string | null;
 };
 
 export type VehiclePassportInspection = {

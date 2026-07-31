@@ -26,6 +26,8 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { requireDirector } from "../directorGate";
+import { metaMakeModel } from "../lib/bookingEnrichment";
+import { summarizeOtoActions, resolveBookingOutcome } from "../lib/otoActivity";
 
 /** "2019 BMW M550i"-style display for a conversation's anchored vehicle.
  *  Mirrors the ymm-walk in director.userDetail. Null when the conversation
@@ -37,20 +39,30 @@ async function vehicleDisplay(
   if (!vehicleId) return null;
   const vehicle = await ctx.db.get(vehicleId);
   if (!vehicle) return null;
+  let make = "";
+  let model = "";
+  let trimName = "";
   if (vehicle.trim_id) {
     const trim = await ctx.db.get(vehicle.trim_id);
     if (trim) {
-      const model = await ctx.db.get(trim.model_id);
-      if (model) {
-        const make = await ctx.db.get(model.make_id);
-        const ymm = [vehicle.year, make?.name, model.name, trim.name]
-          .filter(Boolean)
-          .join(" ");
-        if (ymm) return ymm;
+      trimName = trim.name ?? "";
+      const modelDoc = await ctx.db.get(trim.model_id);
+      if (modelDoc) {
+        model = modelDoc.name ?? "";
+        const makeDoc = await ctx.db.get(modelDoc.make_id);
+        if (makeDoc) make = makeDoc.name ?? "";
       }
     }
   }
-  return vehicle.year ? String(vehicle.year) : vehicle.vin ?? null;
+  // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+  if (!make || !model) {
+    const meta = metaMakeModel(vehicle.metadata);
+    if (!make) make = meta.make;
+    if (!model) model = meta.model;
+    if (!trimName) trimName = meta.trim;
+  }
+  const ymm = [vehicle.year, make, model, trimName].filter(Boolean).join(" ");
+  return ymm || (vehicle.year ? String(vehicle.year) : vehicle.vin ?? null);
 }
 
 function isSim(c: Doc<"ai_conversations">): boolean {
@@ -165,6 +177,8 @@ export const getConversationDebug = query({
   handler: async (ctx, { token, conversationId }) => {
     await requireDirector(ctx, token);
 
+    const convo = await ctx.db.get(conversationId);
+
     const audit = await ctx.db
       .query("conversation_audit")
       .withIndex("by_conversation_turn", (q) =>
@@ -185,7 +199,15 @@ export const getConversationDebug = query({
       .collect();
     telemetry.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
 
+    // Human "what Oto did" timeline + booking outcome, shared with ops /oto-ai.
+    const actions = summarizeOtoActions(audit, telemetry);
+    const bookingOutcome = convo
+      ? await resolveBookingOutcome(ctx, convo, actions)
+      : ({ state: "none" } as const);
+
     return {
+      actions,
+      bookingOutcome,
       audit: audit.map((a) => ({
         _id: a._id,
         turn_number: a.turn_number,

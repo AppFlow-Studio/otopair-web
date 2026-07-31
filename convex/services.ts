@@ -51,7 +51,12 @@ import { partFitsConfigMake } from "./partSelector";
 export const list = query({
   args: {},
   handler: async (ctx) => {
-    const services = await ctx.db.query("services").collect();
+    // Dataset-only rows (is_bookable === false, e.g. serpentine_belt) exist so
+    // enrichment data has a service_id to land on — they are never offered and
+    // never surface in any service menu. Undefined = bookable (legacy rows).
+    const services = (await ctx.db.query("services").collect()).filter(
+      (s) => s.is_bookable !== false,
+    );
     return await Promise.all(
       services.map(async (service) => {
         const serviceCategory = service.service_category_id
@@ -123,7 +128,11 @@ export const listForVehicle = query({
       }
     }
 
-    const all = await ctx.db.query("services").collect();
+    // Dataset-only rows (is_bookable === false) never surface — a mechanic
+    // can't recommend a service the platform doesn't offer.
+    const all = (await ctx.db.query("services").collect()).filter(
+      (s) => s.is_bookable !== false,
+    );
     const filtered = needle
       ? all.filter((s) => {
           const name = (s.name ?? "").toLowerCase();
@@ -355,6 +364,10 @@ export const listBookableForVehicle = query({
     for (const service of services) {
       const slug = service.slug;
       if (!slug) continue;
+      // Dataset-only services (is_bookable === false, seeded by
+      // seeds/seedServices.ts seedDatasetServices) hold enrichment data for
+      // services we do NOT offer — never bookable, never rendered.
+      if (service.is_bookable === false) continue;
       const sid = String(service._id);
 
       // Applicability: owner override wins; else engine default; else applicable.

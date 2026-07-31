@@ -46,6 +46,18 @@ export function isNhtsaDescriptor(engineCode: string): boolean {
   // Generic placeholders
   if (lower === "unknown" || lower === "n/a" || lower === "none" || lower === "null") return true;
 
+  // Round 10 (batch-11 Crosstrek): "NA" — an aspiration descriptor read as a
+  // code by the decode fallback — keyed a config as `..._limited_na`. Reject
+  // aspiration/architecture tokens outright; none is ever an OEM code.
+  if (
+    lower === "na" || lower === "turbo" || lower === "turbocharged" ||
+    lower === "supercharged" || lower === "dohc" || lower === "sohc" ||
+    lower === "ohv" || lower === "gdi" || lower === "mpi" ||
+    lower === "hybrid" || lower === "diesel" ||
+    lower === "i4" || lower === "v6" || lower === "v8" || lower === "h4" ||
+    lower === "boxer"
+  ) return true;
+
   // Known VDB placeholder values
   if (lower === "stden") return true;
 
@@ -70,16 +82,20 @@ const SYSTEM = `You are an automotive engineering expert. Given a vehicle descri
 Rules:
 - Search the web for the engine code — do NOT answer from memory alone. Prefer manufacturer catalogs, parts catalogs (AMSOIL lookup, RockAuto, OEM parts sites), or the maker's own engine-family documentation.
 - The code must match the given displacement and cylinder count. A code for a different engine in the same lineup is WRONG (e.g. the 1.6T code on a 2.0 MPI car).
-- Respond with ONLY a JSON object on one line: {"code": "<OEM code>", "evidence_url": "<url that ties this code to this exact vehicle+displacement>"}
-- If you cannot find a code tied to this exact vehicle and displacement by a source, respond exactly: {"code": "unknown"}`;
+- **The code must also match the vehicle's MODEL YEAR / GENERATION.** A maker often uses a NEW engine code for the same displacement when a model is redesigned. The previous-generation engine shares the litres and the nameplate but is a DIFFERENT engine and a DIFFERENT code — do NOT return it for a later model year. Example: the 2013+ Nissan Sentra (B17) 1.8L is the **MRA8DE**; the earlier **MR18DE** 1.8L is the prior generation and is WRONG for a 2013. Confirm the code's production years INCLUDE this vehicle's model year.
+- Respond with ONLY a JSON object on one line: {"code": "<OEM code>", "evidence_url": "<url that ties this code to this exact vehicle+displacement+year>"}
+- If you cannot find a code tied to this exact vehicle, displacement, AND model year by a source, respond exactly: {"code": "unknown"}`;
 
 const VERIFY_SYSTEM = `You are an automotive fact-checker. You will be given a vehicle and a claimed OEM engine code. Search the web and try to REFUTE the claim.
 
-The claim is WRONG if the code belongs to a different displacement, different engine family, or a different model — even from the same manufacturer. Codes fabricated to look plausible (right format, wrong engine) are the failure mode you are hunting.
+The claim is WRONG if the code belongs to:
+- a different displacement, different engine family, or a different model — even from the same manufacturer;
+- **a different GENERATION / model-year range of the SAME model.** This is the sneakiest case: the code shares the displacement AND the nameplate but belongs to the previous (or next) generation — its production years do NOT include this vehicle's model year. Example: MR18DE on a 2013 Sentra (that generation uses the MRA8DE; MR18DE is the older B16 engine).
+Codes fabricated to look plausible (right format, wrong engine) — or right-displacement-but-wrong-generation — are the failure mode you are hunting. Always check the code's production YEAR RANGE against this vehicle's model year.
 
 Respond with ONLY a JSON object on one line:
 {"verdict": "confirmed" | "refuted" | "uncertain", "reason": "<one short sentence>"}
-Default to "uncertain" when the evidence is thin — do not confirm without a source tying the code to this exact vehicle AND displacement.`;
+Default to "uncertain" when the evidence is thin — do not confirm without a source tying the code to this exact vehicle, displacement, AND model year.`;
 
 function parseJsonLine(text: string): any | null {
   const match = text.match(/\{[\s\S]*\}/);
@@ -110,7 +126,7 @@ async function callWithSearch(system: string, user: string): Promise<string> {
  * hallucinated codes (CZDA on an Atlas VR6, nonexistent "ERG" on a Durango,
  * G4FJ on a 2.0 MPI Soul) flowing into config keys and extraction prompts.
  */
-async function verifyEngineCode(
+export async function verifyEngineCode(
   code: string,
   year: number,
   make: string,
@@ -158,10 +174,16 @@ export async function resolveEngineCode(
   cylinders: number,
   fuelType: string,
   rawEngineCode: string,
+  opts?: {
+    /** Round 10: resolve even when the raw code looks like a real OEM code —
+     *  used after an adversarial verification REFUTED the decoder's code
+     *  (batch-11 Equinox: vPIC returned the 2025 RPO "LSD" on a 2024 VIN). */
+    forceResolve?: boolean;
+  },
 ): Promise<{ engineCode: string; source: "passthrough" | "verified" | "unverified" | "unknown" }> {
 
   // Already a clean OEM code — pass through
-  if (!isNhtsaDescriptor(rawEngineCode)) {
+  if (!isNhtsaDescriptor(rawEngineCode) && !opts?.forceResolve) {
     return { engineCode: rawEngineCode, source: "passthrough" };
   }
 

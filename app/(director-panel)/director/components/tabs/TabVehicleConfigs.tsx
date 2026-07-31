@@ -218,6 +218,110 @@ const SpecsBlock = ({ title, rows, empty }: { title: string; rows: [string, unkn
 }
 
 // ---------------------------------------------------------------------------
+// OEM rotor minimum thickness.
+//
+// Deliberately NOT folded into SpecsBlock: that helper hides empty rows, and a
+// MISSING minimum is the thing we most need visible — it's what tells the
+// director this vehicle grades ungraded in the bay. Minimum and nominal are
+// always shown apart and captioned, because a nominal ("330x22mm" → 22) read as
+// a minimum makes healthy rotors read "Below min" and has us recommending brake
+// jobs that aren't needed.
+// ---------------------------------------------------------------------------
+
+type RotorSpecs = {
+  frontMinMm: number | null
+  rearMinMm: number | null
+  frontNominalMm: number | null
+  rearNominalMm: number | null
+  frontQuality: string | null
+  rearQuality: string | null
+  sourceUrl: string | null
+  observedLabel: string | null
+}
+
+const ROTOR_QUALITY_BADGE: Record<string, { tone: string; label: string; title: string }> = {
+  oem_spec:            { tone:'green',  label:'sourced',        title:'Read from a source that labelled it a minimum' },
+  mechanic_read:       { tone:'green',  label:'read off rotor', title:'A mechanic read the number cast on the rotor hat' },
+  director_verified:   { tone:'green',  label:'verified',       title:'A director confirmed this against a source link' },
+  derived_from_nominal:{ tone:'orange', label:'est.',           title:'Derived from the nominal — NOT an OEM minimum. Never auto-recommends replacement.' },
+  default_fallback:    { tone:'orange', label:'est.',           title:'Fallback estimate — NOT an OEM minimum.' },
+}
+
+const RotorAxleRow = ({ axle, minMm, nominalMm, quality }: {
+  axle: string; minMm: number | null; nominalMm: number | null; quality: string | null
+}) => {
+  const badge = quality ? ROTOR_QUALITY_BADGE[quality] : undefined
+  return (
+    <div style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:6, padding:'8px 10px' }}>
+      <div style={{ fontSize:10, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em', marginBottom:4 }}>{axle}</div>
+      {minMm != null ? (
+        <div style={{ display:'flex', alignItems:'center', gap:6, marginBottom:4 }}>
+          <span style={{ fontSize:14, fontWeight:600, color:'var(--slate-900)' }}>{minMm.toFixed(1)} mm</span>
+          {badge && <span title={badge.title}><Badge tone={badge.tone as never}>{badge.label}</Badge></span>}
+        </div>
+      ) : (
+        <div style={{ fontSize:12, color:'var(--amber-700, #b45309)', marginBottom:4 }}>
+          No OEM minimum on file
+        </div>
+      )}
+      <div style={{ fontSize:11, color:'var(--slate-500)' }}>
+        {nominalMm != null
+          ? <>New thickness {nominalMm.toFixed(1)} mm <span style={{ fontStyle:'italic' }}>— not a minimum</span></>
+          : <span style={{ color:'var(--slate-400)' }}>New thickness unknown</span>}
+      </div>
+    </div>
+  )
+}
+
+const RotorSpecsBlock = ({ rotor, onBackfill, busy }: {
+  rotor: RotorSpecs | null | undefined
+  onBackfill?: () => void
+  busy?: boolean
+}) => {
+  const r = rotor
+  const nothing = !r || (r.frontMinMm == null && r.rearMinMm == null &&
+    r.frontNominalMm == null && r.rearNominalMm == null)
+  return (
+    <div style={{ marginBottom:18 }}>
+      <SectionTitle label="Brakes — OEM rotor minimum" right={onBackfill && (
+        <Button size="sm" variant="secondary" disabled={busy} onClick={onBackfill}>
+          {busy ? 'Checking…' : 'Re-check cached page'}
+        </Button>
+      )} />
+      {nothing ? (
+        <div style={{ fontSize:12, color:'var(--slate-500)' }}>
+          No OEM rotor minimum on file. Rotor readings are recorded but{' '}
+          <strong>not graded</strong> in the inspection until one is supplied —
+          add it with a source link, or a mechanic can enter the number cast on
+          the rotor hat.
+        </div>
+      ) : (
+        <>
+          <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+            <RotorAxleRow axle="Front" minMm={r!.frontMinMm} nominalMm={r!.frontNominalMm} quality={r!.frontQuality} />
+            <RotorAxleRow axle="Rear"  minMm={r!.rearMinMm}  nominalMm={r!.rearNominalMm}  quality={r!.rearQuality} />
+          </div>
+          {(r!.observedLabel || r!.sourceUrl) && (
+            <div style={{ display:'flex', flexWrap:'wrap', alignItems:'center', gap:8, marginTop:6, fontSize:11, color:'var(--slate-500)' }}>
+              {r!.observedLabel && (
+                // Verbatim, so a director can tell a real minimum from a bare
+                // "Thickness" without opening the source.
+                <span>Read under label: <span className="mono" style={{ color:'var(--slate-700)' }}>&ldquo;{r!.observedLabel}&rdquo;</span></span>
+              )}
+              {r!.sourceUrl && (
+                <a href={r!.sourceUrl} target="_blank" rel="noreferrer" style={{ color:'var(--blue-700)' }}>
+                  {(() => { try { return new URL(r!.sourceUrl!).hostname } catch { return 'source' } })()}
+                </a>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Detail modal — every spec on a vehicle_config
 // ---------------------------------------------------------------------------
 
@@ -236,7 +340,50 @@ type ServiceIntervalRow = {
   confidence?: number
   verified?: boolean
   display?: string
+  dataQuality?: string | null
+  monthsSource?: string | null
 }
+
+type ManualRow = {
+  id: string
+  sourceUrl: string
+  domain: string
+  isOemDomain: boolean
+  docKind: string
+  pageCount?: number | null
+  fileBytes?: number | null
+  hasFile: boolean
+  failureReason?: string | null
+  attempts?: number | null
+  rejectedCount: number
+  fetchedAt: number
+  expiresAt?: number | null
+}
+
+const MANUAL_DOC_KIND_LABEL: Record<string, string> = {
+  owners_manual: "Owner's manual",
+  maintenance_schedule: 'Maintenance schedule',
+  warranty_guide: 'Warranty guide',
+}
+
+const fmtMb = (bytes?: number | null): string | null =>
+  bytes == null ? null : `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+
+/** Mirrors MANUAL_REJECTION_PREFIX / MANUAL_MAX_REJECTIONS in manualLibrary.ts.
+ *  A rejected-after-extraction row is NOT an ordinary failure: the PDF fetched
+ *  and uploaded fine and was only unmasked as the wrong document once the
+ *  extractor read it (the Forester that resolved a BRZ quick guide). Worth its
+ *  own label, because "download failed" and "we had the wrong book" lead a
+ *  director to completely different next steps. */
+const MANUAL_REJECTED_PREFIX = 'rejected_after_extraction'
+const MANUAL_MAX_REJECTIONS = 3
+const isWrongDocument = (m: ManualRow): boolean =>
+  !!m.failureReason?.startsWith(MANUAL_REJECTED_PREFIX)
+
+/** True when the manual library is what produced this interval — either the
+ *  whole row, or just its months (which carries its own provenance). */
+const fromManual = (r: ServiceIntervalRow): boolean =>
+  r.dataQuality === 'oem_manual' || r.monthsSource === 'oem_manual'
 
 type LaborTimeRow = {
   serviceName: string
@@ -480,10 +627,12 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   const reEnrichConfig     = useAction(api.directorConfigBackfills.reEnrichConfig)
   const backfillConfigParts = useAction(api.directorConfigBackfills.backfillConfigParts)
   const repriceConfigParts = useAction(api.directorConfigBackfills.repriceConfigParts)
+  const backfillRotorMinimums = useAction(api.directorConfigBackfills.backfillRotorMinimums)
   // Independent busy flags so one running backfill doesn't grey out the others.
   const [busyFull,   setBusyFull]   = useState(false)
   const [busyParts,  setBusyParts]  = useState(false)
   const [busyPrices, setBusyPrices] = useState(false)
+  const [busyRotorMin, setBusyRotorMin] = useState(false)
 
   // Refs + highlight state for scrolling from the action-row pill to the
   // matching Enrichment runs row.
@@ -583,6 +732,29 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     } catch (e) {
       setToast(`Reprice failed: ${(e as Error).message}`)
     } finally { setBusyPrices(false) }
+  }
+
+  // Re-parses the parts page ALREADY cached for this config with the
+  // label-aware parser. No scrape, no LLM, no spend — so it is safe to run
+  // freely. A page carrying only a nominal yields no minimum, by design.
+  const handleBackfillRotorMin = async () => {
+    if (!configId || busyRotorMin) return
+    setBusyRotorMin(true)
+    try {
+      const res = await backfillRotorMinimums({ id: configId, token: sessionToken }) as
+        { status?: string; message?: string; written?: number; hadCache?: boolean; outcomes?: string[] }
+      if (res?.status !== 'done') {
+        setToast(`Could not run: ${res?.message ?? res?.status ?? 'unknown'}.`)
+      } else if ((res.written ?? 0) > 0) {
+        setToast(`Rotor minimum backfilled — ${res.outcomes?.join(', ')}.`)
+      } else {
+        setToast(res.hadCache
+          ? 'No rotor minimum in the cached page (it likely publishes only the new thickness).'
+          : 'No cached parts page for this config — run a parts backfill first.')
+      }
+    } catch (e) {
+      setToast(`Rotor minimum backfill failed: ${(e as Error).message}`)
+    } finally { setBusyRotorMin(false) }
   }
 
   const ymmt = detail
@@ -705,6 +877,8 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                 ['Last enriched',         detail.chassisSpecs.last_enriched_at && fmtDate(detail.chassisSpecs.last_enriched_at)],
               ] : []} />
 
+              <RotorSpecsBlock rotor={detail.rotor} onBackfill={handleBackfillRotorMin} busy={busyRotorMin} />
+
               <TiresSection trim={detail.trimSpecs} />
 
               {/* Packages */}
@@ -736,7 +910,12 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
               {/* Service intervals */}
               {detail.serviceIntervals && detail.serviceIntervals.length > 0 && (
                 <div style={{ marginBottom:18 }}>
-                  <SectionTitle label={`OEM service intervals (${detail.serviceIntervals.length})`} />
+                  <SectionTitle
+                    label={`OEM service intervals (${detail.serviceIntervals.length})`}
+                    right={detail.manualBackedIntervals > 0
+                      ? <Badge tone="indigo">{detail.manualBackedIntervals} from manual</Badge>
+                      : undefined}
+                  />
                   <div style={{ border:'1px solid var(--slate-200)', borderRadius:8, overflow:'hidden' }}>
                     <div style={{ display:'grid', gridTemplateColumns:'1.6fr 90px 90px 100px 80px', padding:'8px 12px', background:'var(--slate-25)', borderBottom:'1px solid var(--slate-200)', fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
                       <span>Service</span>
@@ -752,11 +931,97 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                         borderBottom: i < detail.serviceIntervals.length - 1 ? '1px solid var(--slate-100)' : 'none',
                         fontSize:12, color:'var(--slate-700)',
                       }}>
-                        <span style={{ fontWeight:500, color:'var(--slate-900)' }}>{r.serviceName}</span>
+                        <span style={{ fontWeight:500, color:'var(--slate-900)', display:'flex', alignItems:'center', gap:6, minWidth:0 }}>
+                          <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.serviceName}</span>
+                          {fromManual(r) && (
+                            <span title={r.dataQuality === 'oem_manual'
+                              ? 'Extracted from the OEM manual PDF'
+                              : 'Months interval extracted from the OEM manual PDF'}>
+                              <Badge tone="indigo">manual</Badge>
+                            </span>
+                          )}
+                        </span>
                         <span className="mono" style={{ textAlign:'right' }}>{r.miles != null ? r.miles.toLocaleString() : '—'}</span>
                         <span className="mono" style={{ textAlign:'right' }}>{r.months ?? '—'}</span>
                         <span style={{ textAlign:'center' }}>{r.verified ? <Badge tone="green">✓</Badge> : <span style={{ color:'var(--slate-400)' }}>—</span>}</span>
                         <span className="mono" style={{ textAlign:'right' }}>{r.confidence != null ? r.confidence.toFixed(2) : '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* OEM manuals — the documents behind the "manual" interval rows
+                  above. Keyed by year/make/model, so this is the same library
+                  every config of this YMM shares. Failed lookups are listed on
+                  purpose: an empty intervals table plus "wrong document" here
+                  is a diagnosis, whereas silence is a mystery. */}
+              {detail.manuals && detail.manuals.length > 0 && (
+                <div style={{ marginBottom:18 }}>
+                  <SectionTitle
+                    label={`OEM manuals (${detail.manuals.length})`}
+                    right={(() => {
+                      // A rejected-after-extraction row still carries a file_id,
+                      // so hasFile alone would overcount it as usable.
+                      const usable = (detail.manuals as ManualRow[])
+                        .filter(m => m.hasFile && !isWrongDocument(m)).length
+                      return usable === 0
+                        ? <Badge tone="yellow">none usable</Badge>
+                        : <Badge tone="slate">{usable} usable</Badge>
+                    })()}
+                  />
+                  <div style={{ border:'1px solid var(--slate-200)', borderRadius:8, overflow:'hidden' }}>
+                    {(detail.manuals as ManualRow[]).map((m, i) => (
+                      <div key={m.id} style={{
+                        padding:'10px 12px',
+                        borderBottom: i < detail.manuals.length - 1 ? '1px solid var(--slate-100)' : 'none',
+                        background: m.hasFile && !isWrongDocument(m) ? 'transparent' : 'var(--slate-25)',
+                      }}>
+                        <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                          <span style={{ fontSize:12, fontWeight:600, color:'var(--slate-900)' }}>
+                            {MANUAL_DOC_KIND_LABEL[m.docKind] ?? m.docKind}
+                          </span>
+                          {m.isOemDomain
+                            ? <span title="Hosted on the manufacturer's own domain — the provenance tier that lets an extracted interval count as OEM-backed"><Badge tone="green">OEM domain</Badge></span>
+                            : <span title="Third-party mirror — usable, but not manufacturer-hosted"><Badge tone="slate">mirror</Badge></span>}
+                          {isWrongDocument(m)
+                            ? <span title="Downloaded and uploaded fine, but the extractor found it was not this vehicle's manual"><Badge tone="red">wrong document</Badge></span>
+                            : !m.hasFile && <Badge tone="yellow">not usable</Badge>}
+                          {m.rejectedCount > 0 && (
+                            <span title={m.rejectedCount >= MANUAL_MAX_REJECTIONS
+                              ? `Rejection limit reached (${m.rejectedCount}) — the library has stopped retrying this vehicle until the negative cache expires`
+                              : `${m.rejectedCount} URL(s) already tried and rejected, so a retry picks a different candidate`}>
+                              <Badge tone={m.rejectedCount >= MANUAL_MAX_REJECTIONS ? 'yellow' : 'slate'}>
+                                {m.rejectedCount} rejected{m.rejectedCount >= MANUAL_MAX_REJECTIONS ? ' · gave up' : ''}
+                              </Badge>
+                            </span>
+                          )}
+                        </div>
+
+                        <div style={{ marginTop:4, fontSize:11, color:'var(--slate-500)', display:'flex', gap:10, flexWrap:'wrap' }}>
+                          <span className="mono">{m.domain}</span>
+                          {m.pageCount != null && <span>{m.pageCount} pp</span>}
+                          {fmtMb(m.fileBytes) && <span>{fmtMb(m.fileBytes)}</span>}
+                          <span>fetched {fmtDate(m.fetchedAt)}</span>
+                          {m.attempts != null && m.attempts > 1 && <span>{m.attempts} attempts</span>}
+                        </div>
+
+                        {m.failureReason && (
+                          <div style={{ marginTop:6, fontSize:11, color:'var(--amber-700, #b45309)' }}>
+                            {m.failureReason}
+                          </div>
+                        )}
+
+                        <div style={{ marginTop:6 }}>
+                          <a
+                            href={m.sourceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            style={{ fontSize:11, color:'var(--indigo-600, #4f46e5)', wordBreak:'break-all' }}
+                          >
+                            {m.sourceUrl}
+                          </a>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1728,6 +1993,9 @@ type ConfigRow = {
   lastVerifiedAt?:   number
   verificationCount: number
   packagesCount:     number
+  rotorFrontMinMm:   number | null
+  rotorRearMinMm:    number | null
+  rotorMinEstimated: boolean
   vehicleCount:      number
   latestRunStatus?:  string
   latestRunAt?:      number
@@ -1797,6 +2065,7 @@ export const TabVehicleConfigs = () => {
             <th style={tableStyles.th}>Trans</th>
             <th style={tableStyles.th}>Chassis</th>
             <th style={tableStyles.th}>Enrichment</th>
+            <th style={tableStyles.th}>Rotor min</th>
             <th style={{ ...tableStyles.th, textAlign:'right' }}># VINs</th>
             <th style={{ ...tableStyles.th, textAlign:'right' }}># Packages</th>
             <th style={tableStyles.th}>Last enriched</th>
@@ -1804,9 +2073,9 @@ export const TabVehicleConfigs = () => {
           </tr></thead>
           <tbody>
             {configs === undefined
-              ? <tr><td colSpan={9} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>Loading…</td></tr>
+              ? <tr><td colSpan={10} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>Loading…</td></tr>
               : filtered.length === 0
-                ? <tr><td colSpan={9} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>No configs match.</td></tr>
+                ? <tr><td colSpan={10} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>No configs match.</td></tr>
                 : filtered.map(c => (
                   <tr key={String(c.id)} onClick={() => setOpenId(c.id)} style={{ cursor:'pointer' }}>
                     <td style={tableStyles.td}>
@@ -1828,6 +2097,21 @@ export const TabVehicleConfigs = () => {
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)', fontSize:12 }}>{c.transmissionType ?? '—'}</td>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)' }} className="mono">{c.chassisCode ?? '—'}</td>
                     <td style={tableStyles.td}>{enrichmentChip(c.enrichmentStatus, c.fillRate)}</td>
+                    <td style={{ ...tableStyles.td, fontSize:12 }} className="mono"
+                        title={c.rotorFrontMinMm == null && c.rotorRearMinMm == null
+                          ? 'No OEM rotor minimum — inspection records rotor readings but does not grade them'
+                          : 'front / rear OEM minimum (mm)'}>
+                      {c.rotorFrontMinMm == null && c.rotorRearMinMm == null
+                        ? <span style={{ color:'var(--slate-400)' }}>—</span>
+                        : <>
+                            <span style={{ color:'var(--slate-700)' }}>
+                              {c.rotorFrontMinMm != null ? c.rotorFrontMinMm.toFixed(1) : '—'}
+                              {' / '}
+                              {c.rotorRearMinMm != null ? c.rotorRearMinMm.toFixed(1) : '—'}
+                            </span>
+                            {c.rotorMinEstimated && <span style={{ display:'block', fontSize:10, color:'var(--amber-700, #b45309)' }}>est.</span>}
+                          </>}
+                    </td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} className="mono">{c.vehicleCount}</td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} className="mono">{c.packagesCount}</td>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)', fontSize:12 }}>

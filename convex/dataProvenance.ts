@@ -9,7 +9,10 @@
 // =============================================================================
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import type { QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { requireDirector, logAudit } from "./directorGate";
+import { carInfoFor } from "./dataOverview";
 
 // --- Authored return types (see dataOverview.ts header) -----------------------
 
@@ -183,6 +186,185 @@ export const setIncidentStatus = mutation({
       entity_id: String(id),
       action: `incident_${status}`,
       detail: `#${row.number} ${row.title}: ${row.status} → ${status} — ${reason.trim()}`,
+    });
+    return { ok: true };
+  },
+});
+
+// ─── affected-config membership ─────────────────────────────────────────────
+// data_incidents.affected_count/affected_entity_type is a bare number+type
+// pair (Incident #1's "38 vehicle_config" was never itemized). The rows below
+// give a declared incident an actual, workable list of vehicle_configs, each
+// independently trackable to "corrected" — with an audited who/when/why on
+// every add and every correction.
+
+/** A VIN (17 chars, exact match) or a vehicle_configs.config_key. Tries VIN
+ *  first since it's the identifier directors have on hand from an audit
+ *  report; falls back to config_key for configs with no vehicle row yet. */
+async function resolveConfigIdentifier(
+  ctx: QueryCtx,
+  raw: string,
+): Promise<Id<"vehicle_configs"> | null> {
+  const id = raw.trim();
+  if (!id) return null;
+  if (id.length === 17) {
+    const veh = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", id.toUpperCase()))
+      .first();
+    if (veh?.vehicle_config_id) return veh.vehicle_config_id;
+  }
+  const cfg = await ctx.db
+    .query("vehicle_configs")
+    .withIndex("by_config_key", (q) => q.eq("config_key", id))
+    .first();
+  return cfg?._id ?? null;
+}
+
+export const addAffectedConfigs = mutation({
+  args: {
+    token: v.string(),
+    reason: v.string(),
+    incidentId: v.id("data_incidents"),
+    // One VIN or config_key per entry — the UI splits a pasted list on
+    // newlines/commas before calling this.
+    identifiers: v.array(v.string()),
+  },
+  handler: async (ctx, { token, reason, incidentId, identifiers }): Promise<{
+    added: number; alreadyPresent: number; notFound: string[];
+  }> => {
+    const actor = await requireDirector(ctx, token, "data.write");
+    if (reason.trim().length < 4) throw new Error("A reason is required.");
+    const incident = await ctx.db.get(incidentId);
+    if (!incident) throw new Error("That incident no longer exists.");
+
+    let added = 0;
+    let alreadyPresent = 0;
+    const notFound: string[] = [];
+    const now = Date.now();
+    for (const raw of identifiers) {
+      if (!raw.trim()) continue;
+      const configId = await resolveConfigIdentifier(ctx, raw);
+      if (!configId) { notFound.push(raw.trim()); continue; }
+      const existing = await ctx.db
+        .query("data_incident_configs")
+        .withIndex("by_incident_config", (q) => q.eq("incident_id", incidentId).eq("vehicle_config_id", configId))
+        .first();
+      if (existing) { alreadyPresent++; continue; }
+      await ctx.db.insert("data_incident_configs", {
+        incident_id: incidentId,
+        vehicle_config_id: configId,
+        status: "open",
+        added_by: actor.name,
+        added_by_id: actor.userId,
+        added_at: now,
+      });
+      added++;
+    }
+
+    if (added > 0) {
+      const total = await ctx.db
+        .query("data_incident_configs")
+        .withIndex("by_incident", (q) => q.eq("incident_id", incidentId))
+        .collect();
+      await ctx.db.patch(incidentId, {
+        affected_count: total.length,
+        affected_entity_type: incident.affected_entity_type ?? "vehicle_config",
+      });
+    }
+
+    await logAudit(ctx, actor, {
+      entity_type: "data_incident",
+      entity_id: String(incidentId),
+      action: "configs_added",
+      detail: `#${incident.number} ${incident.title}: +${added} vehicle(s)` +
+        `${alreadyPresent ? `, ${alreadyPresent} already present` : ""}` +
+        `${notFound.length ? `, ${notFound.length} not found (${notFound.slice(0, 5).join(", ")}${notFound.length > 5 ? "…" : ""})` : ""}` +
+        ` — ${reason.trim()}`,
+    });
+    return { added, alreadyPresent, notFound };
+  },
+});
+
+export type AffectedConfigRow = {
+  id: string;
+  configId: string;
+  status: "open" | "corrected";
+  addedBy: string;
+  addedAt: number;
+  correctedBy: string | null;
+  correctedAt: number | null;
+  correctionNote: string | null;
+  configKey: string | null;
+  year: number | null;
+  make: string | null;
+  model: string | null;
+  trim: string | null;
+  engineLabel: string | null;
+  vin: string | null;
+};
+
+export const listAffectedConfigs = query({
+  args: { token: v.string(), incidentId: v.id("data_incidents") },
+  handler: async (ctx, { token, incidentId }): Promise<AffectedConfigRow[]> => {
+    await requireDirector(ctx, token);
+    const rows = await ctx.db
+      .query("data_incident_configs")
+      .withIndex("by_incident", (q) => q.eq("incident_id", incidentId))
+      .collect();
+    const out: AffectedConfigRow[] = await Promise.all(
+      rows.map(async (r) => {
+        const car = await carInfoFor(ctx, "vehicle_config", String(r.vehicle_config_id));
+        return {
+          id: String(r._id),
+          configId: String(r.vehicle_config_id),
+          status: r.status,
+          addedBy: r.added_by,
+          addedAt: r.added_at,
+          correctedBy: r.corrected_by ?? null,
+          correctedAt: r.corrected_at ?? null,
+          correctionNote: r.correction_note ?? null,
+          configKey: car.configKey,
+          year: car.year,
+          make: car.make,
+          model: car.model,
+          trim: car.trim,
+          engineLabel: car.engineLabel,
+          vin: car.vin,
+        };
+      }),
+    );
+    // Open first (the actual worklist), oldest-added first within each; corrected last.
+    return out.sort((a, b) =>
+      (a.status === b.status ? a.addedAt - b.addedAt : a.status === "open" ? -1 : 1));
+  },
+});
+
+export const setConfigCorrectionStatus = mutation({
+  args: {
+    token: v.string(),
+    reason: v.string(),
+    id: v.id("data_incident_configs"),
+    status: v.union(v.literal("open"), v.literal("corrected")),
+  },
+  handler: async (ctx, { token, reason, id, status }): Promise<{ ok: true }> => {
+    const actor = await requireDirector(ctx, token, "data.write");
+    if (reason.trim().length < 4) throw new Error("A reason is required.");
+    const row = await ctx.db.get(id);
+    if (!row) throw new Error("That vehicle is no longer on this incident.");
+    if (row.status === status) throw new Error(`Already ${status}.`);
+    await ctx.db.patch(id, {
+      status,
+      corrected_by: status === "corrected" ? actor.name : row.corrected_by,
+      corrected_by_id: status === "corrected" ? actor.userId : row.corrected_by_id,
+      corrected_at: status === "corrected" ? Date.now() : row.corrected_at,
+      correction_note: status === "corrected" ? reason.trim() : row.correction_note,
+    });
+    await logAudit(ctx, actor, {
+      entity_type: "data_incident_config",
+      entity_id: String(id),
+      action: status === "corrected" ? "marked_corrected" : "reopened",
+      detail: `vehicle_config ${row.vehicle_config_id}: ${row.status} → ${status} — ${reason.trim()}`,
     });
     return { ok: true };
   },

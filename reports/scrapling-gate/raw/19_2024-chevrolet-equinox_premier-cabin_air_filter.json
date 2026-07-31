@@ -1,0 +1,61 @@
+{
+  "key": "2024-chevrolet-equinox_premier-cabin_air_filter",
+  "url": "https://g.oempartsonline.com/oem-2024-chevrolet-equinox_premier-cabin_air_filter.html",
+  "legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2784,
+      "content_len": 349536,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3465
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 5499,
+      "content_len": 289395,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3398
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 830,
+      "content_len": 201016,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3474,
+      "content_len": 256222,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

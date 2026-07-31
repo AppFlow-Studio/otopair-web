@@ -21,13 +21,17 @@
  */
 
 import { v } from "convex/values";
-import { action, internalAction, internalMutation } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal, api } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { extractPriceFirecrawl } from "./vehicleEnrichment/firecrawl";
 import { priceAllSources } from "./vehicleEnrichment/priceReextract";
 import { UNVERIFIED_PRICE_TYPE } from "./lib/priceTypes";
 import { roleHasCapability, type Capability, type DirectorRole } from "./directorGate";
+import { buildCacheKey } from "./vehicleEnrichment/scraperQueries";
+import { resolveRotorMinimums, computeAxlesWithFitment } from "./vehicleEnrichment/utils/rotorSpecResource";
+import { validateRotorResolution } from "./vehicleEnrichment/validation/sanityChecks";
+import { reconcileClaims } from "./vehicleEnrichment/sourceAdapters/claimLedger";
 
 // ---------------------------------------------------------------------------
 // Audit-log writer (actions can't use ctx.db — go through a mutation).
@@ -91,6 +95,386 @@ async function requireDirector(
   }
   return { name: session.name, userId: session.userId };
 }
+
+// ---------------------------------------------------------------------------
+// 0. backfillRotorMinimums — deterministic re-parse of ALREADY-CACHED pages.
+//
+// The cheapest possible backfill: no scrape, no LLM, no spend. It re-reads the
+// parts markdown already on disk with the label-aware parser, so a page whose
+// minimum the extraction missed can still yield one. A page that only carries a
+// nominal produces NO minimum — that stays an honest gap.
+// ---------------------------------------------------------------------------
+
+export const _backfillRotorMinimumsRun = internalMutation({
+  args: {
+    id: v.id("vehicle_configs"),
+    /** When true, run the FULL resolver + validation pipeline but skip the
+     *  ctx.db.patch — the return value reports exactly what WOULD be written.
+     *  Used by backfillRotorMinimumsFleet's dry-run mode. */
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const cfg = await ctx.db.get(args.id);
+    if (!cfg) return { status: "not_found" as const };
+
+    const [makeRow, modelRow] = await Promise.all([
+      ctx.db.get(cfg.make_id),
+      ctx.db.get(cfg.model_id),
+    ]);
+    const cacheKey = buildCacheKey(
+      makeRow?.name ?? "",
+      modelRow?.name ?? "",
+      cfg.year,
+      "parts_catalog",
+      cfg.trim_name ?? "",
+    );
+    const cached = await ctx.db
+      .query("scrape_cache")
+      .withIndex("by_cache_key", (q) => q.eq("cache_key", cacheKey))
+      .first();
+
+    // Only axles that actually carry a rotor fitment are candidates; a drum
+    // axle must never be reported as a gap. Shared helper with the pipeline
+    // finalize so the two call sites can never disagree.
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.id))
+      .collect();
+    const fitParts = await Promise.all(fitments.map((f) => ctx.db.get(f.part_id)));
+    const axlesWithFitment = computeAxlesWithFitment(
+      fitParts.map((p) => ({ subcategory: p?.subcategory ?? null })),
+    );
+
+    // Aftermarket-catalogue minimums from the claim ledger, reconciled with the
+    // SAME deterministic function the pipeline uses so the two call sites can
+    // never disagree about what the evidence says.
+    //
+    // This is what makes rotor minimums healable WITHOUT a full re-enrich: the
+    // network work (gatherClaims) already happened and persisted, so this
+    // mutation only has to read and reconcile. A conflict_tie yields
+    // `value: null` and is therefore correctly absent — a tie must contribute
+    // nothing.
+    const claimRows = await ctx.db
+      .query("field_claims")
+      .withIndex("by_config", (q) => q.eq("vehicle_config_id", args.id))
+      .collect();
+    const catalogClaimFor = (axle: "front" | "rear") => {
+      const pick = (fieldKey: string) => {
+        const forField = claimRows.filter((c) => c.field_key === fieldKey);
+        if (forField.length === 0) return null;
+        const verdict = reconcileClaims(fieldKey, forField as any);
+        return verdict.value != null ? verdict : null;
+      };
+      const min = pick(`rotor_${axle}_min_thickness_mm`);
+      const nominal = pick(`rotor_${axle}_nominal_thickness_mm`);
+      if (!min && !nominal) return undefined;
+      return {
+        minMm: min?.value != null ? Number(min.value) : null,
+        nominalMm: nominal?.value != null ? Number(nominal.value) : null,
+        observedLabel: null,
+        sourceUrl: min?.source_urls?.[0] ?? nominal?.source_urls?.[0] ?? null,
+      };
+    };
+
+    const resolutions = resolveRotorMinimums({
+      markdown: cached?.markdown ?? null,
+      catalogClaims: {
+        front: catalogClaimFor("front"),
+        rear: catalogClaimFor("rear"),
+      },
+      existing: {
+        front: {
+          minMm: cfg.rotor_front_min_thickness_mm ?? null,
+          nominalMm: cfg.rotor_front_nominal_thickness_mm ?? null,
+          quality: cfg.rotor_front_min_quality ?? null,
+          observedLabel:
+            cfg.rotor_front_min_observed_label ?? cfg.rotor_min_observed_label ?? null,
+          sourceUrl: cfg.rotor_min_source_url ?? null,
+        },
+        rear: {
+          minMm: cfg.rotor_rear_min_thickness_mm ?? null,
+          nominalMm: cfg.rotor_rear_nominal_thickness_mm ?? null,
+          quality: cfg.rotor_rear_min_quality ?? null,
+          observedLabel:
+            cfg.rotor_rear_min_observed_label ?? cfg.rotor_min_observed_label ?? null,
+          sourceUrl: cfg.rotor_min_source_url ?? null,
+        },
+      },
+      naRoleKeys: (cfg.na_role_keys ?? []) as string[],
+      axlesWithFitment: axlesWithFitment.length ? axlesWithFitment : undefined,
+    });
+
+    // Same physics gate as the pipeline persist — the parser's guarantees plus
+    // range/impossibility/pairing checks. Previously this path wrote whatever
+    // the parser returned with zero validation.
+    const byAxle = Object.fromEntries(resolutions.map((r) => [r.axle, r])) as Partial<
+      Record<"front" | "rear", (typeof resolutions)[number]>
+    >;
+    const verdict = validateRotorResolution({
+      front: { minMm: byAxle.front?.minMm, nominalMm: byAxle.front?.nominalMm },
+      rear: { minMm: byAxle.rear?.minMm, nominalMm: byAxle.rear?.nominalMm },
+    });
+
+    // verified_fields still guards the write, so a director's or a mechanic's
+    // value can't be overwritten even if the resolver were wrong.
+    const verified = new Set(cfg.verified_fields ?? []);
+    const patch: Partial<Doc<"vehicle_configs">> = {};
+    const rejected: string[] = [];
+    for (const r of resolutions) {
+      if (!r.changed) continue;
+      const isFront = r.axle === "front";
+      const minCol = isFront
+        ? "rotor_front_min_thickness_mm"
+        : "rotor_rear_min_thickness_mm";
+      const nomCol = isFront
+        ? "rotor_front_nominal_thickness_mm"
+        : "rotor_rear_nominal_thickness_mm";
+      if (r.minMm != null && !verified.has(minCol)) {
+        const rejectReason = verdict.rejects[r.axle];
+        if (rejectReason) {
+          rejected.push(`${r.axle}:${rejectReason}`);
+        } else {
+          const flagReason = verdict.flags[r.axle];
+          const quality =
+            flagReason && (r.quality ?? "oem_spec") === "oem_spec"
+              ? "oem_spec_flagged"
+              : r.quality ?? "oem_spec";
+          patch[minCol] = r.minMm;
+          if (isFront) {
+            patch.rotor_front_min_quality = quality;
+            if (r.observedLabel) patch.rotor_front_min_observed_label = r.observedLabel;
+          } else {
+            patch.rotor_rear_min_quality = quality;
+            if (r.observedLabel) patch.rotor_rear_min_observed_label = r.observedLabel;
+          }
+        }
+      }
+      if (r.nominalMm != null && !verified.has(nomCol)) {
+        patch[nomCol] = r.nominalMm;
+      }
+    }
+    const dryRun = args.dryRun ?? false;
+    if (!dryRun && Object.keys(patch).length > 0) await ctx.db.patch(args.id, patch);
+
+    const patchKeys = Object.keys(patch);
+    const minsWritten = patchKeys.filter(
+      (k) => k === "rotor_front_min_thickness_mm" || k === "rotor_rear_min_thickness_mm",
+    ).length;
+    const nominalsWritten = patchKeys.filter(
+      (k) =>
+        k === "rotor_front_nominal_thickness_mm" ||
+        k === "rotor_rear_nominal_thickness_mm",
+    ).length;
+
+    return {
+      status: "ok" as const,
+      dryRun,
+      hadCache: !!cached?.markdown,
+      outcomes: resolutions.map((r) => `${r.axle}:${r.outcome}`),
+      // In dryRun these report what WOULD have been written (patch skipped).
+      written: patchKeys.length,
+      minsWritten,
+      nominalsWritten,
+      rejected,
+    };
+  },
+});
+
+/** Explicit, because the action calls a mutation in its OWN module and the
+ *  inferred type would otherwise be circular. */
+type RotorBackfillRun =
+  | { status: "not_found" }
+  | {
+      status: "ok";
+      dryRun: boolean;
+      hadCache: boolean;
+      outcomes: string[];
+      written: number;
+      minsWritten: number;
+      nominalsWritten: number;
+      rejected: string[];
+    };
+
+export const backfillRotorMinimums = action({
+  args: backfillArgs,
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    | { status: "not_found"; message: string }
+    | { status: "done"; hadCache: boolean; outcomes: string[]; written: number }
+  > => {
+    const actor = await requireDirector(ctx, args.token, "data.trigger");
+    const res = (await ctx.runMutation(
+      internal.directorConfigBackfills._backfillRotorMinimumsRun,
+      { id: args.id },
+    )) as RotorBackfillRun;
+    if (res.status === "not_found") {
+      return { status: "not_found" as const, message: "Vehicle config not found" };
+    }
+    await ctx.runMutation(internal.directorConfigBackfills._writeBackfillAudit, {
+      id: args.id,
+      actorName: actor.name,
+      actorId: actor.userId,
+      detail:
+        `Rotor minimum backfill (cached-page re-parse, no spend): ` +
+        `${res.outcomes.join(", ")}; ${res.written} column(s) written` +
+        (res.hadCache ? "" : "; NO cached parts page on file"),
+    });
+    return {
+      status: "done" as const,
+      hadCache: res.hadCache,
+      outcomes: res.outcomes,
+      written: res.written,
+    };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// 0b. backfillRotorMinimumsFleet — the per-config re-parse above, FLEET-WIDE.
+//
+// Paginates ALL vehicle_configs (100/page) and runs _backfillRotorMinimumsRun
+// on each — still no scrape, no LLM, no spend, and every write passes the same
+// verified_fields guard + validateRotorResolution physics gate. Follows the
+// self-continue pattern of vehicleEnrichment/backfills.ts:backfillPartPrices:
+// one page per action tick, accumulators threaded through the scheduled
+// continuation so the FINAL invocation logs fleet totals.
+//
+// Default is dryRun (resolver + validation run, NOTHING written — the run
+// mutation's dryRun flag skips the patch and reports what it WOULD write).
+//   npx convex run directorConfigBackfills:backfillRotorMinimumsFleet '{"dryRun":true}'
+//   npx convex run directorConfigBackfills:backfillRotorMinimumsFleet '{"dryRun":false}'
+// ---------------------------------------------------------------------------
+
+/** One page of vehicle_config ids — the run mutation re-reads everything else. */
+export const _vehicleConfigsPage = internalQuery({
+  args: { cursor: v.union(v.string(), v.null()), limit: v.number() },
+  handler: async (ctx, { cursor, limit }) => {
+    const res = await ctx.db
+      .query("vehicle_configs")
+      .paginate({ cursor, numItems: limit });
+    return {
+      ids: res.page.map((c) => c._id),
+      isDone: res.isDone,
+      cursor: res.continueCursor,
+    };
+  },
+});
+
+// Fleet accumulators, threaded through self-continued invocations so the last
+// page's summary is the whole-fleet total.
+const fleetAcc = v.object({
+  configsScanned: v.number(),
+  hadCache: v.number(),
+  written: v.number(),
+  minsWritten: v.number(),
+  nominalsWritten: v.number(),
+  rejects: v.number(),
+  rejectReasons: v.record(v.string(), v.number()),
+  outcomes: v.record(v.string(), v.number()),
+  /** Up to 10 config ids that gained (or would gain) a minimum — spot checks. */
+  gainedMinSamples: v.array(v.string()),
+  /** Up to 10 config ids that gained (or would gain) ONLY a nominal. */
+  gainedNominalSamples: v.array(v.string()),
+});
+
+type FleetAcc = {
+  configsScanned: number;
+  hadCache: number;
+  written: number;
+  minsWritten: number;
+  nominalsWritten: number;
+  rejects: number;
+  rejectReasons: Record<string, number>;
+  outcomes: Record<string, number>;
+  gainedMinSamples: string[];
+  gainedNominalSamples: string[];
+};
+
+type RotorFleetSummary = FleetAcc & {
+  batch: string;
+  dryRun: boolean;
+  isDone: boolean;
+  nextCursor: string | null;
+};
+
+export const backfillRotorMinimumsFleet = internalAction({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+    limit: v.optional(v.number()),
+    dryRun: v.optional(v.boolean()),
+    selfContinue: v.optional(v.boolean()),
+    batch: v.optional(v.string()),
+    acc: v.optional(fleetAcc),
+  },
+  handler: async (ctx, args): Promise<RotorFleetSummary> => {
+    const dryRun = args.dryRun ?? true; // safe default — pass false explicitly to write
+    const limit = args.limit ?? 100; // mutations are cheap; 100 configs per tick
+    const selfContinue = args.selfContinue ?? true;
+    const batch =
+      args.batch ?? `rotor_fleet_${dryRun ? "dryrun" : "live"}_${Date.now()}`;
+    const acc: FleetAcc = args.acc ?? {
+      configsScanned: 0,
+      hadCache: 0,
+      written: 0,
+      minsWritten: 0,
+      nominalsWritten: 0,
+      rejects: 0,
+      rejectReasons: {},
+      outcomes: {},
+      gainedMinSamples: [],
+      gainedNominalSamples: [],
+    };
+
+    const page = await ctx.runQuery(
+      internal.directorConfigBackfills._vehicleConfigsPage,
+      { cursor: args.cursor ?? null, limit },
+    );
+
+    for (const id of page.ids) {
+      const res = (await ctx.runMutation(
+        internal.directorConfigBackfills._backfillRotorMinimumsRun,
+        { id, dryRun },
+      )) as RotorBackfillRun;
+      acc.configsScanned++;
+      if (res.status !== "ok") continue; // config deleted mid-run — nothing to do
+      if (res.hadCache) acc.hadCache++;
+      acc.written += res.written;
+      acc.minsWritten += res.minsWritten;
+      acc.nominalsWritten += res.nominalsWritten;
+      acc.rejects += res.rejected.length;
+      for (const r of res.rejected) {
+        acc.rejectReasons[r] = (acc.rejectReasons[r] ?? 0) + 1;
+      }
+      for (const o of res.outcomes) {
+        acc.outcomes[o] = (acc.outcomes[o] ?? 0) + 1;
+      }
+      if (res.minsWritten > 0 && acc.gainedMinSamples.length < 10) {
+        acc.gainedMinSamples.push(String(id));
+      } else if (res.nominalsWritten > 0 && acc.gainedNominalSamples.length < 10) {
+        acc.gainedNominalSamples.push(String(id));
+      }
+    }
+
+    const summary: RotorFleetSummary = {
+      batch,
+      dryRun,
+      ...acc,
+      isDone: page.isDone,
+      nextCursor: page.isDone ? null : page.cursor,
+    };
+    console.log(`[rotor-fleet] ${JSON.stringify(summary)}`);
+
+    if (selfContinue && !page.isDone) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.directorConfigBackfills.backfillRotorMinimumsFleet,
+        { cursor: page.cursor, limit, dryRun, selfContinue, batch, acc },
+      );
+    }
+    return summary;
+  },
+});
 
 // ---------------------------------------------------------------------------
 // 1. reEnrichConfig — FULL re-enrich (force + writeScope="full")
@@ -192,6 +576,47 @@ export const backfillConfigParts = action({
     });
 
     return { status: "scheduled" as const, scope: "parts" as const };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// 2b. repairConfigRoles — round 12: fill EMPTY binding core roles in place
+// ---------------------------------------------------------------------------
+//
+// No purge, no re-run: detects missing binding core roles from live fitments
+// (the Crosstrek shipped rear-only brake data as "complete") and repairs them
+// via the state-based re-source loop — Tier-1 year-scoped storefront lookup,
+// Tier-2 verified research with a drum-brake not_applicable escape. Empty-fill
+// only; every write passes the blocklist/cross-make/role-identity chokepoints.
+// Fire-and-return like the other backfills; the internal action logs its own
+// summary and reconciles the run row via patchRunRoleHealth.
+
+export const repairConfigRoles = action({
+  args: backfillArgs,
+  handler: async (ctx, args) => {
+    const actor = await requireDirector(ctx, args.token, "data.trigger");
+    const resolved = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
+      { vehicleConfigId: args.id },
+    );
+    if (!resolved) {
+      return { status: "not_found" as const, message: "Vehicle config not found" };
+    }
+
+    await ctx.scheduler.runAfter(
+      0,
+      internal.vehicleEnrichment.resourceRoles.repairMissingRoles,
+      { vehicleConfigId: args.id },
+    );
+
+    await ctx.runMutation(internal.directorConfigBackfills._writeBackfillAudit, {
+      id: args.id,
+      actorName: actor.name,
+      actorId: actor.userId,
+      detail: `Role-completeness repair scheduled for ${resolved.year} ${resolved.make} ${resolved.model} ${resolved.trim}`.trim(),
+    });
+
+    return { status: "scheduled" as const, scope: "roles" as const };
   },
 });
 

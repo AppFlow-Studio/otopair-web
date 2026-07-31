@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  RevolutionParts product-sitemap slice. SYNTHETIC, unlike the partsdeal
+  fixtures: at capture time (Jul 30 2026) every RevolutionParts storefront
+  reachable from here answered /sitemap.xml with a Cloudflare 403 — including
+  toyota.oempartsonline.com, whose own robots.txt allows the path and links it.
+  The urls below therefore encode the platform GRAMMAR (dash-separated slug,
+  make first, part number with its dashes STRIPPED) rather than captured bytes,
+  and the same five verified Camry numbers are used so the two grammars can be
+  compared on identical input.
+
+  Last two entries are negatives: a slug ending in a model year, and a
+  vehicle-landing url with no part number at all.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<url><loc>https://toyota.oempartsonline.com/oem-parts/toyota-replaceable-element-04152yzza1</loc></url>
+<url><loc>https://toyota.oempartsonline.com/oem-parts/toyota-element-sub-assy-ai-178010p051</loc></url>
+<url><loc>https://toyota.oempartsonline.com/oem-parts/toyota-pad-kit-disc-brake-0446533471</loc></url>
+<url><loc>https://toyota.oempartsonline.com/oem-parts/toyota-plug-spark-9091901298</loc></url>
+<url><loc>https://toyota.oempartsonline.com/oem-parts/toyota-disc-fr-4351233150</loc></url>
+<url><loc>https://toyota.oempartsonline.com/oem-parts/toyota-plug-spark-iridium-9091901298</loc></url>
+<url><loc>https://toyota.oempartsonline.com/oem-parts/toyota-camry-2020</loc></url>
+<url><loc>https://toyota.oempartsonline.com/vehicles/toyota-camry</loc></url>
+</urlset>

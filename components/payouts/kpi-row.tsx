@@ -12,7 +12,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Sparkline } from "./charts";
 import { Skeleton, formatCount, formatMoneyDollars } from "./shared";
-import type { PayoutsOverview, RangeKey, ShopPaymentInsights } from "./types";
+import type { PayoutsOverview, ShopPaymentInsights } from "./types";
 
 type Kpi = {
   key: string;
@@ -78,12 +78,14 @@ function KpiSkeleton() {
 export function KpiRow({
   overview,
   insights,
-  range,
+  windowLabel,
   loading,
 }: {
   overview: PayoutsOverview | null;
   insights: ShopPaymentInsights | null | undefined;
-  range: RangeKey;
+  /** Human label for the active window, so a custom range doesn't render as
+   *  a meaningless "custom" on five cards. */
+  windowLabel: string;
   loading: boolean;
 }) {
   // A grid, not v0's horizontal snap-scroll: a scroller with no affordance
@@ -128,20 +130,20 @@ export function KpiRow({
     },
     {
       key: "net",
-      eyebrow: `Net revenue · ${range}`,
+      eyebrow: "Net revenue",
       value: netSeries.length ? formatMoneyDollars(netTotal) : "—",
-      caption: "After Stripe fees",
+      caption: `After Stripe fees · ${windowLabel}`,
       Icon: TrendingUp,
       accent: "bg-primary/10 text-primary",
       sparkline: netSeries.map((p) => p.net),
     },
     {
       key: "orders",
-      eyebrow: `Payments · ${range}`,
+      eyebrow: "Payments",
       value: formatCount(insights?.totals.txnCount ?? null),
       caption: insights
         ? `Avg ${formatMoneyDollars(insights.totals.avgTicketCents / 100)} per job`
-        : "Captured payments",
+        : `Captured · ${windowLabel}`,
       Icon: ShoppingBag,
       accent: "bg-muted text-foreground",
     },

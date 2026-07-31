@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { AlertTriangle, Download, Search, SearchX } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
+import { AlertTriangle, Search, SearchX } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -87,42 +87,6 @@ function FilterMenu({
   );
 }
 
-function toCsv(rows: ShopTxnListItem[]): string {
-  const head = [
-    "Date",
-    "Customer",
-    "Service",
-    "Vehicle",
-    "Mechanic",
-    "Status",
-    "Captured (USD)",
-    "Otopair fee (USD)",
-    "Refunded (USD)",
-    "Net to shop (USD)",
-    "Invoice",
-  ];
-  const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-  const cents = (c: number | null) => (c == null ? "" : (c / 100).toFixed(2));
-  const body = rows.map((r) =>
-    [
-      r.createdAtMs ? new Date(r.createdAtMs).toISOString() : "",
-      r.customerName,
-      r.serviceSummary ?? "",
-      r.vehicleYmm ?? "",
-      r.mechanicName ?? "",
-      r.displayStatus,
-      cents(r.capturedCents),
-      cents(r.platformFeeCents),
-      cents(r.refundedCents),
-      cents(r.netToShopCents),
-      r.invoiceNumber ?? "",
-    ]
-      .map(esc)
-      .join(","),
-  );
-  return [head.map(esc).join(","), ...body].join("\n");
-}
-
 export function TransactionsCard({
   result,
   loading,
@@ -135,6 +99,7 @@ export function TransactionsCard({
   onStatusChange,
   mechanicId,
   onMechanicChange,
+  exportSlot,
 }: {
   result: ShopTxnListResult | undefined;
   loading: boolean;
@@ -147,8 +112,10 @@ export function TransactionsCard({
   onStatusChange: (v: StatusPill) => void;
   mechanicId: string;
   onMechanicChange: (v: string) => void;
+  /** The export control is injected rather than built here — it needs the
+   *  window, insights and Stripe overview, none of which this card knows. */
+  exportSlot?: ReactNode;
 }) {
-  const [exported, setExported] = useState(false);
   const rows = result?.page ?? [];
 
   const mechanicOptions = useMemo(
@@ -166,18 +133,6 @@ export function TransactionsCard({
     onSearchChange("");
     onStatusChange("all");
     onMechanicChange("all");
-  }
-
-  function exportCsv() {
-    const blob = new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `otopair-payments-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setExported(true);
-    setTimeout(() => setExported(false), 2000);
   }
 
   return (
@@ -225,15 +180,7 @@ export function TransactionsCard({
             options={mechanicOptions}
             onChange={onMechanicChange}
           />
-          <button
-            type="button"
-            onClick={exportCsv}
-            disabled={rows.length === 0}
-            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-card px-3 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <Download className="size-4" aria-hidden="true" />
-            {exported ? "Downloaded" : "Export"}
-          </button>
+          {exportSlot}
         </div>
       </div>
 

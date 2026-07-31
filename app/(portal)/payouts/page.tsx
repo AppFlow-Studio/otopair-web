@@ -24,15 +24,20 @@ import {
   StripeStatusPill,
 } from "@/components/payouts/stripe-status-banner";
 import { SectionHeader } from "@/components/payouts/section-header";
+import { DateRangePicker } from "@/components/payouts/date-range-picker";
+import { ExportMenu } from "@/components/payouts/export-menu";
 import {
   Skeleton,
   formatRelative,
-  rangeWindow,
+  formatWindowLabel,
+  resolveWindow,
   usePreviousDefined,
   useDebouncedValue,
+  ymdOffset,
+  todayYmd,
 } from "@/components/payouts/shared";
 import {
-  RANGE_DAYS,
+  MAX_INSIGHT_DAYS,
   type RangeKey,
   type ShopTxnListItem,
   type StatusPill,
@@ -68,7 +73,6 @@ const NewVsReturningCard = dynamic(
   { ssr: false, loading: () => <Skeleton className="h-72 w-full rounded-2xl" /> },
 );
 
-const RANGES: RangeKey[] = ["7d", "30d", "90d"];
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "payments", label: "Payments" },
@@ -77,6 +81,7 @@ type TabKey = (typeof TABS)[number]["key"];
 
 export default function PayoutsPage() {
   const [range, setRange] = useState<RangeKey>("30d");
+  const [custom, setCustom] = useState({ from: ymdOffset(-30), to: todayYmd() });
   const [tab, setTab] = useState<TabKey>("overview");
   const [selected, setSelected] = useState<Id<"payments"> | null>(null);
   const [rawSearch, setRawSearch] = useState("");
@@ -87,24 +92,39 @@ export default function PayoutsPage() {
   const reduced = useReducedMotion();
 
   const search = useDebouncedValue(rawSearch, 250);
-  const days = RANGE_DAYS[range];
-  const window = useMemo(() => rangeWindow(range, days), [range, days]);
+  const window = useMemo(
+    () => resolveWindow(range, custom),
+    [range, custom.from, custom.to],
+  );
+  const windowLabel = formatWindowLabel(range, custom);
+  const days = window.days;
+
+  // getPaymentInsights caps its scan at MAX_INSIGHT_DAYS and throws beyond it.
+  // Check here so a wide custom range explains itself instead of erroring the
+  // page; transactions and exports have no such cap and still cover it all.
+  const insightsInRange = days <= MAX_INSIGHT_DAYS;
 
   const ctx = useQuery(api.shopPayments.getMyPayoutsContext);
   const shopId = ctx?.shopId;
 
   const stripe = useStripeOverview(
     ctx === undefined ? undefined : (ctx?.stripeConnectAccountId ?? null),
+    days,
   );
 
   const bookingSeries = useQuery(
     api.bookings.getShopBookingSeries,
-    shopId ? { shopId, days } : "skip",
+    // getShopBookingSeries is rolling-from-today only, so a custom window that
+    // ends in the past can't be expressed — it's skipped rather than shown
+    // against the wrong dates.
+    shopId && range !== "custom" ? { shopId, days } : "skip",
   );
 
   const insightsRaw = useQuery(
     api.shopPayments.getPaymentInsights,
-    ctx ? { startMs: window.startMs, endMs: window.endMs } : "skip",
+    ctx && insightsInRange
+      ? { startMs: window.startMs, endMs: window.endMs }
+      : "skip",
   );
   // Hold the previous window's numbers while a new one loads, so changing the
   // range dims the cards instead of blanking four of them at once.
@@ -233,33 +253,14 @@ export default function PayoutsPage() {
         <>
           {/* One range control, scoping everything below it. */}
           <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-            <div
-              className="flex rounded-full bg-muted p-1"
-              role="group"
-              aria-label="Date range"
-            >
-              {RANGES.map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => setRange(r)}
-                  aria-pressed={range === r}
-                  className={cn(
-                    "relative rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                    range === r ? "text-foreground" : "text-muted-foreground",
-                  )}
-                >
-                  {range === r && (
-                    <motion.span
-                      layoutId={reduced ? undefined : "payouts-range-pill"}
-                      className="absolute inset-0 rounded-full bg-card shadow-sm"
-                      transition={{ type: "spring", stiffness: 400, damping: 32 }}
-                    />
-                  )}
-                  <span className="relative">{r}</span>
-                </button>
-              ))}
-            </div>
+            <DateRangePicker
+              range={range}
+              custom={custom}
+              onChange={(r, c) => {
+                setRange(r);
+                setCustom(c);
+              }}
+            />
 
             <div
               className="flex gap-1 rounded-lg bg-muted p-1"
@@ -316,7 +317,7 @@ export default function PayoutsPage() {
             <KpiRow
               overview={stripe.overview}
               insights={insights}
-              range={range}
+              windowLabel={windowLabel}
               loading={stripe.loading && insightsRaw === undefined}
             />
           </div>
@@ -332,7 +333,8 @@ export default function PayoutsPage() {
                   <div className="lg:col-span-2">
                     <NetRevenueChart
                       overview={stripe.overview}
-                      range={range}
+                      window={window}
+                      windowLabel={windowLabel}
                       loading={stripe.loading}
                       isRefreshing={stripe.isRefreshing}
                     />
@@ -340,7 +342,12 @@ export default function PayoutsPage() {
                   <div className="flex flex-col gap-4">
                     <OrderVolumeChart
                       series={bookingSeries}
-                      loading={bookingSeries === undefined}
+                      loading={range !== "custom" && bookingSeries === undefined}
+                      unavailableReason={
+                        range === "custom"
+                          ? "Job volume is only available for the preset ranges."
+                          : null
+                      }
                     />
                     <PayoutCadenceCard
                       overview={stripe.overview}
@@ -354,6 +361,15 @@ export default function PayoutsPage() {
                 <SectionHeader
                   title="Where the money lands"
                   description="Your payout account and the transfers that have already left Stripe."
+                  action={
+                    <ExportMenu
+                      shopName={ctx.shopName}
+                      window={window}
+                      filters={{ status, mechanicId, search }}
+                      insights={insightsInRange ? insights : null}
+                      overview={stripe.overview}
+                    />
+                  }
                 />
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                   <DestinationCard
@@ -377,21 +393,35 @@ export default function PayoutsPage() {
                   title="Where your payments come from"
                   description="Payment methods, top-earning work, and repeat business."
                 />
-                <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-                  <PaymentOriginCard
-                    insights={insights}
-                    loading={insightsRaw === undefined && !insights}
-                  />
-                  <RevenueByCard
-                    insights={insights}
-                    loading={insightsRaw === undefined && !insights}
-                  />
-                  <NewVsReturningCard
-                    insights={insights}
-                    loading={insightsRaw === undefined && !insights}
-                  />
-                </div>
-                {insights?.coverage.uncapturedRowsSkipped ? (
+                {!insightsInRange ? (
+                  <div className="rounded-2xl border border-border bg-card p-6 text-sm text-muted-foreground shadow-sm">
+                    <p className="font-medium text-foreground">
+                      Revenue-source charts cover up to {MAX_INSIGHT_DAYS} days.
+                    </p>
+                    <p className="mt-1">
+                      You&apos;ve selected {days} days. The transaction list and
+                      every export below still cover the whole range — only
+                      these three breakdowns are capped, because they scan every
+                      payment in the window.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+                    <PaymentOriginCard
+                      insights={insights}
+                      loading={insightsRaw === undefined && !insights}
+                    />
+                    <RevenueByCard
+                      insights={insights}
+                      loading={insightsRaw === undefined && !insights}
+                    />
+                    <NewVsReturningCard
+                      insights={insights}
+                      loading={insightsRaw === undefined && !insights}
+                    />
+                  </div>
+                )}
+                {insightsInRange && insights?.coverage.uncapturedRowsSkipped ? (
                   <p className="mt-3 text-xs text-muted-foreground">
                     {insights.coverage.uncapturedRowsSkipped} authorized-but-not-yet-captured
                     payment
@@ -427,6 +457,15 @@ export default function PayoutsPage() {
                       onStatusChange={setStatus}
                       mechanicId={mechanicId}
                       onMechanicChange={setMechanicId}
+                      exportSlot={
+                        <ExportMenu
+                          shopName={ctx.shopName}
+                          window={window}
+                          filters={{ status, mechanicId, search }}
+                          insights={insightsInRange ? insights : null}
+                          overview={stripe.overview}
+                        />
+                      }
                     />
                   </div>
 

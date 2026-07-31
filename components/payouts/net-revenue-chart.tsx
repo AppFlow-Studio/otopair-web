@@ -10,7 +10,7 @@ import {
   formatDayLabel,
   formatMoneyDollars,
 } from "./shared";
-import type { PayoutsOverview, RangeKey } from "./types";
+import type { DateWindow, PayoutsOverview } from "./types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -24,24 +24,27 @@ import { cn } from "@/lib/utils";
  */
 export function NetRevenueChart({
   overview,
-  range,
+  window,
+  windowLabel,
   loading,
   isRefreshing,
 }: {
   overview: PayoutsOverview | null;
-  range: RangeKey;
+  window: DateWindow;
+  windowLabel: string;
   loading: boolean;
   isRefreshing: boolean;
 }) {
-  const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
-  const cutoff = Date.now() - days * 86_400_000;
-
   const series: RevenuePoint[] = (overview?.series ?? [])
-    .filter((p) => new Date(`${p.date}T00:00:00Z`).getTime() >= cutoff)
+    .filter((p) => {
+      const ms = new Date(`${p.date}T00:00:00Z`).getTime();
+      return ms >= window.startMs && ms <= window.endMs;
+    })
     .map((p) => ({ date: p.date, netDollars: p.net }));
 
   const total = series.reduce((s, p) => s + p.netDollars, 0);
-  const tickInterval = range === "7d" ? 0 : range === "30d" ? 4 : 14;
+  // Roughly 6-8 labels regardless of window width.
+  const tickInterval = Math.max(0, Math.floor(series.length / 7));
 
   return (
     <Card className={cn(isRefreshing && "opacity-60 transition-opacity")}>
@@ -56,9 +59,7 @@ export function NetRevenueChart({
           <p className="mt-1 text-3xl font-semibold tracking-tight text-foreground">
             —
           </p>
-          <EmptyHint>
-            No settled Stripe activity in the last {days} days yet.
-          </EmptyHint>
+          <EmptyHint>No settled Stripe activity in {windowLabel} yet.</EmptyHint>
         </>
       ) : (
         <>
@@ -66,13 +67,21 @@ export function NetRevenueChart({
             {formatMoneyDollars(total)}
           </p>
           <p className="mt-1 text-sm text-muted-foreground">
-            After Stripe fees · last {days} days
+            After Stripe fees · {windowLabel}
           </p>
           <div className="mt-6">
             <RevenueArea data={series} tickInterval={tickInterval} />
           </div>
+          {/* Stripe caps how far back we page. Say so rather than letting the
+              total quietly disagree with their bank statement. */}
+          {overview?.seriesTruncated ? (
+            <p className="mt-3 text-xs text-amber-700">
+              This shop has more Stripe activity than we page in one request —
+              the series shows the most recent portion of the range.
+            </p>
+          ) : null}
           <ChartTableView
-            caption={`Net revenue per day over the last ${days} days`}
+            caption={`Net revenue per day, ${windowLabel}`}
             columns={["Day", "Net"]}
             rows={series.map((p) => [
               formatDayLabel(p.date),

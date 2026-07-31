@@ -15,9 +15,13 @@ import type { BookingSeriesPoint } from "./types";
 export function OrderVolumeChart({
   series,
   loading,
+  unavailableReason,
 }: {
   series: BookingSeriesPoint[] | undefined;
   loading: boolean;
+  /** Set when the active window can't be expressed to the backing query — say
+   *  why rather than rendering an empty chart that looks like zero jobs. */
+  unavailableReason?: string | null;
 }) {
   const data: VolumePoint[] = (series ?? []).map((p) => ({
     date: p.date,
@@ -29,7 +33,9 @@ export function OrderVolumeChart({
   return (
     <Card className="flex flex-col">
       <CardEyebrow>Order volume</CardEyebrow>
-      {loading ? (
+      {unavailableReason ? (
+        <EmptyHint>{unavailableReason}</EmptyHint>
+      ) : loading ? (
         <>
           <Skeleton className="mt-2 h-8 w-20" />
           <Skeleton className="mt-6 h-[180px] w-full rounded-xl" />

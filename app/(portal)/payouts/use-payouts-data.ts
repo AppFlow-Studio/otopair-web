@@ -35,6 +35,9 @@ export type StripeOverviewState = {
 
 export function useStripeOverview(
   stripeAccountId: string | null | undefined,
+  /** Days of balance-transaction history to fetch. Driven by the page's range
+   *  control so a custom range doesn't silently get the default 90. */
+  windowDays: number,
 ): StripeOverviewState {
   const [overview, setOverview] = useState<PayoutsOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,7 +60,7 @@ export function useStripeOverview(
     setError(null);
 
     const attempt = async (): Promise<Response> =>
-      fetch("/api/stripe/payouts/overview", {
+      fetch(`/api/stripe/payouts/overview?days=${windowDays}`, {
         cache: "no-store",
         signal: controller.signal,
       });
@@ -88,7 +91,7 @@ export function useStripeOverview(
         setIsRefreshing(false);
       }
     }
-  }, [stripeAccountId]);
+  }, [stripeAccountId, windowDays]);
 
   useEffect(() => {
     if (stripeAccountId) {

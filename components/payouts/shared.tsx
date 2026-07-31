@@ -14,7 +14,12 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import type { PaymentDisplayStatus, RangeKey } from "./types";
+import {
+  RANGE_DAYS,
+  type DateWindow,
+  type PaymentDisplayStatus,
+  type RangeKey,
+} from "./types";
 
 /* ------------------------------------------------------------------ */
 /*  Money                                                              */
@@ -114,9 +119,76 @@ export function formatDayLabel(ymd: string): string {
   });
 }
 
-export function rangeWindow(range: RangeKey, days: number) {
+/** Local start-of-day for a YYYY-MM-DD. */
+export function startOfDayMs(ymd: string): number | null {
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d, 0, 0, 0, 0).getTime();
+}
+
+/** Local END-of-day, so a single-day range includes that whole day. */
+export function endOfDayMs(ymd: string): number | null {
+  const [y, m, d] = ymd.split("-").map(Number);
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d, 23, 59, 59, 999).getTime();
+}
+
+export function todayYmd(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+export function ymdOffset(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+/**
+ * Resolves the active window.
+ *
+ * Presets are rolling (now − N days). Custom is calendar: local start-of-day to
+ * local end-of-day, both ends inclusive, because that's what picking two dates
+ * off a calendar means. An incomplete custom selection falls back to 30 days
+ * rather than producing an invalid window.
+ */
+export function resolveWindow(
+  range: RangeKey,
+  custom: { from: string; to: string },
+): DateWindow {
+  if (range === "custom") {
+    const startMs = startOfDayMs(custom.from);
+    const endMs = endOfDayMs(custom.to);
+    if (startMs != null && endMs != null && endMs > startMs) {
+      return {
+        startMs,
+        endMs,
+        days: Math.max(1, Math.round((endMs - startMs) / 86_400_000)),
+      };
+    }
+    const fallbackEnd = Date.now();
+    return { startMs: fallbackEnd - 30 * 86_400_000, endMs: fallbackEnd, days: 30 };
+  }
+  const days = RANGE_DAYS[range];
   const endMs = Date.now();
-  return { startMs: endMs - days * 86_400_000, endMs };
+  return { startMs: endMs - days * 86_400_000, endMs, days };
+}
+
+export function formatWindowLabel(
+  range: RangeKey,
+  custom: { from: string; to: string },
+): string {
+  if (range !== "custom") return `last ${RANGE_DAYS[range]} days`;
+  if (!custom.from || !custom.to) return "custom range";
+  const fmt = (ymd: string) => {
+    const ms = startOfDayMs(ymd);
+    return ms == null ? ymd : formatDateShort(ms);
+  };
+  return `${fmt(custom.from)} – ${fmt(custom.to)}`;
 }
 
 /* ------------------------------------------------------------------ */

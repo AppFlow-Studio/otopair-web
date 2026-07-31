@@ -21,6 +21,11 @@ import type { Id } from "@/convex/_generated/dataModel";
 export type PayoutStatus = "paid" | "pending" | "in_transit" | "canceled" | "failed";
 
 export type PayoutsOverview = {
+  /** How many days of balance transactions the route actually fetched. */
+  windowDays: number;
+  /** The balance-transaction scan hit its ceiling — `series` is the most recent
+   *  slice of the window, not all of it. */
+  seriesTruncated: boolean;
   currency: string;
   balance: { available: number; pending: number };
   payoutSchedule:
@@ -329,12 +334,35 @@ export type ShopPayoutsContext = {
 /*  UI-only                                                            */
 /* ------------------------------------------------------------------ */
 
-export type RangeKey = "7d" | "30d" | "90d";
+export type RangeKey = "7d" | "30d" | "90d" | "custom";
 
-export const RANGE_DAYS: Record<RangeKey, number> = {
+/** Preset windows are ROLLING (now minus N days). A custom window is
+ *  CALENDAR (local start-of-day to local end-of-day), because the user picked
+ *  days off a calendar and expects both ends included. */
+export const RANGE_DAYS: Record<Exclude<RangeKey, "custom">, number> = {
   "7d": 7,
   "30d": 30,
   "90d": 90,
+};
+
+/** A resolved window, whatever produced it. */
+export type DateWindow = { startMs: number; endMs: number; days: number };
+
+/** getPaymentInsights caps its scan at this many days and throws beyond it.
+ *  The page checks first and explains, rather than letting the query throw. */
+export const MAX_INSIGHT_DAYS = 180;
+
+/** Widest custom range the picker allows. Transactions have no window cap of
+ *  their own; this is a guard against someone asking for a decade. */
+export const MAX_CUSTOM_DAYS = 366;
+
+/** Rows one CSV export will pull before giving up and saying so. */
+export const MAX_EXPORT_ROWS = 5000;
+
+export type PaymentFilters = {
+  status: StatusPill;
+  mechanicId: string;
+  search: string;
 };
 
 export type StatusPill =

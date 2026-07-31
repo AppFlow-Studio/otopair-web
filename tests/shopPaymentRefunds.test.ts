@@ -644,6 +644,46 @@ describe("shop payment reads", () => {
     expect(res.page[0]!.capturedCents).toBe(18_000);
   });
 
+  test("getPaymentDetail joins the booking, timeline and refundability", async () => {
+    const t = makeT();
+    const seed = await seedCapturedPayment(t, { tag: "detail" });
+
+    const { api } = await import("../convex/_generated/api");
+    const asOwner = t.withIdentity(identityFor(seed.ownerClerkId));
+    const detail = await asOwner.query(api.shopPayments.getPaymentDetail, {
+      paymentId: seed.paymentId,
+    });
+
+    expect(detail).not.toBeNull();
+    expect(detail!.payment.capturedCents).toBe(18_000);
+    expect(detail!.customer?.name).toBe("Casey Customer");
+    expect(detail!.mechanic?.name).toBe("Alice Wrench");
+    expect(detail!.booking?.services).toContain("Brake pads");
+    expect(detail!.refundability.canRefund).toBe(true);
+    expect(detail!.refundability.refundableCents).toBe(18_000);
+
+    // The two payout steps are not derivable from stored data and must say so
+    // rather than being estimated from the payout schedule.
+    const unavailable = detail!.timeline.filter((s) => s.state === "unavailable");
+    expect(unavailable.map((s) => s.key)).toEqual([
+      "payout_initiated",
+      "payout_arrived",
+    ]);
+  });
+
+  test("getPaymentDetail refuses a payment belonging to another shop", async () => {
+    const t = makeT();
+    const a = await seedCapturedPayment(t, { tag: "tenancy-a" });
+    const b = await seedCapturedPayment(t, { tag: "tenancy-b" });
+
+    const { api } = await import("../convex/_generated/api");
+    const asOwnerA = t.withIdentity(identityFor(a.ownerClerkId));
+    const leaked = await asOwnerA.query(api.shopPayments.getPaymentDetail, {
+      paymentId: b.paymentId,
+    });
+    expect(leaked).toBeNull();
+  });
+
   test("insights skip uncaptured rows instead of falling back to the estimate", async () => {
     const t = makeT();
     const seed = await seedCapturedPayment(t, {

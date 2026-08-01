@@ -1,0 +1,177 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [],
+    "claim_rows": 0,
+    "families_seen": [],
+    "fields_conflict_tie": 0,
+    "fields_contested": 0,
+    "fields_multi_family_agreement": 0,
+    "fields_single_source": 0,
+    "fields_with_claims": 0
+  },
+  "external_joins": {
+    "complaint_signal": null,
+    "epa": null,
+    "manual": null,
+    "recalls_open": 0
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": null,
+    "brake_fluid_type": null,
+    "coolant_capacity_qts": null,
+    "coolant_type": null,
+    "oil_capacity_qts": null,
+    "oil_viscosity": null,
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": null
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "n/a",
+    "fields_with_claims": 0,
+    "fitment_multi_source": "n/a",
+    "has_manual": false,
+    "months_fill": "0%",
+    "parts_quotable": "0/0",
+    "rotor_minimums": 0,
+    "status": "pending"
+  },
+  "identity_coherence": {
+    "aspiration": null,
+    "cylinders": 6,
+    "displacement_l": 3,
+    "engine_code": "DKKA",
+    "epa_says": null,
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": null,
+    "spark_plug_quantity": null,
+    "timing_system": null,
+    "trans_fluid_type": null,
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "vdb_schedule": 5
+    },
+    "months_fill": "0%",
+    "rows": [
+      {
+        "bookable": true,
+        "miles": 40000,
+        "months": null,
+        "provenance": "vdb_schedule",
+        "service": "brake_fluid_flush",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": 20000,
+        "months": null,
+        "provenance": "vdb_schedule",
+        "service": "filter_replacement",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": 20000,
+        "months": null,
+        "provenance": "vdb_schedule",
+        "service": "oil_change",
+        "status": "active"
+      },
+      {
+        "bookable": false,
+        "miles": 50000,
+        "months": null,
+        "provenance": "vdb_schedule",
+        "service": "serpentine_belt",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": null,
+        "provenance": "vdb_schedule",
+        "service": "spark_plugs",
+        "status": "active"
+      }
+    ],
+    "total": 5,
+    "with_miles": 5,
+    "with_months": 0
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 2
+    },
+    "rows": [
+      {
+        "hours": 0.5,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.8,
+        "service": "serpentine_belt",
+        "source": "aggregated"
+      }
+    ],
+    "total": 2
+  },
+  "parts": {
+    "corroborated_2plus_sources": 0,
+    "corroboration_rate": "n/a",
+    "rows": [],
+    "total": 0,
+    "triangle_broken": [],
+    "triangle_ok": 0,
+    "with_observed_title": 0
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": null,
+    "duration_min": null,
+    "error_tags": {
+      "batch1a_errored": 1
+    },
+    "field_gap_count": 0,
+    "fill_rate": null,
+    "quotability": null,
+    "runId": "tx71nxmqaxx359abyadp6cz1qs8bn2sc",
+    "sanity_flag_count": 0,
+    "sanity_flags_by_stage": {},
+    "status": "failed",
+    "tokens_in": null,
+    "tokens_out": null,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": null
+  },
+  "vehicle": {
+    "chassis_code": null,
+    "confidence_avg": null,
+    "configId": "w57bwcpj3gne571w29541f27nn8bmhyq",
+    "config_key": "2020_porsche_911_carrera_s_dkka",
+    "drivetrain": "RWD",
+    "enrichment_status": "pending",
+    "fill_rate": 0,
+    "last_enriched_at": null,
+    "make": "Porsche",
+    "model": "911",
+    "na_role_keys": [],
+    "trim": "Carrera S",
+    "verified_fields": [],
+    "year": 2020
+  }
+}

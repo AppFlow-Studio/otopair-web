@@ -6625,6 +6625,36 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       console.warn("[v8] NHTSA ODI refresh trigger failed (non-fatal):", e);
     }
 
+    // ── EPA fuel economy (round 15b) ────────────────────────────────────────
+    // epaFuelEconomy.ts advertised `refreshEpaForConfig` as a per-config
+    // wire-in point from the day it shipped, and the call was never written:
+    // its ONLY caller was its own daily stale sweep (crons.ts), which is capped
+    // and age-filtered. So a freshly enriched config carried no EPA row at all
+    // — `epa_joined: false` on 10/10 audited vehicles across rounds 15 and 15b,
+    // and the commit that shipped the module recorded the symptom ("EPA did not
+    // join despite its hook being scheduled") without finding the cause.
+    //
+    // This is not only MPG/CO2. The module stores the EPA record's own
+    // displacement/cylinders/turbo/fuel-type and computes `coherence_mismatch`
+    // — a government-backed second opinion on engine identity that the P0.3
+    // identity-coherence gate consumes. With no row, that gate has no input,
+    // which is why `identity.epa_says` audits as null.
+    //
+    // Scheduled, not awaited: the join is two public API calls with a 15s abort
+    // each, and it must not spend this action's 600s budget. It runs after the
+    // engine identity it corroborates is already persisted. The picker never
+    // guesses — an engine it cannot match to exactly one EPA option stores
+    // nothing — so the worst case is the status quo.
+    try {
+      await ctx.scheduler.runAfter(
+        20_000,
+        internal.vehicleEnrichment.epaFuelEconomy.refreshEpaForConfig,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.warn("[v8] EPA economy refresh trigger failed (non-fatal):", e);
+    }
+
     // ── Labor retry (2020 Yaris canary, Jul 30 2026) ────────────────────────
     // The inline labor pass lives inside `if (r2)`, so a batch-2 timeout or an
     // unparseable batch-2 body means NO labor source is ever contacted — and

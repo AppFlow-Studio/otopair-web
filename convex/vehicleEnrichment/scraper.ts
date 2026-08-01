@@ -36,7 +36,7 @@ import {
   BLOCKED_DOMAINS,
   type MakeSourceConfig,
 } from "./sourceRegistry";
-import { isStorefrontHomepage } from "./rpCatalog";
+import { isStorefrontHomepage, detailPageVehicleVerdict, parseDetailTitle } from "./rpCatalog";
 import { parsePartPrices, parseSupersessions, type ParsedPartPrice, type ParsedSupersession } from "./priceParser";
 import { checkRoleIdentity, ROLEKEYS_BY_PART_SLUG } from "./roleIdentity";
 import { CACHE_FORMAT_VERSION } from "./scraperQueries";
@@ -343,6 +343,22 @@ async function scrapePartsPages(
     `[scraper] Cache miss: parts_catalog — ${plans.length} site-scoped part searches for ${storeHost}`,
   );
 
+  // Round 15b — VEHICLE vocabulary for the detail-page gate below. A
+  // `/oem-parts/…` page is MAKE-scoped: one Porsche storefront serves 911,
+  // Cayenne and Macan parts off the same path shape, and the 2019 911 GT3 RS
+  // shipped the CAYENNE's brake pads because nothing compared the page's
+  // vehicle to ours. The model list is what lets a title naming a RIVAL model
+  // be told apart from one naming no model at all; without it the gate falls
+  // back to its year axis, which is the correct fail-open degradation.
+  const siblingModels: string[] = await ctx
+    .runQuery(internal.vehicleEnrichment.scraperQueries.getModelNamesForMake, {
+      make: vehicle.make,
+    })
+    .catch((e) => {
+      console.warn(`[scraper] model vocabulary unavailable for ${vehicle.make} — vehicle gate degrades to year-only:`, e);
+      return [] as string[];
+    });
+
   const markdownParts: string[] = [];
   const sourceUrls: string[] = [];
   const allPartPrices: ParsedPartPrice[] = [];
@@ -424,6 +440,39 @@ async function scrapePartsPages(
       );
     }
 
+    // Round 15b: VEHICLE gate. The role screen above answers "is this a brake
+    // pad?"; this one answers "is it a brake pad FOR THIS CAR?". Both are
+    // needed — the 911 GT3 RS's Cayenne pads passed the role screen with a
+    // perfectly correct component title ("1 Set Of Brake Pads Front") while the
+    // page's own <title> said "2019-2025 Porsche Cayenne …".
+    //
+    // Judged on the FETCHED page, not the SERP snippet: the search engine's
+    // title for that page was "1 Set Of Brake Pads Front - Porsche" (make only,
+    // no model), so only the page's own <title> carries the contradiction.
+    //
+    // Fail-open: only a positive contradiction drops a page. Unknown/unparseable
+    // titles pass through exactly as before.
+    const vehicleKept = notBlocked.filter((r) => {
+      const verdict = detailPageVehicleVerdict({
+        html: r.html ?? null,
+        targetYear: vehicle.year,
+        targetModel: vehicle.model,
+        siblingModels,
+      });
+      if (verdict.verdict !== "mismatch") return true;
+      console.warn(
+        `[scraper] VEHICLE MISMATCH — dropped ${r.url} for "${plan.partSlug}" ` +
+          `(${verdict.reason}${verdict.observedModel ? `: page is a ${verdict.observedModel}` : ""}); ` +
+          `target ${vehicle.year} ${vehicle.make} ${vehicle.model}; page title "${verdict.title ?? "?"}"`,
+      );
+      return false;
+    });
+    if (vehicleKept.length < notBlocked.length) {
+      console.log(
+        `[scraper] vehicle gate dropped ${notBlocked.length - vehicleKept.length} wrong-vehicle detail page(s) for "${plan.partSlug}"`,
+      );
+    }
+
     // Rank the survivors. URL slug naming the part beats SERP ordering (the
     // slug encodes the product name); position-split slugs ("front_brake_pads")
     // also try the position-stripped base token since RP URLs write
@@ -443,7 +492,7 @@ async function scrapePartsPages(
         (r.title ?? "").toLowerCase().includes(positionWord));
     const rank = (r: { url: string; title?: string | null }): number =>
       (titlePasses(r) ? 4 : 0) + (urlNamesPart(r) ? 2 : 0) + (matchesPosition(r) ? 1 : 0);
-    const chosen = [...notBlocked]
+    const chosen = [...vehicleKept]
       .sort((a, b) => rank(b) - rank(a)) // stable — SERP order breaks ties
       .slice(0, detailLinkBudget(plan.partSlug));
     if (chosen.length === 0) {
@@ -489,7 +538,18 @@ async function scrapePartsPages(
       }
 
       const chunk = r.markdown.slice(0, MAX_PER_PAGE_CHARS);
-      markdownParts.push(`\n\n--- Parts Page (${plan.query}): ${r.url} ---\n${chunk}`);
+      // Round 15b: carry the page's OWN <title> into the extraction context.
+      // It is the only server-rendered statement of which vehicle the page
+      // describes ("2019-2025 Porsche Cayenne 1 Set Of Brake Pads Front …"),
+      // and it was previously discarded — Batch-1 saw the component name and
+      // nothing else, which is how a Cayenne pad became a 911's front pad.
+      // Markdown conversion drops <title>, so it has to be prepended here.
+      const pageTitle = parseDetailTitle(r.html ?? null)?.head ?? null;
+      markdownParts.push(
+        `\n\n--- Parts Page (${plan.query}): ${r.url} ---` +
+          (pageTitle ? `\nPage title (states the vehicle this part fits): ${pageTitle}` : "") +
+          `\n${chunk}`,
+      );
       sourceUrls.push(r.url);
       totalChars += chunk.length;
     }

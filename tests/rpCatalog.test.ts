@@ -12,8 +12,15 @@
 //   npx vitest run tests/rpCatalog.test.ts
 // =============================================================================
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isStorefrontHomepage, extractDetailLinks } from "../convex/vehicleEnrichment/rpCatalog";
+import {
+  isStorefrontHomepage,
+  extractDetailLinks,
+  parseDetailTitle,
+  detailPageVehicleVerdict,
+} from "../convex/vehicleEnrichment/rpCatalog";
 import { getSourceConfig, getPartsSearchPlans } from "../convex/vehicleEnrichment/sourceRegistry";
 import type { VehicleInput } from "../convex/vehicleEnrichment/types";
 
@@ -127,5 +134,142 @@ describe("getPartsSearchPlans", () => {
       year: 2024, make: "Chevrolet", model: "Equinox", trim: "Premier",
     } as VehicleInput);
     expect(plans[0].searchUrl.startsWith("https://g.oempartsonline.com/search?")).toBe(true);
+  });
+});
+
+// ─── Detail-page vehicle gate (round 15b) ────────────────────────
+//
+// Round 15b shipped a 2019 Porsche 911 GT3 RS with the CAYENNE's brake pads.
+// The page said "Cayenne" in its own <title>; the pipeline stored only the
+// component name ("1 Set Of Brake Pads Front") and the role checker passed it,
+// because the ROLE was right and nobody checked the VEHICLE.
+//
+// The fixture is the real page, captured live 2026-07-31.
+
+const CAYENNE_DETAIL = readFileSync(
+  join(__dirname, "fixtures/rpCatalog/detail-cayenne-9y0698151an.html"),
+  "utf-8",
+);
+const PORSCHE_MODELS = ["911", "Cayenne", "Macan", "Panamera", "Boxster", "Cayman", "Taycan"];
+
+describe("parseDetailTitle", () => {
+  it("reads the year range and head off the real Cayenne pad page", () => {
+    const p = parseDetailTitle(CAYENNE_DETAIL);
+    expect(p).not.toBeNull();
+    expect(p!.yearMin).toBe(2019);
+    expect(p!.yearMax).toBe(2025);
+    expect(p!.head).toBe("2019-2025 Porsche Cayenne 1 Set Of Brake Pads Front 9Y0-698-151-AN");
+  });
+
+  it("treats a single-year title as a one-year range", () => {
+    const p = parseDetailTitle(page("2020 Subaru Forester Oil Filter 15208AA21A | OEM Parts Online"));
+    expect(p!.yearMin).toBe(2020);
+    expect(p!.yearMax).toBe(2020);
+  });
+
+  it("returns null when there is no title at all", () => {
+    expect(parseDetailTitle("<html><body>no head</body></html>")).toBeNull();
+    expect(parseDetailTitle(null)).toBeNull();
+  });
+
+  it("ignores a year that appears later in the title (product name, not fitment)", () => {
+    const p = parseDetailTitle(page("Porsche Classic 1970 Style Badge 911 | OEM Parts Online"));
+    expect(p!.yearMin).toBeNull();
+  });
+});
+
+describe("detailPageVehicleVerdict", () => {
+  it("REFUSES the Cayenne pad page for a 911 - the round-15b defect", () => {
+    const v = detailPageVehicleVerdict({
+      html: CAYENNE_DETAIL,
+      targetYear: 2019,
+      targetModel: "911",
+      siblingModels: PORSCHE_MODELS,
+    });
+    expect(v.verdict).toBe("mismatch");
+    expect(v.reason).toBe("other_model_named");
+    expect(v.observedModel).toBe("Cayenne");
+  });
+
+  it("ACCEPTS the same page for the Cayenne it actually belongs to", () => {
+    const v = detailPageVehicleVerdict({
+      html: CAYENNE_DETAIL,
+      targetYear: 2019,
+      targetModel: "Cayenne",
+      siblingModels: PORSCHE_MODELS,
+    });
+    expect(v.verdict).toBe("match");
+    expect(v.reason).toBe("model_named");
+  });
+
+  it("refuses a page whose fitment year range excludes the vehicle", () => {
+    const v = detailPageVehicleVerdict({
+      html: page("2022-2025 Porsche Cayenne 1 Set Of Brake Pads Front 9Y0-698-151-AN | OEM Parts Online"),
+      targetYear: 2019,
+      targetModel: "Cayenne",
+      siblingModels: PORSCHE_MODELS,
+    });
+    expect(v.verdict).toBe("mismatch");
+    expect(v.reason).toBe("year_out_of_range");
+  });
+
+  // ── FAIL-OPEN LAW: "mismatch" is the only verdict that can discard a part,
+  //    so every uncertain state must resolve to "unknown", never to a refusal.
+  it("is UNKNOWN when the title names no model (the Hyundai shape)", () => {
+    const v = detailPageVehicleVerdict({
+      html: page("2018-2021 Hyundai Oil Filter 26300-35505 | OEM Parts Online"),
+      targetYear: 2019,
+      targetModel: "Tucson",
+      siblingModels: ["Tucson", "Santa Fe", "Elantra", "Sonata"],
+    });
+    expect(v.verdict).toBe("unknown");
+    expect(v.reason).toBe("year_in_range");
+  });
+
+  it("is UNKNOWN with no sibling vocabulary, even on a rival model's page", () => {
+    const v = detailPageVehicleVerdict({
+      html: CAYENNE_DETAIL,
+      targetYear: 2019,
+      targetModel: "911",
+      siblingModels: [],
+    });
+    expect(v.verdict).toBe("unknown");
+  });
+
+  it("is UNKNOWN when the page has no title", () => {
+    expect(
+      detailPageVehicleVerdict({
+        html: "<html><body>x</body></html>",
+        targetYear: 2019,
+        targetModel: "911",
+        siblingModels: PORSCHE_MODELS,
+      }).verdict,
+    ).toBe("unknown");
+  });
+
+  it("keeps a genuine multi-model page when ours is among the models named", () => {
+    const v = detailPageVehicleVerdict({
+      html: page("2017-2020 Porsche 911 Cayman Boxster Spark Plug 99917023790 | OEM Parts Online"),
+      targetYear: 2019,
+      targetModel: "911",
+      siblingModels: PORSCHE_MODELS,
+    });
+    expect(v.verdict).toBe("match");
+  });
+
+  it("matches model names carrying digits and punctuation", () => {
+    for (const [model, title] of [
+      ["Mazda3", "2019-2024 Mazda Mazda3 Oil Filter PE01-14-302 | OEM Parts Online"],
+      ["CX-5", "2019-2024 Mazda CX-5 Oil Filter PE01-14-302 | OEM Parts Online"],
+      ["3 Series", "2016-2019 BMW 3 Series Brake Pad Set 34106859181 | OEM Parts Online"],
+    ] as const) {
+      const v = detailPageVehicleVerdict({
+        html: page(title),
+        targetYear: 2019,
+        targetModel: model,
+        siblingModels: ["Mazda3", "CX-5", "CX-9", "3 Series", "5 Series"],
+      });
+      expect(v.verdict, `${model} should match "${title}"`).toBe("match");
+    }
   });
 });

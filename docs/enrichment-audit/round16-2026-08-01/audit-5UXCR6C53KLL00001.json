@@ -1,0 +1,179 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [],
+    "claim_rows": 0,
+    "families_seen": [],
+    "fields_conflict_tie": 0,
+    "fields_contested": 0,
+    "fields_multi_family_agreement": 0,
+    "fields_single_source": 0,
+    "fields_with_claims": 0
+  },
+  "external_joins": {
+    "complaint_signal": null,
+    "epa": null,
+    "manual": null,
+    "recalls_open": 0
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": null,
+    "brake_fluid_type": null,
+    "coolant_capacity_qts": null,
+    "coolant_type": null,
+    "oil_capacity_qts": null,
+    "oil_viscosity": null,
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": null
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "n/a",
+    "fields_with_claims": 0,
+    "fitment_multi_source": "n/a",
+    "has_manual": false,
+    "months_fill": "0%",
+    "parts_quotable": "0/0",
+    "rotor_minimums": 0,
+    "status": "pending"
+  },
+  "identity_coherence": {
+    "aspiration": null,
+    "cylinders": 6,
+    "displacement_l": 3,
+    "engine_code": "B58B30M0",
+    "epa_says": null,
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": null,
+    "spark_plug_quantity": null,
+    "timing_system": null,
+    "trans_fluid_type": null,
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "vdb_schedule": 4
+    },
+    "months_fill": "0%",
+    "rows": [
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": null,
+        "provenance": "vdb_schedule",
+        "service": "brake_fluid_flush",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": null,
+        "provenance": "vdb_schedule",
+        "service": "filter_replacement",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": null,
+        "provenance": "vdb_schedule",
+        "service": "oil_change",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": null,
+        "provenance": "vdb_schedule",
+        "service": "tire_rotation",
+        "status": "active"
+      }
+    ],
+    "total": 4,
+    "with_miles": 4,
+    "with_months": 0
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 4
+    },
+    "rows": [
+      {
+        "hours": 0.7,
+        "service": "brake_fluid_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.5,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "oil_change",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "tire_rotation",
+        "source": "aggregated"
+      }
+    ],
+    "total": 4
+  },
+  "parts": {
+    "corroborated_2plus_sources": 0,
+    "corroboration_rate": "n/a",
+    "rows": [],
+    "total": 0,
+    "triangle_broken": [],
+    "triangle_ok": 0,
+    "with_observed_title": 0
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": null,
+    "duration_min": null,
+    "error_tags": {
+      "batch1a_errored": 1
+    },
+    "field_gap_count": 0,
+    "fill_rate": null,
+    "quotability": null,
+    "runId": "tx7319frq3tppb0bf5nzn8cey58bmj9a",
+    "sanity_flag_count": 0,
+    "sanity_flags_by_stage": {},
+    "status": "failed",
+    "tokens_in": null,
+    "tokens_out": null,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": null
+  },
+  "vehicle": {
+    "chassis_code": "G05",
+    "confidence_avg": null,
+    "configId": "w57773y8fwfgcjtrgq33ag0c298bma40",
+    "config_key": "2019_bmw_x5_xdrive40i_b58b30m0",
+    "drivetrain": "AWD",
+    "enrichment_status": "pending",
+    "fill_rate": 0,
+    "last_enriched_at": null,
+    "make": "BMW",
+    "model": "X5",
+    "na_role_keys": [],
+    "trim": "xDrive40i",
+    "verified_fields": [],
+    "year": 2019
+  }
+}

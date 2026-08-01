@@ -1,0 +1,121 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [],
+    "claim_rows": 0,
+    "families_seen": [],
+    "fields_conflict_tie": 0,
+    "fields_contested": 0,
+    "fields_multi_family_agreement": 0,
+    "fields_single_source": 0,
+    "fields_with_claims": 0
+  },
+  "external_joins": {
+    "complaint_signal": null,
+    "epa": null,
+    "manual": null,
+    "recalls_open": 0
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": null,
+    "brake_fluid_type": null,
+    "coolant_capacity_qts": null,
+    "coolant_type": null,
+    "oil_capacity_qts": null,
+    "oil_viscosity": null,
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": null
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "n/a",
+    "fields_with_claims": 0,
+    "fitment_multi_source": "n/a",
+    "has_manual": false,
+    "months_fill": "n/a",
+    "parts_quotable": "0/0",
+    "rotor_minimums": 0,
+    "status": "pending"
+  },
+  "identity_coherence": {
+    "aspiration": "turbo",
+    "cylinders": 4,
+    "displacement_l": 2,
+    "engine_code": "M264",
+    "epa_says": null,
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": null,
+    "spark_plug_quantity": null,
+    "timing_system": null,
+    "trans_fluid_type": null,
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {},
+    "months_fill": "n/a",
+    "rows": [],
+    "total": 0,
+    "with_miles": 0,
+    "with_months": 0
+  },
+  "labor": {
+    "by_source": {},
+    "rows": [],
+    "total": 0
+  },
+  "parts": {
+    "corroborated_2plus_sources": 0,
+    "corroboration_rate": "n/a",
+    "rows": [],
+    "total": 0,
+    "triangle_broken": [],
+    "triangle_ok": 0,
+    "with_observed_title": 0
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": null,
+    "duration_min": null,
+    "error_tags": {
+      "batch1a_errored": 1
+    },
+    "field_gap_count": 0,
+    "fill_rate": null,
+    "quotability": null,
+    "runId": "tx7axv7mpn589jq4yf0km8jxj58bnv7v",
+    "sanity_flag_count": 0,
+    "sanity_flags_by_stage": {},
+    "status": "failed",
+    "tokens_in": null,
+    "tokens_out": null,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": null
+  },
+  "vehicle": {
+    "chassis_code": "X253",
+    "confidence_avg": null,
+    "configId": "w571v8g2whhn708xqfe47y896h8bmgn7",
+    "config_key": "2020_mercedes_benz_glc_class_glc300_4m_m264",
+    "drivetrain": "AWD",
+    "enrichment_status": "pending",
+    "fill_rate": 0,
+    "last_enriched_at": null,
+    "make": "MERCEDES-BENZ",
+    "model": "GLC-Class",
+    "na_role_keys": [],
+    "trim": "GLC300-4M",
+    "verified_fields": [],
+    "year": 2020
+  }
+}

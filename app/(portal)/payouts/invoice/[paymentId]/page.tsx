@@ -14,6 +14,7 @@
 
 import { use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useAction, useQuery } from "convex/react";
 import { ArrowLeft, Loader2, Printer, ShieldX } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -27,6 +28,7 @@ export default function ShopInvoicePage({
   params: Promise<{ paymentId: string }>;
 }) {
   const { paymentId } = use(params);
+  const router = useRouter();
   const invoice = useQuery(api.shopInvoices.getShopInvoice, {
     paymentId: paymentId as Id<"payments">,
   });
@@ -34,6 +36,20 @@ export default function ShopInvoicePage({
 
   const [syncing, setSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [canGoBack, setCanGoBack] = useState(false);
+
+  // /payouts keeps its range, tab, filters, search and selection in the query
+  // string, so history.back() lands on the exact view the user left. Only
+  // offered when there's history to go back to — a deep link or a fresh tab
+  // has none, and back() would leave the app entirely.
+  useEffect(() => {
+    setCanGoBack(window.history.length > 1);
+  }, []);
+
+  const goBack = useCallback(() => {
+    if (canGoBack) router.back();
+    else router.push("/payouts?tab=payments");
+  }, [canGoBack, router]);
 
   // The print rules in globals.css hide everything but the invoice sheet, so
   // they're scoped to this class — without it, printing any other page in the
@@ -96,13 +112,14 @@ export default function ShopInvoicePage({
     <div className="mx-auto max-w-3xl pb-16">
       {/* Toolbar is excluded from print by .no-print in the document's styles. */}
       <div className="no-print mb-4 flex flex-wrap items-center justify-between gap-3">
-        <Link
-          href="/payouts?tab=payments"
-          className="inline-flex items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+        <button
+          type="button"
+          onClick={goBack}
+          className="inline-flex items-center gap-2 rounded-lg text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <ArrowLeft className="size-4" aria-hidden="true" />
           Back to payments
-        </Link>
+        </button>
         <button
           type="button"
           onClick={() => window.print()}

@@ -99,6 +99,7 @@ export function TransactionsCard({
   onStatusChange,
   mechanicId,
   onMechanicChange,
+  onClearFilters,
   exportSlot,
 }: {
   result: ShopTxnListResult | undefined;
@@ -112,6 +113,10 @@ export function TransactionsCard({
   onStatusChange: (v: StatusPill) => void;
   mechanicId: string;
   onMechanicChange: (v: string) => void;
+  /** Single callback rather than three setters: the filters live in the URL,
+   *  and three sequential patches would each rebuild from the same stale
+   *  query string, so only the last would survive. */
+  onClearFilters: () => void;
   /** The export control is injected rather than built here — it needs the
    *  window, insights and Stripe overview, none of which this card knows. */
   exportSlot?: ReactNode;
@@ -128,12 +133,6 @@ export function TransactionsCard({
 
   const hasFilters =
     search.trim() !== "" || status !== "all" || mechanicId !== "all";
-
-  function clearFilters() {
-    onSearchChange("");
-    onStatusChange("all");
-    onMechanicChange("all");
-  }
 
   return (
     <Card className="p-0">
@@ -230,7 +229,7 @@ export function TransactionsCard({
           {hasFilters ? (
             <button
               type="button"
-              onClick={clearFilters}
+              onClick={onClearFilters}
               className="text-sm font-medium text-primary hover:underline"
             >
               Clear filters

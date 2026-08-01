@@ -1,10 +1,17 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import {
+  Suspense,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import dynamic from "next/dynamic";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { motion, useReducedMotion } from "framer-motion";
-import { Loader2, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
@@ -79,25 +86,115 @@ const TABS = [
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
 
-export default function PayoutsPage() {
-  const [range, setRange] = useState<RangeKey>("30d");
-  const [custom, setCustom] = useState({ from: ymdOffset(-30), to: todayYmd() });
-  const [tab, setTab] = useState<TabKey>("overview");
-  const [selected, setSelected] = useState<Id<"payments"> | null>(null);
-  const [rawSearch, setRawSearch] = useState("");
-  const [status, setStatus] = useState<StatusPill>("all");
-  const [mechanicId, setMechanicId] = useState("all");
+const RANGE_KEYS: RangeKey[] = ["7d", "30d", "90d", "custom"];
+
+function queryString(params: URLSearchParams): string {
+  const s = params.toString();
+  return s ? `?${s}` : "";
+}
+
+/** Wrapped in Suspense below — useSearchParams opts the tree into client-side
+ *  rendering and Next requires the boundary to be explicit. */
+function PayoutsPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  /* ------------------------------------------------------------------
+   * The URL is the source of truth for every filter.
+   *
+   * These used to be useState, which meant opening an invoice and coming
+   * back threw away the range, tab, filters, search and selection — the
+   * component unmounts on navigation and remounted with defaults. Putting
+   * them in the query string makes back/forward, refresh and shared links
+   * all restore the same view. Defaults are omitted so the common URL
+   * stays clean.
+   * ------------------------------------------------------------------ */
+  const tab: TabKey = searchParams.get("tab") === "payments" ? "payments" : "overview";
+  const rangeParam = searchParams.get("range") as RangeKey | null;
+  const range: RangeKey =
+    rangeParam && RANGE_KEYS.includes(rangeParam) ? rangeParam : "30d";
+  const custom = useMemo(
+    () => ({
+      from: searchParams.get("from") || ymdOffset(-30),
+      to: searchParams.get("to") || todayYmd(),
+    }),
+    [searchParams],
+  );
+  const status = (searchParams.get("status") ?? "all") as StatusPill;
+  const mechanicId = searchParams.get("mechanic") ?? "all";
+  const urlSearch = searchParams.get("q") ?? "";
+  const selectedParam = searchParams.get("id");
+  const selected = (selectedParam as Id<"payments"> | null) ?? null;
+
+  // Reads the live URL rather than the captured searchParams, which keeps this
+  // callback stable AND always current. Both matter: the debounced search
+  // effect only re-runs when the search text changes, so a patchParams closed
+  // over older params would silently drop a status change made during the
+  // debounce window.
+  //
+  // Only ever called from effects and event handlers, never during render.
+  const patchParams = useCallback(
+    (patch: Record<string, string | null>) => {
+      const params = new URLSearchParams(globalThis.location.search);
+      for (const [k, val] of Object.entries(patch)) {
+        if (val == null || val === "") params.delete(k);
+        else params.set(k, val);
+      }
+      router.replace(`/payouts${queryString(params)}`, { scroll: false });
+    },
+    [router],
+  );
+
+  // Local mirror so typing stays responsive; the debounced value is what
+  // reaches the URL. Seeded from the URL on mount — which is exactly when a
+  // return from the invoice page happens, since that remounts this component.
+  // Deliberately NOT synced back from the URL on every change: an in-flight
+  // write for "abc" would clobber a user who has already typed "abcd".
+  const [rawSearch, setRawSearch] = useState(urlSearch);
+  const search = useDebouncedValue(rawSearch, 250);
+
+  useEffect(() => {
+    if (search !== urlSearch) patchParams({ q: search || null });
+  }, [search, urlSearch, patchParams]);
+
+  const setRange = useCallback(
+    (next: RangeKey, nextCustom: { from: string; to: string }) => {
+      patchParams({
+        range: next === "30d" ? null : next,
+        from: next === "custom" ? nextCustom.from : null,
+        to: next === "custom" ? nextCustom.to : null,
+      });
+    },
+    [patchParams],
+  );
+
+  const setTab = useCallback(
+    (next: TabKey) => {
+      // Drop the open detail panel when leaving the Payments tab — it has
+      // nothing to attach to on Overview.
+      patchParams({
+        tab: next === "overview" ? null : next,
+        ...(next === "overview" ? { id: null } : {}),
+      });
+    },
+    [patchParams],
+  );
+
+  const setSelected = useCallback(
+    (id: Id<"payments"> | null) => patchParams({ id: id ? String(id) : null }),
+    [patchParams],
+  );
+
   const [payoutBusy, setPayoutBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const reduced = useReducedMotion();
 
-  const search = useDebouncedValue(rawSearch, 250);
-  const window = useMemo(
-    () => resolveWindow(range, custom),
-    [range, custom.from, custom.to],
-  );
+  // NOT named `window` — a local of that name shadows the global inside this
+  // whole function body, which would break patchParams' globalThis.location
+  // read and anything else reaching for the real window.
+  const dateWindow = useMemo(() => resolveWindow(range, custom), [range, custom]);
   const windowLabel = formatWindowLabel(range, custom);
-  const days = window.days;
+  const days = dateWindow.days;
 
   // getPaymentInsights caps its scan at MAX_INSIGHT_DAYS and throws beyond it.
   // Check here so a wide custom range explains itself instead of erroring the
@@ -123,7 +220,7 @@ export default function PayoutsPage() {
   const insightsRaw = useQuery(
     api.shopPayments.getPaymentInsights,
     ctx && insightsInRange
-      ? { startMs: window.startMs, endMs: window.endMs }
+      ? { startMs: dateWindow.startMs, endMs: dateWindow.endMs }
       : "skip",
   );
   // Hold the previous window's numbers while a new one loads, so changing the
@@ -136,8 +233,8 @@ export default function PayoutsPage() {
       ? {
           paginationOpts: { numItems: 50, cursor: null },
           status,
-          startMs: window.startMs,
-          endMs: window.endMs,
+          startMs: dateWindow.startMs,
+          endMs: dateWindow.endMs,
           ...(mechanicId !== "all"
             ? { mechanicId: mechanicId as Id<"mechanics"> }
             : {}),
@@ -253,14 +350,7 @@ export default function PayoutsPage() {
         <>
           {/* One range control, scoping everything below it. */}
           <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
-            <DateRangePicker
-              range={range}
-              custom={custom}
-              onChange={(r, c) => {
-                setRange(r);
-                setCustom(c);
-              }}
-            />
+            <DateRangePicker range={range} custom={custom} onChange={setRange} />
 
             <div
               className="flex gap-1 rounded-lg bg-muted p-1"
@@ -333,7 +423,7 @@ export default function PayoutsPage() {
                   <div className="lg:col-span-2">
                     <NetRevenueChart
                       overview={stripe.overview}
-                      window={window}
+                      window={dateWindow}
                       windowLabel={windowLabel}
                       loading={stripe.loading}
                       isRefreshing={stripe.isRefreshing}
@@ -364,7 +454,7 @@ export default function PayoutsPage() {
                   action={
                     <ExportMenu
                       shopName={ctx.shopName}
-                      window={window}
+                      window={dateWindow}
                       filters={{ status, mechanicId, search }}
                       insights={insightsInRange ? insights : null}
                       overview={stripe.overview}
@@ -454,13 +544,22 @@ export default function PayoutsPage() {
                       search={rawSearch}
                       onSearchChange={setRawSearch}
                       status={status}
-                      onStatusChange={setStatus}
+                      onStatusChange={(v) =>
+                        patchParams({ status: v === "all" ? null : v })
+                      }
                       mechanicId={mechanicId}
-                      onMechanicChange={setMechanicId}
+                      onMechanicChange={(v) =>
+                        patchParams({ mechanic: v === "all" ? null : v })
+                      }
+                      onClearFilters={() => {
+                        // One patch, not three — see the prop's comment.
+                        setRawSearch("");
+                        patchParams({ q: null, status: null, mechanic: null });
+                      }}
                       exportSlot={
                         <ExportMenu
                           shopName={ctx.shopName}
-                          window={window}
+                          window={dateWindow}
                           filters={{ status, mechanicId, search }}
                           insights={insightsInRange ? insights : null}
                           overview={stripe.overview}
@@ -490,5 +589,24 @@ export default function PayoutsPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function PayoutsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-6xl space-y-6 pb-16">
+          <Skeleton className="h-9 w-48" />
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-5">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <Skeleton key={i} className="h-32 rounded-2xl" />
+            ))}
+          </div>
+        </div>
+      }
+    >
+      <PayoutsPageInner />
+    </Suspense>
   );
 }

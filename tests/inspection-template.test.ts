@@ -160,6 +160,21 @@ describe("multi-point inspection requirements", () => {
     expect(isFieldRequiredForZone("ENG", "oil_type", oilContext)).toBe(true);
   });
 
+  it("requires Battery & electrical readings before completing a Battery Test", () => {
+    const context = {
+      serviceNames: ["Battery Test"],
+      brakeScope: { hasBrakeWork: false, front: false, rear: false },
+    };
+
+    expect(isFieldRequiredForZone("ENG", "batt", context)).toBe(true);
+    expect(isFieldRequiredForZone("ENG", "term", context)).toBe(true);
+    expect(validateZoneForCompletion(createInspectionState(), "ENG", context)).toEqual({
+      valid: false,
+      fieldKey: "batt",
+      error: "Battery load test is required.",
+    });
+  });
+
   it("waives outgoing-tire checks only at booked replacement corners", () => {
     const context = {
       serviceNames: ["Tire Replacement"],

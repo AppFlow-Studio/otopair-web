@@ -63,6 +63,7 @@ import {
   resolveInspectionOption,
   TIRE_BRAND_OPTIONS,
   TIRE_MODEL_OPTIONS,
+  tireModelOptionsForBrand,
   TIRE_SIZE_OPTIONS,
   type InspectionOption,
 } from "@/lib/inspection-options";
@@ -1680,7 +1681,10 @@ function FieldRow({
   }
 
   const value = zs.text[field.key] ?? "";
-  const options = optionsForInspectionField(field.key);
+  const options =
+    field.key === "tire_model"
+      ? tireModelOptionsForBrand(zs.text.tire_brand)
+      : optionsForInspectionField(field.key);
   const resolved = resolveInspectionOption(value, options);
   const selected = resolved
     ? resolved.value
@@ -1692,7 +1696,13 @@ function FieldRow({
       field.key === "tire_size" && next !== OTHER_INSPECTION_OPTION
         ? normalizeTireSize(next)
         : next;
-    if (field.key === "tire_brand" || field.key === "tire_model") {
+    if (field.key === "tire_brand") {
+      onPatch({
+        text: { ...zs.text, tire_brand: normalized, tire_model: "" },
+      });
+      return;
+    }
+    if (field.key === "tire_model") {
       onPatch({ text: { ...zs.text, [field.key]: normalized } });
       return;
     }

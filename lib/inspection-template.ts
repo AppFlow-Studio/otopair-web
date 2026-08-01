@@ -591,8 +591,14 @@ export function isFieldRequiredForZone(
     }
     return false;
   }
-  if (zoneId === "ENG" && getBookingServiceFlags(context.serviceNames).hasOilChange) {
-    return fieldKey === "oil_viscosity" || fieldKey === "oil_type";
+  if (zoneId === "ENG") {
+    const flags = getBookingServiceFlags(context.serviceNames);
+    if (flags.hasBatteryTest && (fieldKey === "batt" || fieldKey === "term")) {
+      return true;
+    }
+    if (flags.hasOilChange && (fieldKey === "oil_viscosity" || fieldKey === "oil_type")) {
+      return true;
+    }
   }
   return false;
 }

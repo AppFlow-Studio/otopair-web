@@ -1,6 +1,7 @@
 // Mirrors the current Otopair service groupings used for service-aware UI states.
 
 const OIL_CHANGE_SERVICES = new Set(["oil change"]);
+const BATTERY_TEST_SERVICES = new Set(["battery test", "battery test service"]);
 
 const TIRE_AND_WHEEL_SERVICES = new Set([
   "tire rotation",
@@ -49,6 +50,11 @@ export function isOilChangeService(value: string) {
   return OIL_CHANGE_SERVICES.has(normalized);
 }
 
+export function isBatteryTestService(value: string) {
+  const normalized = normalizeServiceName(value);
+  return BATTERY_TEST_SERVICES.has(normalized);
+}
+
 export function isTireService(value: string) {
   const normalized = normalizeServiceName(value);
   return (
@@ -82,6 +88,7 @@ export function isFluidService(value: string) {
 export function getBookingServiceFlags(services: string[]) {
   return {
     hasOilChange: services.some(isOilChangeService),
+    hasBatteryTest: services.some(isBatteryTestService),
     hasTireWork: services.some(isTireService),
     hasBrakeWork: services.some(isBrakeService),
     hasFluidWork: services.some(

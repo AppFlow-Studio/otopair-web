@@ -93,6 +93,17 @@ export const TIRE_MODEL_OPTIONS: InspectionOption[] = [
   { value: "general_altimax", label: "General AltiMAX", aliases: ["altimax", "altimax rt43"] },
 ];
 
+export function tireModelOptionsForBrand(
+  brand: string | null | undefined,
+): InspectionOption[] {
+  const brandValue = resolveInspectionOption(brand, TIRE_BRAND_OPTIONS)?.value;
+  if (!brandValue) return [];
+  const modelPrefix = brandValue === "bfgoodrich" ? "bfg" : brandValue;
+  return TIRE_MODEL_OPTIONS.filter((option) =>
+    option.value.startsWith(`${modelPrefix}_`),
+  );
+}
+
 export const TIRE_SIZE_OPTIONS: InspectionOption[] = [
   "195/65R15",
   "205/55R16",

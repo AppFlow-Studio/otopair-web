@@ -4960,45 +4960,51 @@ function validatePrejobReport(
   brakeScope: BrakeScope,
   tireReplacementPositions: TirePosition[],
 ) {
-  const replaced = new Set(tireReplacementPositions);
+  const tireInspectionRequired =
+    serviceFlags.hasTireWork || serviceFlags.hasBrakeWork;
+  const replaced = new Set(
+    serviceFlags.hasTireReplacement ? tireReplacementPositions : [],
+  );
   if (typeof prejob.mileage !== "number" || !Number.isFinite(prejob.mileage)) {
     throw new Error("Mileage is required before starting this booking.");
   }
-  const tireDetails = prejob.tire_details ?? {};
-  const tireLabels: Record<TirePosition, string> = {
-    front_left: "Front-left",
-    front_right: "Front-right",
-    rear_left: "Rear-left",
-    rear_right: "Rear-right",
-  };
-  for (const position of Object.keys(tireLabels) as TirePosition[]) {
-    if (
-      !replaced.has(position) &&
-      !hasText(tireDetails[position]?.brand) &&
-      !hasText(prejob.tire_brand)
-    ) {
-      throw new Error(
-        `${tireLabels[position]} tire brand is required before starting this booking.`,
-      );
+  if (tireInspectionRequired) {
+    const tireDetails = prejob.tire_details ?? {};
+    const tireLabels: Record<TirePosition, string> = {
+      front_left: "Front-left",
+      front_right: "Front-right",
+      rear_left: "Rear-left",
+      rear_right: "Rear-right",
+    };
+    for (const position of Object.keys(tireLabels) as TirePosition[]) {
+      if (
+        !replaced.has(position) &&
+        !hasText(tireDetails[position]?.brand) &&
+        !hasText(prejob.tire_brand)
+      ) {
+        throw new Error(
+          `${tireLabels[position]} tire brand is required before starting this booking.`,
+        );
+      }
     }
-  }
-  if (!hasText(prejob.tire_size_front)) {
-    throw new Error("Front tire size is required before starting this booking.");
-  }
-  if (!hasText(prejob.tire_size_rear)) {
-    throw new Error("Rear tire size is required before starting this booking.");
-  }
-  if (
-    (!replaced.has("front_left") || !replaced.has("front_right")) &&
-    !hasText(prejob.front_tire_condition)
-  ) {
-    throw new Error("Front tire condition is required before starting this booking.");
-  }
-  if (
-    (!replaced.has("rear_left") || !replaced.has("rear_right")) &&
-    !hasText(prejob.rear_tire_condition)
-  ) {
-    throw new Error("Rear tire condition is required before starting this booking.");
+    if (!hasText(prejob.tire_size_front)) {
+      throw new Error("Front tire size is required before starting this booking.");
+    }
+    if (!hasText(prejob.tire_size_rear)) {
+      throw new Error("Rear tire size is required before starting this booking.");
+    }
+    if (
+      (!replaced.has("front_left") || !replaced.has("front_right")) &&
+      !hasText(prejob.front_tire_condition)
+    ) {
+      throw new Error("Front tire condition is required before starting this booking.");
+    }
+    if (
+      (!replaced.has("rear_left") || !replaced.has("rear_right")) &&
+      !hasText(prejob.rear_tire_condition)
+    ) {
+      throw new Error("Rear tire condition is required before starting this booking.");
+    }
   }
   if (
     typeof baselineMileage === "number" &&
@@ -5029,7 +5035,8 @@ function validatePrejobReport(
   }
   const measurementResult = validateInspectionMeasurements({
     tire_tread: prejob.tire_tread,
-    tire_replacement_positions: tireReplacementPositions,
+    tire_replacement_positions: [...replaced],
+    require_tire_tread: tireInspectionRequired,
     brakes: prejob.brakes,
     brake_scope: brakeScope,
   });
@@ -5043,6 +5050,20 @@ function validatePrejobReport(
     if (!hasText(prejob.fluid_overrides?.oil_type)) {
       throw new Error("Oil type is required for an oil change.");
     }
+  }
+  if (
+    serviceFlags.hasCoolantFlush &&
+    !hasText(prejob.fluid_overrides?.coolant_type)
+  ) {
+    throw new Error("Coolant type is required for a coolant flush.");
+  }
+  if (
+    serviceFlags.hasTransmissionFluidService &&
+    !hasText(prejob.fluid_overrides?.transmission_fluid_type)
+  ) {
+    throw new Error(
+      "Transmission fluid type is required for a transmission fluid service.",
+    );
   }
 }
 

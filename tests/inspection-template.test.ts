@@ -94,14 +94,23 @@ describe("multi-point inspection requirements", () => {
     expect(patch.measures?.tread).toBe("4");
   });
 
-  it("always requires all four corner zones because final validation requires all tires", () => {
+  it("requires only service-relevant zones", () => {
     expect(requiredZonesForBooking(["Oil Change"])).toEqual([
+      "ENG",
+    ]);
+    expect(requiredZonesForBooking(["Tire Rotation"])).toEqual([
       "FL",
       "FR",
       "RL",
       "RR",
-      "ENG",
     ]);
+    expect(requiredZonesForBooking(["Brake Pad Replacement"])).toEqual([
+      "FL",
+      "FR",
+      "RL",
+      "RR",
+    ]);
+    expect(requiredZonesForBooking(["Battery Replacement"])).toEqual([]);
   });
 
   it("labels a rotor at the reference as in spec but near the minimum", () => {
@@ -151,13 +160,33 @@ describe("multi-point inspection requirements", () => {
       brakeScope: { hasBrakeWork: true, front: true, rear: false },
     };
 
-    expect(isFieldRequiredForZone("FR", "tire_brand", oilContext)).toBe(true);
-    expect(isFieldRequiredForZone("FR", "tire_size", oilContext)).toBe(true);
+    const tireContext = {
+      serviceNames: ["Tire Rotation"],
+      brakeScope: { hasBrakeWork: false, front: false, rear: false },
+    };
+
+    expect(isFieldRequiredForZone("FR", "tire_brand", oilContext)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "tire_size", oilContext)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "tire_brand", tireContext)).toBe(true);
+    expect(isFieldRequiredForZone("FR", "psi", tireContext)).toBe(true);
     expect(isFieldRequiredForZone("FR", "pad", oilContext)).toBe(false);
     expect(isFieldRequiredForZone("FR", "pad", frontBrakeContext)).toBe(true);
     expect(isFieldRequiredForZone("RR", "pad", frontBrakeContext)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "psi", frontBrakeContext)).toBe(false);
     expect(isFieldRequiredForZone("ENG", "oil_viscosity", oilContext)).toBe(true);
     expect(isFieldRequiredForZone("ENG", "oil_type", oilContext)).toBe(true);
+    expect(
+      isFieldRequiredForZone("ENG", "coolant_type", {
+        serviceNames: ["Coolant Flush"],
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      }),
+    ).toBe(true);
+    expect(
+      isFieldRequiredForZone("ENG", "af", {
+        serviceNames: ["Engine Air Filter"],
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      }),
+    ).toBe(false);
   });
 
   it("requires Battery & electrical readings before completing a Battery Test", () => {
@@ -205,6 +234,7 @@ describe("multi-point inspection requirements", () => {
   it("requires tire condition on a corner that is not being replaced", () => {
     const state = createInspectionState();
     state.zones.FL!.measures.tread = "7";
+    state.zones.FL!.measures.psi = "32";
     state.zones.FL!.text.tire_brand = "michelin";
     state.zones.FL!.text.tire_size = "225/45R18";
 

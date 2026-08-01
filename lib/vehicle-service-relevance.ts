@@ -2,6 +2,12 @@
 
 const OIL_CHANGE_SERVICES = new Set(["oil change"]);
 const BATTERY_TEST_SERVICES = new Set(["battery test", "battery test service"]);
+const TIRE_REPLACEMENT_SERVICES = new Set(["tire replacement"]);
+const COOLANT_FLUSH_SERVICES = new Set(["coolant flush"]);
+const TRANSMISSION_FLUID_SERVICES = new Set([
+  "transmission fluid service",
+  "transmission service",
+]);
 
 const TIRE_AND_WHEEL_SERVICES = new Set([
   "tire rotation",
@@ -55,6 +61,18 @@ export function isBatteryTestService(value: string) {
   return BATTERY_TEST_SERVICES.has(normalized);
 }
 
+export function isTireReplacementService(value: string) {
+  return TIRE_REPLACEMENT_SERVICES.has(normalizeServiceName(value));
+}
+
+export function isCoolantFlushService(value: string) {
+  return COOLANT_FLUSH_SERVICES.has(normalizeServiceName(value));
+}
+
+export function isTransmissionFluidService(value: string) {
+  return TRANSMISSION_FLUID_SERVICES.has(normalizeServiceName(value));
+}
+
 export function isTireService(value: string) {
   const normalized = normalizeServiceName(value);
   return (
@@ -89,6 +107,9 @@ export function getBookingServiceFlags(services: string[]) {
   return {
     hasOilChange: services.some(isOilChangeService),
     hasBatteryTest: services.some(isBatteryTestService),
+    hasTireReplacement: services.some(isTireReplacementService),
+    hasCoolantFlush: services.some(isCoolantFlushService),
+    hasTransmissionFluidService: services.some(isTransmissionFluidService),
     hasTireWork: services.some(isTireService),
     hasBrakeWork: services.some(isBrakeService),
     hasFluidWork: services.some(

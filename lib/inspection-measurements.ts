@@ -51,6 +51,7 @@ export type RotorThicknessMeasurements = Partial<
 export type InspectionMeasurementsInput = {
   tire_tread?: TireTreadMeasurements | null;
   tire_replacement_positions?: TirePosition[];
+  require_tire_tread?: boolean;
   brakes?: {
     rotor_thickness?: RotorThicknessMeasurements | null;
   } | null;
@@ -202,18 +203,20 @@ function validateRotorReading(
 export function validateInspectionMeasurements(
   input: InspectionMeasurementsInput,
 ): InspectionValidationResult {
-  for (const position of TIRE_POSITIONS) {
-    if (
-      input.tire_replacement_positions?.includes(position) &&
-      !input.tire_tread?.[position]
-    ) {
-      continue;
+  if (input.require_tire_tread !== false) {
+    for (const position of TIRE_POSITIONS) {
+      if (
+        input.tire_replacement_positions?.includes(position) &&
+        !input.tire_tread?.[position]
+      ) {
+        continue;
+      }
+      const result = validateTreadReading(
+        position,
+        input.tire_tread?.[position],
+      );
+      if (!result.valid) return result;
     }
-    const result = validateTreadReading(
-      position,
-      input.tire_tread?.[position],
-    );
-    if (!result.valid) return result;
   }
 
   if (!input.brake_scope.hasBrakeWork) return { valid: true };

@@ -574,13 +574,22 @@ export function isFieldRequiredForZone(
   context: ZoneCompletionContext,
 ): boolean {
   if (CORNER_IDS.includes(zoneId)) {
-    if (fieldKey === "tire_size") {
-      return true;
-    }
-    if (["tread", "wear", "tire_brand"].includes(fieldKey)) {
-      return !context.tireReplacementPositions?.includes(
+    const flags = getBookingServiceFlags(context.serviceNames);
+    const tireInspectionRequired =
+      flags.hasTireWork || flags.hasBrakeWork || context.brakeScope.hasBrakeWork;
+    const isReplacementTire =
+      flags.hasTireReplacement &&
+      context.tireReplacementPositions?.includes(
         zoneId as Extract<ZoneId, "FL" | "FR" | "RL" | "RR">,
       );
+    if (fieldKey === "tire_size") {
+      return tireInspectionRequired;
+    }
+    if (["tread", "wear", "tire_brand"].includes(fieldKey)) {
+      return tireInspectionRequired && !isReplacementTire;
+    }
+    if (fieldKey === "psi") {
+      return flags.hasTireWork && !isReplacementTire;
     }
     if (fieldKey === "pad" || fieldKey === "rotor") {
       const front = zoneId === "FL" || zoneId === "FR";
@@ -597,6 +606,12 @@ export function isFieldRequiredForZone(
       return true;
     }
     if (flags.hasOilChange && (fieldKey === "oil_viscosity" || fieldKey === "oil_type")) {
+      return true;
+    }
+    if (flags.hasCoolantFlush && fieldKey === "coolant_type") {
+      return true;
+    }
+    if (flags.hasTransmissionFluidService && fieldKey === "transmission_fluid_type") {
       return true;
     }
   }
@@ -733,8 +748,9 @@ export function validateZoneForCompletion(
       return fail("tire_brand", "Enter the tire brand.");
     }
     const size = normalizeTireSize(zs.text.tire_size ?? "");
-    if (!size) return fail("tire_size", "Tire size is required.");
-    if (!TIRE_SIZE_PATTERN.test(size)) {
+    const sizeRequired = isFieldRequiredForZone(zoneId, "tire_size", context);
+    if (sizeRequired && !size) return fail("tire_size", "Tire size is required.");
+    if (size && !TIRE_SIZE_PATTERN.test(size)) {
       return fail("tire_size", "Tire size must look like 225/45R18.");
     }
   }
@@ -781,13 +797,17 @@ export function validateZoneForCompletion(
  */
 export function requiredZonesForBooking(serviceNames: string[]): ZoneId[] {
   const flags = getBookingServiceFlags(serviceNames);
-  const required = new Set<ZoneId>(["FL", "FR", "RL", "RR"]);
+  const required = new Set<ZoneId>();
 
-  if (flags.hasFluidWork || flags.hasOilChange) {
-    required.add("ENG");
+  if (flags.hasTireWork || flags.hasBrakeWork) {
+    CORNER_IDS.forEach((zoneId) => required.add(zoneId));
   }
-  // A pure diagnostic / unknown booking still captures the engine baseline.
-  if (!flags.hasBrakeWork && !flags.hasTireWork && !flags.hasFluidWork && !flags.hasOilChange) {
+  if (
+    flags.hasOilChange ||
+    flags.hasBatteryTest ||
+    flags.hasCoolantFlush ||
+    flags.hasTransmissionFluidService
+  ) {
     required.add("ENG");
   }
   return INSPECTION_ZONES.filter((z) => required.has(z.id)).map((z) => z.id);

@@ -41,6 +41,16 @@ import {
 import { tierValidator } from "./lib/vehicleTiers";
 
 export default defineSchema({
+  // Short-lived 2FA verification codes. Server-only — the client never reads
+  // the code; it submits an entered value to `two_factor.verifyCode`.
+  two_factor_codes: defineTable({
+    clerkUserId: v.string(),
+    method: v.string(), // "email" | "sms"
+    code: v.string(),
+    expiresAt: v.number(),
+    attempts: v.number(),
+  }).index("by_user_method", ["clerkUserId", "method"]),
+
   // ===== CORE VEHICLE REFERENCE =====
 
   // [W] 9 fields (A/D had 3)
@@ -1459,6 +1469,11 @@ export default defineSchema({
     preOnboardingComplete: v.optional(v.boolean()),
     onboardingComplete: v.optional(v.boolean()),
     setupCardDismissed: v.optional(v.boolean()),
+    // Saved-but-not-finished Service History answers from CarInfoStepper.
+    // Persisted on "Finish for now" so a returning user sees the cards they
+    // already answered pre-completed. Shape:
+    //   { answers, questionIndex, progress, completed: string[] }
+    serviceHistoryDraft: v.optional(v.any()),
     usage_pattern: v.optional(v.string()),
     vehicle_age_years: v.optional(v.number()),
     mileage_tier: v.optional(v.string()),
@@ -1868,12 +1883,34 @@ export default defineSchema({
     acquisition_source: v.optional(v.string()),
     onboardingCompleted: v.optional(v.boolean()),
     essentialOnboardingCompleted: v.optional(v.boolean()),
+    // User explicitly tapped "Finish later" during the optional
+    // portion of onboarding (post-phone/name). Independent from
+    // `essentialOnboardingCompleted` — that flag has strict field
+    // gates (email/emailConfirmed/phone/phoneVerified/name) that can
+    // fail silently for OAuth users mid-flow. This flag exists purely
+    // so re-login routes to home instead of dumping them back at the
+    // first step. Cleared when the user explicitly resumes onboarding
+    // from the home-page "Finish setup" card.
+    onboardingDeferred: v.optional(v.boolean()),
+    // Step the user was on when they tapped "Finish later" — used
+    // by the home-page "Finish setup" card to resume from the
+    // exact spot they left off, even if Convex thinks earlier
+    // steps are still incomplete (partial writes) and even across
+    // sign-outs (SecureStore doesn't survive).
+    onboardingDeferredStep: v.optional(v.string()),
     tellUsAboutCompleted: v.optional(v.boolean()),
     user_intentions: v.optional(v.any()),
     language: v.optional(v.string()),
     units: v.optional(v.string()),
     role: v.optional(v.string()),
     stripe_customer_id: v.optional(v.string()),
+    // Flips true once the user has at least one saved payment method
+    // on the Stripe customer. Consumed by the home-page "Finish setup"
+    // card so the payment-method tile becomes reactive (no Stripe
+    // round-trip per home visit). Stamped by webhook handlers when a
+    // SetupIntent succeeds or a PaymentMethod attaches; cleared if the
+    // user removes their last card.
+    has_saved_payment_method: v.optional(v.boolean()),
     // Expo push token registered by mobile on app open / after onboarding.
     // Consumed by convex/lib/push_dispatcher.ts. Cleared on
     // `DeviceNotRegistered` from Expo Push API.
@@ -3278,6 +3315,10 @@ export default defineSchema({
     booking_id: v.optional(v.id("bookings")),
     message_count: v.optional(v.number()),
     session_id: v.optional(v.string()),
+    // Chat-history drawer: user-set title (overrides the derived arc-summary
+    // title) and pin timestamp (non-null = pinned, sorts to the top).
+    custom_title: v.optional(v.string()),
+    pinned_at: v.optional(v.number()),
     // -----------------------------------------------------------------------
     // [RESTORED post-merge — Sprint 2 conversation_state fields]
     // Conversation state (v0.7) — Oto-maintained context across turns.
@@ -3335,6 +3376,11 @@ export default defineSchema({
     timestamp: v.number(),
     confidence_score: v.optional(v.number()),
     metadata: v.optional(v.any()),
+    // Persisted render envelope (quickReplies / bookService / linkButton /
+    // bookingCard / bookingsList / reasoning / sources / record-confirm) so
+    // the inline interactive components come back when a conversation is
+    // re-opened from history instead of collapsing to a text-only transcript.
+    render: v.optional(v.any()),
   })
     .index("by_conversation_id", ["conversation_id"])
     .index("by_role", ["role"])

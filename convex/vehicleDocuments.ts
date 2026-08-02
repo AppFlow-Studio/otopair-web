@@ -157,18 +157,33 @@ export const confirmExtraction = mutation({
       .withIndex("by_document", (q) => q.eq("document_id", documentId))
       .order("desc")
       .first();
-    if (!extraction) throw new Error("No parsed extraction to confirm");
 
-    const mergedPayload = edits
-      ? { ...(extraction.payload as object), ...(edits as object) }
-      : extraction.payload;
+    if (!extraction) {
+      // Auto-parse failed (or never produced an extraction) and the user is
+      // entering the details by hand — create the extraction from their
+      // edits instead of dead-ending.
+      await ctx.db.insert("vehicle_document_extractions", {
+        document_id: documentId,
+        schema_version: 1,
+        payload: (edits as object) ?? {},
+        overall_confidence: 1,
+        review_state: "user_confirmed",
+        created_at: Date.now(),
+        reviewed_at: Date.now(),
+        reviewed_by: user._id,
+      });
+    } else {
+      const mergedPayload = edits
+        ? { ...(extraction.payload as object), ...(edits as object) }
+        : extraction.payload;
 
-    await ctx.db.patch(extraction._id, {
-      payload: mergedPayload,
-      review_state: "user_confirmed",
-      reviewed_at: Date.now(),
-      reviewed_by: user._id,
-    });
+      await ctx.db.patch(extraction._id, {
+        payload: mergedPayload,
+        review_state: "user_confirmed",
+        reviewed_at: Date.now(),
+        reviewed_by: user._id,
+      });
+    }
     await ctx.db.patch(documentId, {
       parse_status: "parsed",
       parsed_at: Date.now(),
@@ -215,6 +230,38 @@ export const rejectExtraction = mutation({
         reviewed_by: user._id,
       });
     }
+    return { ok: true };
+  },
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// PUBLIC: deleteDocument — permanently remove a receipt + its extraction + file
+// ───────────────────────────────────────────────────────────────────────────
+
+export const deleteDocument = mutation({
+  args: { documentId: v.id("vehicle_documents") },
+  handler: async (ctx, { documentId }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!user) throw new Error("User not found");
+
+    const doc = await ctx.db.get(documentId);
+    if (!doc || doc.user_id !== user._id) throw new Error("Document not found");
+
+    // Remove every extraction row for this doc, then the stored file, then
+    // the doc itself. Storage delete is best-effort — a missing blob
+    // shouldn't block removing the record from the user's history.
+    const extractions = await ctx.db
+      .query("vehicle_document_extractions")
+      .withIndex("by_document", (q) => q.eq("document_id", documentId))
+      .collect();
+    for (const e of extractions) await ctx.db.delete(e._id);
+    await ctx.storage.delete(doc.storage_id).catch(() => {});
+    await ctx.db.delete(documentId);
     return { ok: true };
   },
 });

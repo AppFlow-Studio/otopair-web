@@ -351,6 +351,18 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
     }
 
     if (event.type === "setup_intent.succeeded") {
+      // Flip `users.has_saved_payment_method = true` so the home-page
+      // "Finish setup" tile reactively marks Payment as complete
+      // (no per-visit Stripe API hit needed).
+      const si = event.data.object as Stripe.SetupIntent;
+      const customerId =
+        typeof si.customer === "string" ? si.customer : si.customer?.id;
+      if (customerId) {
+        await ctx.runMutation(
+          internal.payments_stripe._setUserHasSavedPaymentMethodByCustomerId,
+          { stripeCustomerId: customerId, value: true },
+        );
+      }
       await ctx.runMutation(internal.stripe_webhook_events.record, {
         eventId: event.id,
         eventType: event.type,

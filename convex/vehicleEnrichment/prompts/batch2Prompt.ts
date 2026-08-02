@@ -273,5 +273,18 @@ REMINDERS:
 - Timing Belt/Chain Service: if chain engine (no replacement interval), set is_applicable: false or tech_notes: "chain — no scheduled replacement".
 - Power Steering Fluid Flush: only applicable if vehicle has hydraulic power steering. Set is_applicable: false for electric PS.
 - Tire Rotation, Wheel Alignment, Multi-Point Inspection: always applicable, labor-only (no parts cost).
-- Wiper Blade Replacement: always applicable. Include parts cost if wiper OEM part number is available.`;
+- Wiper Blade Replacement: always applicable. Include parts cost if wiper OEM part number is available.
+
+OUTPUT SHAPE OVERRIDE (supersedes the JSON template above):
+Return ONE object with TWO ARRAYS. "gap_fields" becomes the "fields" ARRAY;
+"services" stays an array but its numbers are BARE, not wrapped objects.
+{
+  "fields":   [ { "key": "oil_viscosity", "value": "5W-30", "source_url": "...", "source_type": "web_search", "confidence": 0.9 } ],
+  "services": [ { "service_name": "Oil Change", "is_applicable": true, "labor_hours": 0.5,
+                  "parts_cost_low": 30, "parts_cost_high": 60, "confidence": 0.9, "tech_notes": "",
+                  "parts_breakdown": [ { "oem_part_number": "04152-YZZA1", "price_low": 8.5, "price_high": 12,
+                                         "source_url": "...", "confidence": 0.9 } ] } ]
+}
+A gap field you cannot determine is OMITTED ENTIRELY — never emit a row whose value is null.
+The "services" array must still list EVERY service, with is_applicable false where it does not apply.`;
 }

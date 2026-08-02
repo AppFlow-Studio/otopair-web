@@ -26,9 +26,10 @@ import type {
 import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS, SIBLING_INHERIT_RULES, parseFrontWiperSizes, ON_DEMAND_SERVICE_SLUGS, WEAR_ITEM_SERVICE_SLUGS } from "./types";
 import { submitBatch, getBatchStatus, getBatchResults, type BatchRequest } from "./utils/batchClient";
 import {
-  buildBatch1aOutputSchema,
-  buildBatch1bOutputSchema,
-  buildBatch2OutputSchema,
+  buildBatch1aArraySchema,
+  buildBatch1bArraySchema,
+  buildBatch2ArraySchema,
+  normalizeBatchShape,
   buildVdbMappingOutputSchema,
   BATCH_1A_INTERVAL_KEYS,
   BATCH_1B_INTERVAL_KEYS,
@@ -2958,7 +2959,7 @@ export const enrichVehicleBatchV3 = internalAction({
         maxTokens: 8192,
         temperature: 0,
         maxSearchUses: 0,
-        outputSchema: buildBatch1aOutputSchema(detectedPackages.map((p) => p.code)),
+        outputSchema: buildBatch1aArraySchema(detectedPackages.map((p) => p.code)),
       },
       {
         customId: "batch1b",
@@ -2968,7 +2969,7 @@ export const enrichVehicleBatchV3 = internalAction({
         temperature: 0,
         maxSearchUses: 1,
         blockedDomains: runtimeBlockedDomains,
-        outputSchema: buildBatch1bOutputSchema(),
+        outputSchema: buildBatch1bArraySchema(),
       },
     ];
 
@@ -3345,8 +3346,8 @@ async function runPollBatch1Body(
       ...(r1b && !r1b.error ? [{ call: "batch1b", tokensIn: r1b.usage.tokensIn, tokensOut: r1b.usage.tokensOut, webSearches: r1b.usage.webSearches, durationMs: 0 }] : []),
     ];
 
-    const fields1a = parseBatch1a(r1a.data);
-    const fields1b = r1b && !r1b.error ? parseBatch1b(r1b.data) : {};
+    const fields1a = parseBatch1a(normalizeBatchShape(r1a.data, "1a"));
+    const fields1b = r1b && !r1b.error ? parseBatch1b(normalizeBatchShape(r1b.data, "1b")) : {};
     let fields = mergeBatch1(fields1a, fields1b);
 
     // Package-specific OEM parts (only present when assessAvailablePackages
@@ -3549,7 +3550,7 @@ async function runPollBatch1Body(
           temperature: 0,
           maxSearchUses: batch2SearchUses,
           blockedDomains: batch2BlockedDomains,
-          outputSchema: buildBatch2OutputSchema(nullFields),
+          outputSchema: buildBatch2ArraySchema(nullFields),
         },
       ]);
     } catch (e) {
@@ -3776,7 +3777,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
 
     if (r2 && !r2.error) {
       // Gap fill — only fill nulls
-      const parsed = parseBatch2(r2.data, args.nullFields);
+      const parsed = parseBatch2(normalizeBatchShape(r2.data, "2"), args.nullFields);
       const gapFields = parsed.gapFields;
       services = parsed.services;
       for (const [k, fv] of Object.entries(gapFields)) {
@@ -3835,7 +3836,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               webSearches: gfRes.usage.webSearches,
               durationMs: 0,
             });
-            const gfParsed = parseBatch2(gfRes.data, stillNull);
+            const gfParsed = parseBatch2(normalizeBatchShape(gfRes.data, "2"), stillNull);
             let gfFilled = 0;
             for (const [k, fv] of Object.entries(gfParsed.gapFields)) {
               if (allFields[k]?.value == null) {
@@ -5196,6 +5197,18 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // Disable: PARTS_ROLE_RESOURCE=0 (detection still runs; only repair stops).
     let roleResourceGaps: Array<{ field: string; reason: string }> = [];
     let roleResourceErrors: string[] = [];
+    // Round 18: everything the post-pass-2 REPAIR RUNG needs, captured where it
+    // is in scope. Without a repair stage behind the second sweep, a pass-2
+    // refutation empties a role and nothing refills it until the next run —
+    // which is why the round-17 Jeep Grand Cherokee finished 0/3 quotable.
+    let repairCtx: {
+      metaBySubcategory: Record<string, any>;
+      fieldBySubcategory: Record<string, string>;
+      applicableSlugs: string[];
+      naKeys: Set<string>;
+      priorAttemptsByRole: Map<string, number>;
+      blockedOems: Set<string>;
+    } | null = null;
     let missingCoreRoleStrings: string[] = [];
     let axlePairGapStrings: string[] = [];
     let axleGapSanityFlags: Array<{ field: string; severity: "flag"; reason: string }> = [];
@@ -5326,6 +5339,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           // Rival incumbents join the exclusion set — the researcher must not
           // re-derive the very number that is flagged.
           for (const t of rivalTargets) for (const oem of t.flaggedOems) blockedOems.add(oem);
+          // Captured for the post-pass-2 repair rung below.
+          repairCtx = {
+            metaBySubcategory,
+            fieldBySubcategory,
+            applicableSlugs: applicableSlugsForRoles,
+            naKeys,
+            priorAttemptsByRole,
+            blockedOems,
+          };
           const outcomes = await resourceMissingRoles(
             ctx,
             {
@@ -5620,6 +5642,94 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           }
           for (const r of refuted2) {
             fitmentRefutedErrors.push(`fitment_refuted_pass2:${r.roleKey}:${r.oem}`);
+          }
+
+          // ── REPAIR RUNG (round 18) ──────────────────────────────────────
+          //
+          // Until now the sequence ended at a verdict: verify -> repair ->
+          // verify. A pass-2 refutation therefore emptied a role with NOTHING
+          // behind it, and the role stayed empty until the next run. Round 17
+          // measured the cost — the Jeep Grand Cherokee had all three of its
+          // parts refuted here and finished 0/3 quotable, an honest but
+          // unusable config.
+          //
+          // This closes the loop: whatever pass 2 just removed or demoted is
+          // re-sourced now, reusing the SAME machinery as the first repair —
+          // missingCoreRoles for roles pass 2 emptied, soleFlaggedWinnerRoles
+          // for roles where it flagged the only candidate. Nothing new is
+          // invented; the existing stages simply get to run once more.
+          //
+          // The refuted numbers join blockedOems, so the researcher cannot
+          // re-find the very part just rejected — without that, a role whose
+          // wrong number dominates the open web would loop straight back to it.
+          if (refuted2.length > 0 && repairCtx) {
+            try {
+              const rc = repairCtx;
+              for (const r of refuted2) rc.blockedOems.add(r.oem.toUpperCase());
+              const after = await ctx.runQuery(
+                internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
+                { vehicleConfigId: args.vehicleConfigId },
+              );
+              const refill = missingCoreRoles(after, rc.applicableSlugs, rc.naKeys);
+              const candidateRows: any[] = await ctx.runQuery(
+                internal.vehicleEnrichment.v3queries.getFitmentCandidateRows,
+                { vehicleConfigId: args.vehicleConfigId },
+              );
+              const rivals = soleFlaggedWinnerRoles(candidateRows)
+                .filter((r) => !rc.naKeys.has(r.roleKey))
+                .map((r) => ({
+                  serviceSlug: r.serviceType,
+                  roleKey: r.roleKey,
+                  fitmentService: r.serviceType,
+                  kind: "rival" as const,
+                  flaggedOems: r.flaggedOems,
+                }));
+              const targets = [...refill, ...rivals];
+              if (targets.length > 0) {
+                console.log(
+                  `[role-resource:2] repairing ${targets.length} role(s) emptied or demoted by pass 2: ` +
+                    targets.map((t) => t.roleKey).join(", "),
+                );
+                const repaired = await resourceMissingRoles(
+                  ctx,
+                  {
+                    year: args.year,
+                    make: args.make,
+                    model: args.model,
+                    trim: args.trim,
+                    engineCode: vehicle.engineCode,
+                    displacement: args.displacement,
+                    transmissionType:
+                      (allFields.transmission_type?.value as string | null) ?? undefined,
+                    vehicleConfigId: args.vehicleConfigId,
+                    makeId: args.makeId,
+                    buildSourceMake:
+                      resolveScrapeRedirect({
+                        make: args.make, model: args.model, model_year: args.year,
+                      })?.make ?? null,
+                  },
+                  targets,
+                  rc.metaBySubcategory,
+                  {
+                    priorAttemptsByRole: rc.priorAttemptsByRole,
+                    blockedOems: rc.blockedOems,
+                  },
+                );
+                const written = repaired.filter((o) => o.outcome === "written");
+                console.log(
+                  `[role-resource:2] ${written.length}/${targets.length} role(s) refilled after pass-2 refutation`,
+                );
+                for (const o of repaired) {
+                  roleResourceErrors.push(`role_resource_pass2:${o.roleKey}:${o.outcome}`);
+                }
+                fitmentRefutedErrors.push(
+                  `repair_rung:refilled:${written.length}/${targets.length}`,
+                );
+              }
+            } catch (e) {
+              console.warn("[role-resource:2] repair rung failed (non-fatal):", e);
+              fitmentRefutedErrors.push("repair_rung:failed");
+            }
           }
         }
       } catch (e) {

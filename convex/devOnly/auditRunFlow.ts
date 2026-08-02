@@ -354,6 +354,83 @@ async function buildAudit(ctx: any, configId: Id<"vehicle_configs">) {
         }
       : null,
     claim_ledger: claimLedger,
+    // ── Shippability gate (round 18) ────────────────────────────────────
+    //
+    // Until now "is this config good enough to serve?" was answered by a human
+    // reading these numbers. That does not scale past a handful of vehicles and
+    // it is not reproducible, so every round has been judged by eye.
+    //
+    // The criteria are CORRECTNESS-first, deliberately inverting the coverage
+    // KPIs that industry enrichment guides recommend (match rate >85%, coverage
+    // >90%). Those come from lead/CRM enrichment, where a missing phone number
+    // is a nuisance. Here a wrong brake pad is a safety defect, so a config
+    // with fewer parts and no wrong ones OUTRANKS a fuller one carrying a
+    // refuted part — and "quotable" already requires an OEM number, a trusted
+    // price, and no refute flag.
+    //
+    // Blockers make a config unservable. Warnings are quality debt that should
+    // be visible without gating a launch test.
+    shippable: (() => {
+      const blockers: string[] = [];
+      const warnings: string[] = [];
+
+      const quotable = parts.length - triangleBroken.length;
+      // A config that cannot quote anything cannot serve a customer at all.
+      if (quotable === 0) blockers.push("no_quotable_parts");
+      // The three headline services a launch test will actually exercise.
+      const coreSlugs = ["oil_change", "brake_pad_replacement", "filter_replacement"];
+      const q: any = run?.quotability;
+      for (const slug of coreSlugs) {
+        const svc = (q?.services ?? []).find((s: any) => s.slug === slug);
+        if (svc && (svc.core_with_price ?? 0) < (svc.core_total ?? 0)) {
+          warnings.push(`incomplete_service:${slug}`);
+        }
+      }
+      // Correctness blockers: anything the gates positively condemned must not
+      // still be sitting in a role a quote could reach.
+      const flagged = parts.filter((p) => p.refute_flagged);
+      if (flagged.length > 0) {
+        blockers.push(`refuted_parts_present:${flagged.length}`);
+      }
+      // A part with no observed title has no component-identity evidence — the
+      // signal that caught the battery-cable-as-battery class.
+      const untitled = parts.filter((p) => !p.scraped_name);
+      if (untitled.length > 0) warnings.push(`parts_without_observed_title:${untitled.length}`);
+
+      // Run health: a run that failed, timed out, or never searched did not
+      // actually do the work, whatever its stored numbers say.
+      if (run && run.status !== "complete") blockers.push(`run_${run.status}`);
+      const tags = tallyTags(run?.errors);
+      for (const t of Object.keys(tags)) {
+        if (t.endsWith("_errored") || t === "batch1_submission_failed") {
+          blockers.push(`api_failure:${t}`);
+        }
+      }
+      if ((run?.total_web_searches ?? 0) === 0 && run?.trigger !== "cache") {
+        warnings.push("zero_web_searches");
+      }
+      // Known-unfixed systemic issues surface as warnings so a launch test is
+      // not blocked on them, but nobody can claim they were unknown.
+      if (tags["applicable_services_empty_fallback_used"] ||
+          tags["applicable_services_structural_fallback_used"] ||
+          tags["applicable_services_unknown"]) {
+        warnings.push("batch2_returned_no_applicable_services");
+      }
+      if (!cfg.rotor_front_min_thickness_mm && !cfg.rotor_rear_min_thickness_mm) {
+        warnings.push("no_rotor_minimums");
+      }
+      if (!epa) warnings.push("no_epa_join");
+
+      return {
+        ready: blockers.length === 0,
+        blockers,
+        warnings,
+        quotable_parts: quotable,
+        criteria:
+          "correctness-first: a config with fewer parts and none refuted outranks " +
+          "a fuller one carrying a condemned part",
+      };
+    })(),
     // Everything a reviewer should eyeball first.
     headline: {
       status: cfg.enrichment_status ?? null,

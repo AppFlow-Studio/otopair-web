@@ -177,12 +177,20 @@ export const searchBySize = action({
       }
     }
 
-    // Mark size as scraped so future calls hit the cache
-    await ctx.runMutation(internal.tires_catalog.markTireSizeScraped, {
-      size: args.size,
-      total_count: simpleTireResult.total_count,
-      source_url: simpleTireResult.source_url,
-    });
+    // Mark size as scraped so future calls hit the cache — but only when the
+    // scrape actually cataloged something. Caching an empty result turns one
+    // bad scrape into a permanent "Cache hit — returning 0 models" for every
+    // future vehicle sharing the size (observed across 10+ sizes, Jul 2026
+    // 5-VIN test). An empty scrape stays uncached so the next call retries.
+    if (modelIdMap.size > 0) {
+      await ctx.runMutation(internal.tires_catalog.markTireSizeScraped, {
+        size: args.size,
+        total_count: simpleTireResult.total_count,
+        source_url: simpleTireResult.source_url,
+      });
+    } else {
+      console.warn(`[tires] Scrape for ${args.size} produced 0 catalogable models — NOT caching (will retry on next call)`);
+    }
 
     // Apply vehicle-specific filters before returning (cache stores all tires unfiltered)
     let tires: any[] = simpleTireResult.tires;

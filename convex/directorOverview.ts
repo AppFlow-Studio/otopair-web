@@ -11,6 +11,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
+import { requireDirector } from "./directorGate";
 
 const periodValidator = v.union(
   v.literal("today"),
@@ -44,8 +45,9 @@ function deltaPct(cur: number, prior: number): number | null {
 // ---------------------------------------------------------------------------
 
 export const overviewMetrics = query({
-  args: { period: v.optional(periodValidator) },
-  handler: async (ctx, { period = "30d" }) => {
+  args: { token: v.string(), period: v.optional(periodValidator) },
+  handler: async (ctx, { token, period = "30d" }) => {
+    await requireDirector(ctx, token);
     const now = Date.now();
     const windowMs = periodMs(period);
     const since = now - windowMs;
@@ -145,8 +147,9 @@ export const overviewMetrics = query({
 // ---------------------------------------------------------------------------
 
 export const overviewRevenueChart = query({
-  args: { days: v.optional(v.number()) },
-  handler: async (ctx, { days = 30 }) => {
+  args: { token: v.string(), days: v.optional(v.number()) },
+  handler: async (ctx, { token, days = 30 }) => {
+    await requireDirector(ctx, token);
     const span = Math.min(Math.max(days, 7), 90);
     const now = Date.now();
     const dayMs = 24 * 60 * 60 * 1000;
@@ -183,8 +186,9 @@ export const overviewRevenueChart = query({
 // ---------------------------------------------------------------------------
 
 export const overviewTopShops = query({
-  args: { period: v.optional(periodValidator), limit: v.optional(v.number()) },
-  handler: async (ctx, { period = "30d", limit = 10 }) => {
+  args: { token: v.string(), period: v.optional(periodValidator), limit: v.optional(v.number()) },
+  handler: async (ctx, { token, period = "30d", limit = 10 }) => {
+    await requireDirector(ctx, token);
     const since = Date.now() - periodMs(period);
     const [shops, bookings, reviews] = await Promise.all([
       ctx.db.query("shops").collect(),
@@ -224,8 +228,9 @@ export const overviewTopShops = query({
 // ---------------------------------------------------------------------------
 
 export const overviewTopMechanics = query({
-  args: { period: v.optional(periodValidator), limit: v.optional(v.number()) },
-  handler: async (ctx, { period = "30d", limit = 10 }) => {
+  args: { token: v.string(), period: v.optional(periodValidator), limit: v.optional(v.number()) },
+  handler: async (ctx, { token, period = "30d", limit = 10 }) => {
+    await requireDirector(ctx, token);
     const since = Date.now() - periodMs(period);
 
     const [bookings, mechanics, reviews] = await Promise.all([
@@ -273,8 +278,9 @@ export const overviewTopMechanics = query({
 // ---------------------------------------------------------------------------
 
 export const overviewServiceMix = query({
-  args: { period: v.optional(periodValidator), limit: v.optional(v.number()) },
-  handler: async (ctx, { period = "30d", limit = 12 }) => {
+  args: { token: v.string(), period: v.optional(periodValidator), limit: v.optional(v.number()) },
+  handler: async (ctx, { token, period = "30d", limit = 12 }) => {
+    await requireDirector(ctx, token);
     const since = Date.now() - periodMs(period);
     const bookings = await ctx.db.query("bookings").collect();
     const inWindow = bookings.filter((b) => (b.created_at ?? 0) >= since);
@@ -315,8 +321,9 @@ export const overviewServiceMix = query({
 // ---------------------------------------------------------------------------
 
 export const overviewBookingsToday = query({
-  args: { period: v.optional(periodValidator), limit: v.optional(v.number()) },
-  handler: async (ctx, { period = "today", limit = 50 }) => {
+  args: { token: v.string(), period: v.optional(periodValidator), limit: v.optional(v.number()) },
+  handler: async (ctx, { token, period = "today", limit = 50 }) => {
+    await requireDirector(ctx, token);
     const todayStr = new Date().toISOString().split("T")[0];
     let rows: Doc<"bookings">[];
     if (period === "today") {
@@ -365,8 +372,9 @@ export const overviewBookingsToday = query({
 // ---------------------------------------------------------------------------
 
 export const overviewTriageQueues = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    await requireDirector(ctx, token);
     const [bugs, feedback] = await Promise.all([
       ctx.db.query("bugs").withIndex("by_created_at").order("desc").take(50),
       ctx.db.query("app_feedback").withIndex("by_created_at").order("desc").take(50),

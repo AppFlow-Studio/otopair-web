@@ -65,12 +65,12 @@ export const TabOtoSim = () => {
   const [cardState, setCardState] = useState<Record<string, CardState>>({})
 
   // ── user picker (reuses the Users-tab list + the same client filter) ──────
-  const users = useQuery(api.director.usersList)
+  const users = useQuery(api.director.usersList, { token })
   const [q, setQ] = useState('')
   const [selected, setSelected] = useState<{ id: string; name: string; email: string } | null>(null)
 
   // ── selected user's detail → cars + onboarding level (mirrors Users tab) ──
-  const detail = useQuery(api.director.userDetail, selected ? { id: selected.id as Id<'users'> } : 'skip')
+  const detail = useQuery(api.director.userDetail, selected ? { id: selected.id as Id<'users'>, token } : 'skip')
   const level = useQuery(
     api.onboarding_questions_answers.getCarKnowledgeLevelForUser,
     selected ? { user_id: selected.id as Id<'users'> } : 'skip',

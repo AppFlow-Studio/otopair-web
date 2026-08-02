@@ -3,13 +3,14 @@
  *
  * Finds vehicle_configs by a trim substring and returns their labor_times +
  * labor_observations (joined to service slugs) plus the platform keys
- * (chassis_code / engine_family). Used to verify the RepairPal labor source +
+ * (chassis_code / engine_family). Used to verify the Estimator labor source +
  * weighted aggregation + confidence on a real config without the Convex MCP.
  *
  *   npx convex run devOnly/verifyLabor:labor '{"trimContains":"750i"}'
  */
 import { internalQuery } from "../_generated/server";
 import { v } from "convex/values";
+import { isEstimatorBookSource } from "../lib/sourceNames";
 
 export const labor = internalQuery({
   args: { trimContains: v.string() },
@@ -78,7 +79,7 @@ export const labor = internalQuery({
         engine_code: (engine as any)?.engine_code,
         engine_family: (engine as any)?.engine_family,
         vehicleVins: (vehicles as any[]).map((v) => v.vin),
-        repairpalObsCount: laborObservations.filter((o) => o.source === "repairpal_motor").length,
+        estimatorObsCount: laborObservations.filter((o) => isEstimatorBookSource(o.source)).length,
         laborTimes,
         laborObservations,
       });

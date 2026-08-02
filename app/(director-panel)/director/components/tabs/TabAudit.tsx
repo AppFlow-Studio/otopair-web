@@ -52,10 +52,11 @@ const looksLikeId = (s: string) => /^[a-z0-9]{20,}$/.test(s)
 const ID_BACKED_TYPES = new Set(['shop', 'user', 'booking', 'bug', 'feedback', 'director'])
 
 const EntityPreview = ({ entityType, entityId }: { entityType: string; entityId: string }) => {
+  const session  = useContext(DirectorSessionCtx)
   const validId  = looksLikeId(entityId)
-  const shop     = useQuery(api.director.shopDetail,          entityType === 'shop'     && validId ? { id: entityId as Id<'shops'> }           : 'skip')
-  const user     = useQuery(api.director.userDetail,          entityType === 'user'     && validId ? { id: entityId as Id<'users'> }           : 'skip')
-  const booking  = useQuery(api.director.bookingDetail,       entityType === 'booking'  && validId ? { id: entityId as Id<'bookings'> }        : 'skip')
+  const shop     = useQuery(api.director.shopDetail,          entityType === 'shop'     && validId ? { id: entityId as Id<'shops'>, token: session?.token ?? '' }    : 'skip')
+  const user     = useQuery(api.director.userDetail,          entityType === 'user'     && validId ? { id: entityId as Id<'users'>, token: session?.token ?? '' }    : 'skip')
+  const booking  = useQuery(api.director.bookingDetail,       entityType === 'booking'  && validId ? { id: entityId as Id<'bookings'>, token: session?.token ?? '' } : 'skip')
   const bug      = useQuery(api.bugs.getById,                 entityType === 'bug'      && validId ? { id: entityId as Id<'bugs'> }            : 'skip')
   const feedback = useQuery(api.app_feedback.getById,         entityType === 'feedback' && validId ? { id: entityId as Id<'app_feedback'> }    : 'skip')
   const director = useQuery(api.director_auth.getUserPreview, entityType === 'director' && validId ? { id: entityId as Id<'director_users'> }  : 'skip')
@@ -91,12 +92,12 @@ const EntityPreview = ({ entityType, entityId }: { entityType: string; entityId:
   if (entityType === 'shop') {
     if (shop === undefined) return wrap('Shop', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
     if (!shop) return wrap('Shop', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
-    return wrap('Shop', <>{row('Name', shop.name)}{row('Status', `${shop.isActive ? 'Active' : 'Inactive'}${shop.isVerified ? ' · Verified' : ''}`)}{row('City', shop.city)}{row('Phone', shop.phone)}</>)
+    return wrap('Shop', <>{row('Name', shop.name)}{row('Status', `${shop.status}${shop.isVerified ? ' · Verified' : ''}`)}{row('City', shop.city)}{row('Phone', shop.phone)}</>)
   }
   if (entityType === 'user') {
     if (user === undefined) return wrap('User', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
     if (!user) return wrap('User', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
-    return wrap('User', <>{row('Name', user.name)}{row('Email', user.email)}{row('Phone', user.phone)}{row('Joined', user.joined)}{row('Bookings', String(user.bookings))}</>)
+    return wrap('User', <>{row('Name', user.name)}{row('Email', user.email)}{row('Phone', user.phone)}{row('Joined', user.joined)}{row('Bookings', String(user.recentBookings.length))}</>)
   }
   if (entityType === 'booking') {
     if (booking === undefined) return wrap('Booking', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)

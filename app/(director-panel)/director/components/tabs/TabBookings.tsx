@@ -1,15 +1,17 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useContext, useState, useEffect } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
+import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { Badge, Button, Card, Input, Select, Toggle, StatusBadge, tableStyles, IconShop } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { consumeGoto } from '../directorNav'
 import { BookingDetailModal } from '../BookingDetailModal'
 
 export const TabBookings = () => {
+  const session = useContext(DirectorSessionCtx)
   const [statusFilter, setStatusFilter] = useState('all')
   const [shopFilter, setShopFilter]     = useState('')
   const [untaggedOnly, setUntaggedOnly] = useState(false)
@@ -21,7 +23,7 @@ export const TabBookings = () => {
     if (goto) setOpenId(goto.entityId as Id<'bookings'>)
   }, [])
 
-  const bookings = useQuery(api.director.recentBookingsList)
+  const bookings = useQuery(api.director.recentBookingsList, { token: session?.token ?? '' })
 
   const filtered = (bookings ?? []).filter(b => {
     if (statusFilter !== 'all' && b.status !== statusFilter) return false

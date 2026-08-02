@@ -34,8 +34,8 @@ describe("laborBands", () => {
     expect(STRONG_LABOR_SOURCES.has("olp_labor")).toBe(true);
     expect(STRONG_LABOR_SOURCES.has("web_labor")).toBe(true);
     expect(STRONG_LABOR_SOURCES.has("oem_labor")).toBe(true);
-    expect(STRONG_LABOR_SOURCES.has("repairpal_labor")).toBe(false); // corroborator, not strong
+    expect(STRONG_LABOR_SOURCES.has("estimator_labor")).toBe(false); // corroborator, not strong
     expect(STRONG_LABOR_SOURCES.has("vdb_repair_estimates")).toBe(false);
-    expect(STRONG_LABOR_SOURCES.has("repairpal_motor")).toBe(false);
+    expect(STRONG_LABOR_SOURCES.has("estimator_book")).toBe(false);
   });
 });

@@ -145,8 +145,15 @@ export const getById = query({
  *   - "Not authenticated": If no auth identity found
  */
 export const getOrCreateMe = mutation({
-  args: {},
-  handler: async (ctx) => {
+  // Optional first-touch context passed by the client on the first call after
+  // signup. The Clerk identity token doesn't reliably carry the OAuth provider
+  // (it depends on the JWT template), so the client — which can read
+  // `user.externalAccounts[0].provider` and the entry surface — supplies both.
+  args: {
+    authProvider: v.optional(v.string()),
+    acquisitionSource: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) {
       throw new Error("Not authenticated");
@@ -177,6 +184,14 @@ export const getOrCreateMe = mutation({
       if (identity.pictureUrl && !existing.profile_photo_url && !existing.profile_photo_storage_id) {
         updates.profile_photo_url = identity.pictureUrl;
       }
+      // Backfill attribution once, only when still empty (first touch wins) —
+      // lets accounts created before this field existed pick it up on next login.
+      if (args.authProvider && !existing.auth_provider) {
+        updates.auth_provider = args.authProvider;
+      }
+      if (args.acquisitionSource && !existing.acquisition_source) {
+        updates.acquisition_source = args.acquisitionSource;
+      }
       const nextUser = { ...existing, ...updates };
       if (
         existing.essentialOnboardingCompleted !== true &&
@@ -192,7 +207,7 @@ export const getOrCreateMe = mutation({
       return existing;
     }
 
-    // New user — seed with everything Clerk provides
+    // New user — seed with everything Clerk provides + first-touch attribution
     const userId = await ctx.db.insert("users", {
       clerkUserId,
       email: identity.email || undefined,
@@ -200,6 +215,8 @@ export const getOrCreateMe = mutation({
       first_name: identity.givenName || undefined,
       last_name: identity.familyName || undefined,
       profile_photo_url: identity.pictureUrl || undefined,
+      auth_provider: args.authProvider || undefined,
+      acquisition_source: args.acquisitionSource || undefined,
       onboardingCompleted: false,
       essentialOnboardingCompleted: false,
       createdAt: Date.now(),

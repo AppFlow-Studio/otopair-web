@@ -93,7 +93,8 @@ async function fetchPage(url: string): Promise<WalmartRawProduct[] | null> {
     }
 
     // Walmart's script tag has no type attribute: <script id="__NEXT_DATA__">
-    const match = html.match(/<script id="__NEXT_DATA__"[^>]*>(.+?)<\/script>/s);
+    // [\s\S] instead of the dotAll /s flag — tsconfig targets pre-es2018.
+    const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([\s\S]+?)<\/script>/);
     if (!match) {
       console.warn(`[walmart] __NEXT_DATA__ not found`);
       return null;

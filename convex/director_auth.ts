@@ -43,7 +43,7 @@ async function hotp(secret: string, counter: number): Promise<string> {
   return String(n % 1_000_000).padStart(6, "0");
 }
 
-async function verifyTotp(secret: string, code: string): Promise<boolean> {
+export async function verifyTotp(secret: string, code: string): Promise<boolean> {
   const t = Math.floor(Date.now() / 1000 / 30);
   for (const d of [-1, 0, 1]) {
     if (await hotp(secret, t + d) === code.padStart(6, "0")) return true;
@@ -83,6 +83,20 @@ export const validateSession = query({
     const u = await ctx.db.get(s.user_id);
     if (!u) return null;
     return { userId: u._id, name: u.name, role: u.role };
+  },
+});
+
+/** Re-verify the CURRENT session's TOTP code without minting a new session —
+ *  the Pricing Engine interstitial (Data spec §9.3: "access logged", re-auth
+ *  before the internal pricing system renders). */
+export const reverifyTotp = action({
+  args: { token: v.string(), code: v.string() },
+  handler: async (ctx, { token, code }): Promise<{ ok: boolean }> => {
+    const session = await ctx.runQuery(api.director_auth.validateSession, { token });
+    if (!session) return { ok: false };
+    const user = await ctx.runQuery(internal.director_auth._getUser, { id: session.userId });
+    if (!user) return { ok: false };
+    return { ok: await verifyTotp(user.totp_secret, code) };
   },
 });
 
@@ -150,7 +164,14 @@ export const _logFailedLogin = internalMutation({
 export const _insertUser = internalMutation({
   args: {
     name: v.string(),
-    role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    role: v.union(
+      v.literal("super_admin"),
+      v.literal("ops_admin"),
+      v.literal("support"),
+      v.literal("readonly"),
+      v.literal("data_admin"),
+      v.literal("shop_success"),
+    ),
     totp_secret: v.string(),
     email: v.optional(v.string()),
     actorName: v.string(),
@@ -304,7 +325,14 @@ export const verifyAndLogin = action({
 export const addUser = action({
   args: {
     name: v.string(),
-    role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    role: v.union(
+      v.literal("super_admin"),
+      v.literal("ops_admin"),
+      v.literal("support"),
+      v.literal("readonly"),
+      v.literal("data_admin"),
+      v.literal("shop_success"),
+    ),
     email: v.string(),
     actorName: v.string(),
     actorId: v.optional(v.id("director_users")),
@@ -364,7 +392,7 @@ export const bootstrap = action({
     if (existing.length > 0) return { ok: false, reason: "Director accounts already exist. Use Settings to add more." };
     const secret = genBase32();
     await ctx.runMutation(internal.director_auth._insertUser, {
-      name: "Bootstrap", role: "superadmin", totp_secret: secret,
+      name: "Bootstrap", role: "super_admin", totp_secret: secret,
       email: "bootstrap@otopair.com", actorName: "System",
     });
     return { ok: true, name: "Bootstrap", email: "bootstrap@otopair.com", totp_secret: secret };

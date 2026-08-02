@@ -71,7 +71,7 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
   const grantCredit = useMutation(api.directorUserActions.grantCredit)
   const updateBasics = useMutation(api.directorUserActions.updateUserBasics)
   const logView    = useMutation(api.director.logView)
-  const detail = useQuery(api.director.userDetail, userId ? { id: userId } : 'skip')
+  const detail = useQuery(api.director.userDetail, userId ? { id: userId, token: session?.token ?? '' } : 'skip')
   const externalIds = useQuery(api.directorUserActions.userExternalIds, userId ? { id: userId } : 'skip')
 
   // Seed edit form when entering edit mode.
@@ -343,6 +343,7 @@ const UserModal = ({ userId, onClose }: { userId: Id<'users'> | null; onClose: (
 }
 
 export const TabUsers = () => {
+  const session = useContext(DirectorSessionCtx)
   const [q, setQ]           = useState('')
   const [loyalty, setLoyalty] = useState('all')
   const [openId, setOpenId] = useState<Id<'users'> | null>(null)
@@ -352,7 +353,7 @@ export const TabUsers = () => {
     if (goto) setOpenId(goto.entityId as Id<'users'>)
   }, [])
 
-  const users = useQuery(api.director.usersList)
+  const users = useQuery(api.director.usersList, { token: session?.token ?? '' })
 
   const filtered = (users ?? []).filter(u => {
     if (loyalty !== 'all' && (u.loyalty ?? 'standard') !== loyalty) return false

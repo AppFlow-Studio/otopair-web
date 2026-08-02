@@ -455,21 +455,21 @@ export default defineSchema({
     .index("by_part", ["part_id"])
     .index("by_part_source", ["part_id", "source_domain"]),
 
-  // Raw per-config RepairPal estimate-endpoint cache — one row per (config,
+  // Raw per-config estimator estimate-endpoint cache — one row per (config,
   // service), storing the whole endpoint response at its natural granularity so
   // `part_prices` stays SKU-only. Labor is ALSO projected into labor_observations
-  // (source repairpal_endpoint, weight 0.9).
+  // (source estimator_endpoint, weight 0.9).
   // Parts: each endpoint part's averaged per-unit price (total_price avg ÷
   // quantity) is ALSO projected into part_prices as a fallback POINT
-  // (source_domain="repairpal_endpoint", a price_type excluded from the pooled
+  // (source_domain="estimator_endpoint", a price_type excluded from the pooled
   // SKU aggregate). resolvePartsCost (flag PARTS_SOURCE_REAL_PRIMARY) pools SKU
   // prices WITH this endpoint point per role, falling back to it when a part has
   // no SKU price, then to Camry×multiplier. See
   // docs/superpowers/plans/2026-06-23-parts-real-primary-endpoint-point.md.
-  repairpal_endpoint_estimates: defineTable({
+  estimator_estimates: defineTable({
     vehicle_config_id: v.id("vehicle_configs"),
     service_id: v.id("services"),
-    base_vehicle_id: v.number(),               // resolved RepairPal baseVehicleId
+    base_vehicle_id: v.number(),               // resolved provider baseVehicleId
     variant_label: v.optional(v.string()),     // matched engine/position variant
     labor_minutes: v.optional(v.number()),
     labor_hours: v.optional(v.number()),
@@ -483,7 +483,7 @@ export default defineSchema({
       v.array(
         v.object({
           role: v.optional(v.string()),        // oem_parts.subcategory (+position) via endpointPartCategory
-          name: v.string(),                    // RepairPal part name (verbatim)
+          name: v.string(),                    // provider part name (verbatim)
           quantity: v.optional(v.number()),
           price_low: v.optional(v.number()),
           price_high: v.optional(v.number()),
@@ -493,7 +493,47 @@ export default defineSchema({
     ),
     zip: v.optional(v.string()),
     match_quality: v.optional(v.string()),   // "exact" | "engine_sibling"
-    matched_via: v.optional(v.string()),     // RP modelName substituted when engine_sibling
+    matched_via: v.optional(v.string()),     // provider modelName substituted when engine_sibling
+    fetched_at: v.number(),
+  })
+    .index("by_config_service", ["vehicle_config_id", "service_id"])
+    .index("by_config", ["vehicle_config_id"]),
+
+  // ── DUAL-READ WINDOW — DELETE AFTER MIGRATION ──────────────────────────
+  // Pre-rename shape of `estimator_estimates`. Retained ONLY so existing rows
+  // stay queryable while convex/migrations/purgeVendorNames.ts copies them into
+  // the table above. Nothing writes here anymore. Once every deployment reports
+  // a 0-row remainder, delete this block (see the runbook:
+  // docs/superpowers/runbooks/2026-07-27-vendor-name-purge-migration.md).
+  // eslint-disable-next-line -- legacy table name, intentionally retained
+  repairpal_endpoint_estimates: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_id: v.id("services"),
+    base_vehicle_id: v.number(),
+    variant_label: v.optional(v.string()),
+    labor_minutes: v.optional(v.number()),
+    labor_hours: v.optional(v.number()),
+    labor_low: v.optional(v.number()),
+    labor_high: v.optional(v.number()),
+    total_independent_low: v.optional(v.number()),
+    total_independent_high: v.optional(v.number()),
+    total_dealer_low: v.optional(v.number()),
+    total_dealer_high: v.optional(v.number()),
+    parts: v.optional(
+      v.array(
+        v.object({
+          role: v.optional(v.string()),
+          name: v.string(),
+          quantity: v.optional(v.number()),
+          price_low: v.optional(v.number()),
+          price_high: v.optional(v.number()),
+          position: v.optional(v.string()),
+        }),
+      ),
+    ),
+    zip: v.optional(v.string()),
+    match_quality: v.optional(v.string()),
+    matched_via: v.optional(v.string()),
     fetched_at: v.number(),
   })
     .index("by_config_service", ["vehicle_config_id", "service_id"])
@@ -936,6 +976,23 @@ export default defineSchema({
     .index("by_service", ["service_id"])
     .index("by_status", ["status"]),
 
+  // A mechanic/director assertion that a parts-requiring service does NOT apply
+  // to this vehicle config (e.g. sealed transmission → no transmission filter).
+  // Lets the pre-job "fill in missing parts" gate stop demanding a part the car
+  // will never need, without inventing a fitment. One row per (config, service,
+  // role); presence means "excluded — don't gate on this".
+  config_service_exclusions: defineTable({
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_slug: v.string(),
+    role_key: v.optional(v.string()),
+    reason: v.optional(v.string()),
+    marked_by_mechanic_id: v.optional(v.id("mechanics")),
+    booking_id: v.optional(v.id("bookings")),
+    created_at: v.number(),
+  })
+    .index("by_config", ["vehicle_config_id"])
+    .index("by_config_service", ["vehicle_config_id", "service_slug"]),
+
   vin_queue: defineTable({
     vin: v.string(),
     source: v.optional(v.string()),
@@ -980,10 +1037,14 @@ export default defineSchema({
     display_order: v.optional(v.number()),
     default_labor_hours: v.optional(v.number()),
     // Labor sourcing: which platform dimension determines this service's labor,
-    // and the RepairPal estimator slug (null = no RepairPal page, e.g. fluids).
+    // and the external estimator slug (null = no estimator page, e.g. fluids).
     labor_determinant: v.optional(
       v.union(v.literal("engine"), v.literal("chassis"), v.literal("both")),
     ),
+    estimator_slug: v.optional(v.union(v.string(), v.null())),
+    // DUAL-READ WINDOW — DELETE AFTER MIGRATION. Pre-rename name of
+    // `estimator_slug`; readers fall back to it until the migration has copied
+    // every value across. Nothing writes here anymore.
     repairpal_slug: v.optional(v.union(v.string(), v.null())),
     has_options: v.optional(v.boolean()),
     is_labor_only: v.optional(v.boolean()),
@@ -1183,7 +1244,7 @@ export default defineSchema({
     tier: v.string(), // "catalog" (book-time sources) | "empirical" (reserved)
     weight: v.number(), // catalog trust weight (vdb 0.4, llm 0.3, …)
     observed_at: v.number(),
-    // Provenance when sourced from a platform-equivalent sibling (RepairPal).
+    // Provenance when sourced from a platform-equivalent sibling (estimator).
     sibling_slug: v.optional(v.string()), // e.g. "550i-xdrive"
     match_key: v.optional(v.string()), // "engine_family:N63" | "chassis_code:G30" | "exact"
   })
@@ -1644,6 +1705,12 @@ export default defineSchema({
     profile_photo_url: v.optional(v.string()),
     profile_photo_storage_id: v.optional(v.string()),
     auth_provider: v.optional(v.string()),
+    // First-touch acquisition attribution captured at account creation:
+    // the entry surface / campaign the user arrived from (e.g. "referral",
+    // "web_signup", "ios_app", or a raw utm_source). Null = unknown/direct
+    // (older accounts, or a signup that carried no entry context). Never
+    // overwritten once set — first touch wins.
+    acquisition_source: v.optional(v.string()),
     onboardingCompleted: v.optional(v.boolean()),
     essentialOnboardingCompleted: v.optional(v.boolean()),
     tellUsAboutCompleted: v.optional(v.boolean()),
@@ -1796,6 +1863,7 @@ export default defineSchema({
     owner_user_id: v.optional(v.id("users")),
     description: v.optional(v.string()),
     logo: v.optional(v.string()),
+    logo_storage_id: v.optional(v.id("_storage")),
     stripe_connect_account_id: v.optional(v.string()),
     stripe_charges_enabled: v.optional(v.boolean()),
     stripe_payouts_enabled: v.optional(v.boolean()),
@@ -1836,7 +1904,8 @@ export default defineSchema({
   })
     .index("by_slug", ["slug"])
     .index("by_owner_user_id", ["owner_user_id"])
-    .index("by_stripe_connect_account_id", ["stripe_connect_account_id"]),
+    .index("by_stripe_connect_account_id", ["stripe_connect_account_id"])
+    .index("by_logo_storage_id", ["logo_storage_id"]),
 
   // [I]
   shops_hours: defineTable({
@@ -1874,12 +1943,19 @@ export default defineSchema({
     .index("by_shop", ["shop_id"])
     .index("by_shop_service", ["shop_id", "service_id"]),
 
-  // [I]
+  // [I] Two image sources coexist: legacy seed rows reference cdn_assets via
+  // content_id; owner-uploaded rows (settings gallery) reference Convex
+  // storage via storage_id. Exactly one of the two should be set per row.
   shop_portfolio: defineTable({
     shop_id: v.id("shops"),
-    content_id: v.string(),
+    content_id: v.optional(v.string()),
+    storage_id: v.optional(v.id("_storage")),
+    caption: v.optional(v.string()),
     display_order: v.optional(v.number()),
-  }).index("by_shop_id", ["shop_id"]),
+    created_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_storage_id", ["storage_id"]),
 
   // [U-D] Shop staff roles, permissions, deletion tracking
   shop_users: defineTable({
@@ -2387,6 +2463,7 @@ export default defineSchema({
     .index("by_created_at", ["created_at"])
     .index("by_source_recommendation", ["source_recommendation_id"])
     .index("by_payment_approval_state", ["payment_approval_state"])
+    .index("by_vin", ["vin"])
     .index("by_sla_expires_at", ["sla_expires_at_ms"]),
 
   // Tire quote responses — one row per shop response to a quote-stage
@@ -2527,6 +2604,15 @@ export default defineSchema({
       ),
     ),
 
+    // Card network + last-4, resolved from the charge's
+    // payment_method_details.card at capture time (and backfilled for
+    // historical rows). Present for card + wallet payments alike (wallets
+    // resolve the underlying network card). Display-only — operators see
+    // "Visa ···· 4242" instead of a bare "card" origin. Absent on rows that
+    // never reached a successful charge or predate collection.
+    card_brand: v.optional(v.string()),
+    card_last4: v.optional(v.string()),
+
     // Invoice PDF (generated server-side after capture). Identical layout to
     // the email attachment, stored once in Convex file storage and reused for
     // both the email send and the mobile "View Receipt PDF" link.
@@ -2635,7 +2721,10 @@ export default defineSchema({
     .index("by_user_id_created_at", ["user_id", "created_at"])
     .index("by_user_id_type", ["user_id", "transaction_type"])
     .index("by_user_id_type_created_at", ["user_id", "transaction_type", "created_at"])
-    .index("by_payment_id", ["payment_id"]),
+    .index("by_payment_id", ["payment_id"])
+    // Global time index — the Ops ledger (/ops/transactions) reads the whole
+    // network's ledger newest-first; every prior index is user-scoped.
+    .index("by_created_at", ["created_at"]),
 
   // [I] Daniel/Waleed
   ownership_credit_transactions: defineTable({
@@ -2673,6 +2762,12 @@ export default defineSchema({
     rating: v.number(),
     comment: v.optional(v.string()),
     created_at: v.optional(v.number()),
+    // Moderation (Ops portal /ops/reviews — hide = ceremony, never delete).
+    // Hidden reviews stay in the table for the audit trail; consumer reads
+    // must filter hidden_at == undefined.
+    hidden_at: v.optional(v.number()),
+    hidden_reason: v.optional(v.string()),
+    hidden_by: v.optional(v.string()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_id", ["shop_id"])
@@ -3135,9 +3230,143 @@ export default defineSchema({
     .index("by_created_at", ["created_at"])
     .index("by_actor_id", ["actor_id"]),
 
+  // External data-API keys (Data spec §12). Only the SHA-256 hash of a key is
+  // stored — the plaintext (otp_live_…) is shown exactly once at creation.
+  api_keys: defineTable({
+    name: v.string(),
+    key_hash: v.string(),
+    // First 12 chars of the plaintext ("otp_live_ab…") for display/support.
+    prefix: v.string(),
+    scopes: v.array(
+      v.union(
+        v.literal("maintenance:read"),
+        v.literal("labor:read"),
+        v.literal("media:read"),
+        v.literal("enrich:write"),
+        v.literal("service_history:read"),
+      ),
+    ),
+    rate_limit_per_min: v.number(),
+    // Team-minted keys carry the director who created them; self-serve dev
+    // keys (the /developers dashboard) carry owner_user_id instead — a key
+    // has exactly one of the two.
+    created_by: v.optional(v.id("director_users")),
+    owner_user_id: v.optional(v.id("users")),
+    created_at: v.number(),
+    revoked_at: v.optional(v.number()),
+    last_used_at: v.optional(v.number()),
+    request_count: v.number(),
+  })
+    .index("by_key_hash", ["key_hash"])
+    .index("by_created_at", ["created_at"])
+    .index("by_owner", ["owner_user_id"]),
+
+  // Per-request usage metering for api_keys (the future billing meter) and
+  // the rate-limit window source.
+  api_usage: defineTable({
+    api_key_id: v.id("api_keys"),
+    endpoint: v.string(),
+    status: v.number(),
+    config_key: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_key_and_time", ["api_key_id", "created_at"])
+    .index("by_created_at", ["created_at"]),
+
+  // Thin review-queue materialization over the four real streams (decision
+  // #4, Data spec §13): consensus needs_review, mechanic corrections,
+  // report-wrong-data, survey disconfirmations. Rows are created ONLY by the
+  // idempotent per-stream backfills in reviewQueue.ts, keyed on
+  // (source_stream, source_id) so re-running a backfill never duplicates.
+  review_queue: defineTable({
+    source_stream: v.union(
+      v.literal("consensus"),
+      v.literal("correction"),
+      v.literal("report"),
+      v.literal("survey"),
+    ),
+    // _id of the source document (enrichment_run, mechanic_verification, …)
+    source_id: v.string(),
+    entity_type: v.string(),
+    entity_id: v.string(),
+    vin: v.optional(v.string()),
+    title: v.string(),
+    priority: v.union(v.literal("low"), v.literal("normal"), v.literal("high")),
+    status: v.union(
+      v.literal("open"),
+      v.literal("claimed"),
+      v.literal("resolved"),
+      v.literal("dismissed"),
+    ),
+    assignee: v.optional(v.id("director_users")),
+    resolution_note: v.optional(v.string()),
+    created_at: v.number(),
+    resolved_at: v.optional(v.number()),
+  })
+    .index("by_status", ["status"])
+    .index("by_source_stream", ["source_stream", "status"])
+    .index("by_assignee", ["assignee", "status"])
+    .index("by_source", ["source_stream", "source_id"]),
+
+  // Data incidents — institutional memory for data-quality events (Data spec
+  // §10.4/§13). Seeded with the two historical incidents (Ford-on-Alfa, VD
+  // labor under-read) by migrations/seedDataIncidents.ts; new rows come from
+  // the Provenance page's declare ceremony only.
+  data_incidents: defineTable({
+    // Display number ("#1") — assigned at declare time, monotonic.
+    number: v.number(),
+    // Stable slug — the seed migration's idempotency key.
+    slug: v.string(),
+    title: v.string(),
+    severity: v.union(v.literal("sev1"), v.literal("sev2"), v.literal("sev3")),
+    status: v.union(v.literal("open"), v.literal("monitoring"), v.literal("resolved")),
+    summary: v.string(),
+    root_cause: v.optional(v.string()),
+    // Deployment-scope caveat (Incident #1: backfill scope is per-deployment).
+    scope_note: v.optional(v.string()),
+    affected_entity_type: v.optional(v.string()),
+    affected_count: v.optional(v.number()),
+    // Pre-filled context when declared from another page (reserved).
+    source_context: v.optional(v.string()),
+    declared_by: v.string(),
+    declared_by_id: v.optional(v.id("director_users")),
+    declared_at: v.number(),
+    resolved_by: v.optional(v.string()),
+    resolved_at: v.optional(v.number()),
+    resolution_note: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_slug", ["slug"])
+    .index("by_number", ["number"]),
+
+  // Materialized KPI counters for the internal portals (decision #3, R2
+  // class). Written only by portalStats.ts summarizers on cron; read via the
+  // gated portalStats.getStats. Realtime (R1) metrics never land here — they
+  // stay indexed window queries.
+  portal_stats: defineTable({
+    key: v.string(),
+    value: v.number(),
+    // Free-form context: sample sizes, breakdowns, threshold used, etc.
+    meta: v.optional(v.any()),
+    computed_at: v.number(),
+  }).index("by_key", ["key"]),
+
   director_users: defineTable({
     name: v.string(),
-    role: v.union(v.literal("superadmin"), v.literal("admin"), v.literal("viewer")),
+    // The six portal roles (decision #2). Legacy superadmin/admin/viewer rows
+    // must be converted by migrations/directorRoles.ts BEFORE this schema can
+    // push to a deployment that still holds them — the validator rejects
+    // legacy values on write and the push-time schema check rejects legacy
+    // rows at rest.
+    role: v.union(
+      v.literal("super_admin"),
+      v.literal("ops_admin"),
+      v.literal("support"),
+      v.literal("readonly"),
+      v.literal("data_admin"),
+      v.literal("shop_success"),
+    ),
     totp_secret: v.string(),
     email: v.optional(v.string()),
     created_at: v.number(),

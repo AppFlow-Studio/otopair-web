@@ -82,7 +82,7 @@ describe("weightedMedian", () => {
     expect(weightedMedian([1, 2, 3], [1, 1, 1])).toBe(2);
   });
   it("lets a high-weight source dominate two low-weight ones", () => {
-    // repairpal 1.5 @0.8 vs two llm 3.0/3.2 @0.3 → cum weight crosses 50% at 1.5
+    // estimator 1.5 @0.8 vs two llm 3.0/3.2 @0.3 → cum weight crosses 50% at 1.5
     expect(weightedMedian([3.0, 1.5, 3.2], [0.3, 0.8, 0.3])).toBe(1.5);
   });
   it("drops invalid (<=0 / NaN) and zero-weight values", () => {
@@ -94,8 +94,8 @@ describe("weightedMedian", () => {
 });
 
 describe("weightedMedian — labor source contract", () => {
-  it("repairpal_motor(0.8) wins over vdb(0.05)+llm(0.3)", () => {
-    // hours: repairpal 2.1, llm 1.4, vdb 3.5
+  it("estimator_book(0.8) wins over vdb(0.05)+llm(0.3)", () => {
+    // hours: estimator 2.1, llm 1.4, vdb 3.5
     expect(weightedMedian([2.1, 1.4, 3.5], [0.8, 0.3, 0.05])).toBe(2.1);
   });
 });

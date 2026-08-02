@@ -154,6 +154,44 @@ async function resolveMechanicPhotoUrl(ctx: any, photo?: string | null) {
   }
 }
 
+async function resolveShopLogoUrl(ctx: any, shop: any): Promise<string | null> {
+  if (!shop?.logo_storage_id) return null;
+  return await ctx.storage.getUrl(shop.logo_storage_id);
+}
+
+// Explicit-shopId shop-owner gate — mirrors convex/mechanics.ts's
+// `requireShopOwner` (same shop_users membership check + owner_user_id
+// fallback). Duplicated rather than imported, matching this file's
+// existing convention of local copies of small ctx-helpers (see
+// `resolveMechanicPhotoUrl` above, also duplicated from mechanics.ts).
+// Needed here (vs. this file's own `getPrimaryShopForUser` pattern)
+// because the dashboard-facing logo mutations take an explicit
+// `shopId` arg rather than acting on "my primary shop".
+// Exported for reuse by sibling modules (shop_portfolio.ts) — plain helper,
+// not a registered Convex function.
+export async function requireShopOwner(ctx: any, shopId: any) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Not authenticated");
+
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", identity.subject))
+    .unique();
+  if (!user) throw new Error("User not found");
+
+  const membership = await ctx.db
+    .query("shop_users")
+    .withIndex("by_user_and_shop", (q: any) => q.eq("user_id", user._id).eq("shop_id", shopId))
+    .filter((q: any) => q.eq(q.field("is_active"), true))
+    .first();
+
+  const shop = await ctx.db.get(shopId);
+  const isOwner = OWNER_ROLES.has(membership?.role) || String(shop?.owner_user_id ?? "") === String(user._id);
+  if (!isOwner) throw new Error("Not authorized");
+
+  return { user, shop };
+}
+
 async function getBlockingBookingsForMechanic(ctx: any, shopId: any, mechanicId: any) {
   const bookings = await ctx.db
     .query("bookings")
@@ -243,7 +281,13 @@ export const list = query({
   handler: async (ctx) => {
     const shops = await ctx.db.query("shops").collect();
     const bookableShopIds = await getBookableShopIds(ctx, shops);
-    return shops.filter((shop) => bookableShopIds.has(shop._id));
+    const bookableShops = shops.filter((shop) => bookableShopIds.has(shop._id));
+    return await Promise.all(
+      bookableShops.map(async (shop) => ({
+        ...shop,
+        logoUrl: await resolveShopLogoUrl(ctx, shop),
+      }))
+    );
   },
 });
 
@@ -375,7 +419,9 @@ export const getMyShops = query({
     const shops = await Promise.all(
       shopUsers.map(async (su: any) => {
         const shop = await ctx.db.get(su.shop_id);
-        return shop ? { ...shop, memberRole: su.role } : null;
+        return shop
+          ? { ...shop, memberRole: su.role, logoUrl: await resolveShopLogoUrl(ctx, shop) }
+          : null;
       })
     );
 
@@ -1391,3 +1437,88 @@ export const updateShopOfferedServices = mutation({
     return primary.shop._id;
   },
 });;
+
+/**
+ * Generate a short-lived upload URL for a shop's logo/official image.
+ * Called by the (separate) mechanic dashboard before POSTing the image
+ * bytes directly to Convex storage. Mutation (not action) because
+ * `ctx.storage.generateUploadUrl()` is available on mutation ctx in
+ * this Convex version — see the same pattern in users.ts / bookings.ts
+ * / vehicleDocuments.ts — which lets us reuse the ctx.db-based
+ * `requireShopOwner` auth directly instead of an action+runQuery hop.
+ */
+export const generateShopLogoUploadUrl = mutation({
+  args: { shopId: v.id("shops") },
+  handler: async (ctx, args) => {
+    await requireShopOwner(ctx, args.shopId);
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+/**
+ * Point a shop at a newly-uploaded logo file.
+ *
+ * We deliberately do NOT hard-delete the previously-stored file here. A
+ * client-supplied storageId can't be proven to belong to this shop, and
+ * `ctx.storage.delete` is a global hard-delete with no refcount — deleting
+ * a "previous" id an attacker planted could destroy another feature's file
+ * (e.g. a user's profile photo). Orphaned replaced logos are an accepted,
+ * low-severity tradeoff, reclaimable later by a background job that deletes
+ * only `_storage` ids not referenced by any live `logo_storage_id` (and
+ * cross-checked against other `_storage`-referencing tables). A
+ * `{shopId, storageId}` pending-upload record at generateShopLogoUploadUrl
+ * time would enable safe synchronous reclamation — deferred.
+ */
+export const setShopLogo = mutation({
+  args: { shopId: v.id("shops"), storageId: v.id("_storage") },
+  handler: async (ctx, args) => {
+    await requireShopOwner(ctx, args.shopId);
+
+    // Security: reject a storageId already used as another shop's logo (or as
+    // any portfolio image). Without this, an owner of any shop could adopt a
+    // victim's file id (leaked via shops.list). This guarantees a shop's
+    // logo_storage_id is only ever a file uniquely uploaded for that shop.
+    const [conflict, portfolioConflict] = await Promise.all([
+      ctx.db
+        .query("shops")
+        .withIndex("by_logo_storage_id", (q) => q.eq("logo_storage_id", args.storageId))
+        .filter((q) => q.neq(q.field("_id"), args.shopId))
+        .first(),
+      ctx.db
+        .query("shop_portfolio")
+        .withIndex("by_storage_id", (q) => q.eq("storage_id", args.storageId))
+        .first(),
+    ]);
+    if (conflict || portfolioConflict) {
+      throw new Error("That image is already in use.");
+    }
+
+    await ctx.db.patch(args.shopId, { logo_storage_id: args.storageId });
+
+    return args.shopId;
+  },
+});
+
+/**
+ * Remove a shop's logo — unsets the field so the card falls back to the
+ * placeholder.
+ *
+ * As with setShopLogo, we deliberately do NOT hard-delete the stored file:
+ * a client-supplied storageId can't be proven to belong to this shop and
+ * `ctx.storage.delete` is a global hard-delete with no refcount, so deleting
+ * it could destroy another feature's file. Orphaned files are an accepted,
+ * low-severity tradeoff, reclaimable later by a background job that deletes
+ * only `_storage` ids not referenced by any live `logo_storage_id` (and
+ * cross-checked against other `_storage`-referencing tables).
+ */
+export const clearShopLogo = mutation({
+  args: { shopId: v.id("shops") },
+  handler: async (ctx, args) => {
+    await requireShopOwner(ctx, args.shopId);
+
+    await ctx.db.patch(args.shopId, { logo_storage_id: undefined });
+
+    return args.shopId;
+  },
+});
+

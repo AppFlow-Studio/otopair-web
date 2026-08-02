@@ -108,22 +108,14 @@ const DATA_TOOLS: OtoToolSchema[] = [
   {
     name: "list_services_for_vehicle",
     description:
-      "List the services Otopair offers FOR THIS SPECIFIC VEHICLE, after applying compatibility filters (engine type, drivetrain, steering type, model year, tire fitment, state). Use this — not a generic catalog dump — whenever you're suggesting services or showing a service picker. The filter eliminates impossible recommendations (e.g. timing-belt service on a chain-driven engine, oil-change on an EV, emissions-test on an EV, state-inspection in a state that doesn't require one). Returns each service with its canonical snake_case slug, name, description (quote this text when explaining services), default labor hours, and a parts cost band when known. Pass `category` to scope to one of: Diagnostics, Compliance, Routine Maintenance, Tires, Brakes, Battery, Fluids.",
+      "List the services Otopair offers FOR THIS SPECIFIC VEHICLE, after applying compatibility filters (engine type, drivetrain, steering type, model year, tire fitment, state). Use this — not a generic catalog dump — whenever you're suggesting services or showing a service picker. The filter eliminates impossible recommendations (e.g. timing-belt service on a chain-driven engine, oil-change on an EV, emissions-test on an EV, state-inspection in a state that doesn't require one). Returns each service with its canonical snake_case slug, name, description (quote this text when explaining services), default labor hours, and a parts cost band when known. Pass `category` to scope to one of: Routine, Tires & Brakes, Scheduled Service, Inspections.",
     input_schema: {
       type: "object",
       properties: {
         vehicle_id: { type: "string", description: "VIN of the vehicle." },
         category: {
           type: "string",
-          enum: [
-            "Diagnostics",
-            "Compliance",
-            "Routine Maintenance",
-            "Tires",
-            "Brakes",
-            "Battery",
-            "Fluids",
-          ],
+          enum: ["Routine", "Tires & Brakes", "Scheduled Service", "Inspections"],
           description: "Optional category filter.",
         },
       },
@@ -1009,16 +1001,15 @@ export type OtopairServiceSlug = (typeof OTOPAIR_SERVICE_SLUGS)[number];
 //   "general-diagnostic", "check-engine-light", "brake-system-inspection",
 // ];
 
-// Canonical service categories — production has 7. Names come from the live
-// `service_categories` table seeded by `convex/seeds/seedServices.ts`.
+// Canonical service categories — the four locked Jul 13 (7→4 consolidation;
+// names match the mobile app's tabs). Live names come from the
+// `service_categories` table (seeded by `convex/seeds/seedServices.ts`,
+// migrated by `convex/migrations/categoryConsolidation.ts`).
 export const OTOPAIR_SERVICE_CATEGORIES = [
-  "Diagnostics",
-  "Compliance",
-  "Routine Maintenance",
-  "Tires",
-  "Brakes",
-  "Battery",
-  "Fluids",
+  "Routine",
+  "Tires & Brakes",
+  "Scheduled Service",
+  "Inspections",
 ] as const;
 
 export type OtopairServiceCategory = (typeof OTOPAIR_SERVICE_CATEGORIES)[number];

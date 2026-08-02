@@ -44,14 +44,16 @@ describe("agreement + fallback-guardrail confidence", () => {
     });
   });
 
-  it("one strong source >15 min from the fallback → 0.6 + outside-band flag", async () => {
-    // book 1.5 vs fallback 0.6 = 54 min gap → outside guardrail
+  it("one strong source >15 min from the fallback → REJECTED (tier estimate wins)", async () => {
+    // book 1.5 vs fallback 0.6 = 54 min gap → outside guardrail. Old policy
+    // kept this at 0.6 + flag; the Jul 2026 batch-2 audit showed the same
+    // shape shipping an implausible 0.8h V6 plug time (low-side outlier from
+    // thin sources), so a lone strong source that contradicts the tier
+    // anchor by >15 min is now rejected outright — no aggregated row.
     const db = base([obs("olp_labor", 1.5)]);
     await recomputeLaborForConfigService({ db } as any,
       { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
-    expect(db.inserts[0].doc).toMatchObject({
-      confidence: 0.6, labor_outside_fallback_band: true, fallback_gap_minutes: 54,
-    });
+    expect(db.inserts.length).toBe(0);
   });
 
   it("two strong sources that disagree → quotable 0.75 + review flag", async () => {
@@ -94,19 +96,20 @@ describe("agreement + fallback-guardrail confidence", () => {
     });
   });
 
-  it("a strong source OUTVOTED on the weighted-median frontier does not lend its 0.8 to a weaker-source median", async () => {
-    // web_labor (strong) sits at 2.0 but is outvoted: median lands on the LLM 1.2,
-    // so the strong source did NOT drive book_hours → must NOT earn 0.8 (drops to
-    // the 0.6 LLM-consensus tier, below the 0.75 quote gate).
+  it("a weaker-source median outside the guardrail is REJECTED, not quoted at LLM-consensus 0.6", async () => {
+    // web_labor (strong) sits at 2.0 but is outvoted: median lands on the LLM
+    // 1.2 — 36 min from the 0.6h tier anchor with <2 strong sources backing
+    // it. Old policy wrote it at the 0.6 LLM-consensus tier; new policy
+    // (batch-2 audit) rejects an out-of-band value without >=2 strong
+    // sources — the tier estimate is safer than an LLM median that far off.
     const db = base([
       obs("web_labor", 2.0, 0.6),
-      obs("repairpal_labor", 1.0, 0.4),
+      obs("estimator_labor", 1.0, 0.4),
       obs("llm_training", 1.2, 0.3),
     ]);
     await recomputeLaborForConfigService({ db } as any,
       { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
-    expect(db.inserts[0].doc.book_hours).toBe(1.2);
-    expect(db.inserts[0].doc.confidence).toBe(0.6);
+    expect(db.inserts.length).toBe(0);
   });
 
   it("an OUTVOTED strong source is denied 0.8 even when the fallback corroborates the weaker median", async () => {
@@ -120,7 +123,7 @@ describe("agreement + fallback-guardrail confidence", () => {
     // 0.6 LLM-consensus tier instead of the strong-source 0.8.
     const db = base([
       obs("web_labor", 1.2, 0.3),
-      obs("repairpal_labor", 0.6, 0.4),
+      obs("estimator_labor", 0.6, 0.4),
       obs("llm_training", 0.6, 0.5),
     ]);
     await recomputeLaborForConfigService({ db } as any,
@@ -130,10 +133,12 @@ describe("agreement + fallback-guardrail confidence", () => {
     expect(db.inserts[0].doc.confidence).toBe(0.6);
   });
 
-  it("a strong source MAD-dropped as an outlier does not lend its 0.8 to a weaker-source median", async () => {
-    // 4 obs so weightedMedian's internal MAD engages; olp 7.5 is the outlier and
-    // is dropped, so book_hours is LLM/VDB-driven and confidence must be the
-    // LLM-consensus 0.6, NOT the strong-source 0.8.
+  it("a MAD-dropped strong source leaves a weaker out-of-band median → REJECTED", async () => {
+    // 4 obs so weightedMedian's internal MAD engages; olp 7.5 is the outlier
+    // and is dropped, so book_hours (~1.0) is LLM/VDB-driven — 24 min from
+    // the 0.6h anchor with zero surviving strong sources. Old policy wrote
+    // it at LLM-consensus 0.6; new policy (batch-2 audit) rejects an
+    // out-of-band median that no strong source backs.
     const db = base([
       obs("olp_labor", 7.5, 0.8),
       obs("llm_web", 1.0, 0.5),
@@ -142,6 +147,6 @@ describe("agreement + fallback-guardrail confidence", () => {
     ]);
     await recomputeLaborForConfigService({ db } as any,
       { vehicleConfigId: CFG, serviceId: SVC, now: 1, bookOnly: true });
-    expect(db.inserts[0].doc.confidence).toBe(0.6);
+    expect(db.inserts.length).toBe(0);
   });
 });

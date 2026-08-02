@@ -5,7 +5,7 @@
  * OLP is a Next.js (Pages Router) site. Every page has a JSON data route
  *   /_next/data/{buildId}/...json
  * and the portal route's pageProps.laborJobs carries a car's FULL labor list
- * as {name, slug, category, laborHours} — hours are DIRECT (no RepairPal
+ * as {name, slug, category, laborHours} — hours are DIRECT (no Estimator
  * dollars→hours reversal, so no 1.47-ratio guardrail; we gate on a plain
  * hours range instead). The probe action lives in devOnly/olpProbe.ts.
  * Probe-only: nothing here writes to the DB or the pipeline.
@@ -51,7 +51,7 @@ export function parseJsonLoose(s: string): unknown | null {
 /**
  * Ordered model-slug candidates, most specific first. OLP keys models by
  * trim-qualified nameplate (civic, civic-si, civic-type-r) — same shape as
- * RepairPal, so same candidate strategy as repairpalModelCandidates:
+ * Estimator, so same candidate strategy as estimatorModelCandidates:
  *   ("5 Series", "M550i xDrive") → 5-series-m550i-xdrive, m550i-xdrive,
  *                                  m550i, 5-series
  */

@@ -551,7 +551,10 @@ export default function ShopSetupPage() {
   const { user, isLoaded: isUserLoaded } = useUser();
   const portalAccess = useQuery(getPortalAccessQuery) as PortalAccess | undefined;
   const onboardingData = useQuery(getOnboardingDataQuery) as OnboardingData | null | undefined;
-  const ensureUser = useMutation(ensureUserMutation) as () => Promise<unknown>;
+  const ensureUser = useMutation(ensureUserMutation) as (args: {
+    authProvider?: string;
+    acquisitionSource?: string;
+  }) => Promise<unknown>;
   const generateUploadUrl = useMutation(generateUploadUrlMutation) as () => Promise<string>;
   const updateMechanicProfilePhoto = useMutation(updateMechanicProfilePhotoMutation) as (args: {
     mechanicId: Id<"mechanics">;
@@ -722,7 +725,13 @@ export default function ShopSetupPage() {
     if (!isUserLoaded || !user || ensuredConvexUser) return;
     let cancelled = false;
 
-    void ensureUser()
+    // First-touch attribution: OAuth provider (or password) from Clerk, and the
+    // entry surface. Convex only writes these when still empty, so re-running is
+    // harmless.
+    const authProvider =
+      user.externalAccounts?.[0]?.provider ??
+      (user.passwordEnabled ? "password" : undefined);
+    void ensureUser({ authProvider, acquisitionSource: "shop_portal_web" })
       .catch(() => {
         // Keep the UI responsive; the queries will stay null if auth bootstrap fails.
       })

@@ -244,7 +244,7 @@ const EXPECTATIONS: ReadonlyArray<Expected> = [
     must_flag: "tier_estimate",
   },
 
-  // ── Cross-tier validation table (in-range vs RepairPal market) ───────────
+  // ── Cross-tier validation table (in-range vs Estimator market) ───────────
   // NOTE: 2026-06-09 — oil_change reclassified to filter-only (shops supply
   // engine oil from stock). Our customer-facing quote is intentionally
   // BELOW the market_low these fixtures were calibrated against, because

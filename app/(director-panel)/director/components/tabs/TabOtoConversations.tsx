@@ -193,7 +193,7 @@ export const TabOtoConversations = () => {
   const token = session?.token ?? ''
 
   // ── user picker (same pattern as the Sim tab) ─────────────────────────────
-  const users = useQuery(api.director.usersList)
+  const users = useQuery(api.director.usersList, { token })
   const [q, setQ] = useState('')
   const [selected, setSelected] = useState<{ id: string; name: string; email: string } | null>(null)
   const [openId, setOpenId] = useState<Id<'ai_conversations'> | null>(null)

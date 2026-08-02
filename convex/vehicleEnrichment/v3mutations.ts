@@ -470,6 +470,34 @@ export const updateTransmissionSpecs = internalMutation({
         patch[key] = value;
       }
     }
+    // Reconcile the decode-time display string with the enriched canonical
+    // type. Batch-2 audit (Jul 2026): a 2015 WRX 6MT row carried
+    // type:"manual" (LLM, correct) next to transmission_type:"Continuously
+    // Variable Transmission (CVT)" (decode, the OTHER 2015 WRX gearbox) —
+    // and every transmission_type-keyed gate (CVT-filter nulling, manual
+    // ATF nulling) then fired wrong. When the canonical type lands and the
+    // stored display string names a DIFFERENT canonical family, replace it.
+    if (typeof patch.type === "string") {
+      const existing = await ctx.db.get(transmission_id);
+      const display = String((existing as any)?.transmission_type ?? "").toLowerCase();
+      const canon = (patch.type as string).toLowerCase();
+      const displayFamily =
+        display.includes("cvt") || display.includes("continuously variable") ? "cvt"
+        : display.includes("manual") ? "manual"
+        : display.includes("dct") || display.includes("dual clutch") ? "dct"
+        : display.includes("auto") ? "automatic"
+        : null;
+      if (displayFamily && displayFamily !== canon.toLowerCase()) {
+        const DISPLAY: Record<string, string> = {
+          manual: "Manual", automatic: "Automatic",
+          cvt: "Continuously Variable Transmission (CVT)", dct: "Dual-Clutch (DCT)", amt: "Automated Manual (AMT)",
+        };
+        patch.transmission_type = DISPLAY[canon] ?? patch.type;
+        console.warn(
+          `[v8] Transmission display/type contradiction — "${(existing as any)?.transmission_type}" vs canonical "${patch.type}"; display reconciled`,
+        );
+      }
+    }
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(transmission_id, patch);
     }
@@ -879,6 +907,22 @@ export const upsertServiceInterval = internalMutation({
     data_quality: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Wear items (pads/rotors/tires/battery) are condition-based: miles is a
+    // useful wear ESTIMATE, but a months recurrence is meaningless and reads
+    // as "replace brake pads every 12 months" (Jul 2026 5-VIN test: Atlas
+    // pads landed 10k/12mo at 0.95 — an inspection cadence stored as a
+    // replacement schedule). Strip months for these services on every write
+    // path that funnels through this mutation.
+    const WEAR_ITEM_SLUGS = new Set([
+      "brake_pad_replacement",
+      "rotor_replacement",
+      "tire_replacement",
+      "battery_replacement",
+    ]);
+    const svc = await ctx.db.get(args.service_id);
+    const isWearItem = WEAR_ITEM_SLUGS.has(((svc as any)?.slug ?? "").replace(/-/g, "_"));
+    const intervalMonths = isWearItem ? undefined : args.interval_months;
+
     const existing = await ctx.db
       .query("service_intervals")
       .withIndex("by_config_service", (q) =>
@@ -892,7 +936,7 @@ export const upsertServiceInterval = internalMutation({
       vehicle_config_id: args.vehicle_config_id,
       service_id: args.service_id,
       interval_miles: args.interval_miles,
-      interval_months: args.interval_months,
+      interval_months: intervalMonths,
       status: args.status,
       display_string: args.display_string,
       confidence: args.confidence,
@@ -904,8 +948,8 @@ export const upsertServiceInterval = internalMutation({
       const valuesAgree =
         args.interval_miles != null && existing.interval_miles != null
           ? args.interval_miles === existing.interval_miles
-          : args.interval_months != null && existing.interval_months != null
-            ? args.interval_months === existing.interval_months
+          : intervalMonths != null && existing.interval_months != null
+            ? intervalMonths === existing.interval_months
             : false;
 
       if (valuesAgree) {
@@ -913,7 +957,7 @@ export const upsertServiceInterval = internalMutation({
         await ctx.db.patch(existing._id, {
           source_count: (existing.source_count ?? 1) + 1,
           confidence: Math.max(args.confidence, existing.confidence ?? 0),
-          interval_months: args.interval_months ?? existing.interval_months,
+          interval_months: isWearItem ? undefined : (intervalMonths ?? existing.interval_months),
           display_string: args.display_string ?? existing.display_string,
         });
       } else {
@@ -923,7 +967,7 @@ export const upsertServiceInterval = internalMutation({
         if (existingCount <= 1 && args.confidence > (existing.confidence ?? 0)) {
           await ctx.db.patch(existing._id, {
             interval_miles: args.interval_miles,
-            interval_months: args.interval_months,
+            interval_months: intervalMonths,
             status: args.status,
             display_string: args.display_string,
             confidence: args.confidence,
@@ -1423,6 +1467,78 @@ export const failEnrichmentRun = internalMutation({
 });
 
 // ============================================================================
+// 12a. renameConfigKey — migrate a config to its corrected engine-code key
+// ============================================================================
+// Batch-2 audit (Jul 2026): a verified engine-code correction persisted to
+// engines.engine_code but the config_key never followed (the Soul stayed
+// "..._g4fj" after "U" verified), so future decodes resolving the correct
+// code build a different key, miss the config, and create duplicates — the
+// mechanism behind the ~70 duplicate config groups in dev. Rename when the
+// corrected key is free; on conflict leave the row and report (merging two
+// enriched configs is a director decision, not an automatic one).
+
+export const renameConfigKey = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    new_key: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.vehicle_config_id);
+    if (!row) return { renamed: false, reason: "no_config" as const };
+    if ((row as any).config_key === args.new_key) return { renamed: true, reason: "already" as const };
+    const holder = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_config_key", (q: any) => q.eq("config_key", args.new_key))
+      .first();
+    if (holder && holder._id !== args.vehicle_config_id) {
+      console.warn(
+        `[v8] config_key migration conflict: "${args.new_key}" already held by ${String(holder._id)} — keeping "${(row as any).config_key}" (needs manual merge)`,
+      );
+      return { renamed: false, reason: "conflict" as const };
+    }
+    console.log(`[v8] config_key migrated: "${(row as any).config_key}" → "${args.new_key}"`);
+    await ctx.db.patch(args.vehicle_config_id, { config_key: args.new_key });
+    return { renamed: true, reason: "renamed" as const };
+  },
+});
+
+// ============================================================================
+// 12b. removeRefutedFitments — fitment-verification gate (Jul 2026)
+// ============================================================================
+// Deletes part_fitments whose OEM number the adversarial fitment verifier
+// REFUTED for this config (wrong engine variant / wrong model / wrong axle).
+// The oem_parts row is kept — the number is a real part, it just doesn't fit
+// THIS vehicle. With the fitment gone, the role falls to its universal
+// fallback or reads as an honest gap instead of quoting a wrong part.
+
+export const removeRefutedFitments = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    refuted: v.array(v.object({ oem: v.string(), reason: v.string() })),
+  },
+  handler: async (ctx, args) => {
+    if (args.refuted.length === 0) return { removed: 0 };
+    const refutedByOem = new Map(args.refuted.map((r) => [r.oem.toUpperCase(), r.reason]));
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicle_config_id))
+      .collect();
+    let removed = 0;
+    for (const f of fitments) {
+      const part = await ctx.db.get(f.part_id);
+      const oem = ((part as any)?.oem_part_number ?? "").toUpperCase();
+      if (!oem || !refutedByOem.has(oem)) continue;
+      console.warn(
+        `[fitment-verify] Removing refuted fitment ${String(f._id)} (${oem}, service=${(f as any).service_type ?? "?"}): ${refutedByOem.get(oem)}`,
+      );
+      await ctx.db.delete(f._id);
+      removed++;
+    }
+    return { removed };
+  },
+});
+
+// ============================================================================
 // 13. attachVehicleConfig
 // ============================================================================
 
@@ -1904,6 +2020,12 @@ export const ensureAllServiceIntervals = internalMutation({
       hasStaggeredTires = opts.some((t: any) => t.size_rear && t.size_rear !== t.size_front);
     }
 
+    // ps_fluid_type is only persisted for hydraulic systems (patchVehicleConfig
+    // strips "electric"), so absence means electric OR unknown — either way,
+    // don't invent a flush schedule for fluid the car may not have.
+    const psFluidType = String(cfg.ps_fluid_type ?? "").toLowerCase();
+    const hasHydraulicPs = !!psFluidType && psFluidType !== "electric";
+
     // Get all 23 services
     const allServices = await ctx.db.query("services").collect();
 
@@ -1916,6 +2038,35 @@ export const ensureAllServiceIntervals = internalMutation({
 
     let added = 0;
     let skipped = 0;
+
+    // ── Retro-cleanup (batch-2 audit, Jul 2026): the wear-months and
+    // applicability fixes were insert-only, so configs enriched before them
+    // kept stale rows through re-enrichment (Soul re-run kept rotor 72mo /
+    // tire 60mo / battery 48mo). Every re-run now repairs existing rows too.
+    const svcById = new Map(allServices.map((s) => [s._id.toString(), s]));
+    const WEAR_SLUGS = new Set(["brake_pad_replacement", "rotor_replacement", "tire_replacement", "battery_replacement"]);
+    let cleaned = 0;
+    for (const row of existingIntervals) {
+      const svc = svcById.get(row.service_id.toString());
+      if (!svc) continue;
+      const slug = (svc.slug ?? "").replace(/-/g, "_");
+      const notApplicable =
+        (svc.requires_timing_belt && timingSystem.includes("chain")) ||
+        (svc.requires_differential && isFWD) ||
+        (svc.requires_rotatable_tires && hasStaggeredTires) ||
+        (svc.requires_hydraulic_ps && !hasHydraulicPs);
+      if (notApplicable) {
+        await ctx.db.delete(row._id);
+        existingServiceIds.delete(row.service_id.toString());
+        cleaned++;
+        continue;
+      }
+      if (WEAR_SLUGS.has(slug) && row.interval_months != null) {
+        await ctx.db.patch(row._id, { interval_months: undefined });
+        cleaned++;
+      }
+    }
+    if (cleaned > 0) console.log(`[fallback] Retro-cleaned ${cleaned} stale interval row(s)`);
 
     for (const svc of allServices) {
       // Already has an interval — skip
@@ -1934,16 +2085,25 @@ export const ensureAllServiceIntervals = internalMutation({
         skipped++;
         continue;
       }
+      if (svc.requires_hydraulic_ps && !hasHydraulicPs) {
+        skipped++;
+        continue;
+      }
 
       // Determine status and interval
       const defaults = svc.slug ? SERVICE_DEFAULTS[svc.slug] : undefined;
       const isOnDemand = svc.is_labor_only && !defaults;
+      // Wear items are condition-based — miles is a wear estimate, a months
+      // recurrence is nonsense ("pads every 48 months"). Same guard as
+      // upsertServiceInterval.
+      const isWearItem = ["brake_pad_replacement", "rotor_replacement", "tire_replacement", "battery_replacement"]
+        .includes((svc.slug ?? "").replace(/-/g, "_"));
 
       await ctx.db.insert("service_intervals", {
         vehicle_config_id: args.vehicle_config_id,
         service_id: svc._id,
         interval_miles: defaults?.miles,
-        interval_months: defaults?.months,
+        interval_months: isWearItem ? undefined : defaults?.months,
         status: isOnDemand ? "on_demand" : "scheduled",
         display_string: isOnDemand ? "As needed" : undefined,
         confidence: 0.50, // low confidence — these are fallback defaults
@@ -1994,6 +2154,10 @@ export const ensureAllLaborTimes = internalMutation({
       hasStaggeredTires = opts.some((t: any) => t.size_rear && t.size_rear !== t.size_front);
     }
 
+    // Same hydraulic-PS gate as ensureAllServiceIntervals above.
+    const psFluidType = String(cfg.ps_fluid_type ?? "").toLowerCase();
+    const hasHydraulicPs = !!psFluidType && psFluidType !== "electric";
+
     const allServices = await ctx.db.query("services").collect();
 
     const existingLabor = await ctx.db
@@ -2005,6 +2169,33 @@ export const ensureAllLaborTimes = internalMutation({
     let added = 0;
     let skipped = 0;
 
+    // ── Retro-cleanup (batch-2 audit, Jul 2026): pre-fix configs carry
+    // "training_data"-labeled default rows and labor rows for services their
+    // hardware can't receive (FWD diff service on the Atlas). Insert-only
+    // seeding never repaired them; every re-run now does.
+    const svcByIdL = new Map(allServices.map((s) => [s._id.toString(), s]));
+    let cleanedL = 0;
+    for (const row of existingLabor) {
+      const svc = svcByIdL.get(row.service_id.toString());
+      if (!svc) continue;
+      const notApplicable =
+        (svc.requires_timing_belt && timingSystem.includes("chain")) ||
+        (svc.requires_differential && isFWD) ||
+        (svc.requires_rotatable_tires && hasStaggeredTires) ||
+        (svc.requires_hydraulic_ps && !hasHydraulicPs);
+      if (notApplicable) {
+        await ctx.db.delete(row._id);
+        existingServiceIds.delete(row.service_id.toString());
+        cleanedL++;
+        continue;
+      }
+      if ((row as any).source === "training_data") {
+        await ctx.db.patch(row._id, { source: "default_fallback", data_quality: "default_fallback" });
+        cleanedL++;
+      }
+    }
+    if (cleanedL > 0) console.log(`[fallback] Retro-cleaned ${cleanedL} stale labor row(s)`);
+
     for (const svc of allServices) {
       if (existingServiceIds.has(svc._id.toString())) continue;
       if (!svc.default_labor_hours) { skipped++; continue; }
@@ -2012,12 +2203,19 @@ export const ensureAllLaborTimes = internalMutation({
       if (svc.requires_timing_belt && timingSystem.includes("chain")) { skipped++; continue; }
       if (svc.requires_differential && isFWD) { skipped++; continue; }
       if (svc.requires_rotatable_tires && hasStaggeredTires) { skipped++; continue; }
+      if (svc.requires_hydraulic_ps && !hasHydraulicPs) { skipped++; continue; }
 
       await ctx.db.insert("labor_times", {
         vehicle_config_id: args.vehicle_config_id,
         service_id: svc._id,
         book_hours: svc.default_labor_hours,
-        source: "training_data",
+        // These rows ARE the service defaults, not observations — label them
+        // so (Jul 2026 5-VIN test: 8 rows/vehicle stamped "training_data"
+        // read as vehicle data in every report). Both labels sit in the
+        // quote gate's disqualified sets, so quoting behavior is unchanged;
+        // "default_fallback" matches the intervals seeder's provenance.
+        source: "default_fallback",
+        data_quality: "default_fallback",
         confidence: 0.45,
         empirical_sample_size: 0,
         created_at: now,

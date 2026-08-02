@@ -154,8 +154,39 @@ export const getServiceSpecs = internalQuery({
       .withIndex("by_engine_id", (q) => q.eq("engine_id", args.engineId))
       .collect();
 
-    // Resolve MI category for each spec by joining services → service_categories
+    // Resolve the MI bucket for each spec. The 7→4 category consolidation
+    // (Jul 13: Routine / Tires & Brakes / Scheduled Service / Inspections)
+    // made category names too coarse for MI buckets — "Tires & Brakes" can't
+    // distinguish a brake spec from a tire spec — so the bucket now derives
+    // from the service SLUG first, with category names (new AND legacy, for
+    // deployments that haven't run migrations/categoryConsolidation) as the
+    // fallback.
+    const MI_SLUG_MAP: Record<string, string> = {
+      brake_pad_replacement: "brakes",
+      rotor_replacement: "brakes",
+      brake_fluid_flush: "brakes",
+      tire_rotation: "tires",
+      tire_balance: "tires",
+      tire_replacement: "tires",
+      wheel_alignment: "tires",
+      battery_test: "battery",
+      battery_replacement: "battery",
+      coolant_flush: "fluids",
+      power_steering_flush: "fluids",
+      differential_service: "fluids",
+      transmission_service: "fluids",
+      diagnostic_scan: "diagnostics",
+      check_engine_light: "diagnostics",
+      pre_purchase_inspection: "diagnostics",
+      state_inspection: "compliance",
+      emissions_test: "compliance",
+    };
     const MI_CATEGORY_MAP: Record<string, string> = {
+      "Routine": "routine",
+      "Tires & Brakes": "tires",
+      "Scheduled Service": "routine",
+      "Inspections": "diagnostics",
+      // Legacy 7-category names (pre-consolidation deployments)
       "Routine Maintenance": "routine",
       "Maintenance": "routine",
       "Tires": "tires",
@@ -172,13 +203,18 @@ export const getServiceSpecs = internalQuery({
     for (const spec of specs) {
       let miCategory = "routine";
       const service = await ctx.db.get(spec.service_id);
-      if (service && service.service_category_id) {
-        const category = await ctx.db.get(
-          service.service_category_id as Id<"service_categories">
-        );
-        if (category) {
-          miCategory =
-            MI_CATEGORY_MAP[(category as { name: string }).name] ?? "routine";
+      if (service) {
+        const bySlug = service.slug ? MI_SLUG_MAP[service.slug] : undefined;
+        if (bySlug) {
+          miCategory = bySlug;
+        } else if (service.service_category_id) {
+          const category = await ctx.db.get(
+            service.service_category_id as Id<"service_categories">
+          );
+          if (category) {
+            miCategory =
+              MI_CATEGORY_MAP[(category as { name: string }).name] ?? "routine";
+          }
         }
       }
       enriched.push({ ...spec, service_category: miCategory });
@@ -517,7 +553,14 @@ export const runPipeline = internalAction({
     // Step 3: Calculate composites per category
     const weightsByCategory = new Map<string, WeightProfile>();
     for (const w of weights) {
-      weightsByCategory.set(w.category_name, w);
+      weightsByCategory.set(w.category_name, {
+        dcm_weight: w.dcm_weight ?? 0,
+        vam_weight: w.vam_weight ?? 0,
+        mtm_weight: w.mtm_weight ?? 0,
+        pum_weight: w.pum_weight ?? 0,
+        hcm_weight: w.hcm_weight ?? 0,
+        is_fixed: w.is_fixed ?? false,
+      });
     }
 
     const getComp = (cat: string) =>
@@ -608,9 +651,18 @@ export const runPipeline = internalAction({
     // Then build a secondary map keyed by service_id for lookup during interval calc
     const anchorsByType = new Map<string, ServiceAnchor>();
     for (const r of records) {
+      // lastServiceDate is stored as either a Unix-ms number or a date string;
+      // ServiceAnchor.last_service_date expects Unix ms.
+      const lastServiceDateMs =
+        typeof r.lastServiceDate === "number"
+          ? r.lastServiceDate
+          : typeof r.lastServiceDate === "string" &&
+              !Number.isNaN(Date.parse(r.lastServiceDate))
+            ? Date.parse(r.lastServiceDate)
+            : undefined;
       anchorsByType.set(r.type, {
         last_service_mileage: r.lastServiceMileage ?? undefined,
-        last_service_date: r.lastServiceDate ?? undefined,
+        last_service_date: lastServiceDateMs,
         last_service_source: (r as any).serviceSource ?? "user_reported",
       });
     }
@@ -627,7 +679,7 @@ export const runPipeline = internalAction({
       const service = await ctx.runQuery(internal.maintenance_pipeline.getServiceById, {
         serviceId: spec.service_id,
       });
-      if (!service) continue;
+      if (!service?.slug) continue;
       const recordType = recordTypeForServiceSlug(service.slug);
       if (recordType && anchorsByType.has(recordType)) {
         anchorsByServiceId.set(spec.service_id.toString(), anchorsByType.get(recordType)!);

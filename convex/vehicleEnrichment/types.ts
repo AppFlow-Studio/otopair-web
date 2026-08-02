@@ -364,9 +364,10 @@ export const V4_FIELD_KEYS = [
   "diff_fluid_capacity_qts", "transfer_case_fluid_capacity_qts",
   "brake_fluid_capacity_oz", "ps_fluid_capacity_oz",
   "transmission_fluid_capacity_qts",
-  // ── v7 New Fluid Intervals (4) ──
+  // ── v7 New Fluid Intervals (6) ──
   "diff_fluid_miles", "diff_fluid_months",
   "transfer_case_fluid_miles", "transfer_case_fluid_months",
+  "ps_fluid_miles", "ps_fluid_months",
   // ── Wear/rotation guidance intervals (4) ── brake pads = inspection/
   //    typical-life guidance (wear-based); tire rotation = real schedule.
   "brake_pads_miles", "brake_pads_months",

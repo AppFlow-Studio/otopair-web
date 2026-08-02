@@ -251,7 +251,9 @@ export const runFullTestSuite = internalAction({
         // Get service slugs
         const services = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getAllServices, {});
         const slugMap: Record<string, string> = {};
-        for (const s of services) slugMap[s._id] = s.slug;
+        for (const s of services) {
+          if (s.slug) slugMap[s._id] = s.slug;
+        }
 
         // Parts with details
         const partsList = [];
@@ -291,8 +293,8 @@ export const runFullTestSuite = internalAction({
             tc_fluid_type: dt.tc_fluid_type, lsd_additive_required: dt.lsd_additive_required,
           } : null,
           trim_specs: trim ? {
-            front_tire_size: trim.tire_size_front ?? trim.front_tire_size,
-            rear_tire_size: trim.tire_size_rear ?? trim.rear_tire_size,
+            front_tire_size: trim.tire_size_front,
+            rear_tire_size: trim.tire_size_rear,
             battery_group: trim.battery_group, battery_cca: trim.battery_cca,
             lug_nut_torque_ft_lbs: trim.lug_nut_torque_ft_lbs,
           } : null,
@@ -304,7 +306,7 @@ export const runFullTestSuite = internalAction({
           })),
           labor: {
             total: labor.length,
-            non_training: labor.filter((l: any) => l.source !== "training_data").length,
+            non_training: labor.filter((l: any) => l.source !== "training_data" && l.source !== "default_fallback").length,
             list: labor.map((l: any) => ({
               service: slugMap[l.service_id] ?? l.service_id,
               book_hours: l.book_hours, source: l.source,
@@ -329,7 +331,7 @@ export const runFullTestSuite = internalAction({
         if (engine?.oil_capacity_qts && (engine.oil_capacity_qts < 1 || engine.oil_capacity_qts > 20)) r.sanityIssues.push("BAD_OIL_CAPACITY");
         if (config.drivetrain === "FWD" && dt?.diff_fluid_type) r.sanityIssues.push("DIFF_ON_FWD");
         if (config.drivetrain === "FWD" && dt?.tc_fluid_type) r.sanityIssues.push("TC_ON_FWD");
-        if (r.decoded.fuelType?.toLowerCase().includes("electric") && engine?.spark_plug_quantity > 0) r.sanityIssues.push("SPARK_ON_EV");
+        if (r.decoded.fuelType?.toLowerCase().includes("electric") && (engine?.spark_plug_quantity ?? 0) > 0) r.sanityIssues.push("SPARK_ON_EV");
         if (r.decoded.fuelType?.toLowerCase().includes("electric") && engine?.oil_viscosity) r.sanityIssues.push("OIL_ON_EV");
         if (engine?.timing_system === "belt" && !partsList.some((p) => p.subcategory === "timing_belt")) r.sanityIssues.push("MISSING_BELT_PARTS");
 

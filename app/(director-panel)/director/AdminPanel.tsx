@@ -21,7 +21,7 @@ import { TabAudit }     from './components/tabs/TabAudit'
 import { TabSettings }       from './components/tabs/TabSettings'
 import { TabMechanicEdits } from './components/tabs/TabMechanicEdits'
 import { TabServiceParts } from './components/tabs/TabServiceParts'
-import { TabRepairPalLabor } from './components/tabs/TabRepairPalLabor'
+import { TabEstimatorLabor } from './components/tabs/TabEstimatorLabor'
 import { TabOtoSim }    from './components/tabs/TabOtoSim'
 import { TabOtoConversations } from './components/tabs/TabOtoConversations'
 
@@ -36,7 +36,7 @@ const TABS: Record<string, React.ComponentType> = {
   configs:     TabVehicleConfigs,
   pricing:     TabPricing,
   serviceParts: TabServiceParts,
-  repairpalLabor: TabRepairPalLabor,
+  estimatorLabor: TabEstimatorLabor,
   bugs:        TabBugs,
   feedback:    TabFeedback,
   otoFeedback: TabOtoFeedback,
@@ -58,7 +58,7 @@ function getHashTab(): string {
 
 const PanelShell = ({ session, onLogout }: { session: DirectorSession; onLogout: () => void }) => {
   const [active, setActive] = useState('overview')
-  const counts = useQuery(api.director.sidebarCounts)
+  const counts = useQuery(api.director.sidebarCounts, { token: session.token })
 
   useEffect(() => {
     setActive(getHashTab())

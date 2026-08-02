@@ -144,6 +144,54 @@ const Row = ({ k, v }: { k: string; v: React.ReactNode }) => (
   </div>
 )
 
+const GapPartAdder = ({
+  gap,
+  onAdd,
+}: {
+  gap: { serviceSlug: string; serviceName: string; roleKey: string; roleLabel: string }
+  onAdd: (oemNumber: string, partName: string) => Promise<void>
+}) => {
+  const [oem, setOem] = useState('')
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const submit = async () => {
+    if (!oem.trim() || busy) return
+    setBusy(true)
+    try { await onAdd(oem.trim(), name.trim()); setOem(''); setName('') }
+    finally { setBusy(false) }
+  }
+  const inputStyle: React.CSSProperties = {
+    border:'1px solid var(--slate-200)', borderRadius:6, padding:'6px 8px',
+    fontSize:12, color:'var(--slate-800)', background:'#fff', minWidth:0,
+  }
+  return (
+    <div style={{ border:'1px solid var(--amber-200, #fde68a)', background:'var(--amber-25, #fffbeb)', borderRadius:8, padding:'10px 12px' }}>
+      <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:8 }}>
+        <span style={{ fontSize:11, fontWeight:600, color:'var(--slate-700)', textTransform:'uppercase', letterSpacing:'0.06em' }}>
+          {gap.serviceName} · {gap.roleLabel}
+        </span>
+        <Badge tone="yellow">no part on file</Badge>
+      </div>
+      <div style={{ display:'grid', gridTemplateColumns:'minmax(0,1.4fr) minmax(0,1.6fr) 88px', gap:8, alignItems:'center' }}>
+        <input value={oem} onChange={e => setOem(e.target.value)} placeholder="OEM part number" className="mono" style={inputStyle} />
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Part name (optional)" style={inputStyle} />
+        <button
+          onClick={submit}
+          disabled={busy || !oem.trim()}
+          style={{
+            border:'none', borderRadius:6, padding:'7px 10px', fontSize:12, fontWeight:600,
+            cursor: busy || !oem.trim() ? 'default' : 'pointer',
+            background: busy || !oem.trim() ? 'var(--slate-200)' : 'var(--blue-600, #2563eb)',
+            color: busy || !oem.trim() ? 'var(--slate-500)' : '#fff',
+          }}
+        >
+          {busy ? 'Adding…' : 'Add part'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 const SpecsBlock = ({ title, rows, empty }: { title: string; rows: [string, unknown][]; empty?: boolean }) => {
   const filled = rows.filter(([, v]) => v !== undefined && v !== null && v !== '')
   if (empty || filled.length === 0) {
@@ -420,6 +468,9 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     configId ? { id: configId } : 'skip')
   const fitments = useQuery(api.directorCars.vehicleConfigFitments,
     configId ? { vehicle_config_id: configId } : 'skip')
+  const serviceGaps = useQuery(api.serviceParts.getServiceGapsForConfig,
+    configId ? { vehicleConfigId: configId } : 'skip')
+  const addConfigFitment = useMutation(api.directorConfigActions.addConfigFitment)
   const updateBasics       = useMutation(api.directorConfigActions.updateConfigBasics)
   const updateEngine       = useMutation(api.directorConfigActions.updateEngineFields)
   const updateTransmission = useMutation(api.directorConfigActions.updateTransmissionFields)
@@ -742,6 +793,36 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                             : <span style={{ color:'var(--slate-400)' }}>—</span>}
                         </span>
                       </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Missing parts — parts-requiring services this config has NO
+                  usable OEM part for (dropped by OEM-strict enrichment, e.g. the
+                  2001 740iA battery). Add the OEM number to make the service
+                  available for booking + the mechanic pre-job flow. */}
+              {configId && serviceGaps && serviceGaps.gaps.length > 0 && (
+                <div style={{ marginBottom:18 }}>
+                  <SectionTitle label={`Missing parts (${serviceGaps.gaps.length})`} />
+                  <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                    {serviceGaps.gaps.map((gap) => (
+                      <GapPartAdder
+                        key={`${gap.serviceSlug}:${gap.roleKey}`}
+                        gap={gap}
+                        onAdd={async (oemNumber, partName) => {
+                          const res = await addConfigFitment({
+                            vehicleConfigId: configId,
+                            serviceSlug: gap.serviceSlug,
+                            roleKey: gap.roleKey,
+                            oemNumber,
+                            partName: partName || undefined,
+                            token: sessionToken,
+                          })
+                          if (res?.ok) setToast(`Added ${gap.roleLabel} — ${gap.serviceName} is now available`)
+                          else setToast('Could not add part')
+                        }}
+                      />
                     ))}
                   </div>
                 </div>

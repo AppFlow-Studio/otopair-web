@@ -210,3 +210,104 @@ export const backfillFromStripe = action({
     return summary;
   },
 });
+
+type CardBackfillSummary = {
+  dryRun: boolean;
+  scanned: number;
+  patched: number;
+  unchanged: number;
+  noCardOnCharge: number;
+  errors: { paymentIntentId: string; reason: string }[];
+};
+
+/**
+ * Backfill card brand + last4 onto historical `payments` rows. Walks OUR rows
+ * that have a Stripe PI but no card_last4 yet (so it can't touch anything the
+ * live webhook already stamped), retrieves each PI with its latest charge, and
+ * reads payment_method_details.card. Admin-gated, dry-run by default, and
+ * idempotent — the helper mutation only writes when the fields are still empty.
+ *
+ *   await ctx.runAction(api.payments_backfill.backfillCardDetails, {
+ *     apply: false, maxRows: 500,
+ *   });
+ */
+export const backfillCardDetails = action({
+  args: {
+    apply: v.optional(v.boolean()),
+    limitPerPage: v.optional(v.number()),
+    maxRows: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<CardBackfillSummary> => {
+    const isAdmin: boolean = await ctx.runQuery(
+      (internal as any).payments_backfill_helpers._isCallerAdmin,
+      {},
+    );
+    if (!isAdmin) throw new Error("forbidden: admin role required");
+
+    const apply = !!args.apply;
+    const limitPerPage = Math.min(Math.max(args.limitPerPage ?? 50, 1), 200);
+    const maxRows = Math.max(args.maxRows ?? 1000, 1);
+    const stripe = getStripe();
+
+    const summary: CardBackfillSummary = {
+      dryRun: !apply,
+      scanned: 0,
+      patched: 0,
+      unchanged: 0,
+      noCardOnCharge: 0,
+      errors: [],
+    };
+
+    let cursor: number | undefined;
+    while (summary.scanned < maxRows) {
+      const window: {
+        candidates: { _id: Id<"payments">; stripe_payment_intent_id: string }[];
+        scanned: number;
+        nextCursor: number | null;
+        exhausted: boolean;
+      } = await ctx.runQuery(
+        (internal as any).payments_backfill_helpers._paymentsMissingCard,
+        { limit: limitPerPage, cursor },
+      );
+
+      for (const row of window.candidates) {
+        summary.scanned += 1;
+        try {
+          const pi = await stripe.paymentIntents.retrieve(
+            row.stripe_payment_intent_id,
+            { expand: ["latest_charge"] },
+          );
+          const charge = chargeFromPi(pi);
+          const card = charge?.payment_method_details?.card;
+          const cardBrand = card?.brand ?? undefined;
+          const cardLast4 = card?.last4 ?? undefined;
+          if (cardBrand == null && cardLast4 == null) {
+            summary.noCardOnCharge += 1;
+            continue;
+          }
+          if (!apply) {
+            summary.patched += 1; // dry-run optimistic
+            continue;
+          }
+          const res: "patched" | "unchanged" = await ctx.runMutation(
+            (internal as any).payments_backfill_helpers._patchPaymentCard,
+            { paymentId: row._id, cardBrand, cardLast4 },
+          );
+          if (res === "patched") summary.patched += 1;
+          else summary.unchanged += 1;
+        } catch (err) {
+          summary.errors.push({
+            paymentIntentId: row.stripe_payment_intent_id,
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      // Advance past the oldest row in this raw window; stop at end of table.
+      if (window.exhausted || window.nextCursor == null) break;
+      cursor = window.nextCursor;
+    }
+
+    return summary;
+  },
+});

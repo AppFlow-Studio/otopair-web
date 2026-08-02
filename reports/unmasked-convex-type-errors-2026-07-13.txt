@@ -1,0 +1,75 @@
+RESOLVED Jul 13 2026 — all 50 errors fixed (guards, dead-field removals,
+and three real bug fixes: diagnoseVin's dead getVehicleConfig refs,
+payments_stripe reading nonexistent shop.address_state/zip so booking tax
+never saw the shop's state, vehicle_pipeline's phantom engine fields).
+convex/ is at ZERO type errors; `npx convex dev` typechecks clean again —
+the --typecheck=disable workaround is no longer needed.
+
+Original inventory kept below for the record:
+
+     10 convex/vehicle_pipeline.ts
+      9 convex/vehicleEnrichment/pipelineTest.ts
+      6 convex/vehicleEnrichment/cacheValidation.ts
+      4 convex/vehicleEnrichment/v3TestSuite.ts
+      4 convex/payments_stripe.ts
+      3 convex/vehicleEnrichment/pipelineBatch.ts
+      3 convex/maintenance_pipeline.ts
+      3 convex/diagnoseVin.ts
+      2 convex/vehicleEnrichment/tier2Enrichment.ts
+      2 convex/vehicleEnrichment/scraper.ts
+      1 convex/vehicleEnrichment/runTest.ts
+      1 convex/vehicleEnrichment/runPublic.ts
+      1 convex/retrigger_enrichment.ts
+      1 convex/oto/migrations/backfillV3Lifecycle.ts
+      1 convex/lib/walmartTireScraper.ts
+convex/diagnoseVin.ts(331,76): error TS2551: Property 'getVehicleConfig' does not exist on type '{ getVehicleConfigByKey: FunctionReference<"query", "internal", { configKey: string; }, { _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; ... 29 more ...; year: number; } | null, string | undefined>; ... 44 more ...; findEngineSiblings: Funct...'. Did you mean 'getVehicleConfigById'?
+convex/diagnoseVin.ts(355,11): error TS2322: Type '{ [k: string]: any; code: string; }[]' is not assignable to type '{ confidence?: number | undefined; code: string; label: string; services_affected: string[]; detected_from: string; }[]'.
+convex/diagnoseVin.ts(616,76): error TS2551: Property 'getVehicleConfig' does not exist on type '{ getVehicleConfigByKey: FunctionReference<"query", "internal", { configKey: string; }, { _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; ... 29 more ...; year: number; } | null, string | undefined>; ... 44 more ...; findEngineSiblings: Funct...'. Did you mean 'getVehicleConfigById'?
+convex/lib/walmartTireScraper.ts(96,79): error TS1501: This regular expression flag is only available when targeting 'es2018' or later.
+convex/maintenance_pipeline.ts(520,46): error TS2345: Argument of type '{ _id: Id<"composite_modifier_weights">; _creationTime: number; dcm_weight?: number | undefined; vam_weight?: number | undefined; mtm_weight?: number | undefined; pum_weight?: number | undefined; hcm_weight?: number | undefined; is_fixed?: boolean | undefined; category_name: string; }' is not assignable to parameter of type 'WeightProfile'.
+convex/maintenance_pipeline.ts(613,9): error TS2322: Type 'string | number | undefined' is not assignable to type 'number | undefined'.
+convex/maintenance_pipeline.ts(631,51): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+convex/oto/migrations/backfillV3Lifecycle.ts(175,9): error TS2322: Type 'number | null' is not assignable to type 'number | undefined'.
+convex/payments_stripe.ts(1814,23): error TS2339: Property 'address_state' does not exist on type '{ _id: Id<"shops">; _creationTime: number; logo?: string | undefined; slug?: string | undefined; zip?: string | undefined; description?: string | undefined; email?: string | undefined; ... 32 more ...; name: string; }'.
+convex/payments_stripe.ts(1815,21): error TS2339: Property 'address_zip' does not exist on type '{ _id: Id<"shops">; _creationTime: number; logo?: string | undefined; slug?: string | undefined; zip?: string | undefined; description?: string | undefined; email?: string | undefined; ... 32 more ...; name: string; }'.
+convex/payments_stripe.ts(1856,21): error TS2339: Property 'address_state' does not exist on type '{ _id: Id<"shops">; _creationTime: number; logo?: string | undefined; slug?: string | undefined; zip?: string | undefined; description?: string | undefined; email?: string | undefined; ... 32 more ...; name: string; }'.
+convex/payments_stripe.ts(1857,19): error TS2339: Property 'address_zip' does not exist on type '{ _id: Id<"shops">; _creationTime: number; logo?: string | undefined; slug?: string | undefined; zip?: string | undefined; description?: string | undefined; email?: string | undefined; ... 32 more ...; name: string; }'.
+convex/retrigger_enrichment.ts(53,7): error TS2322: Type 'string | number' is not assignable to type 'string'.
+convex/vehicle_pipeline.ts(617,11): error TS2322: Type 'Id<"trims"> | undefined' is not assignable to type 'Id<"trims">'.
+convex/vehicle_pipeline.ts(715,17): error TS2322: Type 'Id<"trims"> | undefined' is not assignable to type 'Id<"trims">'.
+convex/vehicle_pipeline.ts(797,17): error TS2322: Type 'Id<"trims"> | undefined' is not assignable to type 'Id<"trims">'.
+convex/vehicle_pipeline.ts(884,39): error TS2339: Property 'confidence_score' does not exist on type '{ _id: Id<"engines">; _creationTime: number; created_at?: number | undefined; make_id?: Id<"makes"> | undefined; trim_id?: Id<"trims"> | undefined; cylinders?: number | undefined; ... 24 more ...; last_enriched_at?: number | undefined; }'.
+convex/vehicle_pipeline.ts(886,44): error TS2339: Property 'power_steering_type' does not exist on type '{ _id: Id<"engines">; _creationTime: number; created_at?: number | undefined; make_id?: Id<"makes"> | undefined; trim_id?: Id<"trims"> | undefined; cylinders?: number | undefined; ... 24 more ...; last_enriched_at?: number | undefined; }'.
+convex/vehicle_pipeline.ts(888,41): error TS2339: Property 'has_turbocharger' does not exist on type '{ _id: Id<"engines">; _creationTime: number; created_at?: number | undefined; make_id?: Id<"makes"> | undefined; trim_id?: Id<"trims"> | undefined; cylinders?: number | undefined; ... 24 more ...; last_enriched_at?: number | undefined; }'.
+convex/vehicle_pipeline.ts(889,44): error TS2551: Property 'fuel_injection_type' does not exist on type '{ _id: Id<"engines">; _creationTime: number; created_at?: number | undefined; make_id?: Id<"makes"> | undefined; trim_id?: Id<"trims"> | undefined; cylinders?: number | undefined; ... 24 more ...; last_enriched_at?: number | undefined; }'. Did you mean 'fuel_injection'?
+convex/vehicle_pipeline.ts(890,42): error TS2339: Property 'transmission_type' does not exist on type '{ _id: Id<"engines">; _creationTime: number; created_at?: number | undefined; make_id?: Id<"makes"> | undefined; trim_id?: Id<"trims"> | undefined; cylinders?: number | undefined; ... 24 more ...; last_enriched_at?: number | undefined; }'.
+convex/vehicle_pipeline.ts(891,40): error TS2339: Property 'drivetrain_type' does not exist on type '{ _id: Id<"engines">; _creationTime: number; created_at?: number | undefined; make_id?: Id<"makes"> | undefined; trim_id?: Id<"trims"> | undefined; cylinders?: number | undefined; ... 24 more ...; last_enriched_at?: number | undefined; }'.
+convex/vehicle_pipeline.ts(1062,29): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+convex/vehicleEnrichment/cacheValidation.ts(54,9): error TS2322: Type 'Id<"engines"> | undefined' is not assignable to type 'Id<"engines">'.
+convex/vehicleEnrichment/cacheValidation.ts(102,9): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+convex/vehicleEnrichment/cacheValidation.ts(142,15): error TS2345: Argument of type 'FunctionReference<"action", "internal", { superseded_by: string; part_id: Id<"oem_parts">; }, null, string | undefined>' is not assignable to parameter of type 'FunctionReference<"mutation", "public" | "internal">'.
+convex/vehicleEnrichment/cacheValidation.ts(188,13): error TS2345: Argument of type 'FunctionReference<"action", "internal", { part_id: Id<"oem_parts">; source_domain: string; new_price: number; }, null, string | undefined>' is not assignable to parameter of type 'FunctionReference<"mutation", "public" | "internal">'.
+convex/vehicleEnrichment/cacheValidation.ts(200,15): error TS2345: Argument of type 'FunctionReference<"action", "internal", { price_id: Id<"part_prices">; }, null, string | undefined>' is not assignable to parameter of type 'FunctionReference<"mutation", "public" | "internal">'.
+convex/vehicleEnrichment/cacheValidation.ts(232,74): error TS2339: Property 'front_tire_size' does not exist on type '{ _id: Id<"trim_specs">; _creationTime: number; created_at?: number | undefined; parking_brake_type?: string | undefined; trim_id?: Id<"trims"> | undefined; data_quality?: string | undefined; ... 20 more ...; battery_cca?: number | undefined; }'.
+convex/vehicleEnrichment/pipelineBatch.ts(534,31): error TS2551: Property 'fillRate' does not exist on type '{ _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; chassis_code?: string | undefined; brake_fluid_type?: string | undefined; ... 27 more ...; year: number; }'. Did you mean 'fill_rate'?
+convex/vehicleEnrichment/pipelineBatch.ts(535,73): error TS2551: Property 'fillRate' does not exist on type '{ _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; chassis_code?: string | undefined; brake_fluid_type?: string | undefined; ... 27 more ...; year: number; }'. Did you mean 'fill_rate'?
+convex/vehicleEnrichment/pipelineBatch.ts(540,76): error TS2551: Property 'fillRate' does not exist on type '{ _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; chassis_code?: string | undefined; brake_fluid_type?: string | undefined; ... 27 more ...; year: number; }'. Did you mean 'fill_rate'?
+convex/vehicleEnrichment/pipelineTest.ts(229,22): error TS18047: 'vehicle' is possibly 'null'.
+convex/vehicleEnrichment/pipelineTest.ts(392,24): error TS18047: 'vehicle' is possibly 'null'.
+convex/vehicleEnrichment/pipelineTest.ts(444,19): error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; chassis_code?: string | undefined; brake_fluid_type?: string | undefined; ... 27 more ...; year: number; }'.
+convex/vehicleEnrichment/pipelineTest.ts(923,22): error TS18047: 'vehicle' is possibly 'null'.
+convex/vehicleEnrichment/pipelineTest.ts(962,19): error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; chassis_code?: string | undefined; brake_fluid_type?: string | undefined; ... 27 more ...; year: number; }'.
+convex/vehicleEnrichment/pipelineTest.ts(993,17): error TS7053: Element implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; chassis_code?: string | undefined; brake_fluid_type?: string | undefined; ... 27 more ...; year: number; }'.
+convex/vehicleEnrichment/pipelineTest.ts(1005,32): error TS2339: Property 'callLog' does not exist on type '{ _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; chassis_code?: string | undefined; brake_fluid_type?: string | undefined; ... 27 more ...; year: number; }'.
+convex/vehicleEnrichment/pipelineTest.ts(1019,47): error TS2339: Property 'sourceUrls' does not exist on type '{ _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; chassis_code?: string | undefined; brake_fluid_type?: string | undefined; ... 27 more ...; year: number; }'.
+convex/vehicleEnrichment/pipelineTest.ts(1020,53): error TS2551: Property 'enrichmentVersion' does not exist on type '{ _id: Id<"vehicle_configs">; _creationTime: number; created_at?: number | undefined; last_enriched_at?: number | undefined; chassis_code?: string | undefined; brake_fluid_type?: string | undefined; ... 27 more ...; year: number; }'. Did you mean 'enrichment_version'?
+convex/vehicleEnrichment/runPublic.ts(69,15): error TS18047: 'user' is possibly 'null'.
+convex/vehicleEnrichment/runTest.ts(59,15): error TS18047: 'user' is possibly 'null'.
+convex/vehicleEnrichment/scraper.ts(406,14): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+convex/vehicleEnrichment/scraper.ts(406,48): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+convex/vehicleEnrichment/tier2Enrichment.ts(161,9): error TS2322: Type 'Id<"engines"> | undefined' is not assignable to type 'Id<"engines">'.
+convex/vehicleEnrichment/tier2Enrichment.ts(294,15): error TS2345: Argument of type 'string | undefined' is not assignable to parameter of type 'string'.
+convex/vehicleEnrichment/v3TestSuite.ts(254,35): error TS2322: Type 'string | undefined' is not assignable to type 'string'.
+convex/vehicleEnrichment/v3TestSuite.ts(294,59): error TS2339: Property 'front_tire_size' does not exist on type '{ _id: Id<"trim_specs">; _creationTime: number; created_at?: number | undefined; parking_brake_type?: string | undefined; trim_id?: Id<"trims"> | undefined; data_quality?: string | undefined; ... 20 more ...; battery_cca?: number | undefined; }'.
+convex/vehicleEnrichment/v3TestSuite.ts(295,57): error TS2339: Property 'rear_tire_size' does not exist on type '{ _id: Id<"trim_specs">; _creationTime: number; created_at?: number | undefined; parking_brake_type?: string | undefined; trim_id?: Id<"trims"> | undefined; data_quality?: string | undefined; ... 20 more ...; battery_cca?: number | undefined; }'.
+convex/vehicleEnrichment/v3TestSuite.ts(332,71): error TS18048: 'engine.spark_plug_quantity' is possibly 'undefined'.

@@ -307,6 +307,20 @@ function MultiPointInspectionDialogBody({
   const submitInspectionRecs = useMutation(
     api.inspections.submitInspectionRecommendations,
   );
+
+  // Mechanic parts fill-in: parts the OEM-strict pipeline left MISSING or
+  // LOW_CONFIDENCE that the mechanic must confirm/fill before starting work.
+  const partsToVerify = useQuery(
+    api.serviceParts.getPartsNeedingVerification,
+    bookingId ? { bookingId: bookingId as any } : "skip",
+  );
+  const verifyPart = useMutation(api.fitments.verifyPartForBooking);
+  const markServiceNotApplicable = useMutation(
+    api.fitments.markServiceNotApplicable,
+  );
+  // Keys (`serviceId:roleKey`) resolved this session — cleared from the gate
+  // optimistically; the query also drops them once the fitment is verified.
+  const [verifiedKeys, setVerifiedKeys] = useState<Set<string>>(new Set());
   const services = useQuery(api.services.list);
   const prepareInspectionPhotoUpload = useMutation(
     prepareInspectionPhotoUploadRef,
@@ -333,7 +347,9 @@ function MultiPointInspectionDialogBody({
 
   // ---- state -------------------------------------------------------------
   const [state, setState] = useState<InspectionState>(() => createInspectionState());
-  const [activeZone, setActiveZone] = useState<ZoneId | null>(null);
+  // "PARTS" is a synthetic zone (like "OWNER") — never enters the diagram or
+  // requiredZones; it hosts the mechanic parts fill-in gate.
+  const [activeZone, setActiveZone] = useState<ZoneId | "PARTS" | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [error, setError] = useState("");
@@ -509,6 +525,19 @@ function MultiPointInspectionDialogBody({
     () => requiredZones.filter((id) => state.zones[id]?.done).length,
     [requiredZones, state],
   );
+
+  const unresolvedParts = useMemo(
+    () =>
+      (partsToVerify?.items ?? []).filter(
+        (it: PartVerifyItem) => !verifiedKeys.has(`${it.serviceId}:${it.roleKey}`),
+      ),
+    [partsToVerify, verifiedKeys],
+  );
+  const allPartsVerified = unresolvedParts.length === 0;
+  // Parts fill-in is a MANDATORY first step: the mechanic must confirm every
+  // missing/low-confidence OEM part before the inspection UI is available.
+  const mustVerifyPartsFirst =
+    (partsToVerify?.items?.length ?? 0) > 0 && !allPartsVerified;
 
   // Findings + suggestions are evaluated from COMPLETED zones only, so a finding
   // surfaces the moment its zone is marked complete (not after the whole
@@ -763,6 +792,36 @@ function MultiPointInspectionDialogBody({
         }
       }
     }
+  }
+
+  async function handleVerifyPart(item: PartVerifyItem, input: VerifyInput) {
+    await verifyPart({
+      bookingId: bookingId as any,
+      serviceSlug: item.serviceSlug,
+      roleKey: item.roleKey,
+      mode: input.mode,
+      partId: input.partId as any,
+      oemNumber: input.oemNumber,
+      partName: input.partName,
+    });
+    setVerifiedKeys((prev) => {
+      const next = new Set(prev);
+      next.add(`${item.serviceId}:${item.roleKey}`);
+      return next;
+    });
+  }
+
+  async function handleMarkNotApplicable(item: PartVerifyItem) {
+    await markServiceNotApplicable({
+      bookingId: bookingId as any,
+      serviceSlug: item.serviceSlug,
+      roleKey: item.roleKey,
+    });
+    setVerifiedKeys((prev) => {
+      const next = new Set(prev);
+      next.add(`${item.serviceId}:${item.roleKey}`);
+      return next;
+    });
   }
 
   async function handleDownloadPdf() {
@@ -1058,7 +1117,7 @@ function MultiPointInspectionDialogBody({
           {/* diagram */}
           <div className="flex justify-center">
             <CarDiagram
-              activeZone={activeZone}
+              activeZone={activeZone === "PARTS" ? null : activeZone}
               isDone={(id) => !!state.zones[id]?.done}
               isRequired={(id) => requiredSet.has(id)}
               onSelect={setActiveZone}
@@ -1114,6 +1173,13 @@ function MultiPointInspectionDialogBody({
                       : false,
                   );
                 }}
+              />
+            ) : activeZone === "PARTS" ? (
+              <PartsVerifyZone
+                items={partsToVerify?.items ?? []}
+                verifiedKeys={verifiedKeys}
+                onVerify={handleVerifyPart}
+                onNotApplicable={handleMarkNotApplicable}
               />
             ) : (
               <ZonePanel
@@ -1661,6 +1727,9 @@ function FieldRow({
 
   if (field.type === "select") {
     const value = zs.select[field.key] ?? "";
+    // Verbatim OEM value that maps to no canonical option (odd coolant/trans
+    // brand strings): inject it so the enriched spec still shows + stays picked.
+    const isKnown = value === "" || field.options.some((o) => o.value === value);
     return (
       <div className="border-b border-primary/10">
         <Row label={field.label} required={required}>
@@ -2202,6 +2271,297 @@ function AftermarketModsSection({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+// ── Mechanic parts fill-in ─────────────────────────────────────────────────
+
+type PartVerifyPickOption = {
+  partId: string;
+  oemNumber: string;
+  name: string;
+  confidence: number;
+  origin: "winner" | "loser" | "eliminated_by_gate" | "dropped_cross_make";
+};
+
+type PartVerifyItem = {
+  serviceId: string;
+  serviceName: string;
+  serviceSlug: string;
+  roleKey: string;
+  roleLabel: string;
+  status: "MISSING" | "LOW_CONFIDENCE";
+  kind: "booked" | "gap";
+  position?: "front" | "rear";
+  current: { partId: string; oemNumber: string; name: string; confidence: number } | null;
+  pickOptions: PartVerifyPickOption[];
+};
+
+type VerifyInput = {
+  mode: "confirm_existing" | "freehand";
+  partId?: string;
+  oemNumber?: string;
+  partName?: string;
+};
+
+const ORIGIN_LABEL: Record<PartVerifyPickOption["origin"], string> = {
+  winner: "current best match",
+  loser: "alternate on file",
+  eliminated_by_gate: "low-confidence on file",
+  dropped_cross_make: "dropped by OEM-strict check",
+};
+
+function PartsVerifyZone({
+  items,
+  verifiedKeys,
+  onVerify,
+  onNotApplicable,
+}: {
+  items: PartVerifyItem[];
+  verifiedKeys: Set<string>;
+  onVerify: (item: PartVerifyItem, input: VerifyInput) => Promise<void>;
+  onNotApplicable: (item: PartVerifyItem) => Promise<void>;
+}) {
+  const booked = items.filter((it) => it.kind === "booked");
+  const gaps = items.filter((it) => it.kind === "gap");
+  return (
+    <div className="space-y-4">
+      {booked.length > 0 ? (
+        <div className="space-y-3">
+          <div className="mb-1">
+            <h4 className="text-[15px] font-semibold text-foreground">
+              Parts for this job
+            </h4>
+            <p className="text-[11px] text-muted-foreground">
+              Confirm the OEM part for the booked service — pick the match or type
+              the number off the old part.
+            </p>
+          </div>
+          {booked.map((item) => (
+            <PartsVerifyRow
+              key={`${item.serviceId}:${item.roleKey}`}
+              item={item}
+              verified={verifiedKeys.has(`${item.serviceId}:${item.roleKey}`)}
+              onVerify={(input) => onVerify(item, input)}
+              onNotApplicable={() => onNotApplicable(item)}
+            />
+          ))}
+        </div>
+      ) : null}
+      {gaps.length > 0 ? (
+        <div className="space-y-3">
+          <div className="mb-1">
+            <h4 className="text-[15px] font-semibold text-foreground">
+              Missing parts for this vehicle
+            </h4>
+            <p className="text-[11px] text-muted-foreground">
+              We have no OEM part on file for these services. Add the part off the
+              vehicle to make the service available, or mark it not applicable.
+            </p>
+          </div>
+          {gaps.map((item) => (
+            <PartsVerifyRow
+              key={`${item.serviceId}:${item.roleKey}`}
+              item={item}
+              verified={verifiedKeys.has(`${item.serviceId}:${item.roleKey}`)}
+              onVerify={(input) => onVerify(item, input)}
+              onNotApplicable={() => onNotApplicable(item)}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PartsVerifyRow({
+  item,
+  verified,
+  onVerify,
+  onNotApplicable,
+}: {
+  item: PartVerifyItem;
+  verified: boolean;
+  onVerify: (input: VerifyInput) => Promise<void>;
+  onNotApplicable: () => Promise<void>;
+}) {
+  const FREEHAND = "__freehand__";
+  const [selected, setSelected] = useState<string>(
+    () => item.pickOptions[0]?.partId ?? FREEHAND,
+  );
+  const [oemNumber, setOemNumber] = useState("");
+  const [partName, setPartName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const isFreehand = selected === FREEHAND;
+
+  async function submit() {
+    setError("");
+    if (isFreehand && !oemNumber.trim()) {
+      setError("Enter the OEM part number.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await onVerify(
+        isFreehand
+          ? { mode: "freehand", oemNumber: oemNumber.trim(), partName: partName.trim() }
+          : { mode: "confirm_existing", partId: selected },
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save this part.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function notApplicable() {
+    setError("");
+    setBusy(true);
+    try {
+      await onNotApplicable();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not update this service.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (verified) {
+    return (
+      <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
+        <Check className="h-4 w-4 text-emerald-600" />
+        <div className="text-[13px]">
+          <span className="font-semibold text-emerald-800">{item.roleLabel}</span>
+          <span className="text-emerald-700"> confirmed for {item.serviceName}.</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold text-foreground">
+            {item.roleLabel}
+            {item.position ? (
+              <span className="text-muted-foreground"> ({item.position})</span>
+            ) : null}
+          </div>
+          <div className="text-[11px] text-muted-foreground">{item.serviceName}</div>
+        </div>
+        <span
+          className={cn(
+            "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold",
+            item.status === "MISSING"
+              ? "bg-red-100 text-red-700"
+              : "bg-amber-100 text-amber-700",
+          )}
+        >
+          {item.status === "MISSING" ? "No OEM part on file" : "Low confidence"}
+        </span>
+      </div>
+
+      {item.current ? (
+        <p className="mb-2 text-[11px] text-muted-foreground">
+          Current guess: {item.current.name} · {item.current.oemNumber} (
+          {Math.round(item.current.confidence * 100)}% confidence)
+        </p>
+      ) : null}
+
+      <div className="space-y-1.5">
+        {item.pickOptions.map((opt) => (
+          <label
+            key={opt.partId}
+            className={cn(
+              "flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] transition-colors",
+              selected === opt.partId
+                ? "border-primary bg-primary/5"
+                : "border-primary/15 hover:bg-primary/[0.03]",
+            )}
+          >
+            <input
+              type="radio"
+              name={`pick-${item.serviceId}-${item.roleKey}`}
+              checked={selected === opt.partId}
+              onChange={() => setSelected(opt.partId)}
+              className="mt-0.5"
+            />
+            <span className="min-w-0">
+              <span className="font-medium text-foreground">{opt.name}</span>
+              <span className="text-muted-foreground"> · {opt.oemNumber}</span>
+              <span className="block text-[10px] text-muted-foreground">
+                {ORIGIN_LABEL[opt.origin]}
+              </span>
+            </span>
+          </label>
+        ))}
+
+        <label
+          className={cn(
+            "flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[12px] transition-colors",
+            isFreehand
+              ? "border-primary bg-primary/5"
+              : "border-primary/15 hover:bg-primary/[0.03]",
+          )}
+        >
+          <input
+            type="radio"
+            name={`pick-${item.serviceId}-${item.roleKey}`}
+            checked={isFreehand}
+            onChange={() => setSelected(FREEHAND)}
+          />
+          <span className="font-medium text-foreground">Type the OEM number</span>
+        </label>
+      </div>
+
+      {isFreehand ? (
+        <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+          <input
+            value={oemNumber}
+            onChange={(e) => setOemNumber(e.target.value)}
+            placeholder="OEM part number"
+            className="flex-1 rounded-lg border border-primary/20 bg-card px-2.5 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+          />
+          <input
+            value={partName}
+            onChange={(e) => setPartName(e.target.value)}
+            placeholder="Part name (optional)"
+            className="flex-1 rounded-lg border border-primary/20 bg-card px-2.5 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+          />
+        </div>
+      ) : null}
+
+      {error ? (
+        <p className="mt-2 rounded-lg bg-red-50 px-2.5 py-1.5 text-[11px] text-red-700">
+          {error}
+        </p>
+      ) : null}
+
+      <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={submit}
+          disabled={busy}
+          className="inline-flex items-center gap-2 rounded-xl bg-primary px-3.5 py-1.5 text-[12px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+          {item.kind === "gap" ? "Add part" : "Confirm part"}
+        </button>
+        {item.kind === "gap" ? (
+          <button
+            type="button"
+            onClick={notApplicable}
+            disabled={busy}
+            className="text-[12px] font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground disabled:opacity-60"
+          >
+            Not applicable to this vehicle
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

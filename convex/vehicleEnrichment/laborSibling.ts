@@ -4,8 +4,8 @@
  * (engine-bay jobs), so we match on the dimension that determines THIS service's
  * labor.
  *
- * RepairPal-specific actions (resolveLaborSibling, catalogSiblingCandidates,
- * llmSiblingCandidates, getConfigChassisCode) were removed when RepairPal was
+ * Estimator-specific actions (resolveLaborSibling, catalogSiblingCandidates,
+ * llmSiblingCandidates, getConfigChassisCode) were removed when Estimator was
  * decommissioned (Task 7).
  */
 

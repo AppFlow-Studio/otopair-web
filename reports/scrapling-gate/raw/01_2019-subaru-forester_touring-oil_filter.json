@@ -1,0 +1,61 @@
+{
+  "key": "2019-subaru-forester_touring-oil_filter",
+  "url": "https://subaru.oempartsonline.com/oem-2019-subaru-forester_touring-oil_filter.html",
+  "legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2798,
+      "content_len": 293566,
+      "title": "Online Subaru Parts Superstore | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3724
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3286,
+      "content_len": 293346,
+      "title": "Online Subaru Parts Superstore | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3724
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 1013,
+      "content_len": 190789,
+      "title": "Online Subaru Parts Superstore | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3801,
+      "content_len": 201867,
+      "title": "Online Subaru Parts Superstore | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

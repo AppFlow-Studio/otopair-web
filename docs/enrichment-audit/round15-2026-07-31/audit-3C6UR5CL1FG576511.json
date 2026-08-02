@@ -1,0 +1,813 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "pipeline_extraction",
+      "rockauto",
+      "sylvania_bulbs",
+      "trico_wipers"
+    ],
+    "claim_rows": 22,
+    "families_seen": [
+      "aftermarket_catalog",
+      "web_search"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 0,
+    "fields_multi_family_agreement": 4,
+    "fields_single_source": 12,
+    "fields_with_claims": 16
+  },
+  "external_joins": {
+    "complaint_signal": {
+      "top": "POWER TRAIN",
+      "total": 211
+    },
+    "epa": null,
+    "manual": {
+      "file_id": null,
+      "kind": "unknown",
+      "oem": true,
+      "pages": 30,
+      "url": "https://www.ramtrucks.com/assets/pdf/brochures/MY15_Ram_Commercial_Spec_Insert_eBrochure.pdf"
+    },
+    "recalls_open": 15
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": 32,
+    "brake_fluid_type": "DOT 4",
+    "coolant_capacity_qts": 22.6,
+    "coolant_type": "MS-90032 OAT (Organic Additive Technology)",
+    "oil_capacity_qts": 12,
+    "oil_viscosity": "15W-40",
+    "ps_fluid_capacity_oz": 64,
+    "ps_fluid_type": "hydraulic",
+    "trans_fluid_capacity_qts": 6
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "25%",
+    "fields_with_claims": 16,
+    "fitment_multi_source": "50%",
+    "has_manual": false,
+    "months_fill": "45%",
+    "parts_quotable": "7/8",
+    "rotor_minimums": 0,
+    "status": "partial"
+  },
+  "identity_coherence": {
+    "aspiration": "turbo",
+    "cylinders": 6,
+    "displacement_l": 6.7,
+    "engine_code": "ETK",
+    "epa_says": null,
+    "fuel_type": "Diesel",
+    "plugs_match_cylinders": null,
+    "spark_plug_quantity": null,
+    "timing_system": "chain",
+    "trans_fluid_type": "ATF+4 (MS-9602)",
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "default_fallback": 11,
+      "deterministic": 8,
+      "enriched": 10
+    },
+    "months_fill": "45%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "battery_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": 24,
+        "provenance": "enriched",
+        "service": "brake_fluid_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "brake_pad_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 150000,
+        "months": 120,
+        "provenance": "enriched",
+        "service": "coolant_flush",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "enriched",
+        "service": "differential_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 24,
+        "provenance": "enriched",
+        "service": "filter_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "fuel_system_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 15000,
+        "months": 6,
+        "provenance": "enriched",
+        "service": "oil_change",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "power_steering_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "rotor_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": 100000,
+        "months": 72,
+        "provenance": "enriched",
+        "service": "serpentine_belt",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "spark_plugs",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "tire_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 7500,
+        "months": 6,
+        "provenance": "enriched",
+        "service": "tire_rotation",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 120000,
+        "months": 60,
+        "provenance": "enriched",
+        "service": "transmission_service",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 29,
+    "with_miles": 15,
+    "with_months": 13
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 10,
+      "default_fallback": 19
+    },
+    "rows": [
+      {
+        "hours": 0.5,
+        "service": "battery_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "battery_test",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.7,
+        "service": "brake_fluid_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.3,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.5,
+        "service": "oil_change",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "tire_rotation",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.9,
+        "service": "coolant_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.2,
+        "service": "differential_service",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.6,
+        "service": "power_steering_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "fuel_system_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 3,
+        "service": "rotor_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "brake_pad_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "wheel_alignment",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "transmission_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "spark_plugs",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "serpentine_belt",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.1,
+        "service": "transfer_case_service",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 29
+  },
+  "parts": {
+    "corroborated_2plus_sources": 4,
+    "corroboration_rate": "50%",
+    "rows": [
+      {
+        "best_price": 36.58,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "53034051AB",
+        "price_domains": [
+          "moparoriginalparts.com",
+          "parts.moparonlineparts.com",
+          "allmoparparts.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "air_filter",
+        "scraped_name": null,
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 6,
+        "source_domains": [
+          "dieselhub.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 14.99,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "68218057AA",
+        "price_domains": [
+          "hipfunggroup.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "atf_fluid",
+        "scraped_name": "Mopar Automatic Transmission ATF Fluid",
+        "service": "transmission_service",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "moparpartsgiant.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 29.99,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "5033395ac",
+        "price_domains": [
+          "mopar.oempartsonline.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": true,
+        "role": "battery",
+        "scraped_name": "Battery Shield",
+        "service": "battery_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "mopar.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 27.14,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "68535623AA",
+        "price_domains": [
+          "allmoparparts.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "cabin_filter",
+        "scraped_name": "Cabin Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 6,
+        "source_domains": [
+          "mopar.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 17.08,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "05083285AA",
+        "price_domains": [
+          "parts.moparonlineparts.com",
+          "mymoparparts.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "oil_filter",
+        "scraped_name": "Mopar Engine Oil Filter",
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "dieselfiltersonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 111.77,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "68049158AA",
+        "price_domains": [
+          "parts.moparonlineparts.com",
+          "worldpartsdirect.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "rear_brake_pad",
+        "scraped_name": "Rear Disc Brake Pad Kit",
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "store.mopar.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 76.69,
+        "confidence": 0.85,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "4627751AA",
+        "price_domains": [
+          "parts.moparonlineparts.com",
+          "mymoparparts.com",
+          "quirkparts.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "serpentine_belt",
+        "scraped_name": null,
+        "service": "serpentine_belt",
+        "service_role": "core",
+        "source_count": 6,
+        "source_domains": [
+          "dieselhub.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 15.09,
+        "confidence": 0.85,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "5086740AA",
+        "price_domains": [
+          "worldpartsdirect.com",
+          "moparpartsgiant.com",
+          "mymoparparts.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "thermostat_gasket",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": "as_needed",
+        "source_count": 6,
+        "source_domains": [
+          "dieselhub.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      }
+    ],
+    "total": 8,
+    "triangle_broken": [
+      {
+        "oem": "5033395ac",
+        "role": "battery",
+        "why": "refute_flagged"
+      }
+    ],
+    "triangle_ok": 7,
+    "with_observed_title": 5
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 40,
+    "duration_min": 16,
+    "error_tags": {
+      "applicable_services_empty_fallback_used": 1,
+      "axle_pair_gap": 2,
+      "fitment_refute_kept_multisource": 1,
+      "quotability": 1,
+      "role_resource": 5,
+      "rotor_min": 2
+    },
+    "field_gap_count": 86,
+    "fill_rate": 87,
+    "quotability": {
+      "pct": 0.75,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "missing_roles": [
+            "front_brake_pad"
+          ],
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "coolant"
+          ],
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "power_steering_flush"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "missing_roles": [
+            "front_rotor",
+            "rear_rotor",
+            "front_brake_pad"
+          ],
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx72e4f8sf93zn3gha97x4c8618bjmcz",
+    "sanity_flag_count": 9,
+    "sanity_flags_by_stage": {
+      "(pre-finalize)": 2,
+      "claim_ledger": 4,
+      "completion_gate": 1,
+      "fitment_refute": 1,
+      "interval_provenance": 1
+    },
+    "status": "complete",
+    "tokens_in": 23007,
+    "tokens_out": 15805,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 26
+  },
+  "vehicle": {
+    "chassis_code": "DJ",
+    "confidence_avg": 0.828787878787879,
+    "configId": "w573agw0c6aywff5qbxk9paneh8bhg7s",
+    "config_key": "2015_ram_2500_st_etk",
+    "drivetrain": "4WD",
+    "enrichment_status": "partial",
+    "fill_rate": 87,
+    "last_enriched_at": 1785518760254,
+    "make": "Ram",
+    "model": "2500",
+    "na_role_keys": [],
+    "trim": "ST",
+    "verified_fields": [],
+    "year": 2015
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "sub": "hyundai",
+  "oem": "26300-35505",
+  "search_url": "https://hyundai.oempartsonline.com/search?search_str=26300-35505",
+  "search_legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 1825,
+      "content_len": 216947,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/search?search_str=26300-35505",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 2249
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 2218,
+      "content_len": 216953,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/search?search_str=26300-35505",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 2249
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 364,
+      "content_len": 138693,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/search?search_str=26300-35505",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3028,
+      "content_len": 149243,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/search?search_str=26300-35505",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ],
+  "detail_url": "https://hyundai.oempartsonline.com/oem-parts/hyundai-oil-filter-2630035505",
+  "detail_legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2040,
+      "content_len": 412438,
+      "title": "Oil Filter 26300-35505 | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/oem-parts/hyundai-oil-filter-2630035505",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 11008
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3406,
+      "content_len": 392698,
+      "title": "Oil Filter 26300-35505 | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/oem-parts/hyundai-oil-filter-2630035505",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 10941
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 276,
+      "content_len": 233718,
+      "title": "Oil Filter 26300-35505 | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/oem-parts/hyundai-oil-filter-2630035505",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3014,
+      "content_len": 319896,
+      "title": "Oil Filter 26300-35505 | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/oem-parts/hyundai-oil-filter-2630035505",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

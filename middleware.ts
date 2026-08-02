@@ -9,6 +9,15 @@ const isPublicRoute = createRouteMatcher([
   "/accept-invite(.*)",
   "/api/waitlist",
   "/api/webhooks(.*)",
+  // B2B shop onboarding — public top of funnel (no auth): partner marketing
+  // page, the application intake form, and its submit endpoint.
+  "/partner-with-us(.*)",
+  "/apply(.*)",
+  "/api/applications(.*)",
+  // Owner-claim flow: the claim landing previews before auth; verify is public;
+  // accept self-gates via Clerk auth() inside the route.
+  "/invite(.*)",
+  "/api/invites(.*)",
   // Flagship marketing hero — VIN decode + ElevenLabs token are public.
   "/api/vin(.*)",
   "/api/elevenlabs(.*)",

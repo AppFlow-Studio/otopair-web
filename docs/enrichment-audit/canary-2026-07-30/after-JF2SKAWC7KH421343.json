@@ -1,0 +1,1223 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "pipeline_extraction",
+      "rockauto",
+      "sylvania_bulbs",
+      "trico_wipers",
+      "wix_filters"
+    ],
+    "claim_rows": 29,
+    "families_seen": [
+      "aftermarket_catalog",
+      "web_search"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 0,
+    "fields_multi_family_agreement": 3,
+    "fields_single_source": 22,
+    "fields_with_claims": 25
+  },
+  "external_joins": {
+    "complaint_signal": null,
+    "epa": null,
+    "manual": null,
+    "recalls_open": 3
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": 16,
+    "brake_fluid_type": "DOT 3",
+    "coolant_capacity_qts": 9,
+    "coolant_type": "Subaru Super Coolant (blue)",
+    "oil_capacity_qts": 4.4,
+    "oil_viscosity": "0W-20",
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": 4.5
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "12%",
+    "fields_with_claims": 25,
+    "fitment_multi_source": "26%",
+    "has_manual": false,
+    "months_fill": "50%",
+    "parts_quotable": "16/27",
+    "rotor_minimums": 0,
+    "status": "partial"
+  },
+  "identity_coherence": {
+    "aspiration": "natural",
+    "cylinders": 4,
+    "displacement_l": 2.5,
+    "engine_code": "FB25D",
+    "epa_says": null,
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": true,
+    "spark_plug_quantity": 4,
+    "timing_system": "chain",
+    "trans_fluid_type": "Subaru CVTF-II (SOA427V1660)",
+    "transmission_type": "CVT"
+  },
+  "intervals": {
+    "by_provenance": {
+      "chassis_clone": 17,
+      "default_fallback": 6,
+      "enriched": 5
+    },
+    "months_fill": "50%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "chassis_clone",
+        "service": "battery_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 24,
+        "provenance": "chassis_clone",
+        "service": "brake_fluid_flush",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "brake_pad_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 137500,
+        "months": 132,
+        "provenance": "chassis_clone",
+        "service": "coolant_flush",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "differential_service",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 45000,
+        "months": 36,
+        "provenance": "enriched",
+        "service": "filter_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "chassis_clone",
+        "service": "fuel_system_cleaning",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 6000,
+        "months": 6,
+        "provenance": "chassis_clone",
+        "service": "oil_change",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": 72,
+        "provenance": "chassis_clone",
+        "service": "rotor_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": 30000,
+        "months": 24,
+        "provenance": "enriched",
+        "service": "serpentine_belt",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 72,
+        "provenance": "chassis_clone",
+        "service": "spark_plugs",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 60,
+        "provenance": "chassis_clone",
+        "service": "tire_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 6000,
+        "months": 6,
+        "provenance": "chassis_clone",
+        "service": "tire_rotation",
+        "status": "active"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "transmission_service",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 28,
+    "with_miles": 13,
+    "with_months": 14
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 9,
+      "chassis_clone": 12,
+      "default_fallback": 7
+    },
+    "rows": [
+      {
+        "hours": 0.3,
+        "service": "oil_change",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "tire_rotation",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.2,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.9,
+        "service": "brake_fluid_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.5,
+        "service": "transmission_service",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.3,
+        "service": "battery_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "wheel_alignment",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.2,
+        "service": "differential_service",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.5,
+        "service": "fuel_system_cleaning",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.4,
+        "service": "battery_test",
+        "source": "aggregated"
+      },
+      {
+        "hours": 3,
+        "service": "rotor_replacement",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.5,
+        "service": "brake_pad_replacement",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.1,
+        "service": "coolant_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.5,
+        "service": "spark_plugs",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1,
+        "service": "serpentine_belt",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "transfer_case_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 28
+  },
+  "parts": {
+    "corroborated_2plus_sources": 7,
+    "corroboration_rate": "26%",
+    "rows": [
+      {
+        "best_price": 17.66,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "16546AA12A",
+        "price_domains": [
+          "subarupartspro.com",
+          "subarupartspros.com",
+          "subaruonlineparts.com",
+          "subaruparts.worldoemparts.com",
+          "subarupartsexchange.com"
+        ],
+        "price_rows": 5,
+        "refute_flagged": false,
+        "role": "air_filter",
+        "scraped_name": null,
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "subaru.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 5
+      },
+      {
+        "best_price": null,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SOA427V1660",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "atf_fluid",
+        "scraped_name": "Subaru CVTF-II Automatic Transmission Fluid",
+        "service": "transmission_service",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "amazon.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": null,
+        "confidence": 0.87,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SOA821B900",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "battery",
+        "scraped_name": null,
+        "service": "battery_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 6.35,
+        "confidence": 0.82,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SOA868V9221",
+        "price_domains": [
+          "subaruparts.com",
+          "parts.subarupartspros.com",
+          "parts.subarusuperstore.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "brake_fluid",
+        "scraped_name": null,
+        "service": "brake_fluid_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 7,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SOA868V9222",
+        "price_domains": [
+          "smyperformance.com",
+          "parts.subarusuperstore.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "brake_fluid",
+        "scraped_name": null,
+        "service": "brake_fluid_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 6.35,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SOA868V9220",
+        "price_domains": [
+          "parts.subarupartspros.com",
+          "parts.subarusuperstore.com",
+          "subaruparts.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "brake_fluid",
+        "scraped_name": null,
+        "service": "brake_fluid_flush",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.subaru.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 18.32,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "72880FL00A",
+        "price_domains": [
+          "subarupartspro.com",
+          "subaruonlineparts.com",
+          "subaru.oempartsonline.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "cabin_filter",
+        "scraped_name": "Cabin Air Filter",
+        "service": "filter_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": null,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "72880FL000",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "cabin_filter",
+        "scraped_name": "Cabin Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 3,
+        "source_domains": [
+          "parts.subaru.com",
+          "subaru.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 24.96,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SOA868V9210",
+        "price_domains": [
+          "frsport.com",
+          "parts.subarupartspros.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "coolant",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 26.71,
+        "confidence": 0.87,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SOA868V9272",
+        "price_domains": [
+          "parts.subarusuperstore.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "coolant",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": null,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SOA868V9270",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "coolant",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.subaru.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 36.82,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "31835AA030",
+        "price_domains": [
+          "parts.subaruonlineparts.com",
+          "parts.subarupartspros.com",
+          "subarupartsdeal.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "cvt_internal_filter",
+        "scraped_name": null,
+        "service": "transmission_service",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 1.37,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "803916010",
+        "price_domains": [
+          "parts.subarusuperstore.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "drain_plug_gasket",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "parts.subaru.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 69.65,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "26296SC011",
+        "price_domains": [
+          "parts.subarusuperstore.com",
+          "parts.subaruonlineparts.com",
+          "subaruparts.worldoemparts.com",
+          "subarupartspros.com",
+          "bamwholesaleparts.com",
+          "subarupartsdeals.com",
+          "parts.subaru.com"
+        ],
+        "price_rows": 7,
+        "refute_flagged": true,
+        "role": "front_brake_pad",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "subaru.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 7
+      },
+      {
+        "best_price": null,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "26296FJ020",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "front_brake_pad",
+        "scraped_name": "Disc Brake Pad Set (Front)",
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.subaru.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": null,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "26300SJ010",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "front_rotor",
+        "scraped_name": "Disc Brake Rotor (Front)",
+        "service": "rotor_replacement",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "parts.subaru.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 12.15,
+        "confidence": 0.87,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SOA427V1700",
+        "price_domains": [
+          "smyperformance.com",
+          "subarupartsexchange.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "gear_oil",
+        "scraped_name": null,
+        "service": "differential_service",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 196.76,
+        "confidence": 0.87,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "22433AA82A",
+        "price_domains": [
+          "parts.subaruonlineparts.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "ignition_coil",
+        "scraped_name": null,
+        "service": "spark_plugs",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": null,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "14035AA750",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "intake_manifold_gasket",
+        "scraped_name": "Gasket Intake Manifold",
+        "service": "spark_plugs",
+        "service_role": "as_needed",
+        "source_count": 1,
+        "source_domains": [
+          "parts.subaru.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 7.02,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "15208AA15A",
+        "price_domains": [
+          "subarupartsdeal.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "oil_filter",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 3,
+        "source_domains": [
+          "subaru.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": null,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "26696AL020",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "rear_brake_pad",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "subaruparts.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": null,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "26700SJ000",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "rear_rotor",
+        "scraped_name": "Disc Brake Rotor (Rear)",
+        "service": "rotor_replacement",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "parts.subaru.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 27.57,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "23780AA10A",
+        "price_domains": [
+          "subaruoempartsonline.com",
+          "subaru.oempartsonline.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "serpentine_belt",
+        "scraped_name": null,
+        "service": "serpentine_belt",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": null,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "23780AA200",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "serpentine_belt",
+        "scraped_name": null,
+        "service": "serpentine_belt",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.subaru.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 22.48,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "22401aa781",
+        "price_domains": [
+          "subaru.oempartsonline.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "spark_plug",
+        "scraped_name": "Spark Plug",
+        "service": "spark_plugs",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "subaru.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 23.62,
+        "confidence": 0.82,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "21210AA191",
+        "price_domains": [
+          "subarudirectwholesale.com",
+          "estore.subarupartswarehouse.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "thermostat_gasket",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 27.21,
+        "confidence": 0.82,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "21210AA221",
+        "price_domains": [
+          "subarupartsdeal.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "thermostat_gasket",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      }
+    ],
+    "total": 27,
+    "triangle_broken": [
+      {
+        "oem": "SOA427V1660",
+        "role": "atf_fluid",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "SOA821B900",
+        "role": "battery",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "72880FL000",
+        "role": "cabin_filter",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "SOA868V9270",
+        "role": "coolant",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "26296SC011",
+        "role": "front_brake_pad",
+        "why": "refute_flagged"
+      },
+      {
+        "oem": "26296FJ020",
+        "role": "front_brake_pad",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "26300SJ010",
+        "role": "front_rotor",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "14035AA750",
+        "role": "intake_manifold_gasket",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "26696AL020",
+        "role": "rear_brake_pad",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "26700SJ000",
+        "role": "rear_rotor",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "23780AA200",
+        "role": "serpentine_belt",
+        "why": "no_trusted_price"
+      }
+    ],
+    "triangle_ok": 16,
+    "with_observed_title": 8
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 43,
+    "duration_min": 34.7,
+    "error_tags": {
+      "applicable_services_structural_fallback_used": 1,
+      "fitment_refute_kept_multisource": 1,
+      "fitment_refuted": 3,
+      "quotability": 1,
+      "role_resource": 2,
+      "rotor_min": 2,
+      "sanity": 1
+    },
+    "field_gap_count": 77,
+    "fill_rate": 79,
+    "quotability": {
+      "pct": 0.67,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 0,
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 3,
+          "core_with_price": 2,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 5,
+          "core_with_price": 2,
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 1,
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx78b0zydy1eh3eaak0wmqpv958bhh4m",
+    "sanity_flag_count": 11,
+    "sanity_flags_by_stage": {
+      "(pre-finalize)": 1,
+      "claim_ledger": 3,
+      "completion_gate": 1,
+      "fitment_refute": 4,
+      "sibling_inherit": 2
+    },
+    "status": "complete",
+    "tokens_in": 23175,
+    "tokens_out": 18116,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 35
+  },
+  "vehicle": {
+    "chassis_code": "LET",
+    "confidence_avg": 0.8722877358490568,
+    "configId": "w579jk5cy2g98yes9f7cwm3x5h8ba6zy",
+    "config_key": "2019_subaru_forester_touring_fb25d",
+    "drivetrain": "AWD",
+    "enrichment_status": "partial",
+    "fill_rate": 84,
+    "last_enriched_at": 1785450476738,
+    "make": "Subaru",
+    "model": "Forester",
+    "na_role_keys": [],
+    "trim": "Touring",
+    "verified_fields": [],
+    "year": 2019
+  }
+}

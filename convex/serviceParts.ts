@@ -597,6 +597,189 @@ export type PartsNeedingVerification = {
  * Walk-ins (which suppress the catalog cascade) and configless bookings are
  * skipped — the dialog then renders no verify gate.
  */
+/**
+ * Per-axle OEM rotor minimum for a booking's vehicle, shaped for
+ * lib/inspection-template.ts `buildInspectionZones`.
+ *
+ * Returned even when nothing is on file: `{minMm: null, kind: "none"}` is the
+ * signal that classify() must NOT grade the rotor. The mechanic then sees
+ * "No OEM minimum on file — read MIN TH cast on the rotor" instead of a made-up
+ * reference, which is the whole point — the fleet used to be graded against a
+ * hardcoded 23.0 / 8.0 labelled "OEM min".
+ */
+export const rotorSpecsForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const none = {
+      front: { minMm: null, kind: "none" as const, nominalMm: null, sourceDomain: null },
+      rear: { minMm: null, kind: "none" as const, nominalMm: null, sourceDomain: null },
+      configId: null as Id<"vehicle_configs"> | null,
+    };
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return none;
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+      .first();
+    if (!vehicle?.vehicle_config_id) return none;
+    const cfg = await ctx.db.get(vehicle.vehicle_config_id);
+    if (!cfg) return none;
+
+    let sourceDomain: string | null = null;
+    if (cfg.rotor_min_source_url) {
+      try {
+        sourceDomain = new URL(cfg.rotor_min_source_url).hostname;
+      } catch {
+        sourceDomain = null;
+      }
+    }
+    const axleRef = (
+      minMm: number | undefined,
+      quality: string | undefined,
+      nominalMm: number | undefined,
+    ) => ({
+      minMm: minMm ?? null,
+      // A minimum with no recorded quality is still a real one — default to the
+      // sourced label rather than silently demoting it to an estimate.
+      kind: minMm == null ? "none" : (quality ?? "oem_spec"),
+      nominalMm: nominalMm ?? null,
+      sourceDomain,
+    });
+    return {
+      front: axleRef(
+        cfg.rotor_front_min_thickness_mm,
+        cfg.rotor_front_min_quality,
+        cfg.rotor_front_nominal_thickness_mm,
+      ),
+      rear: axleRef(
+        cfg.rotor_rear_min_thickness_mm,
+        cfg.rotor_rear_min_quality,
+        cfg.rotor_rear_nominal_thickness_mm,
+      ),
+      configId: vehicle.vehicle_config_id,
+    };
+  },
+});
+
+/**
+ * Record the OEM minimum a mechanic read off the rotor casting.
+ *
+ * This is the highest-trust source we have: the number is cast into the part
+ * itself and a human is looking straight at it. It outranks every scrape and
+ * is stamped into verified_fields so no re-enrich can overwrite it.
+ *
+ * PROPAGATION IS BY OEM PART NUMBER ONLY — never by model, trim or chassis.
+ * Minimums differ across trims (a sports trim's rotor can have a higher
+ * minimum), but a different trim carries a DIFFERENT rotor part number, so
+ * part-number identity is the only key under which two configs provably share
+ * one casting. Configs that already carry a human-supplied value are skipped.
+ */
+export const recordCastRotorMinimum = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    axle: v.union(v.literal("front"), v.literal("rear")),
+    minMm: v.number(),
+  },
+  handler: async (ctx, args) => {
+    if (!Number.isFinite(args.minMm) || args.minMm <= 0) {
+      return { ok: false as const, reason: "invalid_value" };
+    }
+    // Same plausibility floor/ceiling the enrichment sanity rules apply, so a
+    // fat-fingered reading can't become a grading reference.
+    const band = args.axle === "front" ? [8, 40] : [4, 32];
+    if (args.minMm < band[0] || args.minMm > band[1]) {
+      return { ok: false as const, reason: "out_of_range" };
+    }
+
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return { ok: false as const, reason: "booking_not_found" };
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+      .first();
+    if (!vehicle?.vehicle_config_id) {
+      return { ok: false as const, reason: "no_config" };
+    }
+
+    const isFront = args.axle === "front";
+    const minCol = isFront
+      ? "rotor_front_min_thickness_mm"
+      : "rotor_rear_min_thickness_mm";
+    const qualCol = isFront
+      ? "rotor_front_min_quality"
+      : "rotor_rear_min_quality";
+    const write = async (configId: Id<"vehicle_configs">) => {
+      const cfg = await ctx.db.get(configId);
+      if (!cfg) return false;
+      // Never overwrite a director's confirmed value.
+      const curQuality = isFront
+        ? cfg.rotor_front_min_quality
+        : cfg.rotor_rear_min_quality;
+      if (curQuality === "director_verified") return false;
+      const verified = new Set(cfg.verified_fields ?? []);
+      verified.add(minCol);
+      verified.add(qualCol);
+      await ctx.db.patch(configId, {
+        ...(isFront
+          ? {
+              rotor_front_min_thickness_mm: args.minMm,
+              rotor_front_min_quality: "mechanic_read",
+            }
+          : {
+              rotor_rear_min_thickness_mm: args.minMm,
+              rotor_rear_min_quality: "mechanic_read",
+            }),
+        verified_fields: [...verified],
+      });
+      return true;
+    };
+
+    await write(vehicle.vehicle_config_id);
+
+    // Fan out to configs sharing the exact same rotor part number.
+    const roleKey = args.axle === "front" ? "front_rotor" : "rear_rotor";
+    let propagated = 0;
+    try {
+      const ownFitments = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_vehicle_config", (q) =>
+          q.eq("vehicle_config_id", vehicle.vehicle_config_id!),
+        )
+        .collect();
+      const ownParts = await Promise.all(
+        ownFitments.map(async (f) => ({ f, part: await ctx.db.get(f.part_id) })),
+      );
+      const normalized = ownParts.find(
+        (p) => p.part?.subcategory === roleKey,
+      )?.part?.oem_part_number_normalized;
+
+      if (normalized) {
+        const siblings = await ctx.db
+          .query("part_fitments")
+          .withIndex("by_part", (q) =>
+            q.eq(
+              "part_id",
+              ownParts.find((p) => p.part?.subcategory === roleKey)!.f.part_id,
+            ),
+          )
+          .take(200);
+        const seen = new Set<string>([String(vehicle.vehicle_config_id)]);
+        for (const sib of siblings) {
+          const id = String(sib.vehicle_config_id);
+          if (seen.has(id)) continue;
+          seen.add(id);
+          if (await write(sib.vehicle_config_id)) propagated += 1;
+        }
+      }
+    } catch {
+      // Propagation is a bonus; the vehicle in the bay is already correct.
+    }
+
+    return { ok: true as const, propagated };
+  },
+});
+
 export const getPartsNeedingVerification = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args): Promise<PartsNeedingVerification> => {
@@ -988,6 +1171,77 @@ export const getServiceGapsForConfig = query({
       });
     }
 
+    return { gaps };
+  },
+});
+
+export type ConfigPriceGap = {
+  serviceSlug: string;
+  serviceName: string;
+  roleKey: string | null;
+  partId: string;
+  oemNumber: string | null;
+  partName: string | null;
+};
+
+/**
+ * Parts this config HAS a fitment for but no trusted price (part_prices row
+ * that survives the poison/non-pooled/price-band filter — same standard
+ * quotability.ts's has_trusted_price and summarizePartPrices use). Reads
+ * "which services" off the latest run's persisted `quotability` snapshot
+ * (the pipeline's own per-role-aware computation — not re-derived here) and
+ * only re-checks live pricing for THOSE services' actual fitments, so this
+ * stays cheap and never drifts from what the run itself flagged as
+ * unquotable. Powers the director "Add price" control in the review-resolve
+ * modal.
+ */
+export const getPriceGapsForConfig = query({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, { vehicleConfigId }): Promise<{ gaps: ConfigPriceGap[] }> => {
+    const latest = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", vehicleConfigId))
+      .order("desc")
+      .first();
+    const services = latest?.quotability?.services ?? [];
+    const gappedSlugs = services.filter((s) => s.core_with_price < s.core_total).map((s) => s.slug);
+    if (gappedSlugs.length === 0) return { gaps: [] };
+
+    const allServices = await ctx.db.query("services").collect();
+    const serviceBySlug = new Map<string, Doc<"services">>();
+    for (const svc of allServices) {
+      if (svc.slug) serviceBySlug.set(normalizeServiceSlug(svc.slug), svc);
+    }
+
+    const gaps: ConfigPriceGap[] = [];
+    const seenParts = new Set<string>();
+    for (const slug of gappedSlugs) {
+      const rows = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", vehicleConfigId).eq("service_type", slug),
+        )
+        .collect();
+      const svc = serviceBySlug.get(slug);
+      for (const f of rows) {
+        if (f.package_code != null) continue;
+        const key = String(f.part_id);
+        if (seenParts.has(key)) continue;
+        const part = await ctx.db.get(f.part_id);
+        if (!part) continue;
+        const summary = await summarizePartPrices(ctx, f.part_id);
+        if (summary.sample_size > 0) continue; // has a trusted price already
+        seenParts.add(key);
+        gaps.push({
+          serviceSlug: svc?.slug ?? slug,
+          serviceName: svc?.name ?? slug.replace(/_/g, " "),
+          roleKey: part.subcategory ?? null,
+          partId: String(part._id),
+          oemNumber: part.oem_part_number ?? null,
+          partName: part.name ?? null,
+        });
+      }
+    }
     return { gaps };
   },
 });
@@ -1660,6 +1914,8 @@ export async function resolveWinningPartForService(
       data_quality: normalizeDataQuality(
         c.fitment.data_quality ?? c.part.data_quality ?? null,
       ),
+      refute_flagged: c.fitment.refute_flagged === true,
+      source_domains: c.fitment.source_domains ?? [],
       prices: c.priceSummary.sources_used.map((s) => ({
         price: s.price,
         refreshed_days_ago:

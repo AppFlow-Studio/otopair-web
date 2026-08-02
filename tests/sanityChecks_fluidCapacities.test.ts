@@ -105,7 +105,10 @@ describe("in-band forum-corroboration enforcement", () => {
     expect(fields.coolant_capacity_qts.confidence).toBe(0.9);
   });
 
-  test("out-of-band forum value still escalates to a hard drop (existing rule)", () => {
+  test("out-of-typical but in-base-band forum value (16.9) is kept + capped, not dropped (R10 rescue)", () => {
+    // The V8 engine-typical band flags 16.9, but it sits inside the static base
+    // band (4-22) and coolant is resolver-owned — keep at conf 0.5 for the
+    // resolver to re-resolve instead of destroying a possibly-correct value.
     const fields = {
       coolant_capacity_qts: field(
         16.9,
@@ -114,8 +117,38 @@ describe("in-band forum-corroboration enforcement", () => {
       ),
     };
     const flags = runSanityChecks(fields, 8);
+    expect(flags.some((f) => f.field === "coolant_capacity_qts" && f.severity === "flag")).toBe(true);
+    expect(fields.coolant_capacity_qts.value).toBe(16.9);
+    expect(fields.coolant_capacity_qts.confidence).toBe(0.5);
+  });
+
+  test("out-of-BASE-band forum value (23) still escalates to a hard drop", () => {
+    const fields = {
+      coolant_capacity_qts: field(
+        23,
+        "https://www.silveradosierra.com/threads/coolant.12345/",
+        0.85,
+      ),
+    };
+    const flags = runSanityChecks(fields, 8);
     expect(flags.some((f) => f.field === "coolant_capacity_qts" && f.severity === "reject")).toBe(true);
     expect(fields.coolant_capacity_qts.value).toBeNull();
+  });
+
+  test("rescue does NOT apply to non-resolver-owned capacity fields (forum diff value out of band drops)", () => {
+    // diff_fluid has no downstream resolver: its flag band IS its base band, so
+    // an out-of-band forum value (5 qt > 4) must hard-drop — nothing would ever
+    // correct a kept-wrong value on these fields.
+    const fields = {
+      diff_fluid_capacity_qts: field(
+        5,
+        "https://www.f150forum.com/threads/diff-fluid.999/",
+        0.85,
+      ),
+    };
+    const flags = runSanityChecks(fields);
+    expect(flags.some((f) => f.field === "diff_fluid_capacity_qts" && f.severity === "reject")).toBe(true);
+    expect(fields.diff_fluid_capacity_qts.value).toBeNull();
   });
 
   test("applies to the new capacity fields too", () => {

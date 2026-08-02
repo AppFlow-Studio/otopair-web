@@ -133,6 +133,21 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
         // webhook, so we swallow and let the backfill fill it later.
         let cardBrand: string | undefined;
         let cardLast4: string | undefined;
+        // Settlement facts for the merchant invoice, read off the same charge
+        // retrieval. The expansions are free here and are the only way to know
+        // what Stripe actually took rather than what our formulas predicted —
+        // see the header of convex/shopInvoices.ts.
+        let settlement: {
+          chargeId: string;
+          balanceTransactionId?: string;
+          applicationFeeCents?: number;
+          processingFeeCents?: number;
+          transferCents?: number;
+          capturedCents?: number;
+          receiptUrl?: string;
+          currency?: string;
+        } | null = null;
+
         if (event.type === "payment_intent.succeeded") {
           try {
             const chargeId =
@@ -140,15 +155,39 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
                 ? pi.latest_charge
                 : pi.latest_charge?.id;
             if (chargeId) {
-              const charge =
-                await getStripeForWebhook().charges.retrieve(chargeId);
+              const charge = await getStripeForWebhook().charges.retrieve(
+                chargeId,
+                { expand: ["balance_transaction", "transfer"] },
+              );
               const card = charge.payment_method_details?.card;
               cardBrand = card?.brand ?? undefined;
               cardLast4 = card?.last4 ?? undefined;
+
+              const bt =
+                charge.balance_transaction &&
+                typeof charge.balance_transaction !== "string"
+                  ? charge.balance_transaction
+                  : null;
+              const transfer =
+                charge.transfer && typeof charge.transfer !== "string"
+                  ? charge.transfer
+                  : null;
+              settlement = {
+                chargeId: charge.id,
+                balanceTransactionId: bt?.id,
+                applicationFeeCents: charge.application_fee_amount ?? undefined,
+                processingFeeCents: bt?.fee ?? undefined,
+                // For a destination charge this is what the connected account
+                // actually received — better than any arithmetic of ours.
+                transferCents: transfer?.amount ?? undefined,
+                capturedCents: charge.amount_captured ?? undefined,
+                receiptUrl: charge.receipt_url ?? undefined,
+                currency: charge.currency ?? undefined,
+              };
             }
           } catch (error) {
             console.error(
-              "[Stripe Webhook] card details retrieval failed:",
+              "[Stripe Webhook] charge/settlement retrieval failed:",
               error,
             );
           }
@@ -172,6 +211,17 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
               typeof event.account === "string" ? event.account : undefined,
           },
         );
+
+        // After the status transition, so the payments row exists. Separate
+        // from handlePaymentIntentEvent because that mutation de-dupes on the
+        // event id and returns early on replay — settlement should still land
+        // if a later replay is the first time we manage to read the charge.
+        if (settlement) {
+          await ctx.runMutation(internal.shopInvoices._recordStripeSettlement, {
+            stripePaymentIntentId: pi.id,
+            ...settlement,
+          });
+        }
       } else if (event.type === "payment_intent.amount_capturable_updated") {
         // Pre-Job Approval flow: an incrementAuthorization or reauth just
         // raised the capturable amount on this PI. Reconcile by stamping
@@ -229,35 +279,74 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
       return new Response("ok", { status: 200 });
     }
 
-    if (event.type === "charge.refunded") {
-      const charge = event.data.object as Stripe.Charge;
-      const piId =
-        typeof charge.payment_intent === "string"
-          ? charge.payment_intent
-          : charge.payment_intent?.id;
-      if (piId) {
-        const pi = await getStripeForWebhook().paymentIntents.retrieve(piId);
-        await ctx.runMutation(
-          internal.payments_stripe.handlePaymentIntentEvent,
-          {
-            stripeEventId: event.id,
-            eventType: event.type,
-            paymentIntentId: piId,
-            bookingId:
-              (pi.metadata && (pi.metadata as any).bookingId) || undefined,
-            newStatus: "refunded",
-            livemode: event.livemode,
-            stripeAccountId:
-              typeof event.account === "string" ? event.account : undefined,
-          },
-        );
+    // Refunds — partial-aware.
+    //
+    // This used to map ANY charge.refunded to newStatus "refunded", which meant
+    // a $5 partial refund on a $400 job marked the payment fully refunded. And
+    // because "refunded" is terminal in payment_status_history's FSM, the row
+    // then froze: every later transition silently no-ops, and the customer got
+    // emailed a receipt saying the whole job was refunded.
+    //
+    // charge.refund.updated is handled too — without it a refund the bank later
+    // rejects stays counted and refunded_amount_cents is overstated forever.
+    if (event.type === "charge.refunded" || event.type === "charge.refund.updated") {
+      const stripe = getStripeForWebhook();
+
+      // charge.refunded carries the Charge; charge.refund.updated carries the
+      // Refund, so the charge has to be fetched.
+      let charge: Stripe.Charge | null = null;
+      if (event.type === "charge.refunded") {
+        charge = event.data.object as Stripe.Charge;
       } else {
+        const refund = event.data.object as Stripe.Refund;
+        const chargeId =
+          typeof refund.charge === "string" ? refund.charge : refund.charge?.id;
+        if (chargeId) charge = await stripe.charges.retrieve(chargeId);
+      }
+
+      if (!charge) {
         await ctx.runMutation(internal.stripe_webhook_events.record, {
           eventId: event.id,
           eventType: event.type,
           livemode: event.livemode,
         });
+        return new Response("ok", { status: 200 });
       }
+
+      const piId =
+        typeof charge.payment_intent === "string"
+          ? charge.payment_intent
+          : charge.payment_intent?.id;
+
+      const amountCaptured = charge.amount_captured ?? charge.amount ?? 0;
+      const amountRefunded = charge.amount_refunded ?? 0;
+      const fullyRefunded =
+        charge.refunded === true ||
+        (amountCaptured > 0 && amountRefunded >= amountCaptured);
+
+      // Page the refunds explicitly — the list embedded in the webhook payload
+      // can be truncated, and a missed refund understates the total.
+      const refundList = await stripe.refunds.list({ charge: charge.id, limit: 100 });
+
+      await ctx.runMutation(internal.shopPaymentRefunds._reconcileChargeRefund, {
+        stripeEventId: event.id,
+        eventType: event.type,
+        stripePaymentIntentId: piId,
+        stripeChargeId: charge.id,
+        amountRefundedCents: amountRefunded,
+        amountCapturedCents: amountCaptured,
+        fullyRefunded,
+        refunds: refundList.data.map((r) => ({
+          id: r.id,
+          amountCents: r.amount,
+          status: r.status ?? "succeeded",
+          reason: r.reason ?? null,
+          createdMs: r.created * 1000,
+        })),
+        livemode: event.livemode,
+        stripeAccountId:
+          typeof event.account === "string" ? event.account : undefined,
+      });
       return new Response("ok", { status: 200 });
     }
 

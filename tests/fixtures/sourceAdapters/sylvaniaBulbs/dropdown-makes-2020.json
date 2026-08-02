@@ -1,0 +1,32 @@
+{
+  "action": "BulbFinder-GetDropdownValues",
+  "queryString": "constructionYear=2020&lookupType=makes&requestID=fx1",
+  "locale": "en_US",
+  "response": [
+    {
+      "id": "24",
+      "name": "BMW"
+    },
+    {
+      "id": "31",
+      "name": "Chevrolet"
+    },
+    {
+      "id": "45",
+      "name": "Ford"
+    },
+    {
+      "id": "52",
+      "name": "Honda"
+    },
+    {
+      "id": "73",
+      "name": "Mercedes-Benz"
+    },
+    {
+      "id": "109",
+      "name": "Toyota"
+    }
+  ],
+  "showCaptcha": null
+}

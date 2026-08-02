@@ -1,0 +1,61 @@
+{
+  "key": "2017-nissan-rogue_sv-spark_plug",
+  "url": "https://nissan.oempartsonline.com/oem-2017-nissan-rogue_sv-spark_plug.html",
+  "legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 3326,
+      "content_len": 294672,
+      "title": "Online Nissan Parts Superstore | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3807
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 4184,
+      "content_len": 277946,
+      "title": "Online Nissan Parts Superstore | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3740
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 774,
+      "content_len": 192251,
+      "title": "Online Nissan Parts Superstore | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3480,
+      "content_len": 203388,
+      "title": "Online Nissan Parts Superstore | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

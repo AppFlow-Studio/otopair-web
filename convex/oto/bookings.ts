@@ -27,6 +27,7 @@
 import { query, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
+import { resolveVehicleDisplay } from "../lib/bookingEnrichment";
 
 const ACTIVE_STATUSES = new Set(["pending", "confirmed", "in_progress"]);
 
@@ -38,6 +39,9 @@ export interface OtoBookingSummary {
   shop_name: string | null;
   mechanic_name: string | null;
   vehicle_vin_tail: string | null;
+  /** Resolved "2015 Honda Accord" display (manual-entry metadata fallback
+   *  applied) so the mobile app can label the car, not just show a VIN tail. */
+  vehicle_ymm: string | null;
   scheduled_date: string | null;
   created_at: number;
 }
@@ -93,6 +97,7 @@ async function _getBookingsCore(
         serviceIds.map((id: any) => ctx.db.get(id)),
       );
       const seen = services.filter((s: any): s is Doc<"services"> => s != null);
+      const vehicle = b.vin ? await resolveVehicleDisplay(ctx, b.vin) : null;
       return {
         id: b._id,
         status: b.status,
@@ -103,6 +108,7 @@ async function _getBookingsCore(
           ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
           : null,
         vehicle_vin_tail: b.vin ? b.vin.slice(-6) : null,
+        vehicle_ymm: vehicle?.ymm ?? null,
         scheduled_date: b.scheduled_date ?? null,
         created_at: b._creationTime,
       };
@@ -200,6 +206,7 @@ async function _getPendingBookingsCore(
         serviceIds.map((id: any) => ctx.db.get(id)),
       );
       const seen = services.filter((s: any): s is Doc<"services"> => s != null);
+      const vehicle = b.vin ? await resolveVehicleDisplay(ctx, b.vin) : null;
       return {
         id: b._id,
         status: b.status,
@@ -210,6 +217,7 @@ async function _getPendingBookingsCore(
           ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
           : null,
         vehicle_vin_tail: b.vin ? b.vin.slice(-6) : null,
+        vehicle_ymm: vehicle?.ymm ?? null,
         scheduled_date: b.scheduled_date ?? null,
         created_at: b._creationTime,
       };

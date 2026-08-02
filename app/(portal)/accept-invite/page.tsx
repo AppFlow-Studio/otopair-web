@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
-import { useSession, useUser, useClerk } from "@clerk/nextjs";
+import { useSession, useUser, useClerk, useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import { CheckCircle2, XCircle, Loader2, AlertTriangle } from "lucide-react";
 
@@ -33,6 +33,7 @@ function AcceptInviteContent() {
   const { session } = useSession();
   const { user: clerkUser, isLoaded: isUserLoaded } = useUser();
   const { signOut } = useClerk();
+  const { getToken } = useAuth();
 
   const invitation = useQuery(
     api.invitations.getByToken,
@@ -68,7 +69,7 @@ function AcceptInviteContent() {
 
     if (
       invitation.status === "expired" ||
-      Date.now() > invitation.expires_at
+      (invitation.expires_at != null && Date.now() > invitation.expires_at)
     ) {
       setStatus("error");
       setErrorMessage(
@@ -105,11 +106,15 @@ function AcceptInviteContent() {
             body: JSON.stringify({ role: invitation.role }),
           });
           await session?.reload();
+          // Force a fresh session JWT carrying the new role so the role-gated
+          // portal doesn't bounce us before Clerk propagates the metadata.
+          await getToken({ skipCache: true });
         } catch {
           // Non-fatal
         }
         setStatus("accepted");
-        setTimeout(() => router.push("/dashboard"), 2500);
+        // Full-page nav so middleware re-reads the refreshed session cookie.
+        setTimeout(() => window.location.assign("/dashboard"), 2500);
       })();
       return;
     }
@@ -130,11 +135,15 @@ function AcceptInviteContent() {
               body: JSON.stringify({ role }),
             });
             await session?.reload();
+            // Force a fresh session JWT carrying the new role so the role-gated
+            // portal doesn't bounce us before Clerk propagates the metadata.
+            await getToken({ skipCache: true });
           } catch {
             // Non-fatal
           }
           setStatus("accepted");
-          setTimeout(() => router.push("/dashboard"), 2500);
+          // Full-page nav so middleware re-reads the refreshed session cookie.
+          setTimeout(() => window.location.assign("/dashboard"), 2500);
         })
         .catch((err: Error) => {
           setStatus("error");
@@ -153,6 +162,7 @@ function AcceptInviteContent() {
     isUserLoaded,
     loggedInEmail,
     invitationEmail,
+    getToken,
   ]);
 
   async function handleSwitchAccount() {

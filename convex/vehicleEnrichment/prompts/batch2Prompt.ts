@@ -17,6 +17,13 @@
  */
 
 import type { VehicleInput } from "../types";
+import { SERVICE_LIST } from "../types";
+
+// Single source of truth lives in ../types (census P0.1 unification — this
+// file previously carried a divergent 25-entry copy while types.ts had 22).
+// Re-exported so existing importers (utils/batchSchemas.ts, tests) keep
+// resolving the SAME array object.
+export { SERVICE_LIST };
 
 export const BATCH_2_SYSTEM = `You are a vehicle data specialist for Otopair. You have two jobs:
 
@@ -80,6 +87,14 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = {
   rear_brake_pad_oem: "OEM rear brake pad part number",
   rotor_front_oem: "OEM front brake rotor part number",
   rotor_rear_oem: "OEM rear brake rotor part number",
+  // NOTE: the rotor DISCARD MINIMUM is deliberately NOT gap-fillable here — this
+  // contract has no slot for the verbatim label, and an unlabelled minimum is
+  // indistinguishable from a nominal (see getNullFields in v3pipeline.ts). Only
+  // the nominal, which is never graded against, may be filled from this path.
+  rotor_front_nominal_thickness_mm:
+    "Front brake rotor NOMINAL (new) thickness in mm — the SECOND number in a '330x22mm' size string (the first is the diameter). This is NOT a minimum: do not return a discard/minimum figure here, and never derive one from it.",
+  rotor_rear_nominal_thickness_mm:
+    "Rear brake rotor NOMINAL (new) thickness in mm — same rule as front. Null when the rear axle has drum brakes.",
   drain_plug_gasket_oem: "OEM oil drain plug gasket part number",
   serpentine_belt_oem: "OEM serpentine belt part number",
   timing_belt_oem: "OEM timing belt part number (null if chain engine)",
@@ -123,35 +138,66 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = {
   thermostat_gasket_oem: "OEM thermostat gasket/seal part number",
   cvt_internal_filter_oem: "OEM CVT internal (mesh screen) filter part number — CVT transmissions only; null otherwise",
   cvt_external_filter_oem: "OEM CVT external (cooler line) filter part number — CVT transmissions only; null otherwise",
-};
 
-export const SERVICE_LIST = [
-  "Oil Change",
-  "Spark Plug Replacement",
-  "Air Filter Replacement",
-  "Cabin Air Filter Replacement",
-  "Brake Pad Replacement - Front",
-  "Brake Pad Replacement - Rear",
-  "Brake Pad + Rotor Replacement - Front",
-  "Brake Pad + Rotor Replacement - Rear",
-  "Brake Fluid Flush",
-  "Coolant Flush",
-  "Transmission Fluid Service",
-  "Serpentine Belt Replacement",
-  "Timing Belt/Chain Service",
-  "Battery Replacement",
-  "Tire Rotation",
-  "Wheel Alignment (4-wheel)",
-  "Wiper Blade Replacement (set)",
-  "Power Steering Fluid Flush",
-  "Differential Fluid Service",
-  "Transfer Case Fluid Service",
-  "Engine Air Intake Cleaning",
-  "Fuel System Cleaning",
-  "AC Recharge / Service",
-  "Wheel Bearing Replacement",
-  "Multi-Point Inspection / Diagnostic",
-];
+  // ── Census P0.1 R8 (2026-07-30): the 44 fields below had NO entry, so their
+  //    gap-fill asks rendered as the bare field key ("- battery_price:
+  //    battery_price"). Every V4_FIELD_KEYS entry now has a real description
+  //    (tests/serviceRouting.test.ts enforces the invariant). ──────────────────
+
+  // OEM parts previously description-less
+  wiper_blade_rear_oem: "OEM rear wiper blade part number (null when the vehicle has no rear wiper)",
+  oil_filter_housing_oring_oem: "OEM oil filter housing cap O-ring/seal part number (cartridge-filter engines; null when the vehicle doesn't use one)",
+  ignition_coil_oem: "OEM ignition coil part number (price is per ONE coil)",
+  intake_manifold_gasket_oem: "OEM intake manifold gasket part number (replaced when spark plug access requires manifold removal; null otherwise)",
+  timing_kit_oem: "OEM timing belt kit part number (belt + tensioner + idlers; belt engines only, null for chain)",
+  water_pump_oem: "OEM water pump part number (bundled with timing belt service where the belt drives the pump)",
+  atf_fluid_oem: "OEM transmission fluid (ATF/CVT) bottle part number — the product SKU, never the spec string",
+  trans_filter_oem: "OEM transmission filter part number (pan-service transmissions; null for sealed units without a serviceable filter)",
+  trans_pan_gasket_oem: "OEM transmission pan gasket part number (null when the pan has no serviceable gasket)",
+  brake_fluid_oem: "OEM brake fluid bottle part number — the product SKU, never the DOT spec string",
+  ps_fluid_oem: "OEM power steering fluid bottle part number (hydraulic systems only; null for electric power steering)",
+  gear_oil_oem: "OEM differential gear oil bottle part number (GL-5 hypoid; null when the vehicle has no serviceable differential)",
+  friction_modifier_oem: "OEM limited-slip differential friction modifier part number (LSD-equipped axles only; null otherwise)",
+  brake_hardware_kit_front_oem: "OEM front brake hardware/abutment kit part number (null when the pad set ships with hardware)",
+  brake_hardware_kit_rear_oem: "OEM rear brake hardware/abutment kit part number (null when the pad set ships with hardware)",
+  brake_wear_sensor_front_oem: "OEM front brake pad wear sensor part number (electronic wear-indicator vehicles only; null otherwise)",
+  brake_wear_sensor_rear_oem: "OEM rear brake pad wear sensor part number (electronic wear-indicator vehicles only; null otherwise)",
+
+  // Rotor DISCARD minimums — normally excluded from gap-fill re-asks entirely
+  // (GAP_FILL_EXCLUDED_FIELDS: this contract has no slot for the verbatim
+  // label). Descriptions exist for completeness; they repeat the guardrail.
+  rotor_front_min_thickness_mm: "Front brake rotor DISCARD/minimum thickness in mm — ONLY a value the source explicitly labels minimum/discard; never derive it from the nominal",
+  rotor_rear_min_thickness_mm: "Rear brake rotor DISCARD/minimum thickness in mm — same rule as front; null when the rear axle has drum brakes",
+
+  // Per-part retail prices (per-unit, current sale price — see system rule 1)
+  oil_change_price: "Total OEM parts cost in USD for an oil change (filter + drain plug gasket + oil at capacity)",
+  brake_pad_front_price: "Retail price in USD of the OEM front brake pad set (ONE axle set)",
+  brake_pad_rear_price: "Retail price in USD of the OEM rear brake pad set (ONE axle set)",
+  spark_plug_price: "Retail price in USD of ONE OEM spark plug (per-unit, not the full engine set)",
+  air_filter_price: "Retail price in USD of the OEM engine air filter",
+  cabin_filter_price: "Retail price in USD of the OEM cabin air filter",
+  rotor_front_price: "Retail price in USD of ONE OEM front brake rotor",
+  rotor_rear_price: "Retail price in USD of ONE OEM rear brake rotor",
+  battery_price: "Retail price in USD of the OEM-spec replacement battery",
+  serpentine_belt_price: "Retail price in USD of the OEM serpentine belt",
+  coolant_flush_price: "Total OEM parts cost in USD for a coolant flush (coolant at full system capacity)",
+  transmission_service_price: "Total OEM parts cost in USD for a transmission fluid service (fluid + filter/gasket where serviced)",
+  brake_fluid_flush_price: "Total OEM parts cost in USD for a brake fluid flush (fluid at full-flush capacity)",
+
+  // Book labor hours (training-data book times; see system rules 4-5)
+  estimated_labor_oil_change_hrs: "Book labor hours for an oil change",
+  estimated_labor_brake_front_hrs: "Book labor hours for a front brake pad replacement",
+  estimated_labor_brake_rear_hrs: "Book labor hours for a rear brake pad replacement",
+  estimated_labor_spark_plug_hrs: "Book labor hours for spark plug replacement (all cylinders)",
+  estimated_labor_rotor_front_hrs: "Book labor hours for front rotor + pad replacement",
+  estimated_labor_rotor_rear_hrs: "Book labor hours for rear rotor + pad replacement",
+  estimated_labor_serpentine_belt_hrs: "Book labor hours for serpentine belt replacement",
+  estimated_labor_coolant_flush_hrs: "Book labor hours for a coolant flush",
+  estimated_labor_trans_fluid_hrs: "Book labor hours for a transmission fluid service",
+  estimated_labor_battery_hrs: "Book labor hours for battery replacement (including registration/coding where required)",
+  estimated_labor_brake_fluid_flush_hrs: "Book labor hours for a brake fluid flush",
+  estimated_labor_timing_service_hrs: "Book labor hours for timing belt replacement (belt engines; null for chain)",
+};
 
 export function buildBatch2Prompt(
   vehicle: VehicleInput,
@@ -192,6 +238,11 @@ ${fieldList}
 Search for each missing field with 1-2 targeted queries. Return each as:
 { "field_name": { "value": ..., "source_url": "...", "source_type": "web_search", "confidence": 0.9 } }
 
+For *_oem part-number fields, ALSO include "observed_title": the EXACT product listing title the source shows for that number, verbatim (null if no product title is visible):
+{ "battery_oem": { "value": "...", "observed_title": "ACDelco Gold 47AGM Battery", "source_url": "...", "source_type": "web_search", "confidence": 0.9 } }
+NEVER compose, paraphrase, or infer a title — if you did not literally see a product listing title for that exact number, observed_title MUST be null. A composed title (e.g. "Battery — <model> Primary (Labeled <number>)") corrupts the component-identity evidence chain and is worse than no title.
+The title is evidence of WHAT the part is. If the listing's title names an accessory or adjacent hardware (cable, bracket, tray, housing, cap, sensor, hose) rather than the component the field asks for, that number is the WRONG part: return null for the value and keep searching.
+
 === OEM PART NUMBERS (from Batch 1, for pricing lookup) ===
 ${partsList}
 
@@ -222,5 +273,18 @@ REMINDERS:
 - Timing Belt/Chain Service: if chain engine (no replacement interval), set is_applicable: false or tech_notes: "chain — no scheduled replacement".
 - Power Steering Fluid Flush: only applicable if vehicle has hydraulic power steering. Set is_applicable: false for electric PS.
 - Tire Rotation, Wheel Alignment, Multi-Point Inspection: always applicable, labor-only (no parts cost).
-- Wiper Blade Replacement: always applicable. Include parts cost if wiper OEM part number is available.`;
+- Wiper Blade Replacement: always applicable. Include parts cost if wiper OEM part number is available.
+
+OUTPUT SHAPE OVERRIDE (supersedes the JSON template above):
+Return ONE object with TWO ARRAYS. "gap_fields" becomes the "fields" ARRAY;
+"services" stays an array but its numbers are BARE, not wrapped objects.
+{
+  "fields":   [ { "key": "oil_viscosity", "value": "5W-30", "source_url": "...", "source_type": "web_search", "confidence": 0.9 } ],
+  "services": [ { "service_name": "Oil Change", "is_applicable": true, "labor_hours": 0.5,
+                  "parts_cost_low": 30, "parts_cost_high": 60, "confidence": 0.9, "tech_notes": "",
+                  "parts_breakdown": [ { "oem_part_number": "04152-YZZA1", "price_low": 8.5, "price_high": 12,
+                                         "source_url": "...", "confidence": 0.9 } ] } ]
+}
+A gap field you cannot determine is OMITTED ENTIRELY — never emit a row whose value is null.
+The "services" array must still list EVERY service, with is_applicable false where it does not apply.`;
 }

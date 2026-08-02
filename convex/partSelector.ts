@@ -8,15 +8,19 @@
  * Layer order is fitment-first: we'd rather quote a confident, OEM-quality
  * part with weaker price data than a well-priced part we're less sure fits.
  *   0 mechanic_verified (short-circuit)
+ *   refute demotion (round 9: verifier-refuted-but-kept parts lose to any
+ *        unflagged rival)
  *   gate confidence ≥ threshold (drops low-conf; falls back to full pool if
  *        none clear, and flags low_confidence)
  *   1 fitment confidence
  *   2 data quality (oem > dealer > aftermarket > generic)
- *   3 price source count
- *   4 price stability (CV)
- *   5 recency
- *   6 median-price proximity
- *   7 lexicographic (always decisive)
+ *   3 OEM-catalog fitment attestation (round 9: catalog authority outranks
+ *        price presence — priced-ness is availability, not fitment truth)
+ *   4 price source count
+ *   5 price stability (CV)
+ *   6 recency
+ *   7 median-price proximity
+ *   8 lexicographic (always decisive)
  *
  * No Convex imports here. Callers (serviceParts.ts, booking_quotes.ts) hydrate
  * candidates from part_fitments + part_prices and pass them in. Keeps this module
@@ -108,7 +112,35 @@ export type CandidateInput = {
   mechanic_verified: boolean;
   data_quality: DataQuality;
   prices: CandidatePrice[];
+  /** part_fitments.refute_flagged — the adversarial fitment verifier refuted
+   *  this part but multi-source support blocked the delete. Demoted below any
+   *  unflagged rival (round 9, batch-11). */
+  refute_flagged?: boolean;
+  /** part_fitments.source_domains — distinct domains that attested the
+   *  fitment; feeds the OEM-catalog layer (round 9, batch-11). */
+  source_domains?: string[];
 };
+
+/**
+ * Round 9 (batch-11 Forester): does any attesting domain look like an OEM /
+ * dealer PARTS CATALOG (parts.subaru.com, autoparts.toyota.com,
+ * estore.honda.com, *oemparts*)? Catalog fitment listings are authoritative
+ * about WHAT FITS but usually carry no retail price, so before this layer a
+ * catalog-attested correct part structurally lost every price-derived
+ * tiebreak to a retail-priced wrong-vehicle part.
+ */
+export function hasOemCatalogDomain(domains: string[] | undefined): boolean {
+  if (!domains) return false;
+  return domains.some((d) => {
+    const host = d.toLowerCase().replace(/^www\./, "");
+    return (
+      host.startsWith("parts.") ||
+      host.startsWith("autoparts.") ||
+      host.startsWith("estore.") ||
+      host.includes("oemparts")
+    );
+  });
+}
 
 export type EnrichedCandidate = CandidateInput & {
   price_count: number;
@@ -121,7 +153,7 @@ export type EnrichedCandidate = CandidateInput & {
   most_recent_price_days_ago: number | null;
 };
 
-export type TraceLayer = number | "gate";
+export type TraceLayer = number | "gate" | "refute";
 
 export type TraceEntry = {
   layer: TraceLayer;
@@ -225,6 +257,28 @@ export function selectPart(
       : `No mechanic-verified parts — all ${pool.length} candidates continue.`,
   });
 
+  // Refute demotion (round 9, batch-11): a fitment the adversarial verifier
+  // REFUTED — kept only because multi-source support blocked the delete —
+  // must not beat an unflagged rival. Drop flagged candidates while at least
+  // one unflagged candidate remains; if everything is flagged, keep the pool
+  // (a flagged sole candidate still quotes, flagged low-confidence upstream).
+  const unflagged = pool.filter((c) => c.refute_flagged !== true);
+  if (unflagged.length > 0 && unflagged.length < pool.length) {
+    const dropped = pool.filter((c) => c.refute_flagged === true);
+    trace.push({
+      layer: "refute",
+      name: "Fitment Refute Demotion",
+      decisive: unflagged.length === 1,
+      survivor_part_ids: unflagged.map((c) => c.part_id),
+      eliminated_part_ids: dropped.map((c) => c.part_id),
+      reason: `${dropped.length} refute-flagged candidate(s) demoted below ${unflagged.length} unflagged.`,
+    });
+    pool = unflagged;
+    if (pool.length === 1) {
+      return { winner: pool[0], trace, eliminatedByGate: [], low_confidence: false };
+    }
+  }
+
   // Confidence gate
   let eliminatedByGate: EnrichedCandidate[] = [];
   let low_confidence = false;
@@ -303,15 +357,32 @@ export function selectPart(
   ) {
     return { winner: pool[0], trace, eliminatedByGate, low_confidence };
   }
-  if (runLayer(3, "Price Source Count", (c) => c.price_count, (v) => `${v} sources`)) {
+  // Layer 3 (round 9, batch-11): OEM-catalog fitment authority BEFORE any
+  // price signal. Pricing attaches by whatever retailers happen to sell, so
+  // "has prices" is availability, not fitment authority — on the batch-11
+  // Forester every wrong-generation part was retail-priced and won, while the
+  // correct part sat attested by parts.subaru.com with no price. A candidate
+  // attested by an OEM/dealer parts catalog outranks one that isn't; ties
+  // (both or neither) fall through to the price layers.
+  if (
+    runLayer(
+      3,
+      "OEM Catalog Fitment",
+      (c) => (hasOemCatalogDomain(c.source_domains) ? 1 : 0),
+      (v) => (v ? "catalog-attested" : "no catalog attestation"),
+    )
+  ) {
     return { winner: pool[0], trace, eliminatedByGate, low_confidence };
   }
-  if (runLayer(4, "Price Stability (CV)", (c) => c.price_cv ?? 999, (v) => `CV ${v.toFixed(3)}`, true)) {
+  if (runLayer(4, "Price Source Count", (c) => c.price_count, (v) => `${v} sources`)) {
+    return { winner: pool[0], trace, eliminatedByGate, low_confidence };
+  }
+  if (runLayer(5, "Price Stability (CV)", (c) => c.price_cv ?? 999, (v) => `CV ${v.toFixed(3)}`, true)) {
     return { winner: pool[0], trace, eliminatedByGate, low_confidence };
   }
   if (
     runLayer(
-      5,
+      6,
       "Recency (price freshness)",
       (c) => c.most_recent_price_days_ago ?? 9999,
       (v) => `${v}d ago`,
@@ -321,11 +392,11 @@ export function selectPart(
     return { winner: pool[0], trace, eliminatedByGate, low_confidence };
   }
 
-  // Layer 6: distance from category median of trimmed medians.
+  // Layer 7: distance from category median of trimmed medians.
   const catMed = pool.reduce((s, c) => s + (c.price_trimmed_median ?? 0), 0) / pool.length;
   if (
     runLayer(
-      6,
+      7,
       `Median-Price Proximity (cat $${catMed.toFixed(2)})`,
       (c) => Math.abs((c.price_trimmed_median ?? 0) - catMed),
       (v) => `$${v.toFixed(2)} away`,
@@ -335,10 +406,10 @@ export function selectPart(
     return { winner: pool[0], trace, eliminatedByGate, low_confidence };
   }
 
-  // Layer 7: lexicographic — always decisive.
+  // Layer 8: lexicographic — always decisive.
   const sorted = [...pool].sort((a, b) => a.part_id.localeCompare(b.part_id));
   trace.push({
-    layer: 7,
+    layer: 8,
     name: "Lexicographic (deterministic)",
     decisive: true,
     survivor_part_ids: [sorted[0].part_id],

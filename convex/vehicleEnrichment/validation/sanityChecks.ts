@@ -9,6 +9,7 @@
 
 import type { FieldResult } from "../types";
 import { sanitizeCapacityQuarts } from "../contentSanitization";
+import { labelSupportsKind } from "../rotorThickness";
 import { isLowAuthorityDomain, isHighAuthorityDomain } from "./sourceAuthority";
 
 interface SanityRule {
@@ -29,14 +30,118 @@ export interface SanityFlag {
   value: any;
 }
 
+// Round 10: the static base flag bands for capacity fields, used by the
+// forum-escalation rule — a value INSIDE its base band is plausible enough to
+// keep-with-flag even from a low-authority sole source (see runSanityChecks).
+// Keep in sync with the corresponding SANITY_RULES entries below.
+const BASE_CAPACITY_FLAG_BANDS: Record<string, [number, number]> = {
+  oil_capacity_qts: [3, 16],
+  coolant_capacity_qts: [4, 22],
+  diff_fluid_capacity_qts: [0.5, 4],
+  transfer_case_fluid_capacity_qts: [0.5, 3],
+};
+
+/** Fields the capacity resolver actively re-fetches/corroborates. Two rules key
+ *  on this: (1) the in-base-band forum rescue below only KEEPS a flagged value
+ *  when a resolver will re-resolve it — for any other field nothing downstream
+ *  would ever correct a kept-wrong forum value, so those keep the hard drop;
+ *  (2) the mid-tier single-source cap skips these fields (the resolver's full
+ *  path adds nothing there). */
+const RESOLVER_OWNED_CAPACITY_FIELDS: ReadonlySet<string> = new Set([
+  "oil_capacity_qts",
+  "coolant_capacity_qts",
+]);
+
+// ── Rotor thickness bands ─── single source of truth, mirrored by the
+// SANITY_RULES entries below (kept as data rules so the generic loop still
+// covers the batch-extraction path). validateRotorResolution exists for write
+// paths that DON'T flow through runSanityChecks: the director backfill and the
+// finalize persist of resolver output.
+export const ROTOR_MIN_BANDS = {
+  front: { rejectMin: 8, rejectMax: 40, flagMin: 15, flagMax: 32 },
+  rear: { rejectMin: 4, rejectMax: 32, flagMin: 6, flagMax: 24 },
+} as const;
+export const ROTOR_NOMINAL_BANDS = {
+  front: { rejectMin: 8, rejectMax: 45 },
+  rear: { rejectMin: 5, rejectMax: 40 },
+} as const;
+
+export type RotorResolutionVerdict = {
+  /** Reject reasons per axle — a rejected axle must NOT be written. */
+  rejects: Partial<Record<"front" | "rear", string>>;
+  /** Flag reasons per axle — write allowed, but quality must be demoted to
+   *  "oem_spec_flagged" so classify() warn-caps it like an estimate. */
+  flags: Partial<Record<"front" | "rear", string>>;
+};
+
+/**
+ * Pure rotor-minimum validation for resolver/backfill writes. Applies the same
+ * physics as the in-run rules: reject bands (diameter / inches-as-mm catches),
+ * min >= nominal impossibility, delta plausibility, front-below-rear pairing.
+ * Label/kind checks are NOT repeated here — parseRotorThickness only emits a
+ * minimum under a label that classified as discard_min.
+ */
+export function validateRotorResolution(input: {
+  front?: { minMm?: number | null; nominalMm?: number | null };
+  rear?: { minMm?: number | null; nominalMm?: number | null };
+}): RotorResolutionVerdict {
+  const verdict: RotorResolutionVerdict = { rejects: {}, flags: {} };
+  for (const axle of ["front", "rear"] as const) {
+    const minMm = input[axle]?.minMm;
+    const nominalMm = input[axle]?.nominalMm;
+    if (minMm == null) continue;
+    if (!Number.isFinite(minMm)) {
+      verdict.rejects[axle] = "rotor_min_not_numeric";
+      continue;
+    }
+    const band = ROTOR_MIN_BANDS[axle];
+    if (minMm < band.rejectMin || minMm > band.rejectMax) {
+      verdict.rejects[axle] =
+        `rotor_min_out_of_range:${minMm}mm outside ${band.rejectMin}-${band.rejectMax}`;
+      continue;
+    }
+    if (nominalMm != null && Number.isFinite(nominalMm)) {
+      const nomBand = ROTOR_NOMINAL_BANDS[axle];
+      if (nominalMm >= nomBand.rejectMin && nominalMm <= nomBand.rejectMax) {
+        if (minMm >= nominalMm) {
+          verdict.rejects[axle] = `rotor_min_gte_nominal:${minMm}>=${nominalMm}`;
+          continue;
+        }
+        const delta = Math.round((nominalMm - minMm) * 100) / 100;
+        if (delta < 0.5 || delta > 4.0) {
+          verdict.flags[axle] =
+            `rotor_min_delta_implausible:${delta}mm below nominal ${nominalMm}mm`;
+        }
+      }
+    }
+    if (minMm < band.flagMin || minMm > band.flagMax) {
+      verdict.flags[axle] ??=
+        `rotor_min_atypical:${minMm}mm outside typical ${band.flagMin}-${band.flagMax}`;
+    }
+  }
+  const f = input.front?.minMm;
+  const r = input.rear?.minMm;
+  if (
+    f != null && r != null && Number.isFinite(f) && Number.isFinite(r) &&
+    !verdict.rejects.front && !verdict.rejects.rear && f < r
+  ) {
+    // Pair violation can't say which side is wrong — flag the front, never reject.
+    verdict.flags.front ??= `rotor_min_front_below_rear: front ${f}mm < rear ${r}mm`;
+  }
+  return verdict;
+}
+
 const SANITY_RULES: SanityRule[] = [
   // ── Fluids ──
   { field: "oil_capacity_qts", type: "range", min: 3, max: 16, severity: "flag",
     reason: "Oil capacity outside typical range (3-16 qts)" },
   { field: "oil_capacity_qts", type: "range", min: 1, max: 20, severity: "reject",
     reason: "Oil capacity outside valid range — likely incorrect" },
-  { field: "coolant_capacity_qts", type: "range", min: 4, max: 20, severity: "flag",
-    reason: "Coolant capacity outside typical range (4-20 qts)" },
+  // Flag ceiling 20→22 (round 8, batch-10): a light-duty 5.4L F-150's REAL
+  // owner's-guide capacity is 20.9 qt — full-size gas trucks legitimately
+  // exceed 20 qt without being medium-duty. The reject ceiling is unchanged.
+  { field: "coolant_capacity_qts", type: "range", min: 4, max: 22, severity: "flag",
+    reason: "Coolant capacity outside typical range (4-22 qts)" },
   { field: "coolant_capacity_qts", type: "range", min: 3, max: 24, severity: "reject",
     reason: "Coolant capacity outside valid range (3-24 qts) — likely wrong unit or wrong engine" },
   { field: "diff_fluid_capacity_qts", type: "range", min: 0.5, max: 4, severity: "flag",
@@ -120,6 +225,24 @@ const SANITY_RULES: SanityRule[] = [
   { field: "spark_plug_gap", type: "range", min: 0.4, max: 1.5, severity: "flag",
     reason: "Spark plug gap outside typical range (0.4-1.5mm)" },
 
+  // ── Brakes ── rotor DISCARD minimums (the replace-at number the inspection
+  // grades against). The reject ceiling catches a DIAMETER read as a thickness
+  // ("330x22mm" → 330), the single most likely extraction failure; the reject
+  // floor catches inches read as mm (0.945 in = 24 mm).
+  { field: "rotor_front_min_thickness_mm", type: "range", min: 15, max: 32, severity: "flag",
+    reason: "Front rotor minimum outside typical range (15-32mm)" },
+  { field: "rotor_front_min_thickness_mm", type: "range", min: 8, max: 40, severity: "reject",
+    reason: "Front rotor minimum outside valid range (8-40mm) — likely a diameter, a nominal, or inches read as mm" },
+  { field: "rotor_rear_min_thickness_mm", type: "range", min: 6, max: 24, severity: "flag",
+    reason: "Rear rotor minimum outside typical range (6-24mm)" },
+  { field: "rotor_rear_min_thickness_mm", type: "range", min: 4, max: 32, severity: "reject",
+    reason: "Rear rotor minimum outside valid range (4-32mm) — likely a diameter, a nominal, or inches read as mm" },
+  // Nominal is never graded against, so it needs only a loose plausibility net.
+  { field: "rotor_front_nominal_thickness_mm", type: "range", min: 8, max: 45, severity: "reject",
+    reason: "Front rotor nominal thickness outside valid range (8-45mm) — likely a diameter" },
+  { field: "rotor_rear_nominal_thickness_mm", type: "range", min: 5, max: 40, severity: "reject",
+    reason: "Rear rotor nominal thickness outside valid range (5-40mm) — likely a diameter" },
+
   // ── Attributes ──
   { field: "timing_system", type: "enum", allowed: ["chain", "belt", "gear"], severity: "reject",
     reason: "Invalid timing system value" },
@@ -156,6 +279,42 @@ export interface CapacityBand {
   typicalMax: number;
 }
 
+/**
+ * Vehicle duty class, derived from GVWR. Batch-5 finding: passenger-car sanity
+ * ranges (lug 60-150 ft-lb, tire 28-44 psi, coolant 4-20 qt) false-flag or even
+ * false-REJECT legitimate heavy/medium-duty-truck values — the RAM 2500's 65 psi
+ * / 160 ft-lb / 16.6 qt coolant and the F-650's 475 ft-lb / 22.8 qt coolant.
+ * The bands must scale with the vehicle's duty class, exactly as they already
+ * scale with `diesel`. Duty class is the authoritative, GVWR-derived signal —
+ * not a hardcoded per-model rule.
+ */
+export type DutyClass = "light" | "medium" | "heavy";
+
+/** GVWR (lbs) → duty class. Thresholds chosen so 3/4- and 1-ton trucks land in
+ *  "medium" (they carry the HD lug-torque/tire-pressure/coolant values that were
+ *  false-flagged): DOT light-duty cutoff is 8,500 lb, so >8,500 is not light;
+ *  >19,500 (Class 6+) is heavy. Null GVWR → light (safe default: keep the strict
+ *  passenger bands when we don't know the vehicle's weight class). */
+export function deriveDutyClass(gvwrLbs?: number | null): DutyClass {
+  if (gvwrLbs == null || !Number.isFinite(gvwrLbs) || gvwrLbs <= 0) return "light";
+  if (gvwrLbs > 19500) return "heavy";
+  if (gvwrLbs > 8500) return "medium";
+  return "light";
+}
+
+/** Parse the NHTSA vPIC "GVWR" descriptor string (e.g. "Class 6: 19,501-26,000
+ *  lb (...)") to the UPPER-bound pounds — the value that determines the class.
+ *  Returns null when no lb figure is present. */
+export function parseGvwrUpperLbs(gvwr?: string | null): number | null {
+  if (!gvwr) return null;
+  // Grab all "N,NNN lb" / "NNNNN" numbers appearing before "lb"/"lbs"/"pound".
+  const nums = [...gvwr.matchAll(/([\d,]{3,})\s*(?:lb|pound)/gi)].map((m) =>
+    Number(m[1].replace(/,/g, "")),
+  ).filter((n) => Number.isFinite(n) && n > 0);
+  if (nums.length === 0) return null;
+  return Math.max(...nums);
+}
+
 /** Engine traits that move the physically-plausible capacity window. */
 export interface CapacityBandContext {
   /** True for diesel engines — HD diesel cooling systems (6.7 Power Stroke,
@@ -164,6 +323,9 @@ export interface CapacityBandContext {
    *  2020 F-350 6.7L was rejected by the old flat rejectMax=24 and the truck
    *  shipped with coolant_capacity_qts = null. */
   diesel?: boolean;
+  /** Vehicle duty class (GVWR-derived). Medium/heavy-duty trucks legitimately
+   *  hold far more coolant than the passenger band allows. */
+  dutyClass?: DutyClass;
 }
 
 export function getCapacityBand(
@@ -186,6 +348,16 @@ export function getCapacityBand(
     // cooling). Totals 25-36 qt are normal, not liters-as-quarts mixups.
     return { rejectMin: 8, rejectMax: 40, typicalMin: 18, typicalMax: 36 };
   }
+  // Medium/heavy-duty GAS trucks (batch-5: RAM 2500 6.4 HEMI, 18.5 qt system —
+  // its 16.6 qt was false-REJECTED by the passenger V8 band). Big cooling
+  // systems are normal at high GVWR even without a diesel.
+  const duty = ctx.dutyClass ?? "light";
+  if (duty === "heavy") {
+    return { rejectMin: 4, rejectMax: 44, typicalMin: 12, typicalMax: 34 };
+  }
+  if (duty === "medium") {
+    return { rejectMin: 4, rejectMax: 32, typicalMin: 8, typicalMax: 26 };
+  }
   return {
     rejectMin: 3,
     rejectMax: 24,
@@ -195,6 +367,14 @@ export function getCapacityBand(
     // cooling) was flagged as "outside 4-11 qts". Large 2.5L 4-cyl and hybrid
     // engine loops legitimately reach ~11-12 qt; a genuine liters-as-quarts
     // misread still lands above 13 and flags. The reject ceiling is unchanged.
+    //
+    // Round-8 note (batch-10): the V8 typicalMax was NOT raised to cover the
+    // F-150's real 20.9 qt. Widening to 21 flips decideCapacity's in-band
+    // arbitration so a 2-blog 16.9 cluster outranks an authoritative 13.8 —
+    // re-introducing the batch-6 Silverado L84 wrong-value class. A correct
+    // 20.9 wearing one informational band flag is the cheaper error; the flat
+    // SANITY_RULES flag ceiling was widened to 22 instead (one flag, not two).
+    // Full fix needs a body-class/full-size-truck signal in CapacityBandContext.
     typicalMax: cylinders === 4 ? 13 : 16,
   };
 }
@@ -289,17 +469,57 @@ const TRANSMISSION_CASE_CANON: Record<string, string> = {
 };
 
 /**
+ * Duty-class-scaled overrides for the light-duty base rules. Batch-5 fix: medium/
+ * heavy-duty trucks legitimately exceed the passenger-car ranges for lug torque,
+ * tire pressure, and coolant capacity. Returns replacement rules keyed by field;
+ * runSanityChecks swaps these in for the light-duty defaults when duty > light.
+ * Light-duty returns nothing (base rules unchanged — zero regression).
+ */
+function getDutyClassRules(dutyClass: DutyClass): SanityRule[] {
+  if (dutyClass === "light") return [];
+  // medium (Class 3-6) and heavy (Class 7-8) both need widened ceilings; heavy
+  // goes a step further (larger cooling systems, higher tire pressures).
+  const heavy = dutyClass === "heavy";
+  return [
+    // Lug torque: 3/4- and 1-ton and medium-duty trucks spec 130-175; medium-duty
+    // (F-650 class) hub-piloted wheels run 450-500 ft-lb.
+    { field: "lug_nut_torque_ft_lbs", type: "range", min: 60, max: heavy ? 600 : 550,
+      severity: "flag", reason: `Lug nut torque outside typical range for ${dutyClass}-duty (60-${heavy ? 600 : 550} ft-lbs)` },
+    // Tire pressure: HD/commercial tires run 60-90+ psi.
+    { field: "tire_pressure_front_psi", type: "range", min: 28, max: heavy ? 120 : 90,
+      severity: "flag", reason: `Tire pressure outside typical range for ${dutyClass}-duty (28-${heavy ? 120 : 90} psi)` },
+    { field: "tire_pressure_rear_psi", type: "range", min: 28, max: heavy ? 120 : 90,
+      severity: "flag", reason: `Tire pressure outside typical range for ${dutyClass}-duty (28-${heavy ? 120 : 90} psi)` },
+    // Base coolant flag: medium/heavy cooling systems hold well over the 20 qt
+    // passenger ceiling. (The engine-specific + diesel bands widen further.)
+    { field: "coolant_capacity_qts", type: "range", min: 4, max: heavy ? 60 : 40,
+      severity: "flag", reason: `Coolant capacity outside typical range for ${dutyClass}-duty (4-${heavy ? 60 : 40} qts)` },
+  ];
+}
+
+/**
  * Run sanity checks on a flat field map.
  * Returns list of flags. Fields with severity "reject" are nulled in place.
  */
 export function runSanityChecks(
   fields: Record<string, FieldResult>,
   cylinders: number = 4,
+  opts: { gvwrLbs?: number | null; dutyClass?: DutyClass } = {},
 ): SanityFlag[] {
+  // Duty class (GVWR-derived) widens the light-duty bands for HD/MD trucks.
+  const dutyClass = opts.dutyClass ?? deriveDutyClass(opts.gvwrLbs);
   // Diesel detection widens the capacity bands (HD diesel coolant 25-36 qt is
   // real, not a unit mixup) — derived from the same field map being checked.
-  const bandCtx: CapacityBandContext = { diesel: isDieselFromFields(fields) };
-  const allRules = [...SANITY_RULES, ...getEngineSpecificRules(cylinders, bandCtx)];
+  const bandCtx: CapacityBandContext = { diesel: isDieselFromFields(fields), dutyClass };
+  // Duty-scaled rules REPLACE the light-duty base rules for their fields, so a
+  // heavy truck's legit values don't trip passenger-car ranges.
+  const dutyRules = getDutyClassRules(dutyClass);
+  const dutyFields = new Set(dutyRules.map((r) => `${r.field}:${r.severity}`));
+  const baseRules =
+    dutyRules.length === 0
+      ? SANITY_RULES
+      : SANITY_RULES.filter((r) => !dutyFields.has(`${r.field}:${r.severity}`));
+  const allRules = [...baseRules, ...dutyRules, ...getEngineSpecificRules(cylinders, bandCtx)];
   const flags: SanityFlag[] = [];
 
   // Pre-normalize noisy-but-valid values BEFORE the rules run. The caller writes
@@ -317,6 +537,135 @@ export function runSanityChecks(
   if (trans && typeof trans.value === "string") {
     const canon = TRANSMISSION_CASE_CANON[trans.value.trim().toLowerCase()];
     if (canon && canon !== trans.value) fields["transmission_type"] = { ...trans, value: canon };
+  }
+
+  // Round 8 (batch-10): flex-fuel claims from decode-only sources are a known
+  // false-positive class — NHTSA carries "E85 Max" as an ENGINE-FAMILY
+  // attribute, so a family that was FFV in some years marks every year (2014
+  // SRX: EPA + owner's manual say gasoline-only; 2012-13 were the FFV years).
+  // FLAG-ONLY (round-6 doctrine): an uncorroborated E85/flex claim gets a flag
+  // + the standard 0.6 confidence cap; a scraped/web-search-sourced claim with
+  // a URL is treated as corroborated and left alone.
+  const fuel = fields["fuel_type"];
+  if (fuel && typeof fuel.value === "string") {
+    const f = fuel.value.toLowerCase();
+    const claimsFlex = f.includes("e85") || f.includes("flex") || f.includes("ethanol");
+    const corroborated =
+      !!fuel.source_url &&
+      (fuel.source_type === "scraped" || fuel.source_type === "web_search");
+    if (claimsFlex && !corroborated) {
+      flags.push({
+        field: "fuel_type",
+        severity: "flag",
+        reason:
+          "flex_fuel_claim_uncorroborated: E85/FFV from decode-only source — NHTSA family-attribute bleed; verify against EPA/owner's manual for this model year",
+        value: String(fuel.value),
+      });
+      fields["fuel_type"] = {
+        ...fuel,
+        flagged: true,
+        flag_reason: "flex_fuel_claim_uncorroborated",
+        confidence: Math.min(fuel.confidence ?? 0.6, 0.6),
+      };
+    }
+  }
+
+  // ── Rotor thickness: the structural nominal-vs-minimum guard ──
+  //
+  // Three different numbers exist per rotor (nominal / machine-to / discard) and
+  // only the DISCARD minimum may be graded against. A minimum is believed ONLY
+  // when the extraction quoted a label that actually reads as a minimum —
+  // "Minimum Thickness" yes, a bare "Thickness" no. OEM storefronts publish
+  // diameter x NOMINAL ("330x22mm"), so an unguarded extraction populates the
+  // minimum column with nominals, and a nominal graded as a minimum condemns
+  // healthy rotors and sells brake jobs that aren't needed. Runs BEFORE the
+  // range rules so a rejected value isn't also range-flagged.
+  const rotorReject = (field: string, reason: string, cur: FieldResult) => {
+    flags.push({ field, severity: "reject", reason, value: String(cur.value) });
+    fields[field] = {
+      ...cur,
+      value: null,
+      flagged: true,
+      flag_reason: reason.split(":")[0],
+      rejected: true,
+    };
+  };
+  const rotorFlag = (field: string, reason: string, cur: FieldResult) => {
+    flags.push({ field, severity: "flag", reason, value: String(cur.value) });
+    fields[field] = {
+      ...cur,
+      flagged: true,
+      flag_reason: reason.split(":")[0],
+      confidence: Math.min(cur.confidence ?? 0.6, 0.6),
+    };
+  };
+
+  for (const axle of ["front", "rear"] as const) {
+    const key = `rotor_${axle}_min_thickness_mm`;
+    const minField = fields[key];
+    if (!minField || minField.value == null) continue;
+    const minVal = Number(minField.value);
+    const kind = fields[`rotor_${axle}_min_kind`]?.value;
+    const label = fields[`rotor_${axle}_min_observed_label`]?.value;
+    const labelText = typeof label === "string" ? label.trim() : "";
+
+    if (!Number.isFinite(minVal)) {
+      rotorReject(key, "rotor_min_not_numeric", minField);
+      continue;
+    }
+    if (typeof kind === "string" && kind && kind !== "discard_min") {
+      // A machine-to or nominal figure reached the minimum column.
+      rotorReject(key, `rotor_min_wrong_kind:${kind}`, minField);
+      continue;
+    }
+    if (!labelText) {
+      // Unlabelled means unauditable: nothing distinguishes it from a nominal.
+      rotorReject(key, "rotor_min_unlabelled", minField);
+      continue;
+    }
+    if (!labelSupportsKind(labelText, "discard_min")) {
+      rotorReject(key, `rotor_min_label_mismatch:${labelText}`, minField);
+      continue;
+    }
+
+    const nominalRaw = fields[`rotor_${axle}_nominal_thickness_mm`]?.value;
+    const nominalVal = nominalRaw != null ? Number(nominalRaw) : null;
+    if (nominalVal != null && Number.isFinite(nominalVal)) {
+      if (minVal >= nominalVal) {
+        // Definitionally impossible — the labels were swapped.
+        rotorReject(
+          key,
+          `rotor_min_gte_nominal:${minVal}>=${nominalVal}`,
+          minField,
+        );
+        continue;
+      }
+      const delta = Math.round((nominalVal - minVal) * 100) / 100;
+      if (delta < 0.5 || delta > 4.0) {
+        rotorFlag(
+          key,
+          `rotor_min_delta_implausible:${delta}mm below nominal ${nominalVal}mm`,
+          minField,
+        );
+      }
+    }
+  }
+
+  // Front rotors are normally thicker than rear. FLAG, never reject: a pair
+  // violation doesn't say WHICH side is wrong, and rejecting both would destroy
+  // a correct value to punish an incorrect one.
+  const frontMin = fields["rotor_front_min_thickness_mm"];
+  const rearMin = fields["rotor_rear_min_thickness_mm"];
+  if (
+    frontMin?.value != null &&
+    rearMin?.value != null &&
+    Number(frontMin.value) < Number(rearMin.value)
+  ) {
+    rotorFlag(
+      "rotor_front_min_thickness_mm",
+      `rotor_min_front_below_rear: front ${frontMin.value}mm < rear ${rearMin.value}mm`,
+      frontMin,
+    );
   }
 
   // Convert fluid-capacity fields to US quarts BEFORE the range rules run. A source
@@ -373,13 +722,39 @@ export function runSanityChecks(
         rule.type === "range" &&
         isLowAuthorityDomain(field.source_url)
       ) {
+        // Round 10 (batch-11 F-150): the escalation destroyed the EXACTLY
+        // correct 20.9 qt because the V8 engine-typical band flagged it and
+        // the sole source was f150forum. A value inside the field's STATIC
+        // base flag band is plausible — keep it flagged at capped confidence
+        // (the capacity resolver re-resolves coolant/oil from authoritative
+        // sources anyway); only a value outside the base band still drops on
+        // a forum-only source (the Sierra 16.9-was-wrong class stays covered
+        // by the resolver + the 0.5 cap below).
+        const baseBand = BASE_CAPACITY_FLAG_BANDS[rule.field];
+        const numVal = Number(field.value);
+        const inBaseBand =
+          baseBand != null && !isNaN(numVal) && numVal >= baseBand[0] && numVal <= baseBand[1];
+        // The rescue is only sound for fields a resolver re-resolves from
+        // authoritative sources; elsewhere a kept-wrong forum value would
+        // never be corrected, so the hard drop stands.
+        if (inBaseBand && RESOLVER_OWNED_CAPACITY_FIELDS.has(rule.field)) {
+          reason = `${rule.reason} — kept (in base band) but sole source is a low-authority page (${field.source_url}); confidence capped`;
+          fields[rule.field] = {
+            ...field,
+            flagged: true,
+            flag_reason: reason,
+            confidence: Math.min(field.confidence ?? 0.5, 0.5),
+          };
+          flags.push({ field: rule.field, severity: "flag", reason, value: field.value });
+          continue;
+        }
         severity = "reject";
         reason = `${rule.reason} — dropped: sole source is a low-authority forum/community page (${field.source_url})`;
       }
 
       flags.push({ field: rule.field, severity, reason, value: field.value });
       if (severity === "reject") {
-        fields[rule.field] = { ...field, value: null, flagged: true, flag_reason: reason };
+        fields[rule.field] = { ...field, value: null, flagged: true, flag_reason: reason, rejected: true };
       } else {
         // A fired flag means "suspicious, needs review" — it must not persist
         // at extraction confidence (batch-2 audit: a flagged out-of-band
@@ -443,14 +818,6 @@ export function runSanityChecks(
 
   return flags;
 }
-
-/** Fields the capacity resolver actively re-fetches/corroborates — the mid-tier
- *  cap above would only pre-flag them into the resolver's slower full-resolution
- *  path for no accuracy gain. */
-const RESOLVER_OWNED_CAPACITY_FIELDS: ReadonlySet<string> = new Set([
-  "oil_capacity_qts",
-  "coolant_capacity_qts",
-]);
 
 /** Numeric fluid-capacity fields subject to the forum-corroboration rule. */
 const CAPACITY_FIELDS = [

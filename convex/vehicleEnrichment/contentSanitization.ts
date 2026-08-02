@@ -201,8 +201,11 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   volkswagen: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
   audi: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
   porsche: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
-  // Subaru: various letter-digit combos (deliberately broad)
-  subaru: /^[A-Z0-9]{5,12}$/i,
+  // Subaru: various letter-digit combos (deliberately broad). The optional
+  // dashed tail matters — Subaru's catalog prints 26296-AL03A and 15208-AA160,
+  // and without it this pattern could not rescue its own make's numbers when
+  // the signature matcher flagged them.
+  subaru: /^[A-Z0-9]{5,12}(?:-[A-Z0-9]{3,6})?$/i,
   // Nissan/Infiniti: XXXXX-XXXXX + chemical/fluid SKUs whose first block mixes
   // letters and digits (999MP-A9001 ATF, KE908-99931 oil).
   // Audit findings (Jul 11 2026): brake-part first blocks letter+4digits
@@ -223,8 +226,25 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   mazda: /^[A-Z0-9]{4,5}-?\d{2}-?\d{3}[A-Z0-9]{0,2}$/i,
   // Volvo: 8-digit
   volvo: /^\d{7,8}$/,
-  // Land Rover: LR-prefixed 6-digit
-  landrover: /^LR\d{6}$/i,
+  // Jaguar Land Rover (shared family formats). The old /^LR\d{6}$/ rejected 13
+  // of the 2012 Range Rover's real parts (batch-9): JLR uses far more than the
+  // modern "LR######" number. Covered here:
+  //   - LR + 6 digits, with an optional revision/kit suffix: LR011279, LR011593K
+  //   - 3-letter + 5-6 digit prefixed numbers: TYK500050 (ZF ATF), IYK500010
+  //     (transfer case), YLE500110, JDE37128 (Jaguar), and old Rover codes
+  //     STC3843 / ERR6299 / ANR1234 / FTC5106
+  //   - Jaguar letter-digit-letter numbers: C2Z30906, T2H7856, C2C8355
+  //     (matched by the [A-Z]\d[A-Z]... branch)
+  // 2-letter prefix minimum keeps it from matching a bare Asian 5-5 number; the
+  // foreign-brand-signature check still runs first, and isPlausiblePartNumber
+  // backstops. Jaguar previously had NO pattern (fell through to the generic
+  // check) — giving it the family pattern adds hallucination filtering without
+  // rejecting its real numbers.
+  landrover: /^(?:[A-Z]{2,4}\d{3,6}[A-Z]{0,2}|[A-Z]\d[A-Z]\d{3,6}[A-Z]?)$/i,
+  jaguar: /^(?:[A-Z]{2,4}\d{3,6}[A-Z]{0,2}|[A-Z]\d[A-Z]\d{3,6}[A-Z]?)$/i,
+  // Scion parts are Toyota-cataloged (same 5-5 / chemical formats). Was on the
+  // generic fallback; give it Toyota's pattern for parity.
+  scion: /^\d{5}(?:-[A-Z0-9]{4,6}(?:-[A-Z0-9]{1,4})?|[A-Z0-9]{5})$/i,
 };
 
 // ─── Cross-make brand signatures ─────────────────────────────────
@@ -246,12 +266,28 @@ const BMW_FAMILY = new Set(["bmw", "mini", "rollsroyce"]);
 // though their hard-part format is 5-3-3. Without them here, a genuine Honda
 // fluid reads as a foreign signature on a Honda config (observed in the
 // Jul 2026 quarantine dry-run: 2 false positives on Acura).
+// Makes whose catalogs print the 5-digit-dash-5 shape. Membership decides
+// whether a number matching that signature is OUR make's or another's — a
+// non-member whose number matches is treated as cross-make contamination and
+// DROPPED.
+//
+// `subaru` was missing, and Subaru prints exactly this shape (26296-AL03A,
+// 15208-AA160). Its numbers matched the asian_5_5 signature, failed the
+// membership test, and were deleted as contamination — destroying correct,
+// present values rather than merely failing to find them, which the pipeline
+// law ranks as the worse error. The escape hatch below could not save them
+// either: subaru's own pattern admitted no dash.
+//
+// NOT mazda, deliberately: its numbers are 4-char alphanumeric blocks
+// (L3K9-14-302, PE01-14-302) and do not match this signature at all, so adding
+// it would widen the set for no benefit.
 const ASIAN_5_5_FAMILY = new Set([
   "toyota", "lexus", "scion",
   "hyundai", "kia", "genesis",
   "nissan", "infiniti",
   "mitsubishi", "suzuki",
   "honda", "acura",
+  "subaru",
 ]);
 const HONDA_FAMILY = new Set(["honda", "acura"]);
 const MERCEDES_FAMILY = new Set(["mercedes", "mercedesbenz", "maybach", "smart"]);

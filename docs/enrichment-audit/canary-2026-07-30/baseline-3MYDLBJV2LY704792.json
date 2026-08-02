@@ -1,0 +1,743 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "brembo",
+      "sylvania_bulbs",
+      "trico_wipers",
+      "wix_filters"
+    ],
+    "claim_rows": 22,
+    "families_seen": [
+      "aftermarket_catalog"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 0,
+    "fields_multi_family_agreement": 0,
+    "fields_single_source": 22,
+    "fields_with_claims": 22
+  },
+  "external_joins": {
+    "complaint_signal": {
+      "top": "ENGINE",
+      "total": 9
+    },
+    "epa": null,
+    "manual": null,
+    "recalls_open": 1
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": 33.8,
+    "brake_fluid_type": "DOT 3",
+    "coolant_capacity_qts": 5.7,
+    "coolant_type": "Toyota Super Long Life Coolant (SLLC) — ethylene glycol, non-silicate, HOAT",
+    "oil_capacity_qts": 4.4,
+    "oil_viscosity": "0W-20",
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": 2.6
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "0%",
+    "fields_with_claims": 22,
+    "fitment_multi_source": "0%",
+    "has_manual": false,
+    "months_fill": "19%",
+    "parts_quotable": "7/10",
+    "rotor_minimums": 0,
+    "status": "complete"
+  },
+  "identity_coherence": {
+    "aspiration": null,
+    "cylinders": 4,
+    "displacement_l": 1.5,
+    "engine_code": "P5",
+    "epa_says": null,
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": true,
+    "spark_plug_quantity": 4,
+    "timing_system": "chain",
+    "trans_fluid_type": "Toyota ATF WS (ATF JWS3324 / NWS9638)",
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "default_fallback": 11,
+      "deterministic": 8,
+      "enriched": 8
+    },
+    "months_fill": "19%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "battery_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 45000,
+        "months": 36,
+        "provenance": "enriched",
+        "service": "brake_fluid_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 40000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "brake_pad_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 120000,
+        "months": 120,
+        "provenance": "enriched",
+        "service": "coolant_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": null,
+        "provenance": "enriched",
+        "service": "filter_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "fuel_system_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 5000,
+        "months": 6,
+        "provenance": "enriched",
+        "service": "oil_change",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "rotor_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": 30000,
+        "months": null,
+        "provenance": "enriched",
+        "service": "serpentine_belt",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": null,
+        "provenance": "enriched",
+        "service": "spark_plugs",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "tire_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 5000,
+        "months": 6,
+        "provenance": "enriched",
+        "service": "tire_rotation",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": null,
+        "provenance": "enriched",
+        "service": "transmission_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 27,
+    "with_miles": 13,
+    "with_months": 5
+  },
+  "labor": {
+    "by_source": {
+      "default_fallback": 27
+    },
+    "rows": [
+      {
+        "hours": 1,
+        "service": "fuel_system_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "battery_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "battery_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.85,
+        "service": "brake_fluid_flush",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 3,
+        "service": "rotor_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "brake_pad_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "wheel_alignment",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.4,
+        "service": "tire_rotation",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "transmission_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.25,
+        "service": "coolant_flush",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "spark_plugs",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.35,
+        "service": "filter_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.4,
+        "service": "oil_change",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "serpentine_belt",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "transfer_case_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 27
+  },
+  "parts": {
+    "corroborated_2plus_sources": 0,
+    "corroboration_rate": "0%",
+    "rows": [
+      {
+        "best_price": 20.22,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "17801-WB001",
+        "price_domains": [
+          "toyotapartsdeal.com",
+          "parts.longotoyota.com",
+          "parts.toyotaofnashua.com",
+          "parts.olathetoyota.com"
+        ],
+        "price_rows": 4,
+        "refute_flagged": false,
+        "role": "air_filter",
+        "scraped_name": null,
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.toyotaofnashua.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 4
+      },
+      {
+        "best_price": 12,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "00289-ATFWS",
+        "price_domains": [
+          "sparksparts.com",
+          "toyotaparts.toyotaofelcajon.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "atf_fluid",
+        "scraped_name": null,
+        "service": "transmission_service",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "toyota.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 171.15,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "00544-H4052-470",
+        "price_domains": [
+          "toyotaparts.toyotaofelcajon.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "battery",
+        "scraped_name": null,
+        "service": "battery_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.toyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 27.59,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "87139-WB001",
+        "price_domains": [
+          "parts.olathetoyota.com",
+          "parts.longotoyota.com",
+          "toyotaparts.ourismantoyotaofrichmond.com",
+          "parts.toyotaofnashua.com",
+          "partsautonationtoyotawinterpark.com"
+        ],
+        "price_rows": 5,
+        "refute_flagged": false,
+        "role": "cabin_filter",
+        "scraped_name": null,
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.toyotaofnashua.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 5
+      },
+      {
+        "best_price": 20.16,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "00272-SLLC2",
+        "price_domains": [
+          "parts.kendalltoyota.com",
+          "parts.camelbacktoyota.com",
+          "parts.capovalleytoyota.com"
+        ],
+        "price_rows": 4,
+        "refute_flagged": false,
+        "role": "coolant",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "oemgenuineparts.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": null,
+        "confidence": 0.85,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "90118-WB669",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "drain_plug_gasket",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.olathetoyota.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 6.69,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "90118-WBA40",
+        "price_domains": [
+          "oemgenuineparts.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "oil_filter",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.toyotaofnashua.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": null,
+        "confidence": 0.85,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "04466-K0000",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "rear_brake_pad",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "toyotadirectparts.co.uk"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 30.33,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "90118-WBA55",
+        "price_domains": [
+          "parts.toyotaofnashua.com",
+          "toyotapartsdeal.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "serpentine_belt",
+        "scraped_name": null,
+        "service": "serpentine_belt",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.toyotaofnashua.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 22.99,
+        "confidence": 0.85,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "85212-WB003",
+        "price_domains": [
+          "parts.elmhursttoyota.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": true,
+        "role": "wiper_blade_front_set",
+        "scraped_name": null,
+        "service": "wiper_blade_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.toyotaofnashua.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 1
+      }
+    ],
+    "total": 10,
+    "triangle_broken": [
+      {
+        "oem": "90118-WB669",
+        "role": "drain_plug_gasket",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "04466-K0000",
+        "role": "rear_brake_pad",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "85212-WB003",
+        "role": "wiper_blade_front_set",
+        "why": "refute_flagged"
+      }
+    ],
+    "triangle_ok": 7,
+    "with_observed_title": 0
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 43,
+    "duration_min": 28.5,
+    "error_tags": {
+      "applicable_services_unknown": 1,
+      "fitment_refute_kept_multisource": 1,
+      "role_resource": 1,
+      "rotor_min": 2
+    },
+    "field_gap_count": 81,
+    "fill_rate": 50,
+    "quotability": {
+      "pct": 1,
+      "services": []
+    },
+    "runId": "tx7fxav5tdnmxx8xv9wm0f7rxs8bh3hg",
+    "sanity_flag_count": 2,
+    "sanity_flags_by_stage": {
+      "completion_gate": 1,
+      "fitment_refute": 1
+    },
+    "status": "complete",
+    "tokens_in": 152525,
+    "tokens_out": 35947,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 281
+  },
+  "vehicle": {
+    "chassis_code": "XP210",
+    "confidence_avg": 0.8481627296587926,
+    "configId": "w57dsvk31cqfa4kc8jnj54b2158bg7a3",
+    "config_key": "2020_toyota_yaris_base_p5",
+    "drivetrain": "FWD",
+    "enrichment_status": "complete",
+    "fill_rate": 83,
+    "last_enriched_at": 1785442519279,
+    "make": "Toyota",
+    "model": "Yaris",
+    "na_role_keys": [],
+    "trim": "Base",
+    "verified_fields": [],
+    "year": 2020
+  }
+}

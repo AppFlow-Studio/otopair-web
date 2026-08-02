@@ -1,0 +1,26 @@
+{
+  "_note": "Live web-search results for 'owners.honda.com 2021 CR-V owners manual PDF maintenance minder schedule', captured 2026-07-30. VERIFIED NEGATIVE: owners.honda.com/vehicles/information/2021/CR-V/manuals returns HTTP 302 -> mygarage.honda.com/s/find-honda, a Salesforce SPA that serves only a loading shell. There is NO constructible Honda manual URL, so every candidate here is a third-party mirror.",
+  "query": "owners.honda.com 2021 CR-V owners manual PDF maintenance minder schedule",
+  "results": [
+    {
+      "url": "https://www.scribd.com/document/584508022/Honda-CR-V-2021-Owner-s-Manual",
+      "title": "Honda CR-V 2021 Owner's Manual | PDF | High Voltage | Electric Vehicle"
+    },
+    {
+      "url": "https://www.crvownersclub.com/threads/honda-crv-2021-factory-maint-schedule.248040/",
+      "title": "Honda CRV 2021 Factory Maint. Schedule ? | Honda CR-V Owners Club Forums"
+    },
+    {
+      "url": "https://cdn.dealereprocess.org/cdn/servicemanuals/honda/2021-crv.pdf",
+      "title": "2021 CR-V - Owner's Manual"
+    },
+    {
+      "url": "https://www.crvmanuals.com/",
+      "title": "Honda CR-V Service & Owner's Manuals!"
+    },
+    {
+      "url": "https://www.ebay.de/itm/276034367073",
+      "title": "Honda Cr-V Hybrid 2021 Maintenance/Owners Manual Book"
+    }
+  ]
+}

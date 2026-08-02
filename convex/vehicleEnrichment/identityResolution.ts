@@ -102,6 +102,43 @@ export function deriveIdentityFromTrim(
   };
 }
 
+/**
+ * Guard the decode-time LLM trim normalizer (round 8, batch-10).
+ *
+ * The normalizer's trim was applied unconditionally over the merged VDB/NHTSA
+ * trim (`if (normalized.trim) finalTrim = normalized.trim`). Batch-10 shipped
+ * two identity slips this way: a Lariat F-150 stored as "FX4 SuperCrew" and a
+ * 745Li stored as "745i" — trim names the decoders never produced. The
+ * normalizer's job is CLEANING decode output (casing, model-in-trim-field,
+ * series noise), not inventing a different trim, so a normalized trim is
+ * accepted only when it shares at least one token with the decode evidence
+ * (merged trim / trim2 / series). No overlap = invention → keep the decode's
+ * trim. Pure; exported for tests.
+ */
+export function acceptNormalizedTrim(
+  normalizedTrim: string | null | undefined,
+  decodeEvidence: Array<string | null | undefined>,
+): boolean {
+  if (!normalizedTrim || !normalizedTrim.trim()) return false;
+  const tokens = (s: string): Set<string> =>
+    new Set(
+      s
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length >= 2),
+    );
+  const evidence = new Set<string>();
+  for (const e of decodeEvidence) {
+    if (e) for (const t of tokens(e)) evidence.add(t);
+  }
+  // Nothing decoded to contradict — the normalizer is the only trim source.
+  if (evidence.size === 0) return true;
+  for (const t of tokens(normalizedTrim)) {
+    if (evidence.has(t)) return true;
+  }
+  return false;
+}
+
 /** VDB decode subset relevant here (extractVDBFields output). */
 export interface VdbIdentitySubset {
   bodyType?: string | null;
@@ -141,6 +178,8 @@ export function mergeIdentity(
     cylinders: null,
     displacement_l: null,
     fuel_type: null,
+    gvwr_lbs: null,
+    engine_manufacturer: null,
     body_class: null,
     engine_config: null,
     make: null,

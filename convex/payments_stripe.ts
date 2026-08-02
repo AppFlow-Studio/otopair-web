@@ -1939,8 +1939,11 @@ export const finalizeAndChargeForBooking = internalAction({
 
 /** When reauthFlow voids the original PI and creates a replacement, the live
  *  hold lives on payment.reauth_payment_intent_id. Capture/refund must target
- *  that PI — the original is cancelled and capturing it would 400. */
-function resolveActivePaymentIntentId(payment: any): string | undefined {
+ *  that PI — the original is cancelled and capturing it would 400.
+ *
+ *  Exported for convex/shopPaymentRefunds.ts (the shop-owner refund path) —
+ *  plain helper, not a registered Convex function. */
+export function resolveActivePaymentIntentId(payment: any): string | undefined {
   return payment?.reauth_payment_intent_id ?? payment?.stripe_payment_intent_id;
 }
 

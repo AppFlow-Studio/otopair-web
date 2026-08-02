@@ -42,6 +42,7 @@ import { mintClaimToken } from "./walkin_claims";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { metaMakeModel } from "./lib/bookingEnrichment";
 import {
   computeDisclosedRange,
   computePricedPartsSnapshot,
@@ -416,15 +417,19 @@ export const getByUserIdWithDetails = query({
         let licensePlate = booking.vin.slice(-4);
         let makeLogoUrl: string | undefined;
         if (vehicle) {
-          const parts: string[] = [];
+          let makeName = "";
+          let modelName = "";
+          let trimName = "";
           if (vehicle.trim_id) {
             const trim = await ctx.db.get(vehicle.trim_id);
             if (trim) {
+              trimName = trim.name ?? "";
               const model = await ctx.db.get(trim.model_id);
               if (model) {
+                modelName = model.name ?? "";
                 const make = await ctx.db.get(model.make_id);
                 if (make) {
-                  parts.push(make.name);
+                  makeName = make.name ?? "";
                   if (make.logo) {
                     // TODO(ts-fix): make.logo is schema-typed as string but code calls db.get on it.
                     // Either schema should be Id<"_storage"> or this should read make.logo_url directly.
@@ -432,12 +437,22 @@ export const getByUserIdWithDetails = query({
                     makeLogoUrl = (logoAsset as any)?.url;
                   }
                 }
-                parts.push(model.name);
               }
-              parts.push(trim.name);
             }
           }
-          if (vehicle.year != null) parts.push(String(vehicle.year));
+          // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+          if (!makeName || !modelName) {
+            const meta = metaMakeModel(vehicle.metadata);
+            if (!makeName) makeName = meta.make;
+            if (!modelName) modelName = meta.model;
+            if (!trimName) trimName = meta.trim;
+          }
+          const parts = [
+            makeName,
+            modelName,
+            trimName,
+            vehicle.year != null ? String(vehicle.year) : "",
+          ].filter(Boolean);
           if (parts.length > 0) vehicleDisplay = parts.join(" ");
         }
 
@@ -747,10 +762,22 @@ export const getByShopId = query({
  *
  * Returns an array of length `days` (oldest → newest, gaps filled with zeros)
  * shaped: { date: YYYY-MM-DD, total: number, completed: number, revenue: number }
+ *
+ * Staff-gated: this returns a shop's revenue and previously accepted any
+ * shopId from any signed-in caller. Returns [] rather than throwing so the
+ * chart renders empty instead of blowing up the page.
  */
 export const getShopBookingSeries = query({
   args: { shopId: v.id("shops"), days: v.optional(v.number()) },
   handler: async (ctx, args) => {
+    const viewer = await getCurrentUserOrNull(ctx);
+    if (!viewer) return [];
+    try {
+      await requireShopStaff(ctx, viewer._id, args.shopId);
+    } catch {
+      return [];
+    }
+
     const days = Math.max(1, Math.min(args.days ?? 30, 180));
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
@@ -4417,7 +4444,9 @@ function determineOwnershipLabel(owner: any) {
 function buildSourceTag(
   verifiedValue: unknown,
   fallbackValue: unknown,
-  fallbackTag: "oem_default" | "user_reported"
+  // "estimated" exists because "oem_default" is exactly the wrong word for a
+  // rotor minimum derived from the nominal — it is not an OEM figure at all.
+  fallbackTag: "oem_default" | "user_reported" | "estimated"
 ) {
   if (
     typeof verifiedValue === "number" ||
@@ -4751,6 +4780,14 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       rear_pad_mm: coerceNumberOrNull(passportRecord?.brakes?.rear_pad_mm),
       rotor_condition: passportRecord?.brakes?.rotor_condition ?? null,
       rotor_thickness: passportRecord?.brakes?.rotor_thickness ?? null,
+      // OEM rotor minimums from enrichment — the first values this block has
+      // ever pulled from the config. Null means the reading is recorded but not
+      // graded; the mechanic reads the number cast on the rotor instead.
+      rotor_min_front_mm: vehicleConfig?.rotor_front_min_thickness_mm ?? null,
+      rotor_min_rear_mm: vehicleConfig?.rotor_rear_min_thickness_mm ?? null,
+      rotor_min_quality_front: vehicleConfig?.rotor_front_min_quality ?? null,
+      rotor_min_quality_rear: vehicleConfig?.rotor_rear_min_quality ?? null,
+      rotor_min_source_url: vehicleConfig?.rotor_min_source_url ?? null,
     },
     inspection: {
       looks_current: firstDefinedBoolean(passportRecord?.inspection?.looks_current),
@@ -4817,6 +4854,26 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       passportRecord?.fluids?.transmission_fluid_type,
       transmission?.fluid_type,
       "oem_default"
+    ),
+    // A derived OR sanity-flagged minimum is tagged "estimated", never
+    // "oem_default" — neither is a clean OEM figure, and the tag is what
+    // downstream surfaces key on to avoid presenting it as the manufacturer's
+    // spec.
+    "brakes.rotor_min_front_mm": buildSourceTag(
+      null,
+      vehicleConfig?.rotor_front_min_thickness_mm,
+      vehicleConfig?.rotor_front_min_quality === "derived_from_nominal" ||
+        vehicleConfig?.rotor_front_min_quality === "oem_spec_flagged"
+        ? "estimated"
+        : "oem_default"
+    ),
+    "brakes.rotor_min_rear_mm": buildSourceTag(
+      null,
+      vehicleConfig?.rotor_rear_min_thickness_mm,
+      vehicleConfig?.rotor_rear_min_quality === "derived_from_nominal" ||
+        vehicleConfig?.rotor_rear_min_quality === "oem_spec_flagged"
+        ? "estimated"
+        : "oem_default"
     ),
   };
 

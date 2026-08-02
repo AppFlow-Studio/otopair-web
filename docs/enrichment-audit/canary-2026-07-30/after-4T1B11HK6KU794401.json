@@ -1,0 +1,1135 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "brembo",
+      "pipeline_extraction",
+      "rockauto",
+      "sylvania_bulbs",
+      "trico_wipers"
+    ],
+    "claim_rows": 24,
+    "families_seen": [
+      "aftermarket_catalog",
+      "web_search"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 2,
+    "fields_multi_family_agreement": 1,
+    "fields_single_source": 20,
+    "fields_with_claims": 21
+  },
+  "external_joins": {
+    "complaint_signal": {
+      "top": "POWER TRAIN",
+      "total": 388
+    },
+    "epa": null,
+    "manual": {
+      "file_id": "file_011CdZ2dF4mLfuyhTDw9gKuz",
+      "kind": "maintenance_schedule",
+      "oem": true,
+      "pages": 73,
+      "url": "https://assets.sia.toyota.com/publications/en/omms-s/T-MMS-19CamryHV/pdf/T-MMS-19CamryHV.pdf"
+    },
+    "recalls_open": 6
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": 17,
+    "brake_fluid_type": "DOT 3",
+    "coolant_capacity_qts": 7.3,
+    "coolant_type": "Toyota Super Long Life Coolant (SLLC)",
+    "oil_capacity_qts": 4.8,
+    "oil_viscosity": "0W-20",
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": 3
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "5%",
+    "fields_with_claims": 21,
+    "fitment_multi_source": "17%",
+    "has_manual": true,
+    "months_fill": "48%",
+    "parts_quotable": "21/23",
+    "rotor_minimums": 1,
+    "status": "complete"
+  },
+  "identity_coherence": {
+    "aspiration": "natural",
+    "cylinders": 4,
+    "displacement_l": 2.5,
+    "engine_code": "A25A-FKS",
+    "epa_says": null,
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": true,
+    "spark_plug_quantity": 4,
+    "timing_system": "chain",
+    "trans_fluid_type": "Toyota Genuine ATF WS",
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "default_fallback": 10,
+      "deterministic": 8,
+      "enriched": 9
+    },
+    "months_fill": "48%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "default_fallback",
+        "service": "battery_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": 36,
+        "provenance": "enriched",
+        "service": "brake_fluid_flush",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "brake_pad_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 100000,
+        "months": 120,
+        "provenance": "enriched",
+        "service": "coolant_flush",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 36,
+        "provenance": "enriched",
+        "service": "filter_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "fuel_system_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 10000,
+        "months": 12,
+        "provenance": "enriched",
+        "service": "oil_change",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": 72,
+        "provenance": "default_fallback",
+        "service": "rotor_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": 60000,
+        "months": 72,
+        "provenance": "enriched",
+        "service": "serpentine_belt",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 120000,
+        "months": 144,
+        "provenance": "enriched",
+        "service": "spark_plugs",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "tire_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 5000,
+        "months": 6,
+        "provenance": "enriched",
+        "service": "tire_rotation",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "enriched",
+        "service": "transmission_service",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 27,
+    "with_miles": 12,
+    "with_months": 13
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 12,
+      "default_fallback": 15
+    },
+    "rows": [
+      {
+        "hours": 0.5,
+        "service": "oil_change",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.2,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.8,
+        "service": "brake_fluid_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.3,
+        "service": "coolant_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.7,
+        "service": "battery_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "tire_rotation",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "wheel_alignment",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.3,
+        "service": "fuel_system_cleaning",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "spark_plugs",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "brake_pad_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.4,
+        "service": "rotor_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "battery_test",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "transmission_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "serpentine_belt",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "transfer_case_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 27
+  },
+  "parts": {
+    "corroborated_2plus_sources": 4,
+    "corroboration_rate": "17%",
+    "rows": [
+      {
+        "best_price": 19.71,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "17801-F0050",
+        "price_domains": [
+          "sparksparts.com",
+          "parts.capovalleytoyota.com",
+          "toyotaparts.ourismantoyotaofrichmond.com",
+          "parts.americantoyota.com",
+          "toyotaparts.lakelandtoyota.com"
+        ],
+        "price_rows": 5,
+        "refute_flagged": false,
+        "role": "air_filter",
+        "scraped_name": "Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 3,
+        "source_domains": [
+          "parts.americantoyota.com",
+          "toyota.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 5
+      },
+      {
+        "best_price": 12,
+        "confidence": 0.97,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "00289-ATFWS",
+        "price_domains": [
+          "sparksparts.com",
+          "toyotaparts.toyotaofelcajon.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "atf_fluid",
+        "scraped_name": null,
+        "service": "transmission_service",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.frontiertoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 6.87,
+        "confidence": 0.97,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "00475-1BF03",
+        "price_domains": [
+          "toyotaparts.lakelandtoyota.com",
+          "toyotapartsdeal.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "brake_fluid",
+        "scraped_name": null,
+        "service": "brake_fluid_flush",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "toyotaparts.lakelandtoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 35.76,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "87139-0E040",
+        "price_domains": [
+          "discountpartsmonster.com",
+          "parts.capovalleytoyota.com",
+          "toyotaparts.lakelandtoyota.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "cabin_filter",
+        "scraped_name": "Cabin Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "toyotaparts.lakelandtoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 19.71,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "87139-07020",
+        "price_domains": [
+          "toyotapartsdeal.com",
+          "parts.capovalleytoyota.com",
+          "toyotaparts.ourismantoyotaofrichmond.com",
+          "parts.longotoyotaofprosper.com"
+        ],
+        "price_rows": 4,
+        "refute_flagged": true,
+        "role": "cabin_filter",
+        "scraped_name": "Cabin Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "toyota.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 4
+      },
+      {
+        "best_price": 20.16,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "00272-SLLC2",
+        "price_domains": [
+          "parts.kendalltoyota.com",
+          "parts.camelbacktoyota.com",
+          "parts.capovalleytoyota.com"
+        ],
+        "price_rows": 4,
+        "refute_flagged": false,
+        "role": "coolant",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.kendalltoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 1.39,
+        "confidence": 0.97,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "90430-12031",
+        "price_domains": [
+          "toyotapartsdeal.com",
+          "toyotaparts.lakelandtoyota.com",
+          "parts.camelbacktoyota.com",
+          "parts.capovalleytoyota.com"
+        ],
+        "price_rows": 4,
+        "refute_flagged": false,
+        "role": "drain_plug_gasket",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.olathetoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 4
+      },
+      {
+        "best_price": 70.48,
+        "confidence": 0.93,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "04465-0E060",
+        "price_domains": [
+          "parts.longotoyota.com",
+          "toyotaparts.ourismantoyotaofrichmond.com",
+          "wholesaledirect.moderntoyota.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "front_brake_pad",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.frontiertoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 68.83,
+        "confidence": 0.93,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "43512-06200",
+        "price_domains": [
+          "parts.capovalleytoyota.com",
+          "wholesaledirect.moderntoyota.com",
+          "parts.griecotoyota.com",
+          "parts.longotoyota.com"
+        ],
+        "price_rows": 4,
+        "refute_flagged": false,
+        "role": "front_rotor",
+        "scraped_name": null,
+        "service": "rotor_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.capovalleytoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 4
+      },
+      {
+        "best_price": 105.56,
+        "confidence": 0.93,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "90919-A2010",
+        "price_domains": [
+          "parts.longotoyota.com",
+          "toyotaparts.lakelandtoyota.com",
+          "parts.elmhursttoyota.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "ignition_coil",
+        "scraped_name": null,
+        "service": "spark_plugs",
+        "service_role": "as_needed",
+        "source_count": 1,
+        "source_domains": [
+          "toyota.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 18.55,
+        "confidence": 0.8,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "17177-0H020",
+        "price_domains": [
+          "parts.longotoyota.com",
+          "toyotaparts.ourismantoyotaofrichmond.com",
+          "toyotaparts.lakelandtoyota.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "intake_manifold_gasket",
+        "scraped_name": null,
+        "service": "spark_plugs",
+        "service_role": "as_needed",
+        "source_count": 1,
+        "source_domains": [
+          "autoparts.toyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 4.68,
+        "confidence": 0.98,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "90915-YZZN1",
+        "price_domains": [
+          "toyotapartsdeal.com",
+          "toyotaparts.lakelandtoyota.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "oil_filter",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.lakelandtoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 5.23,
+        "confidence": 0.85,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "90301-79006",
+        "price_domains": [
+          "parts.capovalleytoyota.com",
+          "parts.longotoyota.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "oil_filter_housing_oring",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "toyotaparts.ourismantoyotaofrichmond.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 49.16,
+        "confidence": 0.93,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "04466-33210",
+        "price_domains": [
+          "parts.toyotaofnashua.com",
+          "toyotaparts.ourismantoyotaofrichmond.com",
+          "parts.longotoyota.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "rear_brake_pad",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "toyota.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": null,
+        "confidence": 0.8,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "4777132050",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": true,
+        "role": "rear_brake_wear_sensor",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": "as_needed",
+        "source_count": 1,
+        "source_domains": [
+          "parts.toyota.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 73.04,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "42431-33160",
+        "price_domains": [
+          "toyotaparts.toyotaofelcajon.com",
+          "parts.longotoyota.com",
+          "wholesaledirect.moderntoyota.com",
+          "parts.capovalleytoyota.com"
+        ],
+        "price_rows": 4,
+        "refute_flagged": false,
+        "role": "rear_rotor",
+        "scraped_name": null,
+        "service": "rotor_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.toyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 4
+      },
+      {
+        "best_price": 28.05,
+        "confidence": 0.97,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "90916-A2027",
+        "price_domains": [
+          "parts.conicellitoyotaofconshohocken.com",
+          "toyotaparts.lakelandtoyota.com",
+          "discountpartsmonster.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "serpentine_belt",
+        "scraped_name": null,
+        "service": "serpentine_belt",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "go-parts.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 15.07,
+        "confidence": 0.97,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "90919-01289",
+        "price_domains": [
+          "toyotaparts.ourismantoyotaofrichmond.com",
+          "parts.capovalleytoyota.com",
+          "trdtoyotaparts.beachcitiestoyota.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "spark_plug",
+        "scraped_name": null,
+        "service": "spark_plugs",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "go-parts.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 55.42,
+        "confidence": 0.93,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "16031-25011",
+        "price_domains": [
+          "parts.americantoyota.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "thermostat",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": "as_needed",
+        "source_count": 1,
+        "source_domains": [
+          "parts.lakelandtoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 1.15,
+        "confidence": 0.88,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "16326-47020",
+        "price_domains": [
+          "parts.longotoyota.com",
+          "parts.americantoyota.com",
+          "parts.olathetoyota.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "thermostat_gasket",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": "as_needed",
+        "source_count": 1,
+        "source_domains": [
+          "parts.lakelandtoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 35.98,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "35330-06020",
+        "price_domains": [
+          "wholesaledirect.moderntoyota.com",
+          "trdtoyotaparts.beachcitiestoyota.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "trans_filter",
+        "scraped_name": "Transmission Oil Filter",
+        "service": "transmission_service",
+        "service_role": "kit",
+        "source_count": 3,
+        "source_domains": [
+          "parts.lakelandtoyota.com",
+          "toyota.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 19.32,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "35168-73010",
+        "price_domains": [
+          "parts.longotoyota.com",
+          "parts.capovalleytoyota.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "trans_pan_gasket",
+        "scraped_name": null,
+        "service": "transmission_service",
+        "service_role": "kit",
+        "source_count": 1,
+        "source_domains": [
+          "parts.elmhursttoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 14.49,
+        "confidence": 0.9,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "85212-33340",
+        "price_domains": [
+          "parts.elmhursttoyota.com",
+          "parts.chathamparkwaytoyota.com",
+          "auto-doc.ie"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "wiper_blade_front_set",
+        "scraped_name": null,
+        "service": "wiper_blade_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.olathetoyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      }
+    ],
+    "total": 23,
+    "triangle_broken": [
+      {
+        "oem": "87139-07020",
+        "role": "cabin_filter",
+        "why": "refute_flagged"
+      },
+      {
+        "oem": "4777132050",
+        "role": "rear_brake_wear_sensor",
+        "why": "refute_flagged"
+      }
+    ],
+    "triangle_ok": 21,
+    "with_observed_title": 4
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": 25,
+    "front_nominal_mm": 28,
+    "front_quality": "oem_spec_flagged",
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 38,
+    "duration_min": 33,
+    "error_tags": {
+      "applicable_services_empty_fallback_used": 1,
+      "fitment_refute_kept_multisource": 2,
+      "role_resource": 1,
+      "rotor_min": 3
+    },
+    "field_gap_count": 84,
+    "fill_rate": 83,
+    "quotability": {
+      "pct": 0.9,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "battery"
+          ],
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 5,
+          "core_with_price": 5,
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx75hkjy82b7azhxgbsgj14ddd8bgc9e",
+    "sanity_flag_count": 8,
+    "sanity_flags_by_stage": {
+      "claim_ledger": 3,
+      "completion_gate": 1,
+      "fitment_refute": 2,
+      "interval_provenance": 1,
+      "rotor_resolver": 1
+    },
+    "status": "complete",
+    "tokens_in": 23627,
+    "tokens_out": 16035,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 20
+  },
+  "vehicle": {
+    "chassis_code": "XV70",
+    "confidence_avg": 0.874062095730919,
+    "configId": "w575pk1ryhhbd7s3y18ttpqcss8bbrv9",
+    "config_key": "2019_toyota_camry_l_le_se_xle_a25a_fks",
+    "drivetrain": "FWD",
+    "enrichment_status": "complete",
+    "fill_rate": 90,
+    "last_enriched_at": 1785450373540,
+    "make": "Toyota",
+    "model": "Camry",
+    "na_role_keys": [],
+    "trim": "L/LE/SE/XLE",
+    "verified_fields": [],
+    "year": 2019
+  }
+}

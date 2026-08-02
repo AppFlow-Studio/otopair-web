@@ -73,13 +73,20 @@ const STATUS_MAP: Record<string, { tone: Tone; label: string }> = {
   confirmed:    { tone:'green',  label:'Confirmed' },
   pending:      { tone:'yellow', label:'Pending' },
   in_progress:  { tone:'blue',   label:'In progress' },
-  completed:    { tone:'slate',  label:'Completed' },
+  completed:    { tone:'green',  label:'Completed' },
   cancelled:    { tone:'red',    label:'Cancelled' },
   refunded:     { tone:'purple', label:'Refunded' },
   active:       { tone:'green',  label:'Active' },
+  inactive:     { tone:'slate',  label:'Inactive' },
   suspended:    { tone:'red',    label:'Suspended' },
   connected:    { tone:'green',  label:'Connected' },
   not_connected:{ tone:'slate',  label:'Not connected' },
+  // Ops/booking lifecycle statuses surfaced when porting /ops + /shops.
+  pending_quote:  { tone:'yellow', label:'Pending quote' },
+  quotes_ready:   { tone:'yellow', label:'Quotes ready' },
+  vehicle_at_shop:{ tone:'blue',   label:'At shop' },
+  no_show:        { tone:'red',    label:'No show' },
+  disputed:       { tone:'orange', label:'Disputed' },
 }
 
 export const StatusBadge = ({ status }: { status: string }) => {
@@ -180,6 +187,38 @@ export const SectionTitle = ({ title, subtitle, right }: { title: string; subtit
       {subtitle && <div style={{ fontSize:13, color:'var(--slate-500)', marginTop:2 }}>{subtitle}</div>}
     </div>
     {right}
+  </div>
+)
+
+/* ---------- MICRO HEADING ---------- */
+// The recurring 11px/600/uppercase/slate-500 label used across the panel.
+export const MicroH = ({ children, style }: { children: ReactNode; style?: CSSProperties }) => (
+  <div style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em', ...style }}>
+    {children}
+  </div>
+)
+
+/* ---------- SKELETON ---------- */
+export const Skeleton = ({ width = '100%', height = 14, style }: { width?: number | string; height?: number | string; style?: CSSProperties }) => (
+  <span className="animate-pulse" style={{ display:'inline-block', width, height, borderRadius:6, background:'var(--slate-100)', ...style }} />
+)
+
+/* ---------- SEGMENTED CONTROL ---------- */
+// Inline-style port of ChartKit's period toggle (matches TabStripe's subtab strip).
+export const SegmentedControl = <T extends string>({ value, options, onChange, style }:
+  { value: T; options: { value: T; label: string }[]; onChange: (v: T) => void; style?: CSSProperties }) => (
+  <div style={{ display:'inline-flex', gap:2, background:'#fff', border:'1px solid var(--slate-200)', borderRadius:8, padding:3, ...style }}>
+    {options.map(o => {
+      const isActive = value === o.value
+      return (
+        <button key={o.value} onClick={() => onChange(o.value)}
+          style={{ padding:'5px 11px', border:'none', borderRadius:6, cursor:'pointer', fontSize:12, fontWeight:500,
+            background: isActive ? 'var(--blue-50)' : 'transparent',
+            color: isActive ? 'var(--blue-700)' : 'var(--slate-600)', transition:'background 80ms', fontFamily:'inherit' }}>
+          {o.label}
+        </button>
+      )
+    })}
   </div>
 )
 
@@ -496,6 +535,67 @@ export const Modal = ({ open, onClose, title, eyebrow, statusBadge, headerRight,
             </div>
           </div>
         )}
+      </div>
+    </div>
+  )
+}
+
+/* ---------- SIDEBAR ---------- */
+// Full-height right-edge slide-over — the "singular scalable component"
+// pattern for detail-on-click: a list row opens this instead of a centered
+// Modal, so the list stays visible/scrollable behind it and the same panel
+// can be reused from any row anywhere in the panel.
+export type SidebarProps = {
+  open: boolean
+  onClose: () => void
+  title: string
+  eyebrow?: ReactNode
+  headerRight?: ReactNode
+  children?: ReactNode
+  footer?: ReactNode
+  width?: number
+}
+
+export const Sidebar = ({ open, onClose, title, eyebrow, headerRight, children, footer, width = 520 }: SidebarProps) => {
+  const [show, setShow] = useState(false)
+  useEffect(() => {
+    if (!open) return
+    const raf = requestAnimationFrame(() => setShow(true))
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    const prev = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      cancelAnimationFrame(raf)
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prev
+      setShow(false) // reset so the slide-in replays next time this instance reopens
+    }
+  }, [open, onClose])
+  if (!open) return null
+  return (
+    <div onClick={onClose} style={{ position:'fixed', inset:0, background:'rgba(15,23,42,0.45)', zIndex:200,
+      display:'flex', justifyContent:'flex-end' }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width:`min(100%, ${width}px)`, height:'100%', background:'#fff', boxShadow:'-24px 0 60px rgba(15,23,42,0.25)',
+        display:'flex', flexDirection:'column', transform: show ? 'translateX(0)' : 'translateX(100%)',
+        transition:'transform 220ms cubic-bezier(.2,.7,.2,1)' }}>
+        <div style={{ padding:'16px 22px', borderBottom:'1px solid var(--slate-200)',
+          background:'linear-gradient(to right, var(--blue-50), #fff 60%)',
+          display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12, flexShrink:0 }}>
+          <div style={{ minWidth:0 }}>
+            {eyebrow && <div style={{ marginBottom:6 }}>{eyebrow}</div>}
+            <div style={{ fontSize:17, fontWeight:600, color:'var(--slate-900)', letterSpacing:-0.2 }}>{title}</div>
+          </div>
+          <div style={{ display:'flex', alignItems:'center', gap:8, flexShrink:0 }}>
+            {headerRight}
+            <button onClick={onClose} style={{ border:'none', background:'transparent', cursor:'pointer', color:'var(--slate-500)', padding:4, borderRadius:6, display:'inline-flex' }}>
+              <IconX size={18} />
+            </button>
+          </div>
+        </div>
+        <div style={{ flex:1, overflow:'auto' }}>{children}</div>
+        {footer && <div style={{ padding:'12px 22px', borderTop:'1px solid var(--slate-200)', background:'var(--slate-25)', display:'flex', justifyContent:'flex-end', gap:8, flexShrink:0 }}>{footer}</div>}
       </div>
     </div>
   )

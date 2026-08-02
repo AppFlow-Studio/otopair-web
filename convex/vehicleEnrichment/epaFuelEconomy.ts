@@ -399,31 +399,115 @@ function drivetrainSuffixes(drivetrain: string | null | undefined): string[] {
 }
 
 /**
- * EPA model names diverge from ours two ways: punctuation ("F-150" vs
- * "F150 …") and a baked-in drive suffix ("Crosstrek AWD", "Escape FWD" —
- * verified live Jul 2026). Candidates are tried in order:
- *   1. drive-suffixed names ("Crosstrek AWD") — FIRST, because when EPA lists
- *      both "X" and "X AWD" the bare name is the OTHER drivetrain's ratings,
- *      and matching it for an AWD config would be present-but-wrong;
- *   2. the exact name, then the hyphen-stripped variant.
- * The options endpoint is exact-match, so a wrong candidate can only return
- * empty — never a false positive. Deliberately NO fuzzy prefix matching
- * against the model menu: EPA splits one of our models into many drive/GVWR
- * variants with different MPG, and choosing among them would be a guess.
+ * Manufacturer AWD words EPA bakes into the MODEL NAME instead of using a
+ * generic "AWD" suffix. Verified live against /vehicle/menu/model, 2026-08-01:
+ * EPA lists "GLC300 4matic", "Atlas 4motion", never "GLC300 AWD".
+ *
+ * Porsche's AWD token is deliberately ABSENT. Porsche encodes drive in the
+ * model itself ("Carrera 4", "Carrera 4S"), so a bare "4" suffix does not
+ * merely miss — appended to a truncated base it SYNTHESISES A DIFFERENT REAL
+ * CAR ("911 Carrera" + "4" = "911 Carrera 4", 379 hp, when the vehicle is a
+ * Carrera 4S, 443 hp). An exact-match lookup cannot protect us from a
+ * candidate that is itself a valid other model; only not generating it can.
+ */
+const BRAND_AWD_TOKENS: Readonly<Record<string, readonly string[]>> = {
+  "mercedes-benz": ["4matic"],
+  volkswagen: ["4motion"],
+  audi: ["quattro"],
+  bmw: ["xDrive"],
+};
+
+/**
+ * EPA model names diverge from ours in four ways, all verified live:
+ *   1. punctuation ("F-150" vs "F150");
+ *   2. a baked-in drive suffix ("Crosstrek AWD", "Escape FWD");
+ *   3. a baked-in TRIM — the big one. EPA lists "X5 xDrive40i" and
+ *      "X5 xDrive50i" but NOTHING under "X5", so a bare-model query returns
+ *      null for most of the premium fleet. Measured 2026-08-01: bare-model
+ *      lookups resolved 0 of 6 audited vehicles;
+ *   4. a family-name mismatch, where our model is the family ("GLC-Class")
+ *      and EPA's model is what we store as the TRIM ("GLC300 4matic").
+ *
+ * ORDERING IS LOAD-BEARING, and there are two competing rules:
+ *
+ *   (a) Within one base, drive-suffixed names come FIRST: when EPA lists both
+ *       "RX 350" and "RX 350 AWD", the bare name is the OTHER drivetrain's
+ *       ratings, and taking it for an AWD config is present-but-wrong.
+ *   (b) Across bases, the FULL trim is exhausted before anything is
+ *       truncated. Truncating first and then appending a drive token is how
+ *       "911 Carrera 4S" became "911 Carrera 4" in the design probe.
+ *
+ * So: bases run outer (most specific first), suffixes inner.
+ *
+ * Still NO fuzzy prefix matching against the model menu — every candidate is
+ * an exact name, so a wrong one returns empty. The one class an exact lookup
+ * cannot defend against is a candidate that happens to name a different real
+ * model, which is what BRAND_AWD_TOKENS' Porsche omission exists to prevent.
  */
 export function epaModelNameCandidates(
   model: string,
   drivetrain?: string | null,
+  trim?: string | null,
+  make?: string | null,
 ): string[] {
   const exact = typeof model === "string" ? model.trim() : "";
   if (exact.length === 0) return [];
-  const dehyphenated = exact.replace(/-/g, "");
-  const bases = dehyphenated !== exact ? [exact, dehyphenated] : [exact];
+  const trimStr = typeof trim === "string" ? trim.trim() : "";
+  // A family model name ("GLC-Class", "3 Series") is a container, not a car —
+  // for those EPA's model is what we call the trim.
+  const isFamily = /-class$/i.test(exact) || /\bclass$/i.test(exact);
+  // First token of the trim, split on space AND hyphen: "GLC300-4M" → "GLC300",
+  // "350 Standard" → "350".
+  const trimHead = trimStr ? trimStr.replace(/-/g, " ").trim().split(/\s+/)[0] : "";
+
+  // A "base" is one semantic name, carrying its SPELLING variants together
+  // (hyphenated / dehyphenated) — those are the same candidate written two
+  // ways, so they share a rung and rule (a) applies across them as a group.
+  const spellings = (s: string): string[] => {
+    const d = s.replace(/-/g, "");
+    return d !== s ? [s, d] : [s];
+  };
+  const bases: string[][] = [];
+  const push = (b: string) => {
+    const v = b.trim();
+    if (!v) return;
+    const group = spellings(v);
+    if (!bases.some((g) => g[0] === group[0])) bases.push(group);
+  };
+
+  // Most specific first — see rule (b).
+  if (trimStr) push(`${exact} ${trimStr}`);
+  if (isFamily && trimStr) push(trimStr);
+  if (trimHead && trimHead !== trimStr) push(`${exact} ${trimHead}`);
+  if (isFamily && trimHead && trimHead !== trimStr) push(trimHead);
+  push(exact);
+
+  const brandTokens = make ? (BRAND_AWD_TOKENS[make.trim().toLowerCase()] ?? []) : [];
+  const generic = drivetrainSuffixes(drivetrain);
+  const isAwd = generic.includes("AWD") || generic.includes("4WD");
+  // EPA writes the same all-wheel layout as "4WD" on trucks and "AWD" on
+  // crossovers, while our decode stores whichever vPIC reported: a 2019 Lexus
+  // RX decodes "4WD" but EPA lists "RX 350 AWD", so a 4WD-only candidate set
+  // fell through to the bare "RX 350" — the FRONT-wheel-drive ratings.
+  // Scoped to the trim-aware path so the long-standing no-trim expectations
+  // (e.g. F-150 4WD) keep their exact candidate list.
+  const alias = trimStr
+    ? generic.includes("4WD")
+      ? ["AWD"]
+      : generic.includes("AWD")
+        ? ["4WD"]
+        : []
+    : [];
+  const suffixes = [...(isAwd ? brandTokens : []), ...generic, ...alias];
+
   const out: string[] = [];
-  for (const suffix of drivetrainSuffixes(drivetrain)) {
-    for (const base of bases) out.push(`${base} ${suffix}`);
+  for (const group of bases) {
+    for (const suffix of suffixes) {
+      for (const spelling of group) out.push(`${spelling} ${suffix}`); // rule (a)
+    }
+    for (const spelling of group) out.push(spelling);
   }
-  return [...out, ...bases];
+  return [...new Set(out)];
 }
 
 // ============================================================================
@@ -465,9 +549,10 @@ export async function fetchEpaMenuOptions(
   make: string,
   model: string,
   drivetrain?: string | null,
+  trim?: string | null,
 ): Promise<EpaMenuOption[] | null> {
   let sawFailure = false;
-  for (const candidate of epaModelNameCandidates(model, drivetrain)) {
+  for (const candidate of epaModelNameCandidates(model, drivetrain, trim, make)) {
     const url =
       `${EPA_API_BASE}/vehicle/menu/options` +
       `?year=${encodeURIComponent(String(year))}&make=${encodeURIComponent(make)}` +
@@ -662,7 +747,16 @@ export const refreshEpaForConfig = internalAction({
       };
 
       // ── Menu → unambiguous pick ──────────────────────────────────────
-      const options = await fetchEpaMenuOptions(year, make, model, attrs?.drivetrain ?? null);
+      // Trim is passed because EPA bakes it into the model name for most of
+      // the premium fleet ("X5 xDrive40i", "911 GT3 RS"); without it the
+      // bare-model query returns null and the join silently stores nothing.
+      const options = await fetchEpaMenuOptions(
+        year,
+        make,
+        model,
+        attrs?.drivetrain ?? null,
+        (labels as any)?.trim ?? null,
+      );
       if (options === null) {
         result.skippedReason = "menu_fetch_failed";
         return result; // fetch failed — existing row (if any) keeps its age

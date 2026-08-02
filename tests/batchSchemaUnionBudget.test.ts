@@ -37,8 +37,52 @@ import {
   type JsonSchema,
 } from "../convex/vehicleEnrichment/utils/batchSchemas";
 
-/** The API's documented ceiling on union-typed parameters in one schema. */
+/** The API's ceiling on union-typed parameters in one schema. */
 export const MAX_UNION_PARAMS = 16;
+
+/**
+ * The API's SECOND ceiling — on OPTIONAL parameters.
+ *
+ * Observed live 2026-08-01, when the flag was switched on and every batch
+ * request failed. Two distinct API errors came back, not one:
+ *
+ *   "Schemas contains too many parameters with union types (402 parameters
+ *    with type arrays or anyOf). This causes exponential compilation cost.
+ *    Reduce the number of nullable or union-typed parameters (limit: 16)."
+ *
+ *   "Schemas contains too many optional parameters (74 | 147), which would
+ *    make grammar compilation inefficient. Reduce the number of optional
+ *    parameters in your tool schemas (limit: 24)."
+ *
+ * This matters for the planned fix: the obvious migration — turn every
+ * nullable union into an OPTIONAL property — trades a union for an optional
+ * and walks straight into this second wall. A schema of ~130 fields cannot
+ * satisfy both ceilings by re-labelling leaves; it has to get structurally
+ * SMALLER (split into more, narrower requests).
+ */
+export const MAX_OPTIONAL_PARAMS = 24;
+
+/** Count properties that are declared but not listed in the parent's `required`. */
+export function countOptionalParams(schema: JsonSchema | null | undefined): number {
+  if (!schema || typeof schema !== "object") return 0;
+  let n = 0;
+  const props = (schema as any).properties;
+  if (props && typeof props === "object") {
+    const required = new Set<string>(
+      Array.isArray((schema as any).required) ? (schema as any).required : [],
+    );
+    for (const key of Object.keys(props)) if (!required.has(key)) n += 1;
+  }
+  for (const [key, val] of Object.entries(schema)) {
+    if (key === "required" || key === "enum") continue;
+    if (Array.isArray(val)) {
+      for (const v of val) n += countOptionalParams(v as JsonSchema);
+    } else if (val && typeof val === "object") {
+      n += countOptionalParams(val as JsonSchema);
+    }
+  }
+  return n;
+}
 
 /**
  * Count union-typed parameters in a schema tree.
@@ -146,6 +190,18 @@ describe("batch schema union budget (structured outputs)", () => {
   //     expect(countUnionParams(schema), name).toBeLessThanOrEqual(MAX_UNION_PARAMS);
   //   }
   // });
+
+  it("reports the OPTIONAL-parameter count against the second ceiling", () => {
+    const counts = schemas.map(([name, s]) => [name, countOptionalParams(s)] as const);
+    console.log(
+      "[optional-budget] " +
+        counts.map(([n, c]) => `${n}=${c}`).join("  ") +
+        `  (API ceiling ${MAX_OPTIONAL_PARAMS})`,
+    );
+    // Non-negative and computed for every schema; the live numbers that came
+    // back from the API on 2026-08-01 were 74 and 147 for the two 1A shapes.
+    for (const [, c] of counts) expect(c).toBeGreaterThanOrEqual(0);
+  });
 
   it("the VDB mapping schema (Haiku, small) is already within budget", () => {
     // Proof the counter is not simply reporting "everything is over" — the one

@@ -5489,6 +5489,146 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       }
     }
 
+    // ── Fitment verification, SECOND SWEEP (round 15b) ────────────────────
+    //
+    // The pass above runs BEFORE the role-resource repair, and that ordering
+    // is deliberate: verification deletes refuted parts, leaving a role empty,
+    // and role-resource then sources a RIVAL into it ("source a rival instead
+    // of deleting"). The consequence nobody had traced is that everything
+    // role-resource writes lands AFTER the only adversarial gate, and is
+    // therefore never checked.
+    //
+    // Round 15b measured the cost: the 2019 911 GT3 RS finalized with NINE of
+    // its ten parts written by role-resource — including the Cayenne brake
+    // pads `9Y0698151AN` / `9Y0698451AE`, which shipped priced, unflagged and
+    // quotable. It was not the 25-part cap (the car had 10 parts) and not the
+    // prompt (it names cross-model misfit explicitly): re-running the real
+    // verifier on that exact 10-part list refutes both pads 2/2, twice over.
+    // The gate simply never saw them.
+    //
+    // So: re-verify ONLY what role-resource wrote this run. Same verdict
+    // semantics as the first pass — "uncertain" never acts, catalog-attested
+    // and multi-source refutes soft-flag rather than delete.
+    const secondSweepRoles = new Set(
+      roleResourceErrors
+        .map((e) => /^role_resource:([^:]+):(?:written|rivaled)$/.exec(e)?.[1])
+        .filter((r): r is string => !!r),
+    );
+    if (
+      (process.env.PARTS_FITMENT_VERIFY ?? "1") !== "0" &&
+      !timedOut &&
+      secondSweepRoles.size > 0
+    ) {
+      try {
+        const freshFitments = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getPartFitments,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        const sweep: {
+          roleKey: string; oem: string; name: string; quantity: number | null;
+          observedTitle: string | null; support: number; catalogAttested: boolean;
+        }[] = [];
+        const seen = new Set<string>();
+        for (const f of freshFitments) {
+          const part: any = await ctx.runQuery(
+            internal.vehicleEnrichment.v3queries.getOemPartById,
+            { partId: (f as any).part_id },
+          );
+          const sub = part?.subcategory ?? "";
+          const oem = part?.oem_part_number ?? "";
+          if (!oem || oem.startsWith("OTOPAIR-UNIV")) continue;
+          if (!secondSweepRoles.has(sub) || seen.has(oem)) continue;
+          // Already adjudicated by the first pass — don't pay for it twice.
+          if ((f as any).refute_flagged === true) continue;
+          seen.add(oem);
+          const domains = Array.isArray((f as any).source_domains)
+            ? (f as any).source_domains.length
+            : 0;
+          sweep.push({
+            roleKey: sub,
+            oem,
+            name: part?.name ?? sub,
+            quantity: (f as any).quantity_needed ?? null,
+            observedTitle: part?.scraped_name ?? null,
+            support: domains > 0 ? domains : ((f as any).source_count ?? 1),
+            catalogAttested: hasOemCatalogDomain((f as any).source_domains ?? undefined),
+          });
+        }
+        if (sweep.length > 0) {
+          const verdicts2 = await verifyPartFitments(
+            {
+              year: args.year, make: args.make, model: args.model, trim: args.trim,
+              engineCode: vehicle.engineCode, displacement: args.displacement,
+              aspiration: allFields.turbo?.value === true ? "turbocharged" : undefined,
+              transmissionType:
+                (allFields.transmission_type?.value as string | null) ?? undefined,
+              cylinders: enginePicData?.cylinders ?? undefined,
+              engineManufacturer: enginePicData?.engine_manufacturer ?? undefined,
+              oilViscosity: (allFields.oil_viscosity?.value as string | null) ?? undefined,
+            },
+            sweep.slice(0, VERIFY_MAX_PARTS).map((c) => ({
+              roleKey: c.roleKey, oem: c.oem, name: c.name,
+              quantity: c.quantity, observedTitle: c.observedTitle,
+            })),
+          );
+          const refuted2 = verdicts2.filter((vd) => vd.verdict === "refuted");
+          console.log(
+            `[fitment-verify:2] ${sweep.length} role-resource part(s) checked: ` +
+              `${verdicts2.filter((v) => v.verdict === "confirmed").length} confirmed, ` +
+              `${refuted2.length} refuted, ` +
+              `${verdicts2.filter((v) => v.verdict === "uncertain").length} uncertain`,
+          );
+          // Observability: the first pass had NO persisted evidence of having
+          // run, so "gate found nothing" and "gate never ran" were
+          // indistinguishable in the audit — the same ambiguity that hid the
+          // batch-2 keystone bug. This tag makes the sweep queryable.
+          fitmentRefutedErrors.push(`fitment_verify_pass2:checked:${sweep.length}`);
+          const byOem = new Map(sweep.map((c) => [c.oem.toUpperCase(), c]));
+          const hard2 = refuted2.filter((r) => {
+            const c = byOem.get(r.oem.toUpperCase());
+            return (
+              (c?.support ?? 1) <= FITMENT_REFUTE_HARD_DELETE_MAX_SOURCES &&
+              !c?.catalogAttested
+            );
+          });
+          const soft2 = refuted2.filter((r) => !hard2.includes(r));
+          if (soft2.length > 0) {
+            console.warn(
+              `[fitment-verify:2] ${soft2.length} refuted part(s) KEPT (catalog-attested or multi-source) — flagged: ` +
+                soft2.map((r) => `${r.roleKey}:${r.oem}`).join(", "),
+            );
+            await ctx.runMutation(
+              internal.vehicleEnrichment.v3mutations.flagRefutedFitments,
+              {
+                vehicle_config_id: args.vehicleConfigId,
+                refuted: soft2.map((r) => ({ oem: r.oem, reason: r.reason })),
+              },
+            );
+          }
+          if (hard2.length > 0) {
+            console.warn(
+              `[fitment-verify:2] ${hard2.length} refuted part(s) REMOVED: ` +
+                hard2.map((r) => `${r.roleKey}:${r.oem}`).join(", "),
+            );
+            await ctx.runMutation(
+              internal.vehicleEnrichment.v3mutations.removeRefutedFitments,
+              {
+                vehicle_config_id: args.vehicleConfigId,
+                refuted: hard2.map((r) => ({ oem: r.oem, reason: r.reason })),
+              },
+            );
+          }
+          for (const r of refuted2) {
+            fitmentRefutedErrors.push(`fitment_refuted_pass2:${r.roleKey}:${r.oem}`);
+          }
+        }
+      } catch (e) {
+        // Non-fatal, but recorded — see the observability note above.
+        console.warn("[fitment-verify:2] sweep failed (non-fatal):", e);
+        fitmentRefutedErrors.push("fitment_verify_pass2:failed");
+      }
+    }
+
     // ── Transmission-fluid family gate (round-6, FLAG-ONLY) ───────────
     // The fitment verifier above cross-examines OEM PART numbers, but the
     // transmission fluid SPEC ("Dexron VI", "NS-2", "Mercon LV") lives in the

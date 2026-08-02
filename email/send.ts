@@ -817,6 +817,56 @@ export async function sendShopApplicationNotificationEmail(data: ShopApplication
 }
 
 /**
+ * Branded invite to a shop owner whose application was approved (Step 2 of the
+ * invite-based onboarding). The link carries a one-time 32-byte token (only its
+ * hash is stored server-side) and expires in 7 days.
+ */
+export async function sendShopOwnerInviteEmail({
+  email,
+  inviteUrl,
+  shopName,
+  ownerName,
+}: {
+  email: string;
+  inviteUrl: string;
+  shopName: string;
+  ownerName?: string;
+}) {
+  try {
+    const hi = ownerName ? `Hi ${escapeHtml(ownerName.trim().split(/\s+/)[0])},` : "Hi there,";
+    const body = `
+      <p style="margin:0 0 8px;">${hi}</p>
+      <p style="margin:0 0 24px;">Good news — your application to partner with Otopair has been
+      approved. You can now claim <strong>${escapeHtml(shopName)}</strong> and set up your shop as
+      the <strong>Shop Owner</strong>.</p>
+      <table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 8px;">
+        <tr><td align="center">
+          <a href="${escapeHtml(inviteUrl)}"
+             style="display:inline-block;padding:14px 32px;background:${BRAND_GRADIENT};color:#fff;text-decoration:none;border-radius:8px;font-weight:600;font-size:16px;box-shadow:0 4px 14px rgba(13,114,255,0.3);">
+            Claim your shop
+          </a>
+        </td></tr>
+      </table>
+      <p style="margin:16px 0 0;color:#6b7280;font-size:13px;text-align:center;">
+        This link is unique to you and expires in 7 days.</p>
+      <p style="margin:20px 0 0;color:#6b7280;font-size:14px;line-height:1.6;">
+        If the button doesn't work, copy and paste this link into your browser:<br/>
+        <a href="${escapeHtml(inviteUrl)}" style="color:#0d72ff;word-break:break-all;">${escapeHtml(inviteUrl)}</a>
+      </p>`;
+    const result = await resend.emails.send({
+      from: "Otopair <info@otopair.com>",
+      to: email,
+      subject: `You're approved — claim ${shopName} on Otopair`,
+      html: brandedShellWithLogo("You're approved", body),
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    console.error("Error sending shop owner invite email:", error);
+    return { success: false, error };
+  }
+}
+
+/**
  * Send notification email to company when someone joins waitlist
  */
 export async function sendWaitlistNotificationEmail(data: WaitlistSignupData) {

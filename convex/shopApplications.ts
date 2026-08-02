@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { requireDirector, logAudit } from "./directorGate";
 
 // Public intake (Step 1 of the invite-based shop onboarding flow). The API
 // route has already validated fields, lowercased the email, and confirmed no
@@ -43,24 +44,63 @@ export const submit = mutation({
   },
 });
 
-// Reserved for Step 2 (admin queue / dedupe reads).
+// Admin-only reads (director session gated) — these expose applicant PII, so
+// every caller must present a valid director session token.
 export const getByEmail = query({
-  args: { business_email: v.string() },
-  handler: async (ctx, args) =>
-    ctx.db
+  args: { token: v.string(), business_email: v.string() },
+  handler: async (ctx, args) => {
+    await requireDirector(ctx, args.token);
+    return ctx.db
       .query("shop_applications")
       .withIndex("by_business_email", (q) =>
         q.eq("business_email", args.business_email.trim().toLowerCase()),
       )
-      .first(),
+      .first();
+  },
 });
 
 export const listByStatus = query({
-  args: { status: v.string() },
-  handler: async (ctx, args) =>
-    ctx.db
+  args: { token: v.string(), status: v.string() },
+  handler: async (ctx, args) => {
+    await requireDirector(ctx, args.token);
+    return ctx.db
       .query("shop_applications")
       .withIndex("by_status", (q) => q.eq("status", args.status))
       .order("desc")
-      .collect(),
+      .collect();
+  },
+});
+
+// Admin rejects a pending application. Gated (shops.write).
+export const reject = mutation({
+  args: {
+    token: v.string(),
+    applicationId: v.id("shop_applications"),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireDirector(ctx, args.token, "shops.write");
+    const application = await ctx.db.get(args.applicationId);
+    if (!application) throw new Error("Application not found.");
+    if (application.status !== "pending_review") {
+      throw new Error(
+        `Application is ${application.status}, not pending_review — cannot reject.`,
+      );
+    }
+    const now = Date.now();
+    await ctx.db.patch(args.applicationId, {
+      status: "rejected",
+      rejection_reason: args.reason,
+      reviewed_at: now,
+      reviewed_by_name: actor.name,
+      updated_at: now,
+    });
+    await logAudit(ctx, actor, {
+      entity_type: "shop_application",
+      entity_id: String(args.applicationId),
+      action: "rejected",
+      detail: `Rejected "${application.shop_legal_name}"${args.reason ? ` — ${args.reason}` : ""}.`,
+    });
+    return { ok: true as const };
+  },
 });

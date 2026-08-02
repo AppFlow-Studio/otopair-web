@@ -14,6 +14,10 @@ const isPublicRoute = createRouteMatcher([
   "/partner-with-us(.*)",
   "/apply(.*)",
   "/api/applications(.*)",
+  // Owner-claim flow: the claim landing previews before auth; verify is public;
+  // accept self-gates via Clerk auth() inside the route.
+  "/invite(.*)",
+  "/api/invites(.*)",
   // Flagship marketing hero — VIN decode + ElevenLabs token are public.
   "/api/vin(.*)",
   "/api/elevenlabs(.*)",

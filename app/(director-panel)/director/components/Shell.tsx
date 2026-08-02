@@ -18,6 +18,7 @@ const NAV_GROUPS: NavGroup[] = [
   ] },
   { section:'Marketplace', items: [
     { id:'shops',        label:'Shops',        Icon:IconShop },
+    { id:'applications', label:'Applications', Icon:IconShop },
     { id:'bookings',     label:'Bookings',     Icon:IconCalendar },
     { id:'reviews',      label:'Reviews',      Icon:IconStar,    badge:'reviews' },
   ] },

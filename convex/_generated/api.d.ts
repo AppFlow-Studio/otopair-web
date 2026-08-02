@@ -322,6 +322,7 @@ import type * as services_verification from "../services/verification.js";
 import type * as shopApplications from "../shopApplications.js";
 import type * as shopCustomers from "../shopCustomers.js";
 import type * as shopDisputes from "../shopDisputes.js";
+import type * as shopInvites from "../shopInvites.js";
 import type * as shopInvoices from "../shopInvoices.js";
 import type * as shopLaborRates from "../shopLaborRates.js";
 import type * as shopPaymentRefunds from "../shopPaymentRefunds.js";
@@ -814,6 +815,7 @@ declare const fullApi: ApiFromModules<{
   shopApplications: typeof shopApplications;
   shopCustomers: typeof shopCustomers;
   shopDisputes: typeof shopDisputes;
+  shopInvites: typeof shopInvites;
   shopInvoices: typeof shopInvoices;
   shopLaborRates: typeof shopLaborRates;
   shopPaymentRefunds: typeof shopPaymentRefunds;

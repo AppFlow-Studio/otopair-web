@@ -2163,6 +2163,46 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_clerk_invitation_id", ["clerk_invitation_id"]),
 
+  // B2B shop onboarding intake (Step 1 of the invite-based flow). A public
+  // /apply submission lands here as pending_review. State machine:
+  //   pending_review -> invited -> onboarding -> active   (+ rejected at any point)
+  // Step 1 only ever WRITES pending_review. reviewer_* / invite_token /
+  // invited_shop_id are declared optional now so later steps PATCH, not migrate.
+  shop_applications: defineTable({
+    // --- Applicant-supplied (Step 1) ---
+    shop_legal_name: v.string(),
+    owner_full_name: v.string(),
+    business_email: v.string(), // stored trimmed + lowercased
+    phone: v.string(), // stored digits-normalized (see route)
+    street_address: v.string(),
+
+    // --- Capacity (NOT collected at apply; shop sets during onboarding) ---
+    bays_count: v.optional(v.number()),
+    technicians_count: v.optional(v.number()),
+
+    // --- Lifecycle ---
+    status: v.string(), // "pending_review" | "invited" | "onboarding" | "active" | "rejected"
+
+    // --- Reviewer / later-step fields (all optional; unused in Step 1) ---
+    reviewed_by: v.optional(v.id("users")),
+    reviewed_at: v.optional(v.number()),
+    review_note: v.optional(v.string()),
+    rejection_reason: v.optional(v.string()),
+    invite_token: v.optional(v.string()),
+    invited_at: v.optional(v.number()),
+    invited_shop_id: v.optional(v.id("shops")),
+
+    // --- Provenance / audit ---
+    source: v.optional(v.string()), // "partner-with-us" | "apply-direct"
+    user_agent: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_business_email", ["business_email"]) // duplicate-pending guard
+    .index("by_status", ["status"]) // future admin review queue
+    .index("by_invite_token", ["invite_token"]) // reserved: accept-invite lookup
+    .index("by_created_at", ["created_at"]),
+
   // [U-D] Block time types for shop scheduling
   block_time_types: defineTable({
     shop_id: v.id("shops"),

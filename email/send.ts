@@ -740,6 +740,82 @@ export async function sendInvoiceEmail({
   }
 }
 
+interface ShopApplicationData {
+  ownerFullName: string;
+  shopLegalName: string;
+  businessEmail: string;
+  phone: string;
+  streetAddress: string;
+}
+
+/**
+ * Confirmation receipt to a shop that applied to partner with Otopair (Step 1
+ * of the invite-based onboarding flow). Carries NO claim token / CTA — it only
+ * sets the expectation that the application is under review and, if approved, a
+ * private invite follows. Uses the verified `info@otopair.com` sender.
+ */
+export async function sendShopApplicationReceiptEmail(data: ShopApplicationData) {
+  try {
+    const first = escapeHtml(data.ownerFullName.trim().split(/\s+/)[0] || "there");
+    const body = `
+      <p style="margin:0 0 8px;">Hi ${first},</p>
+      <p style="margin:0 0 20px;">Thanks for applying to join Otopair as a partner shop.
+      We've received your application for <strong>${escapeHtml(data.shopLegalName)}</strong>
+      and our team is reviewing it now.</p>
+      <table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 20px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;">
+        <tr><td style="padding:16px 20px;">
+          <p style="margin:0 0 4px;color:#6b7280;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Application summary</p>
+          <p style="margin:8px 0 0;color:#111827;font-size:14px;font-weight:600;">${escapeHtml(data.shopLegalName)}</p>
+          <p style="margin:2px 0 0;color:#6b7280;font-size:13px;">${escapeHtml(data.streetAddress)}</p>
+        </td></tr>
+      </table>
+      <p style="margin:0 0 8px;color:#6b7280;font-size:14px;">
+        No action needed right now — if approved, we'll email you a private invite to set up your shop.</p>`;
+    const result = await resend.emails.send({
+      from: "Otopair <info@otopair.com>",
+      to: data.businessEmail,
+      subject: "We received your Otopair partner application",
+      html: brandedShell("Application received", body),
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    console.error("Error sending shop application receipt email:", error);
+    return { success: false, error };
+  }
+}
+
+/**
+ * Internal alert to the Otopair team when a new partner application lands.
+ * Best-effort (mirrors the waitlist notification); never blocks the applicant
+ * response. Goes to COMPANY_EMAIL (defaults to team@otopair.com).
+ */
+export async function sendShopApplicationNotificationEmail(data: ShopApplicationData) {
+  try {
+    const companyEmail = process.env.COMPANY_EMAIL || "team@otopair.com";
+    const body = `
+      <p style="margin:0 0 16px;">New partner-shop application submitted.</p>
+      <table role="presentation" style="width:100%;border-collapse:collapse;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;">
+        <tr><td style="padding:20px;">
+          <p style="margin:0 0 6px;font-size:13px;color:#111827;"><strong>Shop:</strong> ${escapeHtml(data.shopLegalName)}</p>
+          <p style="margin:0 0 6px;font-size:13px;color:#111827;"><strong>Owner:</strong> ${escapeHtml(data.ownerFullName)}</p>
+          <p style="margin:0 0 6px;font-size:13px;color:#111827;"><strong>Email:</strong> ${escapeHtml(data.businessEmail)}</p>
+          <p style="margin:0 0 6px;font-size:13px;color:#111827;"><strong>Phone:</strong> ${escapeHtml(data.phone)}</p>
+          <p style="margin:0;font-size:13px;color:#111827;"><strong>Address:</strong> ${escapeHtml(data.streetAddress)}</p>
+        </td></tr>
+      </table>`;
+    const result = await resend.emails.send({
+      from: "Otopair <info@otopair.com>",
+      to: companyEmail,
+      subject: `New partner application: ${data.shopLegalName}`,
+      html: brandedShell("New partner application", body),
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    console.error("Error sending shop application notification email:", error);
+    return { success: false, error };
+  }
+}
+
 /**
  * Send notification email to company when someone joins waitlist
  */

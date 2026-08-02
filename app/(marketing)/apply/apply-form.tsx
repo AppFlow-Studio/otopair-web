@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { CheckCircle2, ChevronLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PopIn, serif } from "@/components/flagship/landing/reveal";
+import { useAddressAutocomplete } from "./use-address-autocomplete";
 
 const STEPS = [
   { key: "shop", title: "Your shop", helper: "The basics about your business." },
@@ -27,6 +28,7 @@ export default function ApplyForm() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const address = useAddressAutocomplete((value) => setStreetAddress(value));
 
   function validateStep(s: number) {
     if (s === 0) {
@@ -227,19 +229,63 @@ export default function ApplyForm() {
                     )}
 
                     {step === 2 && (
-                      <div>
+                      <div className="relative">
                         <label htmlFor="streetAddress" className={labelClass}>
                           Street address
                         </label>
                         <input
                           id="streetAddress"
                           type="text"
-                          autoComplete="street-address"
+                          autoComplete="off"
+                          role="combobox"
+                          aria-expanded={address.suggestions.length > 0}
+                          aria-autocomplete="list"
                           className={inputClass}
-                          placeholder="123 Main St, Staten Island, NY 10301"
+                          placeholder="Start typing your shop's address…"
                           value={streetAddress}
-                          onChange={(e) => setStreetAddress(e.target.value)}
+                          onChange={(e) => {
+                            const value = e.target.value;
+                            setStreetAddress(value);
+                            address.search(value);
+                          }}
+                          onKeyDown={address.handleKeyDown}
+                          onBlur={() => window.setTimeout(() => address.clear(), 150)}
                         />
+                        {(address.loading || address.suggestions.length > 0) && (
+                          <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-[#1a1a1a]/12 bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)]">
+                            {address.loading && address.suggestions.length === 0 ? (
+                              <div className="flex items-center gap-2 px-4 py-3 text-[14px] text-[#777169]">
+                                <Loader2 className="size-4 animate-spin" />
+                                Looking up addresses…
+                              </div>
+                            ) : (
+                              address.suggestions.map((entry, index) => (
+                                <button
+                                  key={entry.id}
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => void address.choose(entry)}
+                                  onMouseEnter={() => address.setHighlight(index)}
+                                  className={`block w-full border-b border-[#1a1a1a]/8 px-4 py-3 text-left transition-colors last:border-b-0 hover:bg-[#f5f5f3] ${
+                                    address.highlight === index ? "bg-[#f5f5f3]" : ""
+                                  }`}
+                                >
+                                  <div className="text-[14px] font-medium text-[#1a1a1a]">
+                                    {entry.primaryText}
+                                  </div>
+                                  {entry.secondaryText && (
+                                    <div className="mt-0.5 text-[12px] text-[#777169]">
+                                      {entry.secondaryText}
+                                    </div>
+                                  )}
+                                </button>
+                              ))
+                            )}
+                          </div>
+                        )}
+                        <p className="mt-1.5 text-[13px] text-[#777169]">
+                          Start typing and pick your address from the list.
+                        </p>
                       </div>
                     )}
                   </motion.div>

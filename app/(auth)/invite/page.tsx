@@ -3,7 +3,7 @@
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useUser } from "@clerk/nextjs";
+import { useAuth, useUser } from "@clerk/nextjs";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -41,7 +41,8 @@ function InviteCard() {
   const searchParams = useSearchParams();
   const token = searchParams.get("token") ?? "";
   const auto = searchParams.get("auto") === "1";
-  const { isLoaded: userLoaded, isSignedIn } = useUser();
+  const { isLoaded: userLoaded, isSignedIn, user } = useUser();
+  const { getToken } = useAuth();
 
   const [state, setState] = useState<VerifyState>({ phase: "loading" });
   const [accepting, setAccepting] = useState(false);
@@ -91,7 +92,18 @@ function InviteCard() {
       });
       const data = await res.json();
       if (res.ok && data?.success) {
-        router.push(data.redirectTo ?? "/shop/setup");
+        // The accept route just PATCHed our Clerk role server-side, but the
+        // active session JWT still carries the pre-claim metadata — a role-gated
+        // route (/shop) would bounce to /shop-only. Reload the user and mint a
+        // fresh token (with the new shop_owner claim), then hard-navigate so
+        // middleware re-reads the updated session.
+        try {
+          await user?.reload();
+          await getToken({ skipCache: true });
+        } catch {
+          /* refresh best-effort — worst case the portal refreshes the token itself */
+        }
+        window.location.assign(data.redirectTo ?? "/shop/setup");
       } else {
         setError(data?.error ?? "Something went wrong. Please try again.");
         setAccepting(false);
@@ -100,7 +112,7 @@ function InviteCard() {
       setError("Something went wrong. Please try again.");
       setAccepting(false);
     }
-  }, [isSignedIn, router, token, userLoaded]);
+  }, [isSignedIn, router, token, userLoaded, user, getToken]);
 
   // After returning from sign-up (auto=1) and signed in, finish automatically.
   useEffect(() => {

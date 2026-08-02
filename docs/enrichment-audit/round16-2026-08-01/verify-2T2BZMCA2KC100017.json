@@ -5,7 +5,7 @@
       "pipeline_extraction",
       "rockauto"
     ],
-    "claim_rows": 11,
+    "claim_rows": 13,
     "families_seen": [
       "aftermarket_catalog",
       "web_search"
@@ -40,23 +40,23 @@
     "brake_fluid_capacity_oz": null,
     "brake_fluid_type": "DOT 3",
     "coolant_capacity_qts": 9.5,
-    "coolant_type": "Toyota Super Long Life Coolant (SLLC) — pink, HOAT",
+    "coolant_type": "Toyota Super Long Life Coolant (SLLC)",
     "oil_capacity_qts": 5.7,
     "oil_viscosity": "0W-20",
     "ps_fluid_capacity_oz": null,
     "ps_fluid_type": null,
-    "trans_fluid_capacity_qts": 3.7
+    "trans_fluid_capacity_qts": 3
   },
   "headline": {
     "epa_joined": true,
     "field_corroboration": "0%",
     "fields_with_claims": 10,
-    "fitment_multi_source": "10%",
+    "fitment_multi_source": "15%",
     "has_manual": true,
-    "months_fill": "39%",
-    "parts_quotable": "9/10",
+    "months_fill": "50%",
+    "parts_quotable": "9/13",
     "rotor_minimums": 1,
-    "status": "pending"
+    "status": "complete"
   },
   "identity_coherence": {
     "aspiration": null,
@@ -74,17 +74,17 @@
     "plugs_match_cylinders": true,
     "spark_plug_quantity": 6,
     "timing_system": "chain",
-    "trans_fluid_type": "Toyota ATF WS (World Standard)",
+    "trans_fluid_type": "Toyota ATF WS",
     "transmission_type": "automatic"
   },
   "intervals": {
     "by_provenance": {
-      "default_fallback": 11,
+      "default_fallback": 10,
       "deterministic": 8,
-      "enriched": 3,
+      "enriched": 4,
       "vdb_schedule": 6
     },
-    "months_fill": "39%",
+    "months_fill": "50%",
     "rows": [
       {
         "bookable": false,
@@ -97,7 +97,7 @@
       {
         "bookable": true,
         "miles": 60000,
-        "months": null,
+        "months": 48,
         "provenance": "default_fallback",
         "service": "battery_replacement",
         "status": "estimated"
@@ -120,7 +120,7 @@
       },
       {
         "bookable": true,
-        "miles": null,
+        "miles": 40000,
         "months": 48,
         "provenance": "enriched",
         "service": "brake_pad_replacement",
@@ -217,7 +217,7 @@
       {
         "bookable": true,
         "miles": 70000,
-        "months": null,
+        "months": 72,
         "provenance": "default_fallback",
         "service": "rotor_replacement",
         "status": "estimated"
@@ -257,7 +257,7 @@
       {
         "bookable": true,
         "miles": 50000,
-        "months": null,
+        "months": 60,
         "provenance": "default_fallback",
         "service": "tire_replacement",
         "status": "estimated"
@@ -272,9 +272,9 @@
       },
       {
         "bookable": false,
-        "miles": null,
+        "miles": 30000,
         "months": null,
-        "provenance": "default_fallback",
+        "provenance": "enriched",
         "service": "transfer_case_service",
         "status": "estimated"
       },
@@ -312,8 +312,8 @@
       }
     ],
     "total": 28,
-    "with_miles": 13,
-    "with_months": 11
+    "with_miles": 15,
+    "with_months": 14
   },
   "labor": {
     "by_source": {
@@ -465,8 +465,8 @@
     "total": 28
   },
   "parts": {
-    "corroborated_2plus_sources": 1,
-    "corroboration_rate": "10%",
+    "corroborated_2plus_sources": 2,
+    "corroboration_rate": "15%",
     "rows": [
       {
         "best_price": 19.71,
@@ -483,7 +483,7 @@
           "lexus.oempartsonline.com"
         ],
         "price_rows": 6,
-        "refute_flagged": false,
+        "refute_flagged": true,
         "role": "air_filter",
         "scraped_name": "Air Filter",
         "service": "filter_replacement",
@@ -492,8 +492,31 @@
         "source_domains": [
           "lexus.oempartsonline.com"
         ],
-        "triangle_ok": true,
+        "triangle_ok": false,
         "trusted_price_rows": 6
+      },
+      {
+        "best_price": 15.07,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "17801YZZ11",
+        "price_domains": [
+          "toyotaparts.ourismantoyotaofrichmond.com",
+          "parts.lexus.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "air_filter",
+        "scraped_name": "Engine Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.lexus.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
       },
       {
         "best_price": 12,
@@ -529,7 +552,7 @@
           "parts.molletoyota.com"
         ],
         "price_rows": 2,
-        "refute_flagged": false,
+        "refute_flagged": true,
         "role": "battery",
         "scraped_name": "Vehicle Battery",
         "service": "battery_replacement",
@@ -538,8 +561,28 @@
         "source_domains": [
           "parts.lexus.com"
         ],
-        "triangle_ok": true,
+        "triangle_ok": false,
         "trusted_price_rows": 2
+      },
+      {
+        "best_price": null,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "28800-38080",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "battery",
+        "scraped_name": "Vehicle Battery",
+        "service": "battery_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "lexuspartsnow.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 0
       },
       {
         "best_price": 19.71,
@@ -566,6 +609,30 @@
         ],
         "triangle_ok": true,
         "trusted_price_rows": 5
+      },
+      {
+        "best_price": 20.16,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "00272-SLLC2",
+        "price_domains": [
+          "parts.kendalltoyota.com",
+          "parts.camelbacktoyota.com",
+          "parts.capovalleytoyota.com"
+        ],
+        "price_rows": 4,
+        "refute_flagged": false,
+        "role": "coolant",
+        "scraped_name": "Toyota Super Long Life Coolant",
+        "service": "coolant_flush",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "autoparts.toyota.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
       },
       {
         "best_price": 92.88,
@@ -631,7 +698,7 @@
         "scraped_name": "Oil Filter",
         "service": "oil_change",
         "service_role": "core",
-        "source_count": 2,
+        "source_count": 4,
         "source_domains": [
           "lexus.oempartsonline.com"
         ],
@@ -655,7 +722,7 @@
         "scraped_name": "Engine Oil Filter Element",
         "service": "oil_change",
         "service_role": "core",
-        "source_count": 1,
+        "source_count": 2,
         "source_domains": [
           "parts.lexus.com"
         ],
@@ -710,8 +777,23 @@
         "trusted_price_rows": 2
       }
     ],
-    "total": 10,
+    "total": 13,
     "triangle_broken": [
+      {
+        "oem": "17801-F0050",
+        "role": "air_filter",
+        "why": "refute_flagged"
+      },
+      {
+        "oem": "2880028100",
+        "role": "battery",
+        "why": "refute_flagged"
+      },
+      {
+        "oem": "28800-38080",
+        "role": "battery",
+        "why": "no_trusted_price"
+      },
       {
         "oem": "90915-YZZN1",
         "role": "oil_filter",
@@ -719,7 +801,7 @@
       }
     ],
     "triangle_ok": 9,
-    "with_observed_title": 10
+    "with_observed_title": 13
   },
   "rotor": {
     "front_label": null,
@@ -733,33 +815,119 @@
     "source_url": null
   },
   "run": {
-    "applicable_fill_rate": null,
-    "duration_min": null,
+    "applicable_fill_rate": 42,
+    "duration_min": 30.6,
     "error_tags": {
-      "batch1_submission_failed": 1
+      "applicable_services_empty_fallback_used": 1,
+      "axle_pair_gap": 1,
+      "fitment_refute_kept_multisource": 3,
+      "fitment_verify_pass2": 1,
+      "role_resource": 2
     },
-    "field_gap_count": 0,
-    "fill_rate": null,
-    "quotability": null,
-    "runId": "tx755vww0n1azfkfmedv10v1g18bn0c8",
-    "sanity_flag_count": 0,
-    "sanity_flags_by_stage": {},
-    "status": "failed",
-    "tokens_in": null,
-    "tokens_out": null,
+    "field_gap_count": 79,
+    "fill_rate": 88,
+    "quotability": {
+      "pct": 0.92,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx77q86nhgkpschjckpk527c2d8bpbfz",
+    "sanity_flag_count": 7,
+    "sanity_flags_by_stage": {
+      "(pre-finalize)": 1,
+      "claim_ledger": 1,
+      "completion_gate": 1,
+      "fitment_refute": 3,
+      "interval_provenance": 1
+    },
+    "status": "complete",
+    "tokens_in": 22576,
+    "tokens_out": 20199,
     "trigger": "new_vehicle",
     "version": "v8",
-    "web_searches": null
+    "web_searches": 31
   },
   "vehicle": {
     "chassis_code": null,
-    "confidence_avg": 0.8579462102689491,
+    "confidence_avg": 0.845427901524033,
     "configId": "w576hkrhqaybmvsd4zxr5w8zq58bnemh",
     "config_key": "2019_lexus_rx_350_2gr_fks",
-    "drivetrain": "AWD",
-    "enrichment_status": "pending",
-    "fill_rate": 84,
-    "last_enriched_at": 1785611905951,
+    "drivetrain": "4WD",
+    "enrichment_status": "complete",
+    "fill_rate": 89,
+    "last_enriched_at": 1785686425653,
     "make": "Lexus",
     "model": "RX",
     "na_role_keys": [],

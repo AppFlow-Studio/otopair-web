@@ -3,14 +3,14 @@
     "adapters_seen": [
       "pipeline_extraction"
     ],
-    "claim_rows": 5,
+    "claim_rows": 8,
     "families_seen": [
       "web_search"
     ],
-    "fields_conflict_tie": 0,
-    "fields_contested": 0,
+    "fields_conflict_tie": 1,
+    "fields_contested": 1,
     "fields_multi_family_agreement": 0,
-    "fields_single_source": 5,
+    "fields_single_source": 4,
     "fields_with_claims": 5
   },
   "external_joins": {
@@ -31,21 +31,21 @@
       "file_id": null,
       "kind": "unknown",
       "oem": true,
-      "pages": null,
-      "url": "https://www.mbusa.com/content/dam/mb-nafta/us/brochures/pdf/MY20-GLC_031820.pdf"
+      "pages": 58,
+      "url": "https://www.mbusa.com/content/dam/mb-nafta/us/owners/manuals/2020/Operators/2020_GLC_AMG_OM.pdf"
     },
     "recalls_open": 0
   },
   "fluids_and_capacities": {
-    "brake_fluid_capacity_oz": null,
+    "brake_fluid_capacity_oz": 34,
     "brake_fluid_type": "DOT 4",
-    "coolant_capacity_qts": 11.83,
-    "coolant_type": "MB 325.0 (OAT, pink/red)",
+    "coolant_capacity_qts": 7.6,
+    "coolant_type": "MB-Approval 310.1 (OAT, pink/red — e.g. Zerex G-40 or MB genuine)",
     "oil_capacity_qts": 6.34,
     "oil_viscosity": "0W-20",
     "ps_fluid_capacity_oz": null,
     "ps_fluid_type": null,
-    "trans_fluid_capacity_qts": 5
+    "trans_fluid_capacity_qts": 8.5
   },
   "headline": {
     "epa_joined": true,
@@ -53,10 +53,10 @@
     "fields_with_claims": 5,
     "fitment_multi_source": "0%",
     "has_manual": false,
-    "months_fill": "39%",
+    "months_fill": "50%",
     "parts_quotable": "2/2",
     "rotor_minimums": 0,
-    "status": "pending"
+    "status": "partial"
   },
   "identity_coherence": {
     "aspiration": "turbo",
@@ -74,16 +74,16 @@
     "plugs_match_cylinders": true,
     "spark_plug_quantity": 4,
     "timing_system": "chain",
-    "trans_fluid_type": "MB 236.17 ATF (9G-Tronic 725.0)",
+    "trans_fluid_type": "MB 236.17 (9G-Tronic 725.0 ATF)",
     "transmission_type": "automatic"
   },
   "intervals": {
     "by_provenance": {
-      "default_fallback": 10,
+      "default_fallback": 9,
       "deterministic": 8,
-      "enriched": 10
+      "enriched": 11
     },
-    "months_fill": "39%",
+    "months_fill": "50%",
     "rows": [
       {
         "bookable": false,
@@ -96,7 +96,7 @@
       {
         "bookable": true,
         "miles": 60000,
-        "months": null,
+        "months": 48,
         "provenance": "default_fallback",
         "service": "battery_replacement",
         "status": "estimated"
@@ -216,16 +216,16 @@
       {
         "bookable": true,
         "miles": 70000,
-        "months": null,
+        "months": 72,
         "provenance": "default_fallback",
         "service": "rotor_replacement",
         "status": "estimated"
       },
       {
         "bookable": false,
-        "miles": 60000,
+        "miles": 100000,
         "months": 72,
-        "provenance": "default_fallback",
+        "provenance": "enriched",
         "service": "serpentine_belt",
         "status": "estimated"
       },
@@ -256,7 +256,7 @@
       {
         "bookable": true,
         "miles": 50000,
-        "months": null,
+        "months": 60,
         "provenance": "default_fallback",
         "service": "tire_replacement",
         "status": "estimated"
@@ -312,7 +312,7 @@
     ],
     "total": 28,
     "with_miles": 15,
-    "with_months": 11
+    "with_months": 14
   },
   "labor": {
     "by_source": {
@@ -530,33 +530,143 @@
     "source_url": null
   },
   "run": {
-    "applicable_fill_rate": null,
-    "duration_min": null,
+    "applicable_fill_rate": 40,
+    "duration_min": 15.6,
     "error_tags": {
-      "batch1_submission_failed": 1
+      "applicable_services_empty_fallback_used": 1,
+      "quotability": 1,
+      "role_resource": 9,
+      "rotor_min": 2,
+      "sanity": 1
     },
-    "field_gap_count": 0,
-    "fill_rate": null,
-    "quotability": null,
-    "runId": "tx7cc208nzejy3ng6qcnhcxvfs8bnm3t",
-    "sanity_flag_count": 0,
-    "sanity_flags_by_stage": {},
-    "status": "failed",
-    "tokens_in": null,
-    "tokens_out": null,
+    "field_gap_count": 90,
+    "fill_rate": 78,
+    "quotability": {
+      "pct": 0.42,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "battery"
+          ],
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "missing_roles": [
+            "front_brake_pad",
+            "rear_brake_pad"
+          ],
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "coolant"
+          ],
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "missing_roles": [
+            "cabin_filter"
+          ],
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "missing_roles": [
+            "front_rotor",
+            "rear_rotor",
+            "front_brake_pad",
+            "rear_brake_pad"
+          ],
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "spark_plug"
+          ],
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "missing_roles": [
+            "atf_fluid"
+          ],
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx794g8hfm1y9yyccnv2yhdds58bp15b",
+    "sanity_flag_count": 4,
+    "sanity_flags_by_stage": {
+      "(pre-finalize)": 1,
+      "claim_ledger": 1,
+      "completion_gate": 1,
+      "interval_provenance": 1
+    },
+    "status": "complete",
+    "tokens_in": 22148,
+    "tokens_out": 18491,
     "trigger": "new_vehicle",
     "version": "v8",
-    "web_searches": null
+    "web_searches": 38
   },
   "vehicle": {
     "chassis_code": "X253",
-    "confidence_avg": 0.8247035573122533,
+    "confidence_avg": 0.8379458794587946,
     "configId": "w571v8g2whhn708xqfe47y896h8bmgn7",
     "config_key": "2020_mercedes_benz_glc_class_glc300_4m_m264",
     "drivetrain": "AWD",
-    "enrichment_status": "pending",
-    "fill_rate": 77,
-    "last_enriched_at": 1785609156819,
+    "enrichment_status": "partial",
+    "fill_rate": 78,
+    "last_enriched_at": 1785685468977,
     "make": "MERCEDES-BENZ",
     "model": "GLC-Class",
     "na_role_keys": [],

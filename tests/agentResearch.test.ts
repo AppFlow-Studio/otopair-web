@@ -183,3 +183,78 @@ describe("roleClaimFrom — the claim boundary", () => {
     expect(roleClaimFrom(null, "k", blocked, 1)).toBeNull();
   });
 });
+
+// ─── never_found qualification ───────────────────────────────────
+//
+// Only a role the deterministic path POSITIVELY EXHAUSTED earns a paid
+// research call. The other outcomes mean different things, and treating them
+// alike would either waste money or re-find a rejected number.
+
+/** Mirrors the regex the pipeline uses to select exhausted roles. */
+function exhaustedRoles(errors: string[]): string[] {
+  return [...new Set(
+    errors
+      .map((e) => /^role_resource(?:_pass2)?:([^:]+):never_found$/.exec(e)?.[1])
+      .filter((r): r is string => !!r),
+  )];
+}
+
+describe("only `never_found` roles qualify for paid research", () => {
+  it("selects never_found from both the first pass and the pass-2 repair", () => {
+    expect(exhaustedRoles([
+      "role_resource:battery:never_found",
+      "role_resource_pass2:coolant:never_found",
+    ])).toEqual(["battery", "coolant"]);
+  });
+
+  it("IGNORES skipped outcomes — untried is not unfindable", () => {
+    // More budget would try these; paying an agent skips a cheaper answer.
+    expect(exhaustedRoles([
+      "role_resource:atf_fluid:skipped_run_budget",
+      "role_resource:oil_filter:skipped_lifetime_cap",
+      "role_resource:coolant:skipped_budget",
+    ])).toEqual([]);
+  });
+
+  it("IGNORES rejected outcomes — the number was found and thrown out", () => {
+    // A research pass would simply re-find what the gates just rejected.
+    expect(exhaustedRoles([
+      "role_resource:coolant:rejected_other",
+      "role_resource:oil_filter:rival_rejected_other",
+      "role_resource:front_rotor:rejected_refuted",
+    ])).toEqual([]);
+  });
+
+  it("IGNORES successful writes", () => {
+    expect(exhaustedRoles([
+      "role_resource:air_filter:written",
+      "role_resource:battery:rivaled",
+    ])).toEqual([]);
+  });
+
+  it("dedupes a role reported by both passes", () => {
+    expect(exhaustedRoles([
+      "role_resource:battery:never_found",
+      "role_resource_pass2:battery:never_found",
+    ])).toEqual(["battery"]);
+  });
+
+  it("picks exactly the round-19 Equinox shape out of a real mixed list", () => {
+    const real = [
+      "role_resource:atf_fluid:skipped_run_budget",
+      "role_resource:battery:never_found",
+      "role_resource:front_brake_pad:never_found",
+      "role_resource:rear_brake_pad:never_found",
+      "role_resource:coolant:never_found",
+      "role_resource:air_filter:written",
+      "role_resource:oil_filter:written",
+      "role_resource:front_rotor:never_found",
+      "role_resource:rear_rotor:never_found",
+      "role_resource:spark_plug:never_found",
+    ];
+    expect(exhaustedRoles(real).sort()).toEqual([
+      "battery", "coolant", "front_brake_pad", "front_rotor",
+      "rear_brake_pad", "rear_rotor", "spark_plug",
+    ]);
+  });
+});

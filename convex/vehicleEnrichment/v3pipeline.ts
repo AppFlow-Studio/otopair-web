@@ -6952,6 +6952,66 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       console.warn("[v8] agent rotor research trigger failed (non-fatal):", e);
     }
 
+    // ── Agent research: roles the deterministic path EXHAUSTED ─────────────
+    //
+    // `never_found` is the only outcome that qualifies, and the distinction is
+    // load-bearing. `skipped_run_budget` / `skipped_lifetime_cap` mean UNTRIED
+    // — more budget would try them, so paying an agent skips a cheaper answer.
+    // `rejected_*` means found and REJECTED — a research pass would simply
+    // re-find the number the gates just threw out.
+    //
+    // Round 19 sized it: 11 residual `never_found` across 5 vehicles, EIGHT of
+    // them on the Chevrolet Equinox — precisely why that config finished at 3
+    // roles while the F-150 reached 13. Concentrated where it is needed.
+    try {
+      if (process.env.ENRICHMENT_AGENT === "on") {
+        const exhausted = roleResourceErrors
+          .map((e) => /^role_resource(?:_pass2)?:([^:]+):never_found$/.exec(e)?.[1])
+          .filter((r): r is string => !!r);
+        const uniqueRoles = [...new Set(exhausted)];
+        if (uniqueRoles.length > 0) {
+          const fieldFor: Record<string, string> = {};
+          for (const [fieldKey, meta] of Object.entries(PART_FIELD_MAP)) {
+            fieldFor[(meta as any).subcategory] = fieldKey;
+          }
+          // The blocklist travels with the request: a rejected number that
+          // dominates the open web is exactly what a research agent re-finds.
+          const blockedRows: any[] = await ctx
+            .runQuery(internal.vehicleEnrichment.v3queries.getBlockedOemsForConfig, {
+              vehicleConfigId: args.vehicleConfigId,
+            })
+            .catch(() => []);
+          await ctx.scheduler.runAfter(
+            60_000,
+            internal.vehicleEnrichment.agentResearch.researchMissingRoles,
+            {
+              vehicleConfigId: args.vehicleConfigId,
+              runId: args.runId,
+              year: args.year,
+              make: args.make,
+              model: args.model,
+              trim: args.trim ?? null,
+              engineCode: vehicle.engineCode ?? null,
+              displacement: args.displacement ?? null,
+              roles: uniqueRoles.map((roleKey) => ({
+                roleKey,
+                fieldKey: fieldFor[roleKey] ?? roleKey,
+              })),
+              blockedOems: (blockedRows ?? [])
+                .map((b: any) => String(b?.oem_part_number_normalized ?? ""))
+                .filter(Boolean),
+            },
+          );
+          console.log(
+            `[v8] agent role research scheduled for ${uniqueRoles.length} exhausted role(s): ` +
+              uniqueRoles.join(", "),
+          );
+        }
+      }
+    } catch (e) {
+      console.warn("[v8] agent role research trigger failed (non-fatal):", e);
+    }
+
     // ── Labor retry (2020 Yaris canary, Jul 30 2026) ────────────────────────
     // The inline labor pass lives inside `if (r2)`, so a batch-2 timeout or an
     // unparseable batch-2 body means NO labor source is ever contacted — and

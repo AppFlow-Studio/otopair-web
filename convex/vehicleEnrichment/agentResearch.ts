@@ -359,3 +359,105 @@ export const researchRotorMinimums = internalAction({
     return { status: "ok", claims: claims.length };
   },
 });
+
+/**
+ * LAST-RESORT part sourcing for roles the deterministic path positively
+ * exhausted (`resource_never_found`).
+ *
+ * Round 19 sized this precisely: 11 residual misses across 5 vehicles, EIGHT
+ * of them on the Chevrolet Equinox — which is exactly why that config finished
+ * at 3 roles while the F-150 reached 13. So the cost is concentrated on the
+ * vehicles that need it, and near-zero on the ones that do not.
+ *
+ * `never_found` is the ONLY outcome that qualifies. The other misses mean
+ * different things and must not trigger paid research:
+ *   skipped_run_budget / skipped_lifetime_cap — untried, not unfindable
+ *   rejected_other / rejected_refuted        — found and REJECTED, so a
+ *                                              research pass would just
+ *                                              re-find the rejected number
+ *
+ * Writes CLAIMS. A claim still has to survive the reconciler, the fitment
+ * verifier and the interchange law before it can occupy a role, which is what
+ * keeps a self-directed research agent from becoming a bypass around every
+ * gate this pipeline has.
+ */
+export const researchMissingRoles = internalAction({
+  args: {
+    vehicleConfigId: v.id("vehicle_configs"),
+    runId: v.optional(v.id("enrichment_runs")),
+    year: v.float64(),
+    make: v.string(),
+    model: v.string(),
+    trim: v.optional(v.union(v.string(), v.null())),
+    engineCode: v.optional(v.union(v.string(), v.null())),
+    displacement: v.optional(v.union(v.string(), v.null())),
+    /** roleKey + the V4 field key its number is stored under. */
+    roles: v.array(v.object({ roleKey: v.string(), fieldKey: v.string() })),
+    /** Normalized numbers already rejected for this config. */
+    blockedOems: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args): Promise<{ status: string; claims: number; attempted: number }> => {
+    if (!isAgentEnabled(process.env)) return { status: "disabled", claims: 0, attempted: 0 };
+    const budget = agentTaskBudget(process.env);
+    if (budget <= 0 || args.roles.length === 0) {
+      return { status: "no_budget_or_roles", claims: 0, attempted: 0 };
+    }
+    const vehicle: AgentVehicle = {
+      year: args.year, make: args.make, model: args.model,
+      trim: args.trim ?? null, engineCode: args.engineCode ?? null,
+      displacement: args.displacement ?? null,
+    };
+    const blockedList = args.blockedOems ?? [];
+    const blockedSet = new Set(blockedList.map((b) => b.toUpperCase().replace(/[^A-Z0-9]/g, "")));
+
+    // Bounded by the per-run task budget: eight roles at ~226s each is half an
+    // hour of wall clock and eight times the credits, so the tap is opened a
+    // few roles at a time rather than all at once.
+    const take = args.roles.slice(0, budget);
+    const claims: Claim[] = [];
+    let attempted = 0;
+
+    for (const role of take) {
+      attempted++;
+      const outcome = await runAgentTask(
+        buildRolePrompt(vehicle, role.roleKey, blockedList),
+        roleSchema(),
+        { maxCredits: agentMaxCredits(process.env) },
+      );
+      if (!outcome.ok) {
+        console.warn(`[agent] role research failed (${role.roleKey}): ${outcome.reason}`);
+        continue;
+      }
+      const claim = roleClaimFrom(outcome.data, role.fieldKey, blockedSet, Date.now());
+      if (!claim) {
+        console.log(`[agent] role research returned nothing usable for ${role.roleKey}`);
+        continue;
+      }
+      claims.push(claim);
+      console.log(
+        `[agent] role research proposed ${role.roleKey}=${claim.value} ` +
+          `("${claim.observed_label ?? ""}") from ${claim.source_url}`,
+      );
+    }
+
+    if (claims.length > 0) {
+      await ctx.runMutation(internal.vehicleEnrichment.claimGathering._writeClaims, {
+        vehicleConfigId: args.vehicleConfigId,
+        runId: args.runId,
+        claims: claims.map((c) => ({
+          field_key: c.field_key,
+          value: c.value,
+          value_raw: c.value_raw ?? c.value,
+          source_family: c.source_family,
+          source_domain: c.source_domain,
+          source_url: c.source_url,
+          method: c.method,
+          adapter: "firecrawl_agent",
+          observed_label: c.observed_label,
+          observed_at: c.observed_at,
+        })),
+      });
+    }
+    return { status: "ok", claims: claims.length, attempted };
+  },
+});

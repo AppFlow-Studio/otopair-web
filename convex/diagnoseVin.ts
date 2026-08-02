@@ -341,7 +341,7 @@ export const repairVin = internalAction({
           .filter(r => r.redundant_when_halo)
           .map(r => r.code),
       );
-      remaining = packagesNow.filter(p => {
+      remaining = packagesNow.filter((p: any) => {
         if (redundantCodes.has(p.code)) {
           removed.push(p.code);
           return false;
@@ -366,7 +366,7 @@ export const repairVin = internalAction({
         source: wheelResult.sourceUrl,
       },
       packages_removed: removed,
-      packages_remaining: remaining.map(p => p.code),
+      packages_remaining: remaining.map((p: any) => p.code),
     };
   },
 });

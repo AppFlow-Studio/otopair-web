@@ -11,6 +11,7 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 const SEED_FILENAME = "SEED_DEMO_receipt.pdf";
 
@@ -122,8 +123,21 @@ export const insertSeeded = internalMutation({
 
 export const seedForVin = internalAction({
   args: { vin: v.string(), now: v.number() },
-  handler: async (ctx, { vin, now }) => {
-    const owners = await ctx.runQuery(internal._seedDemo.listOwners, {});
+  // Explicit annotations break the circular type inference Convex hits when an
+  // action calls other functions in its own module via internal._seedDemo.*.
+  handler: async (
+    ctx,
+    { vin, now },
+  ): Promise<{ docId: Id<"vehicle_documents"> }> => {
+    const owners: Array<{
+      ownerId: Id<"vehicle_owners">;
+      userId: Id<"users">;
+      vin: string;
+      status: string;
+      make: string | null;
+      model: string | null;
+      year: number | null;
+    }> = await ctx.runQuery(internal._seedDemo.listOwners, {});
     const owner = owners.find((o) => o.vin === vin);
     if (!owner) throw new Error(`No vehicle_owner for vin ${vin}`);
 

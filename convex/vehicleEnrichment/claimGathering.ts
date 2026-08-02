@@ -450,7 +450,7 @@ export const gatherClaims = internalAction({
           internal.vehicleEnrichment.claimGathering._claimsForConfig,
           { vehicleConfigId: args.vehicleConfigId },
         );
-        all = rows.filter((r) => KNOWN_FAMILIES.has(r.source_family)) as Claim[];
+        all = rows.filter((r: any) => KNOWN_FAMILIES.has(r.source_family)) as Claim[];
       } catch (e) {
         console.warn("[claim-ledger] claim read-back failed, reconciling this run only:", e);
         all = pending.map((p) => p.claim);

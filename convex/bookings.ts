@@ -92,6 +92,7 @@ import {
   isLateStartTestModeEnabled,
 } from "./lib/late_start";
 import {
+  assignmentPreferenceFromRequestedMechanic,
   DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES,
   DEFAULT_OVERRUN_EXTENSION_PERCENT,
   OVERRUN_EXTENSION_OPTIONS_MINUTES,
@@ -118,7 +119,13 @@ import {
   vehiclePassportUpdateValidator,
 } from "./lib/vehicle_passports";
 import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
-import { validateInspectionMeasurements } from "../lib/inspection-measurements";
+import {
+  areTireReplacementPositionsValid,
+  getBookedTireReplacementPositions,
+  validateInspectionMeasurements,
+  type TireCornerPosition,
+  type TirePosition,
+} from "../lib/inspection-measurements";
 import { insertSnapshotImpl } from "./part_snapshots";
 import {
   closeRecForCompletedBooking,
@@ -1000,7 +1007,7 @@ export const create = mutation({
       estimated_labor_minutes:
         estimated_labor_minutes > 0 ? estimated_labor_minutes : undefined,
       status: "pending",
-      assignment_preference: "any",
+      assignment_preference: assignmentPreferenceFromRequestedMechanic(args.mechanic_id),
       created_at: now,
       updated_at: now,
       source_recommendation_id: args.source_recommendation_id,
@@ -1777,7 +1784,7 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       total_cost,
       estimated_labor_minutes: estimated_labor_minutes > 0 ? estimated_labor_minutes : undefined,
       status: "pending",
-      assignment_preference: "any",
+      assignment_preference: assignmentPreferenceFromRequestedMechanic(args.mechanic_id),
       created_at: now,
       updated_at: now,
       source_recommendation_id: args.source_recommendation_id,
@@ -2122,20 +2129,20 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
   // double-booking through once the user clicks "push anyway" on the hours
   // prompt (the mutation's resolveMechanicForWindow call would then throw a
   // raw, uncaught error instead of the friendly one below).
-  const dayBookings = await getBlockingBookingsForShopDate(
-    ctx,
-    booking.shop_id,
-    proposedScheduledDate,
-  );
+  const [dayBookings, shop] = await Promise.all([
+    getBlockingBookingsForShopDate(ctx, booking.shop_id, proposedScheduledDate),
+    ctx.db.get(booking.shop_id),
+  ]);
+  const bufferMin = normalizeBufferMinutes(shop?.buffer_minutes);
   const conflictBooking = dayBookings.find((other: any) => {
     if (String(other._id) === String(booking._id)) return false;
     if (!other.mechanic_id) return false;
     if (String(other.mechanic_id) !== String(booking.mechanic_id)) return false;
     if (["cancelled", "declined", "no_show"].includes(other.status)) return false;
     const otherStart = hhmmToMinutes(other.scheduled_time);
-    const otherEnd = otherStart + (other.estimated_labor_minutes ?? 60);
+    const otherEnd = otherStart + (other.estimated_labor_minutes ?? 60) + bufferMin;
     const newStart = hhmmToMinutes(proposedScheduledTime);
-    const newEnd = hhmmToMinutes(proposedEndTime);
+    const newEnd = hhmmToMinutes(proposedEndTime) + bufferMin;
     return otherStart < newEnd && otherEnd > newStart;
   });
   if (conflictBooking) {
@@ -4485,6 +4492,7 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
         : undefined,
     tires: {
       brand: prejob.tire_brand ?? undefined,
+      model: prejob.tire_model ?? undefined,
       size_front: prejob.tire_size_front ?? undefined,
       size_rear: prejob.tire_size_rear ?? undefined,
       tread_depths: prejob.tire_tread ?? undefined,
@@ -4985,29 +4993,75 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
   };
 }
 
+function getTireReplacementPositions(booking: {
+  tire_specs?: {
+    quantity?: number;
+    positions?: TireCornerPosition[];
+  } | null;
+}): TirePosition[] {
+  const positions: Record<string, TirePosition> = {
+    FL: "front_left",
+    FR: "front_right",
+    RL: "rear_left",
+    RR: "rear_right",
+  };
+  return getBookedTireReplacementPositions(booking.tire_specs)
+    .map((position: string) => positions[position])
+    .filter((position: TirePosition | undefined): position is TirePosition => !!position);
+}
+
 function validatePrejobReport(
   prejob: any,
   baselineMileage: number | null,
   serviceFlags: ReturnType<typeof getBookingServiceFlags>,
   brakeScope: BrakeScope,
+  tireReplacementPositions: TirePosition[],
 ) {
+  const tireInspectionRequired =
+    serviceFlags.hasTireWork || serviceFlags.hasBrakeWork;
+  const replaced = new Set(
+    serviceFlags.hasTireReplacement ? tireReplacementPositions : [],
+  );
   if (typeof prejob.mileage !== "number" || !Number.isFinite(prejob.mileage)) {
     throw new Error("Mileage is required before starting this booking.");
   }
-  if (!hasText(prejob.tire_brand)) {
-    throw new Error("Tire brand is required before starting this booking.");
-  }
-  if (!hasText(prejob.tire_size_front)) {
-    throw new Error("Front tire size is required before starting this booking.");
-  }
-  if (!hasText(prejob.tire_size_rear)) {
-    throw new Error("Rear tire size is required before starting this booking.");
-  }
-  if (!hasText(prejob.front_tire_condition)) {
-    throw new Error("Front tire condition is required before starting this booking.");
-  }
-  if (!hasText(prejob.rear_tire_condition)) {
-    throw new Error("Rear tire condition is required before starting this booking.");
+  if (tireInspectionRequired) {
+    const tireDetails = prejob.tire_details ?? {};
+    const tireLabels: Record<TirePosition, string> = {
+      front_left: "Front-left",
+      front_right: "Front-right",
+      rear_left: "Rear-left",
+      rear_right: "Rear-right",
+    };
+    for (const position of Object.keys(tireLabels) as TirePosition[]) {
+      if (
+        !replaced.has(position) &&
+        !hasText(tireDetails[position]?.brand) &&
+        !hasText(prejob.tire_brand)
+      ) {
+        throw new Error(
+          `${tireLabels[position]} tire brand is required before starting this booking.`,
+        );
+      }
+    }
+    if (!hasText(prejob.tire_size_front)) {
+      throw new Error("Front tire size is required before starting this booking.");
+    }
+    if (!hasText(prejob.tire_size_rear)) {
+      throw new Error("Rear tire size is required before starting this booking.");
+    }
+    if (
+      (!replaced.has("front_left") || !replaced.has("front_right")) &&
+      !hasText(prejob.front_tire_condition)
+    ) {
+      throw new Error("Front tire condition is required before starting this booking.");
+    }
+    if (
+      (!replaced.has("rear_left") || !replaced.has("rear_right")) &&
+      !hasText(prejob.rear_tire_condition)
+    ) {
+      throw new Error("Rear tire condition is required before starting this booking.");
+    }
   }
   if (
     typeof baselineMileage === "number" &&
@@ -5038,6 +5092,8 @@ function validatePrejobReport(
   }
   const measurementResult = validateInspectionMeasurements({
     tire_tread: prejob.tire_tread,
+    tire_replacement_positions: [...replaced],
+    require_tire_tread: tireInspectionRequired,
     brakes: prejob.brakes,
     brake_scope: brakeScope,
   });
@@ -5051,6 +5107,20 @@ function validatePrejobReport(
     if (!hasText(prejob.fluid_overrides?.oil_type)) {
       throw new Error("Oil type is required for an oil change.");
     }
+  }
+  if (
+    serviceFlags.hasCoolantFlush &&
+    !hasText(prejob.fluid_overrides?.coolant_type)
+  ) {
+    throw new Error("Coolant type is required for a coolant flush.");
+  }
+  if (
+    serviceFlags.hasTransmissionFluidService &&
+    !hasText(prejob.fluid_overrides?.transmission_fluid_type)
+  ) {
+    throw new Error(
+      "Transmission fluid type is required for a transmission fluid service.",
+    );
   }
 }
 
@@ -9127,6 +9197,12 @@ export const getJobDetail = query({
       vehicle: vehicleLabels.full,
       vehicleShort: vehicleLabels.short,
       serviceNames,
+      tireSpecs: booking.tire_specs
+        ? {
+            ...booking.tire_specs,
+            positions: getBookedTireReplacementPositions(booking.tire_specs),
+          }
+        : null,
       mechanicName: mechanic
         ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
         : null,
@@ -9328,6 +9404,7 @@ export const startWithPrejob = mutation({
       passportView.passport.mileage ?? null,
       serviceFlags,
       await resolveBrakeScopeForBooking(ctx, booking),
+      getTireReplacementPositions(booking),
     );
 
     const now = Date.now();
@@ -9431,6 +9508,7 @@ export const commitInspectionAndAwaitEstimate = mutation({
       passportView.passport.mileage ?? null,
       serviceFlags,
       await resolveBrakeScopeForBooking(ctx, booking),
+      getTireReplacementPositions(booking),
     );
 
     const now = Date.now();
@@ -10373,6 +10451,16 @@ export const createByShop = mutation({
         type: v.string(),
         tier: v.string(),
         quantity: v.number(),
+        positions: v.optional(
+          v.array(
+            v.union(
+              v.literal("FL"),
+              v.literal("FR"),
+              v.literal("RL"),
+              v.literal("RR"),
+            ),
+          ),
+        ),
       })
     ),
     // Walk-in / external customer data capture. Defaults to "mechanic_walk_in"
@@ -10977,6 +11065,16 @@ export const backfillCompletedBooking = mutation({
         type: v.string(),
         tier: v.string(),
         quantity: v.number(),
+        positions: v.optional(
+          v.array(
+            v.union(
+              v.literal("FL"),
+              v.literal("FR"),
+              v.literal("RL"),
+              v.literal("RR"),
+            ),
+          ),
+        ),
       }),
     ),
     actualDurationMinutes: v.float64(),
@@ -13717,10 +13815,26 @@ export const createTireQuoteRequest = mutation({
       type: v.string(),
       tier: v.string(),
       quantity: v.number(),
+      positions: v.array(
+        v.union(
+          v.literal("FL"),
+          v.literal("FR"),
+          v.literal("RL"),
+          v.literal("RR"),
+        ),
+      ),
     }),
     service_ids: v.optional(v.array(v.id("services"))),
   },
   handler: async (ctx, args) => {
+    if (
+      !areTireReplacementPositionsValid(
+        args.tire_specs.quantity,
+        args.tire_specs.positions,
+      )
+    ) {
+      throw new Error("Selected tire positions must match the tire quantity.");
+    }
     const normalizedVin = args.vin.toUpperCase().trim();
     const now = Date.now();
 
@@ -13768,6 +13882,9 @@ export const acceptTireQuote = mutation({
   args: {
     booking_id: v.id("bookings"),
     response_id: v.id("tire_quote_responses"),
+    scheduled_date: v.string(),
+    scheduled_time: v.string(),
+    mechanic_id: v.optional(v.id("mechanics")),
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.booking_id);
@@ -13786,6 +13903,17 @@ export const acceptTireQuote = mutation({
     }
     if (response.superseded_at != null) {
       throw new Error("This quote has already been superseded.");
+    }
+
+    // Trust boundary: the customer picks a slot on-device, but the shop's
+    // quoted `availability` is the real floor — parts/install lead time the
+    // client-side picker can only hide, not enforce.
+    const submittedEarlier =
+      args.scheduled_date < response.availability.date ||
+      (args.scheduled_date === response.availability.date &&
+        hhmmToMinutes(args.scheduled_time) < hhmmToMinutes(response.availability.time));
+    if (submittedEarlier) {
+      throw new Error("Pick a time on or after the shop's earliest availability.");
     }
 
     const now = Date.now();
@@ -13841,25 +13969,24 @@ export const acceptTireQuote = mutation({
     const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
     const acceptedMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: response.shop_id,
-      date: response.availability.date,
-      startTime: response.availability.time,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
       durationMinutes: acceptedDurationMinutes,
-      preferredMechanicId: response.mechanic_id ?? undefined,
+      preferredMechanicId: args.mechanic_id ?? response.mechanic_id ?? undefined,
       excludeTireQuoteResponseId: String(response._id),
     });
 
-    // Fill in the chosen shop + pricing + scheduled slot + service. The
-    // shop's structured `availability` (YYYY-MM-DD + HH:MM) goes straight
-    // onto the booking so it surfaces on /bookings + /schedule on the
-    // web side; service_ids drives the rest of the service-aware UI.
+    // Fill in the chosen shop + pricing + scheduled slot + service. Schedule
+    // comes from the customer's picked slot (already validated above); price
+    // fields always come from `response`, never from client args.
     await ctx.db.patch(args.booking_id, {
       shop_id: response.shop_id,
       mechanic_id: acceptedMechanicId,
       labor_cost: response.labor_cost,
       parts_cost: response.per_tire_price * response.quantity,
       total_cost: response.total,
-      scheduled_date: response.availability.date,
-      scheduled_time: response.availability.time,
+      scheduled_date: args.scheduled_date,
+      scheduled_time: args.scheduled_time,
       estimated_labor_minutes: acceptedDurationMinutes,
       status: "confirmed",
       updated_at: now,
@@ -14053,6 +14180,9 @@ export const acceptRotorQuote = mutation({
   args: {
     booking_id: v.id("bookings"),
     response_id: v.id("rotor_quote_responses"),
+    scheduled_date: v.string(),
+    scheduled_time: v.string(),
+    mechanic_id: v.optional(v.id("mechanics")),
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.booking_id);
@@ -14071,6 +14201,17 @@ export const acceptRotorQuote = mutation({
     }
     if (response.superseded_at != null) {
       throw new Error("This quote has already been superseded.");
+    }
+
+    // Trust boundary: the customer picks a slot on-device, but the shop's
+    // quoted `availability` is the real floor — parts/install lead time the
+    // client-side picker can only hide, not enforce.
+    const submittedEarlier =
+      args.scheduled_date < response.availability.date ||
+      (args.scheduled_date === response.availability.date &&
+        hhmmToMinutes(args.scheduled_time) < hhmmToMinutes(response.availability.time));
+    if (submittedEarlier) {
+      throw new Error("Pick a time on or after the shop's earliest availability.");
     }
 
     const now = Date.now();
@@ -14118,17 +14259,24 @@ export const acceptRotorQuote = mutation({
     const padsSubtotal =
       (response.pad_price ?? 0) * (response.pad_quantity ?? response.quantity);
 
+    const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
+    const acceptedMechanicId = await resolveMechanicForWindow(ctx, {
+      shopId: response.shop_id,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
+      durationMinutes: acceptedDurationMinutes,
+      preferredMechanicId: args.mechanic_id ?? response.mechanic_id ?? undefined,
+    });
+
     await ctx.db.patch(args.booking_id, {
       shop_id: response.shop_id,
-      ...(response.mechanic_id ? { mechanic_id: response.mechanic_id } : {}),
+      mechanic_id: acceptedMechanicId,
       labor_cost: response.labor_cost,
       parts_cost: rotorsSubtotal + padsSubtotal,
       total_cost: response.total,
-      scheduled_date: response.availability.date,
-      scheduled_time: response.availability.time,
-      ...(response.estimated_duration_minutes
-        ? { estimated_labor_minutes: response.estimated_duration_minutes }
-        : {}),
+      scheduled_date: args.scheduled_date,
+      scheduled_time: args.scheduled_time,
+      estimated_labor_minutes: acceptedDurationMinutes,
       status: "confirmed",
       updated_at: now,
       ...(attachServiceId ? { service_ids: [attachServiceId] } : {}),

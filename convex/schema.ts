@@ -2015,6 +2015,10 @@ export default defineSchema({
     review_count: v.optional(v.number()),
     is_active: v.optional(v.boolean()),
     is_verified: v.optional(v.boolean()),
+    // Onboarding lifecycle for invite-created shops: "invited" (created by admin
+    // approval, awaiting owner claim) -> "active" (claimed). Legacy/self-serve
+    // shops leave this undefined.
+    status: v.optional(v.string()),
     owner_user_id: v.optional(v.id("users")),
     description: v.optional(v.string()),
     logo: v.optional(v.string()),
@@ -2162,6 +2166,70 @@ export default defineSchema({
     .index("by_token", ["token"])
     .index("by_status", ["status"])
     .index("by_clerk_invitation_id", ["clerk_invitation_id"]),
+
+  // B2B shop onboarding intake (Step 1 of the invite-based flow). A public
+  // /apply submission lands here as pending_review. State machine:
+  //   pending_review -> invited -> onboarding -> active   (+ rejected at any point)
+  // Step 1 only ever WRITES pending_review. reviewer_* / invite_token /
+  // invited_shop_id are declared optional now so later steps PATCH, not migrate.
+  shop_applications: defineTable({
+    // --- Applicant-supplied (Step 1) ---
+    shop_legal_name: v.string(),
+    owner_full_name: v.string(),
+    business_email: v.string(), // stored trimmed + lowercased
+    phone: v.string(), // stored digits-normalized (see route)
+    street_address: v.string(),
+
+    // --- Capacity (NOT collected at apply; shop sets during onboarding) ---
+    bays_count: v.optional(v.number()),
+    technicians_count: v.optional(v.number()),
+
+    // --- Lifecycle ---
+    status: v.string(), // "pending_review" | "invited" | "onboarding" | "active" | "rejected"
+
+    // --- Reviewer / later-step fields (all optional; unused in Step 1) ---
+    reviewed_by: v.optional(v.id("users")),
+    // Director actor name (reviewers are director_users, not app users, so the
+    // reviewed_by id column above can't hold them). audit_log has the full trail.
+    reviewed_by_name: v.optional(v.string()),
+    reviewed_at: v.optional(v.number()),
+    review_note: v.optional(v.string()),
+    rejection_reason: v.optional(v.string()),
+    invite_token: v.optional(v.string()),
+    invited_at: v.optional(v.number()),
+    invited_shop_id: v.optional(v.id("shops")),
+
+    // --- Provenance / audit ---
+    source: v.optional(v.string()), // "partner-with-us" | "apply-direct"
+    user_agent: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_business_email", ["business_email"]) // duplicate-pending guard
+    .index("by_status", ["status"]) // future admin review queue
+    .index("by_invite_token", ["invite_token"]) // reserved: accept-invite lookup
+    .index("by_created_at", ["created_at"]),
+
+  // Owner-claim invites for the B2B onboarding pipeline (Step 2). The raw
+  // 32-byte hex token is emailed and NEVER stored — only its SHA-256 hash lives
+  // here. Distinct from shop_invitations (mechanic invites, raw token).
+  shop_invites: defineTable({
+    shop_id: v.id("shops"),
+    application_id: v.optional(v.id("shop_applications")),
+    email: v.string(), // invited business email (lowercased)
+    role: v.string(), // "shop_owner"
+    token_hash: v.string(), // SHA-256 hex of the raw token
+    status: v.string(), // "pending" | "accepted" | "revoked" | "expired"
+    expires_at: v.number(), // created_at + 7d
+    accepted_at: v.optional(v.number()),
+    accepted_by_user_id: v.optional(v.id("users")),
+    invited_by_name: v.optional(v.string()), // director actor (audit convenience)
+    created_at: v.number(),
+  })
+    .index("by_token_hash", ["token_hash"])
+    .index("by_shop_id", ["shop_id"])
+    .index("by_email", ["email"])
+    .index("by_status", ["status"]),
 
   // [U-D] Block time types for shop scheduling
   block_time_types: defineTable({
@@ -2317,6 +2385,16 @@ export default defineSchema({
         type: v.string(),
         tier: v.string(),
         quantity: v.number(),
+        positions: v.optional(
+          v.array(
+            v.union(
+              v.literal("FL"),
+              v.literal("FR"),
+              v.literal("RL"),
+              v.literal("RR"),
+            ),
+          ),
+        ),
       })
     ),
     // Structured rotor request specs — populated for rotor-quote bookings.
@@ -3932,6 +4010,16 @@ export default defineSchema({
         type: v.string(),
         tier: v.string(),
         quantity: v.number(),
+        positions: v.optional(
+          v.array(
+            v.union(
+              v.literal("FL"),
+              v.literal("FR"),
+              v.literal("RL"),
+              v.literal("RR"),
+            ),
+          ),
+        ),
       })
     ),
     status: v.union(

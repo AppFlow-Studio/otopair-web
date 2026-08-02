@@ -9,22 +9,26 @@
 //
 // The inspection is the new pre-job flow. To keep the existing persistence spine
 // (passport patch + job_actuals.prejob_report) untouched, `derivePrejobFromInspection`
-// maps inspection state back into the legacy `PreJobSurveyPayload`.
+// maps inspection state into `PreJobSurveyPayload`.
 
 // NOTE: relative imports (not the "@/" alias) so this module is safe to import
 // from the Convex bundler (convex/inspections.ts) as well as the Next app.
 import { getBookingServiceFlags } from "./vehicle-service-relevance";
-import { rotorValueToMicrometers } from "./inspection-measurements";
-import type {
-  RotorThicknessMeasurements,
-  TirePosition,
-  TireTreadMeasurements,
-} from "./inspection-measurements";
 import type {
   PreJobSurveyPayload,
   RotorCondition,
   TireCondition,
 } from "./vehicle-passport";
+import {
+  getTireTreadMinimum,
+  rotorValueToMicrometers,
+  type RotorThicknessMeasurements,
+  type RotorUnit,
+  type TirePosition,
+  type TireTreadMeasurements,
+  type TireTreadReading,
+} from "./inspection-measurements";
+import { OTHER_INSPECTION_OPTION } from "./inspection-options";
 
 export const INSPECTION_TEMPLATE_VERSION = "mpi-v1";
 
@@ -34,67 +38,9 @@ export const INSPECTION_TEMPLATE_VERSION = "mpi-v1";
 
 export type ClassifyType = "tread" | "pad" | "rotor" | "batt";
 
-/**
- * "unknown" — we hold no OEM minimum for this rotor, so the reading is NOT
- * graded. Distinct from "none" (the field isn't gradeable at all): an ungraded
- * rotor still has to be reported honestly to the mechanic and the PDF.
- */
-export type GradeLevel = "ok" | "warn" | "bad" | "none" | "unknown";
+export type GradeLevel = "ok" | "warn" | "bad" | "none";
 
 export type ClassifyResult = { lvl: GradeLevel; txt: string };
-
-/**
- * Provenance of an OEM rotor minimum.
- *
- * "derived_from_nominal" / "default_fallback" / "oem_spec_flagged" are
- * ESTIMATES. classify() caps them at "warn" so an unverified reference can
- * never read as a clean pass, and deriveSuggestedRecommendations never
- * auto-sells a rotor job off one. "oem_spec_flagged" is a sourced value that
- * survived only WITH a sanity flag (delta-implausible / front-below-rear) —
- * suspect provenance grades like an estimate, never as a clean spec. Getting
- * this wrong is expensive in both directions: a ref that is too high condemns
- * healthy rotors, one that is too low passes worn ones.
- */
-export type RotorRefKind =
-  | "oem_spec"
-  | "oem_spec_flagged"
-  | "mechanic_read"
-  | "director_verified"
-  | "derived_from_nominal"
-  | "default_fallback"
-  | "none";
-
-export type RotorRef = {
-  /** Discard / replace-at minimum in mm. Null ⇒ nothing on file; do not grade. */
-  minMm: number | null;
-  kind: RotorRefKind;
-  /**
-   * New (nominal) thickness in mm — display and audit only, NEVER graded
-   * against. OEM storefronts publish diameter x nominal ("330x22mm"); treating
-   * that nominal as a minimum is the failure this whole type exists to prevent.
-   */
-  nominalMm?: number | null;
-  /** Domain the minimum was read from, surfaced in the field hint. */
-  sourceDomain?: string | null;
-};
-
-export const NO_ROTOR_REF: RotorRef = { minMm: null, kind: "none" };
-
-export function isEstimatedRotorRef(kind: RotorRefKind): boolean {
-  return (
-    kind === "derived_from_nominal" ||
-    kind === "default_fallback" ||
-    kind === "oem_spec_flagged"
-  );
-}
-
-function toRotorRef(ref: number | RotorRef | null | undefined): RotorRef {
-  if (ref == null) return NO_ROTOR_REF;
-  // A bare number carries no provenance, so it is treated as an estimate —
-  // never as a sourced OEM spec.
-  if (typeof ref === "number") return { minMm: ref, kind: "default_fallback" };
-  return ref;
-}
 
 export type SelectOption = { value: string; label: string };
 
@@ -107,11 +53,8 @@ export type InspectionField =
       unit: string;
       required?: boolean;
       classify?: ClassifyType;
-      /**
-       * Reference for classification: rated CCA for `batt`, or a RotorRef
-       * descriptor for `rotor` (carries provenance so estimates grade honestly).
-       */
-      ref?: number | RotorRef | null;
+      /** Reference value for classification (e.g. rotor minimum, rated CCA). */
+      ref?: number | null;
       hint?: string;
       /** Sub-group header rendered above the first field of each section. */
       section?: string;
@@ -187,7 +130,7 @@ export const TRI_LABELS: Record<TriValue, string> = {
 export function classify(
   cls: ClassifyType | undefined,
   val: string | number | null | undefined,
-  ref?: number | RotorRef | null,
+  ref?: number | null,
 ): ClassifyResult {
   if (!cls) return { lvl: "none", txt: "" };
   const v = typeof val === "number" ? val : parseFloat(String(val ?? ""));
@@ -204,20 +147,10 @@ export function classify(
     return { lvl: "bad", txt: "Replace soon" };
   }
   if (cls === "rotor") {
-    const rr = toRotorRef(ref);
-    // No OEM minimum on file — refuse to grade. The previous `ref ?? 0`
-    // fallback silently graded every such rotor as "In spec".
-    if (rr.minMm == null) return { lvl: "unknown", txt: "No OEM min" };
-    const d = v - rr.minMm;
-    if (isEstimatedRotorRef(rr.kind)) {
-      // An unverified reference may never produce a clean pass — the worst
-      // case is condemning a healthy rotor, so cap the good news at "warn".
-      if (d >= 1) return { lvl: "warn", txt: "In spec (est. min)" };
-      if (d >= 0) return { lvl: "warn", txt: "Near min (est.)" };
-      return { lvl: "bad", txt: "Below min (est.)" };
-    }
+    const r = typeof ref === "number" ? ref : 0;
+    const d = v - r;
     if (d >= 1) return { lvl: "ok", txt: "In spec" };
-    if (d >= 0) return { lvl: "warn", txt: "Near min" };
+    if (d >= 0) return { lvl: "warn", txt: "In spec · near min" };
     return { lvl: "bad", txt: "Below min" };
   }
   if (cls === "batt") {
@@ -228,6 +161,22 @@ export function classify(
     return { lvl: "bad", txt: "Replace" };
   }
   return { lvl: "none", txt: "" };
+}
+
+export function classifyInspectionMeasure(
+  field: Extract<InspectionField, { type: "measure" }>,
+  measures: Record<string, string | undefined>,
+  select: Record<string, string | undefined>,
+): ClassifyResult {
+  const raw = measures[field.key];
+  if (field.classify !== "rotor") {
+    return classify(field.classify, raw, field.ref);
+  }
+  const entered = parseFloat(String(raw ?? ""));
+  if (!Number.isFinite(entered)) return classify("rotor", raw, field.ref);
+  const unit: RotorUnit = select.rotor_unit === "in" ? "in" : "mm";
+  const millimeters = rotorValueToMicrometers(entered, unit) / 1000;
+  return classify("rotor", millimeters, field.ref);
 }
 
 // ---------------------------------------------------------------------------
@@ -286,35 +235,13 @@ const TRANSMISSION_FLUID_OPTIONS: SelectOption[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Zone definitions. Corner zones share a field shape; first-visit text fields
-// (tire/pad brand) only appear on the front-left + rear-left to avoid asking
-// the mechanic the same brand four times.
+// Zone definitions. Corner metadata is repeated in every corner and the dialog
+// keeps shared values synchronized, so mechanics can enter it from either side.
 // ---------------------------------------------------------------------------
 
-/**
- * What the mechanic reads under the rotor field. The old copy rendered
- * `OEM min 23.0` for every vehicle in the fleet off a hardcoded constant —
- * presenting an invented number as the manufacturer's spec.
- */
-function rotorHint(ref: RotorRef): string {
-  if (ref.minMm == null) {
-    return ref.nominalMm != null
-      ? `No OEM minimum on file. New thickness ${ref.nominalMm.toFixed(1)} mm is NOT the minimum — read MIN TH cast on the rotor.`
-      : "No OEM minimum on file — read MIN TH cast on the rotor.";
-  }
-  if (isEstimatedRotorRef(ref.kind)) {
-    return `Est. min ${ref.minMm.toFixed(1)} mm — UNVERIFIED. Confirm against the rotor before recommending replacement.`;
-  }
-  const base = `OEM min ${ref.minMm.toFixed(1)} mm`;
-  return ref.sourceDomain ? `${base} · ${ref.sourceDomain}` : base;
-}
-
 function cornerFields(opts: {
-  rotorRef: RotorRef;
-  /** Ask the mechanic to read the minimum cast on the rotor hat. Set on ONE
-   *  corner per axle, and only when we hold no trustworthy minimum. */
-  askCastMin?: boolean;
-  firstVisitTexts?: InspectionField[];
+  rotorRef: number;
+  axle: "front" | "rear";
 }): InspectionField[] {
   return [
     {
@@ -346,6 +273,27 @@ function cornerFields(opts: {
       section: "Tire",
     },
     {
+      type: "text",
+      key: "tire_brand",
+      label: "Tire brand",
+      firstVisitOnly: true,
+      section: "Tire",
+    },
+    {
+      type: "text",
+      key: "tire_model",
+      label: "Tire model",
+      firstVisitOnly: true,
+      section: "Tire",
+    },
+    {
+      type: "text",
+      key: "tire_size",
+      label: `Installed tire size (${opts.axle} axle)`,
+      firstVisitOnly: true,
+      section: "Tire",
+    },
+    {
       type: "measure",
       key: "pad",
       label: "Brake pad thickness",
@@ -364,7 +312,7 @@ function cornerFields(opts: {
       unit: "mm",
       classify: "rotor",
       ref: opts.rotorRef,
-      hint: rotorHint(opts.rotorRef),
+      hint: `Reference min ${opts.rotorRef.toFixed(1)}`,
       section: "Brakes",
     },
     {
@@ -375,66 +323,50 @@ function cornerFields(opts: {
       default: [],
       section: "Brakes",
     },
-    // The rotor is exposed and the mechanic is standing at it — this is the
-    // most authoritative source we have access to, and it costs nothing.
-    ...(opts.askCastMin
-      ? [
-          {
-            type: "measure" as const,
-            key: "rotor_min_cast",
-            label: "OEM min stamped on rotor",
-            default: "",
-            unit: "mm",
-            hint: 'Cast on the rotor hat as "MIN TH" / "MIN. THICKNESS". Leave blank if not legible. Saves this axle\'s spec for every future inspection of this vehicle.',
-            section: "Brakes",
-          },
-        ]
-      : []),
-    ...(opts.firstVisitTexts ?? []),
+    {
+      type: "text",
+      key: "pad_brand",
+      label: "Brake pad brand / type",
+      firstVisitOnly: true,
+      section: "Brakes",
+    },
   ];
 }
 
-export type BuildZonesOptions = {
-  /** OEM minimum for the front axle. Omitted ⇒ rotors are reported ungraded. */
-  frontRotor?: RotorRef;
-  /** OEM minimum for the rear axle. Omitted ⇒ rotors are reported ungraded. */
-  rearRotor?: RotorRef;
-};
-
 /**
- * Build the zone template for a specific vehicle.
- *
- * Rotor minimums differ by trim and brake package (a sports trim's minimum can
- * be higher than the base trim's), so they are injected per build rather than
- * baked in. Callers that GRADE a rotor — the dialog, findings, recommendations,
- * the PDF — must pass the vehicle's resolved refs. Anything that only reads the
- * template's structure can use the INSPECTION_ZONES default below.
+ * Fallback rotor reference minimums used when no trustworthy vehicle spec exists.
  */
-export function buildInspectionZones(
-  opts?: BuildZonesOptions,
-): InspectionZone[] {
-  const frontRotor = opts?.frontRotor ?? NO_ROTOR_REF;
-  const rearRotor = opts?.rearRotor ?? NO_ROTOR_REF;
-  // Ask for the cast minimum only when we don't already hold a trustworthy one.
-  // Once per axle (the left corner), so the mechanic isn't asked four times.
-  const askFront =
-    frontRotor.minMm == null || isEstimatedRotorRef(frontRotor.kind);
-  const askRear = rearRotor.minMm == null || isEstimatedRotorRef(rearRotor.kind);
-  return [
+export const DEFAULT_FRONT_ROTOR_MIN = 23.0;
+export const DEFAULT_REAR_ROTOR_MIN = 8.0;
+
+export const INSPECTION_NAV_ZONE_IDS: Exclude<ZoneId, "OWNER">[] = [
+  "FL",
+  "FR",
+  "RL",
+  "RR",
+  "ENG",
+  "FRT",
+  "UND",
+];
+
+export function nextInspectionZoneAfterCompletion(zoneId: ZoneId) {
+  const currentIndex = INSPECTION_NAV_ZONE_IDS.indexOf(
+    zoneId as Exclude<ZoneId, "OWNER">,
+  );
+  return currentIndex < 0
+    ? null
+    : INSPECTION_NAV_ZONE_IDS[currentIndex + 1] ?? null;
+}
+
+export const INSPECTION_ZONES: InspectionZone[] = [
   {
     id: "FL",
     label: "Front-left corner",
     short: "FL",
     corner: true,
     fields: cornerFields({
-      rotorRef: frontRotor,
-      askCastMin: askFront,
-      firstVisitTexts: [
-        { type: "text", key: "tire_brand", label: "Tire brand", firstVisitOnly: true, section: "Tire" },
-        { type: "text", key: "tire_model", label: "Tire model", firstVisitOnly: true, section: "Tire" },
-        { type: "text", key: "tire_size", label: "Tire size (front axle)", firstVisitOnly: true, section: "Tire" },
-        { type: "text", key: "pad_brand", label: "Brake pad brand / type", firstVisitOnly: true, section: "Brakes" },
-      ],
+      rotorRef: DEFAULT_FRONT_ROTOR_MIN,
+      axle: "front",
     }),
   },
   {
@@ -442,7 +374,7 @@ export function buildInspectionZones(
     label: "Front-right corner",
     short: "FR",
     corner: true,
-    fields: cornerFields({ rotorRef: frontRotor }),
+    fields: cornerFields({ rotorRef: DEFAULT_FRONT_ROTOR_MIN, axle: "front" }),
   },
   {
     id: "RL",
@@ -450,11 +382,8 @@ export function buildInspectionZones(
     short: "RL",
     corner: true,
     fields: cornerFields({
-      rotorRef: rearRotor,
-      askCastMin: askRear,
-      firstVisitTexts: [
-        { type: "text", key: "tire_size", label: "Tire size (rear axle)", firstVisitOnly: true, section: "Tire" },
-      ],
+      rotorRef: DEFAULT_REAR_ROTOR_MIN,
+      axle: "rear",
     }),
   },
   {
@@ -462,7 +391,7 @@ export function buildInspectionZones(
     label: "Rear-right corner",
     short: "RR",
     corner: true,
-    fields: cornerFields({ rotorRef: rearRotor }),
+    fields: cornerFields({ rotorRef: DEFAULT_REAR_ROTOR_MIN, axle: "rear" }),
   },
   {
     id: "ENG",
@@ -526,27 +455,13 @@ export function buildInspectionZones(
     dynamic: true,
     fields: [],
   },
-  ];
-}
+];
 
-export function buildZonesById(
-  zones: InspectionZone[],
-): Record<ZoneId, InspectionZone> {
-  return zones.reduce((acc, zone) => {
+export const INSPECTION_ZONES_BY_ID: Record<ZoneId, InspectionZone> =
+  INSPECTION_ZONES.reduce((acc, zone) => {
     acc[zone.id] = zone;
     return acc;
   }, {} as Record<ZoneId, InspectionZone>);
-}
-
-/**
- * Structure-only default: identical field layout, but NO rotor minimum, so a
- * rotor reading graded against it comes back "unknown" rather than silently
- * passing. Safe for state creation, required-zone lists and dirty detection.
- */
-export const INSPECTION_ZONES: InspectionZone[] = buildInspectionZones();
-
-export const INSPECTION_ZONES_BY_ID: Record<ZoneId, InspectionZone> =
-  buildZonesById(INSPECTION_ZONES);
 
 // ---------------------------------------------------------------------------
 // Inspection runtime state
@@ -554,6 +469,8 @@ export const INSPECTION_ZONES_BY_ID: Record<ZoneId, InspectionZone> =
 
 export type ZoneState = {
   done: boolean;
+  /** Local edit marker; only explicit user edits should block save/submit. */
+  dirty: boolean;
   measures: Record<string, string>;
   tri: Record<string, TriValue>;
   descriptors: Record<string, string[]>;
@@ -561,6 +478,25 @@ export type ZoneState = {
   select: Record<string, string>;
   photoIds: string[];
 };
+
+export function toggleInspectionTreadMode(zone: ZoneState): Partial<ZoneState> {
+  const detailed = zone.select.tread_mode === "detailed";
+  if (!detailed) {
+    const minimum = getTireTreadMinimum({
+      inner_32nds: zone.measures.tread_inner === "" ? null : Number(zone.measures.tread_inner),
+      center_32nds: zone.measures.tread_center === "" ? null : Number(zone.measures.tread_center),
+      outer_32nds: zone.measures.tread_outer === "" ? null : Number(zone.measures.tread_outer),
+    });
+    return {
+      select: { ...zone.select, tread_mode: "detailed" },
+      measures: { ...zone.measures, tread: minimum == null ? "" : String(minimum) },
+    };
+  }
+  return {
+    select: { ...zone.select, tread_mode: "" },
+    measures: { ...zone.measures },
+  };
+}
 
 export type InspectionState = {
   template_version: string;
@@ -570,6 +506,7 @@ export type InspectionState = {
 export function emptyZoneState(): ZoneState {
   return {
     done: false,
+    dirty: false,
     measures: {},
     tri: {},
     descriptors: {},
@@ -583,7 +520,6 @@ export function defaultZoneState(zone: InspectionZone): ZoneState {
   const state = emptyZoneState();
   for (const field of zone.fields) {
     if (field.type === "measure") state.measures[field.key] = field.default ?? "";
-    else if (field.type === "tri") state.tri[field.key] = field.default;
     else if (field.type === "descriptors")
       state.descriptors[field.key] = [...field.default];
     else if (field.type === "text") state.text[field.key] = field.default ?? "";
@@ -607,6 +543,253 @@ export function createInspectionState(): InspectionState {
 
 export type ServiceFlags = ReturnType<typeof getBookingServiceFlags>;
 
+export type BrakeAxleScope = {
+  hasBrakeWork: boolean;
+  front: boolean;
+  rear: boolean;
+};
+
+export type ZoneCompletionContext = {
+  serviceNames: string[];
+  brakeScope: BrakeAxleScope;
+  tireReplacementPositions?: ReadonlyArray<
+    Extract<ZoneId, "FL" | "FR" | "RL" | "RR">
+  >;
+};
+
+export type ZoneCompletionResult =
+  | { valid: true }
+  | { valid: false; fieldKey: string; error: string };
+
+const CORNER_IDS: ZoneId[] = ["FL", "FR", "RL", "RR"];
+const TIRE_SIZE_PATTERN = /^\d{3}\/\d{2}R\d{2}$/i;
+
+export function normalizeTireSize(value: string): string {
+  return value.trim().toUpperCase().replace(/\s+/g, "");
+}
+
+export function isFieldRequiredForZone(
+  zoneId: ZoneId,
+  fieldKey: string,
+  context: ZoneCompletionContext,
+): boolean {
+  if (CORNER_IDS.includes(zoneId)) {
+    const flags = getBookingServiceFlags(context.serviceNames);
+    const tireInspectionRequired =
+      flags.hasTireWork || flags.hasBrakeWork || context.brakeScope.hasBrakeWork;
+    const isReplacementTire =
+      flags.hasTireReplacement &&
+      context.tireReplacementPositions?.includes(
+        zoneId as Extract<ZoneId, "FL" | "FR" | "RL" | "RR">,
+      );
+    if (fieldKey === "tire_size") {
+      return tireInspectionRequired;
+    }
+    if (["tread", "wear", "tire_brand"].includes(fieldKey)) {
+      return tireInspectionRequired && !isReplacementTire;
+    }
+    if (fieldKey === "psi") {
+      return flags.hasTireWork && !isReplacementTire;
+    }
+    if (fieldKey === "pad" || fieldKey === "rotor") {
+      const front = zoneId === "FL" || zoneId === "FR";
+      return (
+        context.brakeScope.hasBrakeWork &&
+        (front ? context.brakeScope.front : context.brakeScope.rear)
+      );
+    }
+    return false;
+  }
+  if (zoneId === "ENG") {
+    const flags = getBookingServiceFlags(context.serviceNames);
+    if (flags.hasBatteryTest && (fieldKey === "batt" || fieldKey === "term")) {
+      return true;
+    }
+    if (flags.hasOilChange && (fieldKey === "oil_viscosity" || fieldKey === "oil_type")) {
+      return true;
+    }
+    if (flags.hasCoolantFlush && fieldKey === "coolant_type") {
+      return true;
+    }
+    if (flags.hasTransmissionFluidService && fieldKey === "transmission_fluid_type") {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function patchInspectionZone(
+  state: InspectionState,
+  zoneId: ZoneId,
+  patch: Partial<ZoneState>,
+): InspectionState {
+  const current =
+    state.zones[zoneId] ?? defaultZoneState(INSPECTION_ZONES_BY_ID[zoneId]);
+  const next = { ...current, ...patch };
+  if (patch.done === true) {
+    next.dirty = false;
+  } else if (patch.done === false) {
+    next.dirty = zoneHasInput(zoneId, next);
+  } else {
+    next.done = false;
+    next.dirty = true;
+  }
+  return {
+    ...state,
+    zones: {
+      ...state.zones,
+      [zoneId]: next,
+    },
+  };
+}
+
+export function patchSharedInspectionText(
+  state: InspectionState,
+  sourceId: ZoneId,
+  key: string,
+  value: string,
+): InspectionState {
+  const targets =
+    key === "tire_size"
+      ? sourceId === "FL" || sourceId === "FR"
+        ? (["FL", "FR"] as ZoneId[])
+        : (["RL", "RR"] as ZoneId[])
+      : key === "pad_brand"
+        ? CORNER_IDS
+        : [sourceId];
+  let next = state;
+  for (const id of targets) {
+    const current =
+      next.zones[id] ?? defaultZoneState(INSPECTION_ZONES_BY_ID[id]);
+    const text = { ...current.text, [key]: value };
+    next =
+      id === sourceId || current.done
+        ? patchInspectionZone(next, id, { text })
+        : {
+            ...next,
+            zones: {
+              ...next.zones,
+              [id]: { ...current, text },
+            },
+          };
+  }
+  return next;
+}
+
+export function validateZoneForCompletion(
+  state: InspectionState,
+  zoneId: ZoneId,
+  context: ZoneCompletionContext,
+): ZoneCompletionResult {
+  const zone = INSPECTION_ZONES_BY_ID[zoneId];
+  const zs = state.zones[zoneId] ?? defaultZoneState(zone);
+  const fail = (fieldKey: string, error: string): ZoneCompletionResult => ({
+    valid: false,
+    fieldKey,
+    error,
+  });
+
+  if (CORNER_IDS.includes(zoneId)) {
+    const treadRequired = isFieldRequiredForZone(
+      zoneId,
+      "tread",
+      context,
+    );
+    const detailed = zs.select.tread_mode === "detailed";
+    const hasDetailedTread = [
+      zs.measures.tread_inner,
+      zs.measures.tread_center,
+      zs.measures.tread_outer,
+    ].some((value) => (value ?? "").trim() !== "");
+    if (detailed && (treadRequired || hasDetailedTread)) {
+      for (const [key, label] of [
+        ["tread_inner", "inner"],
+        ["tread_center", "center"],
+        ["tread_outer", "outer"],
+      ] as const) {
+        if ((zs.measures[key] ?? "").trim() === "") {
+          return fail(key, "Enter inner, center, and outer tread readings.");
+        }
+        const value = Number(zs.measures[key]);
+        if (!Number.isInteger(value) || value < 0 || value > 32) {
+          return fail(key, `${label[0].toUpperCase()}${label.slice(1)} tread must be a whole number from 0 to 32.`);
+        }
+      }
+      const minimum = Math.min(
+        Number(zs.measures.tread_inner),
+        Number(zs.measures.tread_center),
+        Number(zs.measures.tread_outer),
+      );
+      if (Number(zs.measures.tread) !== minimum) {
+        return fail("tread", "Shallowest tread must match the lowest detailed reading.");
+      }
+    } else if (!detailed) {
+      if ((zs.measures.tread ?? "").trim() === "") {
+        if (treadRequired) {
+          return fail("tread", "Tire tread depth is required.");
+        }
+      } else {
+        const tread = Number(zs.measures.tread);
+        if (!Number.isInteger(tread) || tread < 0 || tread > 32) {
+          return fail("tread", "Tire tread depth must be a whole number from 0 to 32.");
+        }
+      }
+    }
+
+    const tireBrandRequired = isFieldRequiredForZone(
+      zoneId,
+      "tire_brand",
+      context,
+    );
+    if (tireBrandRequired && !(zs.text.tire_brand ?? "").trim()) {
+      return fail("tire_brand", "Tire brand is required.");
+    }
+    if (zs.text.tire_brand === OTHER_INSPECTION_OPTION) {
+      return fail("tire_brand", "Enter the tire brand.");
+    }
+    const size = normalizeTireSize(zs.text.tire_size ?? "");
+    const sizeRequired = isFieldRequiredForZone(zoneId, "tire_size", context);
+    if (sizeRequired && !size) return fail("tire_size", "Tire size is required.");
+    if (size && !TIRE_SIZE_PATTERN.test(size)) {
+      return fail("tire_size", "Tire size must look like 225/45R18.");
+    }
+  }
+
+  for (const field of zone.fields) {
+    const required = isFieldRequiredForZone(zoneId, field.key, context);
+    if (field.type === "measure") {
+      if (field.key === "tread") continue;
+      const raw = (zs.measures[field.key] ?? "").trim();
+      if (!raw) {
+        if (required) return fail(field.key, `${field.label} is required.`);
+        continue;
+      }
+      const value = Number(raw);
+      const allowZero = field.key === "pad";
+      if (!Number.isFinite(value) || (allowZero ? value < 0 : value <= 0)) {
+        return fail(field.key, `${field.label} must be a valid number.`);
+      }
+    } else if (field.type === "text") {
+      if (zs.text[field.key] === OTHER_INSPECTION_OPTION) {
+        return fail(field.key, `Enter ${field.label.toLowerCase()}.`);
+      }
+      if (required && !(zs.text[field.key] ?? "").trim()) {
+        return fail(field.key, `${field.label} is required.`);
+      }
+    } else if (field.type === "select") {
+      if (required && !(zs.select[field.key] ?? "").trim()) {
+        return fail(field.key, `${field.label} is required.`);
+      }
+    } else if (field.type === "tri") {
+      if (required && !zs.tri[field.key]) {
+        return fail(field.key, `${field.label} is required.`);
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
 /**
  * Zones the mechanic must complete before submitting, given the booked
  * services. All other zones remain optional but available. The OWNER zone is
@@ -616,16 +799,16 @@ export function requiredZonesForBooking(serviceNames: string[]): ZoneId[] {
   const flags = getBookingServiceFlags(serviceNames);
   const required = new Set<ZoneId>();
 
-  if (flags.hasBrakeWork || flags.hasTireWork) {
-    (["FL", "FR", "RL", "RR"] as ZoneId[]).forEach((z) => required.add(z));
+  if (flags.hasTireWork || flags.hasBrakeWork) {
+    CORNER_IDS.forEach((zoneId) => required.add(zoneId));
   }
-  if (flags.hasFluidWork || flags.hasOilChange) {
+  if (
+    flags.hasOilChange ||
+    flags.hasBatteryTest ||
+    flags.hasCoolantFlush ||
+    flags.hasTransmissionFluidService
+  ) {
     required.add("ENG");
-  }
-  // A pure diagnostic / unknown booking: require at least the corners + engine
-  // so a meaningful baseline record always exists.
-  if (required.size === 0) {
-    (["FL", "FR", "RL", "RR", "ENG"] as ZoneId[]).forEach((z) => required.add(z));
   }
   return INSPECTION_ZONES.filter((z) => required.has(z.id)).map((z) => z.id);
 }
@@ -640,13 +823,13 @@ export type Findings = { attention: Finding[]; monitor: Finding[] };
 
 export function gatherFindings(
   state: InspectionState,
-  opts?: { onlyCompletedZones?: boolean; zones?: InspectionZone[] },
+  opts?: { onlyCompletedZones?: boolean },
 ): Findings {
   const attention: Finding[] = [];
   const monitor: Finding[] = [];
   const onlyDone = !!opts?.onlyCompletedZones;
 
-  for (const zone of opts?.zones ?? INSPECTION_ZONES) {
+  for (const zone of INSPECTION_ZONES) {
     if (zone.dynamic) continue;
     const zs = state.zones[zone.id];
     if (!zs) continue;
@@ -657,7 +840,7 @@ export function gatherFindings(
         if (s === "r") attention.push({ label: field.label, zone: zone.label });
         else if (s === "y") monitor.push({ label: field.label, zone: zone.label });
       } else if (field.type === "measure" && field.classify) {
-        const res = classify(field.classify, zs.measures[field.key], field.ref);
+        const res = classifyInspectionMeasure(field, zs.measures, zs.select);
         if (res.lvl === "bad")
           attention.push({ label: `${field.label} · ${res.txt}`, zone: zone.label });
         else if (res.lvl === "warn")
@@ -707,72 +890,7 @@ function minDefined(a: number | null, b: number | null): number | null {
   return Math.min(a, b);
 }
 
-// ---------------------------------------------------------------------------
-// Corner measurements -> the structured measurement blocks the server validates.
-//
-// `validatePrejobReport` (convex/bookings.ts) calls validateInspectionMeasurements
-// on EVERY prejob submit, and its tread loop runs before the hasBrakeWork
-// early-return — so a payload without `tire_tread` fails every job start, not
-// just brake jobs. The only other producer of these blocks was the legacy
-// pre-job-survey-dialog, which the MPI replaced without porting the mapping.
-// ---------------------------------------------------------------------------
-
-const CORNER_TIRE_POSITIONS: ReadonlyArray<readonly [ZoneId, TirePosition]> = [
-  ["FL", "front_left"],
-  ["FR", "front_right"],
-  ["RL", "rear_left"],
-  ["RR", "rear_right"],
-];
-
-/**
- * Tread is recorded in whole 32nds — `isValidTreadDepth` rejects non-integers,
- * so a mechanic typing "7.5" would hard-block the submit. Round to the nearest
- * 32nd rather than drop the reading; out-of-range values are dropped so the
- * server's own message explains the problem.
- */
-function parseTread32nds(value: string | undefined): number | null {
-  const n = parseMm(value);
-  if (n == null) return null;
-  const rounded = Math.round(n);
-  return rounded >= 0 && rounded <= 32 ? rounded : null;
-}
-
-function buildTireTread(state: InspectionState): TireTreadMeasurements | null {
-  const out: TireTreadMeasurements = {};
-  let any = false;
-  for (const [zoneId, position] of CORNER_TIRE_POSITIONS) {
-    const value = parseTread32nds(state.zones[zoneId]?.measures.tread);
-    if (value == null) continue;
-    out[position] = { reported_min_32nds: value };
-    any = true;
-  }
-  return any ? out : null;
-}
-
-function buildRotorThickness(
-  state: InspectionState,
-): RotorThicknessMeasurements | null {
-  const out: RotorThicknessMeasurements = {};
-  let any = false;
-  for (const [zoneId, position] of CORNER_TIRE_POSITIONS) {
-    const value = parseMm(state.zones[zoneId]?.measures.rotor);
-    if (value == null || value <= 0) continue;
-    out[position] = {
-      entered_value: value,
-      entered_unit: "mm",
-      // `validateRotorReading` re-derives this and compares for exact equality —
-      // it must come from the shared helper, never a local rounding.
-      normalized_um: rotorValueToMicrometers(value, "mm"),
-    };
-    any = true;
-  }
-  return any ? out : null;
-}
-
-function deriveRotorCondition(
-  state: InspectionState,
-  zonesById: Record<ZoneId, InspectionZone> = INSPECTION_ZONES_BY_ID,
-): RotorCondition | null {
+function deriveRotorCondition(state: InspectionState): RotorCondition | null {
   const corners: ZoneId[] = ["FL", "FR", "RL", "RR"];
   let worst: RotorCondition | null = null;
   const rank: Record<RotorCondition, number> = {
@@ -785,13 +903,13 @@ function deriveRotorCondition(
   };
   for (const id of corners) {
     const zs = state.zones[id];
-    if (!zs) continue;
-    const zone = zonesById[id];
-    const rotorField = zone?.fields.find(
+    if (!zs?.done) continue;
+    const zone = INSPECTION_ZONES_BY_ID[id];
+    const rotorField = zone.fields.find(
       (f) => f.type === "measure" && f.classify === "rotor",
     );
     if (rotorField && rotorField.type === "measure") {
-      const res = classify("rotor", zs.measures[rotorField.key], rotorField.ref);
+      const res = classifyInspectionMeasure(rotorField, zs.measures, zs.select);
       if (res.lvl === "bad") bump("needs_attention");
     }
     const desc = zs.descriptors["desc"] ?? [];
@@ -808,19 +926,48 @@ export type DerivePrejobOptions = {
   modifications?: PreJobSurveyPayload["modifications"];
   flaggedVehicleSpecs?: boolean;
   nextMechanicTip?: string | null;
-  /** Vehicle-specific zones, so rotor_condition grades against the real minimum. */
-  zones?: InspectionZone[];
 };
 
 export function derivePrejobFromInspection(
   state: InspectionState,
   opts: DerivePrejobOptions,
 ): PreJobSurveyPayload {
-  const fl = state.zones.FL;
-  const fr = state.zones.FR;
-  const rl = state.zones.RL;
-  const rr = state.zones.RR;
-  const eng = state.zones.ENG;
+  const fl = state.zones.FL?.done ? state.zones.FL : undefined;
+  const fr = state.zones.FR?.done ? state.zones.FR : undefined;
+  const rl = state.zones.RL?.done ? state.zones.RL : undefined;
+  const rr = state.zones.RR?.done ? state.zones.RR : undefined;
+  const eng = state.zones.ENG?.done ? state.zones.ENG : undefined;
+  const corners = [
+    ["front_left", fl],
+    ["front_right", fr],
+    ["rear_left", rl],
+    ["rear_right", rr],
+  ] as const satisfies ReadonlyArray<readonly [TirePosition, ZoneState | undefined]>;
+
+  const tireTread: TireTreadMeasurements = {};
+  const rotorThickness: RotorThicknessMeasurements = {};
+  for (const [position, zone] of corners) {
+    if (!zone) continue;
+    const reported = parseMm(zone.measures.tread);
+    if (reported != null) {
+      const reading: TireTreadReading = { reported_min_32nds: reported };
+      if (zone.select.tread_mode === "detailed") {
+        reading.inner_32nds = parseMm(zone.measures.tread_inner);
+        reading.center_32nds = parseMm(zone.measures.tread_center);
+        reading.outer_32nds = parseMm(zone.measures.tread_outer);
+      }
+      tireTread[position] = reading;
+    }
+    const rotor = parseMm(zone.measures.rotor);
+    if (rotor != null) {
+      const unit: RotorUnit = zone.select.rotor_unit === "in" ? "in" : "mm";
+      rotorThickness[position] = {
+        entered_value: rotor,
+        entered_unit: unit,
+        normalized_um: rotorValueToMicrometers(rotor, unit),
+      };
+    }
+  }
 
   const frontPad = minDefined(
     parseMm(fl?.measures.pad),
@@ -831,7 +978,36 @@ export function derivePrejobFromInspection(
     parseMm(rr?.measures.pad),
   );
 
-  const padBrand = fl?.text.pad_brand?.trim() || null;
+  const completedCorners = [fl, fr, rl, rr].filter(
+    (zone): zone is ZoneState => !!zone,
+  );
+  const sharedText = (key: string) =>
+    completedCorners
+      .map((zone) => zone.text[key]?.trim())
+      .find((value) => value && value !== OTHER_INSPECTION_OPTION) || null;
+  const frontSize = [fl, fr]
+    .map((zone) => zone?.text.tire_size?.trim())
+    .find(Boolean);
+  const rearSize = [rl, rr]
+    .map((zone) => zone?.text.tire_size?.trim())
+    .find(Boolean);
+  const padBrand = sharedText("pad_brand");
+  const tireDetails: NonNullable<PreJobSurveyPayload["tire_details"]> = {};
+  for (const [position, zone] of corners) {
+    if (!zone) continue;
+    const brand = zone.text.tire_brand?.trim();
+    const model = zone.text.tire_model?.trim();
+    if (
+      (!brand || brand === OTHER_INSPECTION_OPTION) &&
+      (!model || model === OTHER_INSPECTION_OPTION)
+    ) {
+      continue;
+    }
+    tireDetails[position] = {
+      ...(brand && brand !== OTHER_INSPECTION_OPTION ? { brand } : {}),
+      ...(model && model !== OTHER_INSPECTION_OPTION ? { model } : {}),
+    };
+  }
 
   const frontTire = worstTireCondition(
     triToTireCondition(fl?.tri.wear),
@@ -841,9 +1017,6 @@ export function derivePrejobFromInspection(
     triToTireCondition(rl?.tri.wear),
     triToTireCondition(rr?.tri.wear),
   );
-
-  const tireTread = buildTireTread(state);
-  const rotorThickness = buildRotorThickness(state);
 
   const fluidOverrides = {
     oil_viscosity: eng?.select.oil_viscosity || null,
@@ -856,29 +1029,32 @@ export function derivePrejobFromInspection(
 
   return {
     mileage: opts.mileage,
-    tire_brand: fl?.text.tire_brand?.trim() || null,
-    tire_size_front: fl?.text.tire_size?.trim() || null,
-    tire_size_rear: rl?.text.tire_size?.trim() || null,
+    tire_details: Object.keys(tireDetails).length ? tireDetails : null,
+    tire_brand: null,
+    tire_model: null,
+    tire_size_front: frontSize ? normalizeTireSize(frontSize) : null,
+    tire_size_rear: rearSize ? normalizeTireSize(rearSize) : null,
     front_tire_condition: frontTire,
     rear_tire_condition: rearTire,
-    tire_tread: tireTread,
+    tire_tread: Object.keys(tireTread).length ? tireTread : null,
     brakes:
-      frontPad != null || rearPad != null || padBrand || rotorThickness
+      frontPad != null ||
+      rearPad != null ||
+      padBrand ||
+      Object.keys(rotorThickness).length
         ? {
             pad_brand: padBrand,
             front_pad_mm: frontPad,
             rear_pad_mm: rearPad,
             // Default to "good" once corners are inspected — server requires a
             // rotor_condition for brake work, and "no findings" means good.
-            rotor_condition:
-              deriveRotorCondition(
-                state,
-                opts.zones ? buildZonesById(opts.zones) : undefined,
-              ) ?? "good",
-            rotor_thickness: rotorThickness,
+            rotor_condition: deriveRotorCondition(state) ?? "good",
+            rotor_thickness: Object.keys(rotorThickness).length
+              ? rotorThickness
+              : null,
           }
         : null,
-    fluids_match_oem: !hasFluidOverride,
+    fluids_match_oem: hasFluidOverride ? false : undefined,
     fluid_overrides: hasFluidOverride ? fluidOverrides : null,
     inspection: opts.inspectionStatus ?? null,
     modifications: opts.modifications ?? null,
@@ -905,12 +1081,6 @@ export type SuggestedRecommendation = {
   label: string;
   urgency: SuggestedRecUrgency;
   reason: string;
-  /**
-   * Set when the suggestion rests on an ESTIMATED rotor minimum. The mechanic
-   * must confirm against the number cast on the rotor before this is offered to
-   * the customer — we do not sell a brake job off a derived reference.
-   */
-  requires_confirmation?: boolean;
 };
 
 // Canonical live service slugs (from the services catalog) so suggestions map
@@ -931,68 +1101,51 @@ function measuresAcrossCorners(
   state: InspectionState,
   key: string,
   onlyDone = false,
-  zonesById: Record<ZoneId, InspectionZone> = INSPECTION_ZONES_BY_ID,
-): {
-  values: number[];
-  worst: GradeLevel;
-  min: number | null;
-  /** Provenance of the reference graded against, when there is one. */
-  refKind: RotorRefKind | null;
-} {
+): { values: number[]; worst: GradeLevel; min: number | null; ref?: number | null } {
   const corners: ZoneId[] = ["FL", "FR", "RL", "RR"];
-  // "unknown" ranks with "none": an ungraded rotor must never escalate the
-  // worst level, so it cannot reach a recommendation.
-  const rank: Record<GradeLevel, number> = {
-    none: 0,
-    unknown: 0,
-    ok: 1,
-    warn: 2,
-    bad: 3,
-  };
+  const rank: Record<GradeLevel, number> = { none: 0, ok: 1, warn: 2, bad: 3 };
   let worst: GradeLevel = "none";
   let min: number | null = null;
-  let refKind: RotorRefKind | null = null;
   const values: number[] = [];
   for (const id of corners) {
     const zs = state.zones[id];
     if (!zs) continue;
     if (onlyDone && !zs.done) continue;
-    const field = zonesById[id]?.fields.find(
+    const field = INSPECTION_ZONES_BY_ID[id].fields.find(
       (f) => f.type === "measure" && f.key === key,
     );
     if (!field || field.type !== "measure") continue;
     const raw = zs.measures[key];
-    const n = parseMm(raw);
-    if (n == null) continue;
-    values.push(n);
-    min = min == null ? n : Math.min(min, n);
-    const res = classify(field.classify, raw, field.ref);
+    const entered = parseMm(raw);
+    if (entered == null) continue;
+    const value =
+      field.classify === "rotor"
+        ? rotorValueToMicrometers(
+            entered,
+            zs.select.rotor_unit === "in" ? "in" : "mm",
+          ) / 1000
+        : entered;
+    values.push(value);
+    min = min == null ? value : Math.min(min, value);
+    const res = classifyInspectionMeasure(field, zs.measures, zs.select);
     if (rank[res.lvl] > rank[worst]) worst = res.lvl;
-    if (field.classify === "rotor") {
-      const kind = toRotorRef(field.ref).kind;
-      // Least-trusted provenance across the axles wins the guard.
-      if (refKind == null || isEstimatedRotorRef(kind)) refKind = kind;
-    }
   }
-  return { values, worst, min, refKind };
+  return { values, worst, min };
 }
 
 export function deriveSuggestedRecommendations(
   state: InspectionState,
-  opts?: { onlyCompletedZones?: boolean; zones?: InspectionZone[] },
+  opts?: { onlyCompletedZones?: boolean },
 ): SuggestedRecommendation[] {
   const out: SuggestedRecommendation[] = [];
   const onlyDone = !!opts?.onlyCompletedZones;
-  const zonesById = opts?.zones
-    ? buildZonesById(opts.zones)
-    : INSPECTION_ZONES_BY_ID;
   const gradeUrgency = (lvl: GradeLevel): SuggestedRecUrgency | null =>
     lvl === "bad" ? "soon" : lvl === "warn" ? "within_3_months" : null;
   const triUrgency = (v: TriValue | undefined): SuggestedRecUrgency | null =>
     v === "r" ? "soon" : v === "y" ? "within_3_months" : null;
 
   // --- Measure-based (exact measurements) ---
-  const pad = measuresAcrossCorners(state, "pad", onlyDone, zonesById);
+  const pad = measuresAcrossCorners(state, "pad", onlyDone);
   const padUrg = gradeUrgency(pad.worst);
   if (padUrg) {
     out.push({
@@ -1005,31 +1158,22 @@ export function deriveSuggestedRecommendations(
     });
   }
 
-  // An ungraded rotor grades "unknown", which never escalates `worst`, so it
-  // cannot reach this branch at all — no OEM minimum means no suggestion.
-  const rotor = measuresAcrossCorners(state, "rotor", onlyDone, zonesById);
-  const rotorEstimated =
-    rotor.refKind != null && isEstimatedRotorRef(rotor.refKind);
-  const rotorGrade = gradeUrgency(rotor.worst);
-  // An estimated minimum may raise it for confirmation but must never drive an
-  // automatic replacement — we do not sell a brake job off a derived number.
-  const rotorUrg = rotorGrade && rotorEstimated ? "next_visit" : rotorGrade;
+  const rotor = measuresAcrossCorners(state, "rotor", onlyDone);
+  const rotorUrg = gradeUrgency(rotor.worst);
   if (rotorUrg) {
     out.push({
       key: "rotors",
       match: [SERVICE_SLUGS.rotors],
       label: "Rotor Replacement",
       urgency: rotorUrg,
-      ...(rotorEstimated ? { requires_confirmation: true } : {}),
-      reason: rotorEstimated
-        ? `Rotor at ${rotor.min}mm vs an ESTIMATED minimum — confirm against the number cast on the rotor before recommending replacement`
-        : rotor.min != null
-          ? `Rotor at ${rotor.min}mm (near/below OEM minimum)`
-          : "Rotor near/below minimum",
+      reason:
+        rotor.min != null
+          ? `Rotor at ${rotor.min.toFixed(2)}mm (near/below reference minimum)`
+          : "Rotor near/below reference minimum",
     });
   }
 
-  const tread = measuresAcrossCorners(state, "tread", onlyDone, zonesById);
+  const tread = measuresAcrossCorners(state, "tread", onlyDone);
   const treadUrg = gradeUrgency(tread.worst);
   if (treadUrg) {
     out.push({
@@ -1044,7 +1188,7 @@ export function deriveSuggestedRecommendations(
   // --- Engine-bay measurements + eye-level (R/Y/G) checks ---
   const eng = state.zones.ENG;
   if (eng && (!onlyDone || eng.done)) {
-    const battField = zonesById.ENG?.fields.find(
+    const battField = INSPECTION_ZONES_BY_ID.ENG.fields.find(
       (f) => f.type === "measure" && f.key === "batt",
     );
     if (battField && battField.type === "measure") {
@@ -1115,6 +1259,7 @@ export type PdfZone = { label: string; rows: PdfRow[] };
 
 type StoredZone = {
   zone_id: string;
+  done: boolean;
   measures?: Record<string, string> | null;
   tri?: Record<string, TriValue> | null;
   descriptors?: Record<string, string[]> | null;
@@ -1138,8 +1283,7 @@ export function zoneHasInput(zoneId: ZoneId, zs: ZoneState): boolean {
     if (field.type === "measure") {
       if ((zs.measures[field.key] ?? "").trim() !== "") return true;
     } else if (field.type === "tri") {
-      // Differs from the template default (e.g. flagged y/r).
-      if (zs.tri[field.key] && zs.tri[field.key] !== field.default) return true;
+      if (zs.tri[field.key]) return true;
     } else if (field.type === "descriptors") {
       if ((zs.descriptors[field.key] ?? []).length > 0) return true;
     } else if (field.type === "text") {
@@ -1158,36 +1302,39 @@ export function getDirtyIncompleteZones(state: InspectionState): ZoneId[] {
     if (zone.dynamic) continue;
     const zs = state.zones[zone.id];
     if (!zs || zs.done) continue;
-    if (zoneHasInput(zone.id, zs)) out.push(zone.id);
+    if (zs.dirty) out.push(zone.id);
   }
   return out;
 }
 
-/**
- * `zones` must be the same template the mechanic filled in — otherwise the PDF
- * grades a rotor against a different minimum than the one shown in the bay.
- */
-export function formatZonesForPdf(
-  storedZones: StoredZone[],
-  zones: InspectionZone[] = INSPECTION_ZONES,
-): PdfZone[] {
+export function formatZonesForPdf(storedZones: StoredZone[]): PdfZone[] {
   const byId = new Map(storedZones.map((z) => [z.zone_id, z]));
   const out: PdfZone[] = [];
 
-  for (const zone of zones) {
+  for (const zone of INSPECTION_ZONES) {
     if (zone.dynamic) continue;
     const stored = byId.get(zone.id);
-    if (!stored) continue;
+    if (!stored?.done) continue;
     const rows: PdfRow[] = [];
 
     for (const field of zone.fields) {
       if (field.type === "measure") {
         const raw = stored.measures?.[field.key];
         if (raw == null || String(raw).trim() === "") continue;
-        const res = classify(field.classify, raw, field.ref);
+        const res = classifyInspectionMeasure(
+          field,
+          stored.measures ?? {},
+          stored.select ?? {},
+        );
+        const unit =
+          field.classify === "rotor"
+            ? stored.select?.rotor_unit === "in"
+              ? "in"
+              : "mm"
+            : field.unit;
         rows.push({
           label: field.label,
-          value: `${raw} ${field.unit}${res.txt && res.lvl !== "none" ? ` (${res.txt})` : ""}`.trim(),
+          value: `${raw} ${unit}${res.txt && res.lvl !== "none" ? ` (${res.txt})` : ""}`.trim(),
           grade: res.lvl,
         });
       } else if (field.type === "tri") {

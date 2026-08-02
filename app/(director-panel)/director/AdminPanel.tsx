@@ -8,6 +8,7 @@ import { DirectorLogin } from './components/DirectorLogin'
 import { DirectorSessionCtx, type DirectorSession } from './components/DirectorSessionCtx'
 import { TabOverview }  from './components/tabs/TabOverview'
 import { TabShops }     from './components/tabs/TabShops'
+import { TabApplications } from './components/tabs/TabApplications'
 import { TabUsers }     from './components/tabs/TabUsers'
 import { TabBookings }  from './components/tabs/TabBookings'
 import { TabCars }      from './components/tabs/TabCars'
@@ -40,6 +41,7 @@ const TABS: Record<string, React.ComponentType> = {
   users:    TabUsers,
   deletionQueue: TabDeletionQueue,
   shops:    TabShops,
+  applications: TabApplications,
   bookings: TabBookings,
   reviews:  TabReviews,
   stripe:      TabStripe,

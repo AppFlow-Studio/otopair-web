@@ -6,7 +6,26 @@ export const TIRE_POSITIONS = [
 ] as const;
 
 export type TirePosition = (typeof TIRE_POSITIONS)[number];
+export type TireCornerPosition = "FL" | "FR" | "RL" | "RR";
 export type RotorUnit = "in" | "mm";
+
+export function areTireReplacementPositionsValid(
+  quantity: number,
+  positions?: readonly TireCornerPosition[] | null,
+): boolean {
+  return (
+    !!positions?.length &&
+    positions.length === quantity &&
+    new Set(positions).size === positions.length
+  );
+}
+
+export function getBookedTireReplacementPositions(specs?: {
+  quantity?: number | null;
+  positions?: readonly TireCornerPosition[] | null;
+} | null): TireCornerPosition[] {
+  return specs?.positions ? [...specs.positions] : [];
+}
 
 export type TireTreadReading = {
   reported_min_32nds?: number | null;
@@ -31,6 +50,8 @@ export type RotorThicknessMeasurements = Partial<
 
 export type InspectionMeasurementsInput = {
   tire_tread?: TireTreadMeasurements | null;
+  tire_replacement_positions?: TirePosition[];
+  require_tire_tread?: boolean;
   brakes?: {
     rotor_thickness?: RotorThicknessMeasurements | null;
   } | null;
@@ -110,6 +131,10 @@ export function formatRotorValue(value: number, unit: RotorUnit): string {
   return value.toFixed(unit === "in" ? 3 : 2);
 }
 
+export function formatRotorReferenceMinimum(valueMm: number, unit: RotorUnit): string {
+  return `${formatRotorValue(convertRotorValue(valueMm, "mm", unit), unit)} ${unit}`;
+}
+
 function validateTreadReading(
   position: TirePosition,
   reading: TireTreadReading | undefined,
@@ -178,12 +203,20 @@ function validateRotorReading(
 export function validateInspectionMeasurements(
   input: InspectionMeasurementsInput,
 ): InspectionValidationResult {
-  for (const position of TIRE_POSITIONS) {
-    const result = validateTreadReading(
-      position,
-      input.tire_tread?.[position],
-    );
-    if (!result.valid) return result;
+  if (input.require_tire_tread !== false) {
+    for (const position of TIRE_POSITIONS) {
+      if (
+        input.tire_replacement_positions?.includes(position) &&
+        !input.tire_tread?.[position]
+      ) {
+        continue;
+      }
+      const result = validateTreadReading(
+        position,
+        input.tire_tread?.[position],
+      );
+      if (!result.valid) return result;
+    }
   }
 
   if (!input.brake_scope.hasBrakeWork) return { valid: true };

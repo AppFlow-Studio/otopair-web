@@ -5,6 +5,7 @@
  * savePrejob / commitInspectionAndAwaitEstimate (which upsert vehicle_inspections
  * alongside the derived prejob_report). This module adds:
  *   - getByBooking            — load a saved inspection for resume / PDF.
+ *   - deleteInspectionPhoto   — remove a zone association and storage object.
  *   - getOwnerProfileForBooking — the booking customer's owner record, so the
  *                                 OWNER zone can compute which onboarding
  *                                 questions were SKIPPED.
@@ -26,11 +27,9 @@ import {
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import {
-  buildInspectionZones,
   formatZonesForPdf,
-  type RotorRef,
+  INSPECTION_TEMPLATE_VERSION,
 } from "../lib/inspection-template";
-import type { Doc, Id } from "./_generated/dataModel";
 import { OWNER_PROFILE_QUESTIONS } from "../lib/owner-profile-questions";
 import { jobRecommendationInputValidator } from "./lib/vehicle_passports";
 import { submitRecommendationsForBooking } from "./jobRecommendations";
@@ -109,10 +108,24 @@ export const getByBooking = query({
     if (!booking) return null;
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
-    return await ctx.db
+    const inspection = await ctx.db
       .query("vehicle_inspections")
       .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
       .first();
+    if (!inspection) return null;
+
+    const storageIds = Array.from(
+      new Set(inspection.zones.flatMap((zone) => zone.photo_ids ?? [])),
+    );
+    const photo_urls = Object.fromEntries(
+      await Promise.all(
+        storageIds.map(async (storageId) => [
+          storageId,
+          await ctx.storage.getUrl(storageId),
+        ]),
+      ),
+    );
+    return { ...inspection, photo_urls };
   },
 });
 
@@ -142,6 +155,269 @@ export const getOwnerProfileForBooking = query({
 // ---------------------------------------------------------------------------
 // Mutations
 // ---------------------------------------------------------------------------
+
+const inspectionPhotoZoneValidator = v.union(
+  v.literal("FL"),
+  v.literal("FR"),
+  v.literal("RL"),
+  v.literal("RR"),
+  v.literal("ENG"),
+  v.literal("FRT"),
+  v.literal("UND"),
+);
+
+const PHOTO_UPLOAD_WINDOW_MS = 10 * 60 * 1000;
+const PHOTO_UPLOAD_TOKEN_KEY = "_inspection_photo_upload_token";
+const PHOTO_UPLOAD_STARTED_KEY = "_inspection_photo_upload_started_at";
+const PHOTO_UPLOAD_USER_KEY = "_inspection_photo_upload_user_id";
+
+function withoutPhotoUploadGrant(
+  select: Record<string, unknown> | null | undefined,
+) {
+  const next = { ...(select ?? {}) };
+  delete next[PHOTO_UPLOAD_TOKEN_KEY];
+  delete next[PHOTO_UPLOAD_STARTED_KEY];
+  delete next[PHOTO_UPLOAD_USER_KEY];
+  return next;
+}
+
+function hasValidPhotoUploadGrant(
+  zone: { select?: unknown },
+  userId: unknown,
+  uploadToken: string,
+  storageCreatedAt: number,
+) {
+  const select = (zone.select ?? {}) as Record<string, unknown>;
+  const startedAt = select[PHOTO_UPLOAD_STARTED_KEY];
+  return (
+    select[PHOTO_UPLOAD_TOKEN_KEY] === uploadToken &&
+    select[PHOTO_UPLOAD_USER_KEY] === String(userId) &&
+    typeof startedAt === "number" &&
+    Date.now() - startedAt <= PHOTO_UPLOAD_WINDOW_MS &&
+    storageCreatedAt >= startedAt
+  );
+}
+
+export const prepareInspectionPhotoUpload = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    zoneId: inspectionPhotoZoneValidator,
+    uploadToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (!args.uploadToken.trim()) throw new Error("Invalid photo upload token.");
+
+    const inspection = await ctx.db
+      .query("vehicle_inspections")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+      .first();
+    const now = Date.now();
+    const grant = {
+      [PHOTO_UPLOAD_TOKEN_KEY]: args.uploadToken,
+      [PHOTO_UPLOAD_STARTED_KEY]: now,
+      [PHOTO_UPLOAD_USER_KEY]: String(user._id),
+    };
+    if (!inspection) {
+      await ctx.db.insert("vehicle_inspections", {
+        booking_id: args.bookingId,
+        vin: booking.vin,
+        shop_id: booking.shop_id,
+        mechanic_id: booking.mechanic_id,
+        template_version: INSPECTION_TEMPLATE_VERSION,
+        zones: [
+          {
+            zone_id: args.zoneId,
+            done: false,
+            select: grant,
+          },
+        ],
+        findings_attention: [],
+        findings_monitor: [],
+        created_at: now,
+        updated_at: now,
+      });
+    } else {
+      const existingZone = inspection.zones.find(
+        (zone) => zone.zone_id === args.zoneId,
+      );
+      const zones = existingZone
+        ? inspection.zones.map((zone) =>
+            zone.zone_id === args.zoneId
+              ? {
+                  ...zone,
+                  select: {
+                    ...((zone.select ?? {}) as Record<string, unknown>),
+                    ...grant,
+                  },
+                }
+              : zone,
+          )
+        : [
+            ...inspection.zones,
+            {
+              zone_id: args.zoneId,
+              done: false,
+              select: grant,
+            },
+          ];
+      await ctx.db.patch(inspection._id, { zones, updated_at: now });
+    }
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+export const attachInspectionPhoto = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    zoneId: inspectionPhotoZoneValidator,
+    storageId: v.id("_storage"),
+    uploadToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    const metadata = await ctx.db.system.get("_storage", args.storageId);
+    if (!metadata) {
+      throw new Error("We couldn't find that uploaded photo.");
+    }
+
+    const inspection = await ctx.db
+      .query("vehicle_inspections")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+      .first();
+    const zone = inspection?.zones.find(
+      (item) => item.zone_id === args.zoneId,
+    );
+    if (
+      !inspection ||
+      !zone ||
+      !hasValidPhotoUploadGrant(
+        zone,
+        user._id,
+        args.uploadToken,
+        metadata._creationTime,
+      )
+    ) {
+      throw new Error("That upload is not authorized for this inspection.");
+    }
+    const alreadyAssociated = (
+      await ctx.db.query("vehicle_inspections").collect()
+    ).some((candidate) =>
+      candidate.zones.some((candidateZone) =>
+        (candidateZone.photo_ids ?? []).includes(args.storageId),
+      ),
+    );
+    if (alreadyAssociated) {
+      throw new Error("That photo is already attached to an inspection.");
+    }
+    const now = Date.now();
+    const zones = inspection.zones.map((item) =>
+      item.zone_id === args.zoneId
+        ? {
+            ...item,
+            done: false,
+            select: withoutPhotoUploadGrant(
+              (item.select ?? {}) as Record<string, unknown>,
+            ),
+            photo_ids: Array.from(
+              new Set([...(item.photo_ids ?? []), args.storageId]),
+            ),
+          }
+        : item,
+    );
+    await ctx.db.patch(inspection._id, { zones, updated_at: now });
+  },
+});
+
+export const deleteInspectionPhoto = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    storageId: v.id("_storage"),
+    zoneId: v.optional(inspectionPhotoZoneValidator),
+    uploadToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const inspection = await ctx.db
+      .query("vehicle_inspections")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+      .first();
+    const belongsToBooking = inspection?.zones.some((zone) =>
+      (zone.photo_ids ?? []).includes(args.storageId),
+    );
+    if (!inspection || !belongsToBooking) {
+      const metadata = await ctx.db.system.get("_storage", args.storageId);
+      const pendingZone = inspection?.zones.find(
+        (zone) => zone.zone_id === args.zoneId,
+      );
+      if (
+        !metadata ||
+        !pendingZone ||
+        !args.uploadToken ||
+        !hasValidPhotoUploadGrant(
+          pendingZone,
+          user._id,
+          args.uploadToken,
+          metadata._creationTime,
+        )
+      ) {
+        throw new Error("That photo does not belong to this inspection.");
+      }
+      if (!inspection) {
+        throw new Error("That photo does not belong to this inspection.");
+      }
+      const associatedElsewhere = (
+        await ctx.db.query("vehicle_inspections").collect()
+      ).some((candidate) =>
+        candidate.zones.some((zone) =>
+          (zone.photo_ids ?? []).includes(args.storageId),
+        ),
+      );
+      if (associatedElsewhere) {
+        throw new Error("That photo belongs to another inspection.");
+      }
+      const zones = inspection.zones.map((zone) =>
+        zone.zone_id === args.zoneId
+          ? {
+              ...zone,
+              select: withoutPhotoUploadGrant(
+                (zone.select ?? {}) as Record<string, unknown>,
+              ),
+            }
+          : zone,
+      );
+      await ctx.db.patch(inspection._id, {
+        zones,
+        updated_at: Date.now(),
+      });
+      await ctx.storage.delete(args.storageId);
+      return;
+    }
+
+    const zones = inspection.zones.map((zone) => ({
+      ...zone,
+      done: (zone.photo_ids ?? []).includes(args.storageId) ? false : zone.done,
+      photo_ids: (zone.photo_ids ?? []).filter(
+        (storageId) => storageId !== args.storageId,
+      ),
+    }));
+    await ctx.db.patch(inspection._id, {
+      zones,
+      updated_at: Date.now(),
+    });
+    await ctx.storage.delete(args.storageId);
+  },
+});
 
 export const saveOwnerProfileAnswers = mutation({
   args: {
@@ -308,50 +584,6 @@ export const _isCallerAuthorizedShopUser = internalQuery({
   },
 });
 
-/**
- * Per-axle rotor minimums for a config, shaped for buildInspectionZones.
- * Returns empty refs when the config is missing or carries no minimum — which
- * makes classify() report the rotor ungraded instead of passing it.
- */
-async function rotorRefsForConfig(
-  ctx: { db: { get: (id: Id<"vehicle_configs">) => Promise<Doc<"vehicle_configs"> | null> } },
-  configId: Id<"vehicle_configs"> | null | undefined,
-): Promise<{ frontRotor?: RotorRef; rearRotor?: RotorRef }> {
-  if (!configId) return {};
-  const cfg = await ctx.db.get(configId);
-  if (!cfg) return {};
-  let sourceDomain: string | null = null;
-  if (cfg.rotor_min_source_url) {
-    try {
-      sourceDomain = new URL(cfg.rotor_min_source_url).hostname;
-    } catch {
-      sourceDomain = null;
-    }
-  }
-  const axleRef = (
-    minMm: number | undefined,
-    quality: string | undefined,
-    nominalMm: number | undefined,
-  ): RotorRef => ({
-    minMm: minMm ?? null,
-    kind: (minMm == null ? "none" : (quality ?? "oem_spec")) as RotorRef["kind"],
-    nominalMm: nominalMm ?? null,
-    sourceDomain,
-  });
-  return {
-    frontRotor: axleRef(
-      cfg.rotor_front_min_thickness_mm,
-      cfg.rotor_front_min_quality,
-      cfg.rotor_front_nominal_thickness_mm,
-    ),
-    rearRotor: axleRef(
-      cfg.rotor_rear_min_thickness_mm,
-      cfg.rotor_rear_min_quality,
-      cfg.rotor_rear_nominal_thickness_mm,
-    ),
-  };
-}
-
 export const _assembleInspectionData = internalQuery({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -420,13 +652,7 @@ export const _assembleInspectionData = internalQuery({
       shopName: shop?.name ?? null,
       mechanicName,
       generatedAtMs: Date.now(),
-      // Build zones with THIS vehicle's rotor minimums so the customer-facing
-      // PDF grades against the same reference the mechanic saw in the bay. With
-      // no minimum on file the rows read "not graded" rather than a false pass.
-      zones: formatZonesForPdf(
-        inspection.zones ?? [],
-        buildInspectionZones(await rotorRefsForConfig(ctx, vehicle?.vehicle_config_id)),
-      ),
+      zones: formatZonesForPdf(inspection.zones ?? []),
       ownerRows,
       findingsAttention: inspection.findings_attention ?? [],
       findingsMonitor: inspection.findings_monitor ?? [],

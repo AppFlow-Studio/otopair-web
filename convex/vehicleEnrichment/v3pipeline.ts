@@ -26,9 +26,10 @@ import type {
 import { buildEngineKey, emptyField, V4_FIELD_KEYS, SIBLING_SAFE_FIELDS, SIBLING_INHERIT_RULES, parseFrontWiperSizes, ON_DEMAND_SERVICE_SLUGS, WEAR_ITEM_SERVICE_SLUGS } from "./types";
 import { submitBatch, getBatchStatus, getBatchResults, type BatchRequest } from "./utils/batchClient";
 import {
-  buildBatch1aOutputSchema,
-  buildBatch1bOutputSchema,
-  buildBatch2OutputSchema,
+  buildBatch1aArraySchema,
+  buildBatch1bArraySchema,
+  buildBatch2ArraySchema,
+  normalizeBatchShape,
   buildVdbMappingOutputSchema,
   BATCH_1A_INTERVAL_KEYS,
   BATCH_1B_INTERVAL_KEYS,
@@ -2958,7 +2959,7 @@ export const enrichVehicleBatchV3 = internalAction({
         maxTokens: 8192,
         temperature: 0,
         maxSearchUses: 0,
-        outputSchema: buildBatch1aOutputSchema(detectedPackages.map((p) => p.code)),
+        outputSchema: buildBatch1aArraySchema(detectedPackages.map((p) => p.code)),
       },
       {
         customId: "batch1b",
@@ -2968,7 +2969,7 @@ export const enrichVehicleBatchV3 = internalAction({
         temperature: 0,
         maxSearchUses: 1,
         blockedDomains: runtimeBlockedDomains,
-        outputSchema: buildBatch1bOutputSchema(),
+        outputSchema: buildBatch1bArraySchema(),
       },
     ];
 
@@ -3345,8 +3346,8 @@ async function runPollBatch1Body(
       ...(r1b && !r1b.error ? [{ call: "batch1b", tokensIn: r1b.usage.tokensIn, tokensOut: r1b.usage.tokensOut, webSearches: r1b.usage.webSearches, durationMs: 0 }] : []),
     ];
 
-    const fields1a = parseBatch1a(r1a.data);
-    const fields1b = r1b && !r1b.error ? parseBatch1b(r1b.data) : {};
+    const fields1a = parseBatch1a(normalizeBatchShape(r1a.data, "1a"));
+    const fields1b = r1b && !r1b.error ? parseBatch1b(normalizeBatchShape(r1b.data, "1b")) : {};
     let fields = mergeBatch1(fields1a, fields1b);
 
     // Package-specific OEM parts (only present when assessAvailablePackages
@@ -3549,7 +3550,7 @@ async function runPollBatch1Body(
           temperature: 0,
           maxSearchUses: batch2SearchUses,
           blockedDomains: batch2BlockedDomains,
-          outputSchema: buildBatch2OutputSchema(nullFields),
+          outputSchema: buildBatch2ArraySchema(nullFields),
         },
       ]);
     } catch (e) {
@@ -3776,7 +3777,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
 
     if (r2 && !r2.error) {
       // Gap fill — only fill nulls
-      const parsed = parseBatch2(r2.data, args.nullFields);
+      const parsed = parseBatch2(normalizeBatchShape(r2.data, "2"), args.nullFields);
       const gapFields = parsed.gapFields;
       services = parsed.services;
       for (const [k, fv] of Object.entries(gapFields)) {
@@ -3835,7 +3836,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               webSearches: gfRes.usage.webSearches,
               durationMs: 0,
             });
-            const gfParsed = parseBatch2(gfRes.data, stillNull);
+            const gfParsed = parseBatch2(normalizeBatchShape(gfRes.data, "2"), stillNull);
             let gfFilled = 0;
             for (const [k, fv] of Object.entries(gfParsed.gapFields)) {
               if (allFields[k]?.value == null) {

@@ -12,6 +12,13 @@
 import type { VehicleInput, VehicleIdentity } from "../types";
 import type { DetectedPackage } from "../../lib/vehicleDatabases";
 import { assembleVariantFingerprint, renderVariantConstraints } from "../variantFingerprint";
+// The prompt's allowed-key lists are generated from the SAME constants the
+// output schema enumerates, so the two contracts cannot drift apart.
+import {
+  BATCH_1A_FIELD_ROW_KEYS,
+  BATCH_1A_INTERVAL_KEYS,
+  OEM_PART_KEYS,
+} from "../utils/batchSchemas";
 import { resolveFuelClass } from "../fuelTypeResolver";
 import { resolveBuildSource } from "../buildSourceResolver";
 
@@ -197,111 +204,46 @@ ${manualSection}
 
 ${packagesSection}
 
-Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, turbo, transmission_type, fuel_injection_type, timing_system), use source_type: "nhtsa" and confidence: 1.0:
+Return ONE JSON object containing FOUR ARRAYS. Each entry is one row.
+
+A field you cannot determine is OMITTED ENTIRELY — do not emit a row whose value
+is null, and never invent a row to fill the shape. An omitted row IS the answer
+"this vehicle has no such value / it was not in the sources"; that is a complete,
+correct response, and it is preferred over a guess.
+
+For NHTSA-provided fields (drivetrain, turbo, transmission_type,
+fuel_injection_type, timing_system) use source_type "nhtsa" and confidence 1.0.
 
 {
-  "fluids": {
-    "oil_viscosity": { "value": "0W-30", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-    "oil_capacity_qts": { "value": 11.1, "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-    "coolant_type": { "value": "BMW HT-12", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-    "coolant_capacity_qts": { "value": 9.25, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 },
-    "brake_fluid_type": { "value": "DOT 4", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
-    "brake_fluid_capacity_oz": { "value": 32, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 },
-    "power_steering_type": { "value": "electric", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
-    "ps_fluid_capacity_oz": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "transmission_fluid_capacity_qts": { "value": 4.5, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 }
-  },
-  "intervals": {
-    "oil_change": {
-      "miles": { "value": 10000, "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-      "months": { "value": 12, "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-      "status": "scheduled",
-      "display_string": "Every 10,000 miles or 12 months"
-    },
-    "spark_plug": { "miles": { ... }, "months": { ... }, "status": "scheduled", "display_string": "..." },
-    "transmission_service": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "coolant_flush": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "air_filter": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "cabin_filter": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "brake_fluid_flush": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "serpentine_belt": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "timing_belt_or_chain_service": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "brake_pads": { "miles": { ... }, "months": { ... }, "status": "inspect_only", "display_string": "..." },
-    "tire_rotation": { "miles": { ... }, "months": { ... }, "status": "scheduled", "display_string": "..." }
-  },
-  "attributes": {
-    "timing_system": { "value": "chain", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "drivetrain": { "value": "AWD", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "turbo": { "value": true, "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "fuel_injection_type": { "value": "direct", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "transmission_type": { "value": "automatic", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 }
-  },
-  "oem_parts": {
-    "oil_filter_oem": { "value": "11427583220", "observed_title": "2018-2023 BMW Oil Filter Element 11427583220", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-    "air_filter_oem": { "value": "...", "observed_title": "...", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "cabin_filter_oem": { "value": null, "observed_title": null, "source_url": null, "source_type": null, "confidence": null },
-    "spark_plug_oem": { "value": "...", ... },
-    "front_brake_pad_oem": { "value": "...", ... },
-    "rear_brake_pad_oem": { "value": "...", ... },
-    "rotor_front_oem": { "value": "...", ... },
-    "rotor_rear_oem": { "value": "...", ... },
-    "drain_plug_gasket_oem": { "value": "...", ... },
-    "serpentine_belt_oem": { "value": "...", ... },
-    "timing_belt_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "wiper_blade_set_oem": { "value": "...", ... },
-    "wiper_blade_rear_oem": { "value": "...", ... },
-    "battery_oem": { "value": "...", ... },
-    "coolant_oem": { "value": "...", ... },
-    "engine_oil_oem": { "value": "...", ... },
-    "oil_filter_housing_oring_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "ignition_coil_oem": { "value": "...", ... },
-    "intake_manifold_gasket_oem": { "value": "...", ... },
-    "timing_kit_oem": { "value": "...", ... },
-    "water_pump_oem": { "value": "...", ... },
-    "atf_fluid_oem": { "value": "...", ... },
-    "trans_filter_oem": { "value": "...", ... },
-    "trans_pan_gasket_oem": { "value": "...", ... },
-    "brake_fluid_oem": { "value": "...", ... },
-    "ps_fluid_oem": { "value": "...", ... },
-    "gear_oil_oem": { "value": "...", ... },
-    "friction_modifier_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "brake_hardware_kit_front_oem": { "value": "...", ... },
-    "brake_hardware_kit_rear_oem": { "value": "...", ... },
-    "brake_wear_sensor_front_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "brake_wear_sensor_rear_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "thermostat_oem": { "value": "...", ... },
-    "thermostat_gasket_oem": { "value": "...", ... },
-    "cvt_internal_filter_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "cvt_external_filter_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null }
-  },
-  "battery": {
-    "battery_group": { "value": "H8/Group 49", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "battery_cca": { "value": 850, "source_url": "...", "source_type": "scraped", "confidence": 0.9 }
-  },
-  "spark_plug": {
-    "quantity": { "value": 8, "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "gap_mm": { "value": 0.7, "source_url": "...", "source_type": "scraped", "confidence": 0.9 }
-  },
-  "parking_brake_type": { "value": "electronic", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
-  "rotor_specs": {
-    "front": {
-      "thickness_kind": "discard_min",
-      "value_mm": 24.0,
-      "observed_label": "Minimum Thickness",
-      "observed_value_text": "24.0 mm",
-      "nominal_mm": 26.0,
-      "source_url": "...", "source_type": "scraped", "confidence": 0.9
-    },
-    "rear": { "thickness_kind": null, "value_mm": null, "observed_label": null, "observed_value_text": null, "nominal_mm": null, "source_url": null, "source_type": null, "confidence": null }
-  },
-  "trim_specs": {
-    "tire_pressure_front_psi": { "value": 35, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "tire_pressure_rear_psi": { "value": 38, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "lug_nut_torque_ft_lbs": { "value": 103, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "front_wiper_size": { "value": "26", "source_url": "...", "source_type": "scraped", "confidence": 0.8 },
-    "rear_wiper_size": { "value": null, "source_url": null, "source_type": null, "confidence": null }
-  }
+  "fields": [
+    { "key": "oil_viscosity", "value": "0W-30", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
+    { "key": "oil_capacity_qts", "value": 11.1, "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
+    { "key": "drivetrain", "value": "AWD", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
+    { "key": "turbo", "value": true, "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
+    { "key": "spark_plug_quantity", "value": 8, "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
+    { "key": "parking_brake_type", "value": "electronic", "source_url": null, "source_type": "training_data", "confidence": 0.75 }
+  ],
+  "intervals": [
+    { "key": "oil_change", "interval_miles": 10000, "interval_months": 12, "status": "scheduled", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
+    { "key": "brake_pads", "interval_miles": 30000, "interval_months": null, "status": "inspect_only", "source_url": "https://...", "source_type": "scraped", "confidence": 0.8 }
+  ],
+  "oem_parts": [
+    { "key": "oil_filter_oem", "value": "11428583898", "observed_title": "Oil Filter Kit", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 }
+  ],
+  "rotor_specs": [
+    { "axle": "front", "thickness_kind": "discard_min", "value_mm": 24.0, "observed_label": "Minimum Thickness", "observed_value_text": "24.0 mm", "nominal_mm": 26.0, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 }
+  ]
 }
+
+ALLOWED "key" VALUES — any other key is invalid and will be discarded.
+
+fields: ${BATCH_1A_FIELD_ROW_KEYS.join(", ")}
+
+intervals: ${BATCH_1A_INTERVAL_KEYS.join(", ")}
+
+oem_parts: ${OEM_PART_KEYS.join(", ")}
+
+rotor_specs axle: "front" or "rear" (one row per axle you have data for)
 
 REMINDERS:
 - If timing_system is "chain" (from NHTSA or scraped), set timing_belt_oem to null.

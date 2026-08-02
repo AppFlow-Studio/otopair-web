@@ -125,5 +125,13 @@ IMPORTANT REMINDERS:
 - battery_type: the battery chemistry. Use one of: "AGM", "flooded", "EFB", "lithium-ion". Most modern vehicles use AGM if start-stop equipped; older vehicles typically use flooded lead-acid.
 - battery_location: where the battery is physically installed. Common values: "engine bay", "trunk", "under rear seat", "under front seat". Many European vehicles (BMW, Mercedes, Audi) place the battery in the trunk.
 - brake_pads: the manufacturer's INSPECTION / typical pad-life guidance in miles (wear-based, not a hard schedule) — use status "inspect_only" unless the maintenance schedule explicitly mandates replacement. tire_rotation: the rotation schedule (typically 5,000-8,000 miles).
-- Return null for any field you cannot confidently determine after 1-2 searches.`;
+- Return null for any field you cannot confidently determine after 1-2 searches.
+
+OUTPUT SHAPE OVERRIDE (supersedes the JSON template above):
+Return ONE object with TWO ARRAYS — no nested section objects.
+{
+  "fields":    [ { "key": "trans_fluid_type", "value": "ATF WS", "source_url": "...", "source_type": "web_search", "confidence": 0.9 } ],
+  "intervals": [ { "key": "oil_change", "interval_miles": 10000, "interval_months": 12, "status": "scheduled", "source_url": "...", "source_type": "web_search", "confidence": 0.9 } ]
+}
+A field you cannot determine is OMITTED ENTIRELY — never emit a row whose value is null.`;
 }

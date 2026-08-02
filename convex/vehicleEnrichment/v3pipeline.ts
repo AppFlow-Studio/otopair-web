@@ -6905,6 +6905,53 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       console.warn("[v8] EPA economy refresh trigger failed (non-fatal):", e);
     }
 
+    // ── Agent research: rotor minimums (round 19) ───────────────────────────
+    //
+    // LAST RESORT, and only on positive evidence that the deterministic path
+    // produced nothing: fires solely when BOTH axles are still null after the
+    // rotor resolver, its adapters, and the whole run have had their turn.
+    //
+    // Round 19 measured the need — 0 of 12 axles populated, and 0 across ~30
+    // vehicles over five rounds, with `brembo` absent from adapters_seen on
+    // every one. This is the tool filter's criterion: data we cannot get today.
+    //
+    // Scheduled and never awaited: one agent task runs ~226s (measured), far
+    // beyond what this action's remaining budget can absorb. It writes CLAIMS
+    // only — the rotor resolver's existing double validation still decides
+    // whether any of it becomes a stored minimum, which is what stops an
+    // aftermarket retailer's product dimension being promoted to a
+    // manufacturer discard spec.
+    //
+    // Off unless ENRICHMENT_AGENT=on, so this costs nothing until switched on.
+    try {
+      const cfgForRotor: any = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getVehicleConfigById,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+      const rotorStillMissing =
+        cfgForRotor?.rotor_front_min_thickness_mm == null &&
+        cfgForRotor?.rotor_rear_min_thickness_mm == null;
+      if (rotorStillMissing && process.env.ENRICHMENT_AGENT === "on") {
+        await ctx.scheduler.runAfter(
+          30_000,
+          internal.vehicleEnrichment.agentResearch.researchRotorMinimums,
+          {
+            vehicleConfigId: args.vehicleConfigId,
+            runId: args.runId,
+            year: args.year,
+            make: args.make,
+            model: args.model,
+            trim: args.trim ?? null,
+            engineCode: vehicle.engineCode ?? null,
+            displacement: args.displacement ?? null,
+          },
+        );
+        console.log("[v8] agent rotor research scheduled (both axles still null)");
+      }
+    } catch (e) {
+      console.warn("[v8] agent rotor research trigger failed (non-fatal):", e);
+    }
+
     // ── Labor retry (2020 Yaris canary, Jul 30 2026) ────────────────────────
     // The inline labor pass lives inside `if (r2)`, so a batch-2 timeout or an
     // unparseable batch-2 body means NO labor source is ever contacted — and

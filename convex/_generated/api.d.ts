@@ -365,6 +365,7 @@ import type * as users from "../users.js";
 import type * as vehicleDocuments from "../vehicleDocuments.js";
 import type * as vehicleDocuments_node from "../vehicleDocuments_node.js";
 import type * as vehicleEnrichment_adversarialVerification from "../vehicleEnrichment/adversarialVerification.js";
+import type * as vehicleEnrichment_agentResearch from "../vehicleEnrichment/agentResearch.js";
 import type * as vehicleEnrichment_anomalyDetection from "../vehicleEnrichment/anomalyDetection.js";
 import type * as vehicleEnrichment_applicabilityRules from "../vehicleEnrichment/applicabilityRules.js";
 import type * as vehicleEnrichment_backfillNhtsaKey from "../vehicleEnrichment/backfillNhtsaKey.js";
@@ -856,6 +857,7 @@ declare const fullApi: ApiFromModules<{
   vehicleDocuments: typeof vehicleDocuments;
   vehicleDocuments_node: typeof vehicleDocuments_node;
   "vehicleEnrichment/adversarialVerification": typeof vehicleEnrichment_adversarialVerification;
+  "vehicleEnrichment/agentResearch": typeof vehicleEnrichment_agentResearch;
   "vehicleEnrichment/anomalyDetection": typeof vehicleEnrichment_anomalyDetection;
   "vehicleEnrichment/applicabilityRules": typeof vehicleEnrichment_applicabilityRules;
   "vehicleEnrichment/backfillNhtsaKey": typeof vehicleEnrichment_backfillNhtsaKey;

@@ -542,3 +542,73 @@ describe("epaModelNameCandidates", () => {
     expect(epaModelNameCandidates("   ")).toEqual([]);
   });
 });
+
+// ─── epaModelNameCandidates: TRIM-aware resolution (2026-08-01) ───────────
+//
+// Measured live that day: bare-model lookups resolved 0 of 6 audited vehicles,
+// because EPA bakes the trim into the model name ("X5 xDrive40i" exists,
+// "X5" returns null). Every expectation below was checked against
+// /ws/rest/vehicle/menu/model for that year+make before being written here.
+
+describe("epaModelNameCandidates — trim-aware (live-verified names)", () => {
+  const firstMatch = (cands: string[], epaModels: string[]): string | null =>
+    cands.find((c) => epaModels.includes(c)) ?? null;
+
+  it("resolves a trim-in-model name: EPA has 'X5 xDrive40i', not 'X5'", () => {
+    // Live 2019 BMW menu: ['X5 xDrive40i', 'X5 xDrive50i'] — no bare 'X5'.
+    const cands = epaModelNameCandidates("X5", "AWD", "xDrive40i", "BMW");
+    expect(firstMatch(cands, ["X5 xDrive40i", "X5 xDrive50i"])).toBe("X5 xDrive40i");
+  });
+
+  it("resolves a family model from its trim: 'GLC-Class' -> 'GLC300 4matic'", () => {
+    const cands = epaModelNameCandidates("GLC-Class", "AWD", "GLC300-4M", "Mercedes-Benz");
+    expect(firstMatch(cands, ["GLC300", "GLC300 4matic", "GLC300 4matic Coupe"])).toBe(
+      "GLC300 4matic",
+    );
+  });
+
+  it("prefers the AWD variant over the FWD one: 'RX 350 AWD', not 'RX 350'", () => {
+    const cands = epaModelNameCandidates("RX", "4WD", "350 Standard", "Lexus");
+    expect(firstMatch(cands, ["RX 350", "RX 350 AWD", "RX 350 L"])).toBe("RX 350 AWD");
+  });
+
+  it("uses the brand AWD word EPA actually prints: 'Atlas 4motion'", () => {
+    const cands = epaModelNameCandidates("Atlas", "AWD", "V6 SE", "Volkswagen");
+    expect(firstMatch(cands, ["Atlas", "Atlas 4motion"])).toBe("Atlas 4motion");
+  });
+
+  // ── The regression this ordering exists to prevent. ──
+  // A truncated base plus a drive token can spell a DIFFERENT REAL CAR.
+  // "911 Carrera" + "4" = "911 Carrera 4" (379 hp) when the vehicle is a
+  // Carrera 4S (443 hp) — an exact-match lookup cannot catch that, because the
+  // wrong candidate is a valid model. Full trim must be exhausted first, and
+  // Porsche must contribute no AWD token.
+  it("never downgrades a Carrera 4S to a Carrera 4", () => {
+    const epa = ["911 Carrera", "911 Carrera 4", "911 Carrera 4S", "911 Carrera S"];
+    const cands = epaModelNameCandidates("911", "AWD", "Carrera 4S", "Porsche");
+    expect(firstMatch(cands, epa)).toBe("911 Carrera 4S");
+    expect(cands).not.toContain("911 Carrera 4");
+  });
+
+  it("resolves a bare-trim supercar name: '911 GT3 RS'", () => {
+    const cands = epaModelNameCandidates("911", "RWD", "GT3 RS", "Porsche");
+    expect(firstMatch(cands, ["911 GT3", "911 GT3 RS", "911 Carrera"])).toBe("911 GT3 RS");
+  });
+
+  it("still resolves a plain model whose EPA name carries no trim", () => {
+    // 2019 Toyota lists a bare 'Camry'; a FWD config must reach it.
+    const cands = epaModelNameCandidates("Camry", "4x2", "L/LE/SE/XLE", "Toyota");
+    expect(firstMatch(cands, ["Camry", "Camry Hybrid", "Camry AWD"])).toBe("Camry");
+  });
+
+  it("keeps the pre-existing drive-suffix-before-bare order within one base", () => {
+    // Unchanged behaviour: hyphen spellings are one rung, suffix first.
+    expect(epaModelNameCandidates("F-150", "4WD")).toEqual([
+      "F-150 4WD",
+      "F150 4WD",
+      "F-150",
+      "F150",
+    ]);
+    expect(epaModelNameCandidates("Crosstrek", "AWD")).toEqual(["Crosstrek AWD", "Crosstrek"]);
+  });
+});

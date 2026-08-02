@@ -18,7 +18,15 @@
       "top": "ENGINE",
       "total": 77
     },
-    "epa": null,
+    "epa": {
+      "co2": 377,
+      "fuel_cost_yr": 3150,
+      "mpg": [
+        21,
+        28,
+        24
+      ]
+    },
     "manual": {
       "file_id": null,
       "kind": "unknown",
@@ -40,7 +48,7 @@
     "trans_fluid_capacity_qts": 5
   },
   "headline": {
-    "epa_joined": false,
+    "epa_joined": true,
     "field_corroboration": "0%",
     "fields_with_claims": 5,
     "fitment_multi_source": "0%",
@@ -48,14 +56,20 @@
     "months_fill": "39%",
     "parts_quotable": "2/2",
     "rotor_minimums": 0,
-    "status": "partial"
+    "status": "pending"
   },
   "identity_coherence": {
     "aspiration": "turbo",
     "cylinders": 4,
     "displacement_l": 2,
     "engine_code": "M264",
-    "epa_says": null,
+    "epa_says": {
+      "cylinders": 4,
+      "displacement_l": 2,
+      "fuel": "Premium Gasoline",
+      "mismatch": null,
+      "turbo": true
+    },
     "fuel_type": "Gasoline",
     "plugs_match_cylinders": true,
     "spark_plug_quantity": 4,
@@ -516,106 +530,23 @@
     "source_url": null
   },
   "run": {
-    "applicable_fill_rate": 37,
-    "duration_min": 16.5,
+    "applicable_fill_rate": null,
+    "duration_min": null,
     "error_tags": {
-      "applicable_services_structural_fallback_used": 1,
-      "quotability": 1,
-      "role_resource": 11,
-      "rotor_min": 2,
-      "sanity": 1
+      "batch1_submission_failed": 1
     },
-    "field_gap_count": 93,
-    "fill_rate": 40,
-    "quotability": {
-      "pct": 0.42,
-      "services": [
-        {
-          "core_total": 1,
-          "core_with_fitment": 0,
-          "core_with_price": 0,
-          "slug": "battery_replacement"
-        },
-        {
-          "core_total": 1,
-          "core_with_fitment": 1,
-          "core_with_price": 1,
-          "slug": "brake_fluid_flush"
-        },
-        {
-          "core_total": 3,
-          "core_with_fitment": 1,
-          "core_with_price": 1,
-          "slug": "brake_pad_replacement"
-        },
-        {
-          "core_total": 1,
-          "core_with_fitment": 0,
-          "core_with_price": 0,
-          "slug": "coolant_flush"
-        },
-        {
-          "core_total": 2,
-          "core_with_fitment": 2,
-          "core_with_price": 2,
-          "slug": "differential_service"
-        },
-        {
-          "core_total": 2,
-          "core_with_fitment": 1,
-          "core_with_price": 1,
-          "slug": "filter_replacement"
-        },
-        {
-          "core_total": 1,
-          "core_with_fitment": 1,
-          "core_with_price": 1,
-          "slug": "fuel_system_cleaning"
-        },
-        {
-          "core_total": 4,
-          "core_with_fitment": 4,
-          "core_with_price": 4,
-          "slug": "oil_change"
-        },
-        {
-          "core_total": 5,
-          "core_with_fitment": 1,
-          "core_with_price": 1,
-          "slug": "rotor_replacement"
-        },
-        {
-          "core_total": 1,
-          "core_with_fitment": 0,
-          "core_with_price": 0,
-          "slug": "spark_plugs"
-        },
-        {
-          "core_total": 1,
-          "core_with_fitment": 1,
-          "core_with_price": 1,
-          "slug": "tire_balance"
-        },
-        {
-          "core_total": 2,
-          "core_with_fitment": 1,
-          "core_with_price": 1,
-          "slug": "transmission_service"
-        }
-      ]
-    },
-    "runId": "tx73wfhm49a2t11m8frje3b7jn8bm7pa",
-    "sanity_flag_count": 2,
-    "sanity_flags_by_stage": {
-      "(pre-finalize)": 1,
-      "completion_gate": 1
-    },
-    "status": "complete",
-    "tokens_in": 22137,
-    "tokens_out": 16414,
+    "field_gap_count": 0,
+    "fill_rate": null,
+    "quotability": null,
+    "runId": "tx7cc208nzejy3ng6qcnhcxvfs8bnm3t",
+    "sanity_flag_count": 0,
+    "sanity_flags_by_stage": {},
+    "status": "failed",
+    "tokens_in": null,
+    "tokens_out": null,
     "trigger": "new_vehicle",
     "version": "v8",
-    "web_searches": 28
+    "web_searches": null
   },
   "vehicle": {
     "chassis_code": "X253",
@@ -623,7 +554,7 @@
     "configId": "w571v8g2whhn708xqfe47y896h8bmgn7",
     "config_key": "2020_mercedes_benz_glc_class_glc300_4m_m264",
     "drivetrain": "AWD",
-    "enrichment_status": "partial",
+    "enrichment_status": "pending",
     "fill_rate": 77,
     "last_enriched_at": 1785609156819,
     "make": "MERCEDES-BENZ",

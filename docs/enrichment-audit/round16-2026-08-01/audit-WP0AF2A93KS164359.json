@@ -6,15 +6,15 @@
       "sylvania_bulbs",
       "trico_wipers"
     ],
-    "claim_rows": 27,
+    "claim_rows": 28,
     "families_seen": [
       "aftermarket_catalog",
       "web_search"
     ],
-    "fields_conflict_tie": 0,
-    "fields_contested": 2,
+    "fields_conflict_tie": 1,
+    "fields_contested": 3,
     "fields_multi_family_agreement": 1,
-    "fields_single_source": 23,
+    "fields_single_source": 22,
     "fields_with_claims": 24
   },
   "external_joins": {
@@ -24,8 +24,8 @@
       "file_id": null,
       "kind": "unknown",
       "oem": true,
-      "pages": 102,
-      "url": "https://newsroom.porsche.com/dam/jcr:48703ff4-40bd-4814-8aac-8bab50af621a/Annual%20and%20Sustainability%20Report%20of%20Porsche%20AG%202019.pdf"
+      "pages": 20,
+      "url": "https://newsroom.porsche.com/dam/jcr:f67ebd45-3aa7-4bf9-9c6a-78d336603b7e/2022%20Porsche%20911%20GT3%20Press%20Kit.pdf"
     },
     "recalls_open": 1
   },
@@ -34,7 +34,7 @@
     "brake_fluid_type": "DOT 4",
     "coolant_capacity_qts": null,
     "coolant_type": "OAT (Porsche 774F spec / G12+ or G13 compatible)",
-    "oil_capacity_qts": 10.04,
+    "oil_capacity_qts": 7.9,
     "oil_viscosity": "0W-40",
     "ps_fluid_capacity_oz": null,
     "ps_fluid_type": null,
@@ -44,12 +44,12 @@
     "epa_joined": false,
     "field_corroboration": "4%",
     "fields_with_claims": 24,
-    "fitment_multi_source": "20%",
+    "fitment_multi_source": "18%",
     "has_manual": false,
-    "months_fill": "33%",
-    "parts_quotable": "9/10",
+    "months_fill": "48%",
+    "parts_quotable": "8/11",
     "rotor_minimums": 0,
-    "status": "pending"
+    "status": "complete"
   },
   "identity_coherence": {
     "aspiration": null,
@@ -66,12 +66,13 @@
   },
   "intervals": {
     "by_provenance": {
-      "default_fallback": 13,
+      "adversarial_corrected": 1,
+      "default_fallback": 12,
       "deterministic": 8,
       "enriched": 1,
       "vdb_schedule": 5
     },
-    "months_fill": "33%",
+    "months_fill": "48%",
     "rows": [
       {
         "bookable": false,
@@ -84,7 +85,7 @@
       {
         "bookable": true,
         "miles": 60000,
-        "months": null,
+        "months": 48,
         "provenance": "default_fallback",
         "service": "battery_replacement",
         "status": "estimated"
@@ -108,7 +109,7 @@
       {
         "bookable": true,
         "miles": 40000,
-        "months": null,
+        "months": 48,
         "provenance": "default_fallback",
         "service": "brake_pad_replacement",
         "status": "estimated"
@@ -123,9 +124,9 @@
       },
       {
         "bookable": true,
-        "miles": 60000,
-        "months": 60,
-        "provenance": "default_fallback",
+        "miles": 50000,
+        "months": 24,
+        "provenance": "adversarial_corrected",
         "service": "coolant_flush",
         "status": "estimated"
       },
@@ -204,7 +205,7 @@
       {
         "bookable": true,
         "miles": 70000,
-        "months": null,
+        "months": 72,
         "provenance": "default_fallback",
         "service": "rotor_replacement",
         "status": "estimated"
@@ -244,7 +245,7 @@
       {
         "bookable": true,
         "miles": 50000,
-        "months": null,
+        "months": 60,
         "provenance": "default_fallback",
         "service": "tire_replacement",
         "status": "estimated"
@@ -292,7 +293,7 @@
     ],
     "total": 27,
     "with_miles": 13,
-    "with_months": 9
+    "with_months": 13
   },
   "labor": {
     "by_source": {
@@ -440,7 +441,7 @@
   },
   "parts": {
     "corroborated_2plus_sources": 2,
-    "corroboration_rate": "20%",
+    "corroboration_rate": "18%",
     "rows": [
       {
         "best_price": null,
@@ -455,7 +456,7 @@
         "scraped_name": "Air Filter",
         "service": "filter_replacement",
         "service_role": "core",
-        "source_count": 2,
+        "source_count": 4,
         "source_domains": [
           "porsche.oempartsonline.com"
         ],
@@ -523,7 +524,7 @@
         "scraped_name": "Cabin Air Filter",
         "service": "filter_replacement",
         "service_role": "core",
-        "source_count": 2,
+        "source_count": 4,
         "source_domains": [
           "porsche.oempartsonline.com"
         ],
@@ -560,6 +561,28 @@
         "data_quality": "scraped",
         "mechanic_verified": false,
         "oem": "9y0698151an",
+        "price_domains": [
+          "porsche.oempartsonline.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": true,
+        "role": "front_brake_pad",
+        "scraped_name": "1 Set Of Brake Pads Front",
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "porsche.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 484.48,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "99135194704",
         "price_domains": [
           "porsche.oempartsonline.com"
         ],
@@ -610,7 +633,7 @@
           "porsche.oempartsonline.com"
         ],
         "price_rows": 1,
-        "refute_flagged": false,
+        "refute_flagged": true,
         "role": "rear_brake_pad",
         "scraped_name": "1 Set Of Brake Pads Rear",
         "service": "brake_pad_replacement",
@@ -619,7 +642,7 @@
         "source_domains": [
           "porsche.oempartsonline.com"
         ],
-        "triangle_ok": true,
+        "triangle_ok": false,
         "trusted_price_rows": 1
       },
       {
@@ -667,16 +690,26 @@
         "trusted_price_rows": 1
       }
     ],
-    "total": 10,
+    "total": 11,
     "triangle_broken": [
       {
         "oem": "991-110-130-92",
         "role": "air_filter",
         "why": "no_trusted_price"
+      },
+      {
+        "oem": "9y0698151an",
+        "role": "front_brake_pad",
+        "why": "refute_flagged"
+      },
+      {
+        "oem": "9y0698451ae",
+        "role": "rear_brake_pad",
+        "why": "refute_flagged"
       }
     ],
-    "triangle_ok": 9,
-    "with_observed_title": 10
+    "triangle_ok": 8,
+    "with_observed_title": 11
   },
   "rotor": {
     "front_label": null,
@@ -690,33 +723,117 @@
     "source_url": null
   },
   "run": {
-    "applicable_fill_rate": null,
-    "duration_min": null,
+    "applicable_fill_rate": 22,
+    "duration_min": 14.4,
     "error_tags": {
-      "batch1a_errored": 1
+      "applicable_services_empty_fallback_used": 1,
+      "fitment_refute_kept_multisource": 2,
+      "role_resource": 3,
+      "rotor_min": 2
     },
-    "field_gap_count": 0,
-    "fill_rate": null,
-    "quotability": null,
-    "runId": "tx74jb00eneak2d7h2n88t3b498bnycz",
-    "sanity_flag_count": 0,
-    "sanity_flags_by_stage": {},
-    "status": "failed",
-    "tokens_in": null,
-    "tokens_out": null,
+    "field_gap_count": 102,
+    "fill_rate": 82,
+    "quotability": {
+      "pct": 0.83,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 5,
+          "core_with_price": 5,
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx71g9zgaygm13a5wkgmrbhhwh8bnf4t",
+    "sanity_flag_count": 9,
+    "sanity_flags_by_stage": {
+      "claim_ledger": 4,
+      "completion_gate": 2,
+      "fitment_refute": 2,
+      "interval_provenance": 1
+    },
+    "status": "complete",
+    "tokens_in": 19946,
+    "tokens_out": 5460,
     "trigger": "new_vehicle",
     "version": "v8",
-    "web_searches": null
+    "web_searches": 0
   },
   "vehicle": {
     "chassis_code": null,
-    "confidence_avg": 0.8520618556701034,
+    "confidence_avg": 0.8774647887323945,
     "configId": "w579hzm96gwa7a16fr2ft88j958bjbs6",
     "config_key": "2019_porsche_911_gt3_rs_ma176",
     "drivetrain": "RWD",
-    "enrichment_status": "pending",
-    "fill_rate": 81,
-    "last_enriched_at": 1785530552743,
+    "enrichment_status": "complete",
+    "fill_rate": 83,
+    "last_enriched_at": 1785608980827,
     "make": "Porsche",
     "model": "911",
     "na_role_keys": [],

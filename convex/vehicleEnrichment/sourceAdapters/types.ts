@@ -30,8 +30,16 @@ export type SourceFamily =
 /** How the value was obtained — provenance for the sellable layer. */
 export type ClaimMethod =
   | "deterministic_parse" // fixed selector/regex on a fetched page
-  | "llm_extraction"      // model-read content
+  | "llm_extraction"      // model-read content, from a page WE chose
   | "api"                 // structured endpoint response
+  // An autonomous research agent that picked its own sources (Firecrawl
+  // /agent). Deliberately NOT folded into "llm_extraction": that is a model
+  // reading a page the pipeline selected and can name, whereas this is a model
+  // choosing where to look. Same words, very different reliability — the live
+  // probe answered a Ford rotor-minimum question from an aftermarket rotor
+  // RETAILER — and in a ledger whose entire purpose is provenance, that
+  // distinction has to survive to the audit.
+  | "agent_research"
   | "human_entry";
 
 export interface Claim {

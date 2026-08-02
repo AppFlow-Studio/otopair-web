@@ -374,9 +374,29 @@ async function buildAudit(ctx: any, configId: Id<"vehicle_configs">) {
       const blockers: string[] = [];
       const warnings: string[] = [];
 
-      const quotable = parts.length - triangleBroken.length;
+      // ROLES, not rows. `parts_quotable` counts fitment ROWS, and a role
+      // legitimately carries several candidates (the rival mechanism) — so a
+      // row count reads as coverage while actually measuring rivalry. The
+      // round-19 F-150's "25/25" was 13 roles with 8 of them rivalled, and the
+      // Altima's "36/36" was 25 roles. Coverage is how many ROLES can be
+      // quoted; the selector picks one winner per role.
+      const rolesAll = new Set(parts.map((p) => String(p.role)));
+      const rolesQuotable = new Set(parts.filter((p) => p.triangle_ok).map((p) => String(p.role)));
+      const quotable = rolesQuotable.size;
       // A config that cannot quote anything cannot serve a customer at all.
-      if (quotable === 0) blockers.push("no_quotable_parts");
+      if (quotable === 0) blockers.push("no_quotable_roles");
+
+      // Exact duplicates — same role AND same part number, twice. Rivals are
+      // legitimate; an identical repeat is not, and it inflates every
+      // row-based metric. Observed on the round-19 Altima (2 rows).
+      const seenPairs = new Set<string>();
+      let dupRows = 0;
+      for (const p of parts) {
+        const k = `${p.role}|${p.oem}`;
+        if (seenPairs.has(k)) dupRows++;
+        else seenPairs.add(k);
+      }
+      if (dupRows > 0) warnings.push(`duplicate_part_rows:${dupRows}`);
       // The three headline services a launch test will actually exercise.
       const coreSlugs = ["oil_change", "brake_pad_replacement", "filter_replacement"];
       const q: any = run?.quotability;
@@ -386,11 +406,26 @@ async function buildAudit(ctx: any, configId: Id<"vehicle_configs">) {
           warnings.push(`incomplete_service:${slug}`);
         }
       }
-      // Correctness blockers: anything the gates positively condemned must not
-      // still be sitting in a role a quote could reach.
+      // Correctness. A refuted part is NOT automatically a blocker: it carries
+      // triangle_ok:false and the selector demotes it, so it cannot reach a
+      // quote while an unflagged rival exists. Blocking on mere presence
+      // (round 19's first cut) failed two otherwise-strong configs — the BMW
+      // at 23 roles and the Outback at 10 — over one already-excluded row.
+      //
+      // What DOES block is a refuted part that is the ONLY candidate for its
+      // role: the role has no correct answer, and a sole flagged candidate is
+      // exactly the "demoted-wrong-winner" shape the rival mechanism exists to
+      // catch. That role is dead, not merely demoted.
       const flagged = parts.filter((p) => p.refute_flagged);
       if (flagged.length > 0) {
-        blockers.push(`refuted_parts_present:${flagged.length}`);
+        const soleFlagged = [...new Set(flagged.map((p) => String(p.role)))].filter(
+          (role) => !parts.some((p) => String(p.role) === role && !p.refute_flagged && p.triangle_ok),
+        );
+        if (soleFlagged.length > 0) {
+          blockers.push(`role_has_only_refuted_candidate:${soleFlagged.join(",")}`);
+        } else {
+          warnings.push(`refuted_parts_demoted:${flagged.length}`);
+        }
       }
       // A part with no observed title has no component-identity evidence — the
       // signal that caught the battery-cable-as-battery class.
@@ -425,7 +460,11 @@ async function buildAudit(ctx: any, configId: Id<"vehicle_configs">) {
         ready: blockers.length === 0,
         blockers,
         warnings,
-        quotable_parts: quotable,
+        quotable_roles: quotable,
+        total_roles: rolesAll.size,
+        // Kept alongside so the row-vs-role gap stays visible rather than
+        // being quietly corrected away.
+        quotable_rows: parts.length - triangleBroken.length,
         criteria:
           "correctness-first: a config with fewer parts and none refuted outranks " +
           "a fuller one carrying a condemned part",

@@ -1,0 +1,1212 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "pipeline_extraction",
+      "sylvania_bulbs",
+      "trico_wipers"
+    ],
+    "claim_rows": 11,
+    "families_seen": [
+      "aftermarket_catalog",
+      "web_search"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 0,
+    "fields_multi_family_agreement": 1,
+    "fields_single_source": 9,
+    "fields_with_claims": 10
+  },
+  "external_joins": {
+    "complaint_signal": {
+      "top": "POWER TRAIN",
+      "total": 3
+    },
+    "epa": null,
+    "manual": {
+      "file_id": null,
+      "kind": "unknown",
+      "oem": true,
+      "pages": null,
+      "url": "https://www.caribe.ford.com/content/dam/Ford/website-assets/cca/cca-compartido/brochures-caribe/ford-caribbean-f150-2021-brochure-download-eng.pdf"
+    },
+    "recalls_open": 9
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": null,
+    "brake_fluid_type": "DOT 4",
+    "coolant_capacity_qts": 8.45,
+    "coolant_type": "Motorcraft Yellow VC-13-G (WSS-M97B57-A2)",
+    "oil_capacity_qts": 8.8,
+    "oil_viscosity": "5W-20",
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": 7
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "10%",
+    "fields_with_claims": 10,
+    "fitment_multi_source": "4%",
+    "has_manual": false,
+    "months_fill": "33%",
+    "parts_quotable": "25/25",
+    "rotor_minimums": 0,
+    "status": "complete"
+  },
+  "identity_coherence": {
+    "aspiration": "natural",
+    "cylinders": 8,
+    "displacement_l": 5,
+    "engine_code": "5",
+    "epa_says": null,
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": true,
+    "spark_plug_quantity": 8,
+    "timing_system": "chain",
+    "trans_fluid_type": "Motorcraft MERCON ULV (XT-12-QULV)",
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "chassis_clone": 25,
+      "default_fallback": 5,
+      "enriched": 3
+    },
+    "months_fill": "33%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "battery_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": 36,
+        "provenance": "chassis_clone",
+        "service": "brake_fluid_flush",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "brake_pad_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 60,
+        "provenance": "chassis_clone",
+        "service": "coolant_flush",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 150000,
+        "months": 60,
+        "provenance": "chassis_clone",
+        "service": "differential_service",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 36,
+        "provenance": "chassis_clone",
+        "service": "filter_replacement",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "chassis_clone",
+        "service": "fuel_system_cleaning",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "jx70gyq04fv51k4py1c8ayjd2d86gwcc",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "jx71wm7z6baz6pbb5d8y4a55n986h7dz",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "jx79w3xdd0a71gk3r2c4dx851186ha73",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "jx7f2qg4xzjh5fpxd7ckzqm83h86gx7f",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "jx7fd2m3ce4t7y5tktfe62yhx986hhqf",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 10000,
+        "months": 12,
+        "provenance": "chassis_clone",
+        "service": "oil_change",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "rotor_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": 100000,
+        "months": 72,
+        "provenance": "enriched",
+        "service": "serpentine_belt",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 100000,
+        "months": 60,
+        "provenance": "chassis_clone",
+        "service": "spark_plugs",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "tire_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 10000,
+        "months": 6,
+        "provenance": "chassis_clone",
+        "service": "tire_rotation",
+        "status": "active"
+      },
+      {
+        "bookable": false,
+        "miles": 150000,
+        "months": null,
+        "provenance": "enriched",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 150000,
+        "months": 60,
+        "provenance": "chassis_clone",
+        "service": "transmission_service",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 33,
+    "with_miles": 14,
+    "with_months": 11
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 10,
+      "chassis_clone": 18,
+      "default_fallback": 5
+    },
+    "rows": [
+      {
+        "hours": 0.3,
+        "service": "oil_change",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "tire_rotation",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.2,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "coolant_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.75,
+        "service": "spark_plugs",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.3,
+        "service": "transmission_service",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.2,
+        "service": "differential_service",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.5,
+        "service": "brake_pad_replacement",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 2,
+        "service": "rotor_replacement",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.5,
+        "service": "brake_fluid_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.3,
+        "service": "battery_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "wheel_alignment",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.5,
+        "service": "fuel_system_cleaning",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.2,
+        "service": "battery_test",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1,
+        "service": "jx70gyq04fv51k4py1c8ayjd2d86gwcc",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1,
+        "service": "jx7f2qg4xzjh5fpxd7ckzqm83h86gx7f",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1,
+        "service": "jx79w3xdd0a71gk3r2c4dx851186ha73",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1,
+        "service": "jx7fd2m3ce4t7y5tktfe62yhx986hhqf",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1,
+        "service": "jx71wm7z6baz6pbb5d8y4a55n986h7dz",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 2.4,
+        "service": "serpentine_belt",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.5,
+        "service": "transfer_case_service",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 33
+  },
+  "parts": {
+    "corroborated_2plus_sources": 1,
+    "corroboration_rate": "4%",
+    "rows": [
+      {
+        "best_price": 29.99,
+        "confidence": 0.96,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "FA-1883",
+        "price_domains": [
+          "autozone.com"
+        ],
+        "price_rows": 10,
+        "refute_flagged": false,
+        "role": "air_filter",
+        "scraped_name": null,
+        "service": "filter_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 179.96,
+        "confidence": 0.7899999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "BXT-65-750",
+        "price_domains": [
+          "eastgatefordpartscanada.ca",
+          "tascaparts.com"
+        ],
+        "price_rows": 7,
+        "refute_flagged": false,
+        "role": "battery",
+        "scraped_name": null,
+        "service": "battery_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 179.96,
+        "confidence": 0.74,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "BXT-48H6-610",
+        "price_domains": [
+          "tascaparts.com",
+          "parts.levittownfordparts.com",
+          "enrichment"
+        ],
+        "price_rows": 8,
+        "refute_flagged": false,
+        "role": "battery",
+        "scraped_name": null,
+        "service": "battery_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 178.46,
+        "confidence": 0.77,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "BXT-65-850",
+        "price_domains": [
+          "villageford.com",
+          "tascaparts.com"
+        ],
+        "price_rows": 7,
+        "refute_flagged": false,
+        "role": "battery",
+        "scraped_name": null,
+        "service": "battery_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 20.82,
+        "confidence": 0.86,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "KL3Z-19N619-AA",
+        "price_domains": [
+          "fordpartsgiant.com"
+        ],
+        "price_rows": 15,
+        "refute_flagged": false,
+        "role": "cabin_filter",
+        "scraped_name": null,
+        "service": "filter_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 21.84,
+        "confidence": 0.96,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "FP-92",
+        "price_domains": [
+          "oemfordpartsdirect.com",
+          "parts.levittownfordparts.com"
+        ],
+        "price_rows": 4,
+        "refute_flagged": false,
+        "role": "cabin_filter",
+        "scraped_name": null,
+        "service": "filter_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 14.03,
+        "confidence": 0.86,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "VC-13DL-G",
+        "price_domains": [
+          "parts.levittownfordparts.com",
+          "fairwayfordparts.net"
+        ],
+        "price_rows": 7,
+        "refute_flagged": false,
+        "role": "coolant",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 24.99,
+        "confidence": 0.77,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "VC-3-B",
+        "price_domains": [
+          "ffperformance.co"
+        ],
+        "price_rows": 5,
+        "refute_flagged": false,
+        "role": "coolant",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 4.94,
+        "confidence": 0.84,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "FT4Z-6734-A",
+        "price_domains": [
+          "ford.oempartsonline.com",
+          "oemfordpartsdirect.com",
+          "fordpartsonsale.com"
+        ],
+        "price_rows": 9,
+        "refute_flagged": false,
+        "role": "drain_plug_gasket",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 4.63,
+        "confidence": 0.84,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "EJ7Z-6734-B",
+        "price_domains": [
+          "costaoils.com",
+          "varsityfordparts.com",
+          "tascaparts.com",
+          "parts.levittownfordparts.com",
+          "oemfordpartsoutlet.com",
+          "ford.com",
+          "parts.southlakeford.com"
+        ],
+        "price_rows": 16,
+        "refute_flagged": false,
+        "role": "drain_plug_gasket",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 7
+      },
+      {
+        "best_price": 4.34,
+        "confidence": 0.7899999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "F75Z-6734-AA",
+        "price_domains": [
+          "varsityfordparts.com",
+          "fordpartsgiant.com",
+          "parts.levittownfordparts.com",
+          "tascaparts.com"
+        ],
+        "price_rows": 10,
+        "refute_flagged": false,
+        "role": "drain_plug_gasket",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 4
+      },
+      {
+        "best_price": 82.83,
+        "confidence": 0.74,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "ML3Z-2001-B",
+        "price_domains": [
+          "parts.lakelandford.com",
+          "parts.levittownfordparts.com",
+          "fordpartsonsale.com"
+        ],
+        "price_rows": 8,
+        "refute_flagged": false,
+        "role": "front_brake_pad",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 163.52,
+        "confidence": 0.85,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "ML3Z-2001-C",
+        "price_domains": [
+          "ford.oempartsonline.com",
+          "oemfordpartsdirect.com",
+          "parts.levittownfordparts.com"
+        ],
+        "price_rows": 7,
+        "refute_flagged": false,
+        "role": "front_brake_pad",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 115.36,
+        "confidence": 0.89,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "BRRF-479",
+        "price_domains": [
+          "oemfordpartsdirect.com",
+          "eastgatefordpartscanada.ca"
+        ],
+        "price_rows": 8,
+        "refute_flagged": false,
+        "role": "front_rotor",
+        "scraped_name": null,
+        "service": "rotor_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 12.07,
+        "confidence": 0.96,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "FL500S",
+        "price_domains": [
+          "ford.com",
+          "oreillyauto.com"
+        ],
+        "price_rows": 14,
+        "refute_flagged": false,
+        "role": "oil_filter",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 83.57,
+        "confidence": 0.82,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "ML3Z-2200-F",
+        "price_domains": [
+          "ford.oempartsonline.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "rear_brake_pad",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 101,
+        "confidence": 0.69,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "ML3Z-2C026-C",
+        "price_domains": [
+          "ford.oempartsonline.com",
+          "fordpartsgiant.com",
+          "oemfordpartsdirect.com"
+        ],
+        "price_rows": 6,
+        "refute_flagged": false,
+        "role": "rear_rotor",
+        "scraped_name": null,
+        "service": "rotor_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 103.31,
+        "confidence": 0.77,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "BRRF-1983",
+        "price_domains": [
+          "parts.levittownfordparts.com",
+          "ford.oempartsonline.com",
+          "rivercityfordparts.ca"
+        ],
+        "price_rows": 7,
+        "refute_flagged": false,
+        "role": "rear_rotor",
+        "scraped_name": null,
+        "service": "rotor_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 25.01,
+        "confidence": 0.8899999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "JL3Z-8620-B",
+        "price_domains": [
+          "parts.levittownfordparts.com",
+          "ford.oempartsonline.com",
+          "gmwholesaledirect.com"
+        ],
+        "price_rows": 7,
+        "refute_flagged": false,
+        "role": "serpentine_belt",
+        "scraped_name": null,
+        "service": "serpentine_belt",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 21.55,
+        "confidence": 0.7899999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "HL3Z-8620-A",
+        "price_domains": [
+          "fordpartsgiant.com",
+          "parts.levittownfordparts.com",
+          "tascaparts.com"
+        ],
+        "price_rows": 7,
+        "refute_flagged": false,
+        "role": "serpentine_belt",
+        "scraped_name": null,
+        "service": "serpentine_belt",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 28.26,
+        "confidence": 0.77,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "JK4385B",
+        "price_domains": [
+          "ford.oempartsonline.com",
+          "eastgatefordpartscanada.ca",
+          "oemfordpartsoutlet.com"
+        ],
+        "price_rows": 5,
+        "refute_flagged": false,
+        "role": "serpentine_belt",
+        "scraped_name": null,
+        "service": "serpentine_belt",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 6.36,
+        "confidence": 0.84,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SP-589",
+        "price_domains": [
+          "parts.levittownfordparts.com",
+          "tascaparts.com",
+          "eastgatefordpartscanada.ca"
+        ],
+        "price_rows": 6,
+        "refute_flagged": false,
+        "role": "spark_plug",
+        "scraped_name": null,
+        "service": "spark_plugs",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 13.91,
+        "confidence": 0.96,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SP-596",
+        "price_domains": [
+          "fordpartsgiant.com",
+          "eastgatefordpartscanada.ca"
+        ],
+        "price_rows": 10,
+        "refute_flagged": false,
+        "role": "spark_plug",
+        "scraped_name": null,
+        "service": "spark_plugs",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 13.77,
+        "confidence": 0.5,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "SP-594",
+        "price_domains": [
+          "autozone.com",
+          "oemfordpartsdirect.com",
+          "ford.oempartsonline.com"
+        ],
+        "price_rows": 5,
+        "refute_flagged": false,
+        "role": "spark_plug",
+        "scraped_name": "Motorcraft Spark Plug",
+        "service": "spark_plugs",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "ford.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 18.58,
+        "confidence": 0.82,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "ML3Z-17528-A",
+        "price_domains": [
+          "fairwayfordparts.net",
+          "levittownfordparts.com",
+          "parts.lakelandford.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "wiper_blade_front_set",
+        "scraped_name": null,
+        "service": "wiper_blade_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      }
+    ],
+    "total": 25,
+    "triangle_broken": [],
+    "triangle_ok": 25,
+    "with_observed_title": 1
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 45,
+    "duration_min": 27.7,
+    "error_tags": {
+      "applicable_services_structural_fallback_used": 1,
+      "role_resource": 1,
+      "rotor_min": 2
+    },
+    "field_gap_count": 75,
+    "fill_rate": 87,
+    "quotability": {
+      "pct": 0.92,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 5,
+          "core_with_price": 5,
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx73egnn6pxecvbnjhqe12rxv58bpy0x",
+    "sanity_flag_count": 3,
+    "sanity_flags_by_stage": {
+      "claim_ledger": 1,
+      "completion_gate": 2
+    },
+    "status": "complete",
+    "tokens_in": 23563,
+    "tokens_out": 12871,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 47
+  },
+  "shippable": {
+    "blockers": [],
+    "criteria": "correctness-first: a config with fewer parts and none refuted outranks a fuller one carrying a condemned part",
+    "quotable_parts": 25,
+    "ready": true,
+    "warnings": [
+      "parts_without_observed_title:24",
+      "batch2_returned_no_applicable_services",
+      "no_rotor_minimums",
+      "no_epa_join"
+    ]
+  },
+  "vehicle": {
+    "chassis_code": "P552",
+    "confidence_avg": 0.8224478594950602,
+    "configId": "w574zdbnp7jm1m5gycm7tx7m1n8bp5qe",
+    "config_key": "2019_ford_f_150_xl_5",
+    "drivetrain": "4WD",
+    "enrichment_status": "complete",
+    "fill_rate": 90,
+    "last_enriched_at": 1785695417651,
+    "make": "Ford",
+    "model": "F-150",
+    "na_role_keys": [],
+    "trim": "XL",
+    "verified_fields": [],
+    "year": 2019
+  }
+}

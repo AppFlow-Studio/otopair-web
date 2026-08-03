@@ -1,5 +1,6 @@
 import { internalMutation, internalQuery, query, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 import { awardPointsImpl } from "./healthPoints";
 import {
@@ -1953,6 +1954,212 @@ export const getEnrichmentStatusByVin = query({
     const etaMinutes = Math.max(1, Math.ceil(remainingMs / 60_000));
 
     return { status, isInProgress: true, etaMinutes, elapsedMs };
+  },
+});
+
+/**
+ * Rich per-vehicle enrichment detail for the tappable status sheet.
+ *
+ * Unlike the coarse `enrichment_status` string (a single pipeline phase),
+ * this reports PER-CATEGORY readiness by ACTUAL DATA PRESENCE — a category
+ * is "ready" only when its real rows exist in the DB, never a heuristic:
+ *   - specs     → config_epa_economy (MPG) + engines (displacement/oil/…)
+ *   - intervals → service_intervals (confidence-gated, joined to service name)
+ *   - parts     → oem_parts catalogued for the config (count only)
+ *
+ * `facts` are short, real, human-readable strings the sheet types out
+ * (e.g. "22 city · 32 hwy MPG", "Spark Plugs · every 100,000 mi"). Empty
+ * when the category hasn't landed yet — the UI shows those as still-working.
+ *
+ * Returns null for an unknown VIN. `phase` mirrors getEnrichmentStatusByVin's
+ * in-progress/terminal classification so the sheet only says "ready" when the
+ * pipeline is genuinely done.
+ */
+export const getEnrichmentDetail = query({
+  args: { vin: v.string() },
+  handler: async (ctx, args) => {
+    const normalizedVin = args.vin.toUpperCase().trim();
+    if (normalizedVin.length === 0) return null;
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", normalizedVin))
+      .first();
+    if (!vehicle) return null;
+
+    // Resolve make/model/trim (trim → model → make) for the label + car image.
+    let make: string | null = null;
+    let model: string | null = null;
+    let trimName: string | null = null;
+    if (vehicle.trim_id) {
+      const trim = await ctx.db.get(vehicle.trim_id);
+      if (trim) {
+        trimName = (trim as { name?: string }).name ?? null;
+        const modelId = (trim as { model_id?: Id<"models"> }).model_id;
+        if (modelId) {
+          const modelRow = await ctx.db.get(modelId);
+          if (modelRow) {
+            model = (modelRow as { name?: string }).name ?? null;
+            const makeId = (modelRow as { make_id?: Id<"makes"> }).make_id;
+            if (makeId) {
+              const makeRow = await ctx.db.get(makeId);
+              if (makeRow) make = (makeRow as { name?: string }).name ?? null;
+            }
+          }
+        }
+      }
+    }
+    const year = vehicle.year ?? null;
+    const labelParts: string[] = [];
+    if (year != null) labelParts.push(String(year));
+    if (make) labelParts.push(make);
+    if (model) labelParts.push(model);
+    const label = labelParts.length ? labelParts.join(" ") : "your car";
+
+    const configId = vehicle.vehicle_config_id ?? null;
+
+    // Status / phase — same classification as getEnrichmentStatusByVin.
+    let status: string | null = null;
+    let phase: "in_progress" | "ready" | "not_started" = "not_started";
+    if (configId) {
+      const config = await ctx.db.get(configId);
+      status = (config as { enrichment_status?: string } | null)?.enrichment_status ?? null;
+      if (status && ENRICHMENT_IN_PROGRESS_STATUSES.has(status)) phase = "in_progress";
+      else if (status && ENRICHMENT_TERMINAL_STATUSES.has(status)) phase = "ready";
+    }
+
+    // ── Vehicle specs facts (real presence) ──────────────────────────────
+    const specFacts: string[] = [];
+    if (configId) {
+      const epa = await ctx.db
+        .query("config_epa_economy")
+        .withIndex("by_config", (q) => q.eq("vehicle_config_id", configId))
+        .first();
+      if (epa) {
+        if (epa.mpg_city != null && epa.mpg_highway != null) {
+          specFacts.push(`${epa.mpg_city} city · ${epa.mpg_highway} hwy MPG`);
+        } else if (epa.mpg_combined != null) {
+          specFacts.push(`${epa.mpg_combined} MPG combined`);
+        }
+      }
+    }
+    if (vehicle.engine_id) {
+      const engine = await ctx.db.get(vehicle.engine_id);
+      if (engine) {
+        const e = engine as {
+          displacement_l?: number;
+          cylinders?: number;
+          configuration?: string;
+          aspiration?: string;
+          fuel_type?: string;
+          oil_viscosity?: string;
+          oil_capacity_qts?: number;
+          oil_spec_standard?: string;
+          spark_plug_gap_mm?: number;
+          spark_plug_quantity?: number;
+          coolant_type?: string;
+          coolant_capacity_qts?: number;
+          transmission_fluid_capacity_qts?: number;
+        };
+        const disp = e.displacement_l != null ? `${e.displacement_l}L` : null;
+        const forced =
+          e.aspiration && /turbo|super/i.test(e.aspiration)
+            ? e.aspiration.replace(/charged/i, "").trim()
+            : null;
+        const layout = e.configuration ?? (e.cylinders != null ? `I${e.cylinders}` : null);
+        const engineDesc = [disp, forced, layout].filter(Boolean).join(" ");
+        if (engineDesc) specFacts.push(engineDesc);
+        if (e.fuel_type) specFacts.push(`Fuel: ${e.fuel_type}`);
+        if (e.oil_viscosity) specFacts.push(`${e.oil_viscosity} oil`);
+        if (e.oil_capacity_qts != null) specFacts.push(`${e.oil_capacity_qts} qt oil capacity`);
+        if (e.oil_spec_standard) specFacts.push(`Oil spec ${e.oil_spec_standard}`);
+        if (e.spark_plug_gap_mm != null) {
+          const qty = e.spark_plug_quantity != null ? `${e.spark_plug_quantity}× ` : "";
+          specFacts.push(`${qty}Spark plug gap ${e.spark_plug_gap_mm} mm`);
+        }
+        if (e.coolant_type) {
+          const cap = e.coolant_capacity_qts != null ? ` · ${e.coolant_capacity_qts} qt` : "";
+          specFacts.push(`Coolant ${e.coolant_type}${cap}`);
+        }
+        if (e.transmission_fluid_capacity_qts != null) {
+          specFacts.push(`Trans fluid ${e.transmission_fluid_capacity_qts} qt`);
+        }
+      }
+    }
+
+    // ── Service interval facts ───────────────────────────────────────────
+    // "Service Name · every N mi", strongest provenance first, real numbers.
+    const fmtMiles = (n: number) =>
+      String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+    const intervalFacts: string[] = [];
+    if (configId) {
+      const rows = await ctx.db
+        .query("service_intervals")
+        .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", configId))
+        .collect();
+      const usable = rows
+        .filter(
+          (r) =>
+            r.interval_miles != null &&
+            (r.mechanic_verified === true || (r.confidence ?? 0) >= 0.75),
+        )
+        .sort(
+          (a, b) =>
+            Number(b.mechanic_verified ?? false) - Number(a.mechanic_verified ?? false) ||
+            (b.confidence ?? 0) - (a.confidence ?? 0),
+        )
+        .slice(0, 6);
+      for (const r of usable) {
+        const svc = await ctx.db.get(r.service_id);
+        const name = (svc as { name?: string } | null)?.name;
+        if (!name) continue;
+        intervalFacts.push(`${name} · every ${fmtMiles(r.interval_miles as number)} mi`);
+      }
+    }
+
+    // ── Tire sizes (real — passport / trim specs). Best-effort. ──────────
+    const tireFacts: string[] = [];
+    try {
+      const tires = await resolveTireSizesForVin(ctx, normalizedVin);
+      const first = tires.sizes[0];
+      if (first?.size) tireFacts.push(`Tire size ${first.size}`);
+    } catch {
+      // Tire resolution is best-effort; skip on any lookup miss.
+    }
+
+    // ── Parts catalogued: distinct parts fitted to this config. ──────────
+    let partsCount = 0;
+    if (configId) {
+      const fitments = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", configId))
+        .collect();
+      partsCount = new Set(fitments.map((f) => String(f.part_id))).size;
+    }
+
+    // One comprehensive stream of REAL facts for the "thinking" ticker —
+    // specs, then tires, then every service interval, then the parts tally.
+    const facts: string[] = [
+      ...specFacts,
+      ...tireFacts,
+      ...intervalFacts,
+      ...(partsCount > 0 ? [`${partsCount.toLocaleString()} parts catalogued`] : []),
+    ];
+
+    return {
+      vin: normalizedVin,
+      label,
+      year,
+      make,
+      model,
+      trim: trimName,
+      status,
+      phase,
+      facts,
+      specs: { ready: specFacts.length > 0, facts: specFacts },
+      intervals: { ready: intervalFacts.length > 0, facts: intervalFacts },
+      parts: { ready: partsCount > 0, count: partsCount },
+    };
   },
 });
 

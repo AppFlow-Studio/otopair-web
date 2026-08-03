@@ -7,6 +7,7 @@
  */
 
 import { FirecrawlResult } from "./helpers";
+import { scraplingEnabled, scraplingFetchUrlWithHtml } from "./scrapling";
 
 const FIRECRAWL_BASE = "https://api.firecrawl.dev/v2";
 
@@ -147,6 +148,16 @@ export async function fetchUrlWithHtml(
     } catch (e) {
       console.warn(`[firecrawl] direct fetch error for ${url} — falling back to Firecrawl:`, e);
     }
+  }
+
+  // Optional self-hosted Scrapling tier (see /scraper). Off unless
+  // PARTS_SCRAPLING is "on" AND SCRAPLING_URL is set. Tried before Firecrawl to
+  // save credits; any miss falls through to Firecrawl, so behavior is unchanged
+  // when the flag/service is absent.
+  if (process.env.PARTS_SCRAPLING === "on" && scraplingEnabled()) {
+    const s = await scraplingFetchUrlWithHtml(url, { timeoutMs });
+    if (s.html || s.markdown) return s;
+    console.warn(`[scrapling] empty for ${url} — falling back to Firecrawl`);
   }
 
   const attempt = async (stealth: boolean) => {

@@ -2051,9 +2051,15 @@ export const getEnrichmentDetail = query({
           cylinders?: number;
           configuration?: string;
           aspiration?: string;
+          fuel_type?: string;
           oil_viscosity?: string;
           oil_capacity_qts?: number;
-          fuel_type?: string;
+          oil_spec_standard?: string;
+          spark_plug_gap_mm?: number;
+          spark_plug_quantity?: number;
+          coolant_type?: string;
+          coolant_capacity_qts?: number;
+          transmission_fluid_capacity_qts?: number;
         };
         const disp = e.displacement_l != null ? `${e.displacement_l}L` : null;
         const forced =
@@ -2063,8 +2069,21 @@ export const getEnrichmentDetail = query({
         const layout = e.configuration ?? (e.cylinders != null ? `I${e.cylinders}` : null);
         const engineDesc = [disp, forced, layout].filter(Boolean).join(" ");
         if (engineDesc) specFacts.push(engineDesc);
+        if (e.fuel_type) specFacts.push(`Fuel: ${e.fuel_type}`);
         if (e.oil_viscosity) specFacts.push(`${e.oil_viscosity} oil`);
         if (e.oil_capacity_qts != null) specFacts.push(`${e.oil_capacity_qts} qt oil capacity`);
+        if (e.oil_spec_standard) specFacts.push(`Oil spec ${e.oil_spec_standard}`);
+        if (e.spark_plug_gap_mm != null) {
+          const qty = e.spark_plug_quantity != null ? `${e.spark_plug_quantity}× ` : "";
+          specFacts.push(`${qty}Spark plug gap ${e.spark_plug_gap_mm} mm`);
+        }
+        if (e.coolant_type) {
+          const cap = e.coolant_capacity_qts != null ? ` · ${e.coolant_capacity_qts} qt` : "";
+          specFacts.push(`Coolant ${e.coolant_type}${cap}`);
+        }
+        if (e.transmission_fluid_capacity_qts != null) {
+          specFacts.push(`Trans fluid ${e.transmission_fluid_capacity_qts} qt`);
+        }
       }
     }
 
@@ -2098,9 +2117,17 @@ export const getEnrichmentDetail = query({
       }
     }
 
-    // ── Parts catalogued: distinct parts fitted to this config. Count only —
-    // a per-part price fact needs the booking-time 7-layer selector, not a
-    // simple read, so the sheet shows "N parts" instead of typing one out. ─
+    // ── Tire sizes (real — passport / trim specs). Best-effort. ──────────
+    const tireFacts: string[] = [];
+    try {
+      const tires = await resolveTireSizesForVin(ctx, normalizedVin);
+      const first = tires.sizes[0];
+      if (first?.size) tireFacts.push(`Tire size ${first.size}`);
+    } catch {
+      // Tire resolution is best-effort; skip on any lookup miss.
+    }
+
+    // ── Parts catalogued: distinct parts fitted to this config. ──────────
     let partsCount = 0;
     if (configId) {
       const fitments = await ctx.db
@@ -2109,6 +2136,15 @@ export const getEnrichmentDetail = query({
         .collect();
       partsCount = new Set(fitments.map((f) => String(f.part_id))).size;
     }
+
+    // One comprehensive stream of REAL facts for the "thinking" ticker —
+    // specs, then tires, then every service interval, then the parts tally.
+    const facts: string[] = [
+      ...specFacts,
+      ...tireFacts,
+      ...intervalFacts,
+      ...(partsCount > 0 ? [`${partsCount.toLocaleString()} parts catalogued`] : []),
+    ];
 
     return {
       vin: normalizedVin,
@@ -2119,6 +2155,7 @@ export const getEnrichmentDetail = query({
       trim: trimName,
       status,
       phase,
+      facts,
       specs: { ready: specFacts.length > 0, facts: specFacts },
       intervals: { ready: intervalFacts.length > 0, facts: intervalFacts },
       parts: { ready: partsCount > 0, count: partsCount },

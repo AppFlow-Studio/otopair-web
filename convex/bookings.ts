@@ -215,7 +215,7 @@ async function assertBookingWithinShopHours(
   const openMinutes = hhmmToMinutes(hours.open_time);
   const closeMinutes = hhmmToMinutes(hours.close_time);
 
-  if (startMinutes < openMinutes || startMinutes >= closeMinutes) {
+  if (startMinutes < openMinutes || startMinutes > closeMinutes) {
     throw new Error("The requested start time is outside the shop's operating hours.");
   }
   if (endMinutes > closeMinutes && !allowAfterClose) {
@@ -2158,6 +2158,7 @@ async function computeEarlyPushPreview(ctx: any, booking: any) {
         startTime: proposedScheduledTime,
         durationMinutes,
         excludeBookingId: String(booking._id),
+        allowOutsideShopHours: true,
       });
       conflict = null;
       conflictingBookingId = null;

@@ -1,0 +1,8 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+# `scrapling[fetchers]` pulls the HTTP/browser fetcher deps; curl_cffi is pinned
+# explicitly because newer Scrapling makes it an extra (the "No module named
+# 'curl_cffi'" failure on the http tier when it's missing).
+scrapling[fetchers]>=0.2.9
+curl_cffi>=0.7
+markdownify>=0.11

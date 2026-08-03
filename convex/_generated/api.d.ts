@@ -446,6 +446,7 @@ import type * as vehicleEnrichment_runSteps from "../vehicleEnrichment/runSteps.
 import type * as vehicleEnrichment_runTest from "../vehicleEnrichment/runTest.js";
 import type * as vehicleEnrichment_scraper from "../vehicleEnrichment/scraper.js";
 import type * as vehicleEnrichment_scraperQueries from "../vehicleEnrichment/scraperQueries.js";
+import type * as vehicleEnrichment_scrapling from "../vehicleEnrichment/scrapling.js";
 import type * as vehicleEnrichment_searchPreGather from "../vehicleEnrichment/searchPreGather.js";
 import type * as vehicleEnrichment_sourceAdapters_amsoil from "../vehicleEnrichment/sourceAdapters/amsoil.js";
 import type * as vehicleEnrichment_sourceAdapters_brembo from "../vehicleEnrichment/sourceAdapters/brembo.js";
@@ -944,6 +945,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/runTest": typeof vehicleEnrichment_runTest;
   "vehicleEnrichment/scraper": typeof vehicleEnrichment_scraper;
   "vehicleEnrichment/scraperQueries": typeof vehicleEnrichment_scraperQueries;
+  "vehicleEnrichment/scrapling": typeof vehicleEnrichment_scrapling;
   "vehicleEnrichment/searchPreGather": typeof vehicleEnrichment_searchPreGather;
   "vehicleEnrichment/sourceAdapters/amsoil": typeof vehicleEnrichment_sourceAdapters_amsoil;
   "vehicleEnrichment/sourceAdapters/brembo": typeof vehicleEnrichment_sourceAdapters_brembo;

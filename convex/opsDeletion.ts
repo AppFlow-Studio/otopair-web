@@ -7,12 +7,18 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireDirector, logAudit } from "./directorGate";
+import { capturedTotalForUser } from "./opsUsers";
+import { resolveVehicleDisplay } from "./lib/bookingEnrichment";
 
 /** Booking statuses that count as terminal — anything else blocks deletion
  *  processing (spec §5.3 "open bookings blocker"). Measured live set:
  *  pending, pending_quote, quotes_ready, vehicle_at_shop, completed,
  *  cancelled, no_show. */
 const TERMINAL_STATUSES = new Set(["completed", "cancelled", "no_show"]);
+
+const DAY = 24 * 60 * 60 * 1000;
+// The compliance grace window before cleanup.ts permanently deletes the account.
+const GRACE_DAYS = 30;
 
 /** Every user with isPendingDeletion = true, oldest request first, with the
  *  survey response and an open-bookings blocker count per row. */
@@ -26,25 +32,48 @@ export const listPendingDeletions = query({
       .withIndex("by_isPendingDeletion", (q) => q.eq("isPendingDeletion", true))
       .collect();
 
+    const now = Date.now();
     const rows = await Promise.all(
       pending.map(async (u) => {
-        const bookings = await ctx.db
-          .query("bookings")
-          .withIndex("by_user_id", (q) => q.eq("user_id", u._id))
-          .collect();
+        const [bookings, owners, spend] = await Promise.all([
+          ctx.db
+            .query("bookings")
+            .withIndex("by_user_id", (q) => q.eq("user_id", u._id))
+            .collect(),
+          ctx.db
+            .query("vehicle_owners")
+            .withIndex("by_user_status", (q) => q.eq("user_id", u._id).eq("status", "active"))
+            .collect(),
+          capturedTotalForUser(ctx, u._id),
+        ]);
         const openBookings = bookings.filter((b) => !TERMINAL_STATUSES.has(b.status)).length;
         const name =
           [u.first_name, u.last_name].filter(Boolean).join(" ") || u.username || u.email || "—";
+        const primaryOwner = owners.find((o) => o.is_primary) ?? owners[0] ?? null;
+        const primaryVehicle = primaryOwner
+          ? (await resolveVehicleDisplay(ctx, primaryOwner.vin)).ymm
+          : null;
+        const requestedAt = u.deletionRequestedAt ?? null;
+        const ageDays =
+          requestedAt != null ? Math.floor((now - requestedAt) / DAY) : null;
         return {
           id: String(u._id),
           name,
           email: u.email ?? null,
           phone: u.phone ?? null,
-          requested_at: u.deletionRequestedAt ?? null,
+          requested_at: requestedAt,
           survey_response: u.deletionSurveyResponse ?? null,
           survey_skipped: u.deletionSurveySkipped === true,
           open_bookings: openBookings,
           bookings_total: bookings.length,
+          // Enrichment: who this is, what they're worth, when the clock runs out.
+          vehicles: owners.length,
+          primaryVehicle,
+          spend,
+          authProvider: u.auth_provider ?? null,
+          createdAt: u.createdAt ?? u._creationTime,
+          lastActive: u.lastUpdated ?? null,
+          graceRemainingDays: ageDays != null ? Math.max(0, GRACE_DAYS - ageDays) : null,
         };
       }),
     );

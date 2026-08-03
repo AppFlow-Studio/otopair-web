@@ -35,7 +35,7 @@ describe("stable prompt — # Recent context section", () => {
   });
 
   it("bumps the stable + composite prompt versions", () => {
-    expect(STABLE_PROMPT_VERSION).toBe("v0.33-stable");
-    expect(SYSTEM_PROMPT_COMPOSITE_VERSION.startsWith("v0.33-stable+")).toBe(true);
+    expect(STABLE_PROMPT_VERSION).toBe("v0.36-stable");
+    expect(SYSTEM_PROMPT_COMPOSITE_VERSION.startsWith("v0.36-stable+")).toBe(true);
   });
 });

@@ -30,6 +30,11 @@ export type ParsedPartPrice = {
   price_type: "sale";
   source_domain: string;
   source_url: string;
+  /** Round 12: the listing's own product title (JSON-LD Product.name) — the
+   *  page-attested component identity for this number. Previously discarded,
+   *  which is how a "Battery Cable / Ground Extension" priced its way into
+   *  the battery role with no gate able to see what it was. */
+  name?: string | null;
 };
 
 /** Normalize an OEM number for matching: uppercase, strip non-alphanumeric. */
@@ -147,6 +152,7 @@ export function parsePartPrices(html: string, sourceUrl: string): ParsedPartPric
     rawNum: string | null | undefined,
     price: number | null,
     currency: string,
+    name: string | null = null,
   ) => {
     if (!rawNum || price == null) return;
     const norm = normalizeOemNumber(rawNum);
@@ -160,6 +166,7 @@ export function parsePartPrices(html: string, sourceUrl: string): ParsedPartPric
       price_type: "sale",
       source_domain: domain,
       source_url: sourceUrl,
+      ...(name && name.trim() ? { name: name.trim().slice(0, 200) } : {}),
     });
   };
 
@@ -182,7 +189,7 @@ export function parsePartPrices(html: string, sourceUrl: string): ParsedPartPric
       const price = priceFromOffers(p.offers);
       if (price == null) continue;
       const num = p.mpn ?? p.sku ?? p.productID ?? p.gtin13 ?? null;
-      add(num, price, currencyFromOffers(p.offers));
+      add(num, price, currencyFromOffers(p.offers), typeof p.name === "string" ? p.name : null);
     }
   }
   if (byNumber.size > 0) return [...byNumber.values()];
@@ -194,7 +201,12 @@ export function parsePartPrices(html: string, sourceUrl: string): ParsedPartPric
   const mpnNode =
     /<meta[^>]+itemprop=["']mpn["'][^>]+content=["']([^"']+)["']/i.exec(html) ??
     /itemprop=["']mpn["'][^>]*>([^<]+)</i.exec(html);
-  if (ogPrice) add(mpnNode?.[1] ?? null, coercePrice(ogPrice[1]), "USD");
+  // Single-product pages: og:title / itemprop=name is the listing title —
+  // same component-identity evidence as JSON-LD Product.name above.
+  const ogTitle =
+    /<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i.exec(html) ??
+    /<meta[^>]+itemprop=["']name["'][^>]+content=["']([^"']+)["']/i.exec(html);
+  if (ogPrice) add(mpnNode?.[1] ?? null, coercePrice(ogPrice[1]), "USD", ogTitle?.[1] ?? null);
   if (byNumber.size > 0) return [...byNumber.values()];
 
   // ── Layer 3: per-domain selector fallback (registered stubborn sites) ──────

@@ -1,0 +1,120 @@
+{
+  "sub": "nissan",
+  "oem": "15208-65F0E",
+  "search_url": "https://nissan.oempartsonline.com/search?search_str=15208-65F0E",
+  "search_legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2179,
+      "content_len": 224046,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/search?search_str=15208-65F0E",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 1886
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3042,
+      "content_len": 207378,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/search?search_str=15208-65F0E",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 1819
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 436,
+      "content_len": 129821,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/search?search_str=15208-65F0E",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3107,
+      "content_len": 140065,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/search?search_str=15208-65F0E",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ],
+  "detail_url": "https://nissan.oempartsonline.com/oem-parts/nissan-oil-filter-1520865f0e",
+  "detail_legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2445,
+      "content_len": 447859,
+      "title": "Oil Filter 15208-65F0E | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/oem-parts/nissan-oil-filter-1520865f0e",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 12281
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3044,
+      "content_len": 315444,
+      "title": "Oil Filter 15208-65F0E | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/oem-parts/nissan-oil-filter-1520865f0e",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 7247
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 488,
+      "content_len": 229625,
+      "title": "Oil Filter 15208-65F0E | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/oem-parts/nissan-oil-filter-1520865f0e",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3098,
+      "content_len": 241192,
+      "title": "Oil Filter 15208-65F0E | OEM Parts Online",
+      "final_url": "https://nissan.oempartsonline.com/oem-parts/nissan-oil-filter-1520865f0e",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

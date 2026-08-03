@@ -7,6 +7,7 @@
  */
 
 import { FirecrawlResult } from "./helpers";
+import { scraplingEnabled, scraplingFetchUrlWithHtml } from "./scrapling";
 
 const FIRECRAWL_BASE = "https://api.firecrawl.dev/v2";
 
@@ -44,12 +45,17 @@ export async function searchAndFetch(
       body: JSON.stringify({
         query,
         limit: numResults,
+        // Firecrawl-side cap slightly under our abort so Firecrawl returns a
+        // clean error instead of us severing the connection (F8 — a search
+        // with N inline scrapes otherwise hangs unbounded on one dead site).
+        timeout: 55_000,
         scrapeOptions: {
           // Raw HTML is requested only for the price path so the deterministic
           // parser can read JSON-LD/microdata from ANY domain the search surfaces.
           formats: includeHtml ? ["markdown", "rawHtml"] : ["markdown"],
         },
       }),
+      signal: AbortSignal.timeout(60_000),
     });
 
     if (!response.ok) {
@@ -144,6 +150,16 @@ export async function fetchUrlWithHtml(
     }
   }
 
+  // Optional self-hosted Scrapling tier (see /scraper). Off unless
+  // PARTS_SCRAPLING is "on" AND SCRAPLING_URL is set. Tried before Firecrawl to
+  // save credits; any miss falls through to Firecrawl, so behavior is unchanged
+  // when the flag/service is absent.
+  if (process.env.PARTS_SCRAPLING === "on" && scraplingEnabled()) {
+    const s = await scraplingFetchUrlWithHtml(url, { timeoutMs });
+    if (s.html || s.markdown) return s;
+    console.warn(`[scrapling] empty for ${url} — falling back to Firecrawl`);
+  }
+
   const attempt = async (stealth: boolean) => {
     const response = await fetch(`${FIRECRAWL_BASE}/scrape`, {
       method: "POST",
@@ -210,7 +226,11 @@ export async function fetchUrl(url: string): Promise<string | null> {
         url,
         formats: ["markdown"],
         maxAge: FIRECRAWL_MAX_AGE_MS,
+        // Firecrawl-side cap slightly under our abort — same convention as
+        // fetchUrlWithHtml (F9: this was the last un-capped Firecrawl call).
+        timeout: 40_000,
       }),
+      signal: AbortSignal.timeout(45_000),
     });
 
     if (!response.ok) {

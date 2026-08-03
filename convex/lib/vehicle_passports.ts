@@ -152,6 +152,17 @@ export const vehiclePassportBrakesValidator = v.object({
   rotor_thickness: v.optional(
     v.union(rotorThicknessMeasurementsValidator, v.null()),
   ),
+  // OEM DISCARD minimum per axle, carried from vehicle_configs so the pre-job
+  // surface grades against the vehicle's own spec. Distinct from the NOMINAL
+  // (new) thickness, which is never a grading reference. Null means ungraded —
+  // the mechanic reads the number cast on the rotor hat.
+  rotor_min_front_mm: v.optional(nullableNumberValidator),
+  rotor_min_rear_mm: v.optional(nullableNumberValidator),
+  // "oem_spec" | "mechanic_read" | "director_verified" | "derived_from_nominal"
+  // | "default_fallback" — anything derived must never read as an OEM figure.
+  rotor_min_quality_front: v.optional(nullableStringValidator),
+  rotor_min_quality_rear: v.optional(nullableStringValidator),
+  rotor_min_source_url: v.optional(nullableStringValidator),
 });
 
 export const vehiclePassportInspectionValidator = v.object({

@@ -19,6 +19,10 @@ const navItems = [
     {
         label: 'Services',
         href: '/services'
+    },
+    {
+        label: 'For shops',
+        href: '/partner-with-us'
     }
 ]
 function Navbar() {

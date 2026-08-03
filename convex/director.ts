@@ -1,6 +1,7 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requireDirector } from "./directorGate";
+import { metaMakeModel } from "./lib/bookingEnrichment";
 
 // All queries for the director panel. Token-gated server-side via requireDirector.
 
@@ -8,12 +9,17 @@ export const sidebarCounts = query({
   args: { token: v.string() },
   handler: async (ctx, { token }) => {
     await requireDirector(ctx, token);
-    const [bugs, feedback, otoFeedback, refunds, pendingVerifications] = await Promise.all([
+    const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const [bugs, feedback, otoFeedback, refunds, pendingVerifications, pendingDeletions, reviews, errorLogs] = await Promise.all([
       ctx.db.query("bugs").collect(),
       ctx.db.query("app_feedback").collect(),
       ctx.db.query("ai_feedback").collect(),
       ctx.db.query("bookings").withIndex("by_status", (q) => q.eq("status", "refunded")).collect(),
       ctx.db.query("mechanic_verifications").withIndex("by_status", (q) => q.eq("status", "pending")).collect(),
+      // Ops surfaces folded in: deletion-queue SLA, reviews needs-eyes, client errors.
+      ctx.db.query("users").withIndex("by_isPendingDeletion", (q) => q.eq("isPendingDeletion", true)).collect(),
+      ctx.db.query("reviews").take(500),
+      ctx.db.query("client_logs").withIndex("by_level", (q) => q.eq("level", "error")).order("desc").take(200),
     ]);
     const openBugStatuses   = new Set(["new", "triaged", "assigned", "in_progress"]);
     const openFbStatuses    = new Set(["new", "reviewed", "triaged"]);
@@ -24,6 +30,10 @@ export const sidebarCounts = query({
       otoFeedback:   otoFeedback.filter((f) => !f.archived && openOtoFbStatuses.has(f.review_status ?? "new")).length,
       stripe:        refunds.length,
       mechanicEdits: pendingVerifications.length,
+      deletionQueue: pendingDeletions.length,
+      // "Needs eyes": visible low-rating reviews awaiting moderation.
+      reviews:       reviews.filter((r) => r.hidden_at == null && r.rating <= 3).length,
+      systemHealth:  errorLogs.filter((l) => l.timestamp >= sevenDaysAgo).length,
     };
   },
 });
@@ -312,19 +322,27 @@ export const userDetail = query({
         .first();
       if (!vehicle) return { vehicleId: null, vin: o.vin, ymm: o.vin, nickname: o.nickname };
 
-      let ymm = o.vin;
+      let make = "";
+      let model = "";
       if (vehicle.trim_id) {
         const trim = await ctx.db.get(vehicle.trim_id);
         if (trim) {
-          const model = await ctx.db.get(trim.model_id);
-          if (model) {
-            const make = await ctx.db.get(model.make_id);
-            ymm = [vehicle.year, make?.name, model.name].filter(Boolean).join(" ");
+          const m = await ctx.db.get(trim.model_id);
+          if (m) {
+            model = m.name ?? "";
+            const mk = await ctx.db.get(m.make_id);
+            if (mk) make = mk.name ?? "";
           }
         }
-      } else if (vehicle.year) {
-        ymm = String(vehicle.year);
       }
+      // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+      if (!make || !model) {
+        const meta = metaMakeModel(vehicle.metadata);
+        if (!make) make = meta.make;
+        if (!model) model = meta.model;
+      }
+      const ymm =
+        [vehicle.year, make, model].filter(Boolean).join(" ") || o.vin;
 
       return { vehicleId: vehicle._id, vin: o.vin, ymm, nickname: o.nickname, mileage: o.mileage };
     }));
@@ -604,6 +622,12 @@ export const bookingDetail = query({
               if (mk) make = mk.name ?? "";
             }
           }
+        }
+        // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+        if (!make || !model) {
+          const meta = metaMakeModel(veh.metadata);
+          if (!make) make = meta.make;
+          if (!model) model = meta.model;
         }
         vehicleYmm = [veh.year, make, model].filter(Boolean).join(" ") || veh.vin;
       }

@@ -1,0 +1,61 @@
+{
+  "key": "2006-ford-f150_lariat-brake_pads",
+  "url": "https://ford.oempartsonline.com/oem-2006-ford-f150_lariat-brake_pads.html",
+  "legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2639,
+      "content_len": 761331,
+      "title": "Online Ford Parts Superstore | OEM Parts Online",
+      "final_url": "https://ford.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3783
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": false,
+      "status": null,
+      "ms": 1531,
+      "content_len": 0,
+      "title": null,
+      "final_url": null,
+      "class": "error",
+      "has_price_class": false,
+      "has_jsonld_product": false,
+      "has_fitment_marker": false,
+      "error": "firecrawl_api_500: Internal Server Error"
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 831,
+      "content_len": 198125,
+      "title": "Online Ford Parts Superstore | OEM Parts Online",
+      "final_url": "https://ford.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3970,
+      "content_len": 938529,
+      "title": "Online Ford Parts Superstore | OEM Parts Online",
+      "final_url": "https://ford.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

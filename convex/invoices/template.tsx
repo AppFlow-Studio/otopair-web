@@ -35,7 +35,7 @@ export type InvoicePart = {
 export type InvoiceData = {
   invoiceNumber: string;
   issuedAtMs: number;
-  status: "paid" | "refunded";
+  status: "paid" | "refunded" | "partially_refunded";
 
   customer: { name: string; email: string; phone?: string | null };
   vehicle: {
@@ -323,6 +323,13 @@ function vehicleTitle(v: InvoiceData["vehicle"]): string {
 function Invoice({ data }: { data: InvoiceData }) {
   const vt = vehicleTitle(data.vehicle);
   const isRefunded = data.status === "refunded";
+  const isPartiallyRefunded = data.status === "partially_refunded";
+  const hasRefund = isRefunded || isPartiallyRefunded;
+  // What the customer is actually out of pocket after the refund.
+  const netPaidCents = Math.max(
+    0,
+    data.totalCents - (hasRefund ? (data.refundedCents ?? 0) : 0),
+  );
   const logoUrl = data.shop.logoUrl || OTOPAIR_LOGO_URL;
   const usingShopLogo = Boolean(data.shop.logoUrl);
   const businessContact = [data.shop.email, data.shop.phone]
@@ -330,7 +337,9 @@ function Invoice({ data }: { data: InvoiceData }) {
     .join("  |  ");
   const paymentLine = isRefunded
     ? `Refunded ${data.refundedAtMs ? formatDate(data.refundedAtMs) : ""}`.trim()
-    : `Paid ${formatDate(data.issuedAtMs)}`;
+    : isPartiallyRefunded
+      ? `Partially refunded ${data.refundedAtMs ? formatDate(data.refundedAtMs) : ""}`.trim()
+      : `Paid ${formatDate(data.issuedAtMs)}`;
 
   return (
     <Document
@@ -401,7 +410,13 @@ function Invoice({ data }: { data: InvoiceData }) {
             <Text style={styles.bandBody}>
               {paymentLine}
               {"\n"}
-              {formatCents(isRefunded ? data.refundedCents ?? 0 : data.totalCents)}
+              {formatCents(
+                isRefunded
+                  ? (data.refundedCents ?? 0)
+                  : isPartiallyRefunded
+                    ? netPaidCents
+                    : data.totalCents,
+              )}
             </Text>
           </View>
         </View>
@@ -479,16 +494,24 @@ function Invoice({ data }: { data: InvoiceData }) {
           <Text style={styles.grandValue}>{formatCents(data.totalCents)}</Text>
         </View>
 
-        {isRefunded && data.refundedCents ? (
-          <View style={styles.refundRow}>
-            <Text style={styles.refundText}>
-              Refunded
-              {data.refundedAtMs ? ` · ${formatDate(data.refundedAtMs)}` : ""}
-            </Text>
-            <Text style={styles.refundText}>
-              −{formatCents(data.refundedCents)}
-            </Text>
-          </View>
+        {hasRefund && data.refundedCents ? (
+          <>
+            <View style={styles.refundRow}>
+              <Text style={styles.refundText}>
+                Refunded
+                {data.refundedAtMs ? ` · ${formatDate(data.refundedAtMs)}` : ""}
+              </Text>
+              <Text style={styles.refundText}>
+                −{formatCents(data.refundedCents)}
+              </Text>
+            </View>
+            {isPartiallyRefunded ? (
+              <View style={styles.grandRow}>
+                <Text style={styles.grandLabel}>Net paid</Text>
+                <Text style={styles.grandValue}>{formatCents(netPaidCents)}</Text>
+              </View>
+            ) : null}
+          </>
         ) : null}
 
         {/* Footer */}

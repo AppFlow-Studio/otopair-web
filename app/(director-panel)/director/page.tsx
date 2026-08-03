@@ -10,6 +10,10 @@ export default function DirectorPage() {
         body { font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
         .mono { font-family: 'JetBrains Mono', ui-monospace, monospace !important; }
 
+        /* Enrichment Console (Direction B) — live telemetry motion */
+        @keyframes omPulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.35 } }
+        @keyframes omFlow { 0% { background-position: 200% 0 } 100% { background-position: -200% 0 } }
+
         :root {
           --slate-25:  #F9FAFB;
           --slate-50:  #F8FAFC;

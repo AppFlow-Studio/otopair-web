@@ -1,16 +1,19 @@
 /**
  * vehicleEnrichment/sourceRegistry.ts — Make-agnostic source registry
  *
- * Maps vehicle make → parts source config + manual search queries.
+ * Maps vehicle make → RevolutionParts storefront + part-slug list (parts) and
+ * manual search queries.
  *
- * Phase 1 (BMW/Toyota/Honda): brand-specific *partsdeal.com sites.
- *   - Server-rendered HTML with year-specific URLs.
- *   - Direct fetchUrl() scraping — no search step needed.
- *   - 8 URL fetches cover all 10 OEM part fields.
- *
- * Phase 2/3 (Ford, GM, Hyundai, Kia, Mercedes, VW, Audi, Subaru, Nissan, etc.):
- *   - oempartsonline.com/{brand}/ subdomains — same URL pattern per brand.
- *   - Falls back gracefully if pages 404 (Batch 2 web_search fills gaps).
+ * ALL registry makes now resolve parts through the same storefront flow:
+ *   {store}/search?search_str={year model part-words} → /oem-parts/… detail
+ * (see rpCatalog.ts). The pre-Jul-2026 deterministic category-URL scheme
+ * (`oem-{year}-{make}-{model}-{part}.html`) was retired by the platform — it
+ * 30x-chains to the storefront homepage on *.oempartsonline.com and 404s on
+ * *partsdeal.com (probe: reports/scrapling_vs_firecrawl_probe_2026-07-28.md).
+ * The former Phase-1 partsdeal sites were re-pointed to the makes' own
+ * oempartsonline.com subdomains (toyota/honda/bmw — search verified Jul 28
+ * 2026); toyotapartsdeal.com itself is now a JS shell with no server-rendered
+ * search.
  *
  * Adding a new make = add one registry entry. No pipeline code changes needed.
  *
@@ -94,17 +97,11 @@ export function isMarketplaceUrl(url: string | null | undefined): boolean {
 
 export interface MakeSourceConfig {
   parts: {
-    /**
-     * Build the URL slug for this vehicle's model+trim combo.
-     * BMW uses trim-only ("M550i xDrive" → "m550i_xdrive").
-     * Toyota/Honda/etc. use model+trim ("Camry XSE" → "camry_xse").
-     */
-    modelSlugFn: (model: string, trim: string) => string;
-    /** Year-specific URL — pre-filters to parts that fit this exact year. */
-    yearSpecificUrl: (year: number, modelSlug: string, partSlug: string) => string;
-    /** Generic (no-year) URL — fallback if year-specific 404s or returns empty. */
-    genericUrl: (modelSlug: string, partSlug: string) => string;
-    /** Maps enrichment field name → URL part slug. Deduped before fetching. */
+    /** RevolutionParts storefront base, e.g. "https://subaru.oempartsonline.com". */
+    storeBaseUrl: string;
+    /** Maps enrichment field name → part slug. Deduped before fetching; the
+     *  slug's words ("cabin_air_filter" → "cabin air filter") become the
+     *  storefront search keywords. */
     partSlugs: Record<string, string>;
   };
   manual: {
@@ -113,34 +110,33 @@ export interface MakeSourceConfig {
   };
 }
 
-// ─── URL Helpers ──────────────────────────────────────────────────
-
-/** "M550i xDrive" → "m550i_xdrive" (trim-only, BMW style) */
-function trimSlug(trim: string): string {
-  return trim.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
-}
-
-/** "Camry", "XSE" → "camry_xse" (model+trim, Toyota/Honda/etc style) */
-function modelTrimSlug(model: string, trim: string): string {
-  const base = model.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "");
-  const t = trim ? "_" + trim.toLowerCase().replace(/\s+/g, "_").replace(/[^a-z0-9_]/g, "") : "";
-  return base + t;
-}
-
 // ─── Exported Helpers ─────────────────────────────────────────────
 
-/** Returns all year-specific parts page URLs for a vehicle (deduplicated by slug). */
-export function getPartsPageUrls(config: MakeSourceConfig, vehicle: VehicleInput): string[] {
-  const slug = config.parts.modelSlugFn(vehicle.model, vehicle.trim);
-  const uniqueSlugs = [...new Set(Object.values(config.parts.partSlugs))];
-  return uniqueSlugs.map((partSlug) => config.parts.yearSpecificUrl(vehicle.year, slug, partSlug));
-}
+export type PartsSearchPlan = {
+  /** The deduped part slug this plan covers (e.g. "oil_filter"). */
+  partSlug: string;
+  /** Human-readable storefront query, e.g. "2019 Forester oil filter". */
+  query: string;
+  /** Full storefront search URL for the query. */
+  searchUrl: string;
+};
 
-/** Returns generic (no-year) parts page URLs — used as fallback if year-specific 404s. */
-export function getGenericPartsPageUrls(config: MakeSourceConfig, vehicle: VehicleInput): string[] {
-  const slug = config.parts.modelSlugFn(vehicle.model, vehicle.trim);
+/**
+ * One search plan per unique part slug. The storefront's own search resolves
+ * year+model+part keywords to the right catalog items (trim deliberately
+ * omitted — parts split by year/engine, and extra trim tokens dilute matches).
+ */
+export function getPartsSearchPlans(config: MakeSourceConfig, vehicle: VehicleInput): PartsSearchPlan[] {
   const uniqueSlugs = [...new Set(Object.values(config.parts.partSlugs))];
-  return uniqueSlugs.map((partSlug) => config.parts.genericUrl(slug, partSlug));
+  const base = config.parts.storeBaseUrl.replace(/\/+$/, "");
+  return uniqueSlugs.map((partSlug) => {
+    const query = `${vehicle.year} ${vehicle.model} ${partSlug.replace(/_/g, " ")}`.trim();
+    return {
+      partSlug,
+      query,
+      searchUrl: `${base}/search?search_str=${encodeURIComponent(query)}`,
+    };
+  });
 }
 
 /** Returns manual search queries for a vehicle. */
@@ -150,67 +146,99 @@ export function getManualSearchQueries(config: MakeSourceConfig, vehicle: Vehicl
 
 // ─── Phase 1: Brand-specific scrapers ────────────────────────────
 
-const BMW_PART_SLUGS: Record<string, string> = {
+// Round 12 (batch-12 Crosstrek): pads/rotors are POSITION-SPLIT into separate
+// searches. The old combined "brake_pads" slug deduped front+rear into ONE
+// search whose top-2 pages carried no axle guarantee — the Crosstrek shipped
+// rear-only brake data. Slugs are only search KEYWORDS since the Jul-2026
+// category-URL retirement, so the position word directly steers the SERP
+// ("2025 Crosstrek front brake pads"), and the scraper's rank step prefers
+// position-matching URLs/titles. Rotor slugs were previously BMW-only —
+// every other make NEVER deterministically scraped rotors.
+/**
+ * THE BASE SLUG SET — every make gets this unless its catalog uses different
+ * words for the same part.
+ *
+ * Derived from SERVICE_PARTS_REFERENCE rather than from habit. Of the 23
+ * bookable services, 8 are labor-only and 1 is a dedicated flow; the remaining
+ * 14 need exactly 13 CORE roles that require a real looked-up part number.
+ * Everything here backs one of those 13, or is a cheap consumable whose real
+ * OEM number beats the synthesised universal fallback. Nothing else earns a
+ * slot.
+ *
+ * Why one map instead of per-make maps: the previous TOYOTA/HONDA maps carried
+ * 10 slugs each and omitted battery, coolant and engine_oil — all CORE roles.
+ * A field with no slug is never searched at all (getPartsSearchPlans maps over
+ * Object.values), with no plan, no query and no warning, so Toyota could not
+ * deterministically scrape a battery and nothing said so. Per-make maps meant
+ * per-make blind spots that nobody could see.
+ *
+ * ORDER IS LOAD-BEARING. Plan order follows insertion order and BOTH budgets
+ * cut the TAIL — PARTS_SCRAPE_BUDGET_MS (210s) and MAX_MARKDOWN_CHARS (40k,
+ * already exceeded by real scrapes). So the axle- and quote-critical searches
+ * come first and the nice-to-haves last.
+ *
+ * REMOVED: wiper_blade. Wiper replacement was made a data-only, non-bookable
+ * service, so its part could never be quoted — yet it consumed a search and a
+ * share of the markdown cap on every vehicle of every make.
+ */
+const BASE_PART_SLUGS: Record<string, string> = {
+  // ── Core, quote-binding. These must never be truncated. ──
   oil_filter_oem:        "oil_filter",
   air_filter_oem:        "air_filter",
   cabin_filter_oem:      "cabin_air_filter",
   spark_plug_oem:        "spark_plug",
-  front_brake_pad_oem:   "brake_pads",   // same page lists front + rear
-  rear_brake_pad_oem:    "brake_pads",   // deduped — only one fetch
-  rotor_front_oem:       "brake_disc",   // same page lists front + rear rotors
-  rotor_rear_oem:        "brake_disc",   // deduped — only one fetch
-  serpentine_belt_oem:   "serpentine_belt",
-  drain_plug_gasket_oem: "drain_plug",
-  wiper_blade_set_oem:   "wiper_blade",
+  front_brake_pad_oem:   "front_brake_pads",
+  rear_brake_pad_oem:    "rear_brake_pads",
+  rotor_front_oem:       "front_brake_rotor",
+  rotor_rear_oem:        "rear_brake_rotor",
   battery_group:         "battery",
   battery_oem:           "battery",      // deduped — same page as battery_group
   coolant_oem:           "coolant",
+  // ── Core roles that had NO scrape source on any make until now. Each is the
+  //    sole core part of its service, so without them that service could never
+  //    be quoted from deterministic data. Both timing_belt and atf_fluid are
+  //    conditional in reality (chain engines, sealed transmissions) and
+  //    applicability nulls them where they do not apply — a wasted search on
+  //    those vehicles, and the only way to have the part on the ones where it
+  //    does. ──
+  atf_fluid_oem:                "transmission_fluid",
+  timing_belt_oem:              "timing_belt",
+  oil_filter_housing_oring_oem: "oil_filter_housing_o_ring",
+  // ── Universal-fallback roles: a synthesised consumable already satisfies
+  //    quotability, so these are last. A real OEM number is simply better. ──
+  drain_plug_gasket_oem: "drain_plug",
   engine_oil_oem:        "engine_oil",
 };
 
-const TOYOTA_PART_SLUGS: Record<string, string> = {
-  oil_filter_oem:        "oil_filter",
-  air_filter_oem:        "air_filter",
-  cabin_filter_oem:      "cabin_air_filter",
-  spark_plug_oem:        "spark_plug",
-  front_brake_pad_oem:   "brake_pads",
-  rear_brake_pad_oem:    "brake_pads",
-  drain_plug_gasket_oem: "drain_plug",
-  wiper_blade_set_oem:   "wiper_blade",
+/** BMW catalogs say "brake disc" where everyone else says "brake rotor", and
+ *  BMW's storefront does serve a serpentine-belt page (a `kit` role, kept
+ *  because it costs nothing extra here and BMW belt jobs are common). */
+const BMW_PART_SLUGS: Record<string, string> = {
+  ...BASE_PART_SLUGS,
+  rotor_front_oem:       "front_brake_disc",
+  rotor_rear_oem:        "rear_brake_disc",
+  serpentine_belt_oem:   "serpentine_belt",
 };
 
-const HONDA_PART_SLUGS: Record<string, string> = {
-  oil_filter_oem:        "oil_filter",
-  air_filter_oem:        "air_filter",
-  cabin_filter_oem:      "cabin_air_filter",
-  spark_plug_oem:        "spark_plug",
-  front_brake_pad_oem:   "brake_pads",
-  rear_brake_pad_oem:    "brake_pads",
-  drain_plug_gasket_oem: "drain_plug",
-  wiper_blade_set_oem:   "wiper_blade",
-};
+// Toyota and Honda use the base catalog vocabulary verbatim — no overrides.
+// They previously had bespoke 10-slug maps missing three core roles.
+const TOYOTA_PART_SLUGS: Record<string, string> = { ...BASE_PART_SLUGS };
+const HONDA_PART_SLUGS: Record<string, string> = { ...BASE_PART_SLUGS };
 
 // ─── Phase 2/3: oempartsonline.com subdomains ─────────────────────
 
-const OEM_PARTS_ONLINE_SLUGS: Record<string, string> = {
-  oil_filter_oem:        "oil_filter",
-  air_filter_oem:        "air_filter",
-  cabin_filter_oem:      "cabin_air_filter",
-  spark_plug_oem:        "spark_plug",
-  front_brake_pad_oem:   "brake_pads",
-  rear_brake_pad_oem:    "brake_pads",
-  drain_plug_gasket_oem: "drain_plug",
-  wiper_blade_set_oem:   "wiper_blade",
-  // Battery + fluids, mirrored from BMW_PART_SLUGS — same RevolutionParts
-  // platform, same slug conventions. battery_oem was absent here, so no OLP
-  // subdomain make could EVER price a battery deterministically (Jul 2026 A4:
-  // battery at 0 prices while the oil filter, which IS listed, got priced).
-  // A slug the site doesn't serve just yields an empty scrape — fail-safe.
-  battery_group:         "battery",
-  battery_oem:           "battery",      // deduped — same page as battery_group
-  coolant_oem:           "coolant",
-  engine_oil_oem:        "engine_oil",
-};
+/**
+ * Every oempartsonline.com subdomain make uses the base set verbatim — same
+ * RevolutionParts platform, same slug vocabulary as the base.
+ *
+ * This was a fourth hand-maintained copy that had already drifted: it carried
+ * wiper_blade (a non-bookable service) and lacked all three of the core roles
+ * with no scrape source anywhere. Since this is the map EVERY make without a
+ * bespoke entry lands on, its blind spots were the default experience for most
+ * of the fleet. Sharing one definition is what makes coverage a property of
+ * the pipeline rather than of how recently someone edited a make's map.
+ */
+const OEM_PARTS_ONLINE_SLUGS: Record<string, string> = { ...BASE_PART_SLUGS };
 
 /** Maps make name → oempartsonline.com subdomain. */
 const OEM_PARTS_ONLINE_SUBDOMAINS: Record<string, string> = {
@@ -243,18 +271,15 @@ const OEM_PARTS_ONLINE_SUBDOMAINS: Record<string, string> = {
   Mitsubishi:      "mitsubishi",
 };
 
-function oemPartsOnlineConfig(make: string): MakeSourceConfig {
+function oemPartsOnlineConfig(
+  make: string,
+  partSlugs: Record<string, string> = OEM_PARTS_ONLINE_SLUGS,
+): MakeSourceConfig {
   const subdomain = OEM_PARTS_ONLINE_SUBDOMAINS[make] ?? make.toLowerCase();
-  const base = `https://${subdomain}.oempartsonline.com`;
-  const makeLower = make.toLowerCase();
   return {
     parts: {
-      modelSlugFn: modelTrimSlug,
-      yearSpecificUrl: (year, modelSlug, partSlug) =>
-        `${base}/oem-${year}-${makeLower}-${modelSlug}-${partSlug}.html`,
-      genericUrl: (modelSlug, partSlug) =>
-        `${base}/oem-${makeLower}-${modelSlug}-${partSlug}.html`,
-      partSlugs: OEM_PARTS_ONLINE_SLUGS,
+      storeBaseUrl: `https://${subdomain}.oempartsonline.com`,
+      partSlugs,
     },
     manual: {
       searchQueries: (year, mk, model) => [
@@ -268,14 +293,13 @@ function oemPartsOnlineConfig(make: string): MakeSourceConfig {
 // ─── Registry ─────────────────────────────────────────────────────
 
 export const SOURCE_REGISTRY: Record<string, MakeSourceConfig> = {
-  // ── Phase 1: Brand-specific verified scrapers ────────────────
+  // ── Former Phase-1 makes — re-pointed off the retired *partsdeal.com
+  //    sites to the makes' own oempartsonline.com storefronts (search
+  //    verified Jul 28 2026); custom manual queries and richer BMW slug
+  //    set preserved. ─────────────────────────────────────────────
   BMW: {
     parts: {
-      modelSlugFn: (_, trim) => trimSlug(trim), // BMW URLs use trim-only slug
-      yearSpecificUrl: (year, modelSlug, partSlug) =>
-        `https://www.bmwpartsdeal.com/oem-${year}-bmw-${modelSlug}-${partSlug}.html`,
-      genericUrl: (modelSlug, partSlug) =>
-        `https://www.bmwpartsdeal.com/oem-bmw-${modelSlug}-${partSlug}.html`,
+      storeBaseUrl: "https://bmw.oempartsonline.com",
       partSlugs: BMW_PART_SLUGS,
     },
     manual: {
@@ -288,11 +312,7 @@ export const SOURCE_REGISTRY: Record<string, MakeSourceConfig> = {
 
   Toyota: {
     parts: {
-      modelSlugFn: modelTrimSlug,
-      yearSpecificUrl: (year, modelSlug, partSlug) =>
-        `https://www.toyotapartsdeal.com/oem-${year}-toyota-${modelSlug}-${partSlug}.html`,
-      genericUrl: (modelSlug, partSlug) =>
-        `https://www.toyotapartsdeal.com/oem-toyota-${modelSlug}-${partSlug}.html`,
+      storeBaseUrl: "https://toyota.oempartsonline.com",
       partSlugs: TOYOTA_PART_SLUGS,
     },
     manual: {
@@ -305,11 +325,7 @@ export const SOURCE_REGISTRY: Record<string, MakeSourceConfig> = {
 
   Honda: {
     parts: {
-      modelSlugFn: modelTrimSlug,
-      yearSpecificUrl: (year, modelSlug, partSlug) =>
-        `https://www.hondapartsdeal.com/oem-${year}-honda-${modelSlug}-${partSlug}.html`,
-      genericUrl: (modelSlug, partSlug) =>
-        `https://www.hondapartsdeal.com/oem-honda-${modelSlug}-${partSlug}.html`,
+      storeBaseUrl: "https://honda.oempartsonline.com",
       partSlugs: HONDA_PART_SLUGS,
     },
     manual: {

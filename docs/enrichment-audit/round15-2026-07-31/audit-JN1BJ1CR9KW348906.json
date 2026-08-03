@@ -1,0 +1,770 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "pipeline_extraction",
+      "rockauto",
+      "sylvania_bulbs",
+      "trico_wipers",
+      "wix_filters"
+    ],
+    "claim_rows": 30,
+    "families_seen": [
+      "aftermarket_catalog",
+      "web_search"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 4,
+    "fields_multi_family_agreement": 0,
+    "fields_single_source": 25,
+    "fields_with_claims": 25
+  },
+  "external_joins": {
+    "complaint_signal": {
+      "top": "FORWARD COLLISION AVOIDANCE",
+      "total": 97
+    },
+    "epa": null,
+    "manual": {
+      "file_id": "file_011CdZ8Sp3HpTJMR1ez8r21B",
+      "kind": "owners_manual",
+      "oem": true,
+      "pages": null,
+      "url": "https://www.nissanusa.com/content/dam/Nissan/us/manuals-and-guides/rogue_sport/2019/2019-Nissan-RogueSport-owner-manual.pdf"
+    },
+    "recalls_open": 2
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": 16,
+    "brake_fluid_type": "DOT 3",
+    "coolant_capacity_qts": 7.7,
+    "coolant_type": "Nissan Long Life Antifreeze/Coolant (blue)",
+    "oil_capacity_qts": 4,
+    "oil_viscosity": "0W-20",
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": 4.5
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "0%",
+    "fields_with_claims": 25,
+    "fitment_multi_source": "29%",
+    "has_manual": true,
+    "months_fill": "46%",
+    "parts_quotable": "6/7",
+    "rotor_minimums": 0,
+    "status": "partial"
+  },
+  "identity_coherence": {
+    "aspiration": null,
+    "cylinders": 4,
+    "displacement_l": 2,
+    "engine_code": "MR20DD",
+    "epa_says": null,
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": true,
+    "spark_plug_quantity": 4,
+    "timing_system": "chain",
+    "trans_fluid_type": "Nissan NS-3 CVT Fluid",
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "default_fallback": 11,
+      "deterministic": 8,
+      "enriched": 6,
+      "vdb_schedule": 3
+    },
+    "months_fill": "46%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "default_fallback",
+        "service": "battery_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 20000,
+        "months": 24,
+        "provenance": "vdb_schedule",
+        "service": "brake_fluid_flush",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "enriched",
+        "service": "brake_pad_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 105000,
+        "months": 84,
+        "provenance": "enriched",
+        "service": "coolant_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "differential_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 36,
+        "provenance": "enriched",
+        "service": "filter_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "fuel_system_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 5000,
+        "months": 6,
+        "provenance": "vdb_schedule",
+        "service": "oil_change",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": 72,
+        "provenance": "default_fallback",
+        "service": "rotor_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": 40000,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "serpentine_belt",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 105000,
+        "months": 60,
+        "provenance": "enriched",
+        "service": "spark_plugs",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "tire_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 5000,
+        "months": 6,
+        "provenance": "vdb_schedule",
+        "service": "tire_rotation",
+        "status": "active"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 60,
+        "provenance": "enriched",
+        "service": "transmission_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 28,
+    "with_miles": 13,
+    "with_months": 13
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 10,
+      "default_fallback": 18
+    },
+    "rows": [
+      {
+        "hours": 0.5,
+        "service": "oil_change",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "tire_rotation",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.3,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.7,
+        "service": "brake_fluid_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "battery_test",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.9,
+        "service": "coolant_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.3,
+        "service": "battery_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "brake_pad_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.4,
+        "service": "rotor_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "wheel_alignment",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "fuel_system_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "differential_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "transmission_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "spark_plugs",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "serpentine_belt",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "transfer_case_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 28
+  },
+  "parts": {
+    "corroborated_2plus_sources": 2,
+    "corroboration_rate": "29%",
+    "rows": [
+      {
+        "best_price": 205.28,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "24410-6MA0A",
+        "price_domains": [
+          "go-parts.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "battery",
+        "scraped_name": "Battery",
+        "service": "battery_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "nissanpartsdeal.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 29.03,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "27277-4BU0A",
+        "price_domains": [
+          "nissanpartsdeal.com",
+          "nissanparts.cc"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "cabin_filter",
+        "scraped_name": "Cabin Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 4,
+        "source_domains": [
+          "nissan.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 76.21,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "D1060-4BT0C",
+        "price_domains": [
+          "nissanpartsdeal.com",
+          "nissanparts.cc",
+          "partsfornissans.com",
+          "nissan.oempartsonline.com"
+        ],
+        "price_rows": 4,
+        "refute_flagged": true,
+        "role": "front_brake_pad",
+        "scraped_name": "Brake Pads Front",
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "nissan.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 4
+      },
+      {
+        "best_price": 78.35,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "D1060-4GA0J",
+        "price_domains": [
+          "parts.nissanusa.com",
+          "nissan.oempartsonline.com",
+          "nissanpartsdeal.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "front_brake_pad",
+        "scraped_name": "Brake Pads Front",
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "nissanpartsdeal.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 6.58,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "15208-65F0E",
+        "price_domains": [
+          "autozone.com",
+          "nissanpartsdeal.com",
+          "oreillyauto.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "oil_filter",
+        "scraped_name": "Engine Oil Filter",
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.nissanusa.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 74.84,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "D4060-4CU2A",
+        "price_domains": [
+          "nissanpartsdeal.com",
+          "nissanparts.cc",
+          "tascaparts.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "rear_brake_pad",
+        "scraped_name": "Brake Pads Rear 2014-2021 Nissan",
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "parts.nissanusa.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 24.04,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "22401-1VA1C",
+        "price_domains": [
+          "nissanpartsdeal.com",
+          "nissanparts.cc"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "spark_plug",
+        "scraped_name": "Spark Plug",
+        "service": "spark_plugs",
+        "service_role": "core",
+        "source_count": 4,
+        "source_domains": [
+          "nissan.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      }
+    ],
+    "total": 7,
+    "triangle_broken": [
+      {
+        "oem": "D1060-4BT0C",
+        "role": "front_brake_pad",
+        "why": "refute_flagged"
+      }
+    ],
+    "triangle_ok": 6,
+    "with_observed_title": 7
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 19,
+    "duration_min": 16.8,
+    "error_tags": {
+      "applicable_services_empty_fallback_used": 1,
+      "fitment_refute_kept_multisource": 1,
+      "quotability": 1,
+      "role_resource": 6,
+      "rotor_min": 2
+    },
+    "field_gap_count": 108,
+    "fill_rate": 79,
+    "quotability": {
+      "pct": 0.67,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx78jrgxjajms6kv3amy0zn5998bkqq1",
+    "sanity_flag_count": 8,
+    "sanity_flags_by_stage": {
+      "claim_ledger": 4,
+      "completion_gate": 1,
+      "fitment_refute": 2,
+      "interval_provenance": 1
+    },
+    "status": "complete",
+    "tokens_in": 18586,
+    "tokens_out": 4838,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 0
+  },
+  "vehicle": {
+    "chassis_code": "J11",
+    "confidence_avg": 0.8559027777777781,
+    "configId": "w57c09g235y0k8k7fayc8am47h8bhahv",
+    "config_key": "2019_nissan_rogue_sport_s_mr20dd",
+    "drivetrain": "4WD",
+    "enrichment_status": "partial",
+    "fill_rate": 79,
+    "last_enriched_at": 1785518874433,
+    "make": "Nissan",
+    "model": "Rogue Sport",
+    "na_role_keys": [],
+    "trim": "S",
+    "verified_fields": [],
+    "year": 2019
+  }
+}

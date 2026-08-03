@@ -1,4 +1,5 @@
 import { mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v } from "convex/values";
 
 /**
@@ -26,7 +27,7 @@ export const submit = mutation({
       trimmed.length <= TITLE_MAX
         ? trimmed
         : `${trimmed.slice(0, TITLE_MAX - 1)}…`;
-    return await ctx.db.insert("app_feedback", {
+    const feedbackId = await ctx.db.insert("app_feedback", {
       title,
       category: "general",
       sentiment: "neutral",
@@ -35,6 +36,31 @@ export const submit = mutation({
       description: trimmed,
       created_at: Date.now(),
     });
+
+    // Also email a copy to support@otopair.com. The row stays anonymous;
+    // we only use the signed-in identity to set a reply-to so ops can
+    // respond. Scheduled because email send is a Node-only action.
+    let customerEmail: string | undefined;
+    let customerName: string | undefined;
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity) {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+        .unique();
+      customerEmail =
+        user?.email ?? (typeof identity.email === "string" ? identity.email : undefined);
+      customerName =
+        [user?.first_name, user?.last_name].filter(Boolean).join(" ") || undefined;
+    }
+    await ctx.scheduler.runAfter(0, internal.support_requests_node.emailAppFeedback, {
+      text: trimmed,
+      source: source ?? "consumer_app",
+      customerEmail,
+      customerName,
+    });
+
+    return feedbackId;
   },
 });
 

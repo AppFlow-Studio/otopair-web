@@ -1,0 +1,764 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "brembo",
+      "pipeline_extraction",
+      "rockauto",
+      "sylvania_bulbs",
+      "trico_wipers"
+    ],
+    "claim_rows": 34,
+    "families_seen": [
+      "aftermarket_catalog",
+      "web_search"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 2,
+    "fields_multi_family_agreement": 2,
+    "fields_single_source": 26,
+    "fields_with_claims": 28
+  },
+  "external_joins": {
+    "complaint_signal": {
+      "top": "FORWARD COLLISION AVOIDANCE",
+      "total": 1072
+    },
+    "epa": {
+      "co2": 302,
+      "fuel_cost_yr": 2100,
+      "mpg": [
+        27,
+        33,
+        29
+      ]
+    },
+    "manual": {
+      "file_id": "file_011CdeEGgvLtv4PMWximVHEv",
+      "kind": "maintenance_schedule",
+      "oem": true,
+      "pages": 9,
+      "url": "http://techinfo.honda.com/rjanisis/pubs/OM/cv9999/CV9999G00017A.pdf"
+    },
+    "recalls_open": 8
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": 32,
+    "brake_fluid_type": "DOT 3",
+    "coolant_capacity_qts": 6.6,
+    "coolant_type": "Honda Long-Life Antifreeze/Coolant Type 2",
+    "oil_capacity_qts": 3.7,
+    "oil_viscosity": "0W-20",
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": 3.9
+  },
+  "headline": {
+    "epa_joined": true,
+    "field_corroboration": "7%",
+    "fields_with_claims": 28,
+    "fitment_multi_source": "40%",
+    "has_manual": true,
+    "months_fill": "50%",
+    "parts_quotable": "4/5",
+    "rotor_minimums": 1,
+    "status": "partial"
+  },
+  "identity_coherence": {
+    "aspiration": "natural",
+    "cylinders": 4,
+    "displacement_l": 1.5,
+    "engine_code": "L15BE",
+    "epa_says": {
+      "cylinders": 4,
+      "displacement_l": 1.5,
+      "fuel": "Regular Gasoline",
+      "mismatch": null,
+      "turbo": true
+    },
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": true,
+    "spark_plug_quantity": 4,
+    "timing_system": "chain",
+    "trans_fluid_type": "Honda HCF-2",
+    "transmission_type": "CVT"
+  },
+  "intervals": {
+    "by_provenance": {
+      "default_fallback": 10,
+      "deterministic": 8,
+      "enriched": 8,
+      "oem_manual": 1,
+      "vdb_schedule": 1
+    },
+    "months_fill": "50%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "default_fallback",
+        "service": "battery_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": 36,
+        "provenance": "enriched",
+        "service": "brake_fluid_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "brake_pad_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 120000,
+        "months": 120,
+        "provenance": "enriched",
+        "service": "coolant_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 36,
+        "provenance": "enriched",
+        "service": "differential_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 24,
+        "provenance": "vdb_schedule",
+        "service": "filter_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "fuel_system_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 7500,
+        "months": 12,
+        "provenance": "enriched",
+        "service": "oil_change",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": 72,
+        "provenance": "default_fallback",
+        "service": "rotor_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": 100000,
+        "months": 72,
+        "provenance": "enriched",
+        "service": "serpentine_belt",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 105000,
+        "months": 84,
+        "provenance": "oem_manual",
+        "service": "spark_plugs",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "tire_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 7500,
+        "months": 6,
+        "provenance": "enriched",
+        "service": "tire_rotation",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 24,
+        "provenance": "enriched",
+        "service": "transmission_service",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 28,
+    "with_miles": 12,
+    "with_months": 14
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 11,
+      "default_fallback": 17
+    },
+    "rows": [
+      {
+        "hours": 0.5,
+        "service": "oil_change",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.4,
+        "service": "tire_rotation",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.9,
+        "service": "brake_fluid_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.5,
+        "service": "battery_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.4,
+        "service": "brake_pad_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.9,
+        "service": "coolant_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.2,
+        "service": "differential_service",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.3,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.8,
+        "service": "rotor_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.7,
+        "service": "transmission_service",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.2,
+        "service": "wheel_alignment",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "fuel_system_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "battery_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "spark_plugs",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "serpentine_belt",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "transfer_case_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 28
+  },
+  "parts": {
+    "corroborated_2plus_sources": 2,
+    "corroboration_rate": "40%",
+    "rows": [
+      {
+        "best_price": 21.24,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "17220-5PH-A00",
+        "price_domains": [
+          "honda.oempartsonline.com",
+          "hondaautomotiveparts.com",
+          "hondafactoryparts.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": true,
+        "role": "air_filter",
+        "scraped_name": "Engine Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "honda.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 23.01,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "17220-5AA-A00",
+        "price_domains": [
+          "honda.oempartsonline.com",
+          "collegehillshonda.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "air_filter",
+        "scraped_name": "Engine Air Filter 1.5L",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "hondapartsnow.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 21.06,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "80291-TF3-E01",
+        "price_domains": [
+          "hondafactoryparts.com",
+          "alldiscountparts.com",
+          "hondaacuraonline.com",
+          "hondapartshub.com"
+        ],
+        "price_rows": 5,
+        "refute_flagged": false,
+        "role": "cabin_filter",
+        "scraped_name": "Cabin Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 4,
+        "source_domains": [
+          "honda.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 4
+      },
+      {
+        "best_price": 87.61,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "45251-TNY-A00",
+        "price_domains": [
+          "hondacarpartsdirect.com",
+          "hondaoemdiscountparts.com",
+          "hondapartsnow.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "front_rotor",
+        "scraped_name": "Disc Brake Rotor, Front",
+        "service": "rotor_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "hondapartsconnection.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 6.81,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "15400-PLM-A02",
+        "price_domains": [
+          "hondapartsnow.com",
+          "acurapartsforless.com",
+          "autozone.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "oil_filter",
+        "scraped_name": "Oil Filter",
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "engineoildb.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      }
+    ],
+    "total": 5,
+    "triangle_broken": [
+      {
+        "oem": "17220-5PH-A00",
+        "role": "air_filter",
+        "why": "refute_flagged"
+      }
+    ],
+    "triangle_ok": 4,
+    "with_observed_title": 5
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": 26,
+    "front_nominal_mm": 28,
+    "front_quality": "oem_spec_flagged",
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 46,
+    "duration_min": 22.7,
+    "error_tags": {
+      "applicable_services_empty_fallback_used": 1,
+      "axle_pair_gap": 1,
+      "fitment_refute_kept_multisource": 1,
+      "fitment_verify_pass2": 1,
+      "quotability": 1,
+      "role_resource": 8
+    },
+    "field_gap_count": 78,
+    "fill_rate": 79,
+    "quotability": {
+      "pct": 0.5,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "battery"
+          ],
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "missing_roles": [
+            "front_brake_pad",
+            "rear_brake_pad"
+          ],
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "coolant"
+          ],
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "missing_roles": [
+            "rear_rotor",
+            "front_brake_pad",
+            "rear_brake_pad"
+          ],
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "spark_plug"
+          ],
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "missing_roles": [
+            "atf_fluid"
+          ],
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx72ejnnx4c3d79qj33zdnmsp18bqk82",
+    "sanity_flag_count": 10,
+    "sanity_flags_by_stage": {
+      "(pre-finalize)": 1,
+      "claim_ledger": 4,
+      "completion_gate": 2,
+      "fitment_refute": 1,
+      "interval_provenance": 1,
+      "sibling_inherit": 1
+    },
+    "status": "complete",
+    "tokens_in": 21306,
+    "tokens_out": 13188,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 40
+  },
+  "vehicle": {
+    "chassis_code": "RW",
+    "confidence_avg": 0.8268253968253975,
+    "configId": "w577545pdhgp5vkpq6501vta258bp4h3",
+    "config_key": "2019_honda_cr_v_ex_l_l15be",
+    "drivetrain": "4WD",
+    "enrichment_status": "partial",
+    "fill_rate": 82,
+    "last_enriched_at": 1785691211202,
+    "make": "Honda",
+    "model": "CR-V",
+    "na_role_keys": [],
+    "trim": "EX-L",
+    "verified_fields": [],
+    "year": 2019
+  }
+}

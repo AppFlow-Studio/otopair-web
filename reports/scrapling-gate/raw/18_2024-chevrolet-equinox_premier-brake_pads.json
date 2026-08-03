@@ -1,0 +1,61 @@
+{
+  "key": "2024-chevrolet-equinox_premier-brake_pads",
+  "url": "https://g.oempartsonline.com/oem-2024-chevrolet-equinox_premier-brake_pads.html",
+  "legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2561,
+      "content_len": 349537,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3465
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3741,
+      "content_len": 349031,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3465
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 919,
+      "content_len": 201016,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 4139,
+      "content_len": 256448,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

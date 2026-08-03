@@ -7,24 +7,16 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
-import { userDisplayName } from "./lib/bookingEnrichment";
+import { enrichReviews, type EnrichedReview } from "./lib/bookingEnrichment";
 
 const DAY = 24 * 60 * 60 * 1000;
 
 // --- Authored return types (see dataOverview.ts header) -----------------------
 
-export type ShopReviewRow = {
-  id: string;
-  rating: number;
-  comment: string | null;
-  reviewer: string | null;
-  reviewer_id: string | null;
-  mechanic: string | null;
-  mechanic_id: string | null;
-  booking_id: string;
-  hidden: boolean;
-  at: number;
-};
+// A network-review row is the shared enriched shape (reviewer / mechanic / car /
+// services / booking) so /shops/reviews renders the same context as the other
+// review surfaces.
+export type ShopReviewRow = EnrichedReview;
 export type ShopReviewGroup = {
   shop_id: string;
   shop: string;
@@ -40,8 +32,6 @@ export const byShop = query({
   handler: async (ctx, { token }): Promise<ShopReviewGroup[]> => {
     await requireDirector(ctx, token);
     const shops = await ctx.db.query("shops").collect(); // 9 rows
-    const mechName = new Map<string, string | null>();
-    const reviewerName = new Map<string, string | null>();
     const out: ShopReviewGroup[] = [];
     const now = Date.now();
 
@@ -52,37 +42,9 @@ export const byShop = query({
         .take(200);
       if (rows.length === 0) continue;
 
-      const reviews: ShopReviewRow[] = [];
-      for (const r of rows) {
-        let mechanic: string | null = null;
-        if (r.mechanic_id) {
-          const mid = String(r.mechanic_id);
-          if (!mechName.has(mid)) {
-            const m = await ctx.db.get(r.mechanic_id);
-            const mo = m as { first_name?: string; last_name?: string } | null;
-            mechName.set(mid, mo ? [mo.first_name, mo.last_name].filter(Boolean).join(" ") || null : null);
-          }
-          mechanic = mechName.get(mid) ?? null;
-        }
-        // Who left the review — the shop-reviews page never showed this before.
-        const rid = String(r.user_id);
-        if (!reviewerName.has(rid)) {
-          reviewerName.set(rid, userDisplayName(await ctx.db.get(r.user_id)));
-        }
-        reviews.push({
-          id: String(r._id),
-          rating: r.rating,
-          comment: r.comment ?? null,
-          reviewer: reviewerName.get(rid) ?? null,
-          reviewer_id: rid,
-          mechanic,
-          mechanic_id: r.mechanic_id ? String(r.mechanic_id) : null,
-          booking_id: String(r.booking_id),
-          hidden: r.hidden_at != null,
-          at: r.created_at ?? r._creationTime,
-        });
-      }
-      reviews.sort((a, b) => b.at - a.at);
+      // Batched enrichment: reviewer + mechanic + car + services + booking,
+      // deduped across this shop's rows (the hot path).
+      const reviews = (await enrichReviews(ctx, rows)).sort((a, b) => b.at - a.at);
 
       // 30d weekly trend from the fetched window (honest: window, not lifetime).
       const trend: ShopReviewGroup["trend_30d"] = [];

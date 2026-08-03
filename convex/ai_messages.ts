@@ -91,6 +91,9 @@ export const create = internalMutation({
         intent_detected: v.optional(v.string()),
       })
     ),
+    // Render envelope for the assistant turn — restored so inline components
+    // (booking flow, quick replies, cards, …) reappear on conversation reload.
+    render: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
     const messageId = await ctx.db.insert("ai_messages", {

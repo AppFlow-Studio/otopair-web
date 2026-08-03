@@ -15,11 +15,14 @@ export const list = query({
     // Runs carrying structured sanity/OEM flags surface here too — they
     // finished (status stays terminal so force-unstick/retry logic is
     // untouched) but a human should eyeball the flagged fields.
+    // W1.5: severity "info" entries (completion-gate decision record,
+    // rotor resolver persisted-keys note) are observability records on
+    // EVERY finalized run — never a review signal.
     return runs.filter(
       (r) =>
         r.status === "pending" ||
         r.status === "needs_review" ||
-        (r.sanity_flags?.length ?? 0) > 0,
+        (r.sanity_flags?.filter((f) => f.severity !== "info").length ?? 0) > 0,
     );
   },
 });

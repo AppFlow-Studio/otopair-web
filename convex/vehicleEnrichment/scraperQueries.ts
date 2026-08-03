@@ -18,8 +18,28 @@ import { internalQuery, internalMutation } from "../_generated/server";
  * v4 (Jul 2026): `supersessions_json` — deterministic part-replacement chains
  * parsed from the same registry HTML as prices; older rows re-fetch so
  * supersession capture runs on them too.
+ * v5 (Jul 28 2026): storefront URL-rot purge — the retired RevolutionParts
+ * category-URL scheme had been 30x-chaining to storefront HOMEPAGES, so v4
+ * parts_catalog rows for registry makes hold homepage markdown/prices
+ * (reports/scrapling_vs_firecrawl_probe_2026-07-28.md). The bump invalidates
+ * them; the new search→detail scrape (scraper.ts + rpCatalog.ts) refills.
+ *
+ * v6 (Jul 29 2026, round 12): position-split pad/rotor searches + JSON-LD
+ * Product.name capture. v5 parts_catalog rows hold single-axle brake markdown
+ * (the Crosstrek rear-only defect), no rotor pages for non-BMW makes, and
+ * name-less part_prices_json (no role-identity evidence) — all three matter
+ * to the new gates, so stale rows must re-scrape, not serve.
+ *
+ * v7 (Jul 31 2026, round 15b): detail-page VEHICLE gate. v6 parts_catalog rows
+ * were written with no check that a `/oem-parts/…` page describes the vehicle
+ * being enriched — a 2019 911 GT3 RS cached the CAYENNE's brake-pad pages and
+ * shipped `9Y0698151AN` as a quotable front pad. Those rows hold the wrong
+ * vehicle's markdown AND its prices, so they must never serve again; the bump
+ * retires every one of them. New rows also carry the detail page's own <title>
+ * in the markdown header (rpCatalog.detailPageVehicleVerdict), so the vehicle
+ * evidence survives into Batch-1 and into the cache instead of being stripped.
  */
-export const CACHE_FORMAT_VERSION = 4;
+export const CACHE_FORMAT_VERSION = 7;
 
 /** Build a deterministic cache key from vehicle identity + source type.
  *  Exported for unit tests — the key IS the contamination boundary. */
@@ -177,5 +197,44 @@ export const storeScrapeCache = internalMutation({
         format_version: CACHE_FORMAT_VERSION,
       });
     }
+  },
+});
+
+/**
+ * Every model name registered under a make, for the detail-page vehicle gate.
+ *
+ * `rpCatalog.detailPageVehicleVerdict` needs a VOCABULARY to tell "this title
+ * names a different model of this make" (a contradiction) from "this title
+ * names no model at all" (unknowable, must fail open). Without it, a page
+ * titled "…Porsche Cayenne Brake Pads…" is indistinguishable from one titled
+ * "…Hyundai Oil Filter…", and the gate can only ever return "unknown".
+ *
+ * Returns [] for an unknown make rather than throwing: an absent vocabulary
+ * degrades the gate to its year axis, which is exactly the fail-open behaviour
+ * the law requires.
+ */
+export const getModelNamesForMake = internalQuery({
+  args: { make: v.string() },
+  handler: async (ctx, args): Promise<string[]> => {
+    const wanted = args.make.trim().toLowerCase();
+    if (!wanted) return [];
+    const makes = await ctx.db.query("makes").collect();
+    const makeRow = makes.find((m) => String(m.name ?? "").trim().toLowerCase() === wanted);
+    if (!makeRow) return [];
+    const models = await ctx.db
+      .query("models")
+      .withIndex("by_make_id", (q) => q.eq("make_id", makeRow._id))
+      .collect();
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const m of models) {
+      const name = String((m as any).name ?? "").trim();
+      if (!name) continue;
+      const k = name.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(name);
+    }
+    return out;
   },
 });

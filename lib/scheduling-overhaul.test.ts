@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  assignmentPreferenceFromRequestedMechanic,
   getCustomerLateReminderOffsetsMs,
   getDefaultOverrunExtensionMinutes,
   normalizeAssignmentPreference,
@@ -60,4 +61,10 @@ test("assignment preference defaults to any", () => {
   assert.equal(normalizeAssignmentPreference(undefined), "any");
   assert.equal(normalizeAssignmentPreference("any"), "any");
   assert.equal(normalizeAssignmentPreference("specific_mechanic"), "specific_mechanic");
+});
+
+test("booking create preference follows the requested mechanic, not the resolved assignee", () => {
+  assert.equal(assignmentPreferenceFromRequestedMechanic(null), "any");
+  assert.equal(assignmentPreferenceFromRequestedMechanic(undefined), "any");
+  assert.equal(assignmentPreferenceFromRequestedMechanic("mech_123"), "specific_mechanic");
 });

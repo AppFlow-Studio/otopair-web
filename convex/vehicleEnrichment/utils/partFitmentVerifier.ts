@@ -43,14 +43,31 @@ export const VERIFY_PRIORITY_ROLE_KEYS = new Set([
   "atf_fluid",
   "trans_filter",
   "engine_oil",
+  // Batch-10: same-platform/wrong-engine parts shipped on 3 of 5 vehicles in
+  // exactly these roles (4.2L belt + 4.6L intake gasket + Duratec thermostat
+  // on a 5.4L F-150; Cruze-family coil + filter hardware on a Cobalt; a
+  // 2017+ Colorado belt on a 2014 SRX) because the cap cut the non-priority
+  // roles before they were ever sampled.
+  "serpentine_belt",
+  "thermostat",
+  "intake_manifold_gasket",
+  "ignition_coil",
+  // Round 12 (batch-12 Equinox): battery was NEVER a priority role, so under
+  // the cap it was rarely sampled — 84257919, a battery ground-extension
+  // CABLE, held the battery role through eleven rounds of gates. Battery is
+  // a headline service; the cable class is exactly what the component-type
+  // clause below exists to catch.
+  "battery",
 ]);
 
 /** Batch-2 audit: a wrong-model o-ring (Genesis V6 part on a Soul) shipped
  *  because only the priority roles were sampled. Every priced non-universal
  *  part is now eligible, priority roles first, up to this cap. Raised 14→16
- *  in batch-3 to fit the added rotor/trans-filter priority roles alongside the
- *  existing consumables on parts-dense vehicles. */
-export const VERIFY_MAX_PARTS = 16;
+ *  in batch-3 to fit the added rotor/trans-filter priority roles, 16→24 in
+ *  batch-10 so the four added same-platform-risk roles never evict the base
+ *  consumables on parts-dense vehicles, 24→25 in round 12 for the added
+ *  battery priority role (same never-evict-base rationale). */
+export const VERIFY_MAX_PARTS = 25;
 
 /** Back-compat alias (v3pipeline imported this name in round 1). */
 export const VERIFY_ROLE_KEYS = VERIFY_PRIORITY_ROLE_KEYS;
@@ -62,6 +79,10 @@ export interface FitmentToVerify {
   /** For spark plugs and other per-cylinder parts: the stored total quantity,
    *  so the verifier can judge dual-plug engines (2× cylinders). */
   quantity?: number | null;
+  /** Round 12: the source page's listing title (oem_parts.scraped_name) —
+   *  without it the checker only ever saw the generic role label ("Battery")
+   *  and the component-type clause had nothing to fire on. */
+  observedTitle?: string | null;
 }
 
 export interface FitmentVerdict {
@@ -69,6 +90,17 @@ export interface FitmentVerdict {
   oem: string;
   verdict: "confirmed" | "refuted" | "uncertain";
   reason: string;
+}
+
+/** Axle position a role key claims, so the verifier can catch a front part
+ *  stored under the rear role (batch-10: a FRONT 7-lug F-150 rotor shipped as
+ *  the rear rotor — the part was real and model-correct, only the position was
+ *  wrong). Pure; exported for tests. */
+export function positionForRoleKey(roleKey: string): "front" | "rear" | null {
+  const k = roleKey.toLowerCase();
+  if (k.startsWith("front_") || k.includes("_front")) return "front";
+  if (k.startsWith("rear_") || k.includes("_rear")) return "rear";
+  return null;
 }
 
 const SYSTEM = `You are an automotive parts fact-checker. You will be given a vehicle and a list of OEM part numbers a pipeline claims fit it. Search the web and try to REFUTE each claim.
@@ -79,10 +111,23 @@ A claim is REFUTED when the part number belongs to:
 - a different engine variant of the same model (e.g. the V8 oil filter on the V6, a spin-on filter on a cartridge-filter engine),
 - a different model or platform from the same manufacturer (e.g. Golf pads listed for an Atlas, a Seltos air filter listed for a Soul, a full-size-TRUCK rotor/sensor listed for a crossover),
 - **a different GENERATION or year range of the SAME nameplate** — this is the sneakiest failure: the part number looks right because the model name matches, but its catalog fitment range ends before (or **starts after**) this model year. It fails in BOTH directions: an OLDER-generation part on a newer car (pad kit 26296SC011 fits Subaru "WRX" only through 2014 — wrong on a 2015 VA-chassis WRX), AND a NEWER-generation part on an older car (a 2012+ Skyactiv spin-on oil filter listed for "Mazda3" does NOT fit a 2008 Mazda3, whose MZR engine uses a cartridge filter). This includes generation splits WITHIN one engine name (a "Gen-2 3.5 EcoBoost" plug on a Gen-1 3.5 EcoBoost truck). ALWAYS check the exact fitment YEAR RANGE against this vehicle's model year — "same model name" is not confirmation.
-- the wrong axle or position (a front-axle pad set claimed as rear pads),
-- a fluid spec the vehicle must not use (e.g. an older-generation coolant on a car requiring the newer chemistry).
+- the wrong axle or position (a front-axle pad set claimed as rear pads, a FRONT rotor part number claimed as the REAR rotor — check the position stated on each part line, and where the platform has lug-count or heavy-duty rotor variants, that the variant matches this vehicle's configuration),
+- a fluid spec the vehicle must not use (e.g. an older-generation coolant on a car requiring the newer chemistry),
+- **an engine oil / fluid PRODUCT whose viscosity or spec grade differs from this vehicle's stated requirement** (e.g. a 5W-20 synthetic-blend product attached to an engine that requires 0W-20 full synthetic — the product is real and the brand is right, but the grade is wrong: REFUTED; name the product's actual grade in your reason).
+
+**A dealer/OEM catalog page for the right MODEL is NOT confirmation.** Genuine-brand catalog pages list parts for EVERY engine, trim, axle, and generation of that nameplate — the single most common false confirmation in this pipeline is a real part, on a trusted dealer domain, for the right truck, but keyed to a DIFFERENT engine option (a 4.2L V6 belt on the 5.4L V8), a different position (front rotor as rear), or a different generation. Confirmation requires the listing's engine/position/year qualifiers to match THIS vehicle, not just the model name.
+
+**Launch-overlap years: pin the RIGHT generation before judging.** Redesigns launch mid-calendar-year, so for a model year that is the FINAL year of an outgoing generation (e.g. a 2021 Hyundai Tucson — the old 2016-2021 TL generation, while the redesigned 2022 model was already on sale in 2021), search results mix BOTH generations. First establish which generation THIS model year belongs to, then judge parts against THAT generation: refuting a correct old-generation part because next-generation results dominate the search — or confirming a next-generation part on the outgoing car — are both failures. When in doubt about which generation the model year is, verdict "uncertain", never "refuted".
+
+**A year-band PAGE TITLE is not a fitment range.** Dealer/retail pages are often titled with a broad make-level band ("2012-2018 Toyota …", "Fits 2014-2020 Nissan …") that spans MANY models whose individual fitment windows differ — a part sold on a "2012-2018 Toyota" page may fit RAV4 only from 2013 (the band came from Camry). Judge the part's model-specific fitment years, never the page-title band; a part whose model-specific fitment starts after (or ends before) this model year is REFUTED even when the page title's band contains the year.
+
+**Wrong COMPONENT TYPE under a role is REFUTED.** The part must be the component itself, not adjacent hardware or an accessory FOR it: a thermostat HOUSING / water outlet claimed as the thermostat, a filter housing or cap claimed as the filter, a sensor bracket claimed as the sensor — and for the battery role, a battery CABLE, ground strap/extension, terminal, hold-down, tray, bracket, vent tube, heat blanket, or current sensor claimed as the 12V starter battery (as are telematics/DCM/auxiliary/key-fob batteries). Fitting the vehicle is IRRELEVANT here — a genuine, fitment-correct cable is still not a battery. When a part line includes a [listed as: "…"] title and that title names a DIFFERENT component than the role claims, that title is decisive evidence: verdict "refuted", and begin your reason with "role_identity: " followed by what the part actually is.
 
 A part is a phantom (REFUTED) when the vehicle's platform does not have that component at all (e.g. an electronic brake-pad WEAR SENSOR part on a platform that uses only mechanical wear indicators).
+
+**A NONEXISTENT part number is REFUTED.** The rule that "refuted requires placing the part on a different vehicle" applies to REAL numbers; a claimed OEM number with ZERO catalog or retail existence anywhere after searching (no OEM catalog row, no retailer listing, no cross-reference) is a fabrication — verdict "refuted", say "phantom" in your reason. (Distinguish from a real-but-obscure dealer-only number, which is "uncertain".)
+
+**Engine GASKETS carry their engine family in the part number — check it.** OEM gasket/seal numbers encode the engine family (Honda: -5A2-/-R40- are K-series, -6A0-/-59B- are L15 1.5T; a 17115-5A2 intake gasket cannot fit an L15BE). When a gasket/seal/o-ring's family code contradicts this vehicle's engine family, REFUTED — this class has survived three consecutive audit waves by being "a real Honda part on a real Honda page".
 
 **When the ENGINE or TRANSMISSION is built by a different company than the vehicle make, component-specific consumables follow the COMPONENT maker's spec, not the chassis brand.** E.g. a medium-duty Ford truck with a Cummins engine takes a Cummins-spec (Fleetguard) coolant/oil filter, NOT a Ford Motorcraft one; an Allison transmission takes Allison TES-spec fluid, not the chassis brand's ATF. If an engine/trans/coolant part is a chassis-brand part but the engine or transmission is a third-party unit, that is grounds for REFUTED.
 
@@ -118,6 +163,10 @@ export async function verifyPartFitments(
     /** Cylinder count — lets the checker judge spark-plug quantity for
      *  dual-plug engines (correct total = 2× cylinders). */
     cylinders?: number | null;
+    /** The vehicle's required oil viscosity (e.g. "0W-20") — batch-10: a
+     *  5W-20 blend product shipped on an 0W-20 engine with no gate; the
+     *  verifier refutes fluid products whose grade differs from this. */
+    oilViscosity?: string | null;
   },
   parts: FitmentToVerify[],
 ): Promise<FitmentVerdict[]> {
@@ -145,11 +194,20 @@ export async function verifyPartFitments(
   const transDesc = vehicle.transmissionType
     ? `\nTransmission: ${vehicle.transmissionType}`
     : "";
+  const oilDesc = vehicle.oilViscosity
+    ? `\nRequired engine oil viscosity: ${vehicle.oilViscosity}`
+    : "";
 
   const partLines = parts
     .map((p, i) => {
       const qty = p.quantity != null && p.quantity > 1 ? ` [stored qty: ${p.quantity}]` : "";
-      return `${i + 1}. ${p.roleKey}: ${p.oem} (${p.name})${qty}`;
+      const pos = positionForRoleKey(p.roleKey);
+      const posNote = pos ? ` [claimed position: ${pos.toUpperCase()} axle]` : "";
+      const listed =
+        p.observedTitle && p.observedTitle.trim()
+          ? ` [listed as: "${p.observedTitle.trim().slice(0, 120)}"]`
+          : "";
+      return `${i + 1}. ${p.roleKey}: ${p.oem} (${p.name})${qty}${posNote}${listed}`;
     })
     .join("\n");
 
@@ -162,7 +220,7 @@ export async function verifyPartFitments(
       tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 12 } as any],
       messages: [{
         role: "user",
-        content: `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim}${engineDesc ? ` (${engineDesc})` : ""}${transDesc}\n\nClaimed parts:\n${partLines}`,
+        content: `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim}${engineDesc ? ` (${engineDesc})` : ""}${transDesc}${oilDesc}\n\nClaimed parts:\n${partLines}`,
       }],
     });
 

@@ -36,6 +36,7 @@ Rules:
 - For Toyota: use the platform code (e.g. A90, J300, TNGA-K)
 - For Honda: use the chassis code (e.g. FK8, FL5, RW1)
 - For all other brands: use whatever the industry-standard generation/chassis code is
+- MODEL-YEAR DISCIPLINE: the code must be the generation actually IN PRODUCTION for the stated model year. Redesigns launch mid-calendar-year, so search results for a launch-overlap year mix two generations — a "2021 Hyundai Tucson" is the OLD 2016-2021 generation (TL), NOT the redesigned model sold from MY2022 (NX4). When the stated model year is the last year of an outgoing generation, return the OUTGOING generation's code.
 - If you truly cannot determine the chassis code, respond with exactly: UNKNOWN
 - Never guess. If unsure, respond UNKNOWN.`;
 

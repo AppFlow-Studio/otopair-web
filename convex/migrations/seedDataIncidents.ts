@@ -51,7 +51,7 @@ const SEEDS: SeedIncident[] = [
       "VD labor values under-read real job times: CRV oil change 18–25 min vs " +
       "~45 real; BMW battery 30 min vs 75–90 incl. mandatory post-diagnostic " +
       "(May 29). VD rows carry a permanent known-low badge in the Labor " +
-      "Command Center; RepairPal/MOTOR promoted to high-confidence source " +
+      "Command Center; Estimator / Book Rate promoted to high-confidence source " +
       "(Jun 18).",
     root_cause: undefined, // pending Saad's dev — tracked here, not in chat scrollback
     declared_at: Date.UTC(2026, 4, 29), // May 29, 2026

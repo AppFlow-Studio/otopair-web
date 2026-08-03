@@ -1,0 +1,636 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "pipeline_extraction"
+    ],
+    "claim_rows": 5,
+    "families_seen": [
+      "web_search"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 0,
+    "fields_multi_family_agreement": 0,
+    "fields_single_source": 5,
+    "fields_with_claims": 5
+  },
+  "external_joins": {
+    "complaint_signal": {
+      "top": "ENGINE",
+      "total": 77
+    },
+    "epa": null,
+    "manual": {
+      "file_id": null,
+      "kind": "unknown",
+      "oem": true,
+      "pages": null,
+      "url": "https://www.mbusa.com/content/dam/mb-nafta/us/brochures/pdf/MY20-GLC_031820.pdf"
+    },
+    "recalls_open": 0
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": null,
+    "brake_fluid_type": "DOT 4",
+    "coolant_capacity_qts": 11.83,
+    "coolant_type": "MB 325.0 (OAT, pink/red)",
+    "oil_capacity_qts": 6.34,
+    "oil_viscosity": "0W-20",
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": 5
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "0%",
+    "fields_with_claims": 5,
+    "fitment_multi_source": "0%",
+    "has_manual": false,
+    "months_fill": "39%",
+    "parts_quotable": "2/2",
+    "rotor_minimums": 0,
+    "status": "partial"
+  },
+  "identity_coherence": {
+    "aspiration": "turbo",
+    "cylinders": 4,
+    "displacement_l": 2,
+    "engine_code": "M264",
+    "epa_says": null,
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": true,
+    "spark_plug_quantity": 4,
+    "timing_system": "chain",
+    "trans_fluid_type": "MB 236.17 ATF (9G-Tronic 725.0)",
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "default_fallback": 10,
+      "deterministic": 8,
+      "enriched": 10
+    },
+    "months_fill": "39%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "battery_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 20000,
+        "months": 24,
+        "provenance": "enriched",
+        "service": "brake_fluid_flush",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "brake_pad_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 100000,
+        "months": 120,
+        "provenance": "enriched",
+        "service": "coolant_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 40000,
+        "months": 60,
+        "provenance": "enriched",
+        "service": "differential_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 20000,
+        "months": 24,
+        "provenance": "enriched",
+        "service": "filter_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "fuel_system_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 10000,
+        "months": 12,
+        "provenance": "enriched",
+        "service": "oil_change",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "rotor_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": 60000,
+        "months": 72,
+        "provenance": "default_fallback",
+        "service": "serpentine_belt",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "enriched",
+        "service": "spark_plugs",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "tire_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 10000,
+        "months": 12,
+        "provenance": "enriched",
+        "service": "tire_rotation",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": 40000,
+        "months": null,
+        "provenance": "enriched",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 40000,
+        "months": 60,
+        "provenance": "enriched",
+        "service": "transmission_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 28,
+    "with_miles": 15,
+    "with_months": 11
+  },
+  "labor": {
+    "by_source": {
+      "default_fallback": 28
+    },
+    "rows": [
+      {
+        "hours": 1,
+        "service": "fuel_system_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "differential_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "battery_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "battery_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.85,
+        "service": "brake_fluid_flush",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 3,
+        "service": "rotor_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "brake_pad_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "wheel_alignment",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.4,
+        "service": "tire_rotation",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "transmission_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.25,
+        "service": "coolant_flush",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "spark_plugs",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.35,
+        "service": "filter_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.4,
+        "service": "oil_change",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "serpentine_belt",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "transfer_case_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 28
+  },
+  "parts": {
+    "corroborated_2plus_sources": 0,
+    "corroboration_rate": "0%",
+    "rows": [
+      {
+        "best_price": 57.62,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "2640940100",
+        "price_domains": [
+          "classicparts.mbusa.com",
+          "fcpeuro.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "air_filter",
+        "scraped_name": "Genuine OEM Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "classicparts.mbusa.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 11.19,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "2701800109",
+        "price_domains": [
+          "ecstuning.com",
+          "autohausaz.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "oil_filter",
+        "scraped_name": "Engine Oil Filter",
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "mbelcajon.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      }
+    ],
+    "total": 2,
+    "triangle_broken": [],
+    "triangle_ok": 2,
+    "with_observed_title": 2
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 37,
+    "duration_min": 16.5,
+    "error_tags": {
+      "applicable_services_structural_fallback_used": 1,
+      "quotability": 1,
+      "role_resource": 11,
+      "rotor_min": 2,
+      "sanity": 1
+    },
+    "field_gap_count": 93,
+    "fill_rate": 40,
+    "quotability": {
+      "pct": 0.42,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx73wfhm49a2t11m8frje3b7jn8bm7pa",
+    "sanity_flag_count": 2,
+    "sanity_flags_by_stage": {
+      "(pre-finalize)": 1,
+      "completion_gate": 1
+    },
+    "status": "complete",
+    "tokens_in": 22137,
+    "tokens_out": 16414,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 28
+  },
+  "vehicle": {
+    "chassis_code": "X253",
+    "confidence_avg": 0.8247035573122533,
+    "configId": "w571v8g2whhn708xqfe47y896h8bmgn7",
+    "config_key": "2020_mercedes_benz_glc_class_glc300_4m_m264",
+    "drivetrain": "AWD",
+    "enrichment_status": "partial",
+    "fill_rate": 77,
+    "last_enriched_at": 1785609156819,
+    "make": "MERCEDES-BENZ",
+    "model": "GLC-Class",
+    "na_role_keys": [],
+    "trim": "GLC300-4M",
+    "verified_fields": [],
+    "year": 2020
+  }
+}

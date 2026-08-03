@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { resolveBookHours } from "../convex/lib/labor_aggregation";
 
-describe("resolveBookHours — repairpal_endpoint precedence", () => {
-  it("uses the repairpal_endpoint value as the face value, even vs disagreeing lower sources", () => {
+describe("resolveBookHours — estimator_endpoint precedence", () => {
+  it("uses the estimator_endpoint value as the face value, even vs disagreeing lower sources", () => {
     const catalog = [
-      { hours: 6.1, weight: 0.9, source: "repairpal_endpoint" },
+      { hours: 6.1, weight: 0.9, source: "estimator_endpoint" },
       { hours: 1.0, weight: 0.7, source: "olp_labor" },
       { hours: 1.0, weight: 0.6, source: "web_labor" },
     ];
@@ -22,13 +22,13 @@ describe("resolveBookHours — repairpal_endpoint precedence", () => {
   });
 
   it("clamps the endpoint value to sane bounds", () => {
-    expect(resolveBookHours([{ hours: 0.02, weight: 0.9, source: "repairpal_endpoint" }])).toBe(0.1);
-    expect(resolveBookHours([{ hours: 12, weight: 0.9, source: "repairpal_endpoint" }])).toBe(8.0);
+    expect(resolveBookHours([{ hours: 0.02, weight: 0.9, source: "estimator_endpoint" }])).toBe(0.1);
+    expect(resolveBookHours([{ hours: 12, weight: 0.9, source: "estimator_endpoint" }])).toBe(8.0);
   });
 
   it("ignores a non-positive endpoint observation and falls to the median", () => {
     const catalog = [
-      { hours: 0, weight: 0.9, source: "repairpal_endpoint" },
+      { hours: 0, weight: 0.9, source: "estimator_endpoint" },
       { hours: 1.0, weight: 0.7, source: "olp_labor" },
     ];
     expect(resolveBookHours(catalog)).toBe(1.0);

@@ -27,7 +27,7 @@ import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./laborConstants";
 import { aggregatePartsBand, type PartsRoleInput } from "./partsBand";
 import { resolveRoleQuantity, type VehicleSpecBundle } from "./partRoleQuantity";
 import { roleForSubcategory } from "./servicePartsReference";
-import { isNonPooledPriceType, isPoisonPriceType, REPAIRPAL_ENDPOINT_PRICE_TYPE } from "./priceTypes";
+import { isNonPooledPriceType, isPoisonPriceType, ESTIMATOR_ENDPOINT_PRICE_TYPE } from "./priceTypes";
 import { isPriceDataStale } from "../part_prices";
 import { partFitsConfigMake } from "../partSelector";
 
@@ -171,7 +171,7 @@ async function resolveRawLaborLayers(
     if (isHighQualityVdb(row)) {
       return {
         hours: row.book_hours!,
-        // Report real provenance: RepairPal/MOTOR-driven medians are stamped
+        // Report real provenance: Estimator / Book Rate-driven medians are stamped
         // source='aggregated' by labor_aggregation — don't relabel them "vdb".
         source: row.source === "aggregated" ? "aggregated" : "vdb",
         confidence: row.confidence ?? 0.9,
@@ -432,7 +432,7 @@ export async function resolvePartsCost(
   }
 
   // ── Real per-config parts band (gated; default OFF) ─────────────────────
-  // Per role: pool the gathered SKU per-unit prices WITH the RepairPal endpoint
+  // Per role: pool the gathered SKU per-unit prices WITH the Estimator endpoint
   // per-unit point (peers), × the config's resolved quantity. Reliable iff every
   // core role has at least one real price; else fall through to the multiplier.
   // Skip brake/per_axle services in v1 (front-only endpoint + booking-position
@@ -501,7 +501,7 @@ export async function resolvePartsCost(
           .map((p) => p.price)
           .filter((n): n is number => typeof n === "number" && n > 0);
         const endpointRow = prices.find(
-          (p) => p.price_type === REPAIRPAL_ENDPOINT_PRICE_TYPE && typeof p.price === "number" && p.price > 0,
+          (p) => p.price_type === ESTIMATOR_ENDPOINT_PRICE_TYPE && typeof p.price === "number" && p.price > 0,
         );
         const { quantity } = resolveRoleQuantity(roleSpec, bundle, f.quantity_needed);
         roles.push({

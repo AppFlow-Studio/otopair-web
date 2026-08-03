@@ -305,6 +305,7 @@ export default function MechanicDashboard() {
               ? "Could not save the pre-job vehicle check"
               : "Could not start booking"),
         );
+        throw error;
       }
     } finally {
       setBusyAction(null);
@@ -814,6 +815,9 @@ export default function MechanicDashboard() {
             : ""
         }
         bookingServices={selectedWorkflowBooking?.serviceNames ?? []}
+        tireReplacementPositions={
+          selectedWorkflowBooking?.tireSpecs?.positions ?? []
+        }
         passportData={selectedWorkflowPassport ?? null}
         prefillData={selectedWorkflowBooking?.jobActuals?.prejobReport ?? null}
         isSubmitting={

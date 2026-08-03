@@ -8,10 +8,12 @@ import { DirectorLogin } from './components/DirectorLogin'
 import { DirectorSessionCtx, type DirectorSession } from './components/DirectorSessionCtx'
 import { TabOverview }  from './components/tabs/TabOverview'
 import { TabShops }     from './components/tabs/TabShops'
+import { TabApplications } from './components/tabs/TabApplications'
 import { TabUsers }     from './components/tabs/TabUsers'
 import { TabBookings }  from './components/tabs/TabBookings'
 import { TabCars }      from './components/tabs/TabCars'
 import { TabVehicleConfigs } from './components/tabs/TabVehicleConfigs'
+import { TabEnrichment } from './components/tabs/TabEnrichment'
 import { TabPricing } from './components/tabs/TabPricing'
 import { TabBugs }      from './components/tabs/TabBugs'
 import { TabFeedback }  from './components/tabs/TabFeedback'
@@ -21,7 +23,7 @@ import { TabAudit }     from './components/tabs/TabAudit'
 import { TabSettings }       from './components/tabs/TabSettings'
 import { TabMechanicEdits } from './components/tabs/TabMechanicEdits'
 import { TabServiceParts } from './components/tabs/TabServiceParts'
-import { TabRepairPalLabor } from './components/tabs/TabRepairPalLabor'
+import { TabEstimatorLabor } from './components/tabs/TabEstimatorLabor'
 import { TabOtoSim }    from './components/tabs/TabOtoSim'
 import { TabOtoConversations } from './components/tabs/TabOtoConversations'
 // Merged /ops surfaces (see plan: ops → director merge).
@@ -39,15 +41,17 @@ const TABS: Record<string, React.ComponentType> = {
   users:    TabUsers,
   deletionQueue: TabDeletionQueue,
   shops:    TabShops,
+  applications: TabApplications,
   bookings: TabBookings,
   reviews:  TabReviews,
   stripe:      TabStripe,
   transactions: TabTransactions,
   cars:        TabCars,
   configs:     TabVehicleConfigs,
+  enrichment:  TabEnrichment,
   pricing:     TabPricing,
   serviceParts: TabServiceParts,
-  repairpalLabor: TabRepairPalLabor,
+  estimatorLabor: TabEstimatorLabor,
   otoConversations: TabOtoConversations,
   followUps:   TabFollowUps,
   otoSim:      TabOtoSim,

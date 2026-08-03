@@ -341,7 +341,7 @@ export const repairVin = internalAction({
           .filter(r => r.redundant_when_halo)
           .map(r => r.code),
       );
-      remaining = packagesNow.filter(p => {
+      remaining = packagesNow.filter((p: any) => {
         if (redundantCodes.has(p.code)) {
           removed.push(p.code);
           return false;
@@ -366,7 +366,7 @@ export const repairVin = internalAction({
         source: wheelResult.sourceUrl,
       },
       packages_removed: removed,
-      packages_remaining: remaining.map(p => p.code),
+      packages_remaining: remaining.map((p: any) => p.code),
     };
   },
 });
@@ -1149,7 +1149,7 @@ export const _listPartsMissingPrices = internalQuery({
         .query("part_prices")
         .withIndex("by_part", q => q.eq("part_id", p._id))
         .collect();
-      // A non-pooled fallback row (repairpal_endpoint) is NOT a real SKU price,
+      // A non-pooled fallback row (estimator_endpoint) is NOT a real SKU price,
       // so it must not make skipExisting skip real LLM pricing for the part.
       const hasPrice = prices.some((r) => !isNonPooledPriceType((r as any).price_type));
       if (skipExisting && hasPrice) continue;

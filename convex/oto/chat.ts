@@ -1499,10 +1499,32 @@ export async function sendMessageHandlerCore(
       role: "user",
       content: message,
     });
+    // Persist the render envelope alongside the assistant text so the inline
+    // interactive components (booking flow, quick replies, cards, …) can be
+    // rebuilt when this conversation is re-opened from history.
+    const renderToPersist: Record<string, unknown> = {};
+    if (quickReplies) renderToPersist.quickReplies = quickReplies;
+    if (showRecordConfirmation)
+      renderToPersist.showRecordConfirmation = showRecordConfirmation;
+    if (renderEnvelope.bookService !== undefined)
+      renderToPersist.bookService = renderEnvelope.bookService;
+    if (renderEnvelope.linkButton !== undefined)
+      renderToPersist.linkButton = renderEnvelope.linkButton;
+    if (renderEnvelope.bookingCard !== undefined)
+      renderToPersist.bookingCard = renderEnvelope.bookingCard;
+    if (renderEnvelope.bookingsList !== undefined)
+      renderToPersist.bookingsList = renderEnvelope.bookingsList;
+    if (renderEnvelope.reasoning !== undefined)
+      renderToPersist.reasoning = renderEnvelope.reasoning;
+    if (renderEnvelope.sources !== undefined)
+      renderToPersist.sources = renderEnvelope.sources;
     await ctx.runMutation(internal.ai_messages.create, {
       conversation_id: conversationId,
       role: "assistant",
       content: finalText,
+      ...(Object.keys(renderToPersist).length
+        ? { render: renderToPersist }
+        : {}),
     });
 
     await ctx.runMutation(internal.ai_conversations.incrementMessageCount, {

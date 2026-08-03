@@ -68,6 +68,18 @@ export const tireTreadMeasurementsValidator = v.object({
   rear_right: v.optional(tireTreadReadingValidator),
 });
 
+export const tireIdentityValidator = v.object({
+  brand: v.optional(nullableStringValidator),
+  model: v.optional(nullableStringValidator),
+});
+
+export const tireIdentityByPositionValidator = v.object({
+  front_left: v.optional(tireIdentityValidator),
+  front_right: v.optional(tireIdentityValidator),
+  rear_left: v.optional(tireIdentityValidator),
+  rear_right: v.optional(tireIdentityValidator),
+});
+
 export const rotorUnitValidator = v.union(v.literal("in"), v.literal("mm"));
 
 export const rotorThicknessReadingValidator = v.object({
@@ -140,6 +152,17 @@ export const vehiclePassportBrakesValidator = v.object({
   rotor_thickness: v.optional(
     v.union(rotorThicknessMeasurementsValidator, v.null()),
   ),
+  // OEM DISCARD minimum per axle, carried from vehicle_configs so the pre-job
+  // surface grades against the vehicle's own spec. Distinct from the NOMINAL
+  // (new) thickness, which is never a grading reference. Null means ungraded —
+  // the mechanic reads the number cast on the rotor hat.
+  rotor_min_front_mm: v.optional(nullableNumberValidator),
+  rotor_min_rear_mm: v.optional(nullableNumberValidator),
+  // "oem_spec" | "mechanic_read" | "director_verified" | "derived_from_nominal"
+  // | "default_fallback" — anything derived must never read as an OEM figure.
+  rotor_min_quality_front: v.optional(nullableStringValidator),
+  rotor_min_quality_rear: v.optional(nullableStringValidator),
+  rotor_min_source_url: v.optional(nullableStringValidator),
 });
 
 export const vehiclePassportInspectionValidator = v.object({
@@ -176,7 +199,9 @@ export const vehiclePassportUpdateValidator = v.object({
 
 export const prejobReportValidator = v.object({
   mileage: v.union(v.float64(), v.null()),
+  tire_details: v.optional(v.union(tireIdentityByPositionValidator, v.null())),
   tire_brand: v.optional(nullableStringValidator),
+  tire_model: v.optional(nullableStringValidator),
   tire_size_front: v.optional(nullableStringValidator),
   tire_size_rear: v.optional(nullableStringValidator),
   front_tire_condition: v.union(tireConditionValidator, v.null()),
@@ -338,6 +363,16 @@ export const jobRecommendationInputValidator = v.object({
         type: v.string(),
         tier: v.string(),
         quantity: v.number(),
+        positions: v.optional(
+          v.array(
+            v.union(
+              v.literal("FL"),
+              v.literal("FR"),
+              v.literal("RL"),
+              v.literal("RR"),
+            ),
+          ),
+        ),
       }),
       v.null()
     )

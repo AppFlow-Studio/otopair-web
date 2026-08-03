@@ -2,20 +2,20 @@
  * vehicleEnrichment/laborRelabor.ts — multi-source labor backfill for an
  * ALREADY-ENRICHED config (no LLM batch). Mirrors olpRelabor.ts, but instead of
  * the OLP-only path it drives the full `laborAllSources` orchestrator (OLP +
- * RepairPal + open-web, each flag-gated). The orchestrator writes the weighted
+ * Estimator + open-web, each flag-gated). The orchestrator writes the weighted
  * `labor_observations` + recomputes the labor_times row internally.
  *
  *   - `_laborConfigInputs`  — internalQuery: loads the config + make/model/engine
  *                             docs and the per-config-APPLICABLE `services` list
- *                             (with repairpal_slug), gated via the canonical
+ *                             (with estimator_slug), gated via the canonical
  *                             getApplicableServices helper; fails open.
  *   - `laborRelaborConfig`  — internalAction: per-config driver; resolves the OLP
  *                             buildId (if flagged) and calls `laborAllSources`.
  *   - `laborRelaborAll`     — internalAction: fleet driver; pages over enriched
  *                             vehicle_configs and runs laborRelaborConfig for each.
  *
- * Flags (same as the v3pipeline path): OLP + repairpal_endpoint on-by-default
- * (LABOR_SOURCE_OLP/LABOR_SOURCE_REPAIRPAL_ENDPOINT="off" to disable); web
+ * Flags (same as the v3pipeline path): OLP + estimator_endpoint on-by-default
+ * (LABOR_SOURCE_OLP/LABOR_SOURCE_ESTIMATOR_ENDPOINT="off" to disable); web
  * opt-in (LABOR_SOURCE_WEB="on").
  */
 import { v } from "convex/values";
@@ -47,16 +47,16 @@ export const _laborConfigInputs = internalQuery({
     const rawDisp = (engine as any)?.displacement_l ?? (engine as any)?.displacement_liters ?? null;
 
     // Build the services payload from the `services` table: every service WITH a
-    // slug, carrying its repairpal_slug (authoritative LABOR_SERVICE_CONFIG map,
+    // slug, carrying its estimator_slug (authoritative LABOR_SERVICE_CONFIG map,
     // falling back to the stamped column, then null). Including services with a
-    // null repairpal_slug is fine — the RepairPal resolver skips nulls, and OLP +
+    // null estimator_slug is fine — the Estimator resolver skips nulls, and OLP +
     // web still run for them.
     const serviceDocs = await ctx.db.query("services").collect();
 
     // ── Per-config applicability gate (parity with v3pipeline) ─────────────────
     // The live enrichment path only resolves labor for services applicable to
     // THIS vehicle. This backfill must do the same, otherwise running it with
-    // RepairPal/web flags on burns firecrawl credits on inapplicable services and
+    // Estimator/web flags on burns firecrawl credits on inapplicable services and
     // writes spurious web_labor observations for services the vehicle doesn't
     // have (e.g. timing_belt on a chain engine, differential service on FWD).
     //
@@ -114,8 +114,12 @@ export const _laborConfigInputs = internalQuery({
         slug: s.slug as string,
         serviceId: s._id,
         name: s.name as string,
-        repairpal_slug:
-          LABOR_SERVICE_CONFIG[s.slug as string]?.repairpal_slug ?? s.repairpal_slug ?? null,
+        estimator_slug:
+          LABOR_SERVICE_CONFIG[s.slug as string]?.estimator_slug
+          ?? s.estimator_slug
+          // DUAL-READ: pre-migration rows still carry the legacy column.
+          ?? (s as any).repairpal_slug
+          ?? null,
       }));
 
     return {

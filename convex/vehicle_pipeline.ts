@@ -24,10 +24,12 @@ import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
 import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
+import { acceptNormalizedTrim } from "./vehicleEnrichment/identityResolution";
 import { parseGvwrUpperLbs } from "./vehicleEnrichment/validation/sanityChecks";
 import { assembleVariantFingerprint, type TransmissionFamily } from "./vehicleEnrichment/variantFingerprint";
 import { resolveFuelClass } from "./vehicleEnrichment/fuelTypeResolver";
 import { resolveBuildSource } from "./vehicleEnrichment/buildSourceResolver";
+import { reconcilePerformanceVariant } from "./vehicleEnrichment/variantDecodeReconcile";
 
 const NHTSA_API = "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
 
@@ -124,7 +126,12 @@ export const processVin = internalAction({
       // ════════════════════════════════════════════════════════════
       // SOURCE 2: NHTSA vPIC (fallback — free, always available)
       // ════════════════════════════════════════════════════════════
-      const nhtsaResp = await fetch(`${NHTSA_API}/${args.vin}?format=json`);
+      // 15s cap: vPIC normally answers in ~1s; a hung socket otherwise eats
+      // the whole decode action. The enclosing try/catch fails open (null →
+      // caller reports decode_failed) — no retry, NHTSA is free to re-hit.
+      const nhtsaResp = await fetch(`${NHTSA_API}/${args.vin}?format=json`, {
+        signal: AbortSignal.timeout(15_000),
+      });
       const nhtsaData = await nhtsaResp.json();
 
       const errorCode = getValue(nhtsaData, "ErrorCode");
@@ -244,9 +251,32 @@ export const processVin = internalAction({
         year: trustVdbYmmt
           ? (vdb?.year || parseInt(nhtsa.year || "0"))
           : (parseInt(nhtsa.year || "0") || vdb?.year || 0),
-        trim: trustVdbYmmt
-          ? (vdb?.trim || nhtsa.trim || "Base")
-          : (nhtsa.trim || "Base"),
+        // Round 10 (batch-11 F-150, 2nd recurrence): the round-8 trim guard
+        // only gated the LLM-normalizer branch — a wrong trim arriving from
+        // the DECODE MERGE itself ("FX4 SuperCrew" from VDB while NHTSA's
+        // series positively says Lariat) flowed through unchecked. Apply the
+        // same token-overlap philosophy here: when VDB's trim shares no
+        // token with NHTSA's trim/series evidence AND NHTSA positively named
+        // one, prefer NHTSA's (the regulatory decode over the aggregator).
+        trim: (() => {
+          const vdbTrim = vdb?.trim ?? "";
+          const nhtsaEvidence = [nhtsa.trim, nhtsa.series, nhtsa.trim2, nhtsa.series2]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          if (trustVdbYmmt && vdbTrim && nhtsaEvidence) {
+            const vdbTokens = vdbTrim.toLowerCase().split(/[\s/_-]+/).filter((t: string) => t.length >= 2);
+            const overlaps = vdbTokens.some((t: string) => nhtsaEvidence.includes(t));
+            if (!overlaps && (nhtsa.trim || nhtsa.series)) {
+              const preferred = nhtsa.trim || nhtsa.series;
+              console.warn(
+                `[decode] TRIM PRECEDENCE — VDB trim "${vdbTrim}" shares no token with NHTSA evidence "${nhtsaEvidence}"; using NHTSA "${preferred}"`,
+              );
+              return preferred;
+            }
+          }
+          return trustVdbYmmt ? (vdbTrim || nhtsa.trim || "Base") : (nhtsa.trim || "Base");
+        })(),
         trim2: nhtsa.trim2 || "",
         series: nhtsa.series || "",
         series2: nhtsa.series2 || "",
@@ -299,6 +329,61 @@ export const processVin = internalAction({
         cca: vdb?.cca || null,
         steeringType: vdb?.steeringType || null,
       };
+
+      // Round 10 (batch-11 Grand Highlander): the substring YMMT agreement
+      // lets the SHORTER nameplate win the merge — vPIC's "Highlander"
+      // collapsed VDB's "Grand Highlander", and because both models share the
+      // A25A-FXS every model-divergent field then resolved to the wrong
+      // sibling at high confidence with no catchable contradiction. When both
+      // decoders name a model and one is a whole-word extension of the other,
+      // the LONGER (more specific) name wins: decoders drop tokens, they
+      // don't invent them. The performance-halo reconcile below still demotes
+      // over-claimed halo tokens (WRX/SS/…) after this.
+      {
+        const normM = (s: string) => s.toLowerCase().replace(/[\s_-]+/g, " ").trim();
+        const a = normM(vdb?.model ?? "");
+        const b = normM(nhtsa.model ?? "");
+        if (a && b && a !== b && merged.model) {
+          const longerRaw = a.length >= b.length ? (vdb?.model ?? "") : (nhtsa.model ?? "");
+          const longerN = normM(longerRaw);
+          const shorterN = a.length >= b.length ? b : a;
+          const wholeWordExtension =
+            longerN.startsWith(shorterN + " ") ||
+            longerN.endsWith(" " + shorterN) ||
+            longerN.includes(" " + shorterN + " ");
+          if (wholeWordExtension && normM(merged.model) === shorterN) {
+            console.warn(
+              `[decode] MODEL SPECIFICITY — "${merged.model}" → "${longerRaw}" (longer decoder nameplate wins over prefix collapse)`,
+            );
+            merged.model = longerRaw;
+          }
+        }
+      }
+
+      // Variant mis-decode reconciliation (batch-9): VDB occasionally decodes a
+      // non-performance vehicle as its performance halo — a 2003 Impreza Outback
+      // (2.5 NA) read as an "Impreza WRX" (2.0T) — and the fuzzy YMMT match lets
+      // it win because "Impreza WRX" ⊇ "Impreza". That wrong model then misleads
+      // the engine-code resolver to the turbo engine + wrong parts. When VDB
+      // adds a performance-halo token NHTSA lacks AND NHTSA positively decoded a
+      // different variant, prefer NHTSA's base model.
+      if (trustVdbYmmt && (vdb?.model || vdb?.trim) && nhtsa.model) {
+        // VDB records the halo in either the model ("Impreza WRX") or the TRIM
+        // ("Impreza" + trim "WRX") — scan both.
+        const vdbFull = `${vdb?.model ?? ""} ${vdb?.trim ?? ""}`.trim();
+        const nhtsaVariantText = [nhtsa.series, nhtsa.trim, nhtsa.series2, nhtsa.trim2]
+          .filter(Boolean)
+          .join(" ");
+        const vr = reconcilePerformanceVariant(vdbFull, nhtsa.model, nhtsaVariantText);
+        if (vr.demote) {
+          const demotedTrim = nhtsa.trim || nhtsa.series || "Base";
+          console.warn(
+            `[decode] VARIANT RECONCILE — ${vr.reason}; "${merged.model} ${merged.trim}" → NHTSA "${nhtsa.model} ${demotedTrim}"`,
+          );
+          merged.model = nhtsa.model;
+          merged.trim = demotedTrim;
+        }
+      }
 
       // Batch-6 fix: NHTSA sometimes omits the Model for a VALID VIN (the 2009
       // Escalade: ErrorCode 4,14 "manufacturer did not submit some fields")
@@ -413,7 +498,25 @@ export const processVin = internalAction({
         });
         if (normalized) {
           if (normalized.model) finalModel = normalized.model;
-          if (normalized.trim) finalTrim = normalized.trim;
+          // Round 8 (batch-10): accept the LLM's trim only when it overlaps the
+          // decode evidence — the unconditional override stored a Lariat F-150
+          // as "FX4 SuperCrew" and a 745Li as "745i" (trims no decoder produced).
+          if (normalized.trim) {
+            if (
+              acceptNormalizedTrim(normalized.trim, [
+                merged.trim,
+                merged.trim2,
+                merged.series,
+                merged.series2,
+              ])
+            ) {
+              finalTrim = normalized.trim;
+            } else {
+              console.log(
+                `[decode] Normalizer trim "${normalized.trim}" rejected — no token overlap with decode evidence (kept "${finalTrim}")`,
+              );
+            }
+          }
           if (normalized.engine_code && !vdbCode && !isSyntheticEngineCode(normalized.engine_code)) {
             finalEngineCode = normalized.engine_code;
           }
@@ -472,9 +575,26 @@ export const processVin = internalAction({
             });
             const code = (resp.content[0]?.type === "text" ? resp.content[0].text.trim() : "")
               .replace(/[^a-zA-Z0-9\-_.]/g, "");
-            if (code && code.toLowerCase() !== "null" && code.length >= 2 && code.length <= 20) {
+            // Round 10 (batch-11 Crosstrek): "NA" (naturally aspirated) passed
+            // the length filter and was keyed as the engine code. Reject
+            // aspiration/architecture descriptors — they are answers to a
+            // different question, never codes.
+            const DESCRIPTOR_ANSWERS = new Set([
+              "na", "n-a", "turbo", "turbocharged", "supercharged", "dohc",
+              "sohc", "ohv", "vtec", "gdi", "mpi", "diesel", "hybrid", "ev",
+              "i4", "v6", "v8", "h4", "boxer",
+            ]);
+            if (
+              code &&
+              code.toLowerCase() !== "null" &&
+              !DESCRIPTOR_ANSWERS.has(code.toLowerCase()) &&
+              code.length >= 2 &&
+              code.length <= 20
+            ) {
               console.log(`[decode] Search + Haiku resolved engine code: ${code} (was "${finalEngineCode}")`);
               finalEngineCode = code;
+            } else if (code && DESCRIPTOR_ANSWERS.has(code.toLowerCase())) {
+              console.log(`[decode] Search + Haiku returned descriptor "${code}", not an engine code — ignored`);
             }
           }
         } catch (err) {
@@ -1133,7 +1253,7 @@ export const enrichVehicleSpecs = internalAction({
           - Publicly visible labor-time references (if available)
 
           NOT ALLOWED
-          - RepairPal
+          - Estimator
           - Forums as a primary source (forums may only sanity-check; never "verify")
 
           CRITICAL RULES
@@ -1621,6 +1741,10 @@ async function fetchAnthropicWithRetry(
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify(body),
+      // Dead-socket bound only — web_search generations legitimately run
+      // minutes, so this must sit above any plausible completion time. The
+      // abort throws into each caller's existing fail-open try/catch.
+      signal: AbortSignal.timeout(300_000),
     });
     lastResponse = response;
     if (response.status === 429) {

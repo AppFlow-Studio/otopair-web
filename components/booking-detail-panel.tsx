@@ -494,6 +494,13 @@ export interface JobDetailData {
   scheduledDate: string;
   scheduledTime: string;
   serviceNames: string[];
+  tireSpecs?: {
+    size: string;
+    type: string;
+    tier: string;
+    quantity: number;
+    positions?: Array<"FL" | "FR" | "RL" | "RR">;
+  } | null;
   totalCost: number;
   laborCost: number;
   partsCost: number;
@@ -1417,6 +1424,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 ? "Could not save the pre-job vehicle check."
                 : "Could not start booking."),
           );
+          throw err;
         }
       } finally {
         setIsSubmittingPrejob(false);
@@ -2535,6 +2543,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               : ""
           }
           bookingServices={job?.serviceNames ?? []}
+          tireReplacementPositions={job?.tireSpecs?.positions ?? []}
           passportData={vehiclePassport ?? null}
           prefillData={job?.jobActuals?.prejobReport ?? null}
           isSubmitting={isSubmittingPrejob}

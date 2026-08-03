@@ -128,7 +128,7 @@ lines.push("");
 lines.push("| Config | Service | Ours h | RP obs h | OLP h | Δ% | Status |");
 lines.push("|---|---|---|---|---|---|---|");
 for (const s of allSvc) {
-  lines.push(`| \`${s.config_key}\` | ${s.slug} | ${fmt(s.our_hours)} | ${fmt(s.repairpal_hours)} | ${fmt(s.olp_hours)} | ${s.delta_pct == null ? "—" : s.delta_pct + "%"} | ${s.status} |`);
+  lines.push(`| \`${s.config_key}\` | ${s.slug} | ${fmt(s.our_hours)} | ${fmt(s.estimator_hours)} | ${fmt(s.olp_hours)} | ${s.delta_pct == null ? "—" : s.delta_pct + "%"} | ${s.status} |`);
 }
 lines.push("");
 lines.push("## Gaps");

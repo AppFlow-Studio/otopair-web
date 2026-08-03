@@ -1,0 +1,32 @@
+{
+  "_note": "Live web-search results for the 2022 Subaru Crosstrek owner's manual, captured 2026-07-30. VERIFIED: techinfo.subaru.com/stis/doc/ownerManual/MSA5M2207A_STIS-Opt.pdf is live (fetch aborted on a >10 MB content cap, i.e. it resolves and serves a large PDF). 'MSA5M2207A' is a Subaru publication part number and is NOT derivable from year/make/model — the proof that URL construction is not viable. Note that a plain search returns eight mirrors and zero OEM hits; the OEM host only surfaces on the site:-scoped query.",
+  "query": "2022 Subaru Crosstrek owner's manual PDF subaru.com owners warranty maintenance booklet",
+  "results": [
+    {
+      "url": "https://ownersmanuals2.com/subaru/crosstrek-2022-owners-manual-90850",
+      "title": "2022 Subaru Crosstrek Owner's Manual PDF (516 Pages)"
+    },
+    {
+      "url": "https://www.manualslib.com/products/Subaru-Crosstrek-2022-12378359.html",
+      "title": "Subaru Crosstrek 2022 Manuals | ManualsLib"
+    },
+    {
+      "url": "https://manual-directory.com/manual/2022-subaru-crosstrek-owners-manual/",
+      "title": "2022 Subaru Crosstrek Owner's Manual PDF | Manual Directory"
+    },
+    {
+      "url": "https://ownersman.com/manuals/2022-Subaru-Crosstrek-owners-manual",
+      "title": "2022 Subaru Crosstrek owners manual free pdf"
+    },
+    {
+      "url": "https://subaru.oemdtc.com/3456/2022-subaru-crosstrek-owners-manual",
+      "title": "2022 Subaru Crosstrek Owner's Manual"
+    }
+  ],
+  "site_scoped_results": [
+    {
+      "url": "https://techinfo.subaru.com/stis/doc/ownerManual/MSA5M2207A_STIS-Opt.pdf",
+      "title": "2022MY Crosstrek Owner's Manual"
+    }
+  ]
+}

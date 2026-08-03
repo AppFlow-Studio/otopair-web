@@ -46,6 +46,18 @@ export function isNhtsaDescriptor(engineCode: string): boolean {
   // Generic placeholders
   if (lower === "unknown" || lower === "n/a" || lower === "none" || lower === "null") return true;
 
+  // Round 10 (batch-11 Crosstrek): "NA" — an aspiration descriptor read as a
+  // code by the decode fallback — keyed a config as `..._limited_na`. Reject
+  // aspiration/architecture tokens outright; none is ever an OEM code.
+  if (
+    lower === "na" || lower === "turbo" || lower === "turbocharged" ||
+    lower === "supercharged" || lower === "dohc" || lower === "sohc" ||
+    lower === "ohv" || lower === "gdi" || lower === "mpi" ||
+    lower === "hybrid" || lower === "diesel" ||
+    lower === "i4" || lower === "v6" || lower === "v8" || lower === "h4" ||
+    lower === "boxer"
+  ) return true;
+
   // Known VDB placeholder values
   if (lower === "stden") return true;
 
@@ -114,7 +126,7 @@ async function callWithSearch(system: string, user: string): Promise<string> {
  * hallucinated codes (CZDA on an Atlas VR6, nonexistent "ERG" on a Durango,
  * G4FJ on a 2.0 MPI Soul) flowing into config keys and extraction prompts.
  */
-async function verifyEngineCode(
+export async function verifyEngineCode(
   code: string,
   year: number,
   make: string,
@@ -162,10 +174,16 @@ export async function resolveEngineCode(
   cylinders: number,
   fuelType: string,
   rawEngineCode: string,
+  opts?: {
+    /** Round 10: resolve even when the raw code looks like a real OEM code —
+     *  used after an adversarial verification REFUTED the decoder's code
+     *  (batch-11 Equinox: vPIC returned the 2025 RPO "LSD" on a 2024 VIN). */
+    forceResolve?: boolean;
+  },
 ): Promise<{ engineCode: string; source: "passthrough" | "verified" | "unverified" | "unknown" }> {
 
   // Already a clean OEM code — pass through
-  if (!isNhtsaDescriptor(rawEngineCode)) {
+  if (!isNhtsaDescriptor(rawEngineCode) && !opts?.forceResolve) {
     return { engineCode: rawEngineCode, source: "passthrough" };
   }
 

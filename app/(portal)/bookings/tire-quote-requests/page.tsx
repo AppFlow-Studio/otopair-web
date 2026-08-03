@@ -223,7 +223,7 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
       ) : requests.length === 0 ? (
         <div className="bg-card rounded-xl border border-border p-12 text-center">
           <Wrench className="mx-auto h-10 w-10 text-muted-foreground/40" strokeWidth={1.5} />
-          <p className="mt-3 text-sm font-medium text-foreground">No open quote requests</p>
+          <p className="mt-3 text-sm font-medium text-foreground">No open tire quote requests</p>
           <p className="mt-1 text-xs text-muted-foreground">
             New customer requests will appear here.
           </p>

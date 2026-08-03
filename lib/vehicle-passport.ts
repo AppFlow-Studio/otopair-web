@@ -77,6 +77,13 @@ export type VehiclePassportBrakes = {
   rear_pad_mm?: number | null;
   rotor_condition?: RotorCondition | null;
   rotor_thickness?: RotorThicknessMeasurements | null;
+  /** OEM DISCARD minimum per axle (mm) — the replace-at figure, not the new
+   *  thickness. Null ⇒ the reading is recorded but not graded. */
+  rotor_min_front_mm?: number | null;
+  rotor_min_rear_mm?: number | null;
+  rotor_min_quality_front?: string | null;
+  rotor_min_quality_rear?: string | null;
+  rotor_min_source_url?: string | null;
 };
 
 export type VehiclePassportInspection = {
@@ -187,7 +194,17 @@ export type JobActualPartPayload = {
 
 export type PreJobSurveyPayload = {
   mileage: number | null;
+  /** Tire identity recorded at each inspected corner. */
+  tire_details?: Partial<
+    Record<
+      "front_left" | "front_right" | "rear_left" | "rear_right",
+      { brand?: string | null; model?: string | null }
+    >
+  > | null;
+  // Legacy vehicle-passport fields. New multi-point inspections use
+  // `tire_details` so different corners are not flattened into one value.
   tire_brand?: string | null;
+  tire_model?: string | null;
   tire_size_front?: string | null;
   tire_size_rear?: string | null;
   front_tire_condition: TireCondition | null;
@@ -248,6 +265,7 @@ export type RecommendationTireSpecs = {
   type: string;
   tier: string;
   quantity: number;
+  positions?: Array<"FL" | "FR" | "RL" | "RR">;
 };
 
 export type JobRecommendationInput = {

@@ -1,13 +1,14 @@
 /**
  * endpointResearch.ts — DEV-ONLY read-only survey of the data landscape for the
- * RepairPal endpoint ingestion. Answers: how many configs do we have, what's
- * enriched, which services map to RepairPal (+ their ids), and what's already in
- * repairpal_endpoint_estimates. Drives the backfill. Throwaway; not prod wiring.
+ * Estimator endpoint ingestion. Answers: how many configs do we have, what's
+ * enriched, which services map to Estimator (+ their ids), and what's already in
+ * estimator_estimates. Drives the backfill. Throwaway; not prod wiring.
  *   npx convex run devOnly/endpointResearch:survey
  */
 import { internalQuery } from "../_generated/server";
 import { v } from "convex/values";
-import { SERVICE_REPAIRPAL_IDS } from "../vehicleEnrichment/repairpalEndpointMatch";
+import { SERVICE_ESTIMATOR_IDS } from "../vehicleEnrichment/estimatorEndpointMatch";
+import { listEstimates } from "../lib/estimatorEstimates";
 
 const num = (x: unknown): number | null => {
   if (typeof x === "number") return x;
@@ -29,7 +30,7 @@ export const survey = internalQuery({
     }
 
     const services = await ctx.db.query("services").collect();
-    const mappedSlugs = new Set(Object.keys(SERVICE_REPAIRPAL_IDS));
+    const mappedSlugs = new Set(Object.keys(SERVICE_ESTIMATOR_IDS));
     const mappedServices = services
       .filter((s) => s.slug && mappedSlugs.has(s.slug))
       .map((s) => ({ slug: s.slug as string, serviceId: s._id }));
@@ -37,7 +38,7 @@ export const survey = internalQuery({
       (slug) => !mappedServices.some((m) => m.slug === slug),
     );
 
-    const endpoint = await ctx.db.query("repairpal_endpoint_estimates").take(4000);
+    const endpoint = await listEstimates(ctx, 4000);
     const endpointConfigs = new Set(endpoint.map((e) => String(e.vehicle_config_id)));
 
     // Sample enriched configs with resolved make/model/engine — the resolver inputs.
@@ -115,12 +116,12 @@ export const otoSimTarget = internalQuery({
   },
 });
 
-/** Verify what landed in repairpal_endpoint_estimates: overall counts + a
+/** Verify what landed in estimator_estimates: overall counts + a
  *  detailed dump of one config's rows (default the 2018 Honda Civic). */
 export const verifyRows = internalQuery({
   args: { configId: v.optional(v.id("vehicle_configs")) },
   handler: async (ctx, args) => {
-    const all = await ctx.db.query("repairpal_endpoint_estimates").take(4000);
+    const all = await listEstimates(ctx, 4000);
     const configs = new Set(all.map((r) => String(r.vehicle_config_id)));
     const withParts = all.filter((r) => (r.parts?.length ?? 0) > 0).length;
     const noMinutes = all.filter((r) => r.labor_minutes == null).length;
@@ -172,7 +173,7 @@ export const resolverInputs = internalQuery({
   },
   handler: async (ctx, args) => {
     const services = await ctx.db.query("services").collect();
-    const mappedSlugs = new Set(Object.keys(SERVICE_REPAIRPAL_IDS));
+    const mappedSlugs = new Set(Object.keys(SERVICE_ESTIMATOR_IDS));
     const mappedServices = services
       .filter((s) => s.slug && mappedSlugs.has(s.slug))
       .map((s) => ({ slug: s.slug as string, serviceId: s._id }));

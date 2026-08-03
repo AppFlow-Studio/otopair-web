@@ -9,37 +9,37 @@ import { internalMutation } from "../_generated/server";
  *  determinant   — which platform key drives this service's labor:
  *                  "engine" (engine-bay access → engine_family),
  *                  "chassis" (corner/body/cabin → chassis_code), or "both".
- *  repairpal_slug — RepairPal estimator slug whose page scope matches OURS 1:1,
- *                  or null where RepairPal has no matching page (fluids, bundles,
+ *  estimator_slug — Estimator estimator slug whose page scope matches OURS 1:1,
+ *                  or null where Estimator has no matching page (fluids, bundles,
  *                  diagnostics) → those rely on the LLM source. We deliberately
  *                  DON'T map bundles (e.g. filter_replacement = engine+cabin air
- *                  filter) since a partial RepairPal value would be wrong, not
+ *                  filter) since a partial Estimator value would be wrong, not
  *                  merely missing.
  */
 export const LABOR_SERVICE_CONFIG: Record<
   string,
-  { determinant: "engine" | "chassis" | "both"; repairpal_slug: string | null }
+  { determinant: "engine" | "chassis" | "both"; estimator_slug: string | null }
 > = {
-  // Engine-determined, clean 1:1 RepairPal coverage:
-  oil_change: { determinant: "engine", repairpal_slug: "oil-change" },
-  spark_plugs: { determinant: "engine", repairpal_slug: "spark-plug-replacement" },
-  timing_belt: { determinant: "engine", repairpal_slug: "timing-belt-replacement" },
-  // Chassis-determined, clean 1:1 RepairPal coverage:
-  brake_pad_replacement: { determinant: "chassis", repairpal_slug: "brake-pad-replacement" },
-  rotor_replacement: { determinant: "chassis", repairpal_slug: "brake-rotor-replacement" },
-  battery_replacement: { determinant: "chassis", repairpal_slug: "battery-replacement" },
-  wheel_alignment: { determinant: "chassis", repairpal_slug: "wheel-alignment" },
-  // Known RepairPal gaps / bundles / diagnostics — determinant recorded, slug
-  // null → sourced from the LLM path, not RepairPal.
-  filter_replacement: { determinant: "engine", repairpal_slug: null },
-  coolant_flush: { determinant: "engine", repairpal_slug: null },
-  power_steering_flush: { determinant: "engine", repairpal_slug: null },
-  transmission_service: { determinant: "both", repairpal_slug: null },
-  differential_service: { determinant: "both", repairpal_slug: null },
-  brake_fluid_flush: { determinant: "chassis", repairpal_slug: null },
+  // Engine-determined, clean 1:1 Estimator coverage:
+  oil_change: { determinant: "engine", estimator_slug: "oil-change" },
+  spark_plugs: { determinant: "engine", estimator_slug: "spark-plug-replacement" },
+  timing_belt: { determinant: "engine", estimator_slug: "timing-belt-replacement" },
+  // Chassis-determined, clean 1:1 Estimator coverage:
+  brake_pad_replacement: { determinant: "chassis", estimator_slug: "brake-pad-replacement" },
+  rotor_replacement: { determinant: "chassis", estimator_slug: "brake-rotor-replacement" },
+  battery_replacement: { determinant: "chassis", estimator_slug: "battery-replacement" },
+  wheel_alignment: { determinant: "chassis", estimator_slug: "wheel-alignment" },
+  // Known Estimator gaps / bundles / diagnostics — determinant recorded, slug
+  // null → sourced from the LLM path, not Estimator.
+  filter_replacement: { determinant: "engine", estimator_slug: null },
+  coolant_flush: { determinant: "engine", estimator_slug: null },
+  power_steering_flush: { determinant: "engine", estimator_slug: null },
+  transmission_service: { determinant: "both", estimator_slug: null },
+  differential_service: { determinant: "both", estimator_slug: null },
+  brake_fluid_flush: { determinant: "chassis", estimator_slug: null },
 };
 
-/** Stamp labor_determinant + repairpal_slug onto matching services rows. */
+/** Stamp labor_determinant + estimator_slug onto matching services rows. */
 export const stampLaborServiceConfig = internalMutation({
   args: {},
   handler: async (ctx) => {
@@ -54,7 +54,7 @@ export const stampLaborServiceConfig = internalMutation({
       }
       await ctx.db.patch(svc._id, {
         labor_determinant: cfg.determinant,
-        repairpal_slug: cfg.repairpal_slug,
+        estimator_slug: cfg.estimator_slug,
       });
       stamped++;
     }

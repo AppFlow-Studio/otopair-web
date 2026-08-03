@@ -15,29 +15,11 @@
       "Bash(dir \"C:\\\\Users\\\\manso\\\\Desktop\\\\otopair-web\\\\app\\\\\\(director-panel\\)\")",
       "Bash(dir \"C:\\\\Users\\\\manso\\\\Desktop\\\\otopair-web\\\\convex\")",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "WebFetch(domain:claude.ai)"
     ]
   },
-  "hooks": {
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ~/.claude/notify.js"
-          }
-        ]
-      }
-    ],
-    "Notification": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node ~/.claude/notify.js"
-          }
-        ]
-      }
-    ]
-  }
+  "enabledMcpjsonServers": [
+    "scrapling"
+  ]
 }

@@ -12,7 +12,9 @@
  * GENERATION / chemistry mismatch inside the correct transmission type that
  * rides in on a wrong-variant identification:
  *   - 2015 Rogue mislabeled the old "Rogue Select" (JF011E) → CVT NS-2 where
- *     the T32's JF017E needs NS-3 (damaging).
+ *     the T32 2.5's JF016E (RE0F10H) needs NS-3 (damaging). (Round 9: this KB
+ *     row previously said JF017E — that is the larger 3.5L-class Jatco unit,
+ *     not the Rogue 2.5's; batch-11 P2-10.)
  *   - 2018 Focus DPS6 DRY dual-clutch got Mercon LV (a WET-auto fluid) — needs
  *     the dry-DCT fluid XT-11-QDC.
  *   - 2022 Tahoe 10L80 10-speed got DEXRON-VI where it needs DEXRON-ULV.
@@ -40,7 +42,7 @@ export interface TransFluidVerdict {
    *  the unit or its required fluid with confidence. */
   verdict: "match" | "mismatch" | "uncertain";
   /** The specific transmission unit the checker placed on this vehicle (e.g.
-   *  "Jatco JF017E CVT", "GM 10L80", "Ford DPS6 dry dual-clutch"). Null when it
+   *  "Jatco JF016E CVT", "GM 10L80", "Ford DPS6 dry dual-clutch"). Null when it
    *  could not name the unit — which forces "uncertain" (no positive evidence). */
   transUnit: string | null;
   /** The OEM-required fluid family/spec for that unit (e.g. "Nissan CVT NS-3",
@@ -112,12 +114,14 @@ const SYSTEM = `You are an automotive transmission-fluid fact-checker. You are g
 The "claimed family" line below (automatic / CVT / manual / N-speed) comes from a VIN decode that is SOMETIMES WRONG — decoders routinely mis-report automatic-vs-manual and the speed count (e.g. a diesel with a ZF 8-speed automatic that vPIC labels "6-speed manual"). Treat it as a weak hint, NOT ground truth: independently establish the real transmission from the YEAR + MODEL + ENGINE. If your web research contradicts the claimed family, trust your research and say so.
 
 Work in this order and SEARCH THE WEB:
-1. Identify the SPECIFIC transmission UNIT fitted to THIS exact year + model + engine + trim/variant. Name the maker's unit code, e.g. "Jatco JF017E CVT", "GM 10L80 10-speed", "Ford DPS6 dry dual-clutch", "ZF 8HP45", "Aisin AWF8F35". Many nameplates have MULTIPLE units in the SAME model year across trims/generations (e.g. a 2015 Nissan Rogue is the T32 with a JF017E, NOT the older "Rogue Select" S35 with a JF011E; a 2011 Corolla is the U341E using ATF WS, NOT the older U240E that used Type T-IV) — pin the one that matches THIS vehicle, and do NOT let a superseded/older unit's fluid stand in for the current one.
+1. Identify the SPECIFIC transmission UNIT fitted to THIS exact year + model + engine + trim/variant. Name the maker's unit code, e.g. "Jatco JF016E CVT", "GM 10L80 10-speed", "Ford DPS6 dry dual-clutch", "ZF 8HP45", "Aisin AWF8F35". Many nameplates have MULTIPLE units in the SAME model year across trims/generations, and unit families split by ENGINE within one model (e.g. a 2015-2017 Nissan Rogue 2.5 is the T32 with the JF016E / RE0F10H, NOT the older "Rogue Select" S35 with a JF011E — and NOT the larger JF017E, which serves the 3.5L-class applications; a 2011 Corolla is the U341E using ATF WS, NOT the older U240E that used Type T-IV) — pin the one that matches THIS vehicle+engine, and do NOT let a superseded/older unit's fluid stand in for the current one.
 2. State the OEM-required fluid family/spec for THAT unit (e.g. "Nissan CVT NS-3", "DEXRON-ULV", "Ford XT-11-QDC dry-DCT fluid", "ZF LifeguardFluid 8 / Shell M-1375.4").
 3. Compare it to the claimed fluid.
 
 REFUSE these traps (all are "mismatch" when they contradict the unit's real spec):
-- A newer/older GENERATION of the same family: NS-2 vs NS-3 (Nissan CVT), DEXRON-VI vs DEXRON-ULV (GM), Mercon LV vs Mercon ULV — same brand, wrong generation, wrong fluid.
+- A newer/older GENERATION of the same family: NS-2 vs NS-3 (Nissan CVT), DEXRON-VI vs DEXRON-ULV (GM), Mercon LV vs Mercon ULV — same brand, wrong generation, wrong fluid. Subaru CVTs are a known minefield: the TR580 chain CVT moved from CVTF-II to **CVTF-III** for 2021+ applications per Subaru TSB 01-167-08R, while "High Torque CVT Fluid" and "CVT Fluid LV" are **TR690** fluids — a TR580 car specced with HT/LV or the gen-1 blue K0425Y0710 is a mismatch.
+- A CHIMERA spec string that mixes manufacturers or families (e.g. "Subaru CVT Fluid TC (CVT-HT-LV)" — "Fluid TC" is a Toyota/Idemitsu spec name welded onto two Subaru TR690 fluid names). A fluid string that does not parse to ONE real spec of ONE family for this unit is a mismatch; name the single correct spec in your answer.
+- The reverse direction of the generation trap: do NOT demand a NEWER-era fluid on an OLDER unit that never used it. MERCON LV belongs to Ford's 6R80/6F35 era (2009+); the earlier 4R70W/4R75W/4R75E family (2004-2008 F-150 etc.) is specified MERCON V, and MERCON V and LV are NOT interchangeable in either direction. Calling a correct period fluid "mismatch" because a newer spec exists for LATER transmissions is a false positive (a batch-10 verifier error flagged MERCON V on a 2006 4R75E, expecting LV).
 - A WET-auto fluid in a DRY dual-clutch (or vice-versa): a DPS6/DSG dry-clutch needs a dedicated dry-DCT fluid, NOT Mercon LV / Dexron; a wet DCT needs its own DCT fluid, not a torque-converter ATF.
 - A geared-automatic ATF in a CVT (or a CVT fluid in a geared automatic) — CVT fluid is NOT interchangeable with ATF.
 - When the transmission is built by a different company than the make (e.g. an Allison in a Chevy, a Jatco in a Nissan is still Nissan-spec, but an Aisin/ZF unit follows the unit maker's approved spec), follow the UNIT's approved fluid, not a generic chassis-brand ATF.

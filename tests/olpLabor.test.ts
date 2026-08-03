@@ -41,7 +41,7 @@ describe("olpModelCandidates", () => {
     // OLP nameplates are trim-qualified: civic, civic-si, civic-type-r
     expect(olpModelCandidates("Civic", "Si")).toEqual(["civic-si", "si", "civic"]);
   });
-  it("strips xDrive like the RepairPal candidates do", () => {
+  it("strips xDrive like the Estimator candidates do", () => {
     expect(olpModelCandidates("5 Series", "M550i xDrive")).toEqual([
       "5-series-m550i-xdrive",
       "m550i-xdrive",

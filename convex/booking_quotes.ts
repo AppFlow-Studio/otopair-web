@@ -528,7 +528,7 @@ export type PartSelectionTraceRow = {
   winner_part_id?: Id<"oem_parts">;
   source: "vin_sticky" | "scored" | "no_candidates";
   trace?: Array<{
-    layer: number | "gate";
+    layer: number | "gate" | "refute";
     name: string;
     decisive: boolean;
     reason: string;

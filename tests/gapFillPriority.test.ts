@@ -68,7 +68,16 @@ describe("rankGapFillFields", () => {
   });
 
   it("is stable within a tier (input order preserved)", () => {
+    // Fixture updated round 12: spark_plug_oem became fuel_type-dependent in
+    // round 7 (diesel/BEV suppression), so with no identity it is DEMOTED by
+    // design — it can no longer share P0 with battery_oem. oil_filter_oem is
+    // identity-free and no-fallback core, the same tier as battery_oem.
+    const ranked = rankGapFillFields(["oil_filter_oem", "battery_oem"]);
+    expect(ranked).toEqual(["oil_filter_oem", "battery_oem"]);
+  });
+
+  it("demotes spark_plug_oem while fuel_type is unknown (round-7 suppression)", () => {
     const ranked = rankGapFillFields(["spark_plug_oem", "battery_oem"]);
-    expect(ranked).toEqual(["spark_plug_oem", "battery_oem"]);
+    expect(ranked).toEqual(["battery_oem", "spark_plug_oem"]);
   });
 });

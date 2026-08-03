@@ -646,3 +646,76 @@ export const backfillSweepLaborOnlyFitments = internalAction({
     return summary;
   },
 });
+
+// ---------------------------------------------------------------------------
+// migrateRotorObservedLabelPerAxle — one-shot (2026-07-29, audit G4).
+//
+// The shared rotor_min_observed_label column let a front label vouch for a
+// rear value. New writes are per-axle; this migrates existing rows:
+//   - exactly one PIPELINE-quality axle has a minimum → label describes it;
+//     copy to that axle's column.
+//   - both axles have minimums → provenance is unrecoverable (the writer took
+//     front ?? rear); copy to BOTH and audit-log the ambiguity for review.
+//   - human-quality axles are never touched.
+// The legacy column is kept (read fallback) until a later cleanup.
+// Idempotent: rows with a per-axle label already set are skipped.
+//   npx convex run vehicleEnrichment/backfills:migrateRotorObservedLabelPerAxle '{}'
+// ---------------------------------------------------------------------------
+
+const HUMAN_ROTOR_QUALITIES = new Set(["mechanic_read", "director_verified"]);
+
+export const migrateRotorObservedLabelPerAxle = internalMutation({
+  args: { cursor: v.optional(v.string()), pageSize: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("vehicle_configs")
+      .paginate({ cursor: args.cursor ?? null, numItems: args.pageSize ?? 200 });
+
+    let migrated = 0;
+    let ambiguous = 0;
+    for (const cfg of page.page) {
+      const legacy = cfg.rotor_min_observed_label;
+      if (!legacy) continue;
+      if (cfg.rotor_front_min_observed_label || cfg.rotor_rear_min_observed_label) continue;
+
+      const frontPipeline =
+        cfg.rotor_front_min_thickness_mm != null &&
+        !HUMAN_ROTOR_QUALITIES.has(cfg.rotor_front_min_quality ?? "");
+      const rearPipeline =
+        cfg.rotor_rear_min_thickness_mm != null &&
+        !HUMAN_ROTOR_QUALITIES.has(cfg.rotor_rear_min_quality ?? "");
+
+      if (frontPipeline && rearPipeline) {
+        await ctx.db.patch(cfg._id, {
+          rotor_front_min_observed_label: legacy,
+          rotor_rear_min_observed_label: legacy,
+        });
+        await ctx.db.insert("audit_log", {
+          entity_type: "vehicle_config",
+          entity_id: String(cfg._id),
+          action: "rotor_label_migration_ambiguous",
+          actor: "system",
+          detail:
+            `Shared rotor label "${legacy}" copied to BOTH axles — original provenance ` +
+            `unrecoverable (writer stored front ?? rear). Review if the axles disagree.`,
+          created_at: Date.now(),
+        });
+        ambiguous++;
+        migrated++;
+      } else if (frontPipeline) {
+        await ctx.db.patch(cfg._id, { rotor_front_min_observed_label: legacy });
+        migrated++;
+      } else if (rearPipeline) {
+        await ctx.db.patch(cfg._id, { rotor_rear_min_observed_label: legacy });
+        migrated++;
+      }
+    }
+
+    return {
+      migrated,
+      ambiguous,
+      isDone: page.isDone,
+      continueCursor: page.isDone ? null : page.continueCursor,
+    };
+  },
+});

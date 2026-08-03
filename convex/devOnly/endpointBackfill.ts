@@ -1,8 +1,8 @@
 /**
- * endpointBackfill.ts — DEV-ONLY driver that populates repairpal_endpoint_estimates
+ * endpointBackfill.ts — DEV-ONLY driver that populates estimator_estimates
  * for real vehicle_configs by invoking the live resolver
- * (vehicleEnrichment/repairpalEndpoint:resolveRepairpalEndpointForConfig) per config.
- * Bypasses the LABOR_SOURCE_REPAIRPAL_ENDPOINT flag (the flag only gates the
+ * (vehicleEnrichment/estimatorEndpoint:resolveEstimatorEndpointForConfig) per config.
+ * Bypasses the LABOR_SOURCE_ESTIMATOR_ENDPOINT flag (the flag only gates the
  * in-pipeline hook); calling the resolver directly just fills the cache table that
  * nothing reads yet. Not prod wiring.
  *
@@ -32,7 +32,7 @@ export const backfill = internalAction({
       const label = `${t.year} ${t.make} ${t.model} ${t.trim ?? ""}`.trim();
       try {
         const res: any = await ctx.runAction(
-          internal.vehicleEnrichment.repairpalEndpoint.resolveRepairpalEndpointForConfig,
+          internal.vehicleEnrichment.estimatorEndpoint.resolveEstimatorEndpointForConfig,
           {
             vehicleConfigId: t.configId,
             make: t.make,

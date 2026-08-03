@@ -13,7 +13,8 @@
  * Fields covered by Batch 1B:
  * - ALL service intervals (oil, spark plug, trans, coolant, air/cabin filter, brake fluid,
  *   serpentine belt, timing) — via manufacturer maintenance schedule search
- * - NEW intervals: diff fluid, transfer case fluid — drivetrain-specific
+ * - NEW intervals: diff fluid, transfer case fluid — drivetrain-specific;
+ *   power steering fluid (hydraulic systems only)
  * - Fluid specs: oil viscosity, coolant type, brake fluid type, power steering type,
  *   trans fluid type, diff fluid type, transfer case fluid type
  * - Battery: group size, CCA, type (AGM/flooded/EFB/lithium-ion), physical location
@@ -68,6 +69,7 @@ Return this exact JSON structure:
       "display_string": "Every 30,000 miles"
     },
     "transfer_case_fluid": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
+    "ps_fluid": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
     "brake_pads": { "miles": { ... }, "months": { ... }, "status": "inspect_only", "display_string": "..." },
     "tire_rotation": { "miles": { ... }, "months": { ... }, "status": "scheduled", "display_string": "..." }
   },
@@ -117,10 +119,19 @@ IMPORTANT REMINDERS:
 - brake_fluid_capacity_oz: the full-flush brake system capacity in US fluid OUNCES (typical 16-48 oz). Convert from liters/mL if needed (1 L = 33.8 oz).
 - ps_fluid_capacity_oz: the power-steering system capacity in US fluid OUNCES; null when the steering is electric (no fluid).
 - diff_fluid and transfer_case_fluid: if FWD (no rear differential, no transfer case), set status: "not_applicable" and values to null.
+- ps_fluid: the power steering fluid flush/replacement interval — hydraulic systems only. If the steering is electric (no fluid), set status: "not_applicable" and values to null.
 - timing_belt_or_chain_service: if timing_system is "chain", the status is typically "not_applicable" (chain is inspect-only or lifetime). If timing_system is "belt", fill the interval.
 - transmission_service: for "lifetime" fluid (ZF 8HP), status = "not_applicable". For normal service intervals, fill miles/months.
 - battery_type: the battery chemistry. Use one of: "AGM", "flooded", "EFB", "lithium-ion". Most modern vehicles use AGM if start-stop equipped; older vehicles typically use flooded lead-acid.
 - battery_location: where the battery is physically installed. Common values: "engine bay", "trunk", "under rear seat", "under front seat". Many European vehicles (BMW, Mercedes, Audi) place the battery in the trunk.
 - brake_pads: the manufacturer's INSPECTION / typical pad-life guidance in miles (wear-based, not a hard schedule) — use status "inspect_only" unless the maintenance schedule explicitly mandates replacement. tire_rotation: the rotation schedule (typically 5,000-8,000 miles).
-- Return null for any field you cannot confidently determine after 1-2 searches.`;
+- Return null for any field you cannot confidently determine after 1-2 searches.
+
+OUTPUT SHAPE OVERRIDE (supersedes the JSON template above):
+Return ONE object with TWO ARRAYS — no nested section objects.
+{
+  "fields":    [ { "key": "trans_fluid_type", "value": "ATF WS", "source_url": "...", "source_type": "web_search", "confidence": 0.9 } ],
+  "intervals": [ { "key": "oil_change", "interval_miles": 10000, "interval_months": 12, "status": "scheduled", "source_url": "...", "source_type": "web_search", "confidence": 0.9 } ]
+}
+A field you cannot determine is OMITTED ENTIRELY — never emit a row whose value is null.`;
 }

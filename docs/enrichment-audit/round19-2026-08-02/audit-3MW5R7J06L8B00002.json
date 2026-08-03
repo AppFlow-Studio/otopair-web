@@ -1,0 +1,1112 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "pipeline_extraction",
+      "rockauto"
+    ],
+    "claim_rows": 8,
+    "families_seen": [
+      "aftermarket_catalog",
+      "web_search"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 0,
+    "fields_multi_family_agreement": 2,
+    "fields_single_source": 4,
+    "fields_with_claims": 6
+  },
+  "external_joins": {
+    "complaint_signal": {
+      "top": "ELECTRICAL SYSTEM",
+      "total": 51
+    },
+    "epa": null,
+    "manual": {
+      "file_id": null,
+      "kind": "maintenance_schedule",
+      "oem": true,
+      "pages": null,
+      "url": "https://www.bmwusa.com/content/dam/bmw/marketUS/common/warranty-books/2025/BMW_MY25_Maintenance_with_BEVs.pdf"
+    },
+    "recalls_open": 0
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": null,
+    "brake_fluid_type": "DOT 4",
+    "coolant_capacity_qts": 9.83,
+    "coolant_type": "BMW HT-12",
+    "oil_capacity_qts": 5.6,
+    "oil_viscosity": "0W-20",
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": 5.3
+  },
+  "headline": {
+    "epa_joined": false,
+    "field_corroboration": "33%",
+    "fields_with_claims": 6,
+    "fitment_multi_source": "13%",
+    "has_manual": false,
+    "months_fill": "52%",
+    "parts_quotable": "22/24",
+    "rotor_minimums": 0,
+    "status": "complete"
+  },
+  "identity_coherence": {
+    "aspiration": "turbo",
+    "cylinders": 4,
+    "displacement_l": 2,
+    "engine_code": "B46B20B",
+    "epa_says": null,
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": true,
+    "spark_plug_quantity": 4,
+    "timing_system": "chain",
+    "trans_fluid_type": "ZF Lifeguard 8",
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "chassis_clone": 19,
+      "default_fallback": 5,
+      "enriched": 3
+    },
+    "months_fill": "52%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "chassis_clone",
+        "service": "battery_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 20000,
+        "months": 24,
+        "provenance": "chassis_clone",
+        "service": "brake_fluid_flush",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 48,
+        "provenance": "chassis_clone",
+        "service": "brake_pad_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 72,
+        "provenance": "enriched",
+        "service": "coolant_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 60,
+        "provenance": "chassis_clone",
+        "service": "differential_service",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 36,
+        "provenance": "chassis_clone",
+        "service": "filter_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "chassis_clone",
+        "service": "fuel_system_cleaning",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 10000,
+        "months": 12,
+        "provenance": "chassis_clone",
+        "service": "oil_change",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": 72,
+        "provenance": "chassis_clone",
+        "service": "rotor_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": 80000,
+        "months": 96,
+        "provenance": "enriched",
+        "service": "serpentine_belt",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 72,
+        "provenance": "chassis_clone",
+        "service": "spark_plugs",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 60,
+        "provenance": "chassis_clone",
+        "service": "tire_replacement",
+        "status": "scheduled"
+      },
+      {
+        "bookable": false,
+        "miles": 55000,
+        "months": 66,
+        "provenance": "enriched",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "chassis_clone",
+        "service": "transmission_service",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "chassis_clone",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 27,
+    "with_miles": 14,
+    "with_months": 14
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 6,
+      "chassis_clone": 14,
+      "default_fallback": 7
+    },
+    "rows": [
+      {
+        "hours": 0.5,
+        "service": "oil_change",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.2,
+        "service": "spark_plugs",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.2,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.2,
+        "service": "brake_pad_replacement",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.5,
+        "service": "rotor_replacement",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.7,
+        "service": "brake_fluid_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.7,
+        "service": "coolant_flush",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 2.2,
+        "service": "transmission_service",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.5,
+        "service": "battery_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "wheel_alignment",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.5,
+        "service": "differential_service",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.5,
+        "service": "fuel_system_cleaning",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.2,
+        "service": "battery_test",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "chassis_clone"
+      },
+      {
+        "hours": 1,
+        "service": "serpentine_belt",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "transfer_case_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 27
+  },
+  "parts": {
+    "corroborated_2plus_sources": 3,
+    "corroboration_rate": "13%",
+    "rows": [
+      {
+        "best_price": 42.04,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "13718580428",
+        "price_domains": [
+          "bimmerworld.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "air_filter",
+        "scraped_name": null,
+        "service": "filter_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 19.99,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "83222289720",
+        "price_domains": [
+          "bimmerworld.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "atf_fluid",
+        "scraped_name": "ZF Lifeguard 8 ATF Auto Trans Fluid for ZF 8-speed Automatic",
+        "service": "transmission_service",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 256.12,
+        "confidence": 0.82,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "61216805461",
+        "price_domains": [
+          "getbmwparts.com",
+          "parts.bmwoforlandpark.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "battery",
+        "scraped_name": "Original Bmw Agm-Battery",
+        "service": "battery_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 5.54,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "81220142156",
+        "price_domains": [
+          "getbmwparts.com",
+          "shop.bmwmcgr.com",
+          "fcpeuro.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "brake_fluid",
+        "scraped_name": "BMW DOT 4 Brake Fluid (12 fl oz) - Genuine BMW 81220142156",
+        "service": "brake_fluid_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 73.28,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "64119382886",
+        "price_domains": [
+          "bmwpartshub.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "cabin_filter",
+        "scraped_name": "Cabin Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 3,
+        "source_domains": [
+          "bmw.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 25.95,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "82141467704",
+        "price_domains": [
+          "bimmerworld.com",
+          "fcpeuro.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "coolant",
+        "scraped_name": "Genuine BMW Coolant / Antifreeze",
+        "service": "coolant_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 2.79,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "07119963132",
+        "price_domains": [
+          "fcpeuro.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "drain_plug_gasket",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 76.99,
+        "confidence": 0.87,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "34106888778",
+        "price_domains": [
+          "bimmerworld.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "front_brake_pad",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 31.64,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "34356870349",
+        "price_domains": [
+          "bimmerworld.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "front_brake_wear_sensor",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 220.99,
+        "confidence": 0.89,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "34106880072",
+        "price_domains": [
+          "turnermotorsport.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "front_rotor",
+        "scraped_name": null,
+        "service": "rotor_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 58.39,
+        "confidence": 0.77,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "83222295532",
+        "price_domains": [
+          "fcpeuro.com",
+          "bimmerworld.com",
+          "getbmwparts.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "gear_oil",
+        "scraped_name": null,
+        "service": "differential_service",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 40.99,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "12138643360",
+        "price_domains": [
+          "oembimmerparts.com",
+          "autohausaz.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "ignition_coil",
+        "scraped_name": "OEM Ignition Coil for B46/B48/B58 engines",
+        "service": "spark_plugs",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 9.6,
+        "confidence": 0.87,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "11619486362",
+        "price_domains": [
+          "fcpeuro.com",
+          "parts.bmwofsouthatlanta.com",
+          "bmwpartsdeal.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "intake_manifold_gasket",
+        "scraped_name": null,
+        "service": "spark_plugs",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 19.39,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "11428575211",
+        "price_domains": [
+          "bimmerworld.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "oil_filter",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": null,
+        "confidence": 0.77,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "11428596283",
+        "price_domains": [],
+        "price_rows": 0,
+        "refute_flagged": false,
+        "role": "oil_filter_housing_oring",
+        "scraped_name": null,
+        "service": "oil_change",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": false,
+        "trusted_price_rows": 0
+      },
+      {
+        "best_price": 111.59,
+        "confidence": 0.85,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "34206888831",
+        "price_domains": [
+          "parts.bmwofsouthatlanta.com",
+          "getbmwparts.com",
+          "parts.bmwnorthwest.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "rear_brake_pad",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 31.64,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "34356870354",
+        "price_domains": [
+          "bimmerworld.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "rear_brake_wear_sensor",
+        "scraped_name": null,
+        "service": "brake_pad_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 150.98,
+        "confidence": 0.87,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "34216882246",
+        "price_domains": [
+          "parts.bmwofsouthatlanta.com",
+          "bmwdirectparts.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "rear_rotor",
+        "scraped_name": null,
+        "service": "rotor_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 22.57,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "11288650740",
+        "price_domains": [
+          "bimmerworld.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "serpentine_belt",
+        "scraped_name": "Serpentine Belt",
+        "service": "serpentine_belt",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "go-parts.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 24.07,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "12122455258",
+        "price_domains": [
+          "bimmerworld.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "spark_plug",
+        "scraped_name": "Spark Plug, High Power",
+        "service": "spark_plugs",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "bmwpartsdeal.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 16.14,
+        "confidence": 0.95,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "12120040551",
+        "price_domains": [
+          "fcpeuro.com",
+          "uspmotorsports.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": true,
+        "role": "spark_plug",
+        "scraped_name": "Spark Plug",
+        "service": "spark_plugs",
+        "service_role": "core",
+        "source_count": 2,
+        "source_domains": [
+          "bmw.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 491.06,
+        "confidence": 0.72,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "11537644811",
+        "price_domains": [
+          "bimmerworld.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "thermostat_gasket",
+        "scraped_name": null,
+        "service": "coolant_flush",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 114.99,
+        "confidence": 0.77,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "24118612901",
+        "price_domains": [
+          "oembimmerparts.com",
+          "bimmerworld.com",
+          "autohausaz.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "trans_filter",
+        "scraped_name": "Auto Transmission Filter & Fluid Service Kit, ZF - F22, F3X, F10, G30, F06, F13, F02, G12, X3, X4, X5, X6, Z4",
+        "service": "transmission_service",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 39.99,
+        "confidence": 0.9199999999999999,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "61619478361",
+        "price_domains": [
+          "getbmwparts.com",
+          "parts.bmwofsouthatlanta.com",
+          "bimmerworld.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "wiper_blade_front_set",
+        "scraped_name": null,
+        "service": "wiper_blade_replacement",
+        "service_role": null,
+        "source_count": 1,
+        "source_domains": null,
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      }
+    ],
+    "total": 24,
+    "triangle_broken": [
+      {
+        "oem": "11428596283",
+        "role": "oil_filter_housing_oring",
+        "why": "no_trusted_price"
+      },
+      {
+        "oem": "12120040551",
+        "role": "spark_plug",
+        "why": "refute_flagged"
+      }
+    ],
+    "triangle_ok": 22,
+    "with_observed_title": 10
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 47,
+    "duration_min": 16.9,
+    "error_tags": {
+      "applicable_services_structural_fallback_used": 1,
+      "fitment_refute_kept_multisource": 1,
+      "fitment_refuted": 2,
+      "rotor_min": 2,
+      "sanity": 1
+    },
+    "field_gap_count": 73,
+    "fill_rate": 85,
+    "quotability": {
+      "pct": 0.92,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 3,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 5,
+          "core_with_price": 5,
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx7d4v6tcsqwygy22xs1ney0598bpean",
+    "sanity_flag_count": 8,
+    "sanity_flags_by_stage": {
+      "(pre-finalize)": 1,
+      "claim_ledger": 2,
+      "completion_gate": 2,
+      "fitment_refute": 3
+    },
+    "status": "complete",
+    "tokens_in": 23251,
+    "tokens_out": 13883,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 42
+  },
+  "shippable": {
+    "blockers": [
+      "refuted_parts_present:1"
+    ],
+    "criteria": "correctness-first: a config with fewer parts and none refuted outranks a fuller one carrying a condemned part",
+    "quotable_parts": 22,
+    "ready": false,
+    "warnings": [
+      "incomplete_service:oil_change",
+      "parts_without_observed_title:14",
+      "batch2_returned_no_applicable_services",
+      "no_rotor_minimums",
+      "no_epa_join"
+    ]
+  },
+  "vehicle": {
+    "chassis_code": "G20",
+    "confidence_avg": 0.8186559139784944,
+    "configId": "w57357970kq76ekqfkcxtaykfs8bqx1a",
+    "config_key": "2020_bmw_3_series_330i_xdrive_b46b20b",
+    "drivetrain": "AWD",
+    "enrichment_status": "complete",
+    "fill_rate": 90,
+    "last_enriched_at": 1785694854332,
+    "make": "BMW",
+    "model": "3 Series",
+    "na_role_keys": [],
+    "trim": "330i xDrive",
+    "verified_fields": [],
+    "year": 2020
+  }
+}

@@ -90,11 +90,22 @@ export const getByUserId = query({
       .unique();
     if (!user) return [];
 
-    const convos = await ctx.db
+    const rows = await ctx.db
       .query("ai_conversations")
       .withIndex("by_user_id", (q) => q.eq("user_id", user._id))
       .order("desc")
       .take(50);
+
+    // Pinned conversations float to the top (most-recently-pinned first);
+    // the rest keep their recency order. (Ahmad-dev)
+    const convos = rows.slice().sort((a, b) => {
+      const ap = a.pinned_at ?? 0;
+      const bp = b.pinned_at ?? 0;
+      if (ap && bp) return bp - ap;
+      if (ap) return -1;
+      if (bp) return 1;
+      return (b._creationTime ?? 0) - (a._creationTime ?? 0);
+    });
 
     // Enrich ADDITIVELY — existing mobile consumers keep reading the raw
     // conversation fields; new consumers get a resolved vehicle label and the
@@ -430,5 +441,71 @@ export const end = mutation({
     });
 
     return await ctx.db.get(args.id);
+  },
+});
+
+/** rename — set (or clear) a user-defined title for a conversation. */
+export const rename = mutation({
+  args: {
+    id: v.id("ai_conversations"),
+    title: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await requireConversationOwner(ctx, args.id);
+    const trimmed = args.title.trim().slice(0, 80);
+    await ctx.db.patch(args.id, {
+      custom_title: trimmed.length > 0 ? trimmed : undefined,
+    });
+    return { ok: true };
+  },
+});
+
+/** setPinned — pin/unpin a conversation so it sorts to the top of history. */
+export const setPinned = mutation({
+  args: {
+    id: v.id("ai_conversations"),
+    pinned: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    await requireConversationOwner(ctx, args.id);
+    await ctx.db.patch(args.id, {
+      pinned_at: args.pinned ? Date.now() : undefined,
+    });
+    return { ok: true };
+  },
+});
+
+/**
+ * remove — permanently delete a conversation the caller owns, along with its
+ * messages, feedback, and audit rows. Powers "delete conversation" in the
+ * Oto chat history drawer.
+ */
+export const remove = mutation({
+  args: {
+    id: v.id("ai_conversations"),
+  },
+  handler: async (ctx, args) => {
+    await requireConversationOwner(ctx, args.id);
+
+    const messages = await ctx.db
+      .query("ai_messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.id))
+      .collect();
+    for (const m of messages) await ctx.db.delete(m._id);
+
+    const feedback = await ctx.db
+      .query("ai_feedback")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.id))
+      .collect();
+    for (const f of feedback) await ctx.db.delete(f._id);
+
+    const audit = await ctx.db
+      .query("conversation_audit")
+      .withIndex("by_conversation_turn", (q) => q.eq("conversation_id", args.id))
+      .collect();
+    for (const a of audit) await ctx.db.delete(a._id);
+
+    await ctx.db.delete(args.id);
+    return { ok: true };
   },
 });

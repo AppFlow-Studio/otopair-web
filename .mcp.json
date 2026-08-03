@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "scrapling": {
+      "command": "${USERPROFILE}\\.venvs\\scrapling\\Scripts\\scrapling.exe",
+      "args": ["mcp"]
+    }
+  }
+}

@@ -208,6 +208,141 @@ export const getLatestRunForConfig = internalQuery({
   },
 });
 
+/** Own-run read for the poll-chain write fence (runFence.shouldAbortChain).
+ *  Returns null when the run row was purged — the fence treats that as an
+ *  abort, which is what kills still-scheduled chain ticks after purgeAndRerun. */
+export const getEnrichmentRunById = internalQuery({
+  args: { runId: v.id("enrichment_runs") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.runId);
+  },
+});
+
+/** Round 13: per-fitment candidate rows for the sole-flagged-winner detector
+ *  (soleFlaggedWinnerRoles in utils/roleResource.ts). Joined with the part's
+ *  subcategory + normalized number; pricing deliberately excluded (identity
+ *  and flag state are all the detector needs). */
+export const getFitmentCandidateRows = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicleConfigId))
+      .collect();
+    const out: Array<{
+      serviceType: string | null;
+      subcategory: string | null;
+      serviceRole: string | null;
+      refuteFlagged: boolean;
+      refuteReason: string | null;
+      mechanicVerified: boolean;
+      packageCode: string | null;
+      oemNormalized: string;
+    }> = [];
+    for (const f of fitments) {
+      const part: any = await ctx.db.get(f.part_id);
+      if (!part) continue;
+      out.push({
+        serviceType: (f as any).service_type ?? null,
+        subcategory: part.subcategory ?? null,
+        serviceRole: (f as any).service_role ?? null,
+        refuteFlagged: !!(f as any).refute_flagged,
+        refuteReason: ((f as any).refute_reason ?? null) as string | null,
+        mechanicVerified: !!(f as any).mechanic_verified,
+        packageCode: ((f as any).package_code ?? null) as string | null,
+        oemNormalized:
+          part.oem_part_number_normalized ??
+          String(part.oem_part_number ?? "").toUpperCase().replace(/[^A-Z0-9]/g, ""),
+      });
+    }
+    return out;
+  },
+});
+
+/** Round 12b: the most recent run whose quotability snapshot carries a
+ *  NON-EMPTY services list — the last known applicable-services set. A live
+ *  Crosstrek re-run returned an EMPTY services array from Batch-2 (variance,
+ *  not a parse break — the sibling Equinox run was fine), which made
+ *  quotability vacuously 1 and blinded the completeness layer: nothing to
+ *  check against means "nothing missing". This fallback restores the prior
+ *  truth so an empty batch response can't erase the completeness contract. */
+export const getPriorApplicableSlugs = internalQuery({
+  args: {
+    vehicleConfigId: v.id("vehicle_configs"),
+    excludeRunId: v.optional(v.id("enrichment_runs")),
+  },
+  handler: async (ctx, args) => {
+    const runs = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) =>
+        q.eq("vehicle_config_id", args.vehicleConfigId),
+      )
+      .order("desc")
+      .take(6);
+    for (const run of runs) {
+      if (args.excludeRunId && run._id === args.excludeRunId) continue;
+      const slugs = (((run as any).quotability?.services ?? []) as any[]).map(
+        (s: any) => s.slug,
+      );
+      if (slugs.length > 0) return slugs as string[];
+    }
+    return [] as string[];
+  },
+});
+
+/** Round 12: this config's hard-blocked OEM numbers (refuted_fitments mode
+ *  "block"), keyed for the Tier-2 researcher's exclusion list. Observed live
+ *  on the first Crosstrek repair: the researcher returned 26300SA001 — the
+ *  exact blocklisted 2004-era rotor (it dominates the open web for the
+ *  query) — and while the write gate rejected it safely, without the
+ *  exclusion the researcher would re-find it on every retry. */
+export const getBlockedOemsForConfig = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("refuted_fitments")
+      .withIndex("by_config", (q) => q.eq("vehicle_config_id", args.vehicleConfigId))
+      .collect();
+    return rows
+      .filter((r) => (r as any).mode === "block")
+      .map((r) => ({
+        oem_part_number_normalized: (r as any).oem_part_number_normalized as string,
+        service_type: ((r as any).service_type ?? null) as string | null,
+        reason: (r as any).reason as string,
+      }));
+  },
+});
+
+/** Round 12: per-field count of FAILED role re-source attempts across this
+ *  config's recent runs (reasons resource_never_found /
+ *  resource_refuted_no_replacement in field_gaps). Feeds the lifetime attempt
+ *  cap so a genuinely-unfindable role stops burning search credits — while
+ *  `resourced` / `resource_not_applicable` end the need and don't count. */
+export const getRoleResourceAttempts = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const runs = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) =>
+        q.eq("vehicle_config_id", args.vehicleConfigId),
+      )
+      .order("desc")
+      .take(10);
+    const counts: Record<string, number> = {};
+    for (const run of runs) {
+      for (const gap of ((run as any).field_gaps ?? []) as Array<{ field: string; reason: string }>) {
+        if (
+          gap?.reason === "resource_never_found" ||
+          gap?.reason === "resource_refuted_no_replacement"
+        ) {
+          counts[gap.field] = (counts[gap.field] ?? 0) + 1;
+        }
+      }
+    }
+    return counts;
+  },
+});
+
 export const resolveConfigForBackfill = internalQuery({
   args: { vehicleConfigId: v.id("vehicle_configs") },
   handler: async (ctx, args) => {
@@ -317,6 +452,39 @@ export const getServiceIntervals = internalQuery({
   },
 });
 
+/**
+ * Interval provenance census: every interval row for a config, joined to its
+ * service slug, with the two provenance facts the floor gate needs.
+ *
+ * One query rather than a per-row service lookup — the finalize action already
+ * runs close to its 600s ceiling, and a 27-row N+1 there is pure waste.
+ *
+ * `months_from_default` is true when the row carries a months value that came
+ * only from the industry default top-up in ensureAllServiceIntervals. That is
+ * distinct from `data_quality === "default_fallback"`: a row can hold a real,
+ * well-sourced interval_miles and a defaulted months, and reporting it as a
+ * fully-invented interval would be as wrong as reporting it as fully sourced.
+ */
+export const getIntervalProvenance = internalQuery({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("service_intervals")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicleConfigId))
+      .collect();
+    const services = await ctx.db.query("services").collect();
+    const slugById = new Map(services.map((s) => [String(s._id), (s as any).slug ?? ""]));
+    return rows.map((r) => ({
+      slug: slugById.get(String(r.service_id)) ?? "",
+      data_quality: (r as any).data_quality ?? null,
+      status: (r as any).status ?? null,
+      interval_miles: (r as any).interval_miles ?? null,
+      interval_months: (r as any).interval_months ?? null,
+      months_from_default: (r as any).interval_months_source === "default_fallback",
+    }));
+  },
+});
+
 export const getLaborTimes = internalQuery({
   args: { vehicleConfigId: v.id("vehicle_configs") },
   handler: async (ctx, args) => {
@@ -374,7 +542,7 @@ export const getPricedPartCount = internalQuery({
       // poison rows (online_discount / you_save / unverified) are excluded
       // from the customer median, so counting them here inflated fill_rate
       // and made backfills skip exactly the broken parts (Jun-9 review).
-      // Non-pooled fallback rows (repairpal_endpoint) are ALSO excluded — an
+      // Non-pooled fallback rows (estimator_endpoint) are ALSO excluded — an
       // endpoint-only part has no real SKU price yet, so counting it would
       // make the pipeline skip fetching one (same fill_rate inflation bug).
       const rows = await ctx.db
@@ -763,7 +931,7 @@ export const diagnoseFillGaps = internalQuery({
     const partIds = fitments.map((f) => f.part_id);
     let pricedCount = 0;
     for (const pid of partIds) {
-      // Exclude poison + non-pooled (repairpal_endpoint) rows: an endpoint-only
+      // Exclude poison + non-pooled (estimator_endpoint) rows: an endpoint-only
       // part has no real SKU price, so it must count as missing here too.
       const rows = await ctx.db
         .query("part_prices")
@@ -835,6 +1003,158 @@ export const findBestEngineSibling = internalQuery({
       .sort((a, b) => (b.fill_rate ?? 0) - (a.fill_rate ?? 0));
 
     return candidates[0] ?? null;
+  },
+});
+
+// ─── P2.4 · Field-level sibling inheritance donors ────────────────
+
+/**
+ * Donor candidates for FIELD-LEVEL sibling inheritance (P2.4).
+ *
+ * v8 clones whole ROWS from a sibling (intervals/labor/fitments/drivetrain/
+ * trim_specs) but never a single field, so engine-intrinsic facts that a
+ * verified sibling already holds get re-asked of an LLM on every config.
+ * This query returns the raw candidates; the CHOICE between them is made by
+ * the pure `selectSiblingDonor` in v3pipeline.ts (testable, no IO).
+ *
+ * Donor admission — all four conditions, no exceptions:
+ *   1. Shares the engine with the target, by one of two routes:
+ *        via "engine_id"   — literally the same engines row, or
+ *        via "engine_code" — a different engines row carrying the SAME
+ *                            non-empty engine_code, same make, and the same
+ *                            cylinder count / displacement wherever both are
+ *                            known. A blank or NHTSA-descriptor-shaped code
+ *                            never matches: engines are per-trim rows, so the
+ *                            code is the only real identity they share.
+ *   2. Same make as the target (defense in depth — engine rows and codes are
+ *      reused across marques on badge-engineered platforms; the same guard
+ *      findBestEngineSibling already applies).
+ *   3. `enrichment_status` is "complete" or "verified".
+ *   4. Holds a non-null value in the requested column.
+ *
+ * `verified` marks a donor whose engines.verified_fields names this column (or
+ * the field key) — a human confirmed it, so it outranks every other candidate.
+ * `confidence` is the donor CONFIG's confidence_avg (engines rows carry no
+ * per-field confidence); it is only ever used to rank and is capped at the
+ * call site, never trusted upward.
+ *
+ * Returns `{ [fieldKey]: DonorCandidate[] }`. Never throws; an unresolvable
+ * target yields {} so the caller degrades to "no inheritance".
+ */
+export const findSiblingFieldDonors = internalQuery({
+  args: {
+    target_config_id: v.id("vehicle_configs"),
+    /** [{ field, column }] — the audited SIBLING_INHERIT_RULES, passed in so
+     *  the safe-set lives in exactly one place (types.ts). */
+    requests: v.array(v.object({ field: v.string(), column: v.string() })),
+    /** Bound on candidate configs inspected (default 25). */
+    max_candidates: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const out: Record<string, Array<Record<string, unknown>>> = {};
+    if (args.requests.length === 0) return out;
+
+    const target = await ctx.db.get(args.target_config_id);
+    if (!target) return out;
+    const targetEngineId = (target as any).engine_id ?? null;
+    const targetEngine = targetEngineId ? await ctx.db.get(targetEngineId) : null;
+    if (!targetEngine) return out; // engine-scoped rules only
+
+    const maxCandidates = Math.max(1, Math.min(args.max_candidates ?? 25, 100));
+
+    // ── Route 1: the same engines row ──
+    const byEngineId = targetEngineId
+      ? await ctx.db
+          .query("vehicle_configs")
+          .withIndex("by_engine", (q) => q.eq("engine_id", targetEngineId))
+          .collect()
+      : [];
+
+    // ── Route 2: a different engines row with the same engine identity ──
+    const code = ((targetEngine as any).engine_code ?? "").trim();
+    const siblingEngineIds: Array<any> = [];
+    if (code.length > 0) {
+      const sameCode = await ctx.db
+        .query("engines")
+        .withIndex("by_engine_code", (q) => q.eq("engine_code", code))
+        .collect();
+      for (const e of sameCode) {
+        if (e._id === targetEngineId) continue;
+        // Same marque, and matching cylinders/displacement wherever both rows
+        // know them — a coarse code ("2.0L L4") must not merge an NA and a
+        // turbo engine.
+        if ((target as any).make_id && (e as any).make_id && (e as any).make_id !== (target as any).make_id) continue;
+        const tCyl = (targetEngine as any).cylinders;
+        const eCyl = (e as any).cylinders;
+        if (tCyl != null && eCyl != null && tCyl !== eCyl) continue;
+        const tDisp = (targetEngine as any).displacement_l;
+        const eDisp = (e as any).displacement_l;
+        if (tDisp != null && eDisp != null && Math.abs(tDisp - eDisp) > 0.05) continue;
+        siblingEngineIds.push(e._id);
+      }
+    }
+
+    const byEngineCode: Array<any> = [];
+    for (const eid of siblingEngineIds) {
+      const rows = await ctx.db
+        .query("vehicle_configs")
+        .withIndex("by_engine", (q) => q.eq("engine_id", eid))
+        .collect();
+      byEngineCode.push(...rows);
+      if (byEngineCode.length >= maxCandidates * 2) break;
+    }
+
+    const seen = new Set<string>();
+    const candidates: Array<{ cfg: any; via: string }> = [];
+    for (const [rows, via] of [
+      [byEngineId, "engine_id"] as const,
+      [byEngineCode, "engine_code"] as const,
+    ]) {
+      for (const cfg of rows as any[]) {
+        if (cfg._id === args.target_config_id) continue;
+        if (seen.has(cfg._id.toString())) continue;
+        if ((target as any).make_id && cfg.make_id !== (target as any).make_id) continue;
+        const st = cfg.enrichment_status;
+        if (st !== "complete" && st !== "verified") continue;
+        seen.add(cfg._id.toString());
+        candidates.push({ cfg, via });
+        if (candidates.length >= maxCandidates) break;
+      }
+      if (candidates.length >= maxCandidates) break;
+    }
+    if (candidates.length === 0) return out;
+
+    // Donor values live on the engines row; cache reads across candidates.
+    const engineCache = new Map<string, any>();
+    for (const { cfg, via } of candidates) {
+      const eid = cfg.engine_id;
+      if (!eid) continue;
+      const key = eid.toString();
+      if (!engineCache.has(key)) engineCache.set(key, await ctx.db.get(eid));
+      const donorEngine = engineCache.get(key);
+      if (!donorEngine) continue;
+      const donorVerified: string[] = Array.isArray(donorEngine.verified_fields)
+        ? donorEngine.verified_fields
+        : [];
+
+      for (const req of args.requests) {
+        const raw = donorEngine[req.column];
+        if (raw == null) continue;
+        (out[req.field] ??= []).push({
+          config_id: cfg._id.toString(),
+          config_key: cfg.config_key ?? cfg._id.toString(),
+          raw_value: raw,
+          confidence: typeof cfg.confidence_avg === "number" ? cfg.confidence_avg : null,
+          verified:
+            donorVerified.includes(req.column) || donorVerified.includes(req.field),
+          last_enriched_at:
+            typeof cfg.last_enriched_at === "number" ? cfg.last_enriched_at : null,
+          via,
+        });
+      }
+    }
+
+    return out;
   },
 });
 

@@ -17,6 +17,7 @@ import {
 import { detectTimezoneFromState, US_TIMEZONES } from "@/lib/shopTimezone";
 import HoursEditor from "./hours-editor";
 import ShopLogoUploader from "./logo-uploader";
+import PortfolioManager from "./portfolio-manager";
 import ServicesEditor from "./services-editor";
 import LaborRateCard from "./labor-rate-card";
 import DevTestTools from "./dev-test-tools";
@@ -147,17 +148,13 @@ export default function SettingsPage() {
           ) : (
             <div className="space-y-6">
               <div className="flex items-start justify-between">
-                <div className="flex items-start gap-4">
-                  <ShopLogoUploader
-                    shopId={(shop as any)._id}
-                    logoUrl={(shop as any).logoUrl ?? null}
-                    memberRole={(shop as any).memberRole}
-                  />
-                  <div>
-                    <h3 className="text-xl font-bold text-gray-900 mb-1">{shop.name}</h3>
-                    <p className="text-gray-500 text-sm">/{shop.slug}</p>
-                  </div>
-                </div>
+                <ShopLogoUploader
+                  shopId={(shop as any)._id}
+                  logoUrl={(shop as any).logoUrl ?? null}
+                  memberRole={(shop as any).memberRole}
+                  shopName={(shop as any).name}
+                  shopSlug={(shop as any).slug}
+                />
                 <span
                   className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
                     shop.is_active
@@ -224,6 +221,13 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+
+        {shop && (
+          <PortfolioManager
+            shopId={(shop as any)._id}
+            memberRole={(shop as any).memberRole}
+          />
+        )}
 
         {shop && process.env.NODE_ENV === "development" && (
           <div className="bg-white rounded-xl border border-gray-200 p-6">

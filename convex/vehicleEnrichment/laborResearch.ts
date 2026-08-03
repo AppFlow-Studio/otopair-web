@@ -6,7 +6,7 @@
  *    it flattens the three per-source {slug:hours} maps into weighted observation
  *    rows, skipping non-positive / non-numeric entries.
  *  - `laborAllSources` is the `internalAction` that fans out to OLP + web +
- *    RepairPal (each flag-gated, each wrapped in its OWN try/catch so one source
+ *    Estimator (each flag-gated, each wrapped in its OWN try/catch so one source
  *    failing never aborts the others), merges their results via
  *    `mergeLaborSources`, and feeds the existing `labor_observations` →
  *    weighted-median → agreement-confidence machinery (per-row write isolation,
@@ -17,15 +17,16 @@
 import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
+import { ESTIMATOR_ENDPOINT_SOURCE } from "../lib/sourceNames";
 
 // Per-source labor weights for the multi-source aggregation (single source of
 // truth). olp_labor is 0.7 here — deliberately a touch below olpRelabor.ts's
-// single-source 0.8 — because web + RepairPal corroboration is present in this
+// single-source 0.8 — because web + Estimator corroboration is present in this
 // path. NOTE: upsertLaborObservation keys by (config, service, source), so if
 // both this path and the olp-only olpRelabor backfill write the same olp_labor
 // row, the last writer wins its weight. Keep 0.7 here intentionally.
 const SOURCE_WEIGHTS = {
-  repairpal_endpoint: 0.9, // exact MOTOR minutes via the estimate endpoint — strongest
+  estimator_endpoint: 0.9, // exact MOTOR minutes via the estimate endpoint — strongest
   olp_labor: 0.7,
   web_labor: 0.6,
 } as const;
@@ -37,19 +38,19 @@ export type LaborAllSourcesResult = {
   resolved: boolean;
   written: number;
   failed: string[];
-  sources: { olp: number; web: number; repairpalEndpoint: number };
+  sources: { olp: number; web: number; estimatorEndpoint: number };
 };
 
 /** The multi-source labor flags, read from env in ONE place so the enrichment
  *  pipeline and the laborRelabor backfill can never drift on what's default-on/off.
- *  OLP + the RepairPal estimate ENDPOINT are on unless explicitly "off" (the
+ *  OLP + the Estimator estimate ENDPOINT are on unless explicitly "off" (the
  *  endpoint is the authoritative labor source — see resolveBookHours); the
  *  open-web source stays opt-in (=== "on"). */
-export function laborFlagsFromEnv(): { olp: boolean; web: boolean; repairpalEndpoint: boolean } {
+export function laborFlagsFromEnv(): { olp: boolean; web: boolean; estimatorEndpoint: boolean } {
   return {
     olp: process.env.LABOR_SOURCE_OLP !== "off",
     web: process.env.LABOR_SOURCE_WEB === "on",
-    repairpalEndpoint: process.env.LABOR_SOURCE_REPAIRPAL_ENDPOINT !== "off",
+    estimatorEndpoint: process.env.LABOR_SOURCE_ESTIMATOR_ENDPOINT !== "off",
   };
 }
 
@@ -57,7 +58,7 @@ export function laborFlagsFromEnv(): { olp: boolean; web: boolean; repairpalEndp
 export function mergeLaborSources(by: {
   olp?: SourceHours;
   web?: SourceHours;
-  repairpalEndpoint?: SourceHours;
+  estimatorEndpoint?: SourceHours;
 }): LaborObsRow[] {
   const rows: LaborObsRow[] = [];
   const add = (map: SourceHours | undefined, source: keyof typeof SOURCE_WEIGHTS) => {
@@ -67,14 +68,14 @@ export function mergeLaborSources(by: {
       }
     }
   };
-  add(by.repairpalEndpoint, "repairpal_endpoint");
+  add(by.estimatorEndpoint, ESTIMATOR_ENDPOINT_SOURCE);
   add(by.olp, "olp_labor");
   add(by.web, "web_labor");
   return rows;
 }
 
 /**
- * Fan out to OLP + web + RepairPal (flag-gated), merge to weighted observations,
+ * Fan out to OLP + web + Estimator (flag-gated), merge to weighted observations,
  * and write them through the existing labor aggregation machinery.
  *
  * Each resolver is wrapped in its OWN try/catch so one source failing (firecrawl
@@ -101,14 +102,14 @@ export const laborAllSources = internalAction({
       slug: v.string(),
       serviceId: v.id("services"),
       name: v.string(),
-      repairpal_slug: v.optional(v.union(v.string(), v.null())),
+      estimator_slug: v.optional(v.union(v.string(), v.null())),
     })),
-    flags: v.object({ olp: v.boolean(), web: v.boolean(), repairpalEndpoint: v.boolean() }),
+    flags: v.object({ olp: v.boolean(), web: v.boolean(), estimatorEndpoint: v.boolean() }),
   },
   handler: async (ctx, args): Promise<LaborAllSourcesResult> => {
     let olp: SourceHours = {};
     let web: SourceHours = {};
-    let repairpalEndpoint: SourceHours = {};
+    let estimatorEndpoint: SourceHours = {};
 
     // --- OLP (only if flagged AND we have a buildId) -------------------------
     if (args.flags.olp && args.buildId) {
@@ -133,14 +134,14 @@ export const laborAllSources = internalAction({
       }
     }
 
-    // --- RepairPal ESTIMATE ENDPOINT (exact MOTOR minutes; high weight 0.9) --
-    // Parallel, isolated, flag-gated (LABOR_SOURCE_REPAIRPAL_ENDPOINT, default-off).
+    // --- Estimator ESTIMATE ENDPOINT (exact MOTOR minutes; high weight 0.9) --
+    // Parallel, isolated, flag-gated (LABOR_SOURCE_ESTIMATOR_ENDPOINT, default-off).
     // SCAFFOLD: the resolver is a stub returning empty until the follow-up plan
     // implements the fetch+matcher (gated on the Convex-fetch probe) — fully inert.
-    if (args.flags.repairpalEndpoint) {
+    if (args.flags.estimatorEndpoint) {
       try {
         const res: any = await ctx.runAction(
-          internal.vehicleEnrichment.repairpalEndpoint.resolveRepairpalEndpointForConfig,
+          internal.vehicleEnrichment.estimatorEndpoint.resolveEstimatorEndpointForConfig,
           {
             vehicleConfigId: args.vehicleConfigId,
             make: args.make,
@@ -153,10 +154,10 @@ export const laborAllSources = internalAction({
             services: args.services.map((s) => ({ slug: s.slug, serviceId: s.serviceId })),
           },
         );
-        if (res?.resolved) repairpalEndpoint = res.services ?? {};
-        else console.warn(`laborAllSources: RepairPal endpoint not resolved`);
+        if (res?.resolved) estimatorEndpoint = res.services ?? {};
+        else console.warn(`laborAllSources: Estimator endpoint not resolved`);
       } catch (e) {
-        console.warn(`laborAllSources: RepairPal endpoint resolver threw:`, e);
+        console.warn(`laborAllSources: Estimator endpoint resolver threw:`, e);
       }
     }
 
@@ -189,7 +190,7 @@ export const laborAllSources = internalAction({
     }
 
     // --- Merge to weighted observation rows ---------------------------------
-    const rows = mergeLaborSources({ olp, web, repairpalEndpoint });
+    const rows = mergeLaborSources({ olp, web, estimatorEndpoint });
 
     // --- Write each row through the aggregation machinery (per-row isolation) -
     const serviceIdBySlug: Record<string, any> = Object.fromEntries(
@@ -232,7 +233,7 @@ export const laborAllSources = internalAction({
       sources: {
         olp: Object.keys(olp).length,
         web: Object.keys(web).length,
-        repairpalEndpoint: Object.keys(repairpalEndpoint).length,
+        estimatorEndpoint: Object.keys(estimatorEndpoint).length,
       },
     };
   },

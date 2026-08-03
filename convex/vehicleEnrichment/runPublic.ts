@@ -17,6 +17,7 @@ import type { Doc } from "../_generated/dataModel";
 import { scrapeWheelSizeOptions } from "./utils/wheelSizeScraper";
 import { buildEngineKey } from "./types";
 import { coreSignature } from "./determinismGate";
+import { lastActivityMs, LIVE_WINDOW_MS, RUN_IN_PROGRESS_STATUSES } from "./runFence";
 
 const TEST_CLERK_ID = "user_39FwQkrjpFYGOQ0gkPIk1DEf0FW";
 const POLL_MS = 30_000;
@@ -278,6 +279,9 @@ export const b8collect = internalAction({
         name: p?.name ?? null,
         qty: f.quantity_needed ?? null,
         sources: f.source_count ?? null,
+        // Round 11: carried so coreSignature can prefer unflagged rivals —
+        // a refute-demoted part must not read as "the" part for its role.
+        refute_flagged: f.refute_flagged === true,
       });
     }
     const runs: any[] = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getEnrichmentRuns, { vehicleConfigId: vcId });
@@ -364,7 +368,35 @@ export const purgeAndRerun = internalAction({
         displacement: decoded.displacement ?? "",
       });
       config = await ctx.runQuery(internal.vehicleEnrichment.v3queries.getVehicleConfigByKey, { configKey });
-      if (!config) return { status: "error", reason: "no_config_found", configKey };
+      if (!config) {
+        // BATCH11: nothing to purge is not an error — a VIN that never got a
+        // config just needs the fresh enrichment it was asking for.
+        console.log(`[purge] No config for ${vin} (key=${configKey}) — running fresh enrichment`);
+        return await ctx.runAction(internal.vehicleEnrichment.runPublic.go, { vin });
+      }
+    }
+
+    // Live-chain guard (F7): purging deletes the run rows a live poll chain
+    // is keyed on — the chain's next tick would then rebuild/finalize over
+    // the fresh run (the write fence aborts it, but only because the row is
+    // gone; a LIVE chain deserves refusal, not a silent kill mid-batch).
+    // Stale in-progress runs are marked failed first so the fence retires
+    // their chain, then the purge proceeds.
+    const latestRun: any = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+      { vehicleConfigId: config._id },
+    );
+    if (latestRun && RUN_IN_PROGRESS_STATUSES.includes(latestRun.status)) {
+      if (Date.now() - lastActivityMs(latestRun) < LIVE_WINDOW_MS) {
+        console.warn(`[purge] REFUSED: live run ${latestRun._id} (${latestRun.status}) on ${(config as any).config_key}`);
+        return { status: "refused_live_run", runId: latestRun._id };
+      }
+      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
+        run_id: latestRun._id,
+        status: "failed",
+        errors: ["superseded_by_purge"],
+        completed_at: Date.now(),
+      });
     }
 
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.purgeVehicleConfig, {

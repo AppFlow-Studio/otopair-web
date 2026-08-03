@@ -14,10 +14,24 @@ function ymd(ts: number) {
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
 }
 
-export async function GET() {
+/** Balance transactions pulled for the revenue series. Bounded, but far above
+ *  the single page of 100 this used to take — see the note at the call site. */
+const MAX_BALANCE_TXNS = 2000;
+const MAX_DAYS = 366;
+const DEFAULT_DAYS = 90;
+
+export async function GET(request: Request) {
   try {
     const { userId, getToken } = await auth();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    // Custom date ranges need a window wider than the old hardcoded 90 days.
+    const requestedDays = Number(
+      new URL(request.url).searchParams.get("days") ?? DEFAULT_DAYS,
+    );
+    const days = Number.isFinite(requestedDays)
+      ? Math.min(Math.max(Math.ceil(requestedDays), 1), MAX_DAYS)
+      : DEFAULT_DAYS;
 
     const token = await getToken({ template: "convex" });
     if (!token) return NextResponse.json({ error: "Missing Convex auth token." }, { status: 401 });
@@ -31,13 +45,18 @@ export async function GET() {
     const stripe = getStripe();
     const opts = { stripeAccount: accountId };
 
-    const sinceSeconds = Math.floor(Date.now() / 1000) - 90 * 24 * 60 * 60;
+    const sinceSeconds = Math.floor(Date.now() / 1000) - days * 24 * 60 * 60;
 
     const [account, balance, payouts, txns] = await Promise.all([
       stripe.accounts.retrieve(accountId),
       stripe.balance.retrieve(undefined, opts),
-      stripe.payouts.list({ limit: 25 }, opts),
-      stripe.balanceTransactions.list({ limit: 100, created: { gte: sinceSeconds } }, opts),
+      stripe.payouts.list({ limit: 100 }, opts),
+      // Auto-paged, not a single page of 100. A single page silently truncated
+      // the revenue series for any shop doing more than ~100 balance
+      // transactions in the window — the chart looked complete and wasn't.
+      stripe.balanceTransactions
+        .list({ limit: 100, created: { gte: sinceSeconds } }, opts)
+        .autoPagingToArray({ limit: MAX_BALANCE_TXNS }),
     ]);
 
     const externalAccount = (() => {
@@ -62,7 +81,7 @@ export async function GET() {
     })();
 
     const seriesMap = new Map<string, DailyPoint>();
-    for (const t of txns.data) {
+    for (const t of txns) {
       if (t.type !== "charge" && t.type !== "payment" && t.type !== "refund") continue;
       const key = ymd(t.created);
       const point = seriesMap.get(key) ?? { date: key, gross: 0, fee: 0, net: 0 };
@@ -74,6 +93,11 @@ export async function GET() {
     const series = Array.from(seriesMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
     return NextResponse.json({
+      windowDays: days,
+      // True when the balance-transaction scan hit its ceiling, so the series
+      // is the most recent slice rather than the whole window. Surfaced rather
+      // than left for someone to discover by reconciling against their bank.
+      seriesTruncated: txns.length >= MAX_BALANCE_TXNS,
       currency: balance.available[0]?.currency ?? "usd",
       balance: {
         available: balance.available.reduce((sum, b) => sum + b.amount, 0) / 100,

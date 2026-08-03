@@ -19,6 +19,12 @@ export function normalizeAssignmentPreference(
   return value === "specific_mechanic" ? "specific_mechanic" : "any";
 }
 
+export function assignmentPreferenceFromRequestedMechanic(
+  mechanicId: unknown,
+): AssignmentPreference {
+  return mechanicId == null ? "any" : "specific_mechanic";
+}
+
 export function normalizeNoShowThresholdMinutes(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_NO_SHOW_THRESHOLD_MINUTES;

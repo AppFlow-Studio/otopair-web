@@ -250,6 +250,80 @@ export function applyApplicabilityRules(
   return fields;
 }
 
+// ── Known electric-power-steering platforms (round 8, batch-10) ─────────────
+//
+// The psType === "electric" rule above only fires when the EXTRACTION already
+// got power_steering_type right. Batch-10: a 2009 Cobalt (Delphi column EPS,
+// no PS fluid exists on the car) was extracted as "hydraulic" with a phantom
+// 32 oz capacity and a scheduled PS flush — a sellable service that cannot be
+// performed. Same shape as the diesel spark-plug suppression: for platforms
+// documented as EPS-only, suppress deterministically instead of trusting the
+// LLM. HIGH-PRECISION entries only — a make/model/year-range goes on this
+// list only when the platform had NO hydraulic-PS variant in that range.
+export const KNOWN_EPS_PLATFORMS: Array<{
+  make: string;
+  models: string[];
+  from: number;
+  to: number; // inclusive; 9999 = through current
+}> = [
+  // GM Delta/Kappa compacts — Delphi column EPS across the whole run.
+  { make: "chevrolet", models: ["cobalt", "hhr"], from: 2005, to: 2011 },
+  { make: "pontiac", models: ["g5", "pursuit"], from: 2005, to: 2010 },
+  { make: "saturn", models: ["ion"], from: 2003, to: 2007 },
+  // Toyota: every Prius; Corolla went EPS with the 2009 E140 refresh.
+  { make: "toyota", models: ["prius"], from: 2001, to: 9999 },
+  { make: "toyota", models: ["corolla"], from: 2009, to: 9999 },
+  // Honda/Acura: 8th-gen Civic onward is EPS-only; 3G MDX (2014+) is EPS
+  // (batch-10 extraction got this one right — the entry makes it deterministic).
+  { make: "honda", models: ["civic"], from: 2006, to: 9999 },
+  { make: "acura", models: ["mdx"], from: 2014, to: 9999 },
+];
+
+/** Pure lookup — exported for tests. */
+export function isKnownEpsPlatform(
+  make: string | null | undefined,
+  model: string | null | undefined,
+  year: number | null | undefined,
+): boolean {
+  if (!make || !model || !year) return false;
+  const mk = make.toLowerCase().trim();
+  const md = model.toLowerCase().trim();
+  return KNOWN_EPS_PLATFORMS.some(
+    (p) =>
+      p.make === mk &&
+      year >= p.from &&
+      year <= p.to &&
+      p.models.some((m) => md === m || md.includes(m)),
+  );
+}
+
+/**
+ * Deterministic EPS suppression for known platforms: overwrites a wrong
+ * "hydraulic" extraction, nulls the fluid fields, and returns true when it
+ * fired (caller logs/flags). Mutates in place like applyApplicabilityRules.
+ */
+export function applyEpsSuppression(
+  fields: Record<string, FieldResult>,
+  make: string | null | undefined,
+  model: string | null | undefined,
+  year: number | null | undefined,
+): boolean {
+  if (!isKnownEpsPlatform(make, model, year)) return false;
+  fields.power_steering_type = {
+    value: "electric",
+    source_url: null,
+    source_type: "training_data",
+    confidence: 0.95,
+    flagged: false,
+    flag_reason: "known_eps_platform",
+  } as FieldResult;
+  fields.ps_fluid_oem = naField();
+  fields.ps_fluid_capacity_oz = naField();
+  fields.ps_fluid_miles = naField();
+  fields.ps_fluid_months = naField();
+  return true;
+}
+
 /**
  * Fields whose applicability depends on an identity input. When that input is
  * itself unknown the rules above fail OPEN (field stays searchable) — the gap

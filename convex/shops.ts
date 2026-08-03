@@ -167,7 +167,9 @@ async function resolveShopLogoUrl(ctx: any, shop: any): Promise<string | null> {
 // Needed here (vs. this file's own `getPrimaryShopForUser` pattern)
 // because the dashboard-facing logo mutations take an explicit
 // `shopId` arg rather than acting on "my primary shop".
-async function requireShopOwner(ctx: any, shopId: any) {
+// Exported for reuse by sibling modules (shop_portfolio.ts) — plain helper,
+// not a registered Convex function.
+export async function requireShopOwner(ctx: any, shopId: any) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) throw new Error("Not authenticated");
 
@@ -279,7 +281,13 @@ export const list = query({
   handler: async (ctx) => {
     const shops = await ctx.db.query("shops").collect();
     const bookableShopIds = await getBookableShopIds(ctx, shops);
-    return shops.filter((shop) => bookableShopIds.has(shop._id));
+    const bookableShops = shops.filter((shop) => bookableShopIds.has(shop._id));
+    return await Promise.all(
+      bookableShops.map(async (shop) => ({
+        ...shop,
+        logoUrl: await resolveShopLogoUrl(ctx, shop),
+      }))
+    );
   },
 });
 
@@ -1466,17 +1474,23 @@ export const setShopLogo = mutation({
   handler: async (ctx, args) => {
     await requireShopOwner(ctx, args.shopId);
 
-    // Security: reject a storageId already used as another shop's logo. Without
-    // this, an owner of any shop could adopt a victim's file id (leaked via
-    // shops.list). This guarantees a shop's logo_storage_id is only ever a
-    // file uniquely uploaded for that shop.
-    const conflict = await ctx.db
-      .query("shops")
-      .withIndex("by_logo_storage_id", (q) => q.eq("logo_storage_id", args.storageId))
-      .filter((q) => q.neq(q.field("_id"), args.shopId))
-      .first();
-    if (conflict) {
-      throw new Error("That image is already in use by another shop.");
+    // Security: reject a storageId already used as another shop's logo (or as
+    // any portfolio image). Without this, an owner of any shop could adopt a
+    // victim's file id (leaked via shops.list). This guarantees a shop's
+    // logo_storage_id is only ever a file uniquely uploaded for that shop.
+    const [conflict, portfolioConflict] = await Promise.all([
+      ctx.db
+        .query("shops")
+        .withIndex("by_logo_storage_id", (q) => q.eq("logo_storage_id", args.storageId))
+        .filter((q) => q.neq(q.field("_id"), args.shopId))
+        .first(),
+      ctx.db
+        .query("shop_portfolio")
+        .withIndex("by_storage_id", (q) => q.eq("storage_id", args.storageId))
+        .first(),
+    ]);
+    if (conflict || portfolioConflict) {
+      throw new Error("That image is already in use.");
     }
 
     await ctx.db.patch(args.shopId, { logo_storage_id: args.storageId });

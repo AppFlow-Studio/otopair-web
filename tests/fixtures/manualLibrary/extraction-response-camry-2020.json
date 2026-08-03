@@ -1,0 +1,117 @@
+{
+  "_note": "Shape-representative Messages API response for the manual extraction call: a citation-enabled document block plus a forced tool_use carrying the schedule. Interval values mirror the 2020 Camry Warranty & Maintenance Guide's published cadence. Deliberately includes the hostile cases the parser must survive: an unknown service_key, a 'null/null' entry, a string-with-comma number, and BOTH air_filter and cabin_filter (which collide on the shared filter_replacement service row).",
+  "id": "msg_01ManualLibraryFixture",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-4-6",
+  "stop_reason": "tool_use",
+  "content": [
+    {
+      "type": "text",
+      "text": "I found the maintenance schedule in this guide.",
+      "citations": [
+        {
+          "type": "page_location",
+          "cited_text": "Every 10,000 miles or 12 months: Replace engine oil and oil filter. Rotate tires.",
+          "document_index": 0,
+          "document_title": "2020 Toyota Camry maintenance_schedule",
+          "start_page_number": 12,
+          "end_page_number": 12
+        },
+        {
+          "type": "page_location",
+          "cited_text": "Every 5,000 miles or 6 months under special operating conditions.",
+          "document_index": 0,
+          "document_title": "2020 Toyota Camry maintenance_schedule",
+          "start_page_number": 13,
+          "end_page_number": 13
+        }
+      ]
+    },
+    {
+      "type": "tool_use",
+      "id": "toolu_01ManualFixture",
+      "name": "record_maintenance_schedule",
+      "input": {
+        "schedule_found": true,
+        "schedule_kind": "Warranty & Maintenance Guide",
+        "notes": null,
+        "services": [
+          {
+            "service_key": "oil_change",
+            "interval_miles": 10000,
+            "interval_months": 12,
+            "severe_miles": 5000,
+            "severe_months": 6,
+            "quoted_text": "Every 10,000 miles or 12 months: Replace engine oil and oil filter.",
+            "page_number": 12
+          },
+          {
+            "service_key": "tire_rotation",
+            "interval_miles": 5000,
+            "interval_months": 6,
+            "severe_miles": null,
+            "severe_months": null,
+            "quoted_text": "Rotate tires every 5,000 miles or 6 months.",
+            "page_number": 12
+          },
+          {
+            "service_key": "cabin_filter",
+            "interval_miles": 30000,
+            "interval_months": 36,
+            "severe_miles": null,
+            "severe_months": null,
+            "quoted_text": "Replace cabin air filter every 30,000 miles.",
+            "page_number": 14
+          },
+          {
+            "service_key": "air_filter",
+            "interval_miles": "30,000",
+            "interval_months": 36,
+            "severe_miles": 15000,
+            "severe_months": null,
+            "quoted_text": "Replace engine air filter every 30,000 miles.",
+            "page_number": 14
+          },
+          {
+            "service_key": "brake_fluid_flush",
+            "interval_miles": null,
+            "interval_months": 36,
+            "severe_miles": null,
+            "severe_months": null,
+            "quoted_text": "Replace brake fluid every 3 years regardless of mileage.",
+            "page_number": 15
+          },
+          {
+            "service_key": "spark_plug",
+            "interval_miles": 120000,
+            "interval_months": null,
+            "severe_miles": null,
+            "severe_months": null,
+            "quoted_text": "Replace spark plugs at 120,000 miles.",
+            "page_number": 16
+          },
+          {
+            "service_key": "transmission_service",
+            "interval_miles": null,
+            "interval_months": null,
+            "severe_miles": null,
+            "severe_months": null,
+            "quoted_text": null,
+            "page_number": null
+          },
+          {
+            "service_key": "wiper_blades",
+            "interval_miles": 12000,
+            "interval_months": 12,
+            "severe_miles": null,
+            "severe_months": null,
+            "quoted_text": "Inspect wiper blades annually.",
+            "page_number": 18
+          }
+        ]
+      }
+    }
+  ],
+  "usage": { "input_tokens": 84213, "output_tokens": 611 }
+}

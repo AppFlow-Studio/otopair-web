@@ -41,7 +41,7 @@ const ownerManagerLinks = [
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/previous-bookings", label: "Previous Bookings", icon: History },
   { href: "/team", label: "Team", icon: Users },
-  { href: "/payouts", label: "Payouts", icon: CreditCard },
+  { href: "/payouts", label: "Payments", icon: CreditCard },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

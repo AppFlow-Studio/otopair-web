@@ -25,6 +25,7 @@
 
 import { summarizeObservations, weightedMedian, nonOutlierIndices } from "./robustStats";
 import { STRONG_LABOR_SOURCES, withinGuardrail, withinAgreementBand } from "./laborBands";
+import { isEstimatorEndpointSource } from "./sourceNames";
 import { computeLaborTierFloorHours } from "./laborFallback";
 import { detectTier } from "./quoteEngine";
 
@@ -44,9 +45,9 @@ function clampRound(hours: number): number {
 }
 
 /**
- * Book-hours precedence. The RepairPal estimate endpoint is exact MOTOR/Chilton
- * flat-rate time — the most authoritative labor source we have — so when an
- * `repairpal_endpoint` observation exists it IS the book value (the face value),
+ * Book-hours precedence. The estimator's estimate endpoint is exact flat-rate
+ * time — the most authoritative labor source we have — so when an
+ * `estimator_endpoint` observation exists it IS the book value (the face value),
  * never averaged down by lower-weight sources (a real disagreement is surfaced
  * by the confidence/`labor_sources_disagree` flag, not resolved away). When no
  * endpoint observation exists, book_hours is the robust WEIGHTED median of the
@@ -55,7 +56,7 @@ function clampRound(hours: number): number {
 export function resolveBookHours(
   catalog: { hours: number; weight?: number; source: string }[],
 ): number {
-  const endpoint = catalog.find((o) => o.source === "repairpal_endpoint" && o.hours > 0);
+  const endpoint = catalog.find((o) => isEstimatorEndpointSource(o.source) && o.hours > 0);
   if (endpoint) return clampRound(endpoint.hours);
   return clampRound(
     weightedMedian(
@@ -168,7 +169,7 @@ export async function recomputeLaborForConfigService(
   let engineFamily: string | undefined;
   if (catalog.length > 0) {
     // Weighted robust median over the catalog sources, each carrying its own
-    // weight: repairpal_endpoint (0.9) wins outright when present; otherwise
+    // weight: estimator_endpoint (0.9) wins outright when present; otherwise
     // olp_labor (0.7) anchors with web_labor (0.6) as additional corroboration,
     // ahead of LLM (0.3-0.5) and VDB (0.05). A wrong high-weight value is
     // guarded at WRITE time by the scrape's sanity gate, not here.

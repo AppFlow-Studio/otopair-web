@@ -130,6 +130,28 @@ export const _setUserStripeCustomerId = internalMutation({
 });
 
 /**
+ * Flip `users.has_saved_payment_method` — flag consumed by the home-page
+ * "Finish setup" card to reactively mark the payment-method tile as
+ * complete without a Stripe round-trip on every home visit. Called by
+ * the setup_intent.succeeded webhook (attach) and payment_method.detached
+ * cleanup path.
+ */
+export const _setUserHasSavedPaymentMethodByCustomerId = internalMutation({
+  args: { stripeCustomerId: v.string(), value: v.boolean() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .filter((q) =>
+        q.eq(q.field("stripe_customer_id"), args.stripeCustomerId),
+      )
+      .first();
+    if (!user) return;
+    if (user.has_saved_payment_method === args.value) return;
+    await ctx.db.patch(user._id, { has_saved_payment_method: args.value });
+  },
+});
+
+/**
  * Pre-creates a payments row in `pending` BEFORE the Stripe API call so the
  * downstream FSM hooks (capture / void) can always find a row to act on
  * even if the Stripe call or the post-PI patch fails. Idempotent by
@@ -1939,8 +1961,11 @@ export const finalizeAndChargeForBooking = internalAction({
 
 /** When reauthFlow voids the original PI and creates a replacement, the live
  *  hold lives on payment.reauth_payment_intent_id. Capture/refund must target
- *  that PI — the original is cancelled and capturing it would 400. */
-function resolveActivePaymentIntentId(payment: any): string | undefined {
+ *  that PI — the original is cancelled and capturing it would 400.
+ *
+ *  Exported for convex/shopPaymentRefunds.ts (the shop-owner refund path) —
+ *  plain helper, not a registered Convex function. */
+export function resolveActivePaymentIntentId(payment: any): string | undefined {
   return payment?.reauth_payment_intent_id ?? payment?.stripe_payment_intent_id;
 }
 

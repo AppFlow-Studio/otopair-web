@@ -1,7 +1,7 @@
 /**
  * devOnly/olpProbe.ts — Open Labor Project probe. READ-ONLY: fetches OLP's
  * Next.js data-route JSON for each enriched config and compares OLP labor
- * hours against our labor_times / RepairPal observations. Writes NOTHING.
+ * hours against our labor_times / Estimator observations. Writes NOTHING.
  * Driven by scripts/olp-probe.mjs which assembles proof/olp/SUMMARY.md.
  * Spec: docs/superpowers/specs/2026-06-12-olp-labor-probe-design.md
  */
@@ -21,6 +21,7 @@ import {
 } from "../vehicleEnrichment/olpLabor";
 import { LABOR_SERVICE_CONFIG } from "../services/laborDeterminant";
 import { fetchUrlWithHtml } from "../vehicleEnrichment/firecrawl";
+import { isEstimatorBookSource } from "../lib/sourceNames";
 export { resolveBuildId } from "../vehicleEnrichment/olpLaborScrape";
 
 const CHROME_UA =
@@ -102,13 +103,13 @@ export const _configLaborSnapshot = internalQuery({
           q.eq("vehicle_config_id", cfg._id).eq("service_id", svc._id),
         )
         .collect();
-      const rp = (obs as any[]).find((o) => o.source === "repairpal_motor");
+      const rp = (obs as any[]).find((o) => isEstimatorBookSource(o.source));
       services.push({
         slug: svc.slug,
         our_hours: lt?.book_hours ?? null,
         our_source: lt?.source ?? null,
         our_confidence: lt?.confidence ?? null,
-        repairpal_hours: rp?.hours ?? null,
+        estimator_hours: rp?.hours ?? null,
       });
     }
 

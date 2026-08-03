@@ -54,7 +54,9 @@ export type AssembledInvoicePart = {
 export type AssembledInvoiceData = {
   bookingId: Id<"bookings">;
   paymentId: Id<"payments">;
-  status: "paid" | "refunded";
+  /** "partially_refunded" is derived from refunded_amount_cents; there is no
+   *  such value in payments.status and there must not be. */
+  status: "paid" | "refunded" | "partially_refunded";
   invoiceNumber: string | null;
   invoiceStorageId: Id<"_storage"> | null;
   invoiceGeneratedAtMs: number | null;
@@ -324,12 +326,30 @@ async function assembleInvoiceData(
     const shopLogoUrl =
       shop?.logo != null ? await ctx.storage.getUrl(shop.logo) : null;
 
-    const status: "paid" | "refunded" =
-      payment.status === "refunded" ? "refunded" : "paid";
+    // Refund state comes from refunded_amount_cents, not from the status
+    // string. A partial refund deliberately leaves payments.status as
+    // "completed" — "refunded" is terminal in the FSM and every
+    // `status === "completed"` reader (including the receipt-access gates
+    // below) would drop partially-refunded rows if it moved.
+    //
+    // The `?? (status === "refunded" ? totalCents : 0)` fallback covers rows
+    // refunded before payment_refunds existed: those were full refunds by
+    // construction, since no partial path existed.
+    const refundedCents =
+      payment.refunded_amount_cents ??
+      (payment.status === "refunded" ? totalCents : 0);
+
+    const status: "paid" | "refunded" | "partially_refunded" =
+      payment.status === "refunded" || (totalCents > 0 && refundedCents >= totalCents)
+        ? "refunded"
+        : refundedCents > 0
+          ? "partially_refunded"
+          : "paid";
 
     const refundedAtMs =
-      status === "refunded" ? (payment.updated_at ?? null) : null;
-    const refundedCents = status === "refunded" ? totalCents : 0;
+      refundedCents > 0
+        ? (payment.last_refunded_at_ms ?? payment.updated_at ?? null)
+        : null;
 
     return {
       bookingId,

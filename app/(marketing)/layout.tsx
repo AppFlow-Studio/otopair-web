@@ -1,8 +1,8 @@
 import Navbar from "@/components/navbar";
-import FooterImage from "@/components/footerimage";
-import Footer from "@/components/footer";
 import ReactLenis from "lenis/react";
 
+// The flagship landing page carries its own footer (FooterCta) per the Figma
+// design, so the old global Footer/FooterImage are no longer rendered here.
 export default function MarketingLayout({
   children,
 }: {
@@ -11,9 +11,10 @@ export default function MarketingLayout({
   return (
     <>
       <Navbar />
-      <ReactLenis root>{children}</ReactLenis>
-      <Footer />
-      <FooterImage />
+      {/* anchors: smooth-scroll nav hash links, offset clears the fixed pill nav */}
+      <ReactLenis root options={{ anchors: { offset: -90 } }}>
+        {children}
+      </ReactLenis>
     </>
   );
 }

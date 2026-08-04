@@ -91,6 +91,10 @@ export interface BatchResultEntry {
   /** Raw model content blocks, stringified — captured for the enrichment run
    *  trace (Deep-Dive step replay). Undefined on errored requests. */
   rawText?: string;
+  /** The message's stop_reason. "end_turn" is the healthy value; "max_tokens"
+   *  or "pause_turn" mean the turn ended before the final answer block —
+   *  exactly the shape behind every json_extraction_empty batch-2 (Aug 2026). */
+  stopReason?: string | null;
   usage: { tokensIn: number; tokensOut: number; webSearches: number };
   error: string | null;
 }
@@ -140,6 +144,12 @@ export async function submitBatch(requests: BatchRequest[]): Promise<string> {
             tools: [{
               type: webSearchToolVersion,
               name: "web_search",
+              // max_uses was silently dropped here for months — the tool ran
+              // UNBOUNDED (batch1b "1 search" budgets ran 37 real searches,
+              // batch2 ran 48). Unbounded turns on the 20260209 code-exec
+              // harness also run long enough to end without a final JSON
+              // block, which is what killed batch-2 fleet-wide (Aug 2026).
+              max_uses: req.maxSearchUses,
               ...(req.blockedDomains && req.blockedDomains.length > 0
                 ? { blocked_domains: req.blockedDomains }
                 : {}),
@@ -209,12 +219,20 @@ export function classifyParseOutcome(input: {
   parseErrorMessage?: string;
   parsedKeyCount: number;
   rawTextLength: number;
+  /** message.stop_reason when known — a non-end_turn stop names the CAUSE of
+   *  an empty parse (pause_turn / max_tokens truncation), so it is carried
+   *  into the error string for the run trace instead of dying in the console. */
+  stopReason?: string | null;
 }): string | null {
+  const stopSuffix =
+    input.stopReason && input.stopReason !== "end_turn"
+      ? ` (stop_reason=${input.stopReason})`
+      : "";
   if (input.parseThrew) {
-    return `json_extraction_failed: ${input.parseErrorMessage ?? "unknown"}`.slice(0, 300);
+    return `json_extraction_failed: ${input.parseErrorMessage ?? "unknown"}`.slice(0, 300) + stopSuffix;
   }
   if (input.parsedKeyCount === 0 && input.rawTextLength > EMPTY_PARSE_RAWTEXT_FLOOR) {
-    return `json_extraction_empty: no JSON object recovered from ${input.rawTextLength} chars of content`;
+    return `json_extraction_empty: no JSON object recovered from ${input.rawTextLength} chars of content${stopSuffix}`;
   }
   return null;
 }
@@ -232,6 +250,12 @@ export async function getBatchResults(batchId: string): Promise<Record<string, B
       const message = item.result.message;
       const content = message.content ?? [];
       const webSearches = (message as any).usage?.server_tool_use?.web_search_requests ?? 0;
+      const stopReason = ((message as any).stop_reason ?? null) as string | null;
+      if (stopReason && stopReason !== "end_turn") {
+        console.warn(
+          `[batch] ${item.custom_id} stop_reason=${stopReason} — turn ended before completion (content may lack the final answer block)`,
+        );
+      }
 
       let data: Record<string, any> = {};
       let parseThrew = false;
@@ -266,6 +290,7 @@ export async function getBatchResults(batchId: string): Promise<Record<string, B
         parseErrorMessage,
         parsedKeyCount: Object.keys(data).length,
         rawTextLength: rawText?.length ?? 0,
+        stopReason,
       });
       if (parseError != null && !parseThrew) {
         console.error(
@@ -278,6 +303,7 @@ export async function getBatchResults(batchId: string): Promise<Record<string, B
         customId: item.custom_id,
         data,
         rawText,
+        stopReason,
         usage: {
           tokensIn: (message as any).usage?.input_tokens ?? 0,
           tokensOut: (message as any).usage?.output_tokens ?? 0,

@@ -34,6 +34,7 @@ import {
   getPartsSearchPlans,
   getManualSearchQueries,
   BLOCKED_DOMAINS,
+  isMarketplaceDomain,
   type MakeSourceConfig,
 } from "./sourceRegistry";
 import { isStorefrontHomepage, detailPageVehicleVerdict, parseDetailTitle } from "./rpCatalog";
@@ -240,6 +241,15 @@ async function searchPartsPages(
       for (const r of results) {
         const host = (() => { try { return new URL(r.url).hostname.replace(/^www\./, ""); } catch { return ""; } })();
         if (BLOCKED_DOMAINS.some((d) => host === d || host.endsWith("." + d))) continue;
+        // Marketplace listings never enter the parts context. Their prices are
+        // already refused at every price choke point, but the MARKDOWN still
+        // fed Batch-1 (the GLC-43 scrape ingested two eBay item pages as
+        // "parts catalog" sources): mixed-seller listings poison part-number
+        // extraction the same way they poison prices.
+        if (isMarketplaceDomain(host)) {
+          console.log(`[scraper] marketplace domain skipped for parts context: ${r.url}`);
+          continue;
+        }
         // A search hit that is really a RevolutionParts storefront HOMEPAGE
         // (redirect rot) carries featured-product tiles — never ingest it.
         if (isStorefrontHomepage(r.html ?? null, r.markdown ?? null)) continue;

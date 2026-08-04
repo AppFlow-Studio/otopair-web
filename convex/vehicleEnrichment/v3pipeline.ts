@@ -2967,7 +2967,15 @@ export const enrichVehicleBatchV3 = internalAction({
         userPrompt: buildBatch1bPrompt(vehicle),
         maxTokens: 16384,
         temperature: 0,
-        maxSearchUses: 1,
+        // 8, raised from 1 (Aug 2026). The prompt asks ~15-20 spec fields at
+        // "1-2 searches per field"; the 1-search budget was latent for months
+        // because batchClient silently dropped max_uses (the request searched
+        // 37 times unbounded and worked). Once the cap was actually enforced,
+        // a 1-search batch1b hit the refusal loop after its single search and
+        // the server ended the turn with stop_reason=pause_turn — no final
+        // JSON, every spec field lost (observed on BOTH web_search tool
+        // versions, runs 2-3 of the GLC-43 verification).
+        maxSearchUses: 8,
         blockedDomains: runtimeBlockedDomains,
         outputSchema: buildBatch1bArraySchema(),
       },
@@ -3528,13 +3536,16 @@ async function runPollBatch1Body(
       total_web_searches: callLog.reduce((s, c) => s + c.webSearches, 0),
     });
 
-    // Give gap-fill more searches when numeric specs (capacities, CCA, gap) are
-    // missing — with the old flat maxSearchUses:1 a single part-number lookup
-    // consumed the whole budget and specs never got searched. Capped to bound cost.
-    const numericSpecGaps = nullFields.filter((k) =>
-      ["coolant_capacity_qts", "oil_capacity_qts", "battery_cca", "spark_plug_gap"].includes(k),
-    ).length;
-    const batch2SearchUses = Math.min(1 + numericSpecGaps, 5);
+    // Search budget scaled to the workload. The old `1 + numericSpecGaps`
+    // (cap 5) formula predates max_uses actually being SENT (batchClient
+    // dropped it, so the model searched unbounded — 48 searches on a "1
+    // search" budget — and the oversized turn ended without its final JSON:
+    // the fleet-wide batch-2 `json_extraction_empty` of Aug 2026). Now that
+    // the cap is enforced, 1-5 searches for ~60 gap fields would starve the
+    // gap fill instead. ~1 search per 8 fields with a floor of 6 keeps small
+    // gap lists cheap and gives a full 59-field re-fill enough road; 14 caps
+    // cost AND keeps the turn short enough to finish with a JSON block.
+    const batch2SearchUses = Math.min(6 + Math.ceil(nullFields.length / 8), 14);
 
     const batch2UserPrompt = buildBatch2Prompt(vehicle, nullFields, oemParts);
     // Audit F18: block-list = hardcoded BLOCKED_DOMAINS + blocked_domains table.
@@ -3793,14 +3804,24 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           allFields[k] = fv;
         }
       }
+    }
 
-      // Batch 3 (gap-fill re-ask): ONE bounded targeted pass over fields
-      // STILL null after Batch 2 (getNullFields excludes not_applicable —
-      // re-asking N/A fields resurrected impossible data, see comment above
-      // getNullFields). One synchronous web-search call, capped field count,
-      // values flow through the same parseBatch2 → sanity → sanitize gates as
-      // Batch-2 gap fills. No loop — a field that survives this stays in the
-      // run's field_gaps ledger instead.
+    // Batch 3 (gap-fill re-ask): ONE bounded targeted pass over fields STILL
+    // null at this point (getNullFields excludes not_applicable — re-asking
+    // N/A fields resurrected impossible data, see comment above getNullFields).
+    // One synchronous web-search call, capped field count, values flow through
+    // the same parseBatch2 → sanity → sanitize gates as Batch-2 gap fills. No
+    // loop — a field that survives this stays in the run's field_gaps ledger.
+    //
+    // Deliberately a SIBLING of the batch-2 success branch, not a child: when
+    // batch-2 comes back unparseable (json_extraction_empty — the GLC-43 /
+    // round-19 fleet shape) this ranked re-ask is the only part-number rung
+    // left in the run, and nesting it under success skipped it exactly when it
+    // was needed most. Quotability ranking puts core roles (pads, rotors,
+    // battery, coolant, plugs) at the head of the 15-field cap. Not run on
+    // timeout (r2 undefined): the paid batch is still processing and the late
+    // collector applies the full gap fill when it ends.
+    if (r2) {
       if (process.env.PARTS_GAPFILL !== "off") {
         const gapFillMax = Number(process.env.PARTS_GAPFILL_MAX_FIELDS ?? "15");
         // Rank by quotability impact before slicing to the cap — core-role

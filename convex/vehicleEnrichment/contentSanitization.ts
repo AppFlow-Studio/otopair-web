@@ -507,6 +507,13 @@ export function sanitizePartNumber(value: string, makeName?: string): string | n
       );
       return null;
     }
+    // The make's own format matched — that is the FINAL verdict. The generic
+    // plausibility check below exists (per its own doc) for makes WITHOUT a
+    // pattern; applying it on top of a pattern match rejected real numbers:
+    // Mercedes display format with a variant suffix ("000 989 79 02 11") is
+    // FIVE space groups, and the generic gate caps at four (found Aug 2026 —
+    // the oil-product rung's text-mined genuine 0W-40 SKU died here).
+    if (pattern) return cleaned;
   }
 
   // Generic plausibility check

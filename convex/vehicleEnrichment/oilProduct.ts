@@ -108,6 +108,50 @@ export function pickOilCandidates(
     .slice(0, cap);
 }
 
+/** SKU candidates from free TEXT (SERP result markdown). Genuine oil part
+ *  numbers circulate in prose ("MB 229.5 0W-40, part A 000 989 79 02 11")
+ *  even when no parseable PRODUCT page ranks — observed live: every MB 0W-40
+ *  query returned marketplaces, spec sheets and blogs, zero JSON-LD tiles.
+ *  A line yields candidates only when it names the exact viscosity AND says
+ *  oil AND is not an oil-adjacent product; numbers still face the make
+ *  format gate here and the fitment verifier after. Price deliberately
+ *  absent — the targeted price backfill prices bare SKUs by URL discovery. */
+export function candidatesFromText(
+  markdown: string | null | undefined,
+  input: { make: string; viscosity: string; sourceUrl: string; cap?: number },
+): OilCandidate[] {
+  if (!markdown) return [];
+  const visc = viscosityMatcher(input.viscosity);
+  if (!visc) return [];
+  const cap = input.cap ?? 3;
+  const out: OilCandidate[] = [];
+  const seen = new Set<string>();
+  for (const rawLine of markdown.split(/\n+/)) {
+    if (out.length >= cap) break;
+    const line = rawLine.replace(/\s+/g, " ").trim();
+    if (line.length < 10 || line.length > 400) continue;
+    if (!visc.test(line) || !/\boil\b/i.test(line)) continue;
+    if (OIL_TITLE_BLOCKS.test(line)) continue;
+    const tokenRe = /\b[A-Z]?[\d][\d\s-]{7,15}[\d]\b|\b[A-Z]\d{9,12}\b/gi;
+    for (const m of line.matchAll(tokenRe)) {
+      if (out.length >= cap) break;
+      const sanitized = sanitizePartNumber(m[0].trim(), input.make);
+      if (!sanitized) continue;
+      const norm = normalizeOemNumber(sanitized);
+      if (seen.has(norm)) continue;
+      seen.add(norm);
+      out.push({
+        oem: sanitized,
+        title: line.slice(0, 160),
+        price: null,
+        sourceUrl: input.sourceUrl,
+        sizeRank: 1,
+      });
+    }
+  }
+  return out;
+}
+
 // ─── The rung ───────────────────────────────────────────────────────────────
 
 export const fetchEngineOilProduct = internalAction({
@@ -157,6 +201,11 @@ export const fetchEngineOilProduct = internalAction({
     // reads. "genuine" + the make + the grade + a bottle word is what ranks
     // PRODUCT pages over blog/spec pages.
     queries.push(`${resolved.make} genuine engine oil ${viscosity} 1 quart OEM part number price`);
+    // Genuine-OEM retailers with structured product data — oil SERPs are
+    // otherwise wall-to-wall marketplaces (excluded), spec sheets and blogs
+    // (no product tiles). These carry JSON-LD price + a title naming both
+    // GENUINE and the grade, which is exactly what the gates want.
+    queries.push(`site:fcpeuro.com ${resolved.make} genuine ${viscosity} engine oil`);
     queries.push(`"${resolved.make}" "${viscosity}" genuine engine oil 1 liter part`);
     queries.push(`${resolved.make} OEM ${viscosity} motor oil bottle part number`);
 
@@ -165,6 +214,7 @@ export const fetchEngineOilProduct = internalAction({
     // better queries (observed live: one refuted retailer SKU from query 2
     // meant queries 3-4, which carry the real OEM bottle listings, never ran).
     const pooled: PageProduct[] = [];
+    const textCandidates: OilCandidate[] = [];
     for (const q of queries) {
       const results = await searchAndFetch(q, 4, true);
       for (const r of results) {
@@ -172,13 +222,27 @@ export const fetchEngineOilProduct = internalAction({
         pooled.push(
           ...extractPageProducts({ html: r.html ?? null, markdown: r.markdown ?? null, url: r.url }),
         );
+        textCandidates.push(
+          ...candidatesFromText(r.markdown ?? null, {
+            make: resolved.make,
+            viscosity: viscosity!,
+            sourceUrl: r.url,
+          }),
+        );
       }
     }
-    const candidates = pickOilCandidates(pooled, {
+    // Product-page candidates first (they carry prices); text-mined SKUs
+    // behind them (the price backfill prices those after the write).
+    const fromProducts = pickOilCandidates(pooled, {
       make: resolved.make,
       viscosity: viscosity!,
       cap: 6,
     });
+    const have = new Set(fromProducts.map((c) => normalizeOemNumber(c.oem)));
+    const candidates = [
+      ...fromProducts,
+      ...textCandidates.filter((c) => !have.has(normalizeOemNumber(c.oem))).slice(0, 4),
+    ];
     if (candidates.length === 0) {
       return { status: "no_candidates" as const, viscosity, capacityQts };
     }

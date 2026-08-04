@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { pickOilCandidates, viscosityMatcher } from "../convex/vehicleEnrichment/oilProduct";
+import {
+  candidatesFromText,
+  pickOilCandidates,
+  viscosityMatcher,
+} from "../convex/vehicleEnrichment/oilProduct";
 import type { PageProduct } from "../convex/vehicleEnrichment/categoryHarvest";
 
 const MB = "Mercedes-Benz";
@@ -80,5 +84,31 @@ describe("pickOilCandidates", () => {
       { make: MB, viscosity: "0W-40" },
     );
     expect(out).toEqual([]);
+  });
+});
+
+describe("candidatesFromText", () => {
+  const src = { make: MB, viscosity: "0W-40", sourceUrl: "https://example.com/x" };
+  it("mines a viscosity-adjacent genuine SKU out of prose", () => {
+    const md = [
+      "# Which oil for the AMG?",
+      "Mercedes-Benz Genuine Engine Oil 0W-40 (MB 229.5), part number 000 989 79 02 11, is the factory fill.",
+      "Unrelated line about brake pads 000-420-49-04.",
+    ].join("\n");
+    const out = candidatesFromText(md, src);
+    expect(out).toHaveLength(1);
+    expect(out[0].oem.replace(/[^0-9A-Z]/gi, "")).toBe("0009897902 11".replace(" ", ""));
+    expect(out[0].price).toBeNull();
+  });
+  it("ignores numbers on lines without the exact viscosity or on oil-adjacent products", () => {
+    const md = [
+      "Engine Oil 5W-30 part 000 989 33 09 11 for older models.",
+      "Oil FILTER 0W-40 compatible, part 276-180-00-09.",
+    ].join("\n");
+    expect(candidatesFromText(md, src)).toEqual([]);
+  });
+  it("returns nothing for empty markdown or junk viscosity", () => {
+    expect(candidatesFromText(null, src)).toEqual([]);
+    expect(candidatesFromText("Engine Oil 0W-40 part 000 989 79 02 11", { ...src, viscosity: "synthetic" })).toEqual([]);
   });
 });

@@ -648,6 +648,57 @@ export const updateEngineSpecs = internalMutation({
   },
 });
 
+/** Operator-directed VERIFIED engine-spec correction (Aug 2026) — the CLI
+ *  twin of directorConfigActions.updateEngineFields, for corrections made
+ *  outside a director session (incident response, spec adjudication). Unlike
+ *  updateEngineSpecs above, this WRITES UNCONDITIONALLY — an operator
+ *  correction is the authority the verified ledger exists to protect — then
+ *  stamps every corrected field into engines.verified_fields so no re-enrich
+ *  can write over it, and records the mandatory provenance in audit_log.
+ *  First use: the GLC-43's oil_viscosity held a single-source 0W-30 while
+ *  MB BeVo 229.5 factory fill for the M276 DE30 AL is 0W-40, and the oil
+ *  product rung correctly refused to fetch against a disputed grade. */
+export const correctEngineSpecVerified = internalMutation({
+  args: {
+    engine_id: v.id("engines"),
+    /** REQUIRED: who decided this and on what evidence — lands in audit_log. */
+    provenance: v.string(),
+    oil_viscosity: v.optional(v.string()),
+    oil_capacity_qts: v.optional(v.float64()),
+    coolant_type: v.optional(v.string()),
+    coolant_capacity_qts: v.optional(v.float64()),
+    spark_plug_gap_mm: v.optional(v.float64()),
+  },
+  handler: async (ctx, args) => {
+    const { engine_id, provenance, ...fields } = args;
+    const existing = await ctx.db.get(engine_id);
+    if (!existing) return { ok: false as const, reason: "engine_not_found" };
+    const patch: Record<string, unknown> = {};
+    const changes: string[] = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined) continue;
+      const cur = (existing as any)[key];
+      if (cur === value) continue;
+      patch[key] = value;
+      changes.push(`${key}: ${cur ?? "—"} → ${value}`);
+    }
+    if (changes.length === 0) return { ok: true as const, changes: [] };
+    const verified = new Set(((existing as any).verified_fields ?? []) as string[]);
+    for (const key of Object.keys(patch)) verified.add(key);
+    (patch as any).verified_fields = [...verified];
+    await ctx.db.patch(engine_id, patch as any);
+    await ctx.db.insert("audit_log", {
+      entity_type: "engine",
+      entity_id: String(engine_id),
+      action: "field_edit",
+      actor: "operator-cli",
+      detail: `Verified spec correction · ${changes.join(", ")} · ${provenance}`,
+      created_at: Date.now(),
+    });
+    return { ok: true as const, changes };
+  },
+});
+
 // ============================================================================
 // 5. updateTransmissionSpecs
 // ============================================================================

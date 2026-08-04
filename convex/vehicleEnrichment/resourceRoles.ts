@@ -480,6 +480,19 @@ export const healAfterRun = internalAction({
     } catch (e) {
       console.error("[heal-after-run] interchange backtrack failed (non-fatal):", e);
     }
+    // Engine oil is NEVER in missingCoreRoles — its universal fallback keeps
+    // the service quotable at a synthetic $/qt — so no rung above touches it.
+    // This one replaces the synthetic with the car's real spec-viscosity
+    // product + per-quart price; self-noops once a trusted price exists.
+    let oil: any = null;
+    try {
+      oil = await ctx.runAction(
+        internal.vehicleEnrichment.oilProduct.fetchEngineOilProduct,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.error("[heal-after-run] oil product fetch failed (non-fatal):", e);
+    }
     let repair: any = null;
     try {
       repair = await ctx.runAction(
@@ -506,6 +519,8 @@ export const healAfterRun = internalAction({
       categoriesWritten: categories?.written ?? [],
       interchange: interchange?.status ?? "error",
       interchangeWritten: interchange?.written ?? [],
+      oil: oil?.status ?? "error",
+      oilWritten: oil?.written ?? null,
       roleRepair: repair?.status ?? "error",
       outcomes: repair?.outcomes ?? [],
       missingAfter: repair?.missingAfter ?? [],

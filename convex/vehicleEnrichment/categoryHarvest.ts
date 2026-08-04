@@ -228,22 +228,22 @@ export interface CategoryCandidate {
   sourceUrl: string;
 }
 
-/** Candidates for the given roles from one fetched category page: JSON-LD
- *  product tiles (number+name+price) plus markdown `/oem-parts/` detail links
- *  (title + trailing number). Every candidate's title must PASS the role's
- *  identity lexicon — no title, no candidate (vehicle-scoped page or not, a
- *  number with no component identity is exactly how wrong parts happen). */
-export function candidatesFromCategoryPage(input: {
+export interface PageProduct {
+  oem: string;
+  title: string | null;
+  price: number | null;
+  sourceUrl: string;
+}
+
+/** Every product visible on a fetched storefront page: JSON-LD tiles
+ *  (number+name+price) plus grouped markdown `/oem-parts/` detail links.
+ *  Shared by the category rung and the fluid-product fetchers. */
+export function extractPageProducts(input: {
   html: string | null;
   markdown: string | null;
   url: string;
-  make: string;
-  roleKeys: readonly string[];
-}): CategoryCandidate[] {
-  const out: CategoryCandidate[] = [];
-  const seen = new Set<string>();
-
-  const products: Array<{ oem: string; title: string | null; price: number | null; sourceUrl: string }> = [];
+}): PageProduct[] {
+  const products: PageProduct[] = [];
   if (input.html) {
     try {
       for (const p of parsePartPrices(input.html, input.url)) {
@@ -294,6 +294,23 @@ export function candidatesFromCategoryPage(input: {
     }
   }
 
+  return products;
+}
+
+/** Candidates for the given roles from one fetched category page. Every
+ *  candidate's title must PASS the role's identity lexicon — no title, no
+ *  candidate (vehicle-scoped page or not, a number with no component
+ *  identity is exactly how wrong parts happen). */
+export function candidatesFromCategoryPage(input: {
+  html: string | null;
+  markdown: string | null;
+  url: string;
+  make: string;
+  roleKeys: readonly string[];
+}): CategoryCandidate[] {
+  const out: CategoryCandidate[] = [];
+  const seen = new Set<string>();
+  const products = extractPageProducts({ html: input.html, markdown: input.markdown, url: input.url });
   for (const roleKey of input.roleKeys) {
     for (const prod of products) {
       if (!prod.title) continue;

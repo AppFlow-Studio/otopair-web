@@ -457,6 +457,29 @@ export const healAfterRun = internalAction({
     } catch (e) {
       console.error("[heal-after-run] refute harvest failed (non-fatal):", e);
     }
+    // Deterministic catalog structure next: the store's own vehicle-scoped
+    // category pages (fitment stated by the URL itself), then RockAuto
+    // OEM/Interchange backtracking off the refuted numbers — both cheaper
+    // and stronger-provenance than the open-web research repair below,
+    // which now only runs for whatever they could not close.
+    let categories: any = null;
+    try {
+      categories = await ctx.runAction(
+        internal.vehicleEnrichment.categoryHarvest.harvestVehicleCategories,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.error("[heal-after-run] category harvest failed (non-fatal):", e);
+    }
+    let interchange: any = null;
+    try {
+      interchange = await ctx.runAction(
+        internal.vehicleEnrichment.categoryHarvest.backtrackInterchange,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.error("[heal-after-run] interchange backtrack failed (non-fatal):", e);
+    }
     let repair: any = null;
     try {
       repair = await ctx.runAction(
@@ -479,6 +502,10 @@ export const healAfterRun = internalAction({
     const summary = {
       harvest: harvest?.status ?? "error",
       harvestWritten: harvest?.written ?? [],
+      categories: categories?.status ?? "error",
+      categoriesWritten: categories?.written ?? [],
+      interchange: interchange?.status ?? "error",
+      interchangeWritten: interchange?.written ?? [],
       roleRepair: repair?.status ?? "error",
       outcomes: repair?.outcomes ?? [],
       missingAfter: repair?.missingAfter ?? [],

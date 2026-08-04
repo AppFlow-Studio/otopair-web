@@ -22,6 +22,8 @@ import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { axlePairGaps, computeQuotability, missingCoreRoles } from "./quotability";
 import { resourceMissingRoles, soleFlaggedWinnerRoles } from "./utils/roleResource";
+import { extractReplacementCandidates, normalizeCandidate } from "./utils/refuteHarvest";
+import { verifyPartFitments } from "./utils/partFitmentVerifier";
 import { PART_FIELD_MAP } from "./v3pipeline";
 
 /** field_gaps reason per outcome — shared with the pipeline hook's mapping. */
@@ -257,6 +259,171 @@ export const repairMissingRoles = internalAction({
   },
 });
 
+/** Refute-harvest rung (Aug 2026): recover the replacement part the VERIFIER
+ *  itself named while refuting the wrong one. Refutation reasons routinely
+ *  carry the correct number ("catalog lists 001-982-80-08 or 001-982-81-08
+ *  for the 2020 GLC43, not 001-982-82-08-26") and that evidence used to be
+ *  discarded — the repair rung re-searched from scratch and often refilled
+ *  nothing. Harvested numbers are CANDIDATES only: each one passes the make
+ *  format gate (inside extractReplacementCandidates), then the SAME
+ *  verifyPartFitments that produced the refutation, and only a positively
+ *  CONFIRMED candidate reaches upsertPartAndFitment — which applies every
+ *  write gate again (role identity, refute blocklist, cross-make, existence).
+ *  One write per role; first confirmed candidate wins.
+ *  Disable: PARTS_REFUTE_HARVEST=off. */
+export const harvestRefutedReplacements = internalAction({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    if (process.env.PARTS_REFUTE_HARVEST === "off") {
+      return { status: "disabled" as const };
+    }
+    const resolved: any = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
+      { vehicleConfigId: args.vehicleConfigId },
+    );
+    if (!resolved || !resolved.makeId) return { status: "no_config" as const };
+
+    // Applicable services + N/A roles — same recovery ladder as
+    // repairMissingRoles, so the two rungs agree on what "missing" means.
+    const latestRun: any = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+      { vehicleConfigId: args.vehicleConfigId },
+    );
+    let applicableSlugs: string[] = ((latestRun?.quotability?.services ?? []) as any[]).map(
+      (s: any) => s.slug,
+    );
+    if (applicableSlugs.length === 0) {
+      applicableSlugs = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getPriorApplicableSlugs,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    }
+    if (applicableSlugs.length === 0) return { status: "no_run_quotability" as const };
+
+    const configRow: any = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.getVehicleConfigById,
+      { vehicleConfigId: args.vehicleConfigId },
+    );
+    const naKeys = new Set<string>([
+      ...(((latestRun?.field_gaps ?? []) as Array<{ field: string; reason: string }>)
+        .filter((g) => g.reason === "not_applicable" && (PART_FIELD_MAP as any)[g.field])
+        .map((g) => (PART_FIELD_MAP as any)[g.field].subcategory) as string[]),
+      ...(((configRow?.na_role_keys ?? []) as string[]) ?? []),
+    ]);
+
+    const fitments = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
+      { vehicleConfigId: args.vehicleConfigId },
+    );
+    const missing = missingCoreRoles(fitments, applicableSlugs, naKeys);
+    if (missing.length === 0) return { status: "nothing_missing" as const };
+    const missingBySlug = new Map<string, string[]>();
+    for (const m of missing) {
+      missingBySlug.set(m.serviceSlug, [...(missingBySlug.get(m.serviceSlug) ?? []), m.roleKey]);
+    }
+
+    // The durable refutation ledger — oem + reason + service_type — plus the
+    // blocklist the harvested candidates must never re-propose.
+    const blockedRows: any[] = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.getBlockedOemsForConfig,
+      { vehicleConfigId: args.vehicleConfigId },
+    );
+    const blocked = new Set<string>(
+      blockedRows.map((b) => String(b.oem_part_number_normalized ?? "").toUpperCase()),
+    );
+
+    const metaBySubcategory: Record<string, any> = Object.fromEntries(
+      Object.values(PART_FIELD_MAP).map((m: any) => [m.subcategory, m]),
+    );
+
+    // One verify batch across every (role, candidate) pair.
+    const toVerify: Array<{ roleKey: string; oem: string; name: string; quantity: number | null; observedTitle: string | null }> = [];
+    for (const row of blockedRows) {
+      const rolesForService = (missingBySlug.get(String(row.service_type ?? "")) ?? []).filter(
+        (rk) => metaBySubcategory[rk],
+      );
+      // Ambiguous (two empty roles behind one service) or already filled → skip.
+      if (rolesForService.length !== 1) continue;
+      const roleKey = rolesForService[0];
+      const candidates = extractReplacementCandidates({
+        reason: row.reason,
+        refutedOem: row.oem_part_number_normalized,
+        make: resolved.make,
+        exclude: blocked,
+      });
+      for (const c of candidates) {
+        if (toVerify.some((t) => normalizeCandidate(t.oem) === c.normalized)) continue;
+        toVerify.push({
+          roleKey,
+          oem: c.oem,
+          name: metaBySubcategory[roleKey].name,
+          quantity: null,
+          observedTitle: null,
+        });
+      }
+    }
+    if (toVerify.length === 0) {
+      return { status: "no_candidates" as const, missing: missing.map((m) => m.roleKey) };
+    }
+
+    console.log(
+      `[refute-harvest] verifying ${toVerify.length} candidate(s) from refutation evidence: ` +
+        toVerify.map((t) => `${t.roleKey}:${t.oem}`).join(", "),
+    );
+    const verdicts = await verifyPartFitments(
+      {
+        year: resolved.year,
+        make: resolved.make,
+        model: resolved.model,
+        trim: resolved.trim ?? "",
+        engineCode: resolved.engineCode ?? undefined,
+        displacement: resolved.displacement ?? undefined,
+      },
+      toVerify,
+    );
+
+    const written: string[] = [];
+    const outcomes: string[] = [];
+    const filledRoles = new Set<string>();
+    for (const t of toVerify) {
+      const vd = verdicts.find(
+        (x) => x.roleKey === t.roleKey && normalizeCandidate(x.oem) === normalizeCandidate(t.oem),
+      );
+      const verdict = vd?.verdict ?? "uncertain";
+      outcomes.push(`${t.roleKey}:${t.oem}:${verdict}`);
+      // A harvested number's provenance is a refutation SENTENCE — positive
+      // confirmation is the bar, uncertain does not write.
+      if (verdict !== "confirmed" || filledRoles.has(t.roleKey)) continue;
+      const meta = metaBySubcategory[t.roleKey];
+      const res: any = await ctx.runMutation(
+        internal.vehicleEnrichment.v3mutations.upsertPartAndFitment,
+        {
+          oem_part_number: t.oem,
+          name: meta.name,
+          category: meta.category,
+          subcategory: meta.subcategory,
+          make_id: resolved.makeId,
+          vehicle_config_id: args.vehicleConfigId,
+          service_type: meta.serviceSlug ?? meta.subcategory,
+          quantity_needed: t.roleKey === "front_rotor" || t.roleKey === "rear_rotor" ? 2 : 1,
+          position: meta.position,
+          service_role: meta.serviceRole,
+          confidence: 0.7,
+        },
+      );
+      if (res?.part_id && !res?.rejected) {
+        filledRoles.add(t.roleKey);
+        written.push(`${t.roleKey}:${t.oem}`);
+      } else {
+        outcomes.push(`${t.roleKey}:${t.oem}:write_rejected_${res?.rejected ?? "unknown"}`);
+      }
+    }
+    const summary = { status: "done" as const, candidates: toVerify.length, outcomes, written };
+    console.log(`[refute-harvest]`, JSON.stringify(summary));
+    return summary;
+  },
+});
+
 /** Post-finalize instant heal (Aug 2026) — bookability cannot wait for the
  *  nightly cron. Scheduled by v3pipeline finalize AFTER the terminal config
  *  write, in its own action budget, and attacks the run's residual gaps
@@ -277,6 +444,19 @@ export const repairMissingRoles = internalAction({
 export const healAfterRun = internalAction({
   args: { vehicleConfigId: v.id("vehicle_configs") },
   handler: async (ctx, args) => {
+    // Harvest FIRST: the refutation ledger already names replacement
+    // candidates, so this is the cheapest possible fill (one verify call, no
+    // search). The repair pass then only re-searches roles harvest could not
+    // close — and its end-of-pass reconcile stamps quotability AFTER both.
+    let harvest: any = null;
+    try {
+      harvest = await ctx.runAction(
+        internal.vehicleEnrichment.resourceRoles.harvestRefutedReplacements,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.error("[heal-after-run] refute harvest failed (non-fatal):", e);
+    }
     let repair: any = null;
     try {
       repair = await ctx.runAction(
@@ -297,6 +477,8 @@ export const healAfterRun = internalAction({
       console.error("[heal-after-run] price backfill scheduling failed:", e);
     }
     const summary = {
+      harvest: harvest?.status ?? "error",
+      harvestWritten: harvest?.written ?? [],
       roleRepair: repair?.status ?? "error",
       outcomes: repair?.outcomes ?? [],
       missingAfter: repair?.missingAfter ?? [],

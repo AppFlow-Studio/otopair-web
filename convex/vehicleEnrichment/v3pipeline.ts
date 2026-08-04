@@ -6663,6 +6663,29 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       { vehicle_id: args.vehicleId, vehicle_config_id: args.vehicleConfigId },
     );
 
+    // Instant heal (Aug 2026): bookability must not wait for the nightly cron.
+    // The mid-finalize price census (~4780) runs BEFORE the late gates, so a
+    // part written by role-repair — or the survivor left after a pass-2
+    // refutation — finishes the run unpriced with nothing scheduled to fix it
+    // (GLC-43 run 4: battery + spark plug). healAfterRun re-censuses from the
+    // DB after EVERYTHING has run: one more role-repair pass for holes the
+    // late gates opened, then the targeted per-config price backfill, each in
+    // its own action budget. Self-noops on a clean run, so it is scheduled
+    // unconditionally (including on late collection — the bonus gap-fill can
+    // create the same late-born parts). Kill switch: PARTS_IMMEDIATE_HEAL=off.
+    if (process.env.PARTS_IMMEDIATE_HEAL !== "off") {
+      try {
+        await ctx.scheduler.runAfter(
+          5_000, // let the terminal writes settle, same as source discovery
+          internal.vehicleEnrichment.resourceRoles.healAfterRun,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        console.log("[v8] instant heal scheduled (role repair + targeted price backfill)");
+      } catch (e) {
+        console.warn("[v8] instant heal scheduling failed (non-fatal):", e);
+      }
+    }
+
     // Update source reliability scores based on consensus
     try {
       await ctx.runMutation(

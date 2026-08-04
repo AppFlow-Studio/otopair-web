@@ -257,6 +257,56 @@ export const repairMissingRoles = internalAction({
   },
 });
 
+/** Post-finalize instant heal (Aug 2026) — bookability cannot wait for the
+ *  nightly cron. Scheduled by v3pipeline finalize AFTER the terminal config
+ *  write, in its own action budget, and attacks the run's residual gaps
+ *  immediately:
+ *    1. repairMissingRoles — fills core roles still empty at the END of the
+ *       run, including holes the late gates themselves created (a pass-2
+ *       refutation empties a role after the in-run repair already finished).
+ *    2. The TARGETED zero-price backfill for this config — scheduled, not
+ *       awaited, so the two legs never share one 600s action budget. Its
+ *       census runs inside refreshStalePrices, so it SEES the parts step 1
+ *       just wrote (the mid-finalize census at v3pipeline ~4780 runs before
+ *       role-repair writes — GLC-43 run 4 finished with a role-repair
+ *       battery and spark plug that no heal ever priced).
+ *  Both steps self-noop when there is nothing to do, so scheduling this on
+ *  every run is cheap. Kill switch: PARTS_IMMEDIATE_HEAL=off (read at the
+ *  scheduling site in v3pipeline).
+ */
+export const healAfterRun = internalAction({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    let repair: any = null;
+    try {
+      repair = await ctx.runAction(
+        internal.vehicleEnrichment.resourceRoles.repairMissingRoles,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.error("[heal-after-run] role repair failed (non-fatal):", e);
+    }
+    try {
+      await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.priceRefresh.refreshStalePrices, {
+        budget: 0, // fleet-wide stale leg stays off — this is a targeted heal
+        backfillBudget: Number(process.env.PARTS_PRICE_IMMEDIATE_BACKFILL_CAP ?? "12"),
+        vehicleConfigId: args.vehicleConfigId,
+        maxChainDepth: Number(process.env.PARTS_PRICE_BACKFILL_CHAIN_DEPTH ?? "2"),
+      });
+    } catch (e) {
+      console.error("[heal-after-run] price backfill scheduling failed:", e);
+    }
+    const summary = {
+      roleRepair: repair?.status ?? "error",
+      outcomes: repair?.outcomes ?? [],
+      missingAfter: repair?.missingAfter ?? [],
+      quotabilityPct: repair?.quotabilityPct,
+    };
+    console.log("[heal-after-run]", JSON.stringify(summary));
+    return summary;
+  },
+});
+
 /** Sequential batch wrapper (cap 10 per invocation) — sequential on purpose:
  *  each repair spends Firecrawl/Anthropic budget; parallel fan-out would spike
  *  both. Larger sweeps run this repeatedly with fresh id lists. */

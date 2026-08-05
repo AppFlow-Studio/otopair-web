@@ -8,6 +8,7 @@ import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireDirector } from "./directorGate";
 import { FIELD_SPECS, type FieldSpec } from "./lib/reviewFieldMap";
+import { latestEvidenceMapForConfig } from "./directorEnrichment";
 
 const HOUR = 60 * 60 * 1000;
 const STREAMS = ["consensus", "correction", "report", "survey"] as const;
@@ -429,9 +430,22 @@ async function readFieldCurrentValue(
   return target.unit === "miles" ? (row.interval_miles ?? null) : (row.interval_months ?? null);
 }
 
+/** Where a flagged field's value came from — the latest enrichment_evidence
+ *  provenance for that field (source link/domain, source type, confidence, and
+ *  the value that source actually logged). Null when no evidence row carries
+ *  this field name — an unsourced value, which is itself worth surfacing. */
+export type FlagSource = {
+  url: string | null;
+  domain: string | null;
+  type: string | null;
+  confidence: number | null;
+  observedValue: string | null;
+  runId: string | null;
+};
 export type ReviewFlagWithCurrent = StaleReviewFlag & {
   currentValue: string | number | null;
   editable: boolean;
+  source: FlagSource | null;
 };
 export type ReviewResolveContext = {
   id: string;
@@ -470,12 +484,30 @@ export const reviewResolveContext = query({
     const cfg = car.configId ? await ctx.db.get(car.configId as Id<"vehicle_configs">) : null;
     const { runId, runStatus, flags: rawFlags } = await runFlagsFor(ctx, item);
 
+    // Per-field provenance ("where did this value come from") — the same
+    // current-best evidence map the Deep-Dive evidence view uses, joined here
+    // by field name so a director can judge a flagged value against its source.
+    const evidence = cfg ? await latestEvidenceMapForConfig(ctx, cfg) : null;
+    const sourceFor = (field: string): FlagSource | null => {
+      const ev = evidence?.get(field);
+      if (!ev) return null;
+      return {
+        url: ev.sourceUrl,
+        domain: ev.sourceDomain,
+        type: ev.sourceType,
+        confidence: ev.confidence,
+        observedValue: ev.value,
+        runId: ev.runId ? String(ev.runId) : null,
+      };
+    };
+
     const flags: ReviewFlagWithCurrent[] = await Promise.all(
       rawFlags.map(async (f) => {
+        const source = sourceFor(f.field);
         const spec = FIELD_SPECS[f.field];
-        if (!spec || !cfg) return { ...f, currentValue: null, editable: false };
+        if (!spec || !cfg) return { ...f, currentValue: null, editable: false, source };
         const currentValue = await readFieldCurrentValue(ctx, cfg, spec);
-        return { ...f, currentValue, editable: true };
+        return { ...f, currentValue, editable: true, source };
       }),
     );
 

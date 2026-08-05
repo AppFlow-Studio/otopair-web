@@ -165,7 +165,12 @@ export function WrongPartsPanel({ token, goDeepDive }: {
   )
 }
 
-function WrongPartDrawer({ token, flag, onClose, goDeepDive }: {
+export type { WrongPartFlag }
+
+/** The wrong-part triage drawer (approve / adjust / dismiss, audited). Exported
+ *  so the car-centric Needs Attention tabs (Incomplete Car Configs) can launch
+ *  the exact same ceremony a director already knows from the Wrong parts tab. */
+export function WrongPartDrawer({ token, flag, onClose, goDeepDive }: {
   token: string
   flag: WrongPartFlag | null
   onClose: () => void

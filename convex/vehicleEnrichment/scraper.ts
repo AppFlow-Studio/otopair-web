@@ -46,6 +46,9 @@ import { scrapeWheelSizeOptions, type WheelSizeResult } from "./utils/wheelSizeS
 import { resolveScrapeRedirect } from "./buildSourceResolver";
 
 const TTL_PARTS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+/** Owner-manual content doesn't churn like storefront catalogs — 90 days,
+ *  matching the ttl_days the cache row itself records for owner_manual. */
+const TTL_MANUAL_MS = 90 * 24 * 60 * 60 * 1000;
 const MAX_MARKDOWN_CHARS = 40_000;
 const MAX_PER_PAGE_CHARS =  8_000; // per-page cap when concatenating multiple pages
 /** Wall-clock budget for the registry parts-fetch loop (see scrapePartsPages).
@@ -644,7 +647,7 @@ async function scrapeManual(
       vehicleYear: vehicle.year,
       vehicleTrim: vehicle.trim ?? "",
       sourceType: "owner_manual",
-      expiresAt: now + TTL_PARTS_MS,
+      expiresAt: now + TTL_MANUAL_MS,
     });
   }
 

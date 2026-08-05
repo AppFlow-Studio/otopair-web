@@ -21,7 +21,7 @@ import { useMutation, useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Sidebar, MicroH } from '../../Primitives'
-import { CopyableMono, StatusPill, SkeletonBlock, Empty, Linkify, ConfirmPopup, STREAM_SOURCE, timeAgo } from './helpers'
+import { CopyableMono, StatusPill, SkeletonBlock, Empty, Linkify, ConfirmPopup, SourceChip, SourceTypeBadge, STREAM_SOURCE, timeAgo } from './helpers'
 
 const inputStyle: React.CSSProperties = {
   border: '1px solid var(--slate-200)', borderRadius: 6, padding: '6px 8px',
@@ -256,6 +256,21 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
                           Scraped value flagged: <span className="mono" style={{ fontWeight: 600 }}>{f.value != null ? String(f.value) : '—'}</span>
                           {f.editable && <span> · currently stored: <span className="mono" style={{ fontWeight: 600 }}>{f.currentValue != null ? String(f.currentValue) : '—'}</span></span>}
                         </div>
+
+                        {/* Where the stored value came from — the evidence provenance for this
+                            field, so a director can judge the value against its source (or see
+                            it has none) before approving. */}
+                        {f.source ? (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11, color: 'var(--slate-500)', marginBottom: 8 }}>
+                            <span style={{ fontWeight: 600, color: 'var(--slate-600)' }}>Source:</span>
+                            <SourceChip url={f.source.url} domain={f.source.domain} />
+                            {f.source.type && <SourceTypeBadge type={f.source.type} />}
+                            {f.source.confidence != null && <span>{Math.round(f.source.confidence * 100)}% conf.</span>}
+                            {f.source.observedValue != null && <span>· logged <span className="mono" style={{ fontWeight: 600 }}>{f.source.observedValue}</span></span>}
+                          </div>
+                        ) : (
+                          <div style={{ fontSize: 11, color: 'var(--orange-700)', marginBottom: 8 }}>⚠ No source on file for this value — verify before approving.</div>
+                        )}
 
                         {!f.editable ? (
                           <div style={{ fontSize: 11, color: 'var(--slate-400)' }}>Can&apos;t auto-resolve this field&apos;s storage location from here — edit it from Deep-Dive, then Resolve this item.</div>

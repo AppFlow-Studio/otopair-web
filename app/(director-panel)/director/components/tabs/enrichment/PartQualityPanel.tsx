@@ -142,7 +142,12 @@ export function UnpricedPartsPanel({ token, goDeepDive }: {
   )
 }
 
-function UnpricedPartDrawer({ token, flag, onClose, goDeepDive }: {
+export type { UnpricedPartFlag }
+
+/** The unpriced-part drawer (add a price + source, audited). Exported so the
+ *  car-centric Needs Attention tabs (Incomplete Car Configs) can launch the
+ *  same ceremony a director already knows from the Unpriced parts tab. */
+export function UnpricedPartDrawer({ token, flag, onClose, goDeepDive }: {
   token: string
   flag: UnpricedPartFlag | null
   onClose: () => void

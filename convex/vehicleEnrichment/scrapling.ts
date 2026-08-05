@@ -66,15 +66,6 @@ async function callScrapling(
   }
 }
 
-/** Markdown-only single-URL fetch — drop-in shape for firecrawl.fetchUrl. */
-export async function scraplingFetchUrl(
-  url: string,
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
-): Promise<string | null> {
-  const r = await callScrapling(url, "http", ["markdown"], timeoutMs);
-  return r?.markdown ?? null;
-}
-
 /** Markdown + HTML fetch — drop-in shape for firecrawl.fetchUrlWithHtml. */
 export async function scraplingFetchUrlWithHtml(
   url: string,

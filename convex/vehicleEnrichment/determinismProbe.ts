@@ -863,3 +863,65 @@ export const report = internalAction({
     };
   },
 });
+
+// ═══════════════════════════════════════════════════════════════════
+// Wave 4 (Aug 2026): SCHEDULED SENTINEL ROTATION
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Weekly cron driver. The probe set stays operator-supplied — a fabricated
+ * VIN burns a 20-minute run proving nothing (the SENTINEL_VINS law above) —
+ * so VINs come from the deployment env, never from code:
+ *
+ *   DETERMINISM_SENTINEL_VINS="label:VIN,label:VIN,VIN"
+ *
+ * Unset/empty → census-only no-op (dark by default, like every spending
+ * cron). One VIN per firing, rotated by ISO week, at the cheapest
+ * meaningful depth (DETERMINISM_PROBE_RUNS, default 2 = MIN_TARGET_RUNS).
+ * Cost when lit: runs × one full enrichment per week. startProbe's own
+ * guards handle overlap (refuses a running probe / a live chain), and
+ * variance still lands in the review queue via flagVarianceForReview.
+ */
+export const runScheduledProbe = internalAction({
+  args: {},
+  handler: async (ctx): Promise<any> => {
+    const raw = (process.env.DETERMINISM_SENTINEL_VINS ?? "").trim();
+    if (!raw) {
+      console.log(
+        "[probe-cron] DETERMINISM_SENTINEL_VINS unset — skipping (set 'label:VIN,…' to enable)",
+      );
+      return { status: "skipped", reason: "no_sentinel_vins" };
+    }
+    const sentinels = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .map((entry) => {
+        const i = entry.indexOf(":");
+        return i > 0
+          ? { label: entry.slice(0, i).trim(), vin: entry.slice(i + 1).trim() }
+          : { label: entry, vin: entry };
+      })
+      .filter((s) => s.vin.length >= 11);
+    if (sentinels.length === 0) {
+      return { status: "skipped", reason: "no_valid_vins" };
+    }
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
+    const pick = sentinels[Math.floor(Date.now() / WEEK_MS) % sentinels.length];
+    const runs = Math.max(
+      MIN_TARGET_RUNS,
+      Math.min(MAX_TARGET_RUNS, Number(process.env.DETERMINISM_PROBE_RUNS ?? "2")),
+    );
+    console.log(
+      `[probe-cron] rotating sentinel this week: ${pick.label} (${runs} runs)`,
+    );
+    // Scheduled, not awaited — the probe is a self-rescheduling chain that
+    // outlives any single action budget.
+    await ctx.scheduler.runAfter(
+      0,
+      internal.vehicleEnrichment.determinismProbe.startProbe,
+      { vin: pick.vin, runs, label: `cron:${pick.label}` },
+    );
+    return { status: "scheduled", sentinel: pick.label, runs };
+  },
+});

@@ -216,6 +216,7 @@ import type * as opsReviews from "../opsReviews.js";
 import type * as opsSystemHealth from "../opsSystemHealth.js";
 import type * as opsTransactions from "../opsTransactions.js";
 import type * as opsUsers from "../opsUsers.js";
+import type * as orphanRepair from "../orphanRepair.js";
 import type * as oto_applicableServices from "../oto/applicableServices.js";
 import type * as oto_bookings from "../oto/bookings.js";
 import type * as oto_canonicalize from "../oto/canonicalize.js";
@@ -722,6 +723,7 @@ declare const fullApi: ApiFromModules<{
   opsSystemHealth: typeof opsSystemHealth;
   opsTransactions: typeof opsTransactions;
   opsUsers: typeof opsUsers;
+  orphanRepair: typeof orphanRepair;
   "oto/applicableServices": typeof oto_applicableServices;
   "oto/bookings": typeof oto_bookings;
   "oto/canonicalize": typeof oto_canonicalize;

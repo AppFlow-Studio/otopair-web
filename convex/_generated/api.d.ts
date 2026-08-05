@@ -32,6 +32,7 @@ import type * as chassis_variants from "../chassis_variants.js";
 import type * as checkin from "../checkin.js";
 import type * as cleanup from "../cleanup.js";
 import type * as client_logs from "../client_logs.js";
+import type * as configsMerge from "../configsMerge.js";
 import type * as conversion_funnels from "../conversion_funnels.js";
 import type * as crons from "../crons.js";
 import type * as dataApi from "../dataApi.js";
@@ -145,6 +146,7 @@ import type * as lib_laborFallback from "../lib/laborFallback.js";
 import type * as lib_labor_aggregation from "../lib/labor_aggregation.js";
 import type * as lib_late_start from "../lib/late_start.js";
 import type * as lib_makeIdentity from "../lib/makeIdentity.js";
+import type * as lib_makeKey from "../lib/makeKey.js";
 import type * as lib_mechanic_verification_logging from "../lib/mechanic_verification_logging.js";
 import type * as lib_mechanic_verifications from "../lib/mechanic_verifications.js";
 import type * as lib_modifiers from "../lib/modifiers.js";
@@ -189,6 +191,7 @@ import type * as lib_walmartTireScraper from "../lib/walmartTireScraper.js";
 import type * as maintenance from "../maintenance.js";
 import type * as maintenance_pipeline from "../maintenance_pipeline.js";
 import type * as makes from "../makes.js";
+import type * as makesMerge from "../makesMerge.js";
 import type * as manual_review_queue from "../manual_review_queue.js";
 import type * as mcp_api from "../mcp_api.js";
 import type * as mechanicNotifications from "../mechanicNotifications.js";
@@ -385,6 +388,7 @@ import type * as vehicleEnrichment_categoryHarvest from "../vehicleEnrichment/ca
 import type * as vehicleEnrichment_claimGathering from "../vehicleEnrichment/claimGathering.js";
 import type * as vehicleEnrichment_completionGate from "../vehicleEnrichment/completionGate.js";
 import type * as vehicleEnrichment_contentSanitization from "../vehicleEnrichment/contentSanitization.js";
+import type * as vehicleEnrichment_cylindersRepair from "../vehicleEnrichment/cylindersRepair.js";
 import type * as vehicleEnrichment_determinismGate from "../vehicleEnrichment/determinismGate.js";
 import type * as vehicleEnrichment_determinismProbe from "../vehicleEnrichment/determinismProbe.js";
 import type * as vehicleEnrichment_drivetrainReconcile from "../vehicleEnrichment/drivetrainReconcile.js";
@@ -397,6 +401,7 @@ import type * as vehicleEnrichment_estimatorEndpointMutations from "../vehicleEn
 import type * as vehicleEnrichment_estimatorEndpointProbe from "../vehicleEnrichment/estimatorEndpointProbe.js";
 import type * as vehicleEnrichment_estimatorEndpointSibling from "../vehicleEnrichment/estimatorEndpointSibling.js";
 import type * as vehicleEnrichment_evidenceConsensus from "../vehicleEnrichment/evidenceConsensus.js";
+import type * as vehicleEnrichment_evidenceLatestBackfill from "../vehicleEnrichment/evidenceLatestBackfill.js";
 import type * as vehicleEnrichment_firecrawl from "../vehicleEnrichment/firecrawl.js";
 import type * as vehicleEnrichment_fitmentQuarantine from "../vehicleEnrichment/fitmentQuarantine.js";
 import type * as vehicleEnrichment_fleetEval from "../vehicleEnrichment/fleetEval.js";
@@ -410,7 +415,10 @@ import type * as vehicleEnrichment_laborRelabor from "../vehicleEnrichment/labor
 import type * as vehicleEnrichment_laborResearch from "../vehicleEnrichment/laborResearch.js";
 import type * as vehicleEnrichment_laborSibling from "../vehicleEnrichment/laborSibling.js";
 import type * as vehicleEnrichment_laborWebSearch from "../vehicleEnrichment/laborWebSearch.js";
+import type * as vehicleEnrichment_manualDirectSources from "../vehicleEnrichment/manualDirectSources.js";
 import type * as vehicleEnrichment_manualLibrary from "../vehicleEnrichment/manualLibrary.js";
+import type * as vehicleEnrichment_manualReducto from "../vehicleEnrichment/manualReducto.js";
+import type * as vehicleEnrichment_manualSpecs from "../vehicleEnrichment/manualSpecs.js";
 import type * as vehicleEnrichment_marketplaceScraper from "../vehicleEnrichment/marketplaceScraper.js";
 import type * as vehicleEnrichment_mutations from "../vehicleEnrichment/mutations.js";
 import type * as vehicleEnrichment_nhtsa from "../vehicleEnrichment/nhtsa.js";
@@ -450,6 +458,7 @@ import type * as vehicleEnrichment_scrapling from "../vehicleEnrichment/scraplin
 import type * as vehicleEnrichment_sourceAdapters_amsoil from "../vehicleEnrichment/sourceAdapters/amsoil.js";
 import type * as vehicleEnrichment_sourceAdapters_brembo from "../vehicleEnrichment/sourceAdapters/brembo.js";
 import type * as vehicleEnrichment_sourceAdapters_claimLedger from "../vehicleEnrichment/sourceAdapters/claimLedger.js";
+import type * as vehicleEnrichment_sourceAdapters_myCarUserManual from "../vehicleEnrichment/sourceAdapters/myCarUserManual.js";
 import type * as vehicleEnrichment_sourceAdapters_registry from "../vehicleEnrichment/sourceAdapters/registry.js";
 import type * as vehicleEnrichment_sourceAdapters_rockauto from "../vehicleEnrichment/sourceAdapters/rockauto.js";
 import type * as vehicleEnrichment_sourceAdapters_summitCentric from "../vehicleEnrichment/sourceAdapters/summitCentric.js";
@@ -529,6 +538,7 @@ declare const fullApi: ApiFromModules<{
   checkin: typeof checkin;
   cleanup: typeof cleanup;
   client_logs: typeof client_logs;
+  configsMerge: typeof configsMerge;
   conversion_funnels: typeof conversion_funnels;
   crons: typeof crons;
   dataApi: typeof dataApi;
@@ -642,6 +652,7 @@ declare const fullApi: ApiFromModules<{
   "lib/labor_aggregation": typeof lib_labor_aggregation;
   "lib/late_start": typeof lib_late_start;
   "lib/makeIdentity": typeof lib_makeIdentity;
+  "lib/makeKey": typeof lib_makeKey;
   "lib/mechanic_verification_logging": typeof lib_mechanic_verification_logging;
   "lib/mechanic_verifications": typeof lib_mechanic_verifications;
   "lib/modifiers": typeof lib_modifiers;
@@ -686,6 +697,7 @@ declare const fullApi: ApiFromModules<{
   maintenance: typeof maintenance;
   maintenance_pipeline: typeof maintenance_pipeline;
   makes: typeof makes;
+  makesMerge: typeof makesMerge;
   manual_review_queue: typeof manual_review_queue;
   mcp_api: typeof mcp_api;
   mechanicNotifications: typeof mechanicNotifications;
@@ -882,6 +894,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/claimGathering": typeof vehicleEnrichment_claimGathering;
   "vehicleEnrichment/completionGate": typeof vehicleEnrichment_completionGate;
   "vehicleEnrichment/contentSanitization": typeof vehicleEnrichment_contentSanitization;
+  "vehicleEnrichment/cylindersRepair": typeof vehicleEnrichment_cylindersRepair;
   "vehicleEnrichment/determinismGate": typeof vehicleEnrichment_determinismGate;
   "vehicleEnrichment/determinismProbe": typeof vehicleEnrichment_determinismProbe;
   "vehicleEnrichment/drivetrainReconcile": typeof vehicleEnrichment_drivetrainReconcile;
@@ -894,6 +907,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/estimatorEndpointProbe": typeof vehicleEnrichment_estimatorEndpointProbe;
   "vehicleEnrichment/estimatorEndpointSibling": typeof vehicleEnrichment_estimatorEndpointSibling;
   "vehicleEnrichment/evidenceConsensus": typeof vehicleEnrichment_evidenceConsensus;
+  "vehicleEnrichment/evidenceLatestBackfill": typeof vehicleEnrichment_evidenceLatestBackfill;
   "vehicleEnrichment/firecrawl": typeof vehicleEnrichment_firecrawl;
   "vehicleEnrichment/fitmentQuarantine": typeof vehicleEnrichment_fitmentQuarantine;
   "vehicleEnrichment/fleetEval": typeof vehicleEnrichment_fleetEval;
@@ -907,7 +921,10 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/laborResearch": typeof vehicleEnrichment_laborResearch;
   "vehicleEnrichment/laborSibling": typeof vehicleEnrichment_laborSibling;
   "vehicleEnrichment/laborWebSearch": typeof vehicleEnrichment_laborWebSearch;
+  "vehicleEnrichment/manualDirectSources": typeof vehicleEnrichment_manualDirectSources;
   "vehicleEnrichment/manualLibrary": typeof vehicleEnrichment_manualLibrary;
+  "vehicleEnrichment/manualReducto": typeof vehicleEnrichment_manualReducto;
+  "vehicleEnrichment/manualSpecs": typeof vehicleEnrichment_manualSpecs;
   "vehicleEnrichment/marketplaceScraper": typeof vehicleEnrichment_marketplaceScraper;
   "vehicleEnrichment/mutations": typeof vehicleEnrichment_mutations;
   "vehicleEnrichment/nhtsa": typeof vehicleEnrichment_nhtsa;
@@ -947,6 +964,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/sourceAdapters/amsoil": typeof vehicleEnrichment_sourceAdapters_amsoil;
   "vehicleEnrichment/sourceAdapters/brembo": typeof vehicleEnrichment_sourceAdapters_brembo;
   "vehicleEnrichment/sourceAdapters/claimLedger": typeof vehicleEnrichment_sourceAdapters_claimLedger;
+  "vehicleEnrichment/sourceAdapters/myCarUserManual": typeof vehicleEnrichment_sourceAdapters_myCarUserManual;
   "vehicleEnrichment/sourceAdapters/registry": typeof vehicleEnrichment_sourceAdapters_registry;
   "vehicleEnrichment/sourceAdapters/rockauto": typeof vehicleEnrichment_sourceAdapters_rockauto;
   "vehicleEnrichment/sourceAdapters/summitCentric": typeof vehicleEnrichment_sourceAdapters_summitCentric;

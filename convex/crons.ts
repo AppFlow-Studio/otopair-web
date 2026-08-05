@@ -161,6 +161,19 @@ crons.interval(
   (internal as any).lib.push_dispatcher.dispatchPendingPush,
 );
 
+// Fleet role repair (Wave 2): nightly census of configs whose latest run
+// shows missing binding core roles, scheduling the batch repair over the
+// worst under PARTS_ROLE_REPAIR_FLEET_BUDGET (0 = census-only, no spend).
+// Runs 45 min before the price refresh so healed parts get priced same
+// night. The logged fleetResidual is the metric that decides when the
+// core-role/axle completion gates can flip from "log" to "enforce".
+crons.daily(
+  "repair-fleet-missing-roles",
+  { hourUTC: 8, minuteUTC: 15 },
+  internal.vehicleEnrichment.resourceRoles.repairFleetSweep,
+  {},
+);
+
 // Part prices: nightly re-verification of parts whose newest price row is
 // stale (default > 30 days). Spends Firecrawl credits, so the action no-ops
 // unless PARTS_PRICE_REFRESH_BUDGET (parts per night) is set > 0 in env.

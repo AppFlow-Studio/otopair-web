@@ -67,6 +67,7 @@
 import { v } from "convex/values";
 import { internalMutation } from "../../_generated/server";
 import type { Id } from "../../_generated/dataModel";
+import { getOrCreateMake } from "../../lib/makeKey";
 
 // -----------------------------------------------------------------------------
 // Stable composite keys — the synthetic fixture is uniquely addressable by
@@ -118,19 +119,12 @@ export const seedEvalTenants = internalMutation({
       now,
     });
 
-    // -- 2. Sentinel `makes` row. ---------------------------------------------
-    const make = await ctx.db
-      .query("makes")
-      .withIndex("by_name", (q) => q.eq("name", EVAL_SENTINEL_MAKE))
-      .first();
-    const makeId: Id<"makes"> =
-      make?._id ??
-      (await ctx.db.insert("makes", {
-        name: EVAL_SENTINEL_MAKE,
-        slug: "evaltest",
-        country: "Synthetic",
-        created_at: now,
-      }));
+    // -- 2. Sentinel `makes` row (key-normalized get-or-create). --------------
+    const makeId: Id<"makes"> = await getOrCreateMake(ctx.db, EVAL_SENTINEL_MAKE, {
+      slug: "evaltest",
+      country: "Synthetic",
+      created_at: now,
+    });
 
     // -- 3. Sentinel `models` row (model_id + name). --------------------------
     const existingModel = await ctx.db

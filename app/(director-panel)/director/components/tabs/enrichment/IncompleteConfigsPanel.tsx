@@ -16,7 +16,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
-import { Input, IconSearch } from '../../Primitives'
+import { Button, Input, IconSearch } from '../../Primitives'
 import { Panel, Empty, SkeletonBlock, CarAccordionItem, CountPill, RunLink, fmtWhen, type ReviewRow } from './helpers'
 import { AddMissingPartDrawer, carLabelOf, type MissingPartFlag } from './MissingPartsPanel'
 import { WrongPartDrawer, type WrongPartFlag } from './WrongPartsPanel'
@@ -157,7 +157,7 @@ export function IncompleteConfigsPanel({ token, goDeepDive, onOpenReview }: {
                     <Row key={item.key} label={`${item.serviceName} · ${item.roleLabel}`}
                       run={{ runId: item.runId, runStatus: item.runStatus }}
                       onRun={() => goDeepDive(item.configId, item.configKey, item.runId ?? undefined)}
-                      action="Add part →" onAction={() => setAddMissing(item)} />
+                      action="Add part" onAction={() => setAddMissing(item)} />
                   ))}
                 </BucketSection>
               )}
@@ -167,7 +167,7 @@ export function IncompleteConfigsPanel({ token, goDeepDive, onOpenReview }: {
                     <Row key={item.fitmentId} label={`${item.oemNumber} · ${item.partName}`}
                       run={{ runId: item.runId, runStatus: item.runStatus }}
                       onRun={() => goDeepDive(item.configId, item.configKey, item.runId ?? undefined)}
-                      action="Review →" onAction={() => setShowWrong(item)} />
+                      action="Review" onAction={() => setShowWrong(item)} />
                   ))}
                 </BucketSection>
               )}
@@ -177,7 +177,7 @@ export function IncompleteConfigsPanel({ token, goDeepDive, onOpenReview }: {
                     <Row key={item.fitmentId} label={`${item.oemNumber} · ${item.partName}`}
                       run={{ runId: item.runId, runStatus: item.runStatus }}
                       onRun={() => goDeepDive(item.configId, item.configKey, item.runId ?? undefined)}
-                      action="Add price →" onAction={() => setShowUnpriced(item)} />
+                      action="Add price" onAction={() => setShowUnpriced(item)} />
                   ))}
                 </BucketSection>
               )}
@@ -188,7 +188,7 @@ export function IncompleteConfigsPanel({ token, goDeepDive, onOpenReview }: {
                       <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 999, background: 'var(--yellow-50)', color: 'var(--yellow-800)', flexShrink: 0 }}>{r.stream}</span>
                       <span style={{ flex: 1, minWidth: 0, color: 'var(--slate-700)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
                       <span style={{ color: 'var(--slate-400)', flexShrink: 0 }} title={new Date(r.created_at).toLocaleString()}>{fmtWhen(r.created_at)}</span>
-                      <button style={linkBtn} onClick={() => onOpenReview(r.id, r.title)}>Open →</button>
+                      <Button variant="secondary" size="sm" onClick={() => onOpenReview(r.id, r.title)}>Open</Button>
                     </div>
                   ))}
                 </BucketSection>
@@ -255,7 +255,7 @@ function Row({ label, run, onRun, action, onAction }: {
     <div style={rowStyle}>
       <span style={{ flex: 1, minWidth: 0, color: 'var(--slate-700)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
       <RunLink runId={run.runId} runStatus={run.runStatus} onOpen={onRun} />
-      <button style={linkBtn} onClick={onAction}>{action}</button>
+      <Button variant="secondary" size="sm" onClick={onAction}>{action}</Button>
     </div>
   )
 }

@@ -118,6 +118,7 @@ import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { searchAndFetch } from "./firecrawl";
 import { resolveExtractionModel } from "./utils/enrichmentFlags";
+import { discoverDirectManuals } from "./manualDirectSources";
 
 // This module is new — `internal.vehicleEnrichment.manualLibrary` is absent
 // from _generated/api.d.ts until `npx convex dev` regenerates it. Same pattern
@@ -138,9 +139,46 @@ const PDF_DOWNLOAD_TIMEOUT_MS = 60_000;
 const FILE_UPLOAD_TIMEOUT_MS = 120_000;
 const EXTRACTION_TIMEOUT_MS = 180_000;
 
-/** Skip anything above this — the Messages API request cap is 32 MB and a
- *  larger body is a mirror site's bundle, not a manual. */
+/**
+ * Largest body the ANTHROPIC path can take. The Messages API caps a request at
+ * 32 MB, so anything above this cannot be sent as a document block.
+ *
+ * This is no longer a discovery-level rejection: a manual over this size is
+ * still downloaded and stored, and routed to the Reducto extractor instead
+ * (see MAX_STORED_MANUAL_BYTES). It only decides WHICH extractor reads it.
+ */
 export const MAX_MANUAL_BYTES = 30 * 1024 * 1024;
+
+/**
+ * Largest body worth keeping at all.
+ *
+ * Real OEM owner's manuals routinely exceed the Anthropic cap — the 2020
+ * Accord OM is 38.7 MB and the 2017 Mazda3 is 57 MB — and every one of those
+ * vehicles used to be written off as `too_large_*` and never enriched. Above
+ * this ceiling, though, a "PDF" is a mirror site's bundle rather than a
+ * manual, so the guard still exists; it just sits much higher.
+ */
+export const MAX_STORED_MANUAL_BYTES = 80 * 1024 * 1024;
+
+/** Extractor ids recorded on the manual row. */
+export const EXTRACTOR_ANTHROPIC = "anthropic_files";
+export const EXTRACTOR_REDUCTO = "reducto";
+
+/** Which extractor can read a document of this size? Pure, so the routing rule
+ *  is testable without a network or a database. */
+export function extractorForBytes(bytes: number): string {
+  return bytes > MAX_MANUAL_BYTES ? EXTRACTOR_REDUCTO : EXTRACTOR_ANTHROPIC;
+}
+
+/** SHA-256 as lowercase hex. Web Crypto is available in the Convex runtime. */
+export async function sha256Hex(bytes: Uint8Array): Promise<string | null> {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", bytes as unknown as BufferSource);
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return null; // an integrity nicety must never break enrichment
+  }
+}
 /** Below this a "PDF" is an error page or a redirect stub, not a manual. */
 export const MIN_MANUAL_BYTES = 40 * 1024;
 
@@ -476,6 +514,8 @@ export function buildManualQueries(year: number, make: string, model: string): s
 
 export type ManualRowLike = {
   file_id?: string | null;
+  /** Our own copy of the bytes — a resolved manual even without a file_id. */
+  storage_id?: string | null;
   failure_reason?: string | null;
   attempts?: number | null;
   fetched_at?: number | null;
@@ -512,12 +552,35 @@ export function shouldSkipManualLookup(
   const refreshTtl = (opts?.refreshDays ?? MANUAL_REFRESH_DAYS) * DAY_MS;
   const fetchedAt = typeof row.fetched_at === "number" ? row.fetched_at : 0;
 
-  if (typeof row.file_id === "string" && row.file_id.length > 0) {
+  const hasFileId = typeof row.file_id === "string" && row.file_id.length > 0;
+  // Bytes only count as "resolved" on a row that is NOT in a failure state.
+  // rejectManualRow clears file_id to force a different candidate; if stored
+  // bytes could stand in for it, a document the extractor already identified
+  // as the WRONG vehicle would read as resolved forever and the
+  // self-correcting loop would never run again. (rejectManualRow also drops
+  // the bytes — this is the belt to that braces.)
+  const failed = typeof row.failure_reason === "string" && row.failure_reason.length > 0;
+  const hasBytes = !failed && typeof row.storage_id === "string" && row.storage_id.length > 0;
+
+  // A row with our OWN copy of the bytes is resolved even without a Files API
+  // id — that is the whole point of storing them. It covers two cases: an
+  // oversize manual that never had a file_id (Reducto reads it from storage),
+  // and one whose file_id expired (re-uploaded from storage, no re-discovery).
+  // Re-running discovery for either would pay a search and a multi-MB download
+  // to arrive at bytes already on disk.
+  if (hasFileId || hasBytes) {
     if (typeof row.expires_at === "number" && row.expires_at <= now) {
-      return { skip: false, reason: "manual_expired" };
+      // Only a document we cannot re-derive locally needs full re-discovery.
+      return hasBytes
+        ? { skip: true, reason: "fresh_manual_stored" }
+        : { skip: false, reason: "manual_expired" };
     }
-    if (now - fetchedAt >= refreshTtl) return { skip: false, reason: "manual_stale" };
-    return { skip: true, reason: "fresh_manual" };
+    if (now - fetchedAt >= refreshTtl) {
+      return hasBytes
+        ? { skip: true, reason: "fresh_manual_stored" }
+        : { skip: false, reason: "manual_stale" };
+    }
+    return { skip: true, reason: hasFileId ? "fresh_manual" : "fresh_manual_stored" };
   }
 
   if (typeof row.failure_reason === "string" && row.failure_reason.length > 0) {
@@ -965,6 +1028,9 @@ export const upsertManualRow = internalMutation({
     file_id: v.optional(v.string()),
     file_bytes: v.optional(v.float64()),
     page_count: v.optional(v.float64()),
+    storage_id: v.optional(v.id("_storage")),
+    content_sha256: v.optional(v.string()),
+    extractor: v.optional(v.string()),
     failure_reason: v.optional(v.string()),
     expires_at: v.optional(v.float64()),
   },
@@ -975,6 +1041,23 @@ export const upsertManualRow = internalMutation({
       .query("vehicle_manuals")
       .withIndex("by_ymm", (q) => q.eq("make", make).eq("model", model).eq("year", args.year))
       .first();
+
+    // A failure write must not orphan a stored copy: if this row already has
+    // bytes and the new write carries none, keep the old reference so the
+    // cheap-refresh path survives a transient discovery failure.
+    const keptStorageId = args.storage_id ?? (existing as any)?.storage_id;
+    if (
+      args.storage_id != null &&
+      (existing as any)?.storage_id != null &&
+      args.storage_id !== (existing as any).storage_id
+    ) {
+      // Replacing the bytes — drop the superseded blob rather than leaking it.
+      try {
+        await ctx.storage.delete((existing as any).storage_id);
+      } catch (e) {
+        console.warn("[manual-library] could not delete superseded blob:", e);
+      }
+    }
 
     const patch = {
       make,
@@ -987,6 +1070,9 @@ export const upsertManualRow = internalMutation({
       file_id: args.file_id,
       file_bytes: args.file_bytes,
       page_count: args.page_count,
+      storage_id: keptStorageId,
+      content_sha256: args.content_sha256 ?? (existing as any)?.content_sha256,
+      extractor: args.extractor ?? (existing as any)?.extractor,
       failure_reason: args.failure_reason,
       attempts: (existing?.attempts ?? 0) + 1,
       fetched_at: Date.now(),
@@ -1034,9 +1120,25 @@ export const rejectManualRow = internalMutation({
     const rejected = new Set<string>((row as any).rejected_urls ?? []);
     if (row.source_url) rejected.add(row.source_url);
 
+    // Drop our copy of the WRONG document. Keeping it would waste storage on
+    // bytes we have already judged useless, and — because stored bytes now
+    // stand in for a Files API id — would let the rejected document keep
+    // reading as a resolved manual.
+    const staleStorageId = (row as any).storage_id;
+    if (staleStorageId) {
+      try {
+        await ctx.storage.delete(staleStorageId);
+      } catch (e) {
+        console.warn("[manual-library] could not delete rejected blob:", e);
+      }
+    }
+
     await ctx.db.patch(row._id, {
       // Cleared so the row stops reading as a fresh success.
       file_id: undefined,
+      storage_id: undefined,
+      content_sha256: undefined,
+      extractor: undefined,
       // Recorded as a FAILURE so the negative cache still applies — a vehicle
       // whose every candidate is wrong must not be re-searched every single
       // run. The 14-day TTL is the right bound for "try again later".
@@ -1092,9 +1194,101 @@ export const getManualExtractionContext = internalQuery({
             failure_reason: manual.failure_reason ?? null,
             fetched_at: manual.fetched_at,
             expires_at: manual.expires_at ?? null,
+            /** Present when we hold our own copy — enables the cheap refresh
+             *  and the oversize path. */
+            storage_id: (manual as any).storage_id ?? null,
+            extractor: (manual as any).extractor ?? null,
           }
         : null,
     };
+  },
+});
+
+/** Read a stored manual's bytes back out for re-upload. */
+export const getStoredManual = internalQuery({
+  args: { make: v.string(), model: v.string(), year: v.float64() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("vehicle_manuals")
+      .withIndex("by_ymm", (q) =>
+        q
+          .eq("make", normalizeMakeKey(args.make))
+          .eq("model", normalizeMakeKey(args.model))
+          .eq("year", args.year),
+      )
+      .first();
+    if (!row?.storage_id) return null;
+    return {
+      _id: row._id,
+      storage_id: row.storage_id,
+      doc_kind: row.doc_kind,
+      extractor: (row as any).extractor ?? null,
+    };
+  },
+});
+
+/** Attach a freshly-minted Files API id to an existing manual row. */
+export const _setManualFileId = internalMutation({
+  args: {
+    manualId: v.id("vehicle_manuals"),
+    file_id: v.string(),
+    file_bytes: v.optional(v.float64()),
+    expires_at: v.optional(v.float64()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.manualId, {
+      file_id: args.file_id,
+      file_bytes: args.file_bytes,
+      expires_at: args.expires_at,
+      // Deliberately NOT touching fetched_at or attempts: this is a re-upload
+      // of a document already resolved, not a new resolution attempt, and
+      // moving those would distort the negative-cache and retry accounting.
+    });
+    return { ok: true };
+  },
+});
+
+/**
+ * Re-upload a stored manual to the Files API.
+ *
+ * The cheap half of a refresh: no search, no download, no chance of resolving
+ * a different document than the one we already validated and (crucially) that
+ * the extractor already confirmed belongs to this vehicle.
+ */
+export const reuploadManualFromStorage = internalAction({
+  args: { make: v.string(), model: v.string(), year: v.float64() },
+  handler: async (ctx, args): Promise<{ file_id: string | null; reason: string }> => {
+    try {
+      const row = await ctx.runQuery(selfApi().getStoredManual, args);
+      if (!row) return { file_id: null, reason: "no_stored_bytes" };
+      if (row.extractor === EXTRACTOR_REDUCTO) {
+        // Oversize: it never had a file_id and cannot have one.
+        return { file_id: null, reason: "oversize_not_uploadable" };
+      }
+
+      const blob = await ctx.storage.get(row.storage_id);
+      if (!blob) return { file_id: null, reason: "blob_missing" };
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (!looksLikePdfBytes(bytes)) return { file_id: null, reason: "stored_bytes_not_pdf" };
+
+      const upload = await uploadPdfToFilesApi(
+        bytes,
+        manualFileName(args, row.doc_kind ?? "manual"),
+      );
+      if (!upload.ok) return { file_id: null, reason: upload.reason };
+
+      await ctx.runMutation(selfApi()._setManualFileId, {
+        manualId: row._id,
+        file_id: upload.result.file_id,
+        file_bytes: upload.result.bytes,
+        expires_at: Date.now() + MANUAL_REFRESH_DAYS * DAY_MS,
+      });
+
+      return { file_id: upload.result.file_id, reason: "ok" };
+    } catch (e) {
+      console.warn("[manual-library] reuploadManualFromStorage failed:", e);
+      return { file_id: null, reason: `unexpected:${String(e).slice(0, 160)}` };
+    }
   },
 });
 
@@ -1426,17 +1620,56 @@ export const resolveManualForVehicle = internalAction({
         }
       }
 
-      // ── 1. Discovery (Firecrawl search — no new scraper) ──────
-      const queries = buildManualQueries(args.year, args.make, args.model);
-      if (queries.length === 0) return await fail("bad_vehicle_args");
-
       const found: Array<{ url: string; title?: string | null }> = [];
-      for (const query of queries) {
-        const results = await searchAndFetch(query, 5);
-        for (const r of results) found.push({ url: r.url, title: r.title });
-        // Stop early once an OEM PDF is in hand — each query costs credits.
-        const ranked = rankManualCandidates(found, args);
-        if (ranked.length > 0 && ranked[0].is_oem_domain && ranked[0].is_pdf) break;
+
+      // ── 1a. Deterministic sources (zero search credits) ───────
+      // A handful of hosts have a stable, live-probed URL grammar (see
+      // manualDirectSources.ts, which also explains why this does not
+      // contradict the "URL construction is not viable" finding above).
+      // Nothing here is trusted on faith: each constructed URL is probed and
+      // must answer with real PDF bytes before it becomes a candidate, and it
+      // then flows through the SAME ranking, download and identity checks as a
+      // search result.
+      //
+      // Asking Toyota's own CDN for a Toyota cannot return a Honda, which is
+      // the failure mode the mirror-farm searches actually produce.
+      let directSufficient = false;
+      if (process.env.ENRICHMENT_MANUAL_DIRECT !== "off") {
+        try {
+          const direct = await discoverDirectManuals(args);
+          for (const c of direct.live) found.push({ url: c.url, title: c.title });
+          directSufficient = direct.sufficient;
+          if (direct.outcomes.length > 0) {
+            console.log(
+              `[manual-library] ${label}: direct probe — ` +
+                direct.outcomes
+                  .map((o) => `${o.candidate.source}:${o.live ? "LIVE" : o.reason}`)
+                  .join(", "),
+            );
+          }
+        } catch (e) {
+          // Discovery must never be worse than not having tried.
+          console.warn(`[manual-library] ${label}: direct probe failed (non-fatal):`, e);
+        }
+      }
+
+      // ── 1b. Search discovery (Firecrawl) ──────────────────────
+      // Skipped entirely when a probed OEM/redistributor PDF is already in
+      // hand — that is the whole credit saving. Still runs for every vehicle
+      // we cannot construct a URL for, which is most of them.
+      const queries = buildManualQueries(args.year, args.make, args.model);
+      if (queries.length === 0 && found.length === 0) return await fail("bad_vehicle_args");
+
+      if (!directSufficient) {
+        for (const query of queries) {
+          const results = await searchAndFetch(query, 5);
+          for (const r of results) found.push({ url: r.url, title: r.title });
+          // Stop early once an OEM PDF is in hand — each query costs credits.
+          const ranked = rankManualCandidates(found, args);
+          if (ranked.length > 0 && ranked[0].is_oem_domain && ranked[0].is_pdf) break;
+        }
+      } else {
+        console.log(`[manual-library] ${label}: direct hit — skipping web search`);
       }
 
       // Candidates already read and found wrong for THIS vehicle. Retrying one
@@ -1488,7 +1721,7 @@ export const resolveManualForVehicle = internalAction({
           continue;
         }
 
-        if (bytes.length > MAX_MANUAL_BYTES) {
+        if (bytes.length > MAX_STORED_MANUAL_BYTES) {
           lastReason = `too_large_${bytes.length}`;
           continue;
         }
@@ -1502,10 +1735,42 @@ export const resolveManualForVehicle = internalAction({
           continue;
         }
 
-        // ── 3. Upload to the Anthropic Files API ────────────────
-        const upload = await uploadPdfToFilesApi(bytes, manualFileName(args, candidate.doc_kind));
-        if (!upload.ok) {
-          lastReason = upload.reason;
+        // ── 3. Keep our own copy BEFORE anything else ───────────
+        // Storing first means a Files API outage costs us an upload, not the
+        // download — and a later expiry never re-runs discovery.
+        const extractor = extractorForBytes(bytes.length);
+        let storageId: Id<"_storage"> | undefined;
+        try {
+          storageId = await ctx.storage.store(
+            new Blob([bytes as unknown as BlobPart], { type: "application/pdf" }),
+          );
+        } catch (e) {
+          // Non-fatal: without a stored copy we simply lose the cheap-refresh
+          // and oversize paths for this vehicle, not the enrichment.
+          console.warn(`[manual-library] ${label}: storage.store failed (non-fatal):`, e);
+        }
+        const contentHash = await sha256Hex(bytes);
+
+        // ── 4. Upload to the Anthropic Files API (when it fits) ──
+        // An oversize manual skips this entirely and is read by Reducto from
+        // the stored copy; attempting the upload would only buy a 413.
+        let fileId: string | undefined;
+        let uploadedBytes = bytes.length;
+        let pageCount = estimatePdfPageCount(bytes) ?? undefined;
+
+        if (extractor === EXTRACTOR_ANTHROPIC) {
+          const upload = await uploadPdfToFilesApi(bytes, manualFileName(args, candidate.doc_kind));
+          if (!upload.ok) {
+            lastReason = upload.reason;
+            continue;
+          }
+          fileId = upload.result.file_id;
+          uploadedBytes = upload.result.bytes;
+          pageCount = upload.result.page_count ?? pageCount;
+        } else if (!storageId) {
+          // Oversize AND unstorable is a genuine dead end — neither extractor
+          // can reach it. Fail so the negative cache applies.
+          lastReason = `oversize_unstored_${bytes.length}`;
           continue;
         }
 
@@ -1517,22 +1782,25 @@ export const resolveManualForVehicle = internalAction({
           source_domain: candidate.source_domain,
           is_oem_domain: candidate.is_oem_domain,
           doc_kind: candidate.doc_kind,
-          file_id: upload.result.file_id,
-          file_bytes: upload.result.bytes,
-          page_count: upload.result.page_count ?? undefined,
+          file_id: fileId,
+          file_bytes: uploadedBytes,
+          page_count: pageCount,
+          storage_id: storageId,
+          content_sha256: contentHash ?? undefined,
+          extractor,
           expires_at: Date.now() + MANUAL_REFRESH_DAYS * DAY_MS,
         });
 
         console.log(
-          `[manual-library] ${label}: uploaded ${upload.result.file_id} ` +
-            `(${(upload.result.bytes / 1024 / 1024).toFixed(2)} MB, ` +
-            `pages≈${upload.result.page_count ?? "?"}, oem=${candidate.is_oem_domain}, ` +
-            `kind=${candidate.doc_kind}) from ${candidate.url}`,
+          `[manual-library] ${label}: stored ${(bytes.length / 1024 / 1024).toFixed(2)} MB ` +
+            `via ${extractor}${fileId ? ` (${fileId})` : " (oversize — Files API skipped)"}, ` +
+            `pages≈${pageCount ?? "?"}, oem=${candidate.is_oem_domain}, ` +
+            `kind=${candidate.doc_kind} from ${candidate.url}`,
         );
 
         return {
           status: "uploaded",
-          file_id: upload.result.file_id,
+          file_id: fileId ?? null,
           source_url: candidate.url,
           is_oem_domain: candidate.is_oem_domain,
           doc_kind: candidate.doc_kind,
@@ -1591,7 +1859,35 @@ export const extractIntervalsFromManual = internalAction({
       if (!context) return none("skipped", "config_not_resolvable");
 
       const label = `${context.year} ${context.make} ${context.model}`;
-      const fileId = context.manual?.file_id ?? null;
+      let fileId = context.manual?.file_id ?? null;
+
+      // ── Route: oversize documents cannot be sent as a document block ──
+      // The Messages API caps a request at 32 MB / 600 pages. Rather than
+      // returning a 413 (or, worse, silently truncating), hand the document to
+      // the extractor that can read it. Same write path, same precedence.
+      if (!fileId && context.manual?.extractor === EXTRACTOR_REDUCTO) {
+        console.log(`[manual-library] ${label}: oversize — delegating to Reducto`);
+        return await ctx.runAction(
+          (internal as any).vehicleEnrichment.manualReducto.extractIntervalsViaReducto,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+      }
+
+      // ── Cheap refresh: re-upload our own bytes, never re-discover ──
+      // A Files API entry expires; the document does not. Before we kept a
+      // copy this meant a fresh search plus a multi-MB download from a host
+      // that may have moved the file — and another roll of the
+      // wrong-document dice. Now it is one upload of bytes already validated.
+      if (!fileId && context.manual?.storage_id) {
+        const re = await ctx.runAction(selfApi().reuploadManualFromStorage, {
+          make: context.make,
+          model: context.model,
+          year: context.year,
+        });
+        fileId = re?.file_id ?? null;
+        if (fileId) console.log(`[manual-library] ${label}: re-uploaded from storage (${fileId})`);
+      }
+
       if (!fileId) return none("skipped", "no_manual_file");
 
       const apiKey = process.env.ANTHROPIC_API_KEY;

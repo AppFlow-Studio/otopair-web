@@ -27,12 +27,7 @@ import { verifyPartFitments } from "./utils/partFitmentVerifier";
 import { normalizeOemNumber } from "./priceParser";
 import { missingCoreRoles } from "./quotability";
 import { PART_FIELD_MAP } from "./v3pipeline";
-
-/** Same normalization as the OEM pattern table — duplicate makes rows
- *  ("Mercedes-Benz" / "MERCEDES-BENZ") resolve to one key. */
-export function makeKeyOf(name: string): string {
-  return name.toLowerCase().replace(/[-\s]/g, "");
-}
+import { makeKeyOf } from "../lib/makeKey";
 
 /** Loose token-contains spec match: row spec "MB 325.0" matches an engine
  *  coolant_type of "MB 325.0", "MB 325.0 / Q 1 03 0002", "MB325.0" — but not

@@ -21,7 +21,7 @@
  */
 
 import { v } from "convex/values";
-import { internalAction, internalQuery } from "../_generated/server";
+import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { extractPriceFirecrawl } from "./firecrawl";
 import { priceAllSources } from "./priceReextract";
@@ -106,7 +106,42 @@ type ZeroPricePart = {
   name: string | null;
   subcategory: string | null;
   make_name: string | null;
+  /** Wave 1: a fresh "no_listing" discovery verdict is on file — the part
+   *  stays in the CENSUS (its gap is real and must not read as healed) but
+   *  target selection skips it so budget goes to winnable parts. */
+  discovery_dead?: boolean;
 };
+
+/** How long a "no_listing" verdict suppresses re-discovery. Listings do
+ *  appear over time (restocks, new sellers), so dead parts retry on a slow
+ *  cadence instead of never. */
+function noListingRetryMs(): number {
+  return Number(process.env.PARTS_PRICE_NO_LISTING_RETRY_DAYS ?? "30") * 24 * 60 * 60 * 1000;
+}
+
+function isDiscoveryDead(part: { price_discovery_outcome?: string; price_discovery_at?: number }): boolean {
+  return (
+    part.price_discovery_outcome === "no_listing" &&
+    typeof part.price_discovery_at === "number" &&
+    Date.now() - part.price_discovery_at < noListingRetryMs()
+  );
+}
+
+/** Durable per-part discovery verdict — the answer to the canary's open
+ *  question ("no listing found" vs "budget exhausted" were
+ *  indistinguishable). outcome null clears the marker (a price landed). */
+export const markPriceDiscoveryOutcome = internalMutation({
+  args: {
+    part_id: v.id("oem_parts"),
+    outcome: v.union(v.literal("no_listing"), v.null()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.part_id, {
+      price_discovery_outcome: args.outcome ?? undefined,
+      price_discovery_at: args.outcome ? Date.now() : undefined,
+    });
+  },
+});
 
 /** A part counts as unpriced when it has no TRUSTED row — poison rows
  *  (unverified / online_discount / you_save) and non-pooled fallbacks never
@@ -141,6 +176,10 @@ export const zeroPricePartsPage = internalQuery({
     for (const part of page.page) {
       // Superseded parts are no longer quoted; don't spend backfill budget.
       if (part.is_current === false) continue;
+      // Fresh no_listing verdict → the fleet sweep skips it entirely (the
+      // targeted config census below keeps such parts, flagged, so gaps
+      // stay honest).
+      if (isDiscoveryDead(part as any)) continue;
 
       if (await hasTrustedPriceRow(ctx, part._id)) continue;
 
@@ -197,6 +236,7 @@ export const zeroPricePartsForConfig = internalQuery({
         name: part.name ?? null,
         subcategory: part.subcategory ?? null,
         make_name: make?.name ?? null,
+        discovery_dead: isDiscoveryDead(part as any),
       });
     }
     return out;
@@ -337,8 +377,12 @@ export const refreshStalePrices = internalAction({
           if (page.isDone) break;
         }
       }
-      const targets = zeroTargets.slice(0, backfillBudget);
-      console.log(`[price-refresh] ${targets.length} zero-price parts selected (backfill budget ${backfillBudget})`);
+      const skippedDead = zeroTargets.filter((t) => t.discovery_dead).length;
+      const targets = zeroTargets.filter((t) => !t.discovery_dead).slice(0, backfillBudget);
+      console.log(
+        `[price-refresh] ${targets.length} zero-price parts selected (backfill budget ${backfillBudget}` +
+          (skippedDead > 0 ? `, ${skippedDead} skipped as no_listing` : "") + `)`,
+      );
 
       for (const t of targets) {
         try {
@@ -349,10 +393,23 @@ export const refreshStalePrices = internalAction({
           });
           if (urls.length === 0) {
             console.warn(`[price-refresh] backfill: no usable source found for ${t.oem_part_number}`);
+            // Durable verdict: searched, nothing sells this number. Retries
+            // after PARTS_PRICE_NO_LISTING_RETRY_DAYS, not next run.
+            await ctx.runMutation(internal.vehicleEnrichment.priceRefresh.markPriceDiscoveryOutcome, {
+              part_id: t.part_id as any,
+              outcome: "no_listing",
+            });
             continue;
           }
           const wrote = await priceAndWrite({ ...t, urls, discovered: true });
-          if (wrote) backfilledParts++;
+          if (wrote) {
+            backfilledParts++;
+            // A price landed — clear any stale no_listing marker.
+            await ctx.runMutation(internal.vehicleEnrichment.priceRefresh.markPriceDiscoveryOutcome, {
+              part_id: t.part_id as any,
+              outcome: null,
+            });
+          }
         } catch (e) {
           console.error(`[price-refresh] backfill failed for ${t.oem_part_number}:`, e);
         }

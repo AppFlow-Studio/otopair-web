@@ -56,6 +56,13 @@ export default defineSchema({
   // [W] 9 fields (A/D had 3)
   makes: defineTable({
     name: v.string(),
+    // Normalized identity key (lib/makeKey.makeKeyOf: lowercase, hyphens and
+    // spaces stripped) — "Mercedes-Benz" and "MERCEDES-BENZ" share one key.
+    // Stamped on every insert via getOrCreateMake and backfilled by
+    // makesMerge; lookups use by_make_key so case-variant duplicate rows can
+    // never form again. Optional only for legacy rows on un-migrated
+    // deployments; findMakeByName falls back to a scan for those.
+    make_key: v.optional(v.string()),
     logo: v.optional(v.string()),
     logo_url: v.optional(v.string()),
     slug: v.optional(v.string()),
@@ -66,7 +73,35 @@ export default defineSchema({
     created_at: v.optional(v.number()),
   })
     .index("by_name", ["name"])
-    .index("by_slug", ["slug"]),
+    .index("by_slug", ["slug"])
+    .index("by_make_key", ["make_key"]),
+
+  // Reversibility ledger for the duplicate-makes (and follow-up duplicate-
+  // models) merge in makesMerge.ts. One "loser" row per deleted duplicate
+  // (full pre-delete snapshot), one "restamp" row per (loser, table) batch of
+  // re-pointed FK docs, one "canonical_patch" row when the surviving row
+  // absorbed metadata. revertMerge(batch_id) replays these backwards — note
+  // revived rows get NEW _ids; the original id of a deleted row cannot be
+  // restored.
+  make_merge_log: defineTable({
+    batch_id: v.string(),
+    entity: v.string(), // "makes" | "models"
+    kind: v.string(), // "loser" | "restamp" | "canonical_patch"
+    entity_key: v.optional(v.string()), // normalized dedupe key of the group
+    canonical_id: v.string(),
+    loser_id: v.optional(v.string()),
+    loser_snapshot: v.optional(v.any()),
+    patch_before: v.optional(v.any()),
+    table: v.optional(v.string()),
+    field: v.optional(v.string()),
+    doc_ids: v.optional(v.array(v.string())),
+    count: v.optional(v.number()),
+    reverted_at: v.optional(v.number()),
+    // configsMerge chunked reverts: loser rows record the id they were revived
+    // under so later revert calls can re-point restamps journaled for them.
+    revived_as: v.optional(v.string()),
+    created_at: v.number(),
+  }).index("by_batch", ["batch_id"]),
 
   // [W] 5 fields (A/D had 2)
   models: defineTable({
@@ -466,6 +501,13 @@ export default defineSchema({
     // scraped_name is what the SOURCE called it ("Battery Cable / Ground
     // Extension" — the Equinox 84257919 defect was invisible without it).
     scraped_name: v.optional(v.string()),
+    // Wave 1 (Aug 2026): durable price-discovery triage. "no_listing" means a
+    // discovery search ran and found NO usable retail source — distinct from
+    // "budget never reached this part", which used to be indistinguishable
+    // (the canary's open question). Heals skip fresh no_listing parts so
+    // budget goes to winnable ones; cleared on any successful price write.
+    price_discovery_outcome: v.optional(v.string()),
+    price_discovery_at: v.optional(v.number()),
   })
     .index("by_part_number", ["oem_part_number"])
     .index("by_part_number_normalized", ["oem_part_number_normalized"])
@@ -5558,6 +5600,35 @@ export default defineSchema({
     file_id: v.optional(v.string()),
     file_bytes: v.optional(v.number()),
     page_count: v.optional(v.number()),
+    /**
+     * OUR OWN copy of the PDF bytes.
+     *
+     * The Files API entry expires (expires_at), and until we kept a copy an
+     * expiry meant re-running discovery: another search, another multi-MB
+     * download from a host that may have moved the file, and another shot at
+     * the wrong-document failure mode. With the bytes on hand a refresh is a
+     * re-upload of a document we already validated and, for a rejected
+     * candidate, we still know exactly which bytes we rejected.
+     *
+     * It is also what makes the oversize path possible at all: a manual too
+     * large for the Messages API can still be handed to a parser by URL.
+     */
+    storage_id: v.optional(v.id("_storage")),
+    /** SHA-256 of the stored bytes. Mirrors are frequently byte-identical to
+     *  the OEM original (a startmycar copy matched Toyota's CDN ETag exactly),
+     *  so this doubles as a dedupe key and an integrity check across refreshes. */
+    content_sha256: v.optional(v.string()),
+    /**
+     * Which extractor can read this document: "anthropic_files" (native PDF
+     * block + citations — preferred, and the only one that yields page-level
+     * citations) or "reducto" (oversize fallback).
+     *
+     * Set at download time from the byte count, because the Messages API caps a
+     * request at 32 MB / 600 pages and real manuals exceed both (the Accord OM
+     * is 38.7 MB, the Mazda3 57 MB, the F-150 644 pages). Before this, those
+     * vehicles were recorded as `too_large_*` failures and never enriched.
+     */
+    extractor: v.optional(v.string()),
     /** "owners_manual" | "maintenance_schedule" | "warranty_guide" */
     doc_kind: v.string(),
     /** Set when a fetch/upload attempt failed — lets the resolver skip a known

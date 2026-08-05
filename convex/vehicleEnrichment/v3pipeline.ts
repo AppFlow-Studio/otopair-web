@@ -3614,6 +3614,29 @@ async function runPollBatch1Body(
         attempt: 1,
       },
     );
+
+    // Wave 3 (Aug 2026): catalog-attested-first BRAKES. Rotors/pads were the
+    // most cross-generation-contaminated class when born from LLM extraction
+    // (wrong on all 3 vehicles that had them in the batch-3 audit) — so
+    // harvest the storefront's own vehicle-scoped brake category pages NOW,
+    // while Batch 2 polls, in a separate action budget. Roles Batch 1A
+    // already filled are skipped inside the action (empty-fill only); the
+    // URL itself is the fitment statement, and the usual verifier still
+    // cross-examines at finalize. Kill: PARTS_CATEGORY_HARVEST_EARLY=off.
+    if (process.env.PARTS_CATEGORY_HARVEST_EARLY !== "off") {
+      try {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.vehicleEnrichment.categoryHarvest.harvestVehicleCategories,
+          {
+            vehicleConfigId: args.vehicleConfigId,
+            roleFilter: ["front_brake_pad", "rear_brake_pad", "front_rotor", "rear_rotor"],
+          },
+        );
+      } catch (e) {
+        console.warn("[v8] early brake harvest scheduling failed (non-fatal):", e);
+      }
+    }
 }
 
 // ============================================================================
@@ -6698,12 +6721,22 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
 
     // Post-enrichment: trigger source discovery if this make has < 3 registered sources.
     // Runs async (scheduled) so it doesn't block the completion path.
+    // Wave-1/2 (Aug 2026): OFF by default. source_registry is the DIRECTOR's
+    // reference surface (data portal /sources), not scraper config — and it
+    // fills as a byproduct of runs (sourceScoring auto-registers every
+    // evidence domain; upsertPartPrice registers price domains), so the
+    // speculative web-search finder here only burned Firecrawl+Haiku to
+    // discover sources the run itself would have recorded for free.
+    // Re-enable with ENRICHMENT_SOURCE_DISCOVERY=on if ever needed.
     try {
-      const existingSources = await ctx.runQuery(
-        internal.vehicleEnrichment.v3queries.getSourcesForMake,
-        { make_id: args.makeId },
-      );
-      if (existingSources.length < 3) {
+      const existingSources =
+        process.env.ENRICHMENT_SOURCE_DISCOVERY === "on"
+          ? await ctx.runQuery(
+              internal.vehicleEnrichment.v3queries.getSourcesForMake,
+              { make_id: args.makeId },
+            )
+          : null;
+      if (existingSources && existingSources.length < 3) {
         console.log(
           `[v8] Source discovery: ${args.make} has ${existingSources.length} sources — scheduling discovery`
         );
@@ -7118,12 +7151,35 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           internal.vehicleEnrichment.manualLibrary.resolveManualForVehicle,
           { make: args.make, model: args.model, year: args.year },
         );
+        const extractDelayMs = Number(process.env.ENRICHMENT_MANUAL_EXTRACT_DELAY_MS ?? "180000");
         await ctx.scheduler.runAfter(
-          Number(process.env.ENRICHMENT_MANUAL_EXTRACT_DELAY_MS ?? "180000"),
+          extractDelayMs,
           internal.vehicleEnrichment.manualLibrary.extractIntervalsFromManual,
           { vehicleConfigId: args.vehicleConfigId },
         );
-        console.log("[v8] Manual library resolve + extract scheduled");
+
+        // ── Second pass over the SAME uploaded PDF: the specifications table ──
+        // The interval pass answers one question; the document also carries
+        // capacities, viscosities, fluid specs, pressures and torque. This pass
+        // files those as field_claims (family owners_manual, weight 3) rather
+        // than writing them, so the reconciler weighs them against the
+        // storefront/aggregator claims already on file — AMSOIL and a manual
+        // agreeing is the first two-family, quote-grade evidence those fields
+        // have ever had.
+        //
+        // Deliberately close behind the interval pass: the document block
+        // carries cache_control, so landing inside the cache window makes this
+        // read ~10% the price of a cold ingest. 60s is comfortably inside the
+        // 5-minute ephemeral TTL while still leaving the first call room to
+        // finish a large PDF.
+        if (process.env.ENRICHMENT_MANUAL_SPECS !== "off") {
+          await ctx.scheduler.runAfter(
+            extractDelayMs + 60_000,
+            (internal as any).vehicleEnrichment.manualSpecs.extractSpecsFromManual,
+            { vehicleConfigId: args.vehicleConfigId, runId: args.runId },
+          );
+        }
+        console.log("[v8] Manual library resolve + extract (+specs) scheduled");
       } catch (e) {
         console.warn("[v8] Manual library trigger failed (non-fatal):", e);
       }

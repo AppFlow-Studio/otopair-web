@@ -354,7 +354,14 @@ export function interchangeCandidates(input: {
 
 // ─── Shared context loader ──────────────────────────────────────────────────
 
-async function loadMissingContext(ctx: any, vehicleConfigId: any) {
+async function loadMissingContext(
+  ctx: any,
+  vehicleConfigId: any,
+  /** Wave 3: slugs to ASSUME applicable when no run has recorded any yet —
+   *  lets the in-run brake harvest work on a FIRST enrichment, where
+   *  quotability hasn't been computed. Only ever universal services. */
+  assumeSlugs?: readonly string[],
+) {
   const resolved: any = await ctx.runQuery(
     internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
     { vehicleConfigId },
@@ -372,6 +379,9 @@ async function loadMissingContext(ctx: any, vehicleConfigId: any) {
       internal.vehicleEnrichment.v3queries.getPriorApplicableSlugs,
       { vehicleConfigId },
     );
+  }
+  if (applicableSlugs.length === 0 && assumeSlugs && assumeSlugs.length > 0) {
+    applicableSlugs = [...assumeSlugs];
   }
   if (applicableSlugs.length === 0) return null;
   const configRow: any = await ctx.runQuery(
@@ -456,21 +466,73 @@ async function writeCandidate(
 
 const CATEGORY_PAGE_BUDGET = 4;
 
+/** Universal brake services — assumable on a first run before quotability
+ *  exists (every car has brakes; drum-rear vehicles are handled by
+ *  na_role_keys, which loadMissingContext already applies on top). */
+const BRAKE_SERVICE_SLUGS = ["brake_pad_replacement", "rotor_replacement"] as const;
+export const BRAKE_ROLE_KEYS = [
+  "front_brake_pad",
+  "rear_brake_pad",
+  "front_rotor",
+  "rear_rotor",
+] as const;
+
 export const harvestVehicleCategories = internalAction({
-  args: { vehicleConfigId: v.id("vehicle_configs") },
+  args: {
+    vehicleConfigId: v.id("vehicle_configs"),
+    /** Wave 3 in-run mode: restrict the harvest to these roleKeys (the
+     *  pipeline passes the brake roles between Batch 1 and Batch 2, so
+     *  rotors/pads are born catalog-attested instead of
+     *  extract-then-refute). Unset = heal-time behavior, all missing roles. */
+    roleFilter: v.optional(v.array(v.string())),
+  },
   handler: async (ctx, args) => {
     if (process.env.PARTS_CATEGORY_HARVEST === "off") return { status: "disabled" as const };
-    const cx = await loadMissingContext(ctx, args.vehicleConfigId);
+    const cx = await loadMissingContext(
+      ctx,
+      args.vehicleConfigId,
+      // Only the brake-scoped in-run call may assume slugs, and only the
+      // universal brake services — never guess broader applicability.
+      args.roleFilter?.every((r) => (BRAKE_ROLE_KEYS as readonly string[]).includes(r))
+        ? BRAKE_SERVICE_SLUGS
+        : undefined,
+    );
     if (!cx) return { status: "no_config" as const };
-    if (cx.missing.length === 0) return { status: "nothing_missing" as const };
+    const missing = args.roleFilter
+      ? cx.missing.filter((m) => args.roleFilter!.includes(m.roleKey))
+      : cx.missing;
+    if (missing.length === 0) return { status: "nothing_missing" as const };
     const { resolved } = cx;
     const config = getSourceConfig(resolved.make);
-    if (!config) return { status: "no_storefront" as const };
-    const storeBase = config.parts.storeBaseUrl.replace(/\/+$/, "");
-    const storeHost = new URL(storeBase).hostname.replace(/^www\./, "");
+    // Wave 3 (Aug 2026): multi-make RevolutionParts storefronts as harvest
+    // fallbacks. AutoNation runs the same RP platform with identical
+    // /v-{slug}/{category} pages across MANY brands (live example:
+    // autonationparts.com/v-2020-mercedes-benz-glc43-amg--4matic--3-0l-v6-gas/
+    // brakes--anti-lock-brakes), so it serves makes with NO registry
+    // storefront and is a second catalog voice when the primary can't
+    // resolve the vehicle. Tried only after the primary fails, with a
+    // smaller SERP budget — lightweight by design.
+    // Order = trust/coverage preference; each fallback only costs SERP
+    // queries when everything before it failed to resolve the vehicle.
+    // tascaparts.com: Tasca's multi-make RP store (Ford/GM/Mopar/Mazda/
+    // Volvo/Kia/Hyundai…), same /search?search_str= + /v- page shapes.
+    // NOT here: carid.com — aftermarket retailer; its SKUs are the exact
+    // contamination class the make-format/brand-signature gates reject
+    // (OEM-only doctrine). Aftermarket sources may join PRICE discovery
+    // breadth someday, never part-number harvesting.
+    const FALLBACK_RP_STOREFRONTS = [
+      "https://www.autonationparts.com",
+      "https://www.tascaparts.com",
+    ];
+    const bases = [
+      ...(config ? [config.parts.storeBaseUrl.replace(/\/+$/, "")] : []),
+      ...FALLBACK_RP_STOREFRONTS,
+    ];
 
-    // 1) Vehicle slug: cached scrape URL when it is vehicle-scoped, else one
-    //    site-scoped SERP (year must appear in the slug; model tokens score).
+    // 1) Vehicle slug: cached scrape URL when it is vehicle-scoped, else a
+    //    site-scoped SERP per candidate storefront (year must appear in the
+    //    slug; model tokens score). First storefront that resolves wins.
+    let storeBase: string | null = null;
     let slugPath: string | null = null;
     try {
       const cached: any = await ctx.runQuery(
@@ -484,15 +546,23 @@ export const harvestVehicleCategories = internalAction({
         },
       );
       // The cached URL may itself have come from open-web search — run it
-      // through the same exact-vehicle gate as the SERP fallback.
+      // through the same exact-vehicle gate as the SERP fallback, and only
+      // adopt it for the storefront it actually belongs to.
       const cachedSlug = extractVehicleSlugPath(cached?.url ?? null);
-      slugPath = cachedSlug
-        ? pickVehicleSlug([`${storeBase}${cachedSlug}`], {
+      if (cachedSlug) {
+        const cachedHost = new URL(cached.url).hostname.replace(/^www\./, "");
+        const owner = bases.find(
+          (b) => new URL(b).hostname.replace(/^www\./, "") === cachedHost,
+        );
+        if (owner) {
+          slugPath = pickVehicleSlug([`${owner}${cachedSlug}`], {
             year: resolved.year,
             model: resolved.model,
             displacement: resolved.displacement,
-          })
-        : null;
+          });
+          if (slugPath) storeBase = owner;
+        }
+      }
     } catch {
       /* cache miss is fine */
     }
@@ -503,29 +573,43 @@ export const harvestVehicleCategories = internalAction({
       // reliably surfaces the vehicle-scoped category URLs (observed live:
       // "GLC43 spark plug" ranked the 2020 ignition category page #2).
       const collapsed = String(resolved.model).replace(/([A-Za-z])\s+(\d)/g, "$1$2");
-      const firstRoleWords = (cx.missing[0]?.roleKey ?? "oil filter").replace(/_/g, " ");
-      const queries = [
-        `site:${storeHost} ${resolved.year} ${resolved.model} parts`,
-        `site:${storeHost} ${collapsed} ${firstRoleWords}`,
-        `site:${storeHost} ${resolved.year} ${collapsed}`,
-      ];
-      for (const q of queries) {
-        const results = await searchAndFetch(q, 4, false);
-        slugPath = pickVehicleSlug(
-          results.map((r) => r.url),
-          { year: resolved.year, model: resolved.model, displacement: resolved.displacement },
-        );
-        if (slugPath) break;
+      const firstRoleWords = (missing[0]?.roleKey ?? "oil filter").replace(/_/g, " ");
+      outer: for (const base of bases) {
+        const host = new URL(base).hostname.replace(/^www\./, "");
+        const isPrimary = bases[0] === base && config != null;
+        const queries = isPrimary
+          ? [
+              `site:${host} ${resolved.year} ${resolved.model} parts`,
+              `site:${host} ${collapsed} ${firstRoleWords}`,
+              `site:${host} ${resolved.year} ${collapsed}`,
+            ]
+          : [
+              // Fallback storefronts get a tighter budget: the two query
+              // shapes that actually surfaced /v- pages in live fire.
+              `site:${host} ${collapsed} ${firstRoleWords}`,
+              `site:${host} ${resolved.year} ${resolved.model} parts`,
+            ];
+        for (const q of queries) {
+          const results = await searchAndFetch(q, 4, false);
+          slugPath = pickVehicleSlug(
+            results.map((r) => r.url),
+            { year: resolved.year, model: resolved.model, displacement: resolved.displacement },
+          );
+          if (slugPath) {
+            storeBase = base;
+            break outer;
+          }
+        }
       }
     }
-    if (!slugPath) return { status: "no_vehicle_slug" as const };
+    if (!slugPath || !storeBase) return { status: "no_vehicle_slug" as const };
 
     // 2) Vehicle root → the store's real category list.
     const root = await fetchUrlWithHtml(`${storeBase}${slugPath}`);
     const links = extractCategoryLinks(root.markdown ?? root.html ?? "", slugPath);
     if (links.length === 0) return { status: "no_categories", slugPath } as const;
 
-    const missingRoleKeys = [...new Set(cx.missing.map((m) => m.roleKey))];
+    const missingRoleKeys = [...new Set(missing.map((m) => m.roleKey))];
     const pages = categoriesForRoles(missingRoleKeys, links, CATEGORY_PAGE_BUDGET);
     if (pages.length === 0) return { status: "no_matching_categories", slugPath } as const;
 

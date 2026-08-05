@@ -1941,6 +1941,7 @@ export async function resolveWinningPartForService(
       source_domains: c.fitment.source_domains ?? [],
       prices: c.priceSummary.sources_used.map((s) => ({
         price: s.price,
+        source_domain: s.source_domain,
         refreshed_days_ago:
           s.refreshed_at != null
             ? Math.max(0, Math.floor((now - s.refreshed_at) / MS_PER_DAY))

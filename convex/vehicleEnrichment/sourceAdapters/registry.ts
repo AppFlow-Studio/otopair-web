@@ -24,6 +24,7 @@ import { sylvaniaBulbsAdapter } from "./sylvaniaBulbs";
 import { tricoWipersAdapter } from "./tricoWipers";
 import { amsoilAdapter } from "./amsoil";
 import { rockautoAdapter } from "./rockauto";
+import { myCarUserManualAdapter } from "./myCarUserManual";
 
 /** How an adapter's domain can be fetched — used to pick the fetch tier. */
 export type Fetchability = "plain_fetch" | "json_endpoint" | "needs_headless";
@@ -37,6 +38,7 @@ export const SOURCE_ADAPTERS: readonly SourceAdapter[] = [
   tricoWipersAdapter,
   amsoilAdapter,
   rockautoAdapter,
+  myCarUserManualAdapter,
 ];
 
 /** Fetch-tier routing hints, keyed by adapter name. */
@@ -48,6 +50,7 @@ export const ADAPTER_FETCHABILITY: Readonly<Record<string, Fetchability>> = {
   [tricoWipersAdapter.name]: "plain_fetch",
   [amsoilAdapter.name]: "needs_headless",
   [rockautoAdapter.name]: "plain_fetch",
+  [myCarUserManualAdapter.name]: "plain_fetch",
 };
 
 /**

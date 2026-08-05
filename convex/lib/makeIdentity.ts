@@ -17,9 +17,11 @@
  * stays as-is; callers that cannot cheaply supply names keep strict behavior
  * by using the originals.
  *
- * The durable cleanup is a makes-table dedupe + uniqueness guard; until that
- * lands, every read path that can see a part's make name should come through
- * here.
+ * The durable cleanup HAS landed (Aug 2026): makesMerge.ts dedupes existing
+ * rows and lib/makeKey.getOrCreateMake prevents new duplicates at insert
+ * time. These wrappers stay as defense-in-depth — a deployment that hasn't
+ * run the merge yet, or a row minted by code predating the guard, still
+ * resolves correctly on the read path.
  */
 import type { Id } from "../_generated/dataModel";
 import {
@@ -27,16 +29,17 @@ import {
   passesI1ReadGuard,
   type I1GuardInput,
 } from "../partSelector";
+import { makeKeyOf } from "./makeKey";
 
 /** Case/hyphen/space-insensitive make-name identity ("MERCEDES-BENZ" ≡
- *  "Mercedes-Benz"). Same normalization the corporate-family map uses. */
+ *  "Mercedes-Benz") — same makeKeyOf the write-side guard and the
+ *  corporate-family map use. */
 export function sameMakeName(
   a: string | null | undefined,
   b: string | null | undefined,
 ): boolean {
   if (!a || !b) return false;
-  const key = (n: string) => n.toLowerCase().replace(/[-\s]/g, "");
-  return key(a) === key(b);
+  return makeKeyOf(a) === makeKeyOf(b);
 }
 
 /** partFitsConfigMake + the duplicate-makes-row escape. */

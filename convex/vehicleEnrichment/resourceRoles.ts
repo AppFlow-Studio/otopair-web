@@ -18,7 +18,7 @@
  */
 
 import { v } from "convex/values";
-import { internalAction } from "../_generated/server";
+import { internalAction, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { axlePairGaps, computeQuotability, missingCoreRoles } from "./quotability";
 import { resourceMissingRoles, soleFlaggedWinnerRoles } from "./utils/roleResource";
@@ -568,5 +568,91 @@ export const repairMissingRolesBatch = internalAction({
       }
     }
     return { attempted: ids.length, skipped: args.vehicleConfigIds.length - ids.length, results };
+  },
+});
+
+// ─── Wave 2: fleet sweep — the scheduled driver the gates were waiting on ───
+
+/** One page of the fleet scan: configs whose LATEST run's quotability
+ *  snapshot shows a binding core role without a fitment. Read-only. */
+export const fleetRoleGapPage = internalQuery({
+  args: { cursor: v.union(v.string(), v.null()), pageSize: v.number() },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("vehicle_configs")
+      .paginate({ cursor: args.cursor, numItems: args.pageSize });
+    const gapConfigs: Array<{ id: string; missing: number; status: string }> = [];
+    for (const config of page.page) {
+      const status = (config as any).enrichment_status ?? "";
+      if (status !== "complete" && status !== "partial" && status !== "verified") continue;
+      const run = await ctx.db
+        .query("enrichment_runs")
+        .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", config._id))
+        .order("desc")
+        .first();
+      const services: any[] = (run as any)?.quotability?.services ?? [];
+      const missing = services.reduce(
+        (n, s) => n + Math.max(0, (s.core_total ?? 0) - (s.core_with_fitment ?? 0)),
+        0,
+      );
+      if (missing > 0) gapConfigs.push({ id: String(config._id), missing, status });
+    }
+    return { continueCursor: page.isDone ? null : page.continueCursor, gapConfigs };
+  },
+});
+
+/** Nightly fleet role-repair driver (Wave 2, Aug 2026). Per-run heals only
+ *  fire on FRESH runs — already-enriched configs never healed, which is why
+ *  the core-role/axle gates must stay log-only ("enforce" would un-book
+ *  working configs). This sweep is the missing driver: scan the fleet's
+ *  latest-run quotability snapshots, log the residual (THE metric that
+ *  decides when the gates flip), and schedule the existing sequential batch
+ *  repair over the worst configs under a nightly budget.
+ *
+ *  Dark by default — spends Firecrawl/Anthropic only when
+ *  PARTS_ROLE_REPAIR_FLEET_BUDGET (configs/night, max 10) is set > 0,
+ *  mirroring the price-refresh cron's budget pattern. The repair itself is
+ *  the proven repairMissingRolesBatch; parts it writes get priced by the
+ *  09:00 UTC price-refresh cron the same night (this runs at 08:15). */
+export const repairFleetSweep = internalAction({
+  args: { budget: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const budget = Math.min(
+      args.budget ?? Number(process.env.PARTS_ROLE_REPAIR_FLEET_BUDGET ?? "0"),
+      10,
+    );
+    let cursor: string | null = null;
+    const gaps: Array<{ id: string; missing: number; status: string }> = [];
+    let pages = 0;
+    do {
+      const r: any = await ctx.runQuery(
+        internal.vehicleEnrichment.resourceRoles.fleetRoleGapPage,
+        { cursor, pageSize: 100 },
+      );
+      cursor = r.continueCursor;
+      gaps.push(...r.gapConfigs);
+      pages++;
+    } while (cursor != null && pages < 100);
+
+    // Worst-first: most missing binding roles. `complete` configs outrank
+    // `partial` at equal severity — they are LIVE-bookable with holes.
+    gaps.sort((a, b) => b.missing - a.missing || (a.status === "complete" ? -1 : 1));
+    const targets = budget > 0 ? gaps.slice(0, budget) : [];
+    if (targets.length > 0) {
+      await ctx.scheduler.runAfter(
+        0,
+        internal.vehicleEnrichment.resourceRoles.repairMissingRolesBatch,
+        { vehicleConfigIds: targets.map((t) => t.id) as any },
+      );
+    }
+    const summary = {
+      status: budget > 0 ? "scheduled" : "census_only",
+      fleetResidualConfigs: gaps.length,
+      fleetResidualRoles: gaps.reduce((n, g) => n + g.missing, 0),
+      scheduled: targets.length,
+      budget,
+    };
+    console.log("[fleet-role-repair]", JSON.stringify(summary));
+    return summary;
   },
 });

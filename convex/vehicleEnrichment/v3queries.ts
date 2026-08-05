@@ -10,6 +10,7 @@
 import { v } from "convex/values";
 import { internalQuery, internalMutation } from "../_generated/server";
 import { isPoisonPriceType, isNonPooledPriceType } from "../lib/priceTypes";
+import { findMakeByName } from "../lib/makeKey";
 import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "../lib/labor_aggregation";
 
 export const getVehicleConfigByKey = internalQuery({
@@ -42,20 +43,10 @@ export const getVehicleConfigByNhtsaVinKey = internalQuery({
 export const getMakeByName = internalQuery({
   args: { name: v.string() },
   handler: async (ctx, args) => {
-    // Try exact match first (fast path)
-    const exact = await ctx.db
-      .query("makes")
-      .withIndex("by_name", (q) => q.eq("name", args.name))
-      .first();
-    if (exact) return exact;
-
-    // Fall back to case-insensitive slug match.
-    // VIN decoders return "MERCEDES-BENZ" but seeded makes use "Mercedes-Benz".
-    const slug = args.name.toLowerCase().replace(/\s+/g, "-");
-    return await ctx.db
-      .query("makes")
-      .withIndex("by_slug", (q) => q.eq("slug", slug))
-      .first();
+    // Normalized total lookup (by_name → by_make_key → keyed scan). The old
+    // slug fallback missed rows created without a slug, so VIN-decoder casing
+    // ("MERCEDES-BENZ") resolved to nothing and callers minted twin rows.
+    return await findMakeByName(ctx.db, args.name);
   },
 });
 

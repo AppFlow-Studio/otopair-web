@@ -1,6 +1,7 @@
 import { action, internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { api, internal } from "./_generated/api";
+import { findMakeByName, getOrCreateMake } from "./lib/makeKey";
 import {
   rebuildAllAvailability,
   syncShopAvailabilityWindow,
@@ -651,19 +652,19 @@ export const seed = mutation({
     const now = Date.now();
 
     // --- Makes (logo stored in cdn_assets, makes reference by id) ---
+    // Get-or-create through lib/makeKey: a demo seed run on a DB that already
+    // has Toyota/Honda must reuse those rows, not mint blind duplicates.
     const toyotaLogoId = await ctx.db.insert("cdn_assets", {
       url: "https://upload.wikimedia.org/wikipedia/commons/9/9d/Toyota_carridge_logo.svg",
     });
-    const toyotaId = await ctx.db.insert("makes", {
-      name: "Toyota",
+    const toyotaId = await getOrCreateMake(ctx.db, "Toyota", {
       logo: toyotaLogoId,
     });
 
     const hondaLogoId = await ctx.db.insert("cdn_assets", {
       url: "https://upload.wikimedia.org/wikipedia/commons/7/7b/Honda-logo.svg",
     });
-    const hondaId = await ctx.db.insert("makes", {
-      name: "Honda",
+    const hondaId = await getOrCreateMake(ctx.db, "Honda", {
       logo: hondaLogoId,
     });
 
@@ -2194,10 +2195,12 @@ export const seedVehicleIntelligenceDemoData = internalMutation({
     const now = Date.now();
 
     const ensureMake = async (name: string, logoUrl: string) => {
-      const existing = (await ctx.db.query("makes").collect()).find((m) => m.name === name);
+      // Key-normalized lookup — the old exact-name find was case-sensitive
+      // and re-created "MERCEDES-BENZ"-style twins of existing makes.
+      const existing = await findMakeByName(ctx.db, name);
       if (existing) return existing;
       const logoId = await ctx.db.insert("cdn_assets", { url: logoUrl });
-      const id = await ctx.db.insert("makes", { name, logo: logoId });
+      const id = await getOrCreateMake(ctx.db, name, { logo: logoId });
       return (await ctx.db.get(id))!;
     };
 

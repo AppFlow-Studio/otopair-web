@@ -1277,6 +1277,34 @@ export const upsertPartPrice = internalMutation({
 
     const now = Date.now();
 
+    // Wave-2 "source with the data": the director's source_registry surface
+    // fills from sources we ACTUALLY used, not a speculative discovery pass.
+    // Evidence-producing domains auto-register in sourceScoring; price-only
+    // domains (the storefronts) registered nowhere until here. One index
+    // read per price write, zero external calls. Non-fatal by construction.
+    try {
+      const registered = await ctx.db
+        .query("source_registry")
+        .withIndex("by_domain", (q) => q.eq("domain", args.source_domain))
+        .first();
+      if (!registered) {
+        await ctx.db.insert("source_registry", {
+          domain: args.source_domain,
+          source_type: "parts_pricing",
+          url_template: args.source_url,
+          reliability_score: 0.5,
+          total_observations: 0,
+          last_scraped_at: now,
+          last_scrape_success: true,
+          created_at: now,
+        });
+      } else if (registered.last_scraped_at == null || registered.last_scraped_at < now - 60_000) {
+        await ctx.db.patch(registered._id, { last_scraped_at: now, last_scrape_success: true });
+      }
+    } catch (e) {
+      console.warn("[upsertPartPrice] source_registry upsert failed (non-fatal):", e);
+    }
+
     const existing = await ctx.db
       .query("part_prices")
       .withIndex("by_part_source", (q) =>
@@ -1686,9 +1714,23 @@ export const reconcileConfigForReenrich = internalMutation({
   },
   handler: async (ctx, args) => {
     const patch: any = {
-      config_key: args.config_key,
       enrichment_status: "enriching",
     };
+    // config_key collision guard (Aug 2026): this patch used to re-key the
+    // config unconditionally — if ANOTHER row already held the target key we
+    // minted a duplicate config_key (the GLC-43 twin-config incident). Mirror
+    // renameConfigKey's conflict behavior: keep the current key and log.
+    const holder = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_config_key", (q) => q.eq("config_key", args.config_key))
+      .first();
+    if (!holder || holder._id === args.config_id) {
+      patch.config_key = args.config_key;
+    } else {
+      console.warn(
+        `[reconcile] config_key conflict: "${args.config_key}" already held by ${String(holder._id)} — keeping existing key on ${String(args.config_id)} (needs manual merge)`,
+      );
+    }
     if (args.drivetrain && args.drivetrain !== "unknown") patch.drivetrain = args.drivetrain;
     if (args.nhtsa_vin_key) patch.nhtsa_vin_key = args.nhtsa_vin_key;
     if (args.transmission_id) patch.transmission_id = args.transmission_id;
@@ -1724,6 +1766,29 @@ export const addEvidenceBatch = internalMutation({
     let count = 0;
 
     for (const row of args.evidence_rows) {
+      // Supersession (Aug 2026, closes June-audit I7/KU-A as "regression"):
+      // a re-observation retires every prior is_latest row for the same
+      // (entity, field) so consensus weighs the CURRENT run's observation
+      // set, not all history. The "mark stale" step was lost when
+      // verification.ts dropped it — nothing ever set is_latest=false, so
+      // the consensus filter was a no-op and a stale spec value could keep
+      // out-voting a fresh re-enrichment forever. Mechanic evidence is
+      // exempt: a human observation is never retired by a pipeline write
+      // (the mechanic-accept path manages its own supersession).
+      const priors = await ctx.db
+        .query("enrichment_evidence")
+        .withIndex("by_entity_field", (q) =>
+          q
+            .eq("entity_type", row.entity_type)
+            .eq("entity_id", row.entity_id)
+            .eq("field_name", row.field_name)
+        )
+        .collect();
+      for (const prior of priors) {
+        if (prior.is_latest && prior.source_type !== "mechanic") {
+          await ctx.db.patch(prior._id, { is_latest: false });
+        }
+      }
       await ctx.db.insert("enrichment_evidence", {
         entity_type: row.entity_type,
         entity_id: row.entity_id,

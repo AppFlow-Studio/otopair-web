@@ -28,6 +28,7 @@
  */
 import type { Id } from "./_generated/dataModel";
 import { matchesForeignBrandSignature } from "./vehicleEnrichment/contentSanitization";
+import { resolveOperator } from "./vehicleEnrichment/sourceAdapters/claimLedger";
 
 export type DataQuality = "oem" | "dealer" | "aftermarket" | "generic";
 
@@ -104,6 +105,11 @@ export function passesI1ReadGuard(input: I1GuardInput): boolean {
 export type CandidatePrice = {
   price: number;
   refreshed_days_ago: number;
+  /** Wave 3: the price row's source domain, so the source-count layer can
+   *  collapse storefronts run by ONE operator (four RevolutionParts dealer
+   *  domains are one catalog, not four corroborations). Optional — rows
+   *  without it each count as their own source (legacy behavior). */
+  source_domain?: string | null;
 };
 
 export type CandidateInput = {
@@ -205,9 +211,19 @@ export function enrichCandidate(c: CandidateInput): EnrichedCandidate {
     ? (trimmed[trimmed.length / 2 - 1] + trimmed[trimmed.length / 2]) / 2
     : trimmed[Math.floor(trimmed.length / 2)];
   const minRefresh = Math.min(...c.prices.map((p) => p.refreshed_days_ago));
+  // Operator-collapsed source count (Wave 3): domains sharing one operator
+  // (resolveOperator — the claim ledger's law) merge into one voice, so
+  // family-pooled prices across N same-platform storefronts can't inflate
+  // the Layer-4 tiebreak. A row with no domain keeps its own count.
+  const operators = new Set<string>();
+  let anonymous = 0;
+  for (const p of c.prices) {
+    if (p.source_domain) operators.add(resolveOperator(p.source_domain));
+    else anonymous++;
+  }
   return {
     ...c,
-    price_count: prices.length,
+    price_count: operators.size + anonymous,
     price_cv: cv,
     price_mean: mean,
     price_min: Math.min(...prices),

@@ -339,7 +339,7 @@ export function htmlLeafToMarkdown(html: string): string {
 // Action: preview ingest (no writes — inspect data quality before wiring)
 // ============================================================================
 
-async function fetchText(url: string, timeoutMs: number): Promise<{ ok: boolean; status: number; body: string }> {
+export async function lemonFetch(url: string, timeoutMs: number): Promise<{ ok: boolean; status: number; body: string }> {
   try {
     const res = await fetch(url, {
       headers: { Accept: "text/html,*/*", "User-Agent": "OtoPair-Enrichment/1.0" },
@@ -380,6 +380,43 @@ export type LemonFetchArgs = {
   maxLeaves?: number;
 };
 
+export type LemonResolved = { host: string; makeFolder: string; trim: string; trimBaseUrl: string };
+
+/**
+ * Resolve a vehicle to a live host + best-match trim folder. Shared by the spec
+ * ingester (this file) and the labor ingester (lemonLabor.ts). Fail-open: null
+ * when no host answers or no trim matches. `trimBaseUrl` ends in "/", ready to
+ * append a section folder ("Repair and Diagnosis (Single Page)/", "Labor Times/").
+ */
+export async function resolveLemonVehicle(args: LemonFetchArgs): Promise<LemonResolved | null> {
+  const makeFolder = lemonMakeFolder(args.make);
+  const vehicle = {
+    model: args.model,
+    trim: args.trim ?? null,
+    drivetrain: args.drivetrain ?? null,
+    displacement_l: args.displacement_l ?? null,
+  };
+  let host: string | null = null;
+  let folders: string[] = [];
+  for (const h of LEMON_HOSTS) {
+    const yearUrl = buildLemonYearUrl(h, makeFolder, args.year);
+    const res = await lemonFetch(yearUrl, FETCH_TIMEOUT_MS);
+    if (res.ok && res.body.length > 0) {
+      const parsed = parseChildFolders(res.body, yearUrl);
+      if (parsed.length > 0) {
+        host = h;
+        folders = parsed;
+        break;
+      }
+    }
+  }
+  if (!host) return null;
+  const trim = pickLemonTrim(vehicle, folders);
+  if (!trim) return null;
+  const trimBaseUrl = buildLemonYearUrl(host, makeFolder, args.year) + `${encodeURIComponent(trim)}/`;
+  return { host, makeFolder, trim, trimBaseUrl };
+}
+
 /**
  * THE core ingester: resolve → index → select leaves → fetch → render markdown.
  *
@@ -404,41 +441,15 @@ export async function fetchLemonManualMarkdown(args: LemonFetchArgs): Promise<Le
     });
 
     const makeFolder = lemonMakeFolder(args.make);
-    const vehicle = {
-      model: args.model,
-      trim: args.trim ?? null,
-      drivetrain: args.drivetrain ?? null,
-      displacement_l: args.displacement_l ?? null,
-    };
 
-    // ── 1. Find a live host + the vehicle's year directory ──────────
-    let host: string | null = null;
-    let folders: string[] = [];
-    for (const h of LEMON_HOSTS) {
-      const yearUrl = buildLemonYearUrl(h, makeFolder, args.year);
-      const res = await fetchText(yearUrl, FETCH_TIMEOUT_MS);
-      if (res.ok && res.body.length > 0) {
-        const parsed = parseChildFolders(res.body, yearUrl);
-        if (parsed.length > 0) {
-          host = h;
-          folders = parsed;
-          break;
-        }
-      }
-    }
-    if (!host) return empty("year_dir_unreachable", { make_folder: makeFolder });
-
-    // ── 2. Resolve the trim folder ──────────────────────────────────
-    const trim = pickLemonTrim(vehicle, folders);
-    if (!trim) {
-      return empty("no_trim_match", { host, make_folder: makeFolder });
-    }
+    // ── 1-2. Resolve a live host + best-match trim folder ───────────
+    const resolved = await resolveLemonVehicle(args);
+    if (!resolved) return empty("unresolved", { make_folder: makeFolder });
+    const { host, trim } = resolved;
 
     // ── 3. Fetch the single-page index (link tree) ──────────────────
-    const indexUrl =
-      buildLemonYearUrl(host, makeFolder, args.year) +
-      `${encodeURIComponent(trim)}/${encodeURIComponent("Repair and Diagnosis (Single Page)")}/`;
-    const indexRes = await fetchText(indexUrl, INDEX_FETCH_TIMEOUT_MS);
+    const indexUrl = resolved.trimBaseUrl + `${encodeURIComponent("Repair and Diagnosis (Single Page)")}/`;
+    const indexRes = await lemonFetch(indexUrl, INDEX_FETCH_TIMEOUT_MS);
     if (!indexRes.ok || indexRes.body.length === 0) {
       return empty("index_unreachable", { host, make_folder: makeFolder, resolved_trim: trim, index_url: indexUrl });
     }
@@ -458,7 +469,7 @@ export async function fetchLemonManualMarkdown(args: LemonFetchArgs): Promise<Le
       if (total >= TOTAL_MARKDOWN_CAP) break;
       const url = resolveLeafUrl(indexUrl, leaf.href);
       if (!url) continue;
-      const res = await fetchText(url, FETCH_TIMEOUT_MS);
+      const res = await lemonFetch(url, FETCH_TIMEOUT_MS);
       if (!res.ok || res.body.length === 0) continue;
       const md = htmlLeafToMarkdown(res.body);
       if (md.length === 0) continue;

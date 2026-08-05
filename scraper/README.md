@@ -15,7 +15,15 @@ It is **opt-in**: the pipeline only calls it when `PARTS_SCRAPLING=on` and
 { "url": "https://…", "mode": "auto", "timeout_ms": 45000, "formats": ["markdown","html"] }
 ```
 - `mode`: `http` (fast, no browser) · `stealth` (Camoufox browser) · `auto` (http, escalate to stealth if blocked/short)
-- Response: `{ url, status, mode, html?, markdown? }`
+- Response: `{ url, status, mode, html?, markdown?, final_url?, blocked }`
+- `status` is the **upstream** status, carried inside a 200 envelope — a `403`
+  here means the target refused us, not that the service failed.
+- `blocked` is the challenge-page verdict. `auto` escalates to the browser tier
+  on it, and callers treat it as a miss.
+
+> **`auto` escalation counts challenge pages, not just short ones.** A Cloudflare
+> interstitial is 2–5 KB of real HTML and frequently answers `200`, so a
+> status+length check alone passed it straight through as a successful scrape.
 
 `GET /health` → `{ "ok": true }`
 
@@ -74,12 +82,42 @@ time — no redeploy needed):
 ```bash
 npx convex env set SCRAPLING_URL   https://<your-scraper-host>
 npx convex env set SCRAPLING_TOKEN <same token as the service>
-npx convex env set PARTS_SCRAPLING on
+
+# Two INDEPENDENT consumers — enable them one at a time, not together.
+npx convex env set PARTS_SCRAPLING          on   # price path (firecrawl.ts)
+npx convex env set PARTS_SCRAPLING_ADAPTERS on   # source adapters (sourceAdapters/http.ts)
 ```
-`convex/vehicleEnrichment/scrapling.ts` is the client; `fetchUrlWithHtml` in
-`firecrawl.ts` tries Scrapling first when enabled and falls back to Firecrawl on
-any miss. To route only specific domains through Scrapling (recommended — e.g.
-TLS-blocking sites), gate the call in `firecrawl.ts` on the URL host.
+
+`convex/vehicleEnrichment/scrapling.ts` is the client. There are three consumers:
+
+| Consumer | Flag | Notes |
+|---|---|---|
+| `firecrawl.ts` `fetchUrlWithHtml` / `fetchUrl` | `PARTS_SCRAPLING` | falls back to Firecrawl on any miss |
+| `sourceAdapters/http.ts` `adapterFetch` | `PARTS_SCRAPLING_ADAPTERS` | falls back to a direct fetch on any miss |
+| `claimGathering.ts` amsoil headless rescue | `PARTS_SCRAPLING` | `mode: "stealth"`, one page |
+
+The flags are separate on purpose: the adapters parse HTML structurally and are
+far more sensitive to a different rendering than the price path is, so they roll
+out — and roll back — independently.
+
+**Adapter eligibility.** `adapterFetch` only offers a request to Scrapling when
+it is a plain HTML GET. Requests carrying `Cookie` / `Authorization` / `Origin` /
+`Referer` / `X-Requested-With` / `Content-Type`, and anything with
+`expects: "json"`, stay on the direct tier — `/scrape` takes no header
+passthrough and HTML-parses what it fetches, so routing them would silently
+change the request or mangle the body. Currently routed: `myCarUserManual`,
+`amsoil` (vehicle page), `rockauto`, `tricoWipers`. Still direct: `brembo`
+(cookie session), `summitCentric` (needs the post-redirect URL — unblock with
+`final_url` once redeployed), `wixFilters` / `sylvaniaBulbs` / `amsoil` API
+(JSON), `tricoWipers` options (POST).
+
+To route only specific domains through Scrapling, gate on the URL host at the
+call site.
+
+> The `blocked` / `final_url` response fields and challenge-aware `auto`
+> escalation need a **redeploy** of this service to take effect. The Convex side
+> re-sniffs the body itself and treats a missing field as `false`, so an older
+> deploy is safe — it just falls back instead of escalating.
 
 > Note: Scrapling's fetcher API has shifted across releases; `app.py` reads the
 > response defensively, but if you pin a very new/old `scrapling` the

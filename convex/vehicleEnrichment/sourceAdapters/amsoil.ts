@@ -55,6 +55,7 @@ import type {
   Claim,
   SourceAdapter,
 } from "./types";
+import { adapterFetch } from "./http";
 
 const ADAPTER_NAME = "amsoil";
 const SOURCE_DOMAIN = "amsoil.com";
@@ -440,13 +441,15 @@ async function fetchVehiclePage(
   path: string,
 ): Promise<{ url: string; outcome: FetchOutcome }> {
   const url = `${PAGE_ROOT}${path}`;
-  const res = await fetch(url, {
-    method: "GET",
+  // PAGE_HEADERS carries no semantic headers (browser-identity only), so this
+  // request is Scrapling-eligible. On a miss the direct tier still sends the
+  // full set — which is what beats the managed challenge today.
+  const r = await adapterFetch(url, {
     headers: PAGE_HEADERS,
-    signal: AbortSignal.timeout(20_000),
+    timeoutMs: 20_000,
+    throwOnError: true,
   });
-  const body = await res.text();
-  return { url, outcome: { status: res.status, body } };
+  return { url, outcome: { status: r.status, body: r.body } };
 }
 
 /** Cloudflare challenge / anti-bot detection. */

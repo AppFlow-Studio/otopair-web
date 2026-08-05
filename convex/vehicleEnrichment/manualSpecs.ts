@@ -104,6 +104,20 @@ const EXTRACTION_TIMEOUT_MS = 180_000;
  *  for any new claim producer. */
 export const MANUAL_SPECS_ADAPTER = "manual_specs";
 
+/**
+ * Adapter id for specs read by the Reducto oversize route.
+ *
+ * Deliberately distinct from MANUAL_SPECS_ADAPTER. The two extractors read the
+ * same document but are different instruments with different failure modes, and
+ * the ledger is a provenance record — an audit should be able to see which one
+ * produced a value, and `purgeClaims({ adapter })` should be able to retract
+ * one extractor's output without destroying the other's.
+ */
+export const SPECS_ADAPTER_REDUCTO = "manual_specs_reducto";
+
+/** Both ids, for callers that ask "has this config been spec-extracted at all?" */
+export const SPECS_ADAPTERS: readonly string[] = [MANUAL_SPECS_ADAPTER, SPECS_ADAPTER_REDUCTO];
+
 /** Gap between scheduled per-config jobs in the sweep. Each is one
  *  large-context model call against a multi-MB PDF. */
 const BACKFILL_STAGGER_MS = 60_000;
@@ -641,6 +655,18 @@ export const getSpecExtractionContext = internalQuery({
             /** Drive the cheap-refresh and oversize branches in the action. */
             storage_id: (manual as any).storage_id ?? null,
             extractor: (manual as any).extractor ?? null,
+            /**
+             * Signed URL for the stored bytes, minted per call.
+             *
+             * Lives here rather than in a second query so BOTH extractors —
+             * the Anthropic one below and the Reducto oversize route — resolve
+             * identity and engine through exactly this code path. Two copies of
+             * engine resolution would be two places for the qualifier-matching
+             * rule to drift.
+             */
+            url: (manual as any).storage_id
+              ? await ctx.storage.getUrl((manual as any).storage_id)
+              : null,
           }
         : null,
     };
@@ -683,7 +709,10 @@ export const specsBackfillPage = internalQuery({
           .query("field_claims")
           .withIndex("by_config", (q) => q.eq("vehicle_config_id", config._id))
           .collect();
-        if (existing.some((c) => c.adapter === MANUAL_SPECS_ADAPTER)) continue;
+        // Either extractor counts as done. Matching only the Anthropic id
+        // would re-pick every oversize config on every sweep and pay for the
+        // same Reducto extraction forever.
+        if (existing.some((c) => c.adapter && SPECS_ADAPTERS.includes(c.adapter))) continue;
 
         const [makeDoc, modelDoc] = await Promise.all([
           ctx.db.get(cfg.make_id),
@@ -700,14 +729,12 @@ export const specsBackfillPage = internalQuery({
           )
           .first();
         // Only vehicles whose manual is already resolved and uploaded.
-        // A resolved manual is one we can READ: either a live Files API id or
-        // our own stored bytes (which the action re-uploads on demand).
-        // Gating on file_id alone would permanently skip every vehicle whose
-        // Files entry has expired — exactly the population storing bytes was
-        // meant to rescue.
-        const readable =
-          Boolean(manual?.file_id) ||
-          (Boolean((manual as any)?.storage_id) && (manual as any)?.extractor !== "reducto");
+        // A resolved manual is one we can READ, by EITHER extractor: a live
+        // Files API id, or our own stored bytes (re-uploaded on demand when
+        // they fit, handed to Reducto when they do not). Gating on file_id
+        // alone would permanently skip both populations storing bytes was
+        // meant to rescue — expired uploads and oversize documents.
+        const readable = Boolean(manual?.file_id) || Boolean((manual as any)?.storage_id);
         if (!readable) continue;
 
         matches.push({ vehicle_config_id: config._id, year: cfg.year, make, model });
@@ -760,6 +787,19 @@ export const extractSpecsFromManual = internalAction({
       const label = `${context.year} ${context.make} ${context.model}`;
       let fileId = context.manual?.file_id ?? null;
 
+      // ── Route: oversize documents go to Reducto ───────────────
+      // A manual over the Messages API's 32 MB / 600-page cap has no file_id
+      // by design. It is also, disproportionately, the kind of document whose
+      // specification chapter is worth reading — so this delegates rather than
+      // returning a gap. Same field contract, same parser, same claim ledger.
+      if (!fileId && context.manual?.extractor === "reducto") {
+        console.log(`[manual-specs] ${label}: oversize — delegating to Reducto`);
+        return await ctx.runAction(
+          (internal as any).vehicleEnrichment.manualReducto.extractSpecsViaReducto,
+          { vehicleConfigId: args.vehicleConfigId, runId: args.runId },
+        );
+      }
+
       // Recover the Files API id from our own stored bytes rather than
       // skipping. This pass is scheduled after the interval pass, which also
       // re-uploads — but relying on that ordering would make this silently
@@ -777,15 +817,9 @@ export const extractSpecsFromManual = internalAction({
         }
       }
 
-      if (!fileId) {
-        // An oversize manual has no file_id by design. Specs extraction has no
-        // Reducto path yet, so this is an honest, named gap rather than a
-        // failure — the intervals for the same vehicle still come through.
-        return none(
-          "skipped",
-          context.manual?.extractor === "reducto" ? "oversize_no_specs_path" : "no_manual_file",
-        );
-      }
+      // Oversize was handled above; anything still without a file_id here has
+      // no readable document at all.
+      if (!fileId) return none("skipped", "no_manual_file");
 
       const apiKey = process.env.ANTHROPIC_API_KEY;
       if (!apiKey) return none("failed", "no_anthropic_api_key");

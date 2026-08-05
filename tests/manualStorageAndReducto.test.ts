@@ -11,10 +11,19 @@ import {
 } from "../convex/vehicleEnrichment/manualLibrary";
 import {
   buildReductoInstructions,
+  buildReductoSpecsInstructions,
   extractReductoResult,
   REDUCTO_INTERVAL_SCHEMA,
+  REDUCTO_SPECS_SCHEMA,
   unwrapReducto,
 } from "../convex/vehicleEnrichment/manualReducto";
+import {
+  MANUAL_SPECS_ADAPTER,
+  parseSpecPayload,
+  SPECS_ADAPTER_REDUCTO,
+  SPECS_ADAPTERS,
+  SPEC_FIELD_KEYS,
+} from "../convex/vehicleEnrichment/manualSpecs";
 
 const MB = 1024 * 1024;
 const DAY = 24 * 60 * 60 * 1000;
@@ -127,6 +136,98 @@ describe("shouldSkipManualLookup — stored bytes make a row resolved", () => {
       ),
     ).toMatchObject({ skip: false, reason: "retry_after_rejection" });
     expect(shouldSkipManualLookup(null, now)).toMatchObject({ skip: false, reason: "no_row" });
+  });
+});
+
+describe("Reducto SPECS route", () => {
+  it("asks for every field the Anthropic specs pass asks for", () => {
+    // Same contract, different instrument — a field the oversize route cannot
+    // request is a field oversize vehicles can never have.
+    const enumVals = REDUCTO_SPECS_SCHEMA.properties.specs.items.properties.field_key.enum;
+    expect([...enumVals].sort()).toEqual([...SPEC_FIELD_KEYS].sort());
+  });
+
+  it("carries the identity guard and requires a quote per value", () => {
+    expect(REDUCTO_SPECS_SCHEMA.required).toContain("document_matches_vehicle");
+    expect(REDUCTO_SPECS_SCHEMA.properties.specs.items.required).toContain("quoted_text");
+  });
+
+  it("asks for `value` as a string on every field, numeric ones included", () => {
+    // A number|string union is what a JSON Schema consumer is most likely to
+    // mishandle, and normalizeSpecValue parses strings on both branches — so
+    // one consistent type removes the risk for nothing.
+    expect(REDUCTO_SPECS_SCHEMA.properties.specs.items.properties.value.type).toBe("string");
+  });
+
+  it("produces a payload manualSpecs' own parser accepts end-to-end", () => {
+    // The real integration check: a Reducto-shaped response (citation-wrapped,
+    // string values) must survive unwrap → parseSpecPayload with the values
+    // normalized identically to the Anthropic path.
+    const wrapped = {
+      result: {
+        document_matches_vehicle: { value: true, citations: [] },
+        document_vehicle_text: { value: "2020 Accord Owner's Manual", citations: [] },
+        specs: [
+          {
+            field_key: { value: "oil_capacity_qts", citations: [] },
+            value: { value: "4.80", citations: [] },
+            unit_as_printed: { value: "US qts", citations: [] },
+            quoted_text: { value: "4.8 US qts with filter", citations: [] },
+            page_number: { value: 552, citations: [] },
+          },
+          {
+            field_key: { value: "oil_viscosity", citations: [] },
+            value: { value: "0w-20", citations: [] },
+            quoted_text: { value: "SAE 0W-20", citations: [] },
+          },
+        ],
+      },
+    };
+    const payload = extractReductoResult(wrapped);
+    const parsed = parseSpecPayload(payload, { code: "K20C4", displacement_l: 1.5 });
+    expect(parsed.rejected).toBeNull();
+    expect(parsed.specs.map((s) => [s.field_key, s.value])).toEqual([
+      ["oil_capacity_qts", "4.8"],
+      ["oil_viscosity", "0W-20"],
+    ]);
+    // Byte-identical to what AMSOIL emits, so the ledger clusters them.
+    expect(parsed.specs[0].value).toBe("4.8");
+  });
+
+  it("inherits the identity guard — a wrong document emits nothing", () => {
+    const payload = extractReductoResult({
+      result: {
+        document_matches_vehicle: { value: false, citations: [] },
+        document_vehicle_text: { value: "2019 Subaru BRZ Quick Guide", citations: [] },
+        specs: [
+          {
+            field_key: { value: "oil_capacity_qts", citations: [] },
+            value: { value: "5.1", citations: [] },
+            quoted_text: { value: "5.1 qts", citations: [] },
+          },
+        ],
+      },
+    });
+    const parsed = parseSpecPayload(payload, null);
+    expect(parsed.specs).toHaveLength(0);
+    expect(parsed.rejected).toMatch(/^document_vehicle_mismatch/);
+  });
+
+  it("names the vehicle and the drain-and-refill rule in the instructions", () => {
+    const p = buildReductoSpecsInstructions({
+      year: 2020,
+      make: "Honda",
+      model: "Accord",
+      engine_label: "K20C4",
+    });
+    expect(p).toContain("2020 Honda Accord");
+    expect(p).toContain("K20C4");
+    expect(p).toContain("DRAIN AND REFILL WITH FILTER CHANGE");
+  });
+
+  it("keeps a distinct adapter id so either extractor can be retracted alone", () => {
+    expect(SPECS_ADAPTER_REDUCTO).not.toBe(MANUAL_SPECS_ADAPTER);
+    expect(SPECS_ADAPTERS).toEqual([MANUAL_SPECS_ADAPTER, SPECS_ADAPTER_REDUCTO]);
   });
 });
 

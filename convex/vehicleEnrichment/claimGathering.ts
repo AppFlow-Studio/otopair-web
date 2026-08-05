@@ -411,7 +411,10 @@ export const gatherClaims = internalAction({
                 mode: "stealth",
                 timeoutMs: 30_000,
               });
-              const html = fetched.html ?? fetched.markdown ?? "";
+              // null is now the miss signal (upstream 4xx, empty, or an
+              // interstitial). Falling to "" yields zero claims, so the rescue
+              // reports failure instead of parsing a challenge page as a page.
+              const html = fetched?.html ?? fetched?.markdown ?? "";
               const claims = parseAmsoilVehiclePage(html, {
                 source_url: pageUrl,
                 observed_at: Date.now(),

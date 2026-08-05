@@ -26,11 +26,23 @@
  * WHAT IT SHARES
  * --------------
  * Everything that decides truth. Reducto is an EXTRACTOR swap, not a pipeline
- * fork: the interval keys, the parser, the dedupe, and above all the write
- * precedence come from manualLibrary and are imported, not reimplemented. A
- * Reducto-sourced interval passes through the same `_writeManualIntervals`
- * mutation and therefore obeys the same rules — never downgrade a
- * `deterministic`/`oem_manual` row, never touch a mechanic-verified one.
+ * fork. Both routes here import their contracts rather than restating them:
+ *
+ *   INTERVALS — keys, parser, dedupe and write precedence come from
+ *   manualLibrary; the write is the same `_writeManualIntervals` mutation, so
+ *   a Reducto interval obeys the same rules (never downgrade a
+ *   `deterministic`/`oem_manual` row, never touch a mechanic-verified one).
+ *
+ *   SPECS — field contract, identity guard, quote requirement, engine-
+ *   qualifier rule and normalization come from manualSpecs.parseSpecPayload,
+ *   and the OEM-vs-mirror family decision from manualSpecs.familyForManual.
+ *   Results are filed as claims, so the reconciler weighs them and nothing
+ *   here can overwrite a stored value.
+ *
+ * The one thing each route states for itself is its adapter id
+ * (`manual_specs_reducto`), because the ledger is a provenance record and an
+ * audit must be able to see which instrument read the document — and retract
+ * one extractor's output without destroying the other's.
  *
  * PIPELINE LAW
  * ------------
@@ -39,10 +51,12 @@
  * use applies here — the extractor must affirmatively confirm the document is
  * this vehicle, or nothing is written.
  *
- * Wire-in points:
+ * Wire-in points — both are delegated to, never selected directly. The routing
+ * decision belongs to the size check made once at download time:
  *   - internal.vehicleEnrichment.manualReducto.extractIntervalsViaReducto
- *     (called by manualLibrary.extractIntervalsFromManual when the row is
- *      routed to this extractor — callers should not choose it directly)
+ *     (from manualLibrary.extractIntervalsFromManual)
+ *   - internal.vehicleEnrichment.manualReducto.extractSpecsViaReducto
+ *     (from manualSpecs.extractSpecsFromManual)
  */
 
 import { v } from "convex/values";
@@ -55,9 +69,18 @@ import {
   normalizeMakeKey,
   parseManualIntervals,
 } from "./manualLibrary";
+import {
+  familyForManual,
+  parseSpecPayload,
+  SPECS_ADAPTER_REDUCTO,
+  SPEC_FIELDS,
+  SPEC_FIELD_KEYS,
+} from "./manualSpecs";
 
 const selfApi = () => (internal as any).vehicleEnrichment.manualReducto;
 const libApi = () => (internal as any).vehicleEnrichment.manualLibrary;
+const specsApi = () => (internal as any).vehicleEnrichment.manualSpecs;
+const claimApi = () => (internal as any).vehicleEnrichment.claimGathering;
 
 const REDUCTO_BASE = "https://platform.reducto.ai";
 /** A 600-page manual takes Reducto meaningfully longer than a receipt. */
@@ -152,6 +175,96 @@ export function buildReductoInstructions(vehicle: {
     "If the schedule is a repeating table (5,000 / 10,000 / 15,000 miles), report the RECURRENCE — the smallest repeating step for that item — not the first column.",
     "If the vehicle uses a condition-based reminder system (Honda Maintenance Minder, GM Oil Life) with no fixed mileage, omit the mileage and say so in notes.",
     "Every reported interval needs a verbatim quoted_text from the document.",
+  ].join(" ");
+}
+
+// ============================================================================
+// Specifications schema (oversize route for manualSpecs)
+// ============================================================================
+
+/**
+ * The specs schema Reducto fills.
+ *
+ * `value` is a STRING for every field, including the numeric ones. That is
+ * deliberate: a `number | string` union is exactly the kind of shape a JSON
+ * Schema consumer is most likely to handle badly, and we do not need it —
+ * `normalizeSpecValue` already accepts strings on both branches (numStr parses
+ * "4.8", textStr uppercases "0W-20"). Asking for one consistent type removes a
+ * class of extractor confusion for nothing.
+ *
+ * The result parses with manualSpecs' OWN `parseSpecPayload`, so the identity
+ * guard, the quote requirement, the engine-qualifier rule, the normalization
+ * and the duplicate handling are all inherited rather than rewritten.
+ */
+export const REDUCTO_SPECS_SCHEMA: Record<string, any> = {
+  type: "object",
+  properties: {
+    document_matches_vehicle: {
+      type: "boolean",
+      description:
+        "True ONLY if this document covers the exact year, make and model asked about. If it covers a different model or model year, false.",
+    },
+    document_vehicle_text: {
+      type: "string",
+      description: "Verbatim vehicle/model-year text from the cover or title page.",
+    },
+    specs: {
+      type: "array",
+      description: "One entry per specification found. Omit anything not printed in the document.",
+      items: {
+        type: "object",
+        properties: {
+          field_key: {
+            type: "string",
+            enum: [...SPEC_FIELD_KEYS],
+            description: "Which specification this is.",
+          },
+          value: {
+            type: "string",
+            description:
+              "The value. For numeric fields give the bare number as text (e.g. \"4.8\", \"35\"); for text fields the value as printed (e.g. \"0W-20\", \"DOT 4\").",
+          },
+          unit_as_printed: {
+            type: "string",
+            description: "Units exactly as the document printed them, e.g. \"US qts\", \"psi\".",
+          },
+          engine_qualifier: {
+            type: "string",
+            description:
+              "Verbatim engine/trim label for this row when the table is split by engine. Omit when the spec is stated once for the whole vehicle.",
+          },
+          quoted_text: {
+            type: "string",
+            description: "Verbatim span from the document stating this value.",
+          },
+          page_number: { type: "number", description: "Page the value appears on." },
+        },
+        required: ["field_key", "value", "quoted_text"],
+      },
+    },
+    notes: { type: "string" },
+  },
+  required: ["document_matches_vehicle", "specs"],
+};
+
+export function buildReductoSpecsInstructions(vehicle: {
+  year: number;
+  make: string;
+  model: string;
+  engine_label?: string | null;
+}): string {
+  const fields = SPEC_FIELDS.map((f) => `${f.key} (${f.unit}): ${f.hint}`).join("; ");
+  return [
+    `This document is manufacturer documentation. The vehicle in question is the ${vehicle.year} ${vehicle.make} ${vehicle.model}` +
+      (vehicle.engine_label ? ` with the ${vehicle.engine_label} engine.` : "."),
+    "First confirm the document covers that exact vehicle and model year from its cover or title page; if it covers something else, set document_matches_vehicle false and return no specs.",
+    "Then find the SPECIFICATIONS section (often titled Specifications, Vehicle Data, Technical Data, or Capacities) and report these values:",
+    fields + ".",
+    "Report only values printed in this document — never infer, convert from a similar model, or fill from general knowledge.",
+    "Capacities marked (qts) must be US quarts: if the document prints litres alongside US quarts, use the US quart figure. Pressures are psi, torque ft-lbs, wiper lengths inches.",
+    "Engine oil capacity means DRAIN AND REFILL WITH FILTER CHANGE — not the dry-fill total and not the without-filter figure. Transmission fluid means the drain-and-fill service quantity, not the total.",
+    "If a value is split by engine or trim, report the row for the engine named above and copy that row's label verbatim into engine_qualifier; if you cannot tell which row applies, omit that field entirely.",
+    "Omit anything the vehicle does not have. Every reported value needs a verbatim quoted_text.",
   ].join(" ");
 }
 
@@ -354,6 +467,142 @@ export const extractIntervalsViaReducto = internalAction({
       return { status: "ok", written: result.written, skipped: result.skipped, reason: EXTRACTOR_REDUCTO };
     } catch (e) {
       console.warn("[manual-reducto] extractIntervalsViaReducto failed:", e);
+      return none("failed", `unexpected:${String(e).slice(0, 200)}`);
+    }
+  },
+});
+
+/**
+ * Read an oversize manual's SPECIFICATIONS with Reducto and file them as claims.
+ *
+ * The specs counterpart to extractIntervalsViaReducto, and the piece that
+ * closes `oversize_no_specs_path`: before this, a manual too large for the
+ * Messages API yielded intervals but never capacities, viscosities or
+ * pressures — the fields its specification chapter is densest in.
+ *
+ * Everything that decides truth is imported, not reimplemented:
+ *   - identity guard, quote requirement, engine matching, normalization and
+ *     duplicate handling come from manualSpecs.parseSpecPayload;
+ *   - the OEM-vs-mirror family rule comes from manualSpecs.familyForManual;
+ *   - the write is the shared claim ledger, so nothing here can overwrite a
+ *     stored value or outrank a mechanic.
+ *
+ * Never throws.
+ */
+export const extractSpecsViaReducto = internalAction({
+  args: {
+    vehicleConfigId: v.id("vehicle_configs"),
+    runId: v.optional(v.id("enrichment_runs")),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ status: "ok" | "skipped" | "failed"; claims: number; dropped: number; reason: string }> => {
+    const none = (status: "skipped" | "failed", reason: string) => ({
+      status,
+      claims: 0,
+      dropped: 0,
+      reason,
+    });
+
+    try {
+      const apiKey = process.env.REDUCTO_API_KEY;
+      if (!apiKey) return none("failed", "no_reducto_api_key");
+
+      // Same context query the Anthropic specs pass uses — one place resolves
+      // identity and engine, so the qualifier rule cannot drift between the
+      // two extractors.
+      const context = await ctx.runQuery(specsApi().getSpecExtractionContext, {
+        vehicleConfigId: args.vehicleConfigId,
+      });
+      if (!context) return none("skipped", "config_not_resolvable");
+      if (!context.manual?.storage_id) return none("skipped", "no_stored_manual");
+      if (!context.manual?.url) return none("failed", "storage_url_unavailable");
+
+      const label = `${context.year} ${context.make} ${context.model}`;
+
+      let body: any;
+      try {
+        const res = await fetch(`${REDUCTO_BASE}/extract`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+          // instructions.schema — NOT a top-level `schema`, which is silently
+          // ignored and yields generic auto-extraction. See the interval call.
+          body: JSON.stringify({
+            input: context.manual.url,
+            instructions: {
+              schema: REDUCTO_SPECS_SCHEMA,
+              prompt: buildReductoSpecsInstructions(context),
+            },
+            settings: { citations: { enabled: true } },
+          }),
+          signal: AbortSignal.timeout(REDUCTO_TIMEOUT_MS),
+        });
+        if (!res.ok) {
+          const detail = (await res.text().catch(() => "")).slice(0, 300);
+          return none("failed", `reducto_${res.status}:${detail}`);
+        }
+        body = await res.json();
+      } catch (e) {
+        return none("failed", `reducto_error:${String(e).slice(0, 200)}`);
+      }
+
+      const payload = extractReductoResult(body);
+      if (!payload) return none("failed", "no_reducto_result");
+
+      const parsed = parseSpecPayload(payload, context.engine);
+      if (parsed.rejected) {
+        console.warn(`[manual-reducto/specs] ${label}: ${parsed.rejected}`);
+        return none("skipped", parsed.rejected);
+      }
+      if (parsed.specs.length === 0) {
+        console.log(
+          `[manual-reducto/specs] ${label}: no storable specs (dropped ${parsed.dropped.length})`,
+        );
+        return none("skipped", "no_specs_extracted");
+      }
+
+      const family = familyForManual(context.manual.source_url, context.make);
+      const observedAt = Date.now();
+      const claims = parsed.specs.map((s) => ({
+        field_key: s.field_key,
+        value: s.value,
+        value_raw: s.value_raw,
+        source_family: family,
+        source_domain: context.manual!.source_domain,
+        source_url: context.manual!.source_url,
+        method: "llm_extraction",
+        // Distinct from the Anthropic adapter id: same document, different
+        // instrument, and the ledger records which one spoke.
+        adapter: SPECS_ADAPTER_REDUCTO,
+        observed_label: s.page_number
+          ? `p.${s.page_number}: ${s.quoted_text}`.slice(0, 600)
+          : s.quoted_text,
+        observed_at: observedAt,
+      }));
+
+      const result = await ctx.runMutation(claimApi()._writeClaims, {
+        vehicleConfigId: args.vehicleConfigId,
+        runId: args.runId,
+        claims,
+      });
+
+      console.log(
+        `[manual-reducto/specs] ${label}: filed ${result.written} claim(s) as ${family} ` +
+          `(${parsed.specs.map((s) => s.field_key).join(", ")})` +
+          (parsed.dropped.length > 0
+            ? ` — dropped ${parsed.dropped.map((d) => `${d.field_key}:${d.reason}`).join(", ")}`
+            : ""),
+      );
+
+      return {
+        status: "ok",
+        claims: result.written,
+        dropped: parsed.dropped.length,
+        reason: EXTRACTOR_REDUCTO,
+      };
+    } catch (e) {
+      console.warn("[manual-reducto/specs] extractSpecsViaReducto failed:", e);
       return none("failed", `unexpected:${String(e).slice(0, 200)}`);
     }
   },

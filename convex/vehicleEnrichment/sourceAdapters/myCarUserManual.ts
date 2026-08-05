@@ -55,6 +55,7 @@ import type {
 } from "./types";
 import { callClaudeExtractOnly } from "../utils/claudeClient";
 import { normalizeSpecValue, SPEC_FIELDS, SPEC_FIELD_KEYS } from "../manualSpecs";
+import { adapterFetch } from "./http";
 
 const ADAPTER_NAME = "mycarusermanual";
 const HOST = "www.mycarusermanual.com";
@@ -452,16 +453,15 @@ export function parseExtraction(
 type Page = { status: number; body: string };
 
 async function fetchPage(url: string): Promise<Page> {
-  try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT, Accept: "text/html,*/*" },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    });
-    const body = res.ok ? await res.text() : "";
-    return { status: res.status, body };
-  } catch {
-    return { status: 0, body: "" };
-  }
+  const r = await adapterFetch(url, {
+    headers: { "User-Agent": USER_AGENT, Accept: "text/html,*/*" },
+    timeoutMs: FETCH_TIMEOUT_MS,
+  });
+  // Unchanged contract: a non-2xx hands back an empty body, so every parser
+  // downstream keeps reading "not ok" as "nothing here". adapterFetch swallows
+  // network errors into status 0, matching the try/catch this replaced.
+  const ok = r.status >= 200 && r.status < 300;
+  return { status: r.status, body: ok ? r.body : "" };
 }
 
 function fail(error: string): AdapterResult {

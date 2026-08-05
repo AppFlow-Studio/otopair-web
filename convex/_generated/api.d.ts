@@ -459,6 +459,7 @@ import type * as vehicleEnrichment_scrapling from "../vehicleEnrichment/scraplin
 import type * as vehicleEnrichment_sourceAdapters_amsoil from "../vehicleEnrichment/sourceAdapters/amsoil.js";
 import type * as vehicleEnrichment_sourceAdapters_brembo from "../vehicleEnrichment/sourceAdapters/brembo.js";
 import type * as vehicleEnrichment_sourceAdapters_claimLedger from "../vehicleEnrichment/sourceAdapters/claimLedger.js";
+import type * as vehicleEnrichment_sourceAdapters_http from "../vehicleEnrichment/sourceAdapters/http.js";
 import type * as vehicleEnrichment_sourceAdapters_myCarUserManual from "../vehicleEnrichment/sourceAdapters/myCarUserManual.js";
 import type * as vehicleEnrichment_sourceAdapters_registry from "../vehicleEnrichment/sourceAdapters/registry.js";
 import type * as vehicleEnrichment_sourceAdapters_rockauto from "../vehicleEnrichment/sourceAdapters/rockauto.js";
@@ -966,6 +967,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/sourceAdapters/amsoil": typeof vehicleEnrichment_sourceAdapters_amsoil;
   "vehicleEnrichment/sourceAdapters/brembo": typeof vehicleEnrichment_sourceAdapters_brembo;
   "vehicleEnrichment/sourceAdapters/claimLedger": typeof vehicleEnrichment_sourceAdapters_claimLedger;
+  "vehicleEnrichment/sourceAdapters/http": typeof vehicleEnrichment_sourceAdapters_http;
   "vehicleEnrichment/sourceAdapters/myCarUserManual": typeof vehicleEnrichment_sourceAdapters_myCarUserManual;
   "vehicleEnrichment/sourceAdapters/registry": typeof vehicleEnrichment_sourceAdapters_registry;
   "vehicleEnrichment/sourceAdapters/rockauto": typeof vehicleEnrichment_sourceAdapters_rockauto;

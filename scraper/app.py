@@ -22,6 +22,7 @@ Auth: if SCRAPLING_TOKEN is set, callers must send `Authorization: Bearer <token
 from __future__ import annotations
 
 import os
+import re
 from typing import Optional
 
 from fastapi import FastAPI, Header, HTTPException
@@ -39,6 +40,34 @@ AUTH_TOKEN = os.environ.get("SCRAPLING_TOKEN", "").strip()
 # "auto" mode escalates to the browser tier — mirrors the pipeline's guard.
 MIN_OK_CHARS = 1000
 
+# Anti-bot interstitials are the case the stealth tier exists for, and a length
+# floor alone does not catch them: a Cloudflare challenge is typically 2-5 KB of
+# real HTML and often answers 200, so it cleared both guards and got returned as
+# a successful scrape. Keep these patterns narrow — vendor internals and exact
+# title strings, never prose a real page might contain — because a false positive
+# escalates a page we already had to the slow browser tier for nothing.
+BLOCK_SIGNATURES = [
+    re.compile(p, re.I)
+    for p in (
+        r"_cf_chl_opt",
+        r"challenge-platform",
+        r"\bcf-chl-",
+        r"<title>\s*Just a moment",
+        r"Checking your browser before accessing",
+        r"Attention Required!\s*\|\s*Cloudflare",
+        r"DDoS protection by\s*Cloudflare",
+        r"_Incapsula_Resource",
+        r"PerimeterX|px-captcha",
+        r"Enable JavaScript and cookies to continue",
+    )
+]
+
+
+def _looks_blocked(html: str) -> bool:
+    """True when the body is an anti-bot challenge rather than the page."""
+    head = html[:4000]
+    return any(rx.search(head) for rx in BLOCK_SIGNATURES)
+
 
 class ScrapeRequest(BaseModel):
     url: str
@@ -53,6 +82,14 @@ class ScrapeResponse(BaseModel):
     mode: str
     html: Optional[str] = None
     markdown: Optional[str] = None
+    # Post-redirect URL when the library exposes it. Adapters that decide what a
+    # page IS from where they landed (a model page bouncing to a category index)
+    # need this; without it they have to stay on the direct tier.
+    final_url: Optional[str] = None
+    # True when the returned body tripped the challenge detector. The caller
+    # treats it as a miss — surfaced rather than hidden so a wall shows up as a
+    # wall in logs instead of as thin extraction downstream.
+    blocked: bool = False
 
 
 def _check_auth(authorization: Optional[str]) -> None:
@@ -113,21 +150,32 @@ def scrape(req: ScrapeRequest, authorization: Optional[str] = Header(default=Non
     try:
         if req.mode == "stealth":
             page = _fetch_stealth(req.url, req.timeout_ms)
+            status, html = _extract(page)
         else:
             page = _fetch_http(req.url, timeout_s)
             status, html = _extract(page)
             # "auto" escalates to the browser tier when the cheap fetch looks
-            # blocked, empty, or bounced to a homepage.
+            # blocked, empty, or bounced to a homepage. The challenge check is
+            # the important one: a Cloudflare interstitial is long enough and
+            # often 200, so the size/status guards alone let it straight through.
             if req.mode == "auto" and (
-                status >= 400 or len(html.strip()) < MIN_OK_CHARS
+                status >= 400
+                or len(html.strip()) < MIN_OK_CHARS
+                or _looks_blocked(html)
             ):
                 page = _fetch_stealth(req.url, req.timeout_ms)
                 used = "stealth"
+                status, html = _extract(page)
     except Exception as e:  # never leak a stack trace to the caller
         raise HTTPException(status_code=502, detail=f"fetch failed: {e}")
 
-    status, html = _extract(page)
-    out = ScrapeResponse(url=req.url, status=status, mode=used)
+    out = ScrapeResponse(
+        url=req.url,
+        status=status,
+        mode=used,
+        final_url=getattr(page, "url", None) or req.url,
+        blocked=_looks_blocked(html),
+    )
     if "html" in req.formats:
         out.html = html
     if "markdown" in req.formats:

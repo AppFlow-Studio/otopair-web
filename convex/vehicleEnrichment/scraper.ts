@@ -43,6 +43,7 @@ import { checkRoleIdentity, ROLEKEYS_BY_PART_SLUG } from "./roleIdentity";
 import { CACHE_FORMAT_VERSION } from "./scraperQueries";
 import type { VehicleInput } from "./types";
 import { scrapeWheelSizeOptions, type WheelSizeResult } from "./utils/wheelSizeScraper";
+import { fetchLemonManualMarkdown } from "./lemonManuals";
 import { resolveScrapeRedirect } from "./buildSourceResolver";
 
 const TTL_PARTS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -615,6 +616,38 @@ async function scrapeManual(
   const markdownParts: string[] = [];
   const sourceUrls: string[] = [];
   let totalChars = 0;
+
+  // LEMON Manuals — a deterministic mirror of factory SERVICE manuals. Its
+  // "Standards and Service Limits" leaves are clean spec tables (fluids,
+  // capacities, torque). Prepend them ahead of open-web results so they survive
+  // the MAX_MARKDOWN_CHARS cap, and let batch1a extract them the same way it
+  // extracts any manual markdown. Fail-open: a miss adds nothing and never
+  // interrupts the search path. Provenance stays mirror-grade (lemon-manuals.la
+  // is in MANUAL_MIRROR_DOMAINS) — it is never claimed as OEM.
+  try {
+    const lemon = await fetchLemonManualMarkdown({
+      make: vehicle.make,
+      model: vehicle.model,
+      year: vehicle.year,
+      trim: vehicle.trim || null,
+      displacement_l: vehicle.displacement ? parseFloat(vehicle.displacement) || null : null,
+    });
+    if (lemon.ok && lemon.markdown.length > 0) {
+      const chunk = lemon.markdown.slice(0, MAX_MARKDOWN_CHARS);
+      markdownParts.push(
+        `\n\n--- Source: LEMON Manuals (${lemon.host ?? "mirror"}, ${lemon.leaf_count} spec pages, trim "${lemon.resolved_trim}") ---\n${chunk}`,
+      );
+      for (const l of lemon.leaves) sourceUrls.push(l.url);
+      totalChars += chunk.length;
+      console.log(
+        `[scraper] LEMON manual: +${chunk.length} chars from ${lemon.leaf_count} spec page(s) for ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
+      );
+    } else {
+      console.log(`[scraper] LEMON manual: no content (${lemon.reason})`);
+    }
+  } catch (e) {
+    console.warn("[scraper] LEMON manual fetch failed (fail-open):", e);
+  }
 
   for (const query of queries) {
     if (totalChars >= MAX_MARKDOWN_CHARS) break;

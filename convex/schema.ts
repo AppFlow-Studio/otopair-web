@@ -1043,6 +1043,35 @@ export default defineSchema({
     created_at: v.optional(v.number()),
   }).index("by_domain", ["domain"]),
 
+  // Curated genuine fluid products (Aug 2026): make × fluid kind × spec/
+  // viscosity → the ONE canonical OEM bottle/jug SKU. Fluids are MAKE-level
+  // data, not per-vehicle — every Mercedes needing MB 229.5 0W-40 takes the
+  // same genuine 1L bottle — so one operator-curated row closes the role for
+  // an entire make. Rows are CANDIDATES only at use time: the heal rung
+  // pushes them through the same fitment verifier and write gates as any
+  // scraped part (a wrong seed cannot poison a config). Curated exclusively
+  // via vehicleEnrichment/genuineFluids.upsertGenuineFluidProduct, which
+  // requires provenance.
+  genuine_fluid_products: defineTable({
+    // Normalized make key — lowercase, hyphens/spaces stripped
+    // ("mercedesbenz"), same normalization as the OEM pattern table, so the
+    // duplicate-makes-row disease can't split fluid coverage.
+    make_key: v.string(),
+    // PART_FIELD_MAP subcategory of the role this product fills:
+    // "engine_oil" | "coolant" | "atf_fluid" | "brake_fluid" | "gear_oil".
+    fluid_kind: v.string(),
+    // OEM spec sheet the product satisfies, e.g. "MB 325.0", "MB 229.5" —
+    // matched against the engine row's spec strings (coolant_type, …).
+    spec: v.optional(v.string()),
+    // Oil grade, e.g. "0W-40" — matched against engines.oil_viscosity.
+    viscosity: v.optional(v.string()),
+    oem_part_number: v.string(),
+    name: v.string(),
+    package_size: v.optional(v.string()),
+    provenance: v.string(),
+    created_at: v.number(),
+  }).index("by_make_kind", ["make_key", "fluid_kind"]),
+
   scrape_cache: defineTable({
     cache_key: v.string(),
     url: v.optional(v.string()),

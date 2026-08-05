@@ -67,6 +67,10 @@ export interface OilCandidate {
   sourceUrl: string;
   /** 2 = explicit 1qt/1L, 1 = size unstated (OEM bottles default 1L). */
   sizeRank: 1 | 2;
+  /** Mined from prose rather than a product page — the weakest provenance
+   *  this rung accepts. Text candidates write ONLY on a positive verifier
+   *  confirmation (see the write loop). */
+  fromText?: boolean;
 }
 
 /** Filter + rank a page's products down to writable oil candidates. */
@@ -146,6 +150,7 @@ export function candidatesFromText(
         price: null,
         sourceUrl: input.sourceUrl,
         sizeRank: 1,
+        fromText: true,
       });
     }
   }
@@ -275,9 +280,16 @@ export const fetchEngineOilProduct = internalAction({
       const vd = verdicts.find((x) => normalizeOemNumber(x.oem) === normalizeOemNumber(c.oem));
       const verdict = vd?.verdict ?? "uncertain";
       outcomes.push(`${c.oem}:${verdict}`);
-      // Viscosity-matched catalog title is strong attestation — write unless
-      // the verifier POSITIVELY refutes (same bar as the category rung).
-      if (verdict === "refuted" || written) continue;
+      // Product-page candidates carry catalog attestation: write unless the
+      // verifier POSITIVELY refutes (same bar as the category rung).
+      // TEXT-MINED numbers have only a prose sentence behind them and write
+      // ONLY on positive confirmation — Aug 5 incident: a lubrication-
+      // HARDWARE-group number (271-180-05-09; genuine MB FLUIDS carry the
+      // 989 middle group) sat on a line reading "Engine Oil 0W-40", cleared
+      // the refute-only bar as "uncertain", and a wrong part reached the
+      // GLC-43 with prices attached before removeRefutedFitments pulled it.
+      if (written) continue;
+      if (c.fromText ? verdict !== "confirmed" : verdict === "refuted") continue;
       const sourceDomain = domainOfUrl(c.sourceUrl) ?? undefined;
       const res: any = await ctx.runMutation(
         internal.vehicleEnrichment.v3mutations.upsertPartAndFitment,

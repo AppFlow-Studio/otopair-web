@@ -457,6 +457,18 @@ export const healAfterRun = internalAction({
     } catch (e) {
       console.error("[heal-after-run] refute harvest failed (non-fatal):", e);
     }
+    // Curated genuine-fluid seeds next — make-level truth (one MB 325.0 jug
+    // row serves every Mercedes), spec-anchored to THIS vehicle and verified
+    // before writing. Cheapest rung after harvest: one DB read + one verify.
+    let fluids: any = null;
+    try {
+      fluids = await ctx.runAction(
+        internal.vehicleEnrichment.genuineFluids.seedFluidsRung,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.error("[heal-after-run] genuine-fluid seed failed (non-fatal):", e);
+    }
     // Deterministic catalog structure next: the store's own vehicle-scoped
     // category pages (fitment stated by the URL itself), then RockAuto
     // OEM/Interchange backtracking off the refuted numbers — both cheaper
@@ -515,6 +527,8 @@ export const healAfterRun = internalAction({
     const summary = {
       harvest: harvest?.status ?? "error",
       harvestWritten: harvest?.written ?? [],
+      fluids: fluids?.status ?? "error",
+      fluidsWritten: fluids?.written ?? [],
       categories: categories?.status ?? "error",
       categoriesWritten: categories?.written ?? [],
       interchange: interchange?.status ?? "error",

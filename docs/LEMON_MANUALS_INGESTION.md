@@ -198,8 +198,8 @@ resolve make → LEMON make folder (handle divergences: "Dodge and Ram", "Nissan
 | Ask | Status | Reality |
 |---|---|---|
 | **Vehicle Specs** | ✅ live | Fluids, capacities, torque, service limits. Working on Honda, Toyota and Ford after the per-make vocabulary fix. |
-| **OEM Intervals** | ⚠️ Honda only | The "LEMON has no schedule" claim was **wrong**. Honda's FSM embeds the Maintenance Minder tables — "Maintenance Main/Sub Items" + a Normal/Severe schedule with real figures ("air cleaner element every 15,000 miles (24,000 km)", "brake fluid every 3 years"). Now harvested at top weight and fed to `batch1a`'s existing `intervals` block. **Absent** on BMW 330i and Toyota Camry/RAV4; Ford's "Maintenance Schedules" pages are stubs that point at the Owner's Guide. |
-| **Labor times** | ✅ live, sparse | 11 catalog services on a populated trim — but only ~10% of trims have a labor index at all (§10). |
+| **OEM Intervals** | ⚠️ Honda only | The "LEMON has no schedule" claim was **wrong**. Honda's FSM embeds the Maintenance Minder tables — "Maintenance Main/Sub Items" with real figures ("air cleaner element every 15,000 miles (24,000 km)", "brake fluid every 3 years"). Harvested at top weight and fed to `batch1a`'s existing `intervals` block. The "Maintenance Schedule … General Countries (Ecuador)" page beside them is **wrong-market and deny-listed** (`LEMON_LEAF_DENY`), as is "Lubricants and Fluids (Ecuador)". **Absent** on BMW 330i and Toyota Camry/RAV4; Ford's "Maintenance Schedules" pages are stubs that point at the Owner's Guide. |
+| **Labor times** | ✅ live, sparse | 12 catalog services on a populated trim (incl. wiper via the `Blade,Both` row preference) — but only ~10% of trims have a labor index at all (§10). |
 | **Parts** | ❌ not available | LEMON publishes **no part numbers**: zero hits for part-number paths in the index, and zero Honda-format p/n (`15400-PLM-A02`) across sampled spec/maintenance leaves. Parts stay on the OEM-storefront path. |
 
 ---
@@ -211,8 +211,9 @@ Sampled live on 2026-08-06. **Read this before quoting a yield number.**
 | | Measured |
 |---|---|
 | Labor Times populated | **~10% of trims.** 2/24 sampled (Honda 2021: 1/12, Ford 2019: 1/12); plus 2020 BMW 330i and 2021 Honda CR-V EX AWD. Empty ones return **HTTP 200 with a ~1.5 KB stub**, so status alone can't tell you. |
-| Labor coverage when populated | **11 of 14** mappable catalog services on a 2021 CR-V EX AWD. (Was 13 before variant-aware row selection — two of those were an arbitrary pick out of a front/rear table and are now correctly withheld, and the pad number was wrong.) |
-| Labor row shape | Multi-variant: `All,Both Axles 1.8` / `Front,Both Sides 1.0` / `Rear,Both Sides 1.0`, then `Combination Procedure:` add-on rows. The axle named by the service selects the row; unresolvable variance returns null. |
+| Labor coverage when populated | **12 of 14** mappable catalog services on a 2021 CR-V EX AWD. Withheld: `brake_fluid_flush` (its leaf has no hours table) and `wheel_bearing_replacement` (front 3.4 vs rear 1.9 with no axle in the service — ambiguity returns null, never a guess). |
+| Labor row shape | Multi-variant: `All,Both Axles 1.8` / `Front,Both Sides 1.0` / `Rear,Both Sides 1.0`, then `Combination Procedure:` add-on rows. The axle named by the service selects the row; per-rule row preferences handle non-axle variants (wiper `Blade,Both` 0.3, not the first row `Arm,Both` 0.4); unresolvable variance returns null. |
+| Drivetrain labels | AWD and 4WD are cross-labelled between makers (Toyota lists AWD sedans as "…, 4WD"); the resolver treats the pair as compatible, penalising only real contradictions. The owner_manual scrape cache partitions by normalized drivetrain so AWD/FWD siblings never share a manual. |
 | Spec-leaf vocabulary | Not shared across makes. Honda "Standards and Service Limits" ×18; Toyota ×0 (uses "Service Specifications" ×470); Ford ×0 for **both** (uses "General Specifications"/"Capacities"). |
 
 Consequences the code has to live with, and does:

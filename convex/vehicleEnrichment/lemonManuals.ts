@@ -210,6 +210,12 @@ export function scoreLemonTrim(
     // correct folder got −6 and the pick fell to the lexicographic tiebreak.
     const isAllWheel = (t: string) => t === "awd" || t === "4wd";
     const folderDts: string[] = DRIVETRAIN_TOKENS.filter((t) => folderToks.has(t));
+    // German makes write AWD as the brand word, never the token: "430i xDrive
+    // 2D Coupe", "C 300 4MATIC", "A4 quattro". Without this alias the AWD/RWD
+    // sibling folders tie and the length tiebreak — not the drivetrain — picks.
+    if (["xdrive", "quattro", "4matic"].some((t) => folderToks.has(t))) {
+      folderDts.push("awd");
+    }
     if (folderDts.includes(dt)) score += 3;
     else if (isAllWheel(dt) && folderDts.some(isAllWheel)) score += 2;
     else if (folderDts.length > 0) score -= 6;
@@ -235,20 +241,42 @@ export function pickLemonTrim(
   vehicle: { model: string; trim?: string | null; drivetrain?: string | null; displacement_l?: number | null },
   folderNames: readonly string[],
 ): string | null {
-  let best: { name: string; score: number } | null = null;
-  for (const name of folderNames) {
-    const score = scoreLemonTrim(vehicle, name);
-    if (score < 0) continue;
-    if (
-      !best ||
-      score > best.score ||
-      (score === best.score && name.length < best.name.length) ||
-      (score === best.score && name.length === best.name.length && name < best.name)
-    ) {
-      best = { name, score };
+  const run = (v: typeof vehicle): { name: string; score: number } | null => {
+    let best: { name: string; score: number } | null = null;
+    for (const name of folderNames) {
+      const score = scoreLemonTrim(v, name);
+      if (score < 0) continue;
+      if (
+        !best ||
+        score > best.score ||
+        (score === best.score && name.length < best.name.length) ||
+        (score === best.score && name.length === best.name.length && name < best.name)
+      ) {
+        best = { name, score };
+      }
     }
-  }
-  return best?.name ?? null;
+    return best;
+  };
+
+  const primary = run(vehicle);
+  if (primary) return primary.name;
+
+  // Trim-designation fallback. German-make folders carry the designation, not
+  // the marketing model — "430i xDrive 2D Coupe" under a car whose model reads
+  // "4 Series" — so the model gate disqualifies the entire directory (the live
+  // miss: 2023 BMW 430i xDrive resolved nothing while the folder sat there).
+  // Re-anchor on the trim's leading designation token, under two guards that
+  // keep this from ever loosening the gate elsewhere:
+  //   1. it fires only when NO folder matched the model (directory-level
+  //      scheme detection, not a per-folder relaxation);
+  //   2. the designation must contain a digit ("430i", "M2", "300") — a
+  //      digit-less trim like Honda's "EX" stays model-gated, so a Civic EX
+  //      can never adopt "Pilot EX-L"'s manual.
+  const designation = (vehicle.trim ?? "")
+    .split(/[^a-zA-Z0-9]+/)
+    .find((t) => t.length >= 2 && /\d/.test(t));
+  if (!designation || alnumKey(designation) === alnumKey(vehicle.model)) return null;
+  return run({ ...vehicle, model: designation })?.name ?? null;
 }
 
 /**

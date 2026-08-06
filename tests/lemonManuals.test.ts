@@ -167,6 +167,54 @@ describe("scoreLemonTrim / pickLemonTrim", () => {
       pickLemonTrim({ model: "CR-V", trim: "EX" }, [...CRV_2021].reverse()),
     );
   });
+
+  // Real folder names from the live /BMW/2023/ index (Aug 6 2026).
+  const BMW_2023 = [
+    "330e xDrive",
+    "330i",
+    "330i xDrive",
+    "430i 2D Convertible",
+    "430i 2D Coupe",
+    "430i Gran Coupe",
+    "430i Gran Coupe xDrive",
+    "430i xDrive 2D Convertible",
+    "430i xDrive 2D Coupe",
+  ];
+
+  it("REGRESSION: BMW designation folders resolve although the model ('4 Series') appears in none", () => {
+    // The live miss: model "4 Series" → alnum "4series" is in no folder, so the
+    // model gate disqualified the whole directory and the 2023 430i xDrive
+    // enriched without LEMON while "430i xDrive 2D Coupe" sat on the index.
+    expect(
+      pickLemonTrim({ model: "4 Series", trim: "430i xDrive", drivetrain: "AWD" }, BMW_2023),
+    ).toBe("430i xDrive 2D Coupe");
+  });
+
+  it("brand drivetrain words count: xDrive beats the RWD sibling for an AWD car", () => {
+    // Without the xdrive→awd alias both coupes tie and the shorter (RWD)
+    // folder wins the tiebreak.
+    expect(
+      pickLemonTrim({ model: "4 Series", trim: "430i xDrive", drivetrain: "AWD" }, [
+        "430i 2D Coupe",
+        "430i xDrive 2D Coupe",
+      ]),
+    ).toBe("430i xDrive 2D Coupe");
+  });
+
+  it("the designation anchor is exact per token: 330i never adopts 330e", () => {
+    expect(pickLemonTrim({ model: "3 Series", trim: "330i xDrive", drivetrain: "AWD" }, BMW_2023)).toBe(
+      "330i xDrive",
+    );
+    expect(pickLemonTrim({ model: "3 Series", trim: "330e xDrive", drivetrain: "AWD" }, BMW_2023)).toBe(
+      "330e xDrive",
+    );
+  });
+
+  it("digit-less trims stay model-gated: a Civic EX cannot adopt Pilot EX-L's manual", () => {
+    // The fallback must be scheme detection for designation-named directories,
+    // never a general loosening of the model gate.
+    expect(pickLemonTrim({ model: "Civic", trim: "EX", drivetrain: "FWD" }, ["Pilot EX-L, AWD"])).toBeNull();
+  });
 });
 
 describe("hrefSegments / hrefTail", () => {

@@ -2904,7 +2904,10 @@ export const enrichVehicleBatchV3 = internalAction({
 
     // STEP 7: FireCrawl scrape — parts catalog + owner's manual
     const scrapeStartedAt = Date.now();
-    const sources = await scrapeVehicleSources(ctx, vehicle);
+    // `vehicle` is built before the decode runs, so fold in the drivetrain we
+    // resolved at STEP 4 — the manual scrape needs it to pick between
+    // drivetrain-qualified source variants (see scrapeManual → LEMON).
+    const sources = await scrapeVehicleSources(ctx, { ...vehicle, drivetrain: nhtsDrivetrain });
     const scrapeEndedAt = Date.now();
 
     // STEP 7b: Record deterministic supersession chains parsed from the same
@@ -4310,7 +4313,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
 
       console.log(
         `[v8/labor] laborAllSources for ${args.make} ${args.model} ${args.trim ?? ""}: ` +
-        `flags={olp:${laborFlags.olp},web:${laborFlags.web},repairpalEndpoint:${laborFlags.repairpalEndpoint}}, ` +
+        `flags={olp:${laborFlags.olp},web:${laborFlags.web},estimatorEndpoint:${laborFlags.estimatorEndpoint},lemon:${laborFlags.lemon}}, ` +
         `${laborServices.length} services, buildId=${laborBuildId ? "resolved" : "none"}`,
       );
 

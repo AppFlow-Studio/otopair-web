@@ -630,6 +630,11 @@ async function scrapeManual(
       model: vehicle.model,
       year: vehicle.year,
       trim: vehicle.trim || null,
+      // Drivetrain matters here: LEMON publishes "CR-V EX, AWD" and "CR-V EX,
+      // FWD" as separate manuals and their capacities differ (only the AWD car
+      // has a rear differential). Without it the two folders tie and the
+      // tiebreak silently picked one.
+      drivetrain: vehicle.drivetrain ?? null,
       displacement_l: vehicle.displacement ? parseFloat(vehicle.displacement) || null : null,
     });
     if (lemon.ok && lemon.markdown.length > 0) {

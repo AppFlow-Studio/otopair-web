@@ -149,9 +149,13 @@ resolve make → LEMON make folder (handle divergences: "Dodge and Ram", "Nissan
   → GET /{Make}/{Year}/                 list trim folders
   → fuzzy-match our {trim, drivetrain, engine} to a LEMON trim folder
   → GET  …/Repair and Diagnosis (Single Page)/    (the link-tree index, §2a)
-  → selectRelevantLeaves(tree)          keep "Service Specifications / Standards and
-                                        Service Limits / Lubrication / Fluid / Capacity" leaves;
-                                        dedupe; cap to ~12 to bound fetches
+  → selectRelevantLeaves(tree)          allowlist is PER-MAKE VOCABULARY, not Honda's:
+                                        Honda "Standards and Service Limits", Toyota
+                                        "Service Specifications" + "…Standard Capacity",
+                                        Ford "General Specifications"/"Capacities"/
+                                        "Lubricants, Fluids, Sealers and Adhesives".
+                                        Subsystem bonus breaks equal-weight ties;
+                                        dedupe by path AND by content; cap ~12 fetches
   → GET each leaf                       (§2b clean spec tables)
   → htmlLeafToMarkdown()                strip chrome; render <table> rows to readable text
   → concat as "--- Source: {url} ---\n{md}"   (same shape scrapeManual returns)
@@ -189,12 +193,28 @@ resolve make → LEMON make folder (handle divergences: "Dodge and Ram", "Nissan
 
 ---
 
-## 10. Open questions / next steps
+## 10. Coverage reality — measured, not assumed
 
-- [ ] **Make-folder map:** enumerate LEMON's make folders (homepage index) and map our make strings, incl. divergences (`Dodge and Ram`, `Nissan-Datsun`, `Mercedes Benz`, `General Motors`, `Land Rover`).
-- [ ] **Trim matching:** confirm the fuzzy matcher against real cases (drivetrain + engine qualifiers). Decide fallback when no trim matches (pick base trim? skip?).
-- [ ] **Leaf allowlist:** finalize which section paths we harvest (specs/fluids/capacities/lubrication — and whether Labor Times feeds the labor subsystem, separately).
-- [ ] **Provenance value:** pick the exact `data_quality` string for LEMON-sourced fields and confirm it's non-protected.
-- [ ] **Rate/etiquette:** the operator dislikes crawlers; keep fetches bounded + cached, per-vehicle on demand (not a fleet sweep).
-- [ ] **Fix the unrelated 4 TS errors** blocking `convex dev` for the team (`useEnsureConvexUser.ts`, `inspection-template.ts`).
+Sampled live on 2026-08-06. **Read this before quoting a yield number.**
+
+| | Measured |
+|---|---|
+| Labor Times populated | **~10% of trims.** 2/24 sampled (Honda 2021: 1/12, Ford 2019: 1/12); plus 2020 BMW 330i and 2021 Honda CR-V EX AWD. Empty ones return **HTTP 200 with a ~1.5 KB stub**, so status alone can't tell you. |
+| Labor coverage when populated | **13 of 14** mappable catalog services on a 2021 CR-V EX AWD. |
+| Spec-leaf vocabulary | Not shared across makes. Honda "Standards and Service Limits" ×18; Toyota ×0 (uses "Service Specifications" ×470); Ford ×0 for **both** (uses "General Specifications"/"Capacities"). |
+
+Consequences the code has to live with, and does:
+- The trim resolver picks the best NAME match, not the trim that happens to have labor data — a 2021 CR-V **EX-L** AWD resolves to a trim with zero labor while **EX** AWD has 392 operations. That is LEMON's shape, not a bug; the source fails open and contributes nothing on a miss.
+- LEMON is one weighted voice (`lemon_labor`, 0.7) among OLP / web / Estimator. A ~10% hit rate is additive, never load-bearing.
+
+---
+
+## 11. Open questions / next steps
+
+- [x] **Make-folder map** — divergences mapped (`Dodge and Ram`, `Nissan-Datsun`, `Mercedes Benz`); unknown makes fall through and are validated by actually fetching the year dir.
+- [x] **Trim matching** — whole-word tokens (so `LE` ≠ `XLE`), drivetrain rewarded AND contradictions penalised (so an FWD car stops getting the AWD manual), displacement echo, deterministic tiebreak. No match → fail open, no fallback guess.
+- [x] **Leaf allowlist** — finalised per-make (§8) with a subsystem tiebreak and content dedupe. Labor Times feeds the labor subsystem **separately** via `lemonLabor.ts` → `laborAllSources`.
+- [ ] **Provenance value:** pick the exact `data_quality` string for LEMON-sourced fields and confirm it's non-protected. (Today LEMON rides `scrapeManual` → `batch1a` like any other web manual and is registered in `MANUAL_MIRROR_DOMAINS`, so it can never claim OEM — but the string has not been pinned deliberately.)
+- [ ] **Rate/etiquette:** the operator dislikes crawlers; keep fetches bounded + cached, per-vehicle on demand (not a fleet sweep). The SPEC path rides the `owner_manual` scrape cache; **the labor path is uncached** and refetches the index + up to 20 leaves per run.
+- [ ] **Unrelated pre-existing TS errors** in `app/` (`TabCars.tsx`, `bookings/page.tsx`, `mechanic-dashboard.tsx`). `convex/` itself typechecks clean.
 ```

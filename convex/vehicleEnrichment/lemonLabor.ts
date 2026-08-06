@@ -23,7 +23,7 @@ import {
   resolveLemonVehicle,
   lemonFetch,
   extractLeafHrefs,
-  safeDecode,
+  hrefTail,
   type LemonFetchArgs,
 } from "./lemonManuals";
 
@@ -32,31 +32,67 @@ const LABOR_LEAF_TIMEOUT_MS = 20_000;
 /** Cap on leaf fetches per vehicle — each requested service costs at most one. */
 export const MAX_LEMON_LABOR_LEAVES = 20;
 
+export type LemonLaborRule = {
+  /** EXACT canonical service slug — the key laborAllSources actually passes. */
+  slug: string;
+  /** Disambiguator for the one slug that covers two service names. */
+  nameTest?: RegExp;
+  /** Operation "Component / Action" tails, most-preferred first. */
+  ops: readonly RegExp[];
+  label: string;
+};
+
 /**
- * Curated service → LEMON labor-operation rules.
+ * Canonical service slug → LEMON labor-operation rules.
  *
- * `test` matches the pipeline's service (we test against "slug name"); `op`
- * matches the operation's decoded "Component / Action" tail. The op regexes are
- * grounded in the REAL MOTOR-style names verified on the 2021 CR-V labor index
- * (e.g. engine air filter is "Air Cleaner Element", a rotor R&R is "Disc Rotor /
- * Remove & Replace" — distinct from the "/ Refinish" variant). Order matters:
- * the FIRST rule whose `test` matches wins, so put specific before generic
- * (cabin filter before the generic air filter).
+ * KEYED ON SLUG, NOT ON A LOOSE NAME REGEX. The previous table matched a regex
+ * against "slug name" and was written against invented slugs (`brake_rotor`,
+ * `water_pump`, `alternator`), none of which the pipeline emits. The real keys
+ * come from SERVICE_NAME_TO_SLUG (v3pipeline.ts) and tests/lemonLabor.test.ts
+ * asserts every `slug` below is one of them. Two concrete bugs that killed:
+ *   - `rotor_replacement`'s NAME is "Brake Pad + Rotor Replacement - Front", so
+ *     the loose /brake[\s_-]?pad/ rule won it and routed rotors to the pad op.
+ *   - `alternator`/`starter`/`water_pump`/`thermostat` are not bookable
+ *     services, so four of the twelve rules could never fire at all.
+ *
+ * Every `ops` regex is anchored and grounded in labor indexes verified live on
+ * 2021 Honda CR-V, 2021 Honda Odyssey, and 2020 BMW 330i — MOTOR's vocabulary
+ * is consistent across makes. Anchoring is what excludes the near-misses:
+ * "Disc Rotor (On Vehicle) / Refinish", "Serpentine Belt TENSIONER /…",
+ * "Battery / Testing", "Battery Cable /…".
+ *
+ * Deliberately UNMAPPED catalog slugs (no honest LEMON equivalent; no hours
+ * beats wrong hours): oil_change (MOTOR publishes no drain-and-refill op — the
+ * nearest, "Engine Oil Filter / Remove & Replace", is a different operation),
+ * power_steering_flush, tire_rotation, wheel_alignment, fuel_system_cleaning,
+ * ac_recharge ("A/C Refrigerant / Recover" is recovery only),
+ * engine_intake_cleaning, multi_point_inspection.
  */
-export const LEMON_LABOR_RULES: ReadonlyArray<{ test: RegExp; op: RegExp; label: string }> = [
-  { test: /spark[\s_-]?plug/i, op: /^spark plugs? \/ remove & replace$/i, label: "spark_plugs" },
-  { test: /cabin/i, op: /^cabin air filter \/ remove & replace$/i, label: "cabin_air_filter" },
-  { test: /air[\s_-]?(filter|cleaner)/i, op: /^air cleaner element \/ remove & replace$/i, label: "engine_air_filter" },
-  { test: /battery/i, op: /^battery \/ remove & replace$/i, label: "battery" },
-  { test: /alternator/i, op: /^alternator(?: assembly)? \/ remove & replace$/i, label: "alternator" },
-  { test: /starter/i, op: /^starter assembly \/ remove & replace$/i, label: "starter" },
-  { test: /water[\s_-]?pump/i, op: /^water pump \/ remove & replace$/i, label: "water_pump" },
-  { test: /thermostat/i, op: /^thermostat(?: housing)? \/ remove & replace$/i, label: "thermostat" },
-  { test: /(serpentine|accessory|drive)[\s_-]?belt/i, op: /^(?:serpentine belt|accessory drive belt|drive belt) \/ remove & replace$/i, label: "serpentine_belt" },
-  { test: /brake[\s_-]?pad/i, op: /^disc brake pads? \/ remove & replace$/i, label: "brake_pads" },
-  { test: /rotor|\bdisc\b/i, op: /^disc rotor \/ remove & replace$/i, label: "brake_rotor" },
-  { test: /transmission[\s_-]?fluid|trans[\s_-]?fluid/i, op: /^automatic transmission fluid \/ drain & refill$/i, label: "transmission_fluid" },
+export const LEMON_LABOR_RULES: readonly LemonLaborRule[] = [
+  { slug: "spark_plugs", ops: [/^spark plugs? \/ remove & replace$/i], label: "spark_plugs" },
+  // One slug, two service names — cabin first so the engine rule gets the rest.
+  { slug: "filter_replacement", nameTest: /cabin/i, ops: [/^cabin air filter \/ remove & replace$/i], label: "cabin_air_filter" },
+  { slug: "filter_replacement", ops: [/^air cleaner element \/ remove & replace$/i], label: "engine_air_filter" },
+  { slug: "brake_pad_replacement", ops: [/^brake shoes &\/or pads \/ remove & replace$/i], label: "brake_pads" },
+  { slug: "rotor_replacement", ops: [/^disc rotor \/ remove & replace$/i], label: "brake_rotor" },
+  { slug: "brake_fluid_flush", ops: [/^brake system \/ bleed$/i], label: "brake_fluid" },
+  { slug: "coolant_flush", ops: [/^cooling system \/ flush$/i, /^cooling system \/ drain & refill$/i], label: "coolant" },
+  { slug: "transmission_service", ops: [/^automatic transmission fluid \/ drain & refill$/i], label: "transmission_fluid" },
+  { slug: "differential_service", ops: [/^differential fluid \/ drain & refill$/i], label: "differential_fluid" },
+  { slug: "transfer_case_service", ops: [/^transfer case fluid \/ drain & refill$/i], label: "transfer_case_fluid" },
+  { slug: "serpentine_belt", ops: [/^serpentine drive belt \/ remove & replace$/i], label: "serpentine_belt" },
+  { slug: "timing_belt", ops: [/^timing belt \/ remove & replace$/i, /^timing chain \/ remove & replace$/i], label: "timing_belt" },
+  { slug: "battery_replacement", ops: [/^battery \/ remove & replace$/i], label: "battery" },
+  { slug: "wheel_bearing_replacement", ops: [/^wheel bearing \/ remove & replace$/i], label: "wheel_bearing" },
+  { slug: "wiper_blade_replacement", ops: [/^wiper arm &\/or blades \/ remove & replace$/i], label: "wiper_blades" },
 ];
+
+/** The rule for a service, or null. Slug is exact; nameTest disambiguates. */
+export function matchLemonLaborRule(svc: { slug: string; name: string }): LemonLaborRule | null {
+  return (
+    LEMON_LABOR_RULES.find((r) => r.slug === svc.slug && (!r.nameTest || r.nameTest.test(svc.name))) ?? null
+  );
+}
 
 /**
  * Parse the "Standard Hours" value from a labor leaf's table.
@@ -145,12 +181,14 @@ export async function fetchLemonLaborHours(
     return fail("labor_index_unreachable", { host: resolved.host, resolved_trim: resolved.trim });
   }
 
-  // Every operation's decoded "component / action" tail, once.
+  // Every operation's "component / action" tail, once. hrefTail splits the RAW
+  // href before decoding — folder names like "Brake Shoes &/Or Pads" and "A/C
+  // Compressor Drive Belt" contain an encoded slash, and decoding first split
+  // them into two segments and produced a wrong tail.
   const ops: Array<{ href: string; tail: string }> = [];
   for (const href of extractLeafHrefs(idx.body)) {
-    const segs = safeDecode(href).split("/").filter(Boolean);
-    if (segs.length < 2) continue;
-    ops.push({ href, tail: `${segs[segs.length - 2]} / ${segs[segs.length - 1]}` });
+    const tail = hrefTail(href);
+    if (tail) ops.push({ href, tail });
   }
 
   const hours: Record<string, number> = {};
@@ -160,11 +198,21 @@ export async function fetchLemonLaborHours(
 
   for (const svc of args.services) {
     if (attempted >= MAX_LEMON_LABOR_LEAVES) break;
+    // One hours value per SLUG, first match wins. "Air Filter Replacement" and
+    // "Cabin Air Filter Replacement" both collapse to `filter_replacement`, so
+    // they resolve to the same services row and can only carry one
+    // labor_observations value — taking the first is the honest behaviour, not
+    // a silent overwrite.
     if (hours[svc.slug] != null) continue;
-    const rule = LEMON_LABOR_RULES.find((r) => r.test.test(`${svc.slug} ${svc.name}`));
+    const rule = matchLemonLaborRule(svc);
     if (!rule) continue;
-    const op = ops.find((o) => rule.op.test(o.tail));
-    if (!op || usedOp.has(op.href)) continue;
+    // Walk the rule's op preferences in order, skipping ops already consumed by
+    // an earlier service, so a taken first choice falls through to the next.
+    const op = rule.ops.reduce<{ href: string; tail: string } | undefined>(
+      (found, rx) => found ?? ops.find((o) => rx.test(o.tail) && !usedOp.has(o.href)),
+      undefined,
+    );
+    if (!op) continue;
     usedOp.add(op.href);
     attempted++;
     const url = new URL(op.href, laborIndexUrl).toString();
@@ -188,18 +236,30 @@ export async function fetchLemonLaborHours(
   };
 }
 
-/** A representative service set for the preview action (proof without a config). */
-const DEFAULT_PREVIEW_SERVICES = [
+/**
+ * The preview action's service set.
+ *
+ * These are REAL (slug, name) pairs straight out of SERVICE_NAME_TO_SLUG — the
+ * previous set was invented, which is precisely why a preview could report 9/10
+ * while production matched almost nothing. A preview that doesn't speak the
+ * pipeline's vocabulary isn't proof of anything.
+ */
+export const DEFAULT_PREVIEW_SERVICES: ReadonlyArray<{ slug: string; name: string }> = [
   { slug: "spark_plugs", name: "Spark Plug Replacement" },
-  { slug: "cabin_air_filter", name: "Cabin Air Filter Replacement" },
-  { slug: "engine_air_filter", name: "Engine Air Filter Replacement" },
-  { slug: "battery", name: "Battery Replacement" },
-  { slug: "alternator", name: "Alternator Replacement" },
-  { slug: "starter", name: "Starter Replacement" },
-  { slug: "water_pump", name: "Water Pump Replacement" },
+  { slug: "filter_replacement", name: "Cabin Air Filter Replacement" },
+  { slug: "filter_replacement", name: "Air Filter Replacement" },
+  { slug: "brake_pad_replacement", name: "Brake Pad Replacement - Front" },
+  { slug: "rotor_replacement", name: "Brake Pad + Rotor Replacement - Front" },
+  { slug: "brake_fluid_flush", name: "Brake Fluid Flush" },
+  { slug: "coolant_flush", name: "Coolant Flush" },
+  { slug: "transmission_service", name: "Transmission Fluid Service" },
+  { slug: "differential_service", name: "Differential Fluid Service" },
+  { slug: "transfer_case_service", name: "Transfer Case Fluid Service" },
   { slug: "serpentine_belt", name: "Serpentine Belt Replacement" },
-  { slug: "brake_rotor", name: "Brake Rotor Replacement" },
-  { slug: "transmission_fluid", name: "Transmission Fluid Service" },
+  { slug: "timing_belt", name: "Timing Belt/Chain Service" },
+  { slug: "battery_replacement", name: "Battery Replacement" },
+  { slug: "wheel_bearing_replacement", name: "Wheel Bearing Replacement" },
+  { slug: "wiper_blade_replacement", name: "Wiper Blade Replacement (set)" },
 ];
 
 /**

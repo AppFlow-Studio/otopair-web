@@ -238,10 +238,10 @@ import type * as oto_migrations_vehicleFactsReconciliation from "../oto/migratio
 import type * as oto_migrations_verifiedFactsSeed from "../oto/migrations/verifiedFactsSeed.js";
 import type * as oto_migrations_wave3Backfill from "../oto/migrations/wave3Backfill.js";
 import type * as oto_moodMap from "../oto/moodMap.js";
+import type * as oto_promptChangelog from "../oto/promptChangelog.js";
 import type * as oto_prompt_index from "../oto/prompt/index.js";
 import type * as oto_prompt_stable from "../oto/prompt/stable.js";
 import type * as oto_prompt_volatile from "../oto/prompt/volatile.js";
-import type * as oto_promptChangelog from "../oto/promptChangelog.js";
 import type * as oto_queryMoat from "../oto/queryMoat.js";
 import type * as oto_recordConfirmation from "../oto/recordConfirmation.js";
 import type * as oto_reliability from "../oto/reliability.js";
@@ -416,6 +416,8 @@ import type * as vehicleEnrichment_laborRelabor from "../vehicleEnrichment/labor
 import type * as vehicleEnrichment_laborResearch from "../vehicleEnrichment/laborResearch.js";
 import type * as vehicleEnrichment_laborSibling from "../vehicleEnrichment/laborSibling.js";
 import type * as vehicleEnrichment_laborWebSearch from "../vehicleEnrichment/laborWebSearch.js";
+import type * as vehicleEnrichment_lemonLabor from "../vehicleEnrichment/lemonLabor.js";
+import type * as vehicleEnrichment_lemonManuals from "../vehicleEnrichment/lemonManuals.js";
 import type * as vehicleEnrichment_manualDirectSources from "../vehicleEnrichment/manualDirectSources.js";
 import type * as vehicleEnrichment_manualLibrary from "../vehicleEnrichment/manualLibrary.js";
 import type * as vehicleEnrichment_manualReducto from "../vehicleEnrichment/manualReducto.js";
@@ -746,10 +748,10 @@ declare const fullApi: ApiFromModules<{
   "oto/migrations/verifiedFactsSeed": typeof oto_migrations_verifiedFactsSeed;
   "oto/migrations/wave3Backfill": typeof oto_migrations_wave3Backfill;
   "oto/moodMap": typeof oto_moodMap;
+  "oto/promptChangelog": typeof oto_promptChangelog;
   "oto/prompt/index": typeof oto_prompt_index;
   "oto/prompt/stable": typeof oto_prompt_stable;
   "oto/prompt/volatile": typeof oto_prompt_volatile;
-  "oto/promptChangelog": typeof oto_promptChangelog;
   "oto/queryMoat": typeof oto_queryMoat;
   "oto/recordConfirmation": typeof oto_recordConfirmation;
   "oto/reliability": typeof oto_reliability;
@@ -924,6 +926,8 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/laborResearch": typeof vehicleEnrichment_laborResearch;
   "vehicleEnrichment/laborSibling": typeof vehicleEnrichment_laborSibling;
   "vehicleEnrichment/laborWebSearch": typeof vehicleEnrichment_laborWebSearch;
+  "vehicleEnrichment/lemonLabor": typeof vehicleEnrichment_lemonLabor;
+  "vehicleEnrichment/lemonManuals": typeof vehicleEnrichment_lemonManuals;
   "vehicleEnrichment/manualDirectSources": typeof vehicleEnrichment_manualDirectSources;
   "vehicleEnrichment/manualLibrary": typeof vehicleEnrichment_manualLibrary;
   "vehicleEnrichment/manualReducto": typeof vehicleEnrichment_manualReducto;

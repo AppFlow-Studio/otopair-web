@@ -46,6 +46,8 @@ const FETCH_TIMEOUT_MS = 20_000;
 const INDEX_FETCH_TIMEOUT_MS = 40_000;
 /** Most spec leaves we will read + render for one vehicle. Each is a fetch. */
 export const MAX_LEMON_LEAVES = 12;
+/** Extra fetches allowed while skipping content-duplicate leaves (see §4/§5). */
+export const LEAF_FETCH_SLACK = 8;
 /** Per-leaf rendered-markdown cap. Spec tables are small; this is a guard. */
 const PER_LEAF_CHAR_CAP = 8_000;
 /** Total rendered-markdown cap fed downstream. */
@@ -133,6 +135,27 @@ export function parseChildFolders(html: string, dirUrl: string): string[] {
   return out;
 }
 
+/** The drivetrain tokens LEMON puts in its folder names. */
+export const DRIVETRAIN_TOKENS = ["awd", "fwd", "rwd", "4wd"] as const;
+
+/**
+ * Reduce a drivetrain string to the token LEMON uses, or null.
+ *
+ * NHTSA rarely returns a bare "AWD" — it returns things like
+ * "4WD/4-Wheel Drive/4x4" or "FWD/Front-Wheel Drive", and the Batch-1 extraction
+ * returns prose. Matching those against a bare-token regex silently dropped the
+ * drivetrain signal entirely, so normalize before comparing.
+ */
+export function normalizeDrivetrain(raw: string | null | undefined): string | null {
+  const s = typeof raw === "string" ? raw.toLowerCase() : "";
+  if (!s) return null;
+  if (/\b(4wd|4x4|four[\s-]?wheel)\b/.test(s)) return "4wd";
+  if (/\b(awd|all[\s-]?wheel)\b/.test(s)) return "awd";
+  if (/\b(fwd|front[\s-]?wheel)\b/.test(s)) return "fwd";
+  if (/\b(rwd|rear[\s-]?wheel)\b/.test(s)) return "rwd";
+  return null;
+}
+
 /**
  * Score how well a LEMON trim folder matches the vehicle. Higher is better;
  * a folder that doesn't contain the model at all scores -1 (disqualified).
@@ -162,16 +185,27 @@ export function scoreLemonTrim(
   const trimToks = (vehicle.trim ?? "").toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 1);
   for (const t of trimToks) if (folderToks.has(t)) score += 4;
 
-  // Drivetrain echo (awd/fwd/rwd/4wd) as a whole token.
-  const dt = (vehicle.drivetrain ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (dt && /^(awd|fwd|rwd|4wd)$/.test(dt) && folderToks.has(dt)) score += 3;
+  // Drivetrain: reward the matching token, PENALIZE a contradicting one. LEMON
+  // publishes sibling folders that differ ONLY by drivetrain ("CR-V EX, AWD" vs
+  // "CR-V EX, FWD"). Rewarding alone left them tied whenever we knew the
+  // drivetrain but the folder disagreed, and the lexicographic tiebreak then
+  // handed every FWD car the AWD manual — including a rear-differential fluid
+  // capacity that vehicle does not have.
+  const dt = normalizeDrivetrain(vehicle.drivetrain);
+  if (dt) {
+    if (folderToks.has(dt)) score += 3;
+    else if (DRIVETRAIN_TOKENS.some((t) => t !== dt && folderToks.has(t))) score -= 6;
+  }
 
   // Displacement echo ("1.5L" ↔ 1.5).
   if (typeof vehicle.displacement_l === "number" && vehicle.displacement_l > 0) {
     const d = vehicle.displacement_l.toFixed(1);
     if (folderLc.includes(`${d}l`) || folderLc.includes(`${d} l`)) score += 3;
   }
-  return score;
+  // Clamp at 0: the drivetrain penalty must DEMOTE a contradicting folder, never
+  // push it below the -1 sentinel that means "doesn't contain the model" — a
+  // wrong-drivetrain manual still beats no manual when it's the only one there.
+  return Math.max(0, score);
 }
 
 /**
@@ -201,16 +235,49 @@ export function pickLemonTrim(
 
 /**
  * Leaf-section allowlist, most valuable first. LEMON is a service manual, so the
- * clean structured data lives on "Standards and Service Limits" spec tables and
- * "Service Specifications" pages (verified: coolant capacity/type, torque, etc.).
- * Each entry: a matcher against the DECODED href path + a priority weight.
+ * clean structured data lives on spec tables. Each entry: a matcher against the
+ * DECODED href path + a priority weight.
+ *
+ * The vocabulary is NOT uniform across makes — verified live on three:
+ *   Honda CR-V   "Standards and Service Limits" ×18, "Service Specifications" ×18
+ *   Toyota Camry "Standards and Service Limits" ×0,  "Service Specifications" ×470
+ *   Ford  F-150  both ×0 — it uses "General Specifications" ×22, "Capacities" ×8,
+ *                "Torque Specifications" ×3, "Lubricants, Fluids, Sealers and
+ *                Adhesives" ×4
+ * A Honda-only allowlist therefore harvested NOTHING of value on Ford. Every
+ * entry below is grounded in a live index.
+ *
+ * `/\bcapacit(y|ies)\b/` is deliberately word-bounded: the earlier `/\bcapacit/`
+ * also matched "Ignition Transformer Capacitor" — a wiring-diagram page. Both
+ * numbers are needed: Ford titles its pages "Capacities", Toyota "Engine Oil
+ * Standard Capacity". Likewise one `/\blubricants?\b/` covers Ford's
+ * "Lubricants, Fluids, Sealers and Adhesives" and Toyota's "Fluids And
+ * Lubricants" without a per-make string.
  */
 export const LEMON_LEAF_SECTIONS: ReadonlyArray<{ re: RegExp; weight: number; label: string }> = [
   { re: /standards and service limits/i, weight: 100, label: "service_limits" },
+  { re: /\bcapacit(y|ies)\b/i, weight: 95, label: "capacity" },
+  { re: /\blubricants?\b/i, weight: 90, label: "lubricants" },
+  { re: /general specifications/i, weight: 85, label: "general_specifications" },
+  { re: /torque specifications/i, weight: 82, label: "torque_specifications" },
   { re: /service specifications/i, weight: 80, label: "service_specifications" },
+  { re: /fluid type specifications/i, weight: 70, label: "fluid_type" },
   { re: /lubrication system - service information/i, weight: 50, label: "lubrication" },
-  { re: /\bcapacit/i, weight: 30, label: "capacity" },
   { re: /\bfluid\b/i, weight: 20, label: "fluid" },
+];
+
+/**
+ * Subsystem bonus, applied on top of the section weight.
+ *
+ * Toyota publishes 470 "Service Specifications" leaves; a cap of 12 with no
+ * tiebreak but href-alphabetical picked an ARBITRARY dozen (whatever sorts
+ * first). The bonus pulls the leaves whose PATH names a subsystem we actually
+ * extract — fluids, capacities, torque — to the front of that pack. Highest
+ * matching bonus wins (not a sum), so ordering stays easy to reason about.
+ */
+export const LEMON_LEAF_SUBSYSTEMS: ReadonlyArray<{ re: RegExp; bonus: number }> = [
+  { re: /lubrication|engine oil|coolant|cooling|brake fluid|transmission fluid|\bcapacities\b|fluid type/i, bonus: 12 },
+  { re: /engine mechanical|\bbrakes\b|transmission|drivelines|axles|steering|suspension/i, bonus: 6 },
 ];
 
 /** Every relative leaf href in the single-page index (deduped, in doc order). */
@@ -230,11 +297,11 @@ export function extractLeafHrefs(indexHtml: string): string[] {
   return out;
 }
 
-export type LemonLeaf = { href: string; weight: number; label: string };
+export type LemonLeaf = { href: string; weight: number; score: number; label: string };
 
 /**
- * Rank the index's leaf hrefs by the section allowlist and return the top N.
- * Deterministic: sort by weight desc, then href asc; dedupe by href.
+ * Rank the index's leaf hrefs by the section allowlist (+ subsystem bonus) and
+ * return the top N. Deterministic: sort by score desc, then href asc; dedupe.
  */
 export function selectRelevantLeaves(hrefs: readonly string[], cap = MAX_LEMON_LEAVES): LemonLeaf[] {
   const scored: LemonLeaf[] = [];
@@ -253,13 +320,14 @@ export function selectRelevantLeaves(hrefs: readonly string[], cap = MAX_LEMON_L
       }
     }
     if (!matched) continue;
-    const segs = decoded.split("/").filter((x) => x.length > 0);
+    const segs = hrefSegments(href);
     const tail = segs.slice(-2).join("/").toLowerCase();
     if (seenTail.has(tail)) continue;
     seenTail.add(tail);
-    scored.push({ href, weight: matched.weight, label: matched.label });
+    const bonus = LEMON_LEAF_SUBSYSTEMS.find((s) => s.re.test(decoded))?.bonus ?? 0;
+    scored.push({ href, weight: matched.weight, score: matched.weight + bonus, label: matched.label });
   }
-  scored.sort((a, b) => b.weight - a.weight || a.href.localeCompare(b.href));
+  scored.sort((a, b) => b.score - a.score || a.href.localeCompare(b.href));
   return scored.slice(0, Math.max(0, cap));
 }
 
@@ -279,6 +347,29 @@ export function safeDecode(s: string): string {
   } catch {
     return s;
   }
+}
+
+/**
+ * Split an href into its path segments — RAW split first, decode each segment
+ * after. Never decode the whole path and then split it.
+ *
+ * LEMON has folder names that CONTAIN a slash: "A/C Compressor Drive Belt",
+ * "Brake Shoes &/Or Pads". The site percent-encodes those (%2F) inside a single
+ * segment, so decode-then-split turns one folder into two and the
+ * "component / action" tail of every such operation comes out wrong — which is
+ * exactly why the brake-pad and A/C operations never matched.
+ */
+export function hrefSegments(href: string): string[] {
+  return href
+    .split("/")
+    .filter((s) => s.length > 0)
+    .map(safeDecode);
+}
+
+/** The "Component / Action" tail of a leaf href ("Spark Plugs / Remove & Replace"). */
+export function hrefTail(href: string): string | null {
+  const segs = hrefSegments(href);
+  return segs.length >= 2 ? `${segs[segs.length - 2]} / ${segs[segs.length - 1]}` : null;
 }
 
 /** Strip tags + decode the handful of entities LEMON emits. */
@@ -455,8 +546,13 @@ export async function fetchLemonManualMarkdown(args: LemonFetchArgs): Promise<Le
     }
 
     // ── 4. Select the spec leaves ───────────────────────────────────
+    // Over-select: the path dedupe keys on the last TWO segments, which is right
+    // for Ford (several genuinely different "…/Capacities" pages) but too loose
+    // for Toyota, which files ONE page under half a dozen parents — six slots of
+    // twelve went to the same "Engine Oil Standard Capacity" page. Take a deeper
+    // candidate list and let the fetch loop below drop content duplicates.
     const cap = Math.max(1, Math.trunc(args.maxLeaves ?? MAX_LEMON_LEAVES));
-    const chosen = selectRelevantLeaves(extractLeafHrefs(indexRes.body), cap);
+    const chosen = selectRelevantLeaves(extractLeafHrefs(indexRes.body), cap * 3);
     if (chosen.length === 0) {
       return empty("no_spec_leaves", { host, make_folder: makeFolder, resolved_trim: trim, index_url: indexUrl });
     }
@@ -464,15 +560,25 @@ export async function fetchLemonManualMarkdown(args: LemonFetchArgs): Promise<Le
     // ── 5. Fetch + render each leaf into markdown ───────────────────
     const parts: string[] = [];
     const leaves: LemonPreview["leaves"] = [];
+    const seenContent = new Set<string>();
     let total = 0;
+    let fetches = 0;
     for (const leaf of chosen) {
-      if (total >= TOTAL_MARKDOWN_CAP) break;
+      if (total >= TOTAL_MARKDOWN_CAP || leaves.length >= cap) break;
+      // Bound the extra fetches the over-selection could cost: a page-count
+      // budget, not just an accepted-leaf budget.
+      if (fetches >= cap + LEAF_FETCH_SLACK) break;
       const url = resolveLeafUrl(indexUrl, leaf.href);
       if (!url) continue;
+      fetches++;
       const res = await lemonFetch(url, FETCH_TIMEOUT_MS);
       if (!res.ok || res.body.length === 0) continue;
       const md = htmlLeafToMarkdown(res.body);
       if (md.length === 0) continue;
+      // Same content under a different parent — keep the first, skip the rest.
+      const fingerprint = `${md.length}:${md.slice(0, 240)}`;
+      if (seenContent.has(fingerprint)) continue;
+      seenContent.add(fingerprint);
       const block = `\n\n--- Source: ${url} ---\n${md}`;
       parts.push(block);
       leaves.push({ url, label: leaf.label, chars: md.length });

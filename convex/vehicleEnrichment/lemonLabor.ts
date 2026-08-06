@@ -95,14 +95,42 @@ export function matchLemonLaborRule(svc: { slug: string; name: string }): LemonL
 }
 
 /**
+ * Row preferences implied by a service NAME.
+ *
+ * The catalog books brakes per axle ("Brake Pad Replacement - Front"), and so
+ * does MOTOR — but its FIRST row is the whole-car variant. On a 2021 CR-V the
+ * pad table reads: "All,Both Axles 1.8" / "Front,Both Sides 1.0" / "Rear,Both
+ * Sides 1.0". Taking the first row billed a front pad job at 1.8 h instead of
+ * 1.0. Prefer the axle the service names, and within it the both-sides row (a
+ * per-axle job is both sides; "One Side" is the half job).
+ */
+export function axlePreferences(name: string): RegExp[] {
+  if (/\bfront\b/i.test(name)) return [/front[^|]*\bboth\b/i, /\bfront\b/i];
+  if (/\brear\b/i.test(name)) return [/rear[^|]*\bboth\b/i, /\brear\b/i];
+  return [];
+}
+
+type LaborRow = { applies: string; hours: number };
+
+/**
  * Parse the "Standard Hours" value from a labor leaf's table.
  *
  * Table shape: header row + one-or-more data rows, columns "Applies To | Note |
- * Standard Hours | Warranty Hours | Skill Level". Finds the Standard-Hours
- * column by header text and returns the first positive value. Returns null if
- * absent (fail-closed: no hours beats a wrong number). Never throws.
+ * Standard Hours | Warranty Hours | Skill Level".
+ *
+ * Row selection, in order:
+ *   1. Stop at the first "Combination Procedure:" separator — everything after
+ *      it is an ADD-ON operation (bleed, caliper overhaul, EPB disable), not the
+ *      base job, and must never be mistaken for it.
+ *   2. If the caller supplies preferences (axle, etc.), the first row matching
+ *      the first matching preference wins.
+ *   3. Otherwise: one distinct value → use it; SEVERAL different values and
+ *      nothing to choose between them → null. An arbitrary pick out of a
+ *      variant table is exactly the wrong-number-at-weight-0.7 case.
+ *
+ * Returns null when absent or ambiguous. Never throws.
  */
-export function parseLaborLeafHours(html: string): number | null {
+export function parseLaborLeafHours(html: string, prefs: readonly RegExp[] = []): number | null {
   const start = html.indexOf('<div class="main">');
   let body = start >= 0 ? html.slice(start) : html;
   const cut = body.search(/<div class="theme-colors footer"|<div class="other-warning/i);
@@ -134,13 +162,26 @@ export function parseLaborLeafHours(html: string): number | null {
   if (idx < 0) idx = header.findIndex((h) => /\bhours\b/.test(h)); // fallback
   if (idx < 0) return null;
 
+  const candidates: LaborRow[] = [];
   for (let r = 1; r < rows.length; r++) {
-    const raw = rows[r][idx];
+    const cells = rows[r];
+    // A combination-procedure separator ends the base-operation rows.
+    if (cells.some((c) => /^combination procedure:/i.test(c))) break;
+    const raw = cells[idx];
     if (!raw) continue;
     const n = parseFloat(raw.replace(/[^0-9.]/g, ""));
-    if (Number.isFinite(n) && n > 0) return Math.round(n * 100) / 100;
+    if (!Number.isFinite(n) || n <= 0) continue;
+    candidates.push({ applies: cells[0] ?? "", hours: Math.round(n * 100) / 100 });
   }
-  return null;
+  if (candidates.length === 0) return null;
+
+  for (const pref of prefs) {
+    const hit = candidates.find((c) => pref.test(c.applies));
+    if (hit) return hit.hours;
+  }
+
+  const distinct = new Set(candidates.map((c) => c.hours));
+  return distinct.size === 1 ? candidates[0].hours : null;
 }
 
 export type LemonLaborResult = {
@@ -218,7 +259,7 @@ export async function fetchLemonLaborHours(
     const url = new URL(op.href, laborIndexUrl).toString();
     const leaf = await lemonFetch(url, LABOR_LEAF_TIMEOUT_MS);
     if (!leaf.ok || leaf.body.length === 0) continue;
-    const h = parseLaborLeafHours(leaf.body);
+    const h = parseLaborLeafHours(leaf.body, axlePreferences(svc.name));
     if (h == null) continue;
     hours[svc.slug] = h;
     matched.push({ slug: svc.slug, op: op.tail, hours: h, url });

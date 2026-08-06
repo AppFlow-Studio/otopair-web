@@ -17,6 +17,7 @@ import {
   LEMON_LABOR_RULES,
   matchLemonLaborRule,
   parseLaborLeafHours,
+  axlePreferences,
   DEFAULT_PREVIEW_SERVICES,
 } from "../convex/vehicleEnrichment/lemonLabor";
 import { SERVICE_NAME_TO_SLUG } from "../convex/vehicleEnrichment/v3pipeline";
@@ -157,6 +158,71 @@ describe("operation regexes vs the real index (near-miss exclusion)", () => {
   it("does not confuse the differential fluid service with its temperature sensor", () => {
     const diff = LEMON_LABOR_RULES.find((r) => r.slug === "differential_service")!;
     expect(opsFor(diff.ops[0])).toEqual(["Differential Fluid / Drain & Refill"]);
+  });
+});
+
+describe("axlePreferences + variant row selection", () => {
+  // The real 2021 CR-V pad table. Its FIRST row is the whole-car variant.
+  const padTable =
+    `<div class="main"><table>` +
+    `<tr><th>Applies To</th><th>Note</th><th>Standard Hours</th><th>Warranty Hours</th><th>Skill Level</th></tr>` +
+    `<tr><td>All,Both Axles</td><td></td><td>1.8</td><td></td><td>B</td></tr>` +
+    `<tr><td>Front,Both Sides</td><td></td><td>1.0</td><td></td><td>B</td></tr>` +
+    `<tr><td>Rear,Both Sides</td><td></td><td>1.0</td><td></td><td>B</td></tr>` +
+    `<tr><td>Combination Procedure: CALIPER: Overhaul: Includes: Bleed Brake System.</td></tr>` +
+    `<tr><td>One</td><td></td><td>0.7</td><td></td><td>B</td></tr>` +
+    `</table></div>`;
+
+  it("REGRESSION: a front pad job bills the front row, not 'All, Both Axles'", () => {
+    expect(parseLaborLeafHours(padTable, axlePreferences("Brake Pad Replacement - Front"))).toBe(1.0);
+    expect(parseLaborLeafHours(padTable, axlePreferences("Brake Pad Replacement - Rear"))).toBe(1.0);
+    // What the old first-row-wins parser produced — nearly double.
+    expect(parseLaborLeafHours(padTable)).not.toBe(1.8);
+  });
+
+  it("prefers the both-sides row over the one-side half job", () => {
+    const rotors =
+      `<div class="main"><table>` +
+      `<tr><th>Applies To</th><th>Standard Hours</th></tr>` +
+      `<tr><td>Front,One Side</td><td>0.6</td></tr>` +
+      `<tr><td>Front,Both</td><td>1.0</td></tr>` +
+      `</table></div>`;
+    expect(parseLaborLeafHours(rotors, axlePreferences("Brake Pad + Rotor Replacement - Front"))).toBe(1.0);
+  });
+
+  it("stops at the combination-procedure separator", () => {
+    // Without the cut, a leaf whose base rows are all blank would fall through
+    // to an add-on operation's hours and report a bleed as the whole job.
+    const html =
+      `<div class="main"><table><tr><th>Applies To</th><th>Standard Hours</th></tr>` +
+      `<tr><td>All</td><td>&nbsp;</td></tr>` +
+      `<tr><td>Combination Procedure: BLEED BRAKE SYSTEM:</td></tr>` +
+      `<tr><td>One</td><td>0.5</td></tr></table></div>`;
+    expect(parseLaborLeafHours(html)).toBeNull();
+  });
+
+  it("REGRESSION: returns null rather than guessing between unequal variants", () => {
+    // The real CR-V wheel-bearing table: rear 1.9, front 3.4. The catalog
+    // service carries no axle, so there is nothing to choose with — and an
+    // arbitrary pick is a wrong number entering a weighted median at 0.7.
+    const bearings =
+      `<div class="main"><table><tr><th>Applies To</th><th>Standard Hours</th></tr>` +
+      `<tr><td>AWD, Rear,Both</td><td>1.9</td></tr>` +
+      `<tr><td>AWD, Rear,One Side</td><td>1.0</td></tr>` +
+      `<tr><td>Front,Both</td><td>3.4</td></tr></table></div>`;
+    expect(parseLaborLeafHours(bearings, axlePreferences("Wheel Bearing Replacement"))).toBeNull();
+  });
+
+  it("takes the value when every variant agrees", () => {
+    const html =
+      `<div class="main"><table><tr><th>Applies To</th><th>Standard Hours</th></tr>` +
+      `<tr><td>Gas</td><td>0.7</td></tr><tr><td>Hybrid</td><td>0.7</td></tr></table></div>`;
+    expect(parseLaborLeafHours(html)).toBe(0.7);
+  });
+
+  it("has no axle preference for a service that names no axle", () => {
+    expect(axlePreferences("Coolant Flush")).toEqual([]);
+    expect(axlePreferences("Brake Pad Replacement - Front")).toHaveLength(2);
   });
 });
 

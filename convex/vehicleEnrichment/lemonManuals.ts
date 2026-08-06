@@ -255,6 +255,17 @@ export function pickLemonTrim(
  * Lubricants" without a per-make string.
  */
 export const LEMON_LEAF_SECTIONS: ReadonlyArray<{ re: RegExp; weight: number; label: string }> = [
+  // OEM MAINTENANCE INTERVALS — top weight because they are the rarest and the
+  // only source here for batch1a's `intervals` block (interval_miles /
+  // interval_months). LEMON is a SERVICE manual, so most makes carry no
+  // schedule; Honda is the exception — its FSM embeds the Maintenance Minder
+  // tables ("Replace air cleaner element … every 15,000 miles (24,000 km)",
+  // "change the brake fluid every 3 years"). Verified present on 2021 CR-V and
+  // 2021 Odyssey; ABSENT on BMW 330i and Toyota Camry/RAV4, and Ford's
+  // "Maintenance Schedules" pages are stubs that point at the Owner's Guide.
+  // Costs nothing where absent — the allowlist simply matches nothing.
+  { re: /maintenance (main|sub) items/i, weight: 110, label: "maintenance_items" },
+  { re: /maintenance schedule/i, weight: 108, label: "maintenance_schedule" },
   { re: /standards and service limits/i, weight: 100, label: "service_limits" },
   { re: /\bcapacit(y|ies)\b/i, weight: 95, label: "capacity" },
   { re: /\blubricants?\b/i, weight: 90, label: "lubricants" },
@@ -331,10 +342,16 @@ export function selectRelevantLeaves(hrefs: readonly string[], cap = MAX_LEMON_L
   return scored.slice(0, Math.max(0, cap));
 }
 
-/** Resolve a leaf href (relative to the single-page dir) to an absolute URL. */
+/**
+ * Resolve a leaf href (relative to the single-page dir) to an absolute URL.
+ *
+ * `new URL()` normalises %28/%29 back to literal parens, and LEMON answers a
+ * literal "(Single Page)" with a 308 to the encoded form — so every leaf cost
+ * two round trips. Re-encoding the parens lands on the canonical URL directly.
+ */
 export function resolveLeafUrl(singlePageUrl: string, href: string): string | null {
   try {
-    return new URL(href, singlePageUrl).toString();
+    return new URL(href, singlePageUrl).toString().replace(/\(/g, "%28").replace(/\)/g, "%29");
   } catch {
     return null;
   }

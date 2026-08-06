@@ -163,9 +163,18 @@ def scrape(req: ScrapeRequest, authorization: Optional[str] = Header(default=Non
                 or len(html.strip()) < MIN_OK_CHARS
                 or _looks_blocked(html)
             ):
-                page = _fetch_stealth(req.url, req.timeout_ms)
-                used = "stealth"
-                status, html = _extract(page)
+                # The rescue rung must never destroy the page it is rescuing:
+                # if the browser tier throws (Camoufox/browserforge failures
+                # arrive as exceptions, not bad pages), keep the http-tier
+                # result — the status/blocked fields already tell the caller
+                # what it is, and a 502 here would discard a real answer.
+                try:
+                    page = _fetch_stealth(req.url, req.timeout_ms)
+                    used = "stealth"
+                    status, html = _extract(page)
+                except Exception as e:
+                    print(f"[scrape] stealth escalation failed for {req.url}: {e}")
+                    used = "http"
     except Exception as e:  # never leak a stack trace to the caller
         raise HTTPException(status_code=502, detail=f"fetch failed: {e}")
 

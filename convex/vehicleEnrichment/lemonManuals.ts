@@ -291,6 +291,11 @@ export const LEMON_LEAF_SECTIONS: ReadonlyArray<{ re: RegExp; weight: number; la
   { re: /\blubricants?\b/i, weight: 90, label: "lubricants" },
   { re: /general specifications/i, weight: 85, label: "general_specifications" },
   { re: /torque specifications/i, weight: 82, label: "torque_specifications" },
+  // BMW files its spec content as numbered-group "Technical Data" pages
+  // ("11 00 ENGINE" carries the oil fill capacity, "17 00 COOLING" the coolant
+  // circuits, "34 11 Front Brakes" the disc MIN TH) — none of the vocabulary
+  // above appears anywhere in its 20k-leaf index. Verified live on 2020 330i.
+  { re: /technical data/i, weight: 88, label: "technical_data" },
   { re: /service specifications/i, weight: 80, label: "service_specifications" },
   { re: /fluid type specifications/i, weight: 70, label: "fluid_type" },
   { re: /lubrication system - service information/i, weight: 50, label: "lubrication" },
@@ -321,8 +326,23 @@ export const LEMON_LEAF_SUBSYSTEMS: ReadonlyArray<{ re: RegExp; bonus: number }>
  * (fixed-mileage schedules, injector-cleaner mandates, different oils) —
  * feeding them to batch1a would write wrong-market data for US vehicles. The
  * KA/KC pages are untouched by these patterns.
+ *
+ * `collision`: BMW's "Collision - Body Dimensions And Torque Specifications"
+ * subtree is body-shop panel-gap and frame-jig data. Its pages ride the
+ * `torque specifications` allowlist match and on a 2020 330i took 9 of 12
+ * harvest slots with door-gap dimensions — zero enrichment value.
  */
-export const LEMON_LEAF_DENY: readonly RegExp[] = [/general countries/i, /\becuador\b/i];
+export const LEMON_LEAF_DENY: readonly RegExp[] = [
+  // Honda's wrong-market labels…
+  /general countries/i,
+  /\becuador\b/i,
+  // …and Chrysler/Ram's: a 2020 Ram 1500 harvest pulled "Maintenance Schedule -
+  // Middle East" and "Maintenance Schedules - LATIN AMERICA" beside the
+  // "North AMERICA" pages. Same hazard, different maker vocabulary.
+  /middle east/i,
+  /latin america/i,
+  /\bcollision\b/i,
+];
 
 /** Every relative leaf href in the single-page index (deduped, in doc order). */
 export function extractLeafHrefs(indexHtml: string): string[] {

@@ -267,12 +267,39 @@ describe("selectRelevantLeaves", () => {
     for (const l of picked) expect(decodeURIComponent(l.href)).not.toMatch(/ecuador|general countries/i);
   });
 
+  it("REVIEW: denies Chrysler-style wrong-market schedules, keeps North America", () => {
+    // Live 2020 Ram 1500 harvest pulled Middle East + Latin America schedules
+    // beside the North America ones.
+    const hrefs = [
+      href("General Information/OEM General Information/Maintenance Schedules/Maintenance Schedule - Middle East/Notes"),
+      href("General Information/OEM General Information/Maintenance Schedules/Maintenance Schedules - LATIN AMERICA"),
+      href("General Information/OEM General Information/Maintenance Schedules/Maintenance Schedules - North AMERICA - Gas"),
+    ];
+    const picked = selectRelevantLeaves(hrefs);
+    expect(picked).toHaveLength(1);
+    expect(decodeURIComponent(picked[0].href)).toContain("North AMERICA");
+  });
+
   it("REVIEW: maintenance pages outrank even a subsystem-bonused spec leaf", () => {
     const maint = href("Maintenance/Procedures/Maintenance/Maintenance/Maintenance Main Items");
     // service_limits (100) + fluid-subsystem bonus (12) = 112 — the old 110
     // maintenance weight lost this comparison.
     const bonused = href("Engine Mechanical/Cooling System/Standards and Service Limits");
     expect(selectRelevantLeaves([bonused, maint], 1)[0].href).toBe(maint);
+  });
+
+  it("REVIEW: BMW Technical Data is harvested; collision body pages are denied", () => {
+    const hrefs = [
+      // The junk that took 9 of 12 slots on a live 2020 330i run:
+      href("Body & Frame/Exterior Body Panels/Collision - Body Dimensions And Torque Specifications (G20)/Torque Specifications/41 51 Front Doors"),
+      href("Body & Frame/Exterior Body Panels/Collision - Body Dimensions And Torque Specifications (G20)/Body Dimensions/BODY GAP DIMENSIONS REH-HIN-P-4100-F39 - V.1"),
+      // The real payload:
+      href("Accessories & Equipment/Exterior Lights/Technical Data (G20)/11 00 ENGINE (330i, 330i xDrive)"),
+      href("Accessories & Equipment/Exterior Lights/Technical Data (G20)/17 00 COOLING, TEST (330i, 330i xDrive)"),
+    ];
+    const picked = selectRelevantLeaves(hrefs);
+    expect(picked.map((l) => l.label)).toEqual(["technical_data", "technical_data"]);
+    for (const l of picked) expect(decodeURIComponent(l.href)).not.toMatch(/collision/i);
   });
 
   it("dedupes a page that appears under two parents and honours the cap", () => {

@@ -391,6 +391,15 @@ export const refreshStalePrices = internalAction({
             make: t.make_name,
             name: t.name,
           });
+          if (urls === null) {
+            // Discovery channel down (Firecrawl outage/limit) — leave the part
+            // eligible; a no_listing stamp here would be an outage artifact
+            // suppressing retries for the whole retry window.
+            console.warn(
+              `[price-refresh] backfill: discovery unavailable for ${t.oem_part_number} — no verdict recorded`,
+            );
+            continue;
+          }
           if (urls.length === 0) {
             console.warn(`[price-refresh] backfill: no usable source found for ${t.oem_part_number}`);
             // Durable verdict: searched, nothing sells this number. Retries

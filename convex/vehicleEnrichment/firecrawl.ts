@@ -34,6 +34,11 @@ export async function searchAndFetch(
   query: string,
   numResults: number = 5,
   includeHtml: boolean = false,
+  // Lenient by default: HTTP/network failures collapse to [] so the dozen
+  // best-effort callers keep working through outages. Callers that must
+  // DISTINGUISH "channel down" from "search ran, zero results" — anything
+  // recording a durable negative verdict — pass throwOnError and catch.
+  opts?: { throwOnError?: boolean },
 ): Promise<FirecrawlResult[]> {
   try {
     const response = await fetch(`${FIRECRAWL_BASE}/search`, {
@@ -62,6 +67,9 @@ export async function searchAndFetch(
       console.error(
         `Firecrawl search failed: ${response.status} ${response.statusText}`,
       );
+      if (opts?.throwOnError) {
+        throw new Error(`firecrawl_search_http_${response.status}`);
+      }
       return [];
     }
 
@@ -103,6 +111,7 @@ export async function searchAndFetch(
     return results;
   } catch (error) {
     console.error("Firecrawl search error:", error);
+    if (opts?.throwOnError) throw error;
     return [];
   }
 }

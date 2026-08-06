@@ -4662,6 +4662,14 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           }
           priceDiscoveryUsed++;
           const urls = await discoverPriceUrls({ oem: item.oem, make: args.make, name: item.name });
+          if (urls === null) {
+            console.warn(`[v8/price] discovery unavailable for part ${item.partId} (oem=${item.oem})`);
+            priceGaps.push({
+              field: `part_price:${item.subcategory ?? item.oem}`,
+              reason: "price_discovery_unavailable",
+            });
+            continue;
+          }
           if (urls.length === 0) {
             console.warn(`[v8/price] discovery found no usable source for part ${item.partId} (oem=${item.oem})`);
             priceGaps.push({

@@ -224,6 +224,25 @@ describe("axlePreferences + variant row selection", () => {
     expect(axlePreferences("Coolant Flush")).toEqual([]);
     expect(axlePreferences("Brake Pad Replacement - Front")).toHaveLength(2);
   });
+
+  it("REVIEW: wiper set bills the Blade,Both row — not the first (Arm) row", () => {
+    // The real 2021 CR-V wiper leaf: rows are Arm/Blade × Both/One. First row
+    // is "Arm,Both" 0.4 — a different job than replacing the blades. Before the
+    // per-rule row preference, first-row-wins returned 0.4 for a blade set.
+    const wiperTable =
+      `<div class="main"><table>` +
+      `<tr><th>Applies To</th><th>Note</th><th>Standard Hours</th><th>Warranty Hours</th><th>Skill Level</th></tr>` +
+      `<tr><td>Arm,Both</td><td></td><td>0.4</td><td></td><td>D</td></tr>` +
+      `<tr><td>Arm,One Side</td><td></td><td>0.3</td><td></td><td>D</td></tr>` +
+      `<tr><td>Blade,Both</td><td></td><td>0.3</td><td></td><td>D</td></tr>` +
+      `<tr><td>Blade,One Side</td><td></td><td>0.2</td><td></td><td>D</td></tr>` +
+      `</table></div>`;
+    const rule = matchLemonLaborRule({ slug: "wiper_blade_replacement", name: "Wiper Blade Replacement (set)" });
+    expect(rule?.rows).toBeDefined();
+    expect(parseLaborLeafHours(wiperTable, rule!.rows!)).toBe(0.3);
+    // Without the preference the table is ambiguous → withheld, never 0.4.
+    expect(parseLaborLeafHours(wiperTable)).toBeNull();
+  });
 });
 
 describe("parseLaborLeafHours", () => {

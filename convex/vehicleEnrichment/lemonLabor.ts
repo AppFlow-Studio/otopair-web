@@ -24,6 +24,8 @@ import {
   lemonFetch,
   extractLeafHrefs,
   hrefTail,
+  resolveLeafUrl,
+  encodeLemonSegment,
   type LemonFetchArgs,
 } from "./lemonManuals";
 
@@ -39,6 +41,11 @@ export type LemonLaborRule = {
   nameTest?: RegExp;
   /** Operation "Component / Action" tails, most-preferred first. */
   ops: readonly RegExp[];
+  /** Row preferences against the leaf's "Applies To" cells, tried BEFORE the
+   *  axle preferences derived from the service name. For leaves whose variant
+   *  axis isn't an axle — the wiper leaf rows are Arm/Blade × Both/One, and the
+   *  bookable service is specifically blades-both. */
+  rows?: readonly RegExp[];
   label: string;
 };
 
@@ -84,7 +91,10 @@ export const LEMON_LABOR_RULES: readonly LemonLaborRule[] = [
   { slug: "timing_belt", ops: [/^timing belt \/ remove & replace$/i, /^timing chain \/ remove & replace$/i], label: "timing_belt" },
   { slug: "battery_replacement", ops: [/^battery \/ remove & replace$/i], label: "battery" },
   { slug: "wheel_bearing_replacement", ops: [/^wheel bearing \/ remove & replace$/i], label: "wheel_bearing" },
-  { slug: "wiper_blade_replacement", ops: [/^wiper arm &\/or blades \/ remove & replace$/i], label: "wiper_blades" },
+  // The wiper leaf's rows are Arm/Blade × Both/One — and its FIRST row is
+  // "Arm,Both" (0.4 h), which is a different job than replacing the blades
+  // (0.3 h). The row preference targets the variant the service actually books.
+  { slug: "wiper_blade_replacement", ops: [/^wiper arm &\/or blades \/ remove & replace$/i], rows: [/blade[^|]*\bboth\b/i], label: "wiper_blades" },
 ];
 
 /** The rule for a service, or null. Slug is exact; nameTest disambiguates. */
@@ -216,7 +226,7 @@ export async function fetchLemonLaborHours(
   const resolved = await resolveLemonVehicle(args);
   if (!resolved) return fail("unresolved");
 
-  const laborIndexUrl = resolved.trimBaseUrl + `${encodeURIComponent("Labor Times")}/`;
+  const laborIndexUrl = resolved.trimBaseUrl + `${encodeLemonSegment("Labor Times")}/`;
   const idx = await lemonFetch(laborIndexUrl, LABOR_INDEX_TIMEOUT_MS);
   if (!idx.ok || idx.body.length === 0) {
     return fail("labor_index_unreachable", { host: resolved.host, resolved_trim: resolved.trim });
@@ -256,10 +266,13 @@ export async function fetchLemonLaborHours(
     if (!op) continue;
     usedOp.add(op.href);
     attempted++;
-    const url = new URL(op.href, laborIndexUrl).toString();
+    // resolveLeafUrl normalises parens to LEMON's canonical %28 form — a trim
+    // folder containing parens would otherwise cost a 308 on every leaf.
+    const url = resolveLeafUrl(laborIndexUrl, op.href);
+    if (!url) continue;
     const leaf = await lemonFetch(url, LABOR_LEAF_TIMEOUT_MS);
     if (!leaf.ok || leaf.body.length === 0) continue;
-    const h = parseLaborLeafHours(leaf.body, axlePreferences(svc.name));
+    const h = parseLaborLeafHours(leaf.body, [...(rule.rows ?? []), ...axlePreferences(svc.name)]);
     if (h == null) continue;
     hours[svc.slug] = h;
     matched.push({ slug: svc.slug, op: op.tail, hours: h, url });

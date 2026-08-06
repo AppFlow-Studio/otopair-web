@@ -85,9 +85,19 @@ export function lemonMakeFolder(make: string): string {
   return LEMON_MAKE_FOLDER[key] ?? LEMON_MAKE_FOLDER[make.trim().toLowerCase()] ?? make.trim();
 }
 
+/**
+ * Encode one LEMON path segment. `encodeURIComponent` deliberately leaves
+ * `!'()*` unescaped, but LEMON's canonical URLs use %28/%29 for parens and
+ * answer the literal form with a 308 — one wasted round trip per fetch (the
+ * "(Single Page)" index paid it on every run). Encode them up front.
+ */
+export function encodeLemonSegment(seg: string): string {
+  return encodeURIComponent(seg).replace(/\(/g, "%28").replace(/\)/g, "%29");
+}
+
 /** Build the year-directory URL for a host. */
 export function buildLemonYearUrl(host: string, makeFolder: string, year: number): string {
-  return `https://${host}/${encodeURIComponent(makeFolder)}/${year}/`;
+  return `https://${host}/${encodeLemonSegment(makeFolder)}/${year}/`;
 }
 
 /**
@@ -193,8 +203,16 @@ export function scoreLemonTrim(
   // capacity that vehicle does not have.
   const dt = normalizeDrivetrain(vehicle.drivetrain);
   if (dt) {
-    if (folderToks.has(dt)) score += 3;
-    else if (DRIVETRAIN_TOKENS.some((t) => t !== dt && folderToks.has(t))) score -= 6;
+    // AWD and 4WD are cross-labelled between makers: Toyota lists its AWD
+    // sedans as "…, 4WD" while NHTSA decodes them "AWD/All-Wheel Drive". Treat
+    // the pair as compatible (+2, just under an exact echo) so the penalty only
+    // fires on a REAL contradiction (fwd vs awd/4wd/rwd) — otherwise the
+    // correct folder got −6 and the pick fell to the lexicographic tiebreak.
+    const isAllWheel = (t: string) => t === "awd" || t === "4wd";
+    const folderDts: string[] = DRIVETRAIN_TOKENS.filter((t) => folderToks.has(t));
+    if (folderDts.includes(dt)) score += 3;
+    else if (isAllWheel(dt) && folderDts.some(isAllWheel)) score += 2;
+    else if (folderDts.length > 0) score -= 6;
   }
 
   // Displacement echo ("1.5L" ↔ 1.5).
@@ -264,8 +282,10 @@ export const LEMON_LEAF_SECTIONS: ReadonlyArray<{ re: RegExp; weight: number; la
   // 2021 Odyssey; ABSENT on BMW 330i and Toyota Camry/RAV4, and Ford's
   // "Maintenance Schedules" pages are stubs that point at the Owner's Guide.
   // Costs nothing where absent — the allowlist simply matches nothing.
-  { re: /maintenance (main|sub) items/i, weight: 110, label: "maintenance_items" },
-  { re: /maintenance schedule/i, weight: 108, label: "maintenance_schedule" },
+  // 130/126 sit above the maximum spec score (100 section + 12 subsystem bonus
+  // = 112), so "top weight" holds even against a bonused service-limits leaf.
+  { re: /maintenance (main|sub) items/i, weight: 130, label: "maintenance_items" },
+  { re: /maintenance schedule/i, weight: 126, label: "maintenance_schedule" },
   { re: /standards and service limits/i, weight: 100, label: "service_limits" },
   { re: /\bcapacit(y|ies)\b/i, weight: 95, label: "capacity" },
   { re: /\blubricants?\b/i, weight: 90, label: "lubricants" },
@@ -290,6 +310,19 @@ export const LEMON_LEAF_SUBSYSTEMS: ReadonlyArray<{ re: RegExp; bonus: number }>
   { re: /lubrication|engine oil|coolant|cooling|brake fluid|transmission fluid|\bcapacities\b|fluid type/i, bonus: 12 },
   { re: /engine mechanical|\bbrakes\b|transmission|drivelines|axles|steering|suspension/i, bonus: 6 },
 ];
+
+/**
+ * Leaf DENY list, checked before the allowlist.
+ *
+ * Honda files non-US-market maintenance pages in the same tree as the US ones:
+ * "Maintenance Schedule for Normal and Severe Conditions - General Countries
+ * (Ecuador)" and "Lubricants and Fluids (Ecuador)" sit beside the US-market
+ * "(KA/KC)" variants. Their intervals and fluid specs are for other markets
+ * (fixed-mileage schedules, injector-cleaner mandates, different oils) —
+ * feeding them to batch1a would write wrong-market data for US vehicles. The
+ * KA/KC pages are untouched by these patterns.
+ */
+export const LEMON_LEAF_DENY: readonly RegExp[] = [/general countries/i, /\becuador\b/i];
 
 /** Every relative leaf href in the single-page index (deduped, in doc order). */
 export function extractLeafHrefs(indexHtml: string): string[] {
@@ -324,6 +357,7 @@ export function selectRelevantLeaves(hrefs: readonly string[], cap = MAX_LEMON_L
   const seenTail = new Set<string>();
   for (const href of hrefs) {
     const decoded = safeDecode(href);
+    if (LEMON_LEAF_DENY.some((d) => d.test(decoded))) continue;
     let matched: { weight: number; label: string } | null = null;
     for (const s of LEMON_LEAF_SECTIONS) {
       if (s.re.test(decoded)) {
@@ -343,15 +377,17 @@ export function selectRelevantLeaves(hrefs: readonly string[], cap = MAX_LEMON_L
 }
 
 /**
- * Resolve a leaf href (relative to the single-page dir) to an absolute URL.
+ * Resolve a leaf href (relative to an index dir) to an absolute URL.
  *
- * `new URL()` normalises %28/%29 back to literal parens, and LEMON answers a
- * literal "(Single Page)" with a 308 to the encoded form — so every leaf cost
- * two round trips. Re-encoding the parens lands on the canonical URL directly.
+ * The paren re-encode is belt-and-suspenders on top of encodeLemonSegment:
+ * a literal paren anywhere in the final URL (from a base built before the
+ * helper, or a raw href) draws LEMON's 308 to the %28 form — one wasted round
+ * trip per fetch. Normalising here guarantees the canonical URL regardless of
+ * how the base was assembled.
  */
-export function resolveLeafUrl(singlePageUrl: string, href: string): string | null {
+export function resolveLeafUrl(indexUrl: string, href: string): string | null {
   try {
-    return new URL(href, singlePageUrl).toString().replace(/\(/g, "%28").replace(/\)/g, "%29");
+    return new URL(href, indexUrl).toString().replace(/\(/g, "%28").replace(/\)/g, "%29");
   } catch {
     return null;
   }
@@ -521,7 +557,7 @@ export async function resolveLemonVehicle(args: LemonFetchArgs): Promise<LemonRe
   if (!host) return null;
   const trim = pickLemonTrim(vehicle, folders);
   if (!trim) return null;
-  const trimBaseUrl = buildLemonYearUrl(host, makeFolder, args.year) + `${encodeURIComponent(trim)}/`;
+  const trimBaseUrl = buildLemonYearUrl(host, makeFolder, args.year) + `${encodeLemonSegment(trim)}/`;
   return { host, makeFolder, trim, trimBaseUrl };
 }
 
@@ -556,7 +592,7 @@ export async function fetchLemonManualMarkdown(args: LemonFetchArgs): Promise<Le
     const { host, trim } = resolved;
 
     // ── 3. Fetch the single-page index (link tree) ──────────────────
-    const indexUrl = resolved.trimBaseUrl + `${encodeURIComponent("Repair and Diagnosis (Single Page)")}/`;
+    const indexUrl = resolved.trimBaseUrl + `${encodeLemonSegment("Repair and Diagnosis (Single Page)")}/`;
     const indexRes = await lemonFetch(indexUrl, INDEX_FETCH_TIMEOUT_MS);
     if (!indexRes.ok || indexRes.body.length === 0) {
       return empty("index_unreachable", { host, make_folder: makeFolder, resolved_trim: trim, index_url: indexUrl });

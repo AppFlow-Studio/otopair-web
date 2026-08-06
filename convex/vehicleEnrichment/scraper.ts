@@ -43,7 +43,7 @@ import { checkRoleIdentity, ROLEKEYS_BY_PART_SLUG } from "./roleIdentity";
 import { CACHE_FORMAT_VERSION } from "./scraperQueries";
 import type { VehicleInput } from "./types";
 import { scrapeWheelSizeOptions, type WheelSizeResult } from "./utils/wheelSizeScraper";
-import { fetchLemonManualMarkdown } from "./lemonManuals";
+import { fetchLemonManualMarkdown, normalizeDrivetrain } from "./lemonManuals";
 import { resolveScrapeRedirect } from "./buildSourceResolver";
 
 const TTL_PARTS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
@@ -602,9 +602,17 @@ async function scrapeManual(
   vehicle: VehicleInput,
   queries: string[],
 ): Promise<{ markdown: string; urls: string[] }> {
+  // Cache key: the manual markdown became drivetrain-SPECIFIC when LEMON came
+  // in ("CR-V EX, AWD" and "…, FWD" are different manuals — the FWD car has no
+  // rear differential). Keying by trim alone let the first sibling to run
+  // poison the other's manual for the full 90-day TTL. Partition by the
+  // normalized drivetrain when known; unknown-drivetrain configs keep the bare
+  // trim key, so existing cache rows stay valid for them.
+  const manualDt = normalizeDrivetrain(vehicle.drivetrain ?? null);
+  const manualCacheTrim = manualDt ? `${vehicle.trim ?? ""}|${manualDt}` : (vehicle.trim ?? "");
   const cached = await ctx.runQuery(
     internal.vehicleEnrichment.scraperQueries.getCachedScrape,
-    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: vehicle.trim ?? "", sourceType: "owner_manual" },
+    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: manualCacheTrim, sourceType: "owner_manual" },
   );
   if (cached?.markdown && cached.url) {
     console.log(`[scraper] Cache hit: owner_manual for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
@@ -683,7 +691,7 @@ async function scrapeManual(
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleYear: vehicle.year,
-      vehicleTrim: vehicle.trim ?? "",
+      vehicleTrim: manualCacheTrim, // must mirror the lookup key above
       sourceType: "owner_manual",
       expiresAt: now + TTL_MANUAL_MS,
     });

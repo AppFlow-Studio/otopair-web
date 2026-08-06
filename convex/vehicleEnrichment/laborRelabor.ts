@@ -128,6 +128,10 @@ export const _laborConfigInputs = internalQuery({
       make: (make as any)?.name ?? "",
       model: (model as any)?.name ?? "",
       trim: (cfg.trim_name as string) ?? "",
+      // LEMON resolves drivetrain-qualified trim folders ("CR-V EX, AWD" vs
+      // "…, FWD") — without this the backfill path resolved blind while the
+      // live pipeline path passed it, so the two could land different manuals.
+      drivetrain: (cfg.drivetrain as string) ?? null,
       year: cfg.year as number,
       // Engine label for the open-web search query (engine_code, e.g. "B58").
       engine: ((engine as any)?.engine_code as string) ?? null,
@@ -175,6 +179,7 @@ export const laborRelaborConfig = internalAction({
         engine_family: inp.engine_family,
         displacementL: inp.displacementL,
         cylinders: inp.cylinders,
+        drivetrain: inp.drivetrain ?? null,
         turbo: inp.turbo,
         buildId,
         services: inp.services,

@@ -193,6 +193,17 @@ resolve make → LEMON make folder (handle divergences: "Dodge and Ram", "Nissan
 
 ---
 
+## 9b. What the four asks actually get
+
+| Ask | Status | Reality |
+|---|---|---|
+| **Vehicle Specs** | ✅ live | Fluids, capacities, torque, service limits. Working on Honda, Toyota and Ford after the per-make vocabulary fix. |
+| **OEM Intervals** | ⚠️ Honda only | The "LEMON has no schedule" claim was **wrong**. Honda's FSM embeds the Maintenance Minder tables — "Maintenance Main/Sub Items" + a Normal/Severe schedule with real figures ("air cleaner element every 15,000 miles (24,000 km)", "brake fluid every 3 years"). Now harvested at top weight and fed to `batch1a`'s existing `intervals` block. **Absent** on BMW 330i and Toyota Camry/RAV4; Ford's "Maintenance Schedules" pages are stubs that point at the Owner's Guide. |
+| **Labor times** | ✅ live, sparse | 11 catalog services on a populated trim — but only ~10% of trims have a labor index at all (§10). |
+| **Parts** | ❌ not available | LEMON publishes **no part numbers**: zero hits for part-number paths in the index, and zero Honda-format p/n (`15400-PLM-A02`) across sampled spec/maintenance leaves. Parts stay on the OEM-storefront path. |
+
+---
+
 ## 10. Coverage reality — measured, not assumed
 
 Sampled live on 2026-08-06. **Read this before quoting a yield number.**
@@ -200,7 +211,8 @@ Sampled live on 2026-08-06. **Read this before quoting a yield number.**
 | | Measured |
 |---|---|
 | Labor Times populated | **~10% of trims.** 2/24 sampled (Honda 2021: 1/12, Ford 2019: 1/12); plus 2020 BMW 330i and 2021 Honda CR-V EX AWD. Empty ones return **HTTP 200 with a ~1.5 KB stub**, so status alone can't tell you. |
-| Labor coverage when populated | **13 of 14** mappable catalog services on a 2021 CR-V EX AWD. |
+| Labor coverage when populated | **11 of 14** mappable catalog services on a 2021 CR-V EX AWD. (Was 13 before variant-aware row selection — two of those were an arbitrary pick out of a front/rear table and are now correctly withheld, and the pad number was wrong.) |
+| Labor row shape | Multi-variant: `All,Both Axles 1.8` / `Front,Both Sides 1.0` / `Rear,Both Sides 1.0`, then `Combination Procedure:` add-on rows. The axle named by the service selects the row; unresolvable variance returns null. |
 | Spec-leaf vocabulary | Not shared across makes. Honda "Standards and Service Limits" ×18; Toyota ×0 (uses "Service Specifications" ×470); Ford ×0 for **both** (uses "General Specifications"/"Capacities"). |
 
 Consequences the code has to live with, and does:

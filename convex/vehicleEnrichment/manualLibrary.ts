@@ -312,6 +312,7 @@ export const MANUAL_MIRROR_DOMAINS: readonly string[] = [
   "amazon.com",
   "goodreads.com",
   "pinterest.com",
+  "lemon-manuals.la", // offshore republisher of OEM manuals; risk accepted 2026-08-05
 ];
 
 /** Suffix-match a host against a domain list (`a.b.com` matches `b.com`). */

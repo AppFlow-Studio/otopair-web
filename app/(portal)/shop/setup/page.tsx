@@ -1730,12 +1730,6 @@ export default function ShopSetupPage() {
                 {STEP_META[currentStep].description}
               </p>
             </div>
-            {currentStep > 0 && onboardingData.shop?.name && (
-              <div className="rounded-xl border border-border bg-muted px-4 py-3 text-sm text-muted-foreground">
-                <p className="font-semibold text-foreground">{onboardingData.shop.name}</p>
-                <p className="mt-1">/{onboardingData.shop.slug}</p>
-              </div>
-            )}
           </div>
 
           {stepError && (

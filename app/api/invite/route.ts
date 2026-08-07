@@ -6,17 +6,34 @@ import { Id } from "@/convex/_generated/dataModel";
 import { sendInviteEmail } from "@/email/send";
 
 const getShopByIdQuery = makeFunctionReference<"query">("shops:getById");
+const getMechanicByIdQuery = makeFunctionReference<"query">("mechanics:getById");
 const hasActiveShopMembershipQuery = makeFunctionReference<"query">(
   "users:hasActiveShopMembership"
 );
 const createInvitationMutation = makeFunctionReference<"mutation">("invitations:create");
+
+// Look up the inviter's display name so the email can read
+// "Marcus invited you to join …" instead of an anonymous notice.
+async function getClerkInviterName(userId: string): Promise<string | undefined> {
+  try {
+    const res = await fetch(`https://api.clerk.com/v1/users/${userId}`, {
+      headers: { Authorization: `Bearer ${process.env.CLERK_SECRET_KEY}` },
+    });
+    if (!res.ok) return undefined;
+    const u = await res.json();
+    const name = [u.first_name, u.last_name].filter(Boolean).join(" ").trim();
+    return name || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function POST(req: NextRequest) {
   try {
     const { userId } = await auth();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { email, role, shopId, mechanicId } = await req.json();
+    const { email, role, shopId, mechanicId, firstName, lastName } = await req.json();
     if (!email || !role || !shopId) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
@@ -32,6 +49,20 @@ export async function POST(req: NextRequest) {
       id: shopId as Id<"shops">,
     })) as { name?: string } | null;
     const shopName = shop?.name;
+
+    // Resolve the invitee's first name for a personal greeting.
+    // Owner/front-desk invites pass it directly; mechanic invites carry only a
+    // mechanicId, so pull the name off the mechanic profile.
+    let inviteeFirstName: string | undefined =
+      typeof firstName === "string" && firstName.trim() ? firstName.trim() : undefined;
+    if (!inviteeFirstName && mechanicId) {
+      const mechanic = (await fetchQuery(getMechanicByIdQuery, {
+        id: mechanicId as Id<"mechanics">,
+      })) as { first_name?: string } | null;
+      inviteeFirstName = mechanic?.first_name?.trim() || undefined;
+    }
+
+    const inviterName = await getClerkInviterName(userId);
 
     // Block invites to users who are already an active member of any shop
     const alreadyMember = await fetchQuery(hasActiveShopMembershipQuery, { email });
@@ -50,7 +81,9 @@ export async function POST(req: NextRequest) {
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? req.nextUrl.origin;
     const redirectUrl = `${baseUrl}/accept-invite?token=${invitationToken}`;
 
-    // Send invitation via Clerk Invitations API
+    // Create the Clerk invitation with notify:false — Clerk still binds account
+    // creation to this invitation (mechanics can't self-register), but WE send
+    // the branded, personalized email instead of Clerk's default template.
     const clerkResponse = await fetch("https://api.clerk.com/v1/invitations", {
       method: "POST",
       headers: {
@@ -66,7 +99,7 @@ export async function POST(req: NextRequest) {
           ...(resolvedMechanicId ? { mechanic_id: resolvedMechanicId } : {}),
         },
         redirect_url: redirectUrl,
-        notify: true,
+        notify: false,
       }),
     });
 
@@ -74,6 +107,21 @@ export async function POST(req: NextRequest) {
     if (clerkResponse.ok) {
       const clerkData = await clerkResponse.json();
       clerkInvitationId = clerkData.id;
+      // Clerk returns a one-click ticket URL (email pre-verified) on the
+      // invitation object. Prefer it; fall back to our /accept-invite link.
+      const ticketUrl =
+        typeof clerkData.url === "string" && clerkData.url ? clerkData.url : redirectUrl;
+      const sent = await sendInviteEmail({
+        email,
+        inviteUrl: ticketUrl,
+        shopName,
+        firstName: inviteeFirstName,
+        role,
+        inviterName,
+      });
+      if (!sent.success) {
+        console.error("Invite email failed to send:", sent.error);
+      }
     } else {
       const err = await clerkResponse.json();
       console.log("Clerk invitation error:", JSON.stringify(err));
@@ -120,9 +168,20 @@ export async function POST(req: NextRequest) {
               }),
             });
           }
-          // Send invite link via Resend in both cases - Clerk won't email existing users,
-          // and for stale-duplicate cases there's no active Clerk invitation to send from.
-          await sendInviteEmail({ email, inviteUrl: redirectUrl, shopName });
+          // Send invite link via Resend in both cases - for an existing account
+          // the /accept-invite link lets them sign in and accept; for a stale
+          // duplicate there's no active Clerk invitation to send from.
+          const sent = await sendInviteEmail({
+            email,
+            inviteUrl: redirectUrl,
+            shopName,
+            firstName: inviteeFirstName,
+            role,
+            inviterName,
+          });
+          if (!sent.success) {
+            console.error("Invite email failed to send:", sent.error);
+          }
         }
       } else {
         return NextResponse.json(

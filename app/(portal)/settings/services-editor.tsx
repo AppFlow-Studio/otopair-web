@@ -8,11 +8,12 @@ import { ChevronDown, Loader2, Search, Sliders, Wrench } from "lucide-react";
 import FixedPriceTierStrip, {
   FIXED_PRICE_TIERS,
   centsMapToInputs,
-  countPricedTiers,
+  countPricedGroups,
   priceMapToCents,
   type FixedPriceMap,
   type FixedPriceTier,
 } from "@/components/shop/fixed-price-tier-strip";
+import Tooltip from "@/components/ui/tooltip";
 
 export default function ServicesEditor() {
   const data = useQuery(api.shops.getMyOnboardingData);
@@ -266,52 +267,59 @@ export default function ServicesEditor() {
                     {cat.services.map((s) => {
                       const isSelected = selected.has(s._id);
                       const pricesForService = pricesByService[s._id] ?? {};
-                      const pricedCount = countPricedTiers(pricesForService);
+                      const pricedCount = countPricedGroups(pricesForService);
                       const isPricingOpen = pricingOpen.has(s._id) && isSelected;
                       return (
                         <div key={s._id} className="px-3 py-2.5 hover:bg-gray-50">
                           <div className="flex items-start gap-3">
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              onChange={() => toggleService(s._id)}
-                              className="mt-1 w-4 h-4 rounded text-blue-600"
-                              aria-label={`Offer ${s.name}`}
-                            />
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <p className="text-sm font-medium text-gray-900">
-                                  {s.name}
-                                </p>
-                                <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">
-                                  {s.defaultLaborHours} hr
-                                </span>
-                                {pricedCount > 0 ? (
-                                  <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                                    {pricedCount} fixed
+                            <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleService(s._id)}
+                                className="mt-1 w-4 h-4 rounded text-blue-600"
+                                aria-label={`Offer ${s.name}`}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <p className="text-sm font-medium text-gray-900">
+                                    {s.name}
+                                  </p>
+                                  <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-600">
+                                    {s.defaultLaborHours} hr
                                   </span>
-                                ) : null}
+                                  {pricedCount > 0 ? (
+                                    <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                                      {pricedCount} fixed
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {s.description && (
+                                  <p className="mt-0.5 text-xs text-gray-500 leading-5">
+                                    {s.description}
+                                  </p>
+                                )}
                               </div>
-                              {s.description && (
-                                <p className="mt-0.5 text-xs text-gray-500 leading-5">
-                                  {s.description}
-                                </p>
-                              )}
-                            </div>
+                            </label>
                             {isSelected ? (
-                              <button
-                                type="button"
-                                onClick={() => togglePricing(s._id)}
-                                className={`mt-0.5 inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[11px] font-medium transition-colors ${
-                                  isPricingOpen
-                                    ? "bg-blue-50 text-blue-700 border-blue-200"
-                                    : "text-gray-600 hover:bg-gray-100"
-                                }`}
-                                aria-expanded={isPricingOpen}
+                              <Tooltip
+                                className="mt-0.5 shrink-0"
+                                content="Set a fixed price for this service by vehicle group — e.g. charge more on an exotic than an everyday car. Leave a group blank to use your standard quote range."
                               >
-                                <Sliders className="h-3 w-3" />
-                                Fixed prices
-                              </button>
+                                <button
+                                  type="button"
+                                  onClick={() => togglePricing(s._id)}
+                                  className={`inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[11px] font-medium transition-colors ${
+                                    isPricingOpen
+                                      ? "bg-blue-50 text-blue-700 border-blue-200"
+                                      : "text-gray-600 hover:bg-gray-100"
+                                  }`}
+                                  aria-expanded={isPricingOpen}
+                                >
+                                  <Sliders className="h-3 w-3" />
+                                  Fixed prices
+                                </button>
+                              </Tooltip>
                             ) : null}
                           </div>
                           {isPricingOpen ? (

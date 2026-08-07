@@ -301,6 +301,101 @@ export const setLaborRate = mutation({
 });
 
 // ---------------------------------------------------------------------------
+// Compliance — shop-uploaded licenses & certificates (shop_licenses).
+// Read for the Compliance tab; review (verify/reject) is a shops.write action
+// that lands in the shop audit trail.
+// ---------------------------------------------------------------------------
+export const shopLicenses = query({
+  args: { token: v.string(), id: v.id("shops") },
+  handler: async (ctx, { token, id }) => {
+    await requireDirector(ctx, token);
+
+    const rows = await ctx.db
+      .query("shop_licenses")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+      .collect();
+
+    const licenses = await Promise.all(
+      rows
+        .sort((a, b) => b.created_at - a.created_at)
+        .map(async (row) => {
+          const reviewer = row.reviewed_by
+            ? await ctx.db.get(row.reviewed_by)
+            : null;
+          return {
+            _id: String(row._id),
+            licenseType: row.license_type,
+            url: row.storage_id ? await ctx.storage.getUrl(row.storage_id) : null,
+            originalFilename: row.original_filename ?? null,
+            mimeType: row.mime_type ?? null,
+            licenseNumber: row.license_number ?? null,
+            issuer: row.issuer ?? null,
+            expiresAt: row.expires_at ?? null,
+            reviewStatus: row.review_status,
+            reviewNote: row.review_note ?? null,
+            reviewedAt: row.reviewed_at ?? null,
+            reviewedBy: reviewer?.name ?? null,
+            createdAt: row.created_at,
+          };
+        }),
+    );
+
+    // Does the shop offer any service that legally needs the DMV inspection
+    // station license? Drives the "missing/unverified license" compliance flag.
+    const offered = await ctx.db
+      .query("shop_services")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+      .collect();
+    let offersInspectionServices = false;
+    for (const row of offered) {
+      if (!row.is_offered) continue;
+      const svc = await ctx.db.get(row.service_id);
+      if (svc?.requires_state_inspection || svc?.requires_emissions_test) {
+        offersInspectionServices = true;
+        break;
+      }
+    }
+
+    return { offersInspectionServices, licenses };
+  },
+});
+
+export const reviewShopLicense = mutation({
+  args: {
+    token: v.string(),
+    licenseId: v.id("shop_licenses"),
+    status: v.union(v.literal("verified"), v.literal("rejected")),
+    note: v.string(),
+  },
+  handler: async (ctx, { token, licenseId, status, note }) => {
+    const actor = await requireDirector(ctx, token, "shops.write");
+    if (note.trim().length < 4) {
+      throw new Error("A reason of at least 4 characters is required.");
+    }
+
+    const license = await ctx.db.get(licenseId);
+    if (!license) throw new Error("Document not found.");
+
+    await ctx.db.patch(licenseId, {
+      review_status: status,
+      reviewed_by: actor.userId,
+      reviewed_at: Date.now(),
+      review_note: note.trim(),
+      updated_at: Date.now(),
+    });
+
+    await logAudit(ctx, actor, {
+      entity_type: "shop",
+      entity_id: String(license.shop_id),
+      action: `license.${status}`,
+      detail: `${license.license_type} ${status}. Reason: ${note.trim()}`,
+    });
+
+    return { ok: true, status };
+  },
+});
+
+// ---------------------------------------------------------------------------
 // Tab 4 — Mechanics roster (mechanics.by_shop_id; 4 rows network-wide).
 // ---------------------------------------------------------------------------
 export const shopMechanics = query({

@@ -12,6 +12,9 @@ import ConfirmationDialog from "@/components/confirmation-dialog";
 import RemoveConfirmationDialog from "@/components/remove-confirmation-dialog";
 import { removeTeamMember } from "@/lib/remove-team-member";
 import { sendTeamInvite } from "@/lib/send-team-invite";
+import TimePicker from "@/components/ui/time-picker";
+import Tooltip from "@/components/ui/tooltip";
+import LicenseUploader from "@/components/shop/license-uploader";
 import {
   BadgeDollarSign,
   Building2,
@@ -21,6 +24,7 @@ import {
   CreditCard,
   Loader2,
   Plus,
+  ShieldCheck,
   Sliders,
   Trash2,
   UserRoundCog,
@@ -30,7 +34,7 @@ import {
 import FixedPriceTierStrip, {
   FIXED_PRICE_TIERS,
   centsMapToInputs,
-  countPricedTiers,
+  countPricedGroups,
   priceMapToCents,
   type FixedPriceMap,
   type FixedPriceTier,
@@ -60,12 +64,12 @@ const WEEK_DAYS = [
 
 const STEP_META = [
   {
-    title: "Shop details",
-    description: "Basic information, contact details, and public slug.",
+    title: "Shop Details",
+    description: "Basic information, contact details, and public page name.",
     icon: Building2,
   },
   {
-    title: "Operating hours",
+    title: "Operating Hours",
     description: "Set your weekly schedule from Monday through Sunday.",
     icon: Clock3,
   },
@@ -75,7 +79,12 @@ const STEP_META = [
     icon: Wrench,
   },
   {
-    title: "Add mechanics",
+    title: "Licenses & compliance",
+    description: "Upload the licenses required to offer regulated services.",
+    icon: ShieldCheck,
+  },
+  {
+    title: "Add Mechanics",
     description: "Invite mechanics now, or skip this step and add them later.",
     icon: UserRoundCog,
   },
@@ -91,63 +100,72 @@ const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"] as const;
 const TIER_ORDER = ["T1", "T2a", "T2b", "T2c", "T3a", "T3b", "T4"] as const;
 type TierCode = (typeof TIER_ORDER)[number];
 
-const TIER_META: Record<
-  TierCode,
-  { label: string; band: { lo: number; hi: number }; examples: string }
-> = {
-  T1: {
-    label: "Mainstream",
-    band: { lo: 130, hi: 150 },
+// Shop-facing vehicle groups. The pricing engine still stores rates per internal
+// tier (T1/T2a/...), but shop owners never see those codes — they think in the
+// kinds of cars they work on. Each group maps to one or more internal tiers.
+const VEHICLE_GROUPS: {
+  id: string;
+  name: string;
+  examples: string;
+  rangeLow: number;
+  rangeHigh: number;
+  tiers: TierCode[];
+}[] = [
+  {
+    id: "everyday",
+    name: "Everyday cars",
     examples: "Toyota, Honda, Ford, Hyundai, Kia, Mazda, Nissan, Subaru",
+    rangeLow: 130,
+    rangeHigh: 150,
+    tiers: ["T1"],
   },
-  T2a: {
-    label: "Value premium",
-    band: { lo: 160, hi: 185 },
-    examples: "Lexus, Acura, Genesis, Volvo, Infiniti, Buick",
+  {
+    id: "luxury",
+    name: "Luxury sedans & SUVs",
+    examples: "Lexus, Acura, Genesis, Volvo, Mercedes, Audi, BMW, Macan",
+    rangeLow: 160,
+    rangeHigh: 210,
+    tiers: ["T2a", "T2b", "T2c"],
   },
-  T2b: {
-    label: "German mid",
-    band: { lo: 165, hi: 195 },
-    examples: "Mercedes (non-AMG), Audi (non-S/RS), VW GTI/Golf R",
+  {
+    id: "performance",
+    name: "Performance & sports",
+    examples: "BMW M, AMG, Audi RS, Porsche 911 / Cayman, Audi R8",
+    rangeLow: 195,
+    rangeHigh: 275,
+    tiers: ["T3a", "T3b"],
   },
-  T2c: {
-    label: "BMW non-M",
-    band: { lo: 175, hi: 210 },
-    examples: "BMW 3/5/X3/X5, MINI JCW, Macan base",
-  },
-  T3a: {
-    label: "Performance",
-    band: { lo: 195, hi: 235 },
-    examples: "BMW M3/M5/X3M, Mercedes-AMG C63/E63, Audi RS/S",
-  },
-  T3b: {
-    label: "Premium sports",
-    band: { lo: 215, hi: 275 },
-    examples: "Porsche 911 / Cayman / Boxster, AMG GT, Audi R8",
-  },
-  T4: {
-    label: "Ultra-exotic",
-    band: { lo: 250, hi: 400 },
+  {
+    id: "exotic",
+    name: "Exotic",
     examples: "Ferrari, Lamborghini, Rolls-Royce, Bentley, McLaren",
+    rangeLow: 250,
+    rangeHigh: 400,
+    tiers: ["T4"],
   },
-};
+];
 
-type TierFormRow = {
-  tier: TierCode;
-  declined: boolean;
-  rateInput: string;
-};
+type GroupRow = { rate: string; notServiced: boolean };
 
-function initialTierRows(
+function initialGroupRows(
   rates: Partial<Record<TierCode, number>> | undefined,
   declined: TierCode[] | undefined,
-): TierFormRow[] {
+): Record<string, GroupRow> {
   const declinedSet = new Set(declined ?? []);
-  return TIER_ORDER.map((tier) => ({
-    tier,
-    declined: declinedSet.has(tier),
-    rateInput: rates?.[tier] != null ? String(rates[tier]) : "",
-  }));
+  const out: Record<string, GroupRow> = {};
+  for (const group of VEHICLE_GROUPS) {
+    const notServiced =
+      group.tiers.length > 0 && group.tiers.every((tier) => declinedSet.has(tier));
+    let rate = "";
+    for (const tier of group.tiers) {
+      if (rates?.[tier] != null) {
+        rate = String(rates[tier]);
+        break;
+      }
+    }
+    out[group.id] = { rate, notServiced };
+  }
+  return out;
 }
 
 const getPortalAccessQuery = makeFunctionReference<"query">("shops:getMyPortalAccess");
@@ -240,6 +258,7 @@ type OnboardingService = {
   description?: string;
   defaultLaborHours: number;
   isOffered: boolean;
+  requiresInspectionLicense?: boolean;
 };
 
 type OnboardingServiceCategory = {
@@ -542,7 +561,8 @@ function getFirstIncompleteSavedStep(params: {
   if (!params.hasSavedShop) return 0;
   if (params.savedHoursCount < 7) return 1;
   if (params.savedServiceCount === 0) return 2;
-  return 4;
+  // Licenses (3) and mechanics (4) are optional/skippable — resume at Payments.
+  return 5;
 }
 
 export default function ShopSetupPage() {
@@ -616,8 +636,8 @@ export default function ShopSetupPage() {
   });
   const [hours, setHours] = useState<HoursFormRow[]>(getDefaultHours());
   const [laborRate, setLaborRate] = useState("150");
-  const [tierRows, setTierRows] = useState<TierFormRow[]>(() =>
-    initialTierRows(undefined, undefined),
+  const [groupRows, setGroupRows] = useState<Record<string, GroupRow>>(() =>
+    initialGroupRows(undefined, undefined),
   );
   const [selectedServiceIds, setSelectedServiceIds] = useState<Set<string>>(new Set());
   const [pricingOpenServiceIds, setPricingOpenServiceIds] = useState<Set<string>>(
@@ -765,19 +785,26 @@ export default function ShopSetupPage() {
     };
     const nextHours = normalizeHours(onboardingData.hours);
     const nextLaborRate = String(onboardingData.shop?.laborRate ?? 150);
+    // Most shops service nearly everything, so default a fresh setup to ALL
+    // services selected — the owner just unchecks the few they don't do. Once
+    // they've saved their own selection, respect exactly what they offered.
+    const offeredServiceIds = serviceCategories.flatMap((category) =>
+      category.services
+        .filter((service) => service.isOffered)
+        .map((service) => service._id)
+    );
+    const allServiceIds = serviceCategories.flatMap((category) =>
+      category.services.map((service) => service._id)
+    );
     const nextSelectedServiceIds = new Set<string>(
-      serviceCategories.flatMap((category) =>
-        category.services
-          .filter((service) => service.isOffered)
-          .map((service) => service._id)
-      )
+      offeredServiceIds.length > 0 ? offeredServiceIds : allServiceIds
     );
 
     setDetails(nextDetails);
     setHours(nextHours);
     setLaborRate(nextLaborRate);
-    setTierRows(
-      initialTierRows(
+    setGroupRows(
+      initialGroupRows(
         onboardingData.shop?.laborRatesByTier,
         onboardingData.shop?.declinedTiers,
       ),
@@ -1127,7 +1154,6 @@ export default function ShopSetupPage() {
 
       setDetails(nextDetails);
       await upsertShopDetails(nextDetails);
-      setStepSuccess("Shop details saved.");
       setCurrentStep(1);
     } catch (error) {
       setStepError(
@@ -1152,7 +1178,6 @@ export default function ShopSetupPage() {
     setSavingStep(1);
     try {
       await saveHours({ hours });
-      setStepSuccess("Operating hours saved.");
       setCurrentStep(2);
     } catch (error) {
       setStepError(
@@ -1176,21 +1201,25 @@ export default function ShopSetupPage() {
 
     const tierRates: Partial<Record<TierCode, number>> = {};
     const tierDeclined: TierCode[] = [];
-    for (const row of tierRows) {
-      if (row.declined) {
-        tierDeclined.push(row.tier);
+    for (const group of VEHICLE_GROUPS) {
+      const row = groupRows[group.id];
+      if (!row) continue;
+      if (row.notServiced) {
+        tierDeclined.push(...group.tiers);
         continue;
       }
-      const trimmed = row.rateInput.trim();
+      const trimmed = row.rate.trim();
       if (trimmed === "") continue;
       const n = Number(trimmed);
       if (!Number.isFinite(n) || n < 50 || n > 900) {
         setStepError(
-          `Tier ${row.tier} rate must be a number between $50 and $900/hr.`,
+          `Enter a rate between $50 and $900/hr for ${group.name}.`,
         );
         return;
       }
-      tierRates[row.tier] = Math.round(n);
+      for (const tier of group.tiers) {
+        tierRates[tier] = Math.round(n);
+      }
     }
 
     setSavingStep(2);
@@ -1241,7 +1270,6 @@ export default function ShopSetupPage() {
         });
       }
       setFixedPricesBaseline(fixedPricesByService);
-      setStepSuccess("Labor rate and services saved.");
       setCurrentStep(3);
     } catch (error) {
       setStepError(
@@ -1601,6 +1629,13 @@ export default function ShopSetupPage() {
       : mechanics.find((mechanic) => mechanic._id === removeMechanicConfirm.mechanicId) ??
         removeMechanicConfirm;
   const offeredCount = selectedServiceIds.size;
+  // A selected service that legally needs the NY DMV inspection station license.
+  const selectedNeedsInspectionLicense = serviceCategories.some((category) =>
+    category.services.some(
+      (service) =>
+        selectedServiceIds.has(service._id) && service.requiresInspectionLicense,
+    ),
+  );
   const stripeRequirements =
     onboardingData.shop?.stripeRequirementsCurrentlyDue ?? [];
   const stripeConnectReady = onboardingData.shop?.stripeConnectReady === true;
@@ -1608,83 +1643,82 @@ export default function ShopSetupPage() {
     "inline-flex items-center rounded-lg border px-4 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50";
 
   return (
-    <div className="mx-auto max-w-6xl">
-      <div className="mb-8">
+    <div className="mx-auto max-w-3xl">
+      <div className="mb-8 text-center">
         <p className="text-sm font-medium uppercase tracking-[0.12em] text-muted-foreground">
           Partner onboarding
         </p>
         <h1 className="mt-2 text-2xl font-semibold text-foreground">
           Shop registration and onboarding
         </h1>
-        <p className="mt-3 max-w-3xl text-sm leading-6 text-muted-foreground">
+        <p className="mt-3 mx-auto max-w-xl text-sm leading-6 text-muted-foreground">
           Let&apos;s get your shop ready to receive bookings. This takes about 15
           minutes - your progress is saved at every step.
         </p>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="rounded-xl border border-border bg-white p-4 shadow-sm">
-          <div className="mb-4 border-b border-border pb-4">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-              Progress
-            </p>
-            <div className="mt-3 h-2 rounded-lg bg-muted">
-              <div
-                className="h-2 rounded-lg bg-primary transition-all"
-                style={{ width: `${(firstIncompleteSavedStep / STEP_META.length) * 100}%` }}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            {STEP_META.map((step, index) => {
-              const Icon = step.icon;
-              const completed =
-                index < firstIncompleteSavedStep ||
-                (firstIncompleteSavedStep === 4 &&
-                  index === 4 &&
-                  onboardingData.shop?.onboardingComplete);
-              const active = currentStep === index;
-              const clickable = index <= Math.max(currentStep, firstIncompleteSavedStep);
-              return (
+      <nav aria-label="Onboarding progress" className="mb-8">
+        <ol className="grid grid-cols-6">
+          {STEP_META.map((step, index) => {
+            const completed =
+              index < firstIncompleteSavedStep ||
+              (firstIncompleteSavedStep === 5 &&
+                index === 5 &&
+                onboardingData.shop?.onboardingComplete);
+            const active = currentStep === index;
+            const clickable =
+              index <= Math.max(currentStep, firstIncompleteSavedStep);
+            return (
+              <li key={step.title} className="relative flex flex-col items-center">
+                {index > 0 && (
+                  <span
+                    aria-hidden
+                    className={`absolute right-1/2 top-[18px] h-px w-full -translate-y-1/2 ${
+                      index <= firstIncompleteSavedStep ? "bg-primary" : "bg-border"
+                    }`}
+                  />
+                )}
                 <button
-                  key={step.title}
                   type="button"
                   onClick={() => handleStepChange(index)}
                   disabled={!clickable}
-                  className={`flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition-colors ${
-                    active
-                      ? "border-primary/20 bg-primary/5"
-                      : "border-transparent hover:border-border hover:bg-muted"
+                  aria-current={active ? "step" : undefined}
+                  className={`relative z-10 flex flex-col items-center gap-2 px-1 transition-opacity ${
+                    clickable ? "cursor-pointer hover:opacity-90" : "cursor-not-allowed"
                   }`}
                 >
-                  <div
-                    className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${
+                  <span
+                    className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-sm font-semibold transition-colors ${
                       completed
-                        ? "bg-success/15 text-success"
+                        ? "border-transparent bg-primary text-white"
                         : active
-                        ? "bg-primary/10 text-primary"
-                        : "bg-muted text-muted-foreground"
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-white text-muted-foreground"
                     }`}
                   >
-                    {completed ? <Check className="h-4 w-4" /> : <Icon className="h-4 w-4" />}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-foreground">
-                      Step {index + 1}: {step.title}
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                      {step.description}
-                    </p>
-                  </div>
+                    {completed ? <Check className="h-4 w-4" /> : index + 1}
+                  </span>
+                  <span className="hidden text-center leading-tight sm:block">
+                    <span className="block text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                      Step {index + 1}
+                    </span>
+                    <span
+                      className={`block text-xs font-semibold ${
+                        active || completed ? "text-foreground" : "text-muted-foreground"
+                      }`}
+                    >
+                      {step.title}
+                    </span>
+                  </span>
                 </button>
-              );
-            })}
-          </div>
-        </aside>
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
 
-        <section className="rounded-xl border border-border bg-white p-6 sm:p-8 shadow-sm">
-          <div className="mb-6 flex flex-wrap items-start justify-between gap-4 border-b border-border pb-6">
+      <section className="rounded-xl border border-border bg-white p-6 sm:p-8 shadow-sm">
+          <div className="mb-6 flex flex-wrap items-start justify-between gap-4 pb-6">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                 Current step
@@ -1733,7 +1767,7 @@ export default function ShopSetupPage() {
 
               <div>
                 <label className={labelClass}>
-                  Shop URL Slug <span className="text-destructive">*</span>
+                  Page name <span className="text-destructive">*</span>
                 </label>
                 <div className="flex items-center overflow-hidden rounded-lg border border-input focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring">
                   <span className="border-r border-input bg-muted px-3.5 py-2.5 font-mono text-sm text-muted-foreground">
@@ -1905,73 +1939,93 @@ export default function ShopSetupPage() {
           )}
 
           {currentStep === 1 && (
-            <div className="space-y-4">
-              {hours.map((row, index) => (
-                <div
-                  key={row.dayOfWeek}
-                  className="grid gap-3 rounded-xl border border-border p-4 md:grid-cols-[160px_minmax(0,1fr)_minmax(0,1fr)_120px]"
-                >
-                  <div>
-                    <p className="text-sm font-semibold text-foreground">{row.dayName}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {row.isClosed ? "Closed all day" : "Open for bookings"}
+            <div className="space-y-6">
+              <div className="divide-y divide-border">
+                {hours.map((row, index) => (
+                  <div
+                    key={row.dayOfWeek}
+                    className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:gap-6"
+                  >
+                    <p className="text-sm font-semibold text-foreground sm:w-28">
+                      {row.dayName}
                     </p>
-                  </div>
-                  <div>
-                    <label className={labelClass}>Open</label>
-                    <input
-                      type="time"
-                      value={row.openTime}
-                      disabled={row.isClosed}
-                      onChange={(event) =>
+
+                    <div className="flex flex-1 flex-wrap items-center gap-x-3 gap-y-2">
+                      {row.isClosed ? (
+                        <span className="text-sm text-muted-foreground">
+                          Closed all day
+                        </span>
+                      ) : (
+                        <>
+                          <div className="w-32">
+                            <TimePicker
+                              value={row.openTime}
+                              ariaLabel={`${row.dayName} opening time`}
+                              onChange={(next) =>
+                                setHours((prev) =>
+                                  prev.map((item, itemIndex) =>
+                                    itemIndex === index
+                                      ? { ...item, openTime: next }
+                                      : item
+                                  )
+                                )
+                              }
+                            />
+                          </div>
+                          <span className="text-sm text-muted-foreground">to</span>
+                          <div className="w-32">
+                            <TimePicker
+                              value={row.closeTime}
+                              ariaLabel={`${row.dayName} closing time`}
+                              onChange={(next) =>
+                                setHours((prev) =>
+                                  prev.map((item, itemIndex) =>
+                                    itemIndex === index
+                                      ? { ...item, closeTime: next }
+                                      : item
+                                  )
+                                )
+                              }
+                            />
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!row.isClosed}
+                      aria-label={`${row.dayName} open`}
+                      onClick={() =>
                         setHours((prev) =>
                           prev.map((item, itemIndex) =>
                             itemIndex === index
-                              ? { ...item, openTime: event.target.value }
+                              ? { ...item, isClosed: !item.isClosed }
                               : item
                           )
                         )
                       }
-                      className={`${inputClass} disabled:bg-muted disabled:text-gray-400`}
-                    />
+                      className="inline-flex items-center gap-2.5 self-start sm:self-auto"
+                    >
+                      <span
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                          row.isClosed ? "bg-gray-300" : "bg-primary"
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                            row.isClosed ? "translate-x-0.5" : "translate-x-[18px]"
+                          }`}
+                        />
+                      </span>
+                      <span className="w-12 text-left text-sm font-medium text-foreground">
+                        {row.isClosed ? "Closed" : "Open"}
+                      </span>
+                    </button>
                   </div>
-                  <div>
-                    <label className={labelClass}>Close</label>
-                    <input
-                      type="time"
-                      value={row.closeTime}
-                      disabled={row.isClosed}
-                      onChange={(event) =>
-                        setHours((prev) =>
-                          prev.map((item, itemIndex) =>
-                            itemIndex === index
-                              ? { ...item, closeTime: event.target.value }
-                              : item
-                          )
-                        )
-                      }
-                      className={`${inputClass} disabled:bg-muted disabled:text-gray-400`}
-                    />
-                  </div>
-                  <label className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground md:self-end">
-                    Closed
-                    <input
-                      type="checkbox"
-                      checked={row.isClosed}
-                      onChange={(event) =>
-                        setHours((prev) =>
-                          prev.map((item, itemIndex) =>
-                            itemIndex === index
-                              ? { ...item, isClosed: event.target.checked }
-                              : item
-                          )
-                        )
-                      }
-                      className="h-4 w-4 rounded border-input text-primary focus:ring-ring"
-                    />
-                  </label>
-                </div>
-              ))}
+                ))}
+              </div>
 
               <div className="flex justify-between pt-2">
                 <button
@@ -1999,167 +2053,177 @@ export default function ShopSetupPage() {
           )}
 
           {currentStep === 2 && (
-            <div className="space-y-6">
-              <div className="rounded-xl border border-border bg-muted p-5">
-                <label className={labelClass}>
-                  Hourly Labor Rate <span className="text-destructive">*</span>
-                </label>
-                <div className="flex max-w-sm items-center overflow-hidden rounded-lg border border-input bg-white focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring">
-                  <span className="border-r border-input bg-muted px-3.5 py-2.5 text-sm text-muted-foreground">
-                    $
-                  </span>
+            <div className="space-y-12">
+              <section>
+                <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                  Rate
+                </p>
+                <h3 className="text-base font-semibold text-foreground">
+                  What do you charge per hour?
+                </h3>
+                <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
+                  Your standard labor rate — we&apos;ll use it for every car unless you
+                  set a different rate below. Most Otopair shops charge between $150 and
+                  $220/hr, and you can change it anytime.
+                </p>
+                <div className="mt-4 flex max-w-[220px] items-center rounded-xl border border-input bg-white transition-colors focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring">
+                  <span className="pl-3.5 pr-1 text-sm text-muted-foreground">$</span>
                   <input
                     type="number"
                     min="0"
                     step="1"
                     value={laborRate}
                     onChange={(event) => setLaborRate(event.target.value)}
-                    className="min-w-0 flex-1 px-3.5 py-2.5 text-sm text-foreground outline-none"
+                    aria-label="Hourly labor rate"
+                    className="min-w-0 flex-1 bg-transparent py-2.5 text-sm font-medium text-foreground outline-none"
                   />
-                  <span className="border-l border-input bg-muted px-3.5 py-2.5 text-sm text-muted-foreground">
-                    / hr
-                  </span>
+                  <span className="pl-1 pr-3.5 text-sm text-muted-foreground">/ hr</span>
                 </div>
-                <p className="mt-2 text-xs text-muted-foreground">
-                  Otopair shops start at $150/hr. You can adjust this any time.
-                </p>
-              </div>
+              </section>
 
-              <div className="rounded-xl border border-border bg-muted p-5">
-                <div className="mb-1 flex items-center justify-between">
-                  <h3 className="text-base font-semibold text-foreground">
-                    Per-tier rates
-                  </h3>
-                </div>
-                <p className="mb-4 text-xs text-muted-foreground">
-                  Optional: charge differently per vehicle class. Blank tiers
-                  fall back to your base rate of{" "}
+              <section>
+                <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                  Vehicle groups · Optional
+                </p>
+                <h3 className="text-base font-semibold text-foreground">
+                  Charge more for certain cars?
+                </h3>
+                <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
+                  Some cars take longer or need more specialized skill, so many shops
+                  charge extra for them. Leave a group blank and we&apos;ll charge your
+                  default{" "}
                   <span className="font-medium text-foreground">
                     ${laborRate || 150}/hr
-                  </span>
-                  . Use Decline to mark a tier you don&apos;t service.
+                  </span>{" "}
+                  for it.
                 </p>
-                <div className="overflow-hidden rounded-lg border border-border bg-white">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted text-[11px] uppercase tracking-wide text-muted-foreground">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Tier
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold whitespace-nowrap">
-                          Suggested
-                        </th>
-                        <th className="px-3 py-2 text-left font-semibold">
-                          Rate ($/hr)
-                        </th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Status
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-100">
-                      {tierRows.map((row) => {
-                        const meta = TIER_META[row.tier];
-                        const trimmed = row.rateInput.trim();
-                        const n = Number(trimmed);
-                        const inputValid =
-                          row.declined ||
-                          trimmed === "" ||
-                          (Number.isFinite(n) && n >= 50 && n <= 900);
-                        return (
-                          <tr key={row.tier} className="align-top">
-                            <td className="px-3 py-2.5">
-                              <div className="font-semibold text-foreground">
-                                {row.tier}{" "}
-                                <span className="font-normal text-muted-foreground">
-                                  · {meta.label}
-                                </span>
-                              </div>
-                              <div className="mt-0.5 text-[11px] text-muted-foreground leading-snug">
-                                e.g. {meta.examples}
-                              </div>
-                            </td>
-                            <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap text-xs">
-                              ${meta.band.lo}–${meta.band.hi}
-                            </td>
-                            <td className="px-3 py-2.5">
-                              <div className="inline-flex items-center overflow-hidden rounded-md border border-input bg-white focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring">
-                                <span className="border-r border-input bg-muted px-2 py-1.5 text-xs text-muted-foreground">
-                                  $
-                                </span>
+
+                <div className="mt-6">
+                  <div className="hidden grid-cols-[minmax(0,1fr)_6rem_8rem_9rem] gap-4 pb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground md:grid">
+                    <span>Vehicle group</span>
+                    <span className="text-center">Typical range</span>
+                    <span>Your rate</span>
+                    <span aria-hidden />
+                  </div>
+
+                  <ul className="divide-y divide-border border-t border-border">
+                    {VEHICLE_GROUPS.map((group) => {
+                      const row = groupRows[group.id] ?? {
+                        rate: "",
+                        notServiced: false,
+                      };
+                      const notServiced = row.notServiced;
+                      return (
+                        <li
+                          key={group.id}
+                          className="grid grid-cols-1 items-center gap-x-4 gap-y-3 py-5 md:grid-cols-[minmax(0,1fr)_6rem_8rem_9rem]"
+                        >
+                          <div
+                            title={`Internal pricing groups: ${group.tiers.join(", ")}`}
+                            className={
+                              notServiced
+                                ? "opacity-50 transition-opacity"
+                                : "transition-opacity"
+                            }
+                          >
+                            <p className="text-sm font-semibold text-foreground">
+                              {group.name}
+                            </p>
+                            <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                              e.g. {group.examples}
+                            </p>
+                          </div>
+
+                          <p className="whitespace-nowrap text-xs text-muted-foreground md:text-center">
+                            ${group.rangeLow} – ${group.rangeHigh}
+                          </p>
+
+                          <div>
+                            {notServiced ? (
+                              <span className="inline-flex items-center rounded-xl bg-muted px-3.5 py-2.5 text-xs text-muted-foreground">
+                                Not serviced
+                              </span>
+                            ) : (
+                              <div className="inline-flex items-center rounded-xl border border-input bg-white transition-colors focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring">
+                                <span className="pl-3 pr-1 text-sm text-muted-foreground">$</span>
                                 <input
                                   type="text"
                                   inputMode="numeric"
-                                  value={row.rateInput}
-                                  onChange={(event) =>
-                                    setTierRows((prev) =>
-                                      prev.map((r) =>
-                                        r.tier === row.tier
-                                          ? { ...r, rateInput: event.target.value }
-                                          : r,
-                                      ),
-                                    )
-                                  }
-                                  disabled={row.declined}
+                                  value={row.rate}
+                                  onChange={(event) => {
+                                    const next = event.target.value.replace(
+                                      /[^0-9]/g,
+                                      "",
+                                    );
+                                    setGroupRows((prev) => ({
+                                      ...prev,
+                                      [group.id]: {
+                                        ...(prev[group.id] ?? {
+                                          rate: "",
+                                          notServiced: false,
+                                        }),
+                                        rate: next,
+                                      },
+                                    }));
+                                  }}
                                   placeholder={String(laborRate || 150)}
-                                  className={`w-20 px-2 py-1.5 text-sm text-foreground outline-none disabled:bg-muted disabled:text-muted-foreground ${
-                                    inputValid ? "" : "text-destructive"
-                                  }`}
+                                  aria-label={`Your hourly rate for ${group.name}`}
+                                  className="w-16 bg-transparent py-2.5 pr-3 text-sm font-medium text-foreground outline-none"
                                 />
                               </div>
-                            </td>
-                            <td className="px-3 py-2.5 text-right">
-                              {row.declined ? (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setTierRows((prev) =>
-                                      prev.map((r) =>
-                                        r.tier === row.tier
-                                          ? { ...r, declined: false }
-                                          : r,
-                                      ),
-                                    )
-                                  }
-                                  className="rounded-md border border-input px-2 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-                                >
-                                  Restore
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setTierRows((prev) =>
-                                      prev.map((r) =>
-                                        r.tier === row.tier
-                                          ? { ...r, declined: true, rateInput: "" }
-                                          : r,
-                                      ),
-                                    )
-                                  }
-                                  className="rounded-md border border-input px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted"
-                                >
-                                  Decline
-                                </button>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+                            )}
+                          </div>
 
-              <div>
-                <div className="mb-4 flex items-center justify-between">
+                          <div className="md:text-right">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setGroupRows((prev) => {
+                                  const current = prev[group.id] ?? {
+                                    rate: "",
+                                    notServiced: false,
+                                  };
+                                  return {
+                                    ...prev,
+                                    [group.id]: {
+                                      rate: current.notServiced ? current.rate : "",
+                                      notServiced: !current.notServiced,
+                                    },
+                                  };
+                                })
+                              }
+                              className={`text-xs underline-offset-4 hover:underline ${
+                                notServiced
+                                  ? "text-primary"
+                                  : "text-muted-foreground hover:text-foreground"
+                              }`}
+                            >
+                              {notServiced ? "Undo" : "I don't work on these"}
+                            </button>
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              </section>
+
+              <section>
+                <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                  Services
+                </p>
+                <div className="flex items-start justify-between gap-6">
                   <div>
-                    <h3 className="text-lg font-semibold text-foreground">Services offered</h3>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Select the services this shop should show as available.
+                    <h3 className="text-base font-semibold text-foreground">
+                      Which services do you offer?
+                    </h3>
+                    <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
+                      Pick the services your shop is set up for. Set a fixed price per
+                      vehicle group if you like, or leave it blank to use your standard
+                      quote range.
                     </p>
                   </div>
-                  <div className="flex items-center gap-3">
+                  <div className="mt-0.5 flex shrink-0 items-center gap-2.5 text-sm">
                     <button
                       type="button"
                       onClick={() => {
@@ -2170,7 +2234,7 @@ export default function ShopSetupPage() {
                           allIds.length > 0 && allIds.every((id) => selectedServiceIds.has(id));
                         setSelectedServiceIds(allSelected ? new Set() : new Set(allIds));
                       }}
-                      className="text-sm font-medium text-primary hover:underline"
+                      className="font-medium text-primary hover:underline"
                     >
                       {(() => {
                         const allIds = serviceCategories.flatMap((c) =>
@@ -2181,138 +2245,182 @@ export default function ShopSetupPage() {
                           : "Select all";
                       })()}
                     </button>
-                    <div className="rounded-lg bg-primary/5 px-3 py-1 text-sm font-medium text-primary">
-                      {offeredCount} selected
-                    </div>
+                    <span className="text-muted-foreground">·</span>
+                    <span className="text-muted-foreground">{offeredCount} selected</span>
                   </div>
                 </div>
 
-                <div className="space-y-4">
+                {selectedNeedsInspectionLicense && (
+                  <p className="mt-4 flex items-start gap-2 text-sm leading-relaxed text-muted-foreground">
+                    <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span>
+                      <span className="font-medium text-foreground">
+                        State Inspection &amp; Emissions Tests
+                      </span>{" "}
+                      need a NY DMV inspection station license — add it next, or in
+                      Settings.
+                    </span>
+                  </p>
+                )}
+
+                <div className="mt-6 flex flex-col gap-8">
                   {serviceCategories
                     .filter((category) => category.services.length > 0)
                     .map((category) => {
-                    const categoryIds = category.services.map((s) => s._id);
-                    const allInCategorySelected = categoryIds.every((id) =>
-                      selectedServiceIds.has(id)
-                    );
-                    return (
-                    <div
-                      key={category.id}
-                      className="overflow-hidden rounded-xl border border-border"
-                    >
-                      <div className="flex items-center justify-between border-b border-border bg-muted px-4 py-3">
-                        <h4 className="text-sm font-semibold text-foreground">{category.name}</h4>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setSelectedServiceIds((prev) => {
-                              const next = new Set(prev);
-                              if (allInCategorySelected) {
-                                categoryIds.forEach((id) => next.delete(id));
-                              } else {
-                                categoryIds.forEach((id) => next.add(id));
-                              }
-                              return next;
-                            })
-                          }
-                          className="text-xs font-medium text-primary hover:underline"
-                        >
-                          {allInCategorySelected ? "Clear" : "Select all"}
-                        </button>
-                      </div>
-                      <div className="divide-y divide-gray-100">
-                        {category.services.map((service) => {
-                          const checked = selectedServiceIds.has(service._id);
-                          const prices = fixedPricesByService[service._id] ?? {};
-                          const pricedCount = countPricedTiers(prices);
-                          const isPricingOpen =
-                            checked && pricingOpenServiceIds.has(service._id);
-                          return (
-                            <div
-                              key={service._id}
-                              className="px-4 py-4 hover:bg-muted/60"
-                            >
-                              <div className="flex items-start gap-3">
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={(event) =>
-                                    setSelectedServiceIds((prev) => {
-                                      const next = new Set(prev);
-                                      if (event.target.checked) next.add(service._id);
-                                      else next.delete(service._id);
-                                      return next;
-                                    })
+                      const categoryIds = category.services.map((s) => s._id);
+                      const allInCategorySelected = categoryIds.every((id) =>
+                        selectedServiceIds.has(id)
+                      );
+                      return (
+                        <div key={category.id}>
+                          <div className="mb-1 flex items-center justify-between">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                              {category.name}
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedServiceIds((prev) => {
+                                  const next = new Set(prev);
+                                  if (allInCategorySelected) {
+                                    categoryIds.forEach((id) => next.delete(id));
+                                  } else {
+                                    categoryIds.forEach((id) => next.add(id));
                                   }
-                                  className="mt-1 h-4 w-4 rounded border-input text-primary focus:ring-ring"
-                                  aria-label={`Offer ${service.name}`}
-                                />
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <p className="text-sm font-medium text-foreground">
-                                      {service.name}
-                                    </p>
-                                    <span className="rounded-lg bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                                      {service.defaultLaborHours} hr
-                                    </span>
-                                    {pricedCount > 0 ? (
-                                      <span className="rounded-lg bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700">
-                                        {pricedCount} fixed price{pricedCount === 1 ? "" : "s"}
-                                      </span>
+                                  return next;
+                                })
+                              }
+                              className="text-xs font-medium text-primary hover:underline"
+                            >
+                              {allInCategorySelected ? "Clear" : "Select all"}
+                            </button>
+                          </div>
+                          <div className="divide-y divide-border">
+                            {category.services.map((service) => {
+                              const checked = selectedServiceIds.has(service._id);
+                              const prices = fixedPricesByService[service._id] ?? {};
+                              const pricedCount = countPricedGroups(prices);
+                              const isPricingOpen =
+                                checked && pricingOpenServiceIds.has(service._id);
+                              return (
+                                <div key={service._id} className="py-3.5">
+                                  <div className="flex items-start gap-3">
+                                    <label className="flex min-w-0 flex-1 cursor-pointer items-start gap-3">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={(event) =>
+                                          setSelectedServiceIds((prev) => {
+                                            const next = new Set(prev);
+                                            if (event.target.checked) next.add(service._id);
+                                            else next.delete(service._id);
+                                            return next;
+                                          })
+                                        }
+                                        className="mt-1 h-4 w-4 rounded border-input text-primary focus:ring-ring"
+                                        aria-label={`Offer ${service.name}`}
+                                      />
+                                      <div className="min-w-0 flex-1">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <p className="text-sm font-medium text-foreground">
+                                            {service.name}
+                                          </p>
+                                          <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                                            {service.defaultLaborHours} hr
+                                          </span>
+                                        </div>
+                                        {service.description ? (
+                                          <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                                            {service.description}
+                                          </p>
+                                        ) : null}
+                                      </div>
+                                    </label>
+                                    {checked ? (
+                                      <Tooltip
+                                        className="mt-0.5 shrink-0"
+                                        content="Set a fixed price for this service by vehicle group — e.g. charge more on an exotic than an everyday car. Leave a group blank to use your standard quote range."
+                                      >
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            setPricingOpenServiceIds((prev) => {
+                                              const next = new Set(prev);
+                                              if (next.has(service._id)) next.delete(service._id);
+                                              else next.add(service._id);
+                                              return next;
+                                            })
+                                          }
+                                          className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
+                                            isPricingOpen
+                                              ? "border-blue-200 bg-blue-50 text-blue-700"
+                                              : "border-input text-muted-foreground hover:bg-muted"
+                                          }`}
+                                          aria-expanded={isPricingOpen}
+                                        >
+                                          <Sliders className="h-3.5 w-3.5" />
+                                          {pricedCount > 0
+                                            ? `${pricedCount} fixed price${pricedCount === 1 ? "" : "s"}`
+                                            : "Fixed prices"}
+                                        </button>
+                                      </Tooltip>
                                     ) : null}
                                   </div>
-                                  <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                                    {service.description}
-                                  </p>
+                                  {isPricingOpen ? (
+                                    <div className="mt-3 overflow-hidden rounded-xl bg-muted">
+                                      <FixedPriceTierStrip
+                                        prices={prices}
+                                        declinedTiers={declinedTierSet}
+                                        onChange={(nextPrices) =>
+                                          setFixedPricesByService((prev) => ({
+                                            ...prev,
+                                            [service._id]: nextPrices,
+                                          }))
+                                        }
+                                        onPersist={async (nextPrices) => {
+                                          if (!persistedShopId) return;
+                                          const baseline =
+                                            fixedPricesBaseline[service._id] ?? {};
+                                          const centsPatch = priceMapToCents(nextPrices);
+                                          const changed: Partial<
+                                            Record<FixedPriceTier, number | null>
+                                          > = {};
+                                          for (const tier of FIXED_PRICE_TIERS) {
+                                            if (
+                                              (nextPrices[tier] ?? "") !==
+                                              (baseline[tier] ?? "")
+                                            ) {
+                                              changed[tier] =
+                                                tier in centsPatch
+                                                  ? centsPatch[tier]!
+                                                  : null;
+                                            }
+                                          }
+                                          if (Object.keys(changed).length === 0) return;
+                                          await setShopServiceFixedPrices({
+                                            shop_id: persistedShopId,
+                                            service_id: service._id as Id<"services">,
+                                            prices: changed,
+                                          });
+                                          setFixedPricesBaseline((prev) => ({
+                                            ...prev,
+                                            [service._id]: { ...nextPrices },
+                                          }));
+                                        }}
+                                      />
+                                    </div>
+                                  ) : null}
                                 </div>
-                                {checked ? (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      setPricingOpenServiceIds((prev) => {
-                                        const next = new Set(prev);
-                                        if (next.has(service._id)) next.delete(service._id);
-                                        else next.add(service._id);
-                                        return next;
-                                      })
-                                    }
-                                    className={`mt-0.5 inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-medium transition-colors ${
-                                      isPricingOpen
-                                        ? "border-blue-200 bg-blue-50 text-blue-700"
-                                        : "border-input text-muted-foreground hover:bg-muted"
-                                    }`}
-                                    aria-expanded={isPricingOpen}
-                                  >
-                                    <Sliders className="h-3 w-3" />
-                                    Fixed prices
-                                  </button>
-                                ) : null}
-                              </div>
-                              {isPricingOpen ? (
-                                <div className="mt-3 rounded-md border border-border bg-white">
-                                  <FixedPriceTierStrip
-                                    prices={prices}
-                                    declinedTiers={declinedTierSet}
-                                    onChange={(nextPrices) =>
-                                      setFixedPricesByService((prev) => ({
-                                        ...prev,
-                                        [service._id]: nextPrices,
-                                      }))
-                                    }
-                                  />
-                                </div>
-                              ) : null}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                    );
-                  })}
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
                 </div>
-              </div>
+              </section>
 
-              <div className="flex justify-between pt-2">
+              <div className="flex justify-between border-t border-border pt-8">
                 <button
                   type="button"
                   onClick={() => handleStepChange(1)}
@@ -2338,10 +2446,40 @@ export default function ShopSetupPage() {
           )}
 
           {currentStep === 3 && (
+            <div className="space-y-8">
+              <LicenseUploader
+                shopId={persistedShopId}
+                inspectionSelected={selectedNeedsInspectionLicense}
+              />
+
+              <div className="flex justify-between pt-2">
+                <button
+                  type="button"
+                  onClick={() => handleStepChange(2)}
+                  className={`${stepButtonClass} border-input bg-white text-foreground hover:bg-muted`}
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearBanners();
+                    setCurrentStep(4);
+                  }}
+                  className={`${stepButtonClass} border-blue-600 bg-primary text-white hover:bg-primary/90`}
+                >
+                  <ChevronRight className="mr-2 h-4 w-4" />
+                  Continue
+                </button>
+              </div>
+            </div>
+          )}
+
+          {currentStep === 4 && (
             <div className="space-y-6">
               <div
                 ref={mechanicFormRef}
-                className="grid gap-4 rounded-xl border border-border bg-muted p-5 md:grid-cols-3"
+                className="grid gap-4 md:grid-cols-3"
               >
                 <div>
                   <label className={labelClass}>
@@ -2408,20 +2546,7 @@ export default function ShopSetupPage() {
                     className={inputClass}
                   />
                 </div>
-                <div className="flex flex-wrap gap-2 md:col-span-3">
-                  <button
-                    type="button"
-                    onClick={handleInviteMechanic}
-                    disabled={sendingInvite}
-                    className={`${stepButtonClass} border-input bg-white text-foreground hover:bg-muted`}
-                  >
-                    {sendingInvite ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Wrench className="mr-2 h-4 w-4" />
-                    )}
-                    {mechanicForm.email.trim() ? "Save and invite mechanic" : "Save mechanic"}
-                  </button>
+                <div className="flex flex-wrap justify-end gap-2 md:col-span-3">
                   {mechanicForm.mechanicId && (
                     <button
                       type="button"
@@ -2436,6 +2561,19 @@ export default function ShopSetupPage() {
                       Cancel
                     </button>
                   )}
+                  <button
+                    type="button"
+                    onClick={handleInviteMechanic}
+                    disabled={sendingInvite}
+                    className={`${stepButtonClass} border-blue-600 bg-primary text-white hover:bg-primary/90`}
+                  >
+                    {sendingInvite ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Wrench className="mr-2 h-4 w-4" />
+                    )}
+                    {mechanicForm.email.trim() ? "Save and invite mechanic" : "Save mechanic"}
+                  </button>
                 </div>
               </div>
 
@@ -2459,22 +2597,22 @@ export default function ShopSetupPage() {
                 onChange={handleMechanicPhotoSelected}
               />
 
-              <div className="space-y-3">
+              <div className="border-t border-border pt-6">
+                <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                  Your team
+                </p>
+                <div className="space-y-3">
                 {mechanics.length === 0 ? (
-                  !mechanicForm.firstName.trim() &&
-                  !mechanicForm.lastName.trim() &&
-                  !mechanicForm.email.trim() &&
-                  !mechanicForm.title.trim() ? (
-                    <div className="rounded-xl bg-muted p-6 text-center text-muted-foreground">
-                      <Users className="mx-auto h-6 w-6 text-muted-foreground" />
-                      <p className="mt-2 text-sm font-medium text-foreground">
-                        Your team will appear here
-                      </p>
-                      <p className="mt-1 text-xs">
-                        Add your first mechanic using the form above.
-                      </p>
-                    </div>
-                  ) : null
+                  <div className="rounded-xl border border-dashed border-border bg-muted/30 px-6 py-10 text-center">
+                    <Users className="mx-auto h-6 w-6 text-muted-foreground" />
+                    <p className="mt-3 text-sm font-medium text-foreground">
+                      No mechanics yet
+                    </p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      Add your first mechanic above, or skip this step and invite
+                      them later.
+                    </p>
+                  </div>
                 ) : (
                   mechanics.map((mechanic) => (
                     <div
@@ -2569,6 +2707,7 @@ export default function ShopSetupPage() {
                     </div>
                   ))
                 )}
+                </div>
               </div>
 
               <ConfirmationDialog
@@ -2640,7 +2779,7 @@ export default function ShopSetupPage() {
               <div className="flex justify-between pt-2">
                 <button
                   type="button"
-                  onClick={() => handleStepChange(2)}
+                  onClick={() => handleStepChange(3)}
                   className={`${stepButtonClass} border-input bg-white text-foreground hover:bg-muted`}
                 >
                   Back
@@ -2649,7 +2788,7 @@ export default function ShopSetupPage() {
                   type="button"
                   onClick={() => {
                     clearBanners();
-                    setCurrentStep(4);
+                    setCurrentStep(5);
                   }}
                   className={`${stepButtonClass} border-blue-600 bg-primary text-white hover:bg-primary/90`}
                 >
@@ -2660,7 +2799,7 @@ export default function ShopSetupPage() {
             </div>
           )}
 
-          {currentStep === 4 && (
+          {currentStep === 5 && (
             <div className="space-y-6">
               <div className="grid gap-4 md:grid-cols-[1.1fr_0.9fr]">
                 <div className="rounded-xl border border-border bg-white p-5 shadow-sm">
@@ -2772,7 +2911,7 @@ export default function ShopSetupPage() {
               <div className="flex justify-between pt-2">
                 <button
                   type="button"
-                  onClick={() => handleStepChange(3)}
+                  onClick={() => handleStepChange(4)}
                   className={`${stepButtonClass} border-input bg-white text-foreground hover:bg-muted`}
                 >
                   Back
@@ -2793,8 +2932,7 @@ export default function ShopSetupPage() {
               </div>
             </div>
           )}
-        </section>
-      </div>
+      </section>
     </div>
   );
 }

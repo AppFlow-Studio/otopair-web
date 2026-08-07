@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Loader2, Clock } from "lucide-react";
+import TimePicker from "@/components/ui/time-picker";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -108,30 +109,28 @@ export default function HoursEditor() {
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Open</label>
-              <input
-                type="time"
+              <TimePicker
                 value={row.openTime}
                 disabled={row.isClosed}
-                onChange={(e) =>
+                ariaLabel={`${row.dayName} opening time`}
+                onChange={(next) =>
                   setRows((prev) =>
-                    prev.map((r, i) => (i === index ? { ...r, openTime: e.target.value } : r))
+                    prev.map((r, i) => (i === index ? { ...r, openTime: next } : r))
                   )
                 }
-                className="w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-400"
               />
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500 mb-1">Close</label>
-              <input
-                type="time"
+              <TimePicker
                 value={row.closeTime}
                 disabled={row.isClosed}
-                onChange={(e) =>
+                ariaLabel={`${row.dayName} closing time`}
+                onChange={(next) =>
                   setRows((prev) =>
-                    prev.map((r, i) => (i === index ? { ...r, closeTime: e.target.value } : r))
+                    prev.map((r, i) => (i === index ? { ...r, closeTime: next } : r))
                   )
                 }
-                className="w-full rounded-md border border-gray-300 px-2.5 py-1.5 text-sm disabled:bg-gray-100 disabled:text-gray-400"
               />
             </div>
             <label className="flex items-center justify-between gap-2 rounded-md border border-gray-200 px-3 py-2 text-sm">

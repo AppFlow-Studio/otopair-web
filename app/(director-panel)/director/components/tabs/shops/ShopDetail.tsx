@@ -18,9 +18,19 @@ import { BookingDetailModal } from '../../BookingDetailModal'
 import { HealthDot } from './shopsUi'
 import type {
   Profile, HourRow, ServicesResult, RosterMechanic, CalendarResult, ShopBookingRow, ShopInsights,
+  ShopComplianceResult,
 } from './types'
 
-const TABS = ['Profile', 'Hours', 'Services & Rate', 'Mechanics', 'Calendar', 'Bookings', 'Insights'] as const
+const TABS = ['Profile', 'Hours', 'Services & Rate', 'Compliance', 'Mechanics', 'Calendar', 'Bookings', 'Insights'] as const
+
+const LICENSE_LABELS: Record<string, string> = {
+  dmv_inspection_station: 'NY DMV Inspection Station License',
+}
+const licenseLabel = (t: string) => LICENSE_LABELS[t] ?? t
+const fmtDate = (ms: number | null) =>
+  ms ? new Date(ms).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
+const LICENSE_TONE = { pending_review: 'yellow', verified: 'green', rejected: 'red' } as const
+const LICENSE_STATUS_LABEL = { pending_review: 'Pending review', verified: 'Verified', rejected: 'Rejected' } as const
 type Tab = (typeof TABS)[number]
 
 // ── week helpers (ported from /shops/all/[id]) ──
@@ -89,6 +99,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
   const mechanics = useQuery(api.shopsDirectory.shopMechanics, tab === 'Mechanics' ? { token, id: sid } : 'skip') as RosterMechanic[] | undefined
   const bookings = useQuery(api.shopsDirectory.shopBookings, tab === 'Bookings' ? { token, id: sid } : 'skip') as ShopBookingRow[] | undefined
   const insights = useQuery(api.shopsDirectory.shopInsights, tab === 'Insights' ? { token, id: sid } : 'skip') as ShopInsights | undefined
+  const compliance = useQuery(api.shopsDirectory.shopLicenses, tab === 'Compliance' ? { token, id: sid } : 'skip') as ShopComplianceResult | undefined
 
   const [weekMonday, setWeekMonday] = useState(() => mondayOf(new Date()))
   const dates = useMemo(() => weekDates(weekMonday), [weekMonday])
@@ -105,6 +116,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
   const setShopActive = useMutation(api.director.setShopActive)
   const setShopVerified = useMutation(api.director.setShopVerified)
   const setLaborRate = useMutation(api.shopsDirectory.setLaborRate)
+  const reviewShopLicense = useMutation(api.shopsDirectory.reviewShopLicense)
   const createOnboardingLink = useAction(api.directorStripeLive.createOrResendOnboardingLink)
 
   useEffect(() => { logView({ entity_type: 'shop', entity_id: shopId, actorName, actorId }) }, [shopId])
@@ -123,6 +135,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
   }, [profile?.id])
 
   const [confirmAction, setConfirmAction] = useState<string | null>(null)
+  const [reviewTarget, setReviewTarget] = useState<{ id: string; status: 'verified' | 'rejected' } | null>(null)
   const [stripeLoading, setStripeLoading] = useState(false)
 
   // Rate ceremony
@@ -151,6 +164,14 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
     if (action === 'Mark Verified') await setShopVerified({ id: sid, verified: true, reason, actorName, actorId })
     if (action === 'Remove Verification') await setShopVerified({ id: sid, verified: false, reason, actorName, actorId })
     setToast(`${action} done — logged in audit.`)
+  }
+
+  const handleReviewLicense = async (reason: string) => {
+    if (!reviewTarget) return
+    try {
+      await reviewShopLicense({ token, licenseId: reviewTarget.id as Id<'shop_licenses'>, status: reviewTarget.status, note: reason })
+      setToast(`License ${reviewTarget.status} — logged in audit.`)
+    } catch (e) { setToast(e instanceof Error ? e.message : 'Review failed.') }
   }
 
   const handleStripeOnboarding = async () => {
@@ -445,6 +466,63 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
         </div>
       )}
 
+      {/* ── Compliance (licenses & certificates) ── */}
+      {tab === 'Compliance' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+          {compliance === undefined ? (
+            <Card><div style={{ color:'var(--slate-500)', fontSize:13 }}>Loading…</div></Card>
+          ) : (
+            <>
+              {compliance.offersInspectionServices &&
+                !compliance.licenses.some(l => l.licenseType === 'dmv_inspection_station' && l.reviewStatus === 'verified') && (
+                <div style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'12px 14px', borderRadius:10, border:'1px solid #FDE68A', background:'var(--yellow-50, #FEFCE8)', color:'var(--yellow-800, #854D0E)', fontSize:13 }}>
+                  <span style={{ fontSize:15, lineHeight:1 }}>⚠</span>
+                  <div>This shop offers <strong>State Inspection / Emissions Test</strong> but has no <strong>verified</strong> NY DMV inspection station license on file.</div>
+                </div>
+              )}
+
+              <Card>
+                <MicroH>Licenses &amp; certificates</MicroH>
+                {compliance.licenses.length === 0 ? (
+                  <div style={{ color:'var(--slate-500)', fontSize:13, marginTop:10 }}>No documents uploaded yet.</div>
+                ) : (
+                  <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:12 }}>
+                    {compliance.licenses.map(lic => (
+                      <div key={lic._id} style={{ border:'1px solid var(--slate-200)', borderRadius:10, padding:14, display:'flex', flexDirection:'column', gap:12 }}>
+                        <div style={{ display:'flex', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
+                          <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+                            <div style={{ fontSize:14, fontWeight:600, color:'var(--slate-800)' }}>{licenseLabel(lic.licenseType)}</div>
+                            <div style={{ fontSize:12.5 }}>
+                              {lic.url
+                                ? <a href={lic.url} target="_blank" rel="noopener noreferrer" style={{ color:'var(--blue-600)', textDecoration:'none' }}>{lic.originalFilename ?? 'View document'} <IconExternal size={11} /></a>
+                                : <span style={{ color:'var(--slate-500)' }}>{lic.originalFilename ?? 'Document'}</span>}
+                            </div>
+                          </div>
+                          <Badge tone={LICENSE_TONE[lic.reviewStatus]}>{LICENSE_STATUS_LABEL[lic.reviewStatus]}</Badge>
+                        </div>
+
+                        <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'10px 24px' }}>
+                          <Field label="License #">{lic.licenseNumber ?? '—'}</Field>
+                          <Field label="Expires">{fmtDate(lic.expiresAt)}</Field>
+                          <Field label="Uploaded">{fmtDate(lic.createdAt)}</Field>
+                          {lic.reviewStatus !== 'pending_review' && <Field label="Reviewed by">{lic.reviewedBy ?? '—'}</Field>}
+                          {lic.reviewNote && <Field label="Review note">{lic.reviewNote}</Field>}
+                        </div>
+
+                        <div style={{ display:'flex', gap:8 }}>
+                          <Button size="sm" variant="primary" disabled={!canWriteShops || lic.reviewStatus === 'verified'} onClick={() => setReviewTarget({ id: lic._id, status: 'verified' })}>Verify</Button>
+                          <Button size="sm" variant="danger" disabled={!canWriteShops || lic.reviewStatus === 'rejected'} onClick={() => setReviewTarget({ id: lic._id, status: 'rejected' })}>Reject</Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            </>
+          )}
+        </div>
+      )}
+
       {/* ── Mechanics ── */}
       {tab === 'Mechanics' && (
         <div>
@@ -720,6 +798,9 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
 
       {/* Confirm verify/activate */}
       {confirmAction && <ConfirmDialog action={confirmAction} onConfirm={reason => handleAction(confirmAction, reason)} onClose={() => setConfirmAction(null)} />}
+
+      {/* Confirm license verify/reject */}
+      {reviewTarget && <ConfirmDialog action={reviewTarget.status === 'verified' ? 'Verify License' : 'Reject License'} onConfirm={reason => handleReviewLicense(reason)} onClose={() => setReviewTarget(null)} />}
 
       {/* Booking drill */}
       <BookingDetailModal bookingId={drillBooking} onClose={() => setDrillBooking(null)} />

@@ -183,6 +183,41 @@ export default function PortalLayout({
     );
   }
 
+  // Onboarding: strip the portal chrome down to a logo + account menu so the
+  // shop-registration flow is the only thing competing for the owner's attention.
+  if (isOnboarding && !isAcceptInvite) {
+    return (
+      <PortalSidebarContext.Provider value={{ setSidebarCompact: setSidebarAutoCompact }}>
+        <div className="min-h-screen flex flex-col bg-gray-50">
+          <header className="sticky top-0 z-40 flex items-center gap-3 border-b border-gray-200 bg-white px-6 py-4">
+            <Link href="/dashboard" className="flex items-center gap-2" aria-label="Otopair">
+              <Image src="/logo.png" alt="Otopair" width={28} height={28} />
+              <span className="text-base font-semibold text-gray-900">Otopair</span>
+            </Link>
+            <div className="ml-auto flex items-center gap-3">
+              <UserButton
+                userProfileProps={{
+                  appearance: {
+                    elements: { profileSection__danger: { display: "none" } },
+                  },
+                }}
+              >
+                <UserButton.UserProfilePage
+                  label="Support"
+                  url="support"
+                  labelIcon={<LifeBuoy className="w-4 h-4" />}
+                >
+                  <UserSupportPage />
+                </UserButton.UserProfilePage>
+              </UserButton>
+            </div>
+          </header>
+          <main className="flex-1 px-6 pt-6 pb-6">{children}</main>
+        </div>
+      </PortalSidebarContext.Provider>
+    );
+  }
+
   const sidebarLinks = isAcceptInvite
     ? []
     : isOwnerManager

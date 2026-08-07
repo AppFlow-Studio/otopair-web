@@ -2224,6 +2224,37 @@ export default defineSchema({
     .index("by_shop_id", ["shop_id"])
     .index("by_storage_id", ["storage_id"]),
 
+  // Compliance documents a shop uploads to prove it can legally offer certain
+  // services (e.g. State Inspection / Emissions Test require a NY DMV inspection
+  // station license). Storage-backed like shop_portfolio, plus review workflow.
+  // `review_status` is the per-document compliance state — distinct from the
+  // shop's own `is_verified`. Only `dmv_inspection_station` is used today; the
+  // `license_type` string leaves room for more license/cert types later.
+  shop_licenses: defineTable({
+    shop_id: v.id("shops"),
+    license_type: v.string(),
+    storage_id: v.id("_storage"),
+    original_filename: v.optional(v.string()),
+    mime_type: v.optional(v.string()),
+    license_number: v.optional(v.string()),
+    issuer: v.optional(v.string()),
+    expires_at: v.optional(v.number()),
+    review_status: v.union(
+      v.literal("pending_review"),
+      v.literal("verified"),
+      v.literal("rejected"),
+    ),
+    reviewed_by: v.optional(v.id("director_users")),
+    reviewed_at: v.optional(v.number()),
+    review_note: v.optional(v.string()),
+    uploaded_by: v.optional(v.id("users")),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop_id", ["shop_id"])
+    .index("by_storage_id", ["storage_id"])
+    .index("by_review_status", ["review_status"]),
+
   // [U-D] Shop staff roles, permissions, deletion tracking
   shop_users: defineTable({
     user_id: v.id("users"),

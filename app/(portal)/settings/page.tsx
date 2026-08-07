@@ -20,6 +20,7 @@ import ShopLogoUploader from "./logo-uploader";
 import PortfolioManager from "./portfolio-manager";
 import ServicesEditor from "./services-editor";
 import LaborRateCard from "./labor-rate-card";
+import LicensesManager from "./licenses-manager";
 import DevTestTools from "./dev-test-tools";
 
 export default function SettingsPage() {
@@ -290,6 +291,7 @@ export default function SettingsPage() {
         {shop && <HoursEditor />}
         {shop && <ServicesEditor />}
         {shop ? <LaborRateCard shopId={shop._id} /> : null}
+        {shop ? <LicensesManager shopId={shop._id} /> : null}
         {shop ? (
           <div className="bg-white rounded-xl border border-gray-200 p-6">
             <h2 className="text-sm font-semibold text-gray-900 mb-4 uppercase tracking-wide">

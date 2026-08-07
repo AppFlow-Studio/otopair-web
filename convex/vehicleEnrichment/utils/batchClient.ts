@@ -219,6 +219,12 @@ export function classifyParseOutcome(input: {
   parseErrorMessage?: string;
   parsedKeyCount: number;
   rawTextLength: number;
+  /** Parsed fine, but every top-level value is an empty array/object (or
+   *  null) — the `{"fields": [], "services": []}` a structured-outputs
+   *  web-search turn emits when the model ends without writing up anything it
+   *  found (2022 Telluride / 2016 C300, Aug 2026: 14 searches, end_turn,
+   *  27-char final answer). Key count alone can't see it: the keys exist. */
+  payloadEmpty?: boolean;
   /** message.stop_reason when known — a non-end_turn stop names the CAUSE of
    *  an empty parse (pause_turn / max_tokens truncation), so it is carried
    *  into the error string for the run trace instead of dying in the console. */
@@ -234,7 +240,31 @@ export function classifyParseOutcome(input: {
   if (input.parsedKeyCount === 0 && input.rawTextLength > EMPTY_PARSE_RAWTEXT_FLOOR) {
     return `json_extraction_empty: no JSON object recovered from ${input.rawTextLength} chars of content${stopSuffix}`;
   }
+  // Same floor as above, same reasoning inverted: a big body means real work
+  // happened (search results, long turn) — reporting zero rows after that is a
+  // failed request, while a short body with an all-empty payload stays a
+  // legitimate "nothing to report".
+  if (input.payloadEmpty && input.rawTextLength > EMPTY_PARSE_RAWTEXT_FLOOR) {
+    return `json_extraction_empty_payload: parsed object has keys but zero rows${stopSuffix}`;
+  }
   return null;
+}
+
+/**
+ * True when a parsed body carries NO rows anywhere: every top-level value is
+ * null, an empty array, or an empty object. `{"fields": [], "services": []}`
+ * → true; `{}` → false (that is the parsedKeyCount=0 case, classified above);
+ * any populated section → false.
+ */
+export function isPayloadEmpty(data: Record<string, any>): boolean {
+  const values = Object.values(data ?? {});
+  if (values.length === 0) return false;
+  return values.every(
+    (v) =>
+      v == null ||
+      (Array.isArray(v) && v.length === 0) ||
+      (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0),
+  );
 }
 
 /**
@@ -290,6 +320,13 @@ export async function getBatchResults(batchId: string): Promise<Record<string, B
         parseErrorMessage,
         parsedKeyCount: Object.keys(data).length,
         rawTextLength: rawText?.length ?? 0,
+        // Gated on searches actually having run: "did N searches, reported
+        // zero rows" is a failed request, while an all-empty answer from a
+        // NO-tool request (batch-1a extracting from dead scrapes) is an
+        // honest nothing — and batch1a errors are FATAL to the run, so
+        // flagging those would turn a thin-but-recoverable run into a
+        // hard failure.
+        payloadEmpty: !parseThrew && webSearches > 0 && isPayloadEmpty(data),
         stopReason,
       });
       if (parseError != null && !parseThrew) {

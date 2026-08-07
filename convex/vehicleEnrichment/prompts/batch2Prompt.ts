@@ -43,7 +43,8 @@ RULES:
 5. Labor hours: use training knowledge for well-established book times (mark source_type: "training_data", confidence 0.75). Oil change is typically 0.5 hrs.
 6. If you cannot find a price for a specific OEM part after 1-2 targeted searches, OMIT that part from parts_breakdown[]. Do not include it with a null or 0 price. Do not guess.
 7. Return OEM part numbers as JSON STRINGS exactly as printed, preserving leading zeros (e.g. "07119963130", never the bare number 7119963130).
-8. Return VALID JSON only. No markdown fences, no explanation, no preamble.`;
+8. Return VALID JSON only. No markdown fences, no explanation, no preamble.
+9. ONE FINAL ANSWER: finish ALL searching first, then emit exactly ONE JSON object as the last thing in your turn. Never emit a JSON object (or any other text) between searches. An empty "services" array is ALWAYS an invalid answer — every service in the provided list gets a row with is_applicable judged from vehicle facts (drivetrain, engine, steering, belt/chain), which requires no search. When a search failed to find a specific field or price, omit that field or parts_breakdown entry — never blank the whole response.`;
 
 /** Field descriptions used in the gap fill user prompt. Shared with the
  *  Batch-3 gap-fill re-ask pass (gapFillPrompt.ts). */
@@ -286,5 +287,7 @@ Return ONE object with TWO ARRAYS. "gap_fields" becomes the "fields" ARRAY;
                                          "source_url": "...", "confidence": 0.9 } ] } ]
 }
 A gap field you cannot determine is OMITTED ENTIRELY — never emit a row whose value is null.
-The "services" array must still list EVERY service, with is_applicable false where it does not apply.`;
+The "services" array must still list EVERY service, with is_applicable false where it does not apply.
+Emit this object ONCE, only after all searching is done. "services" must contain one row per
+service listed above — a response with an empty "services" array is invalid and discarded.`;
 }

@@ -519,6 +519,108 @@ export const auditByVin = internalQuery({
   },
 });
 
+/** All runs for a VIN's config, newest first — status + raw errors[] so a
+ *  specific (re-)run can be picked out before pulling its step trace. */
+export const runsForVin = internalQuery({
+  args: { vin: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const vin = args.vin.trim().toUpperCase();
+    const vehicles = await ctx.db.query("vehicles").order("desc").take(500);
+    const vehicle: any = vehicles.find(
+      (x: any) => String(x.vin ?? "").toUpperCase() === vin,
+    );
+    if (!vehicle?.vehicle_config_id) return { error: "vin_not_found_or_no_config", vin };
+    const runs = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q: any) => q.eq("vehicle_config_id", vehicle.vehicle_config_id))
+      .order("desc")
+      .take(args.limit ?? 10);
+    return runs.map((r: any) => ({
+      runId: r._id,
+      created_at: new Date(r._creationTime).toISOString(),
+      status: r.status,
+      trigger: r.trigger ?? null,
+      version: r.version ?? null,
+      web_searches: r.total_web_searches ?? null,
+      errors: r.errors ?? [],
+    }));
+  },
+});
+
+/** Distilled batch step trace for one run. The stored response_text is the
+ *  JSON.stringify of getBatchResults' map (data + rawText + stopReason +
+ *  error per request) and can be 200K chars with `error` at the END — so a
+ *  naive char-slice hides exactly the evidence this exists to surface.
+ *  Parse server-side and return the distilled verdict per request instead. */
+export const stepTraceForRun = internalQuery({
+  args: {
+    runId: v.id("enrichment_runs"),
+    step: v.optional(v.string()),
+    rawSample: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("enrichment_run_steps")
+      .withIndex("by_run", (q: any) => q.eq("enrichment_run_id", args.runId))
+      .collect();
+    const sample = args.rawSample ?? 1500;
+    return rows
+      .filter((r: any) => !args.step || r.step === args.step)
+      .sort((a: any, b: any) => a.seq - b.seq)
+      .map((r: any) => {
+        const text = r.response_text ?? "";
+        let requests: any = null;
+        let parseNote: string | null = null;
+        try {
+          const obj = JSON.parse(text);
+          if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+            requests = Object.fromEntries(
+              Object.entries(obj).map(([cid, entry]: [string, any]) => {
+                const data = entry?.data ?? null;
+                const services = Array.isArray(data?.services) ? data.services : null;
+                return [cid, {
+                  error: entry?.error ?? null,
+                  stop_reason: entry?.stopReason ?? null,
+                  usage: entry?.usage ?? null,
+                  raw_text_len: (entry?.rawText ?? "").length,
+                  data_keys: data && typeof data === "object" ? Object.keys(data) : null,
+                  fields_rows: Array.isArray(data?.fields) ? data.fields.length : null,
+                  gap_fields_keys: data?.gap_fields && typeof data.gap_fields === "object"
+                    ? Object.keys(data.gap_fields).length : null,
+                  services_count: services ? services.length : null,
+                  services_applicable: services
+                    ? services.filter((s: any) => s?.is_applicable !== false).length : null,
+                  service_names: services
+                    ? services.slice(0, 30).map((s: any) => `${s?.service_name}${s?.is_applicable === false ? " (n/a)" : ""}`)
+                    : null,
+                  raw_tail: (entry?.rawText ?? "").slice(-sample),
+                }];
+              }),
+            );
+          }
+        } catch (e) {
+          parseNote = `response_text not JSON (truncated=${r.truncated ?? false}): head+tail returned`;
+        }
+        return {
+          step: r.step,
+          seq: r.seq,
+          status: r.status ?? null,
+          summary: r.summary ?? null,
+          tokens_in: r.tokens_in ?? null,
+          tokens_out: r.tokens_out ?? null,
+          web_searches: r.web_searches ?? null,
+          truncated: r.truncated ?? false,
+          response_len: text.length,
+          parse_note: parseNote,
+          requests,
+          ...(parseNote
+            ? { raw_head: text.slice(0, sample), raw_tail: text.slice(-sample) }
+            : {}),
+        };
+      });
+  },
+});
+
 /** Fleet-level snapshot: how the whole deployment looks after a batch. */
 export const auditFleetSnapshot = internalQuery({
   args: { limit: v.optional(v.number()) },

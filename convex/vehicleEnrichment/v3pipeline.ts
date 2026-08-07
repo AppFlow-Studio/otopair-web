@@ -6539,6 +6539,12 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       fields_changed: V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null),
       errors: [
         ...(timedOut ? ["batch2_timeout"] : []),
+        // Batch-2's own parse verdict (json_extraction_empty / _failed /
+        // _empty_payload / API "errored"). Before this it lived only in the
+        // console and the step trace's status — the run row said nothing, so
+        // auditByVin tallied zero and the Aug-2026 empty-services runs could
+        // only be diagnosed by pulling raw batch results from the API.
+        ...(r2?.error ? [`batch2_result_error:${String(r2.error).slice(0, 200)}`] : []),
         // The run finalized thin at the 3h timeout and this pass applied the
         // paid batch's gap-fill afterwards — history marker, not an error.
         ...(args.lateCollect ? ["late_collected"] : []),

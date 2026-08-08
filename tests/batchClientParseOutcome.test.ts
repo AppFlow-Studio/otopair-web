@@ -194,3 +194,66 @@ describe("isPayloadEmpty", () => {
     expect(isPayloadEmpty({ note: "n/a" })).toBe(false);
   });
 });
+
+describe("classifyParseOutcome — text-block shape suffix (fresh-5 round 2)", () => {
+  // The Aug 8 fresh-make audit needed raw Batches-API pulls to see WHY the
+  // payload was empty (the 200K-capped run trace cuts the tail off). The
+  // verdict now carries the text-block signature so the two shapes read
+  // directly off errors[]:
+  //   generation gave up ..... textBlocks=1-2, maxTextLen ≤ ~30 (end_turn)
+  //   extraction discarded ... maxTextLen in the thousands (bc3e487 shape)
+  it("empty payload carries the block signature (CX-30 shape)", () => {
+    const err = classifyParseOutcome({
+      parseThrew: false,
+      parsedKeyCount: 2,
+      rawTextLength: 190_000,
+      payloadEmpty: true,
+      stopReason: "end_turn",
+      textBlockCount: 2,
+      maxTextBlockLength: 29,
+      outputTokens: 994,
+    });
+    expect(err).toContain("json_extraction_empty_payload");
+    expect(err).toContain("textBlocks=2");
+    expect(err).toContain("maxTextLen=29");
+    expect(err).toContain("outTokens=994");
+    // end_turn is the normal stop — no stop_reason noise
+    expect(err).not.toContain("stop_reason=");
+  });
+
+  it("zero-keys verdict carries the signature too", () => {
+    const err = classifyParseOutcome({
+      parseThrew: false,
+      parsedKeyCount: 0,
+      rawTextLength: 24_000,
+      textBlockCount: 0,
+      maxTextBlockLength: 0,
+      outputTokens: 512,
+    });
+    expect(err).toContain("json_extraction_empty");
+    expect(err).toContain("textBlocks=0");
+  });
+
+  it("omitting the block stats keeps the legacy verdict byte-stable", () => {
+    const err = classifyParseOutcome({
+      parseThrew: false,
+      parsedKeyCount: 2,
+      rawTextLength: 50_000,
+      payloadEmpty: true,
+    });
+    expect(err).toBe("json_extraction_empty_payload: parsed object has keys but zero rows");
+  });
+
+  it("a healthy parse stays null regardless of block stats", () => {
+    expect(
+      classifyParseOutcome({
+        parseThrew: false,
+        parsedKeyCount: 12,
+        rawTextLength: 8000,
+        textBlockCount: 1,
+        maxTextBlockLength: 21_297,
+        outputTokens: 8442,
+      }),
+    ).toBeNull();
+  });
+});

@@ -39,7 +39,7 @@ import {
 import { mergeBlockedDomains } from "./utils/enrichmentFlags";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
-import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
+import { BATCH_2_SYSTEM, buildBatch2Prompt, SERVICES_RESCUE_SYSTEM, buildServicesRescuePrompt } from "./prompts/batch2Prompt";
 import { GAP_FILL_SYSTEM, buildGapFillPrompt } from "./prompts/gapFillPrompt";
 import { callClaudeWithWebSearch } from "./utils/claudeClient";
 import { deriveEngineFamily } from "./laborSibling";
@@ -843,7 +843,8 @@ function isRejectedPriceUrl(url: string | null | undefined): boolean {
   return isBlockedDomain(url) || isMarketplaceUrl(url);
 }
 
-function parseBatch2(
+/** Exported for tests (services-rescue parse path). Pure. */
+export function parseBatch2(
   data: Record<string, any>,
   nullFields: string[],
 ): { gapFields: Record<string, FieldResult>; services: ServicePricingResult[] } {
@@ -3832,6 +3833,86 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       }
     }
 
+    // ── Services rescue rung (fresh-5 round 2, Aug 2026) ─────────────────
+    // On first-contact makes the paid batch-2 turn keeps ending with
+    // `services: []` — the raw payloads (CX-30/Sierra/Jeep/Palisade) all show
+    // stop_reason=end_turn after 12-13 searches with the final text block
+    // empty or fields-only: the model researches, then quits before the
+    // services write-out. That single empty array starves SIX consumers at
+    // once (pricing writes, labor, quotability ×2, role applicability,
+    // repair scope), each of which then limps on its own degraded fallback —
+    // the structural DB list fails open on unknown drivetrain, inflating the
+    // quotability denominator (CX-30 0.58) while ~25 price/labor V4 fields
+    // stay null and drag applicable_fill_rate to batch-1-only levels
+    // (Sierra 14%). One synchronous services-ONLY re-ask — no 60-103-field
+    // gap list competing for the write-out budget — restores the model-judged
+    // set before any consumer runs. Runs whenever batch-2 produced zero
+    // applicable services (r2.error, empty payload, or fields-only partial —
+    // the Jeep/Palisade shape is deliberately NOT an r2.error, because that
+    // would discard the real fields it returned). Not run on timeout
+    // (r2 undefined): the late collector applies the paid batch's result.
+    // Disable: PARTS_SERVICES_RESCUE=off.
+    const batch2RescueErrors: string[] = [];
+    if (r2 && process.env.PARTS_SERVICES_RESCUE !== "off") {
+      const applicableCount = services.filter((s) => s.is_applicable).length;
+      if (applicableCount === 0) {
+        try {
+          const knownParts: Record<string, string> = {};
+          for (const k of Object.keys(PART_FIELD_MAP)) {
+            const v = allFields[k]?.value;
+            if (typeof v === "string" && v.trim()) knownParts[k] = v.trim();
+            if (Object.keys(knownParts).length >= 20) break;
+          }
+          const rescueVehicle: VehicleInput = {
+            vehicleId: args.vehicleId,
+            year: args.year, make: args.make, model: args.model,
+            trim: args.trim, engineCode: args.engineCode, displacement: args.displacement,
+          };
+          const rescueRes = await callClaudeWithWebSearch({
+            system: SERVICES_RESCUE_SYSTEM,
+            userPrompt: buildServicesRescuePrompt(rescueVehicle, knownParts),
+            maxSearchUses: 8,
+            maxTokens: 8000,
+            temperature: 0,
+          });
+          callLog.push({
+            call: "services_rescue",
+            tokensIn: rescueRes.usage.tokensIn,
+            tokensOut: rescueRes.usage.tokensOut,
+            webSearches: rescueRes.usage.webSearches,
+            durationMs: 0,
+          });
+          const rescueParsed = parseBatch2(normalizeBatchShape(rescueRes.data, "2"), []);
+          const rescuedApplicable = rescueParsed.services.filter((s) => s.is_applicable).length;
+          if (rescuedApplicable > 0) {
+            services = rescueParsed.services;
+            const rescuePricing = mapPricingToFields(services);
+            let rescueFilled = 0;
+            for (const [k, fv] of Object.entries(rescuePricing)) {
+              if (allFields[k]?.value == null) {
+                allFields[k] = fv;
+                rescueFilled++;
+              }
+            }
+            batch2RescueErrors.push("applicable_services_rescue_used");
+            console.log(
+              `[v8/services-rescue] batch-2 services empty — rescue returned ` +
+                `${services.length} rows (${rescuedApplicable} applicable), filled ${rescueFilled} price/labor fields`,
+            );
+          } else {
+            batch2RescueErrors.push("applicable_services_rescue_failed");
+            console.warn(
+              `[v8/services-rescue] rescue also returned no applicable services ` +
+                `(${rescueParsed.services.length} rows) — structural fallback will apply`,
+            );
+          }
+        } catch (e) {
+          batch2RescueErrors.push("applicable_services_rescue_failed");
+          console.warn("[v8/services-rescue] rescue pass failed (non-fatal):", e);
+        }
+      }
+    }
+
     // Batch 3 (gap-fill re-ask): ONE bounded targeted pass over fields STILL
     // null at this point (getNullFields excludes not_applicable — re-asking
     // N/A fields resurrected impossible data, see comment above getNullFields).
@@ -6545,6 +6626,11 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         // auditByVin tallied zero and the Aug-2026 empty-services runs could
         // only be diagnosed by pulling raw batch results from the API.
         ...(r2?.error ? [`batch2_result_error:${String(r2.error).slice(0, 200)}`] : []),
+        // Services rescue outcome: _used means batch-2's services leg came
+        // back empty (even when no result_error was flagged — the fields-only
+        // partial shape) and the synchronous re-ask restored it; _failed means
+        // the structural fallback was the last resort.
+        ...batch2RescueErrors,
         // The run finalized thin at the 3h timeout and this pass applied the
         // paid batch's gap-fill afterwards — history marker, not an error.
         ...(args.lateCollect ? ["late_collected"] : []),

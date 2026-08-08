@@ -229,23 +229,36 @@ export function classifyParseOutcome(input: {
    *  an empty parse (pause_turn / max_tokens truncation), so it is carried
    *  into the error string for the run trace instead of dying in the console. */
   stopReason?: string | null;
+  /** Text-block shape of the response — distinguishes "the model never wrote
+   *  an answer" (fresh-5 round 2: end_turn, 1-2 text blocks ≤30 chars after
+   *  12-13 searches) from "extraction discarded a real answer" (the bc3e487
+   *  multi-block shape) without pulling the raw batch payload from the API.
+   *  The run-trace copy is 200K-capped with the tail cut off, so this is the
+   *  only place the signature survives. */
+  textBlockCount?: number;
+  maxTextBlockLength?: number;
+  outputTokens?: number;
 }): string | null {
   const stopSuffix =
     input.stopReason && input.stopReason !== "end_turn"
       ? ` (stop_reason=${input.stopReason})`
       : "";
+  const shapeSuffix =
+    input.textBlockCount != null
+      ? ` [textBlocks=${input.textBlockCount} maxTextLen=${input.maxTextBlockLength ?? 0} outTokens=${input.outputTokens ?? 0}]`
+      : "";
   if (input.parseThrew) {
-    return `json_extraction_failed: ${input.parseErrorMessage ?? "unknown"}`.slice(0, 300) + stopSuffix;
+    return `json_extraction_failed: ${input.parseErrorMessage ?? "unknown"}`.slice(0, 300) + stopSuffix + shapeSuffix;
   }
   if (input.parsedKeyCount === 0 && input.rawTextLength > EMPTY_PARSE_RAWTEXT_FLOOR) {
-    return `json_extraction_empty: no JSON object recovered from ${input.rawTextLength} chars of content${stopSuffix}`;
+    return `json_extraction_empty: no JSON object recovered from ${input.rawTextLength} chars of content${stopSuffix}${shapeSuffix}`;
   }
   // Same floor as above, same reasoning inverted: a big body means real work
   // happened (search results, long turn) — reporting zero rows after that is a
   // failed request, while a short body with an all-empty payload stays a
   // legitimate "nothing to report".
   if (input.payloadEmpty && input.rawTextLength > EMPTY_PARSE_RAWTEXT_FLOOR) {
-    return `json_extraction_empty_payload: parsed object has keys but zero rows${stopSuffix}`;
+    return `json_extraction_empty_payload: parsed object has keys but zero rows${stopSuffix}${shapeSuffix}`;
   }
   return null;
 }
@@ -315,6 +328,10 @@ export async function getBatchResults(batchId: string): Promise<Record<string, B
       // `services[]` was empty — which starved labor (100% default_fallback),
       // quotability (`{pct: 1, services: []}`) and role applicability
       // (`applicable_services_unknown`) all at once, with no error anywhere.
+      const contentBlocks: any[] = Array.isArray(content) ? content : [content];
+      const textLens = contentBlocks
+        .filter((b: any) => b?.type === "text")
+        .map((b: any) => String(b.text ?? "").length);
       const parseError = classifyParseOutcome({
         parseThrew,
         parseErrorMessage,
@@ -328,6 +345,9 @@ export async function getBatchResults(batchId: string): Promise<Record<string, B
         // hard failure.
         payloadEmpty: !parseThrew && webSearches > 0 && isPayloadEmpty(data),
         stopReason,
+        textBlockCount: textLens.length,
+        maxTextBlockLength: textLens.length > 0 ? Math.max(...textLens) : 0,
+        outputTokens: (message as any).usage?.output_tokens ?? 0,
       });
       if (parseError != null && !parseThrew) {
         console.error(

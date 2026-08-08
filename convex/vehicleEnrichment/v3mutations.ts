@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { computeEnrichmentStatus } from "./completionGate";
+import { computeEnrichmentStatus, explainGateDecision } from "./completionGate";
 import { updateSourceScores } from "../services/sourceScoring";
 import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
@@ -1954,6 +1954,20 @@ export const patchRunPriceHealth = internalMutation({
       ),
     }),
     still_unpriced_keys: v.array(v.string()),
+    /** CURRENT config fill, recomputed by the caller via calculateV3FillRate.
+     *  The stored config.fill_rate is a finalize-time snapshot — the heal
+     *  rungs (refute harvest, category pages, interchange, role repair) add
+     *  fitments AFTER it was stamped, so gating on the stored value left
+     *  healed configs stuck partial forever (Aug-8 fresh-VIN round 2: all 5
+     *  finalized partial on the fill leg and never re-evaluated). When
+     *  provided it drives the gate AND is restamped onto the config. */
+    live_fill_rate: v.optional(v.number()),
+    /** Round-12 gate facts at re-evaluation time. Optional — when absent the
+     *  env-staged role gates simply see empty inputs (their default stage is
+     *  log, so this only matters under an explicit enforce). */
+    missing_core_roles: v.optional(v.array(v.string())),
+    axle_pair_gaps: v.optional(v.array(v.string())),
+    interval_provenance_gaps: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const run = await ctx.db
@@ -1981,24 +1995,48 @@ export const patchRunPriceHealth = internalMutation({
     // price rows are only ever ADDED by the heal path, so demotion would mean
     // the gate thresholds moved, not the data.
     const config = await ctx.db.get(args.vehicle_config_id);
-    if (config && (config as any).enrichment_status === "partial") {
-      const newStatus = computeEnrichmentStatus({
-        fillRate: (config as any).fill_rate ?? 0,
+    const status = (config as any)?.enrichment_status;
+    let promoted = false;
+    if (config && status === "partial") {
+      const gateInput = {
+        fillRate: args.live_fill_rate ?? (config as any).fill_rate ?? 0,
         quotabilityPct: args.quotability.pct,
         hasPriceGaps: args.still_unpriced_keys.length > 0,
-      });
+        missingCoreRoles: args.missing_core_roles,
+        axlePairGaps: args.axle_pair_gaps,
+        intervalProvenanceGaps: args.interval_provenance_gaps,
+      };
+      const newStatus = computeEnrichmentStatus(gateInput);
       if (newStatus === "complete") {
         console.log(
-          `[price-heal] config ${args.vehicle_config_id} partial → complete (quotability ${args.quotability.pct}) — notifying owners`,
+          `[price-heal] config ${args.vehicle_config_id} partial → complete — ` +
+            `${explainGateDecision(gateInput)} — notifying owners`,
         );
         await ctx.db.patch(args.vehicle_config_id, { enrichment_status: "complete" });
+        promoted = true;
         await ctx.scheduler.runAfter(
           0,
           internal.vehicleEnrichment.v3mutations.notifyEnrichmentComplete,
           { vehicle_config_id: args.vehicle_config_id },
         );
+      } else {
+        console.log(
+          `[price-heal] config ${args.vehicle_config_id} stays partial — ${explainGateDecision(gateInput)}`,
+        );
       }
     }
+    // Keep the stored fill honest whenever a live recompute is on hand —
+    // terminal statuses only, so a concurrently-started run's fill_rate=0
+    // reset is never overwritten from this path.
+    if (
+      config &&
+      args.live_fill_rate != null &&
+      args.live_fill_rate !== (config as any).fill_rate &&
+      ["partial", "complete", "verified"].includes(status)
+    ) {
+      await ctx.db.patch(args.vehicle_config_id, { fill_rate: args.live_fill_rate });
+    }
+    return { patchedRun: !!run, promoted, status_after: promoted ? "complete" : status ?? null };
   },
 });
 
@@ -2033,6 +2071,10 @@ export const patchRunRoleHealth = internalMutation({
      *  enforce-stage role gate (no promoting a config that still has gaps). */
     missing_core_roles: v.array(v.string()),
     axle_pair_gaps: v.array(v.string()),
+    /** CURRENT config fill recomputed by the caller — same contract as
+     *  patchRunPriceHealth.live_fill_rate (the stored fill_rate is a
+     *  finalize-time snapshot the repair's own part writes just outdated). */
+    live_fill_rate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const run = await ctx.db
@@ -2079,18 +2121,22 @@ export const patchRunRoleHealth = internalMutation({
     // only partial → complete, and only if the gate — including the round-12
     // role legs at their current env stage — now passes.
     const config = await ctx.db.get(args.vehicle_config_id);
-    if (config && (config as any).enrichment_status === "partial") {
-      const newStatus = computeEnrichmentStatus({
-        fillRate: (config as any).fill_rate ?? 0,
+    const status = (config as any)?.enrichment_status;
+    let promoted = false;
+    if (config && status === "partial") {
+      const gateInput = {
+        fillRate: args.live_fill_rate ?? (config as any).fill_rate ?? 0,
         quotabilityPct: args.quotability.pct,
         missingCoreRoles: args.missing_core_roles,
         axlePairGaps: args.axle_pair_gaps,
-      });
+      };
+      const newStatus = computeEnrichmentStatus(gateInput);
       if (newStatus === "complete") {
         console.log(
-          `[role-repair] config ${args.vehicle_config_id} partial → complete (quotability ${args.quotability.pct})`,
+          `[role-repair] config ${args.vehicle_config_id} partial → complete — ${explainGateDecision(gateInput)}`,
         );
         await ctx.db.patch(args.vehicle_config_id, { enrichment_status: "complete" });
+        promoted = true;
         await ctx.scheduler.runAfter(
           0,
           internal.vehicleEnrichment.v3mutations.notifyEnrichmentComplete,
@@ -2098,7 +2144,15 @@ export const patchRunRoleHealth = internalMutation({
         );
       }
     }
-    return { patchedRun: !!run };
+    if (
+      config &&
+      args.live_fill_rate != null &&
+      args.live_fill_rate !== (config as any).fill_rate &&
+      ["partial", "complete", "verified"].includes(status)
+    ) {
+      await ctx.db.patch(args.vehicle_config_id, { fill_rate: args.live_fill_rate });
+    }
+    return { patchedRun: !!run, promoted };
   },
 });
 

@@ -673,7 +673,10 @@ export function classifyFieldGaps(
 }
 
 /** V3 fill rate — counts actual data coverage across normalized tables. */
-async function calculateV3FillRate(
+// Exported for the post-heal completion-gate re-evaluation
+// (completionReevaluate.ts / priceRefresh epilogue): the gate must judge the
+// config's CURRENT fill, not the finalize-time snapshot stored on the row.
+export async function calculateV3FillRate(
   ctx: any,
   vehicleConfigId: Id<"vehicle_configs">,
   engineId: Id<"engines">,

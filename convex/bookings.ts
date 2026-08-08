@@ -120,6 +120,20 @@ import {
 } from "./lib/vehicle_passports";
 import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
 import {
+  createInspectionState,
+  defaultZoneState,
+  derivePrejobFromInspection,
+  deriveTierInspectionScope,
+  gatherFindings,
+  INSPECTION_TEMPLATE_VERSION,
+  INSPECTION_ZONES_BY_ID,
+  requiredZonesForBooking,
+  rotorEvidenceCornersFromSubmission,
+  validateZoneForCompletion,
+  type CornerZoneId,
+  type InspectionState,
+} from "../lib/inspection-template";
+import {
   areTireReplacementPositionsValid,
   getBookedTireReplacementPositions,
   validateInspectionMeasurements,
@@ -4485,6 +4499,43 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
         typeof value === "boolean" ||
         hasText(value)
     );
+  const tireIdentities = prejob.tire_details
+    ? Object.fromEntries(
+        Object.entries(prejob.tire_details).map(([position, identity]) => [
+          position,
+          {
+            ...(existingPassport?.tires?.identities?.[position] ?? {}),
+            ...Object.fromEntries(
+              Object.entries((identity ?? {}) as Record<string, unknown>).filter(
+                ([, value]) => value !== null && value !== undefined,
+              ),
+            ),
+          },
+        ]),
+      )
+    : undefined;
+  const brakes = prejob.brakes
+    ? {
+        ...prejob.brakes,
+        pad_brand: prejob.brakes.pad_brand ?? undefined,
+        front_pad_mm: prejob.brakes.front_pad_mm ?? undefined,
+        rear_pad_mm: prejob.brakes.rear_pad_mm ?? undefined,
+        rotor_condition: prejob.brakes.rotor_condition ?? undefined,
+        rotor_thickness: prejob.brakes.rotor_thickness
+          ? {
+              ...(existingPassport?.brakes?.rotor_thickness ?? {}),
+              ...prejob.brakes.rotor_thickness,
+            }
+          : undefined,
+      }
+    : undefined;
+  const definedFluidOverrides = fluidOverrides
+    ? Object.fromEntries(
+        Object.entries(fluidOverrides).filter(
+          ([, value]) => value !== null && value !== undefined,
+        ),
+      )
+    : undefined;
 
   return {
     mileage:
@@ -4494,9 +4545,20 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
     tires: {
       brand: prejob.tire_brand ?? undefined,
       model: prejob.tire_model ?? undefined,
+      identities: tireIdentities
+        ? {
+            ...(existingPassport?.tires?.identities ?? {}),
+            ...tireIdentities,
+          }
+        : undefined,
       size_front: prejob.tire_size_front ?? undefined,
       size_rear: prejob.tire_size_rear ?? undefined,
-      tread_depths: prejob.tire_tread ?? undefined,
+      tread_depths: prejob.tire_tread
+        ? {
+            ...(existingPassport?.tires?.tread_depths ?? {}),
+            ...prejob.tire_tread,
+          }
+        : undefined,
       front_condition: frontCondition,
       rear_condition: rearCondition,
       overall_condition:
@@ -4504,11 +4566,11 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
           ? frontCondition
           : existingPassport?.tires?.overall_condition ?? frontCondition ?? rearCondition,
     },
-    brakes: prejob.brakes,
+    brakes,
     fluids:
       prejob.fluids_match_oem || hasFluidOverride
         ? {
-            ...(fluidOverrides ?? {}),
+            ...(definedFluidOverrides ?? {}),
             confirmation_status: hasFluidOverride ? "updated" : "oem_confirmed",
           }
         : undefined,
@@ -4747,6 +4809,7 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
         trimSpec?.tire_size_front
       ),
       run_flat: firstDefinedBoolean(passportRecord?.tires?.run_flat, trimSpec?.is_run_flat),
+      identities: passportRecord?.tires?.identities ?? null,
       overall_condition: passportRecord?.tires?.overall_condition ?? null,
       front_condition: passportRecord?.tires?.front_condition ?? null,
       rear_condition: passportRecord?.tires?.rear_condition ?? null,
@@ -4780,6 +4843,9 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       transmission_fluid_type: firstDefinedString(
         passportRecord?.fluids?.transmission_fluid_type,
         transmission?.fluid_type
+      ),
+      power_steering_fluid_type: firstDefinedString(
+        passportRecord?.fluids?.power_steering_fluid_type,
       ),
       confirmation_status: firstDefinedString(passportRecord?.fluids?.confirmation_status),
     },
@@ -4975,6 +5041,13 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       return out;
     })(),
     is_complete: missing_fields.length === 0,
+    is_first_shop_visit: !passportRecord?.first_shop_confirmed_at,
+    rotor_photo_evidence: {
+      FL: !!passportRecord?.rotor_photo_evidence?.FL,
+      FR: !!passportRecord?.rotor_photo_evidence?.FR,
+      RL: !!passportRecord?.rotor_photo_evidence?.RL,
+      RR: !!passportRecord?.rotor_photo_evidence?.RR,
+    },
     completion_percent: getPassportCompletionPercent(passport),
     missing_fields,
     passport,
@@ -5011,12 +5084,169 @@ function getTireReplacementPositions(booking: {
     .filter((position: TirePosition | undefined): position is TirePosition => !!position);
 }
 
+function hydrateTieredInspectionState(inspection: any): InspectionState {
+  const state = createInspectionState();
+  for (const input of inspection?.zones ?? []) {
+    const zoneId = input.zone_id as keyof typeof INSPECTION_ZONES_BY_ID;
+    const zone = INSPECTION_ZONES_BY_ID[zoneId];
+    if (!zone || zoneId === "OWNER") continue;
+    const base = defaultZoneState(zone);
+    state.zones[zoneId] = {
+      ...base,
+      done: !!input.done,
+      dirty: false,
+      measures: { ...base.measures, ...(input.measures ?? {}) },
+      tri: { ...base.tri, ...(input.tri ?? {}) },
+      descriptors: { ...base.descriptors, ...(input.descriptors ?? {}) },
+      text: { ...base.text, ...(input.text ?? {}) },
+      select: { ...base.select, ...(input.select ?? {}) },
+      statuses: { ...base.statuses, ...(input.statuses ?? {}) },
+      methods: { ...base.methods, ...(input.methods ?? {}) },
+      photoIds: [...(input.photo_ids ?? [])].map(String),
+      photoTags: { ...base.photoTags, ...(input.photo_tags ?? {}) },
+    };
+  }
+  return state;
+}
+
+async function validateTieredInspectionInput({
+  ctx,
+  booking,
+  inspection,
+  prejob,
+  serviceNames,
+  brakeScope,
+  tireReplacementPositions,
+  passportView,
+  requireFinal = true,
+}: {
+  ctx: any;
+  booking: any;
+  inspection: any;
+  prejob: any;
+  serviceNames: string[];
+  brakeScope: BrakeScope;
+  tireReplacementPositions: CornerZoneId[];
+  passportView: any;
+  requireFinal?: boolean;
+}) {
+  if (!inspection) throw new Error("The multi-point inspection is required.");
+  if (inspection.template_version !== INSPECTION_TEMPLATE_VERSION) {
+    throw new Error("This inspection form is out of date. Reload it before continuing.");
+  }
+  if (
+    requireFinal &&
+    inspection.lift_status !== "yes" &&
+    inspection.lift_status !== "no"
+  ) {
+    throw new Error("Select whether the vehicle is on a lift before submitting.");
+  }
+  if (
+    requireFinal &&
+    (typeof inspection.odometer !== "number" ||
+      !Number.isSafeInteger(inspection.odometer) ||
+      inspection.odometer < 0)
+  ) {
+    throw new Error("Odometer reading is required before submitting.");
+  }
+  if (
+    inspection.odometer != null &&
+    (!Number.isSafeInteger(inspection.odometer) || inspection.odometer < 0)
+  ) {
+    throw new Error("Odometer must be a non-negative whole number.");
+  }
+  if (inspection.odometer != null && inspection.odometer !== prejob.mileage) {
+    throw new Error("The inspection odometer does not match the pre-job report.");
+  }
+
+  const savedInspection = await ctx.db
+    .query("vehicle_inspections")
+    .withIndex("by_booking", (q: any) => q.eq("booking_id", booking._id))
+    .first();
+  for (const zone of inspection.zones ?? []) {
+    const savedZone = savedInspection?.zones.find(
+      (candidate: any) => candidate.zone_id === zone.zone_id,
+    );
+    for (const photoId of zone.photo_ids ?? []) {
+      if (!(savedZone?.photo_ids ?? []).includes(photoId)) {
+        throw new Error("An inspection photo is not associated with this booking.");
+      }
+      if (!(await ctx.db.system.get("_storage", photoId))) {
+        throw new Error("An inspection photo is no longer available. Upload it again before submitting.");
+      }
+      if (
+        zone.photo_tags?.[String(photoId)] !==
+        savedZone?.photo_tags?.[String(photoId)]
+      ) {
+        throw new Error("An inspection photo tag does not match its saved association.");
+      }
+    }
+  }
+
+  const state = hydrateTieredInspectionState(inspection);
+  const prior = passportView.passport.tires.tread_depths ?? {};
+  const context = {
+    serviceNames,
+    brakeScope,
+    tireReplacementPositions,
+    isFirstShopVisit: !!passportView.is_first_shop_visit,
+    priorTreadReadings: {
+      FL: prior.front_left?.reported_min_32nds,
+      FR: prior.front_right?.reported_min_32nds,
+      RL: prior.rear_left?.reported_min_32nds,
+      RR: prior.rear_right?.reported_min_32nds,
+    },
+    rotorPhotoEvidence: passportView.rotor_photo_evidence,
+    inspectionState: state,
+    liftStatus: inspection.lift_status,
+  } as const;
+  const scopeError = deriveTierInspectionScope(context).bookingScopeError;
+  if (scopeError) throw new Error(scopeError);
+
+  if (requireFinal) {
+    for (const zoneId of requiredZonesForBooking(serviceNames)) {
+      if (!state.zones[zoneId]?.done) {
+        throw new Error(`${INSPECTION_ZONES_BY_ID[zoneId].label} must be marked complete.`);
+      }
+    }
+  }
+  for (const [zoneId, zoneState] of Object.entries(state.zones)) {
+    if (!zoneState?.done) continue;
+    const result = validateZoneForCompletion(state, zoneId as keyof typeof INSPECTION_ZONES_BY_ID, context);
+    if (!result.valid) {
+      throw new Error(`${INSPECTION_ZONES_BY_ID[zoneId as keyof typeof INSPECTION_ZONES_BY_ID].label}: ${result.error}`);
+    }
+  }
+
+  const findings = gatherFindings(state, { onlyCompletedZones: true });
+  const canonicalInspection = {
+    ...inspection,
+    findings_attention: findings.attention,
+    findings_monitor: findings.monitor,
+  };
+  const canonicalPrejob = derivePrejobFromInspection(state, {
+    mileage:
+      typeof inspection.odometer === "number"
+        ? inspection.odometer
+        : typeof prejob.mileage === "number"
+          ? prejob.mileage
+          : null,
+    inspectionStatus: prejob.inspection ?? null,
+    modifications: prejob.modifications ?? null,
+    flaggedVehicleSpecs: prejob.flagged_vehicle_specs ?? false,
+    nextMechanicTip: prejob.next_mechanic_tip ?? null,
+    completionContext: context,
+  });
+  return { inspection: canonicalInspection, prejob: canonicalPrejob };
+}
+
 function validatePrejobReport(
   prejob: any,
   baselineMileage: number | null,
   serviceFlags: ReturnType<typeof getBookingServiceFlags>,
   brakeScope: BrakeScope,
   tireReplacementPositions: TirePosition[],
+  useTieredInspection = false,
 ) {
   const tireInspectionRequired =
     serviceFlags.hasTireWork || serviceFlags.hasBrakeWork;
@@ -5026,7 +5256,7 @@ function validatePrejobReport(
   if (typeof prejob.mileage !== "number" || !Number.isFinite(prejob.mileage)) {
     throw new Error("Mileage is required before starting this booking.");
   }
-  if (tireInspectionRequired) {
+  if (tireInspectionRequired && !useTieredInspection) {
     const tireDetails = prejob.tire_details ?? {};
     const tireLabels: Record<TirePosition, string> = {
       front_left: "Front-left",
@@ -5072,7 +5302,7 @@ function validatePrejobReport(
       `Mileage cannot move backward. Stored mileage is ${baselineMileage.toLocaleString()}.`
     );
   }
-  if (serviceFlags.hasBrakeWork) {
+  if (serviceFlags.hasBrakeWork && !useTieredInspection) {
     if (
       brakeScope.front &&
       (typeof prejob.brakes?.front_pad_mm !== "number" ||
@@ -5091,15 +5321,17 @@ function validatePrejobReport(
       throw new Error("Rotor condition is required for brake-related work.");
     }
   }
-  const measurementResult = validateInspectionMeasurements({
-    tire_tread: prejob.tire_tread,
-    tire_replacement_positions: [...replaced],
-    require_tire_tread: tireInspectionRequired,
-    brakes: prejob.brakes,
-    brake_scope: brakeScope,
-  });
-  if (!measurementResult.valid) {
-    throw new Error(measurementResult.error);
+  if (!useTieredInspection) {
+    const measurementResult = validateInspectionMeasurements({
+      tire_tread: prejob.tire_tread,
+      tire_replacement_positions: [...replaced],
+      require_tire_tread: tireInspectionRequired,
+      brakes: prejob.brakes,
+      brake_scope: brakeScope,
+    });
+    if (!measurementResult.valid) {
+      throw new Error(measurementResult.error);
+    }
   }
   if (serviceFlags.hasOilChange) {
     if (!hasText(prejob.fluid_overrides?.oil_viscosity)) {
@@ -5148,6 +5380,9 @@ async function upsertInspectionRecord(
   const patch: Record<string, any> = {
     job_actual_id: jobActualId ?? undefined,
     template_version: inspection.template_version ?? "mpi-v1",
+    odometer:
+      typeof inspection.odometer === "number" ? inspection.odometer : undefined,
+    lift_status: inspection.lift_status ?? undefined,
     zones,
     findings_attention: inspection.findings_attention ?? [],
     findings_monitor: inspection.findings_monitor ?? [],
@@ -5158,6 +5393,21 @@ async function upsertInspectionRecord(
     .query("vehicle_inspections")
     .withIndex("by_booking", (q: any) => q.eq("booking_id", booking._id))
     .first();
+
+  // Photo associations and tags are server-owned. Upload/delete mutations are
+  // the only allowed way to change them; a draft/final payload cannot attach an
+  // arbitrary storage object or relabel a general photo as rotor evidence.
+  const existingZones = new Map(
+    (existing?.zones ?? []).map((zone: any) => [zone.zone_id, zone]),
+  );
+  patch.zones = zones.map((zone: any) => {
+    const saved = existingZones.get(zone.zone_id) as any;
+    return {
+      ...zone,
+      photo_ids: saved?.photo_ids ?? [],
+      photo_tags: saved?.photo_tags ?? {},
+    };
+  });
 
   if (existing) {
     await ctx.db.patch(existing._id, patch);
@@ -5174,6 +5424,106 @@ async function upsertInspectionRecord(
   });
 }
 
+async function grantRotorPhotoEvidence(
+  ctx: any,
+  {
+    booking,
+    inspectionId,
+    inspection,
+    now,
+  }: { booking: any; inspectionId: any; inspection: any; now: number },
+) {
+  if (!inspectionId || !inspection) return;
+  await ctx.db.patch(inspectionId, { submitted_at: now, updated_at: now });
+  const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+  const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
+  const context = {
+    serviceNames,
+    brakeScope,
+    tireReplacementPositions: getBookedTireReplacementPositions(
+      booking.tire_specs,
+    ) as CornerZoneId[],
+  };
+  const scope = deriveTierInspectionScope(context);
+  if (scope.bookingScopeError) throw new Error(scope.bookingScopeError);
+
+  const passport = await ctx.db
+    .query("vehicle_passports")
+    .withIndex("by_vin", (q: any) => q.eq("vin", toCanonicalVin(booking.vin)))
+    .unique();
+  if (!passport) return;
+  const evidence = { ...(passport.rotor_photo_evidence ?? {}) };
+  let changed = false;
+  const state = hydrateTieredInspectionState(inspection);
+  for (const corner of rotorEvidenceCornersFromSubmission(state, {
+    ...context,
+    rotorPhotoEvidence: {
+      FL: !!evidence.FL,
+      FR: !!evidence.FR,
+      RL: !!evidence.RL,
+      RR: !!evidence.RR,
+    },
+    inspectionState: state,
+  })) {
+    if (evidence[corner]) continue;
+    const zone = inspection.zones?.find(
+      (candidate: any) => candidate.zone_id === corner && candidate.done,
+    );
+    const taggedPhotoId = (zone?.photo_ids ?? []).find(
+      (photoId: any) => zone.photo_tags?.[String(photoId)] === "rotor_stamp",
+    );
+    if (!taggedPhotoId) continue;
+    const storedPhoto = await ctx.db.system.get("_storage", taggedPhotoId);
+    if (!storedPhoto) continue;
+    evidence[corner] = {
+      first_accepted_at: now,
+      source_inspection_id: inspectionId,
+    };
+    changed = true;
+  }
+  if (changed) {
+    await ctx.db.patch(passport._id, { rotor_photo_evidence: evidence, updated_at: now });
+  }
+}
+
+async function addBrakeFluidDeclineFinding(
+  ctx: any,
+  booking: any,
+  inspection: any,
+) {
+  if (!inspection) return inspection;
+  const currentZone = inspection.zones?.find(
+    (zone: any) => zone.zone_id === "ENG" && zone.done,
+  );
+  if (currentZone?.statuses?.bf) return inspection;
+  const current = currentZone?.tri?.bf;
+  if (!current) return inspection;
+  const previous = (await ctx.db
+    .query("vehicle_inspections")
+    .withIndex("by_vin", (q: any) => q.eq("vin", toCanonicalVin(booking.vin)))
+    .collect())
+    .filter((row: any) => row.booking_id !== booking._id && row.submitted_at)
+    .sort((a: any, b: any) => (b.submitted_at ?? 0) - (a.submitted_at ?? 0))[0];
+  const priorZone = previous?.zones?.find(
+    (zone: any) => zone.zone_id === "ENG" && zone.done,
+  );
+  if (priorZone?.statuses?.bf) return inspection;
+  const prior = priorZone?.tri?.bf;
+  const rank: Record<string, number> = { g: 0, y: 1, r: 2 };
+  if (rank[current] == null || rank[prior] == null || rank[current] <= rank[prior]) {
+    return inspection;
+  }
+  const finding = {
+    label: "Brake fluid level declined since the latest completed inspection",
+    zone: "Engine bay",
+  };
+  const key = current === "r" ? "findings_attention" : "findings_monitor";
+  const existing = inspection[key] ?? [];
+  return existing.some((item: any) => item.label === finding.label)
+    ? inspection
+    : { ...inspection, [key]: [...existing, finding] };
+}
+
 async function persistPrejobSurvey(
   ctx: any,
   {
@@ -5183,6 +5533,7 @@ async function persistPrejobSurvey(
     inspection,
     now,
     startedAtMs,
+    finalizeInspection = false,
   }: {
     booking: any;
     passportView: any;
@@ -5190,6 +5541,7 @@ async function persistPrejobSurvey(
     inspection?: any;
     now: number;
     startedAtMs?: number;
+    finalizeInspection?: boolean;
   }
 ) {
   const jobActual = await ensureJobActualRecord(ctx, {
@@ -5209,18 +5561,33 @@ async function persistPrejobSurvey(
 
   await ctx.db.patch(jobActual._id, jobActualPatch);
 
-  await upsertInspectionRecord(ctx, {
+  const persistedInspection = finalizeInspection
+    ? await addBrakeFluidDeclineFinding(ctx, booking, inspection)
+    : inspection;
+  const inspectionId = await upsertInspectionRecord(ctx, {
     booking,
     jobActualId: jobActual._id,
-    inspection,
+    inspection: persistedInspection,
     now,
   });
+
+  // Draft saves persist the booking-scoped inspection only. They must not
+  // advance the vehicle passport's "latest completed" readings or first-visit
+  // marker, and they never grant permanent rotor-photo evidence.
+  if (!finalizeInspection) return;
 
   await upsertVehiclePassportRecord(ctx, {
     vin: booking.vin,
     patch: buildPassportPatchFromPrejob(prejob, passportView.passport),
     now,
     markConfirmed: true,
+  });
+
+  await grantRotorPhotoEvidence(ctx, {
+    booking,
+    inspectionId,
+    inspection: persistedInspection,
+    now,
   });
 
   // Log the mechanic's spec review/corrections to the Director "Mechanic Edits"
@@ -9397,25 +9764,39 @@ export const startWithPrejob = mutation({
     }
 
     const passportView = await buildVehiclePassportForBooking(ctx, booking);
-    const serviceFlags = getBookingServiceFlags(
-      await resolveServiceNames(ctx, booking.service_ids)
-    );
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+    const serviceFlags = getBookingServiceFlags(serviceNames);
+    const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
+    const canonical = await validateTieredInspectionInput({
+      ctx,
+      booking,
+      inspection: args.inspection,
+      prejob: args.prejob,
+      serviceNames,
+      brakeScope,
+      tireReplacementPositions: getBookedTireReplacementPositions(
+        booking.tire_specs,
+      ) as CornerZoneId[],
+      passportView,
+    });
     validatePrejobReport(
-      args.prejob,
+      canonical.prejob,
       passportView.passport.mileage ?? null,
       serviceFlags,
-      await resolveBrakeScopeForBooking(ctx, booking),
+      brakeScope,
       getTireReplacementPositions(booking),
+      true,
     );
 
     const now = Date.now();
     await persistPrejobSurvey(ctx, {
       booking,
       passportView,
-      prejob: args.prejob,
-      inspection: args.inspection,
+      prejob: canonical.prejob,
+      inspection: canonical.inspection,
       now,
       startedAtMs: now,
+      finalizeInspection: true,
     });
 
     if (booking.status !== "in_progress") {
@@ -9501,25 +9882,39 @@ export const commitInspectionAndAwaitEstimate = mutation({
     }
 
     const passportView = await buildVehiclePassportForBooking(ctx, booking);
-    const serviceFlags = getBookingServiceFlags(
-      await resolveServiceNames(ctx, booking.service_ids),
-    );
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+    const serviceFlags = getBookingServiceFlags(serviceNames);
+    const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
+    const canonical = await validateTieredInspectionInput({
+      ctx,
+      booking,
+      inspection: args.inspection,
+      prejob: args.prejob,
+      serviceNames,
+      brakeScope,
+      tireReplacementPositions: getBookedTireReplacementPositions(
+        booking.tire_specs,
+      ) as CornerZoneId[],
+      passportView,
+    });
     validatePrejobReport(
-      args.prejob,
+      canonical.prejob,
       passportView.passport.mileage ?? null,
       serviceFlags,
-      await resolveBrakeScopeForBooking(ctx, booking),
+      brakeScope,
       getTireReplacementPositions(booking),
+      true,
     );
 
     const now = Date.now();
     await persistPrejobSurvey(ctx, {
       booking,
       passportView,
-      prejob: args.prejob,
-      inspection: args.inspection,
+      prejob: canonical.prejob,
+      inspection: canonical.inspection,
       now,
       startedAtMs: now,
+      finalizeInspection: true,
     });
 
     // Diagnostic checklist seeding — mirrors startWithPrejob's tail block.
@@ -9574,13 +9969,30 @@ export const savePrejob = mutation({
     }
 
     const passportView = await buildVehiclePassportForBooking(ctx, booking);
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+    const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
+    const canonical = args.inspection
+      ? await validateTieredInspectionInput({
+          ctx,
+          booking,
+          inspection: args.inspection,
+          prejob: args.prejob,
+          serviceNames,
+          brakeScope,
+          tireReplacementPositions: getBookedTireReplacementPositions(
+            booking.tire_specs,
+          ) as CornerZoneId[],
+          passportView,
+          requireFinal: false,
+        })
+      : { prejob: args.prejob, inspection: args.inspection };
     const now = Date.now();
 
     await persistPrejobSurvey(ctx, {
       booking,
       passportView,
-      prejob: args.prejob,
-      inspection: args.inspection,
+      prejob: canonical.prejob,
+      inspection: canonical.inspection,
       now,
     });
 

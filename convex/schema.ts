@@ -30,6 +30,7 @@ import {
   postjobPhotoValidator,
   postjobReportValidator,
   prejobReportValidator,
+  rotorPhotoEvidenceValidator,
   vehiclePassportBrakesValidator,
   vehiclePassportFluidsValidator,
   vehiclePassportInspectionValidator,
@@ -1594,6 +1595,7 @@ export default defineSchema({
     updated_at: v.optional(v.number()),
     first_shop_confirmed_at: v.optional(v.number()),
     last_shop_confirmed_at: v.optional(v.number()),
+    rotor_photo_evidence: v.optional(rotorPhotoEvidenceValidator),
   })
     .index("by_vin", ["vin"])
     .index("by_updated_at", ["updated_at"]),
@@ -1610,6 +1612,8 @@ export default defineSchema({
     shop_id: v.optional(v.id("shops")),
     mechanic_id: v.optional(v.id("mechanics")),
     template_version: v.string(),
+    odometer: v.optional(v.float64()),
+    lift_status: v.optional(v.union(v.literal("yes"), v.literal("no"))),
     zones: v.array(
       v.object({
         zone_id: v.string(),
@@ -1617,12 +1621,36 @@ export default defineSchema({
         // Free-form per-field maps keyed by the template field keys. `v.any()`
         // because the template owns the shape and it evolves with the template
         // version (recorded above) rather than the schema.
-        measures: v.optional(v.any()),
-        tri: v.optional(v.any()),
-        descriptors: v.optional(v.any()),
-        text: v.optional(v.any()),
-        select: v.optional(v.any()),
+        measures: v.optional(v.record(v.string(), v.string())),
+        tri: v.optional(
+          v.record(
+            v.string(),
+            v.union(v.literal("g"), v.literal("y"), v.literal("r")),
+          ),
+        ),
+        descriptors: v.optional(v.record(v.string(), v.array(v.string()))),
+        text: v.optional(v.record(v.string(), v.string())),
+        select: v.optional(
+          v.record(v.string(), v.union(v.string(), v.float64())),
+        ),
+        statuses: v.optional(
+          v.record(
+            v.string(),
+            v.union(
+              v.literal("not_inspected"),
+              v.literal("not_visible"),
+              v.literal("not_applicable"),
+            ),
+          ),
+        ),
+        methods: v.optional(v.record(v.string(), v.string())),
         photo_ids: v.optional(v.array(v.id("_storage"))),
+        photo_tags: v.optional(
+          v.record(
+            v.string(),
+            v.union(v.literal("general"), v.literal("rotor_stamp")),
+          ),
+        ),
       }),
     ),
     findings_attention: v.array(
@@ -1632,6 +1660,7 @@ export default defineSchema({
       v.object({ label: v.string(), zone: v.string() }),
     ),
     pdf_storage_id: v.optional(v.id("_storage")),
+    submitted_at: v.optional(v.float64()),
     created_at: v.float64(),
     updated_at: v.float64(),
   })

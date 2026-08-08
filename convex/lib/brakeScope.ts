@@ -168,6 +168,8 @@ export async function resolveBrakeScopeForBooking(
   }
 
   if (!hasBrakeWork) return { hasBrakeWork: false, front: false, rear: false };
-  if (!sawAxleSignal) return { hasBrakeWork: true, front: true, rear: true };
+  // Missing axle scope is invalid for a brake booking. Callers surface a
+  // blocking booking-scope error instead of silently inspecting all corners.
+  if (!sawAxleSignal) return { hasBrakeWork: true, front: false, rear: false };
   return { hasBrakeWork: true, front, rear };
 }

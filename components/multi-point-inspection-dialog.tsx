@@ -38,6 +38,8 @@ import {
   gatherFindings,
   getDirtyIncompleteZones,
   INSPECTION_NAV_ZONE_IDS,
+  deriveTierInspectionScope,
+  isFieldApplicableToZone,
   isFieldRequiredForZone,
   normalizeTireSize,
   nextInspectionZoneAfterCompletion,
@@ -47,13 +49,16 @@ import {
   INSPECTION_ZONES,
   INSPECTION_ZONES_BY_ID,
   requiredZonesForBooking,
+  requiresRotorStampPhoto,
   toggleInspectionTreadMode,
   TRI_LABELS,
   validateZoneForCompletion,
   type BrakeAxleScope,
+  type FieldUnavailableStatus,
   type InspectionField,
   type InspectionState,
   type TriValue,
+  type ZoneCompletionContext,
   type ZoneId,
   type ZoneState,
 } from "@/lib/inspection-template";
@@ -104,8 +109,13 @@ export type InspectionInputPayload = {
     descriptors?: Record<string, string[]>;
     text?: Record<string, string>;
     select?: Record<string, string>;
-    photo_ids?: string[];
+    statuses?: Record<string, FieldUnavailableStatus>;
+    methods?: Record<string, string>;
+    photo_ids?: Id<"_storage">[];
+    photo_tags?: Record<string, "general" | "rotor_stamp">;
   }>;
+  odometer?: number;
+  lift_status?: "yes" | "no";
   findings_attention: Array<{ label: string; zone: string }>;
   findings_monitor: Array<{ label: string; zone: string }>;
 };
@@ -186,7 +196,7 @@ function userFacingInspectionError(error: unknown, fallback: string): string {
 function serverValidationTarget(
   message: string,
 ): { zoneId: ZoneId; fieldKey: string } | null {
-  const lower = message.toLowerCase();
+  const lower = message.toLowerCase().replace(/[^a-z0-9]+/g, " ");
   const position =
     lower.includes("front left")
       ? "FL"
@@ -206,14 +216,22 @@ function serverValidationTarget(
     return { zoneId: position ?? "FL", fieldKey: "rotor" };
   }
   if (lower.includes("pad thickness")) {
-    return { zoneId: position ?? "FL", fieldKey: "pad" };
+    return { zoneId: position ?? "FL", fieldKey: "pad_inner" };
   }
-  if (lower.includes("tire brand")) return { zoneId: "FL", fieldKey: "tire_brand" };
+  if (lower.includes("tire brand")) {
+    return { zoneId: position ?? "FL", fieldKey: "tire_brand" };
+  }
   if (lower.includes("tire size")) {
     return { zoneId: position === "RL" ? "RL" : "FL", fieldKey: "tire_size" };
   }
   if (lower.includes("tire condition")) {
-    return { zoneId: position === "RL" ? "RL" : "FL", fieldKey: "wear" };
+    return { zoneId: position ?? "FL", fieldKey: "wear" };
+  }
+  if (lower.includes("tire air pressure")) {
+    return { zoneId: position ?? "FL", fieldKey: "psi" };
+  }
+  if (lower.includes("brake visual")) {
+    return { zoneId: position ?? "FL", fieldKey: "brake_visual" };
   }
   if (lower.includes("oil viscosity")) {
     return { zoneId: "ENG", fieldKey: "oil_viscosity" };
@@ -289,7 +307,7 @@ function MultiPointInspectionDialogBody({
     inspection: InspectionInputPayload,
   ) => Promise<void>;
 }) {
-  const isFirstVisit = !!passportData && !passportData.is_complete;
+  const isFirstVisit = passportData?.is_first_shop_visit ?? true;
 
   const savedInspection = useQuery(
     api.inspections.getByBooking,
@@ -334,6 +352,7 @@ function MultiPointInspectionDialogBody({
     zoneId: Exclude<ZoneId, "OWNER">;
     storageId: string;
     uploadToken: string;
+    tag?: "general" | "rotor_stamp";
   }) => Promise<void>;
   const generateInspectionPdf = useAction(generateInspectionPdfRef) as (args: {
     bookingId: string;
@@ -368,6 +387,7 @@ function MultiPointInspectionDialogBody({
   // Global header fields that don't belong to a single wheel.
   const [mileage, setMileage] = useState("");
   const [mileageError, setMileageError] = useState("");
+  const [liftStatus, setLiftStatus] = useState<"yes" | "no" | "">("");
   const [inspectionStatus, setInspectionStatus] = useState<InspectionStatus | "">("");
   const [inspectionExpires, setInspectionExpires] = useState("");
   const [modAftermarket, setModAftermarket] = useState(false);
@@ -401,10 +421,10 @@ function MultiPointInspectionDialogBody({
           }
         : {
             hasBrakeWork: bookingServices.some((name) =>
-              /brake|rotor/i.test(name),
+              /brake pad|rotor replacement/i.test(name),
             ),
-            front: true,
-            rear: true,
+            front: false,
+            rear: false,
           },
     [bookingServices, savedBrakeScope],
   );
@@ -413,8 +433,18 @@ function MultiPointInspectionDialogBody({
       serviceNames: bookingServices,
       brakeScope,
       tireReplacementPositions,
+      isFirstShopVisit: isFirstVisit,
+      priorTreadReadings: {
+        FL: passportData?.passport.tires.tread_depths?.front_left?.reported_min_32nds,
+        FR: passportData?.passport.tires.tread_depths?.front_right?.reported_min_32nds,
+        RL: passportData?.passport.tires.tread_depths?.rear_left?.reported_min_32nds,
+        RR: passportData?.passport.tires.tread_depths?.rear_right?.reported_min_32nds,
+      },
+      rotorPhotoEvidence: passportData?.rotor_photo_evidence,
+      inspectionState: state,
+      liftStatus,
     }),
-    [bookingServices, brakeScope, tireReplacementPositions],
+    [bookingServices, brakeScope, tireReplacementPositions, isFirstVisit, passportData, state, liftStatus],
   );
 
   useEffect(() => {
@@ -456,11 +486,21 @@ function MultiPointInspectionDialogBody({
           descriptors: { ...base.descriptors, ...(z.descriptors ?? {}) },
           text: { ...base.text, ...(z.text ?? {}) },
           select: { ...base.select, ...(z.select ?? {}) },
+          statuses: { ...base.statuses, ...(z.statuses ?? {}) },
+          methods: { ...base.methods, ...(z.methods ?? {}) },
           photoIds: Array.isArray(z.photo_ids) ? [...z.photo_ids] : [],
+          photoTags: { ...base.photoTags, ...(z.photo_tags ?? {}) },
         };
       }
       const pf = prefillData;
-      if (typeof pf?.mileage === "number") setMileage(String(pf.mileage));
+      if (typeof savedInspection.odometer === "number") {
+        setMileage(String(savedInspection.odometer));
+      } else if (typeof pf?.mileage === "number") {
+        setMileage(String(pf.mileage));
+      }
+      if (savedInspection.lift_status === "yes" || savedInspection.lift_status === "no") {
+        setLiftStatus(savedInspection.lift_status);
+      }
       if (pf?.inspection?.status) setInspectionStatus(pf.inspection.status);
       if (pf?.inspection?.expires_at) setInspectionExpires(pf.inspection.expires_at);
       if (pf?.modifications?.has_mods) setModAftermarket(true);
@@ -526,19 +566,6 @@ function MultiPointInspectionDialogBody({
     [requiredZones, state],
   );
 
-  const unresolvedParts = useMemo(
-    () =>
-      (partsToVerify?.items ?? []).filter(
-        (it: PartVerifyItem) => !verifiedKeys.has(`${it.serviceId}:${it.roleKey}`),
-      ),
-    [partsToVerify, verifiedKeys],
-  );
-  const allPartsVerified = unresolvedParts.length === 0;
-  // Parts fill-in is a MANDATORY first step: the mechanic must confirm every
-  // missing/low-confidence OEM part before the inspection UI is available.
-  const mustVerifyPartsFirst =
-    (partsToVerify?.items?.length ?? 0) > 0 && !allPartsVerified;
-
   // Findings + suggestions are evaluated from COMPLETED zones only, so a finding
   // surfaces the moment its zone is marked complete (not after the whole
   // inspection) and never counts un-confirmed scratch input.
@@ -595,6 +622,7 @@ function MultiPointInspectionDialogBody({
           }
         : null,
       nextMechanicTip: nextTip.trim() || null,
+      completionContext,
     });
     const inspection: InspectionInputPayload = {
       template_version: state.template_version,
@@ -606,8 +634,13 @@ function MultiPointInspectionDialogBody({
         descriptors: zs!.descriptors,
         text: zs!.text,
         select: zs!.select,
-        photo_ids: zs!.photoIds,
+        statuses: zs!.statuses,
+        methods: zs!.methods,
+        photo_ids: zs!.photoIds as Id<"_storage">[],
+        photo_tags: zs!.photoTags,
       })),
+      odometer: mileage.trim() ? Number(mileage) : undefined,
+      lift_status: liftStatus || undefined,
       findings_attention: f.attention,
       findings_monitor: f.monitor,
     };
@@ -621,6 +654,8 @@ function MultiPointInspectionDialogBody({
     modNotes,
     modAffectedSystems,
     nextTip,
+    liftStatus,
+    completionContext,
   ]);
 
   const persistOwnerAnswers = useCallback(async () => {
@@ -699,6 +734,13 @@ function MultiPointInspectionDialogBody({
 
   function validateBeforePersistence(action: SubmitIntent): boolean {
     setError("");
+    const scopeError = deriveTierInspectionScope(completionContext).bookingScopeError;
+    if (scopeError) {
+      setError(scopeError);
+      setShowResults(false);
+      setActiveZone("FL");
+      return false;
+    }
     if (ownerDirty && !ownerConfirmed) {
       setError(
         'Tap "Mark zone complete" in Owner profile before saving these answers.',
@@ -746,6 +788,13 @@ function MultiPointInspectionDialogBody({
       setMileageError(message);
       requestAnimationFrame(() =>
         document.getElementById("inspection-odometer")?.focus(),
+      );
+      return false;
+    }
+    if (action === "start" && !liftStatus) {
+      setError("Select whether the vehicle is on a lift before submitting.");
+      requestAnimationFrame(() =>
+        document.getElementById("inspection-lift-yes")?.focus(),
       );
       return false;
     }
@@ -876,7 +925,11 @@ function MultiPointInspectionDialogBody({
     }
   }
 
-  async function handlePhotoUpload(id: ZoneId, file: File) {
+  async function handlePhotoUpload(
+    id: ZoneId,
+    file: File,
+    tag: "general" | "rotor_stamp" = "general",
+  ) {
     if (!bookingId || id === "OWNER") return;
     let storageId: string | undefined;
     const uploadToken = crypto.randomUUID();
@@ -900,6 +953,7 @@ function MultiPointInspectionDialogBody({
         zoneId: id,
         storageId,
         uploadToken,
+        tag,
       });
       const previewUrl = URL.createObjectURL(file);
       setPhotoPreviews((prev) => ({ ...prev, [storageId!]: previewUrl }));
@@ -908,6 +962,7 @@ function MultiPointInspectionDialogBody({
           prev.zones[id] ?? defaultZoneState(INSPECTION_ZONES_BY_ID[id]);
         return patchInspectionZone(prev, id, {
           photoIds: [...current.photoIds, storageId!],
+          photoTags: { ...current.photoTags, [storageId!]: tag },
         });
       });
     } catch {
@@ -943,6 +998,9 @@ function MultiPointInspectionDialogBody({
           prev.zones[id] ?? defaultZoneState(INSPECTION_ZONES_BY_ID[id]);
         return patchInspectionZone(prev, id, {
           photoIds: current.photoIds.filter((photoId) => photoId !== storageId),
+          photoTags: Object.fromEntries(
+            Object.entries(current.photoTags).filter(([photoId]) => photoId !== storageId),
+          ),
         });
       });
     } catch (err) {
@@ -1057,6 +1115,30 @@ function MultiPointInspectionDialogBody({
                 </span>
               ) : null}
             </label>
+            <fieldset>
+              <legend className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Is the vehicle on a lift? <span className="text-red-500">*</span>
+              </legend>
+              <div className="mt-1 flex gap-1.5">
+                {(["yes", "no"] as const).map((value) => (
+                  <button
+                    key={value}
+                    id={value === "yes" ? "inspection-lift-yes" : undefined}
+                    type="button"
+                    aria-pressed={liftStatus === value}
+                    onClick={() => setLiftStatus(value)}
+                    className={cn(
+                      "rounded-lg border px-3 py-1 text-[12px] font-medium capitalize",
+                      liftStatus === value
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-primary/20 text-muted-foreground",
+                    )}
+                  >
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
           </div>
 
           {/* progress ring */}
@@ -1212,7 +1294,7 @@ function MultiPointInspectionDialogBody({
                 onSharedText={(key, value) =>
                   patchSharedText(activeZone, key, value)
                 }
-                onPhoto={(file) => handlePhotoUpload(activeZone, file)}
+                onPhoto={(file, tag) => handlePhotoUpload(activeZone, file, tag)}
                 onRemovePhoto={(storageId) =>
                   setPhotoToRemove({ zoneId: activeZone, storageId })
                 }
@@ -1402,11 +1484,7 @@ function ZonePanel({
   zs: ZoneState;
   isFirstVisit: boolean;
   isRequired: boolean;
-  completionContext: {
-    serviceNames: string[];
-    brakeScope: BrakeAxleScope;
-    tireReplacementPositions?: BookedTirePosition[];
-  };
+  completionContext: ZoneCompletionContext;
   fieldError?: { fieldKey: string; message: string };
   canPhoto: boolean;
   photoBusy: string | null;
@@ -1414,7 +1492,7 @@ function ZonePanel({
   extraHeader?: React.ReactNode;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
-  onPhoto: (file: File) => void;
+  onPhoto: (file: File, tag?: "general" | "rotor_stamp") => void;
   onRemovePhoto: (storageId: string) => void;
   onToggleDone: () => void;
   onPrevious: () => void;
@@ -1424,6 +1502,13 @@ function ZonePanel({
   const tireReplacementScheduled =
     (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
     completionContext.tireReplacementPositions?.includes(zoneId);
+  const applicableFields = zone.fields.filter((field) =>
+    isFieldApplicableToZone(zoneId, field.key, completionContext),
+  );
+  const rotorPhotoRequired =
+    (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
+    !!completionContext.inspectionState &&
+    requiresRotorStampPhoto(completionContext.inspectionState, zoneId, completionContext);
   return (
     <div className="space-y-1">
       <div className="sticky top-0 z-20 -mx-2 mb-2 flex items-center justify-between gap-2 border-b border-primary/10 bg-card/95 px-2 py-2 backdrop-blur">
@@ -1469,13 +1554,12 @@ function ZonePanel({
           <span className="font-semibold text-foreground">
             Tire replacement scheduled.
           </span>{" "}
-          Outgoing-tire details are optional. Installed axle size is still
-          required.
+          Outgoing-tire tread, pressure, and condition are optional.
         </p>
       ) : null}
 
-      {zone.fields.map((field, i) => {
-        const prevSection = i > 0 ? zone.fields[i - 1].section : undefined;
+      {applicableFields.map((field, i) => {
+        const prevSection = i > 0 ? applicableFields[i - 1].section : undefined;
         const showSection = field.section && field.section !== prevSection;
         return (
           <div key={field.key}>
@@ -1519,6 +1603,11 @@ function ZonePanel({
                 key={storageId}
                 className="relative overflow-hidden rounded-lg border border-primary/15 bg-muted"
               >
+                  {zs.photoTags[storageId] === "rotor_stamp" ? (
+                    <span className="absolute left-2 top-2 z-10 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-semibold text-white">
+                      Rotor stamp
+                    </span>
+                  ) : null}
                 {src ? (
                   <a
                     href={src}
@@ -1559,6 +1648,9 @@ function ZonePanel({
           })}
         </div>
       ) : null}
+      {fieldError?.fieldKey === "rotor_stamp_photo" ? (
+        <InlineFieldError message={fieldError.message} />
+      ) : null}
 
       {!zs.done && zoneHasInput(zoneId, zs) ? (
         <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
@@ -1571,6 +1663,8 @@ function ZonePanel({
       <div className="flex items-center gap-2 pt-3">
         {canPhoto ? (
           <label
+            id={`inspection-${zoneId}-rotor_stamp_photo`}
+            tabIndex={-1}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg border border-primary/20 px-3 py-1.5 text-[12px] text-muted-foreground hover:bg-primary/5",
               photoBusy === zoneId ? "cursor-wait opacity-60" : "cursor-pointer",
@@ -1581,7 +1675,7 @@ function ZonePanel({
             ) : (
               <Camera className="h-3.5 w-3.5" />
             )}
-            Add photo
+            {rotorPhotoRequired ? "Add required rotor-stamp photo" : "Add photo"}
             <input
               type="file"
               accept="image/*"
@@ -1589,7 +1683,7 @@ function ZonePanel({
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
-                if (file) onPhoto(file);
+                if (file) onPhoto(file, rotorPhotoRequired ? "rotor_stamp" : "general");
                 e.target.value = "";
               }}
             />
@@ -1631,6 +1725,22 @@ function FieldRow({
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
 }) {
+  const clearUnavailable = () => {
+    const statuses = { ...zs.statuses };
+    delete statuses[field.key];
+    return statuses;
+  };
+  const unavailableControl = (
+    <UnavailableStatusControl
+      value={zs.statuses[field.key] ?? ""}
+      onChange={(next) => {
+        const statuses = { ...zs.statuses };
+        if (next) statuses[field.key] = next;
+        else delete statuses[field.key];
+        onPatch({ statuses });
+      }}
+    />
+  );
   if (field.type === "measure") {
     return (
       <MeasureField
@@ -1661,7 +1771,10 @@ function FieldRow({
                 type="button"
                 aria-label={TRI_LABELS[color]}
                 onClick={() =>
-                  onPatch({ tri: { ...zs.tri, [field.key]: color } })
+                  onPatch({
+                    tri: { ...zs.tri, [field.key]: color },
+                    statuses: clearUnavailable(),
+                  })
                 }
                 className={cn(
                   "h-7 w-7 rounded-full border-2 transition-transform active:scale-90",
@@ -1674,6 +1787,7 @@ function FieldRow({
           </div>
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+        {unavailableControl}
       </div>
     );
   }
@@ -1706,6 +1820,7 @@ function FieldRow({
                         ? selected.filter((value) => value !== option)
                         : [...selected, option],
                     },
+                    statuses: clearUnavailable(),
                   })
                 }
                 className={cn(
@@ -1721,15 +1836,17 @@ function FieldRow({
           })}
         </div>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+        {unavailableControl}
       </div>
     );
   }
 
   if (field.type === "select") {
-    const value = zs.select[field.key] ?? "";
-    // Verbatim OEM value that maps to no canonical option (odd coolant/trans
-    // brand strings): inject it so the enriched spec still shows + stays picked.
-    const isKnown = value === "" || field.options.some((o) => o.value === value);
+    const isMeasurementMethod =
+      field.key === "pad_method" || field.key === "rotor_tool";
+    const value = isMeasurementMethod
+      ? zs.methods[field.key] || zs.select[field.key] || ""
+      : zs.select[field.key] ?? "";
     return (
       <div className="border-b border-primary/10">
         <Row label={field.label} required={required}>
@@ -1740,11 +1857,22 @@ function FieldRow({
             options={field.options}
             className="w-44"
             onChange={(next) =>
-              onPatch({ select: { ...zs.select, [field.key]: next } })
+              onPatch(
+                isMeasurementMethod
+                  ? {
+                      methods: { ...zs.methods, [field.key]: next },
+                      statuses: clearUnavailable(),
+                    }
+                  : {
+                      select: { ...zs.select, [field.key]: next },
+                      statuses: clearUnavailable(),
+                    },
+              )
             }
           />
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+        {unavailableControl}
       </div>
     );
   }
@@ -1768,15 +1896,37 @@ function FieldRow({
     if (field.key === "tire_brand") {
       onPatch({
         text: { ...zs.text, tire_brand: normalized, tire_model: "" },
+        statuses: clearUnavailable(),
       });
       return;
     }
     if (field.key === "tire_model") {
-      onPatch({ text: { ...zs.text, [field.key]: normalized } });
+      onPatch({
+        text: { ...zs.text, [field.key]: normalized },
+        statuses: clearUnavailable(),
+      });
       return;
     }
+    onPatch({ statuses: clearUnavailable() });
     onSharedText(field.key, normalized);
   };
+  if (options.length === 0) {
+    return (
+      <div className="border-b border-primary/10">
+        <Row label={field.label} required={required}>
+          <input
+            id={`inspection-${zoneId}-${field.key}`}
+            aria-invalid={!!errorMessage}
+            value={value}
+            onChange={(event) => setText(event.target.value)}
+            className="w-48 rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+          />
+        </Row>
+        {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+        {unavailableControl}
+      </div>
+    );
+  }
   return (
     <div className="border-b border-primary/10">
       <Row
@@ -1822,6 +1972,7 @@ function FieldRow({
         </div>
       </Row>
       {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+      {unavailableControl}
     </div>
   );
 }
@@ -1843,6 +1994,22 @@ function MeasureField({
 }) {
   const value = zs.measures[field.key] ?? "";
   const result = classifyInspectionMeasure(field, zs.measures, zs.select);
+  const clearUnavailable = () => {
+    const statuses = { ...zs.statuses };
+    delete statuses[field.key];
+    return statuses;
+  };
+  const unavailableControl = (
+    <UnavailableStatusControl
+      value={zs.statuses[field.key] ?? ""}
+      onChange={(next) => {
+        const statuses = { ...zs.statuses };
+        if (next) statuses[field.key] = next;
+        else delete statuses[field.key];
+        onPatch({ statuses });
+      }}
+    />
+  );
 
   if (field.key === "tread") {
     const detailed = zs.select.tread_mode === "detailed";
@@ -1861,7 +2028,7 @@ function MeasureField({
       };
       const minimum = getTireTreadMinimum(reading);
       measures.tread = minimum == null ? "" : String(minimum);
-      onPatch({ measures });
+      onPatch({ measures, statuses: clearUnavailable() });
     };
     return (
       <div className="border-b border-primary/10 py-2.5">
@@ -1879,6 +2046,7 @@ function MeasureField({
                       ...zs.measures,
                       [field.key]: event.target.value,
                     },
+                    statuses: clearUnavailable(),
                   })
                 }
                 className="w-16 rounded-lg border border-primary/20 bg-card px-1 py-1.5 text-center text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none"
@@ -1932,6 +2100,7 @@ function MeasureField({
           {detailed ? "Use shallowest only" : "Add inner, center, outer"}
         </button>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+        {unavailableControl}
       </div>
     );
   }
@@ -1956,6 +2125,7 @@ function MeasureField({
                 ...zs.measures,
                 [field.key]: event.target.value,
               },
+              statuses: clearUnavailable(),
             })
           }
           className={cn(
@@ -1987,6 +2157,7 @@ function MeasureField({
                         )
                       : value,
                 },
+                statuses: clearUnavailable(),
               });
             }}
           />
@@ -1998,6 +2169,32 @@ function MeasureField({
         {field.classify ? <GradeTag result={result} /> : null}
       </Row>
       {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+      {unavailableControl}
+    </div>
+  );
+}
+
+function UnavailableStatusControl({
+  value,
+  onChange,
+}: {
+  value: FieldUnavailableStatus | "";
+  onChange: (value: FieldUnavailableStatus | "") => void;
+}) {
+  return (
+    <div className="flex justify-end px-2 pb-2">
+      <CompactSelect
+        ariaLabel="Unavailable status"
+        value={value}
+        options={[
+          { value: "", label: "Measured / inspected" },
+          { value: "not_inspected", label: "Not inspected" },
+          { value: "not_visible", label: "Not visible" },
+          { value: "not_applicable", label: "N/A" },
+        ]}
+        className="w-36"
+        onChange={(next) => onChange(next as FieldUnavailableStatus | "")}
+      />
     </div>
   );
 }

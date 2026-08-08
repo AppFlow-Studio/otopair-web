@@ -16,6 +16,7 @@
 import { getBookingServiceFlags } from "./vehicle-service-relevance";
 import type {
   PreJobSurveyPayload,
+  FilterStatus,
   RotorCondition,
   TireCondition,
 } from "./vehicle-passport";
@@ -30,7 +31,7 @@ import {
 } from "./inspection-measurements";
 import { OTHER_INSPECTION_OPTION } from "./inspection-options";
 
-export const INSPECTION_TEMPLATE_VERSION = "mpi-v1";
+export const INSPECTION_TEMPLATE_VERSION = "mpi-v2-tiered";
 
 // ---------------------------------------------------------------------------
 // Field + zone types
@@ -93,6 +94,11 @@ export type InspectionField =
     };
 
 export type TriValue = "g" | "y" | "r";
+export type FieldUnavailableStatus =
+  | "not_inspected"
+  | "not_visible"
+  | "not_applicable";
+export type InspectionPhotoTag = "general" | "rotor_stamp";
 
 export type ZoneId =
   | "FL"
@@ -103,6 +109,8 @@ export type ZoneId =
   | "UND"
   | "FRT"
   | "OWNER";
+
+export type CornerZoneId = Extract<ZoneId, "FL" | "FR" | "RL" | "RR">;
 
 export type InspectionZone = {
   id: ZoneId;
@@ -166,7 +174,7 @@ export function classify(
 export function classifyInspectionMeasure(
   field: Extract<InspectionField, { type: "measure" }>,
   measures: Record<string, string | undefined>,
-  select: Record<string, string | undefined>,
+  select: Record<string, string | number | undefined>,
 ): ClassifyResult {
   const raw = measures[field.key];
   if (field.classify !== "rotor") {
@@ -294,15 +302,70 @@ function cornerFields(opts: {
       section: "Tire",
     },
     {
+      type: "text",
+      key: "dot_code",
+      label: "DOT code",
+      firstVisitOnly: true,
+      section: "Tire",
+    },
+    {
+      type: "select",
+      key: "run_flat",
+      label: "Run-flat tire",
+      options: [
+        { value: "yes", label: "Yes" },
+        { value: "no", label: "No" },
+      ],
+      section: "Tire",
+    },
+    {
+      type: "tri",
+      key: "brake_visual",
+      label: "Brake visual state",
+      default: "g",
+      section: "Brakes · visual",
+    },
+    {
       type: "measure",
-      key: "pad",
-      label: "Brake pad thickness",
+      key: "pad_inner",
+      label: "Inner brake pad thickness",
       default: "",
       unit: "mm",
-      required: true,
       classify: "pad",
       hint: "auto-classified",
-      section: "Brakes",
+      section: "Brakes · wheel off",
+    },
+    {
+      type: "measure",
+      key: "pad_outer",
+      label: "Outer brake pad thickness",
+      default: "",
+      unit: "mm",
+      classify: "pad",
+      hint: "auto-classified",
+      section: "Brakes · wheel off",
+    },
+    {
+      type: "select",
+      key: "pad_method",
+      label: "Pad measurement method",
+      options: [
+        { value: "gauge", label: "Brake lining gauge" },
+        { value: "caliper", label: "Caliper" },
+        { value: "visual_scale", label: "Visual scale" },
+        { value: "other", label: "Other" },
+      ],
+      section: "Brakes · wheel off",
+    },
+    {
+      type: "select",
+      key: "rotor_applicable",
+      label: "Applicable rotor present",
+      options: [
+        { value: "yes", label: "Yes" },
+        { value: "no", label: "No / drum brake" },
+      ],
+      section: "Brakes · wheel off",
     },
     {
       type: "measure",
@@ -313,7 +376,24 @@ function cornerFields(opts: {
       classify: "rotor",
       ref: opts.rotorRef,
       hint: `Reference min ${opts.rotorRef.toFixed(1)}`,
-      section: "Brakes",
+      section: "Brakes · wheel off",
+    },
+    {
+      type: "select",
+      key: "rotor_tool",
+      label: "Rotor measurement tool",
+      options: [
+        { value: "micrometer", label: "Micrometer" },
+        { value: "caliper", label: "Caliper" },
+        { value: "other", label: "Other" },
+      ],
+      section: "Brakes · wheel off",
+    },
+    {
+      type: "text",
+      key: "rotor_stamp",
+      label: "Exact rotor-stamp text",
+      section: "Brakes · wheel off",
     },
     {
       type: "descriptors",
@@ -321,15 +401,20 @@ function cornerFields(opts: {
       label: "Brake rotor surface issues",
       options: ["scored", "pitted", "rusted", "warped", "grooved"],
       default: [],
-      section: "Brakes",
+      section: "Brakes · wheel off",
     },
+    { type: "tri", key: "caliper", label: "Caliper slides / boots", default: "g", section: "Brakes · wheel off" },
+    { type: "tri", key: "brake_hose", label: "Brake hose condition", default: "g", section: "Brakes · wheel off" },
     {
       type: "text",
       key: "pad_brand",
       label: "Brake pad brand / type",
       firstVisitOnly: true,
-      section: "Brakes",
+      section: "Brakes · wheel off",
     },
+    { type: "tri", key: "steering_play", label: "Steering-linkage play", default: "g", section: "Lift · wheel off" },
+    { type: "tri", key: "ball_joint_play", label: "Ball-joint play", default: "g", section: "Lift · wheel off" },
+    { type: "tri", key: "wheel_bearing_play", label: "Wheel-bearing play", default: "g", section: "Lift · wheel off" },
   ];
 }
 
@@ -398,9 +483,11 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     label: "Engine bay",
     short: "Engine",
     fields: [
-      { type: "tri", key: "oil", label: "Engine oil level / condition", default: "g", section: "Fluid & filter eye-check" },
-      { type: "tri", key: "cool", label: "Coolant level / condition", default: "g", section: "Fluid & filter eye-check" },
-      { type: "tri", key: "bf", label: "Brake fluid level / condition", default: "g", section: "Fluid & filter eye-check" },
+      { type: "tri", key: "oil", label: "Engine oil level / condition", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "cool", label: "Coolant level / condition", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "bf", label: "Brake fluid level / condition", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "washer", label: "Washer-fluid level", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "warning_lights", label: "Dashboard warning lights", default: "g", section: "Every-visit checks" },
       { type: "tri", key: "trans", label: "Transmission fluid", default: "g", section: "Fluid & filter eye-check" },
       { type: "tri", key: "ps", label: "Power steering fluid", default: "g", section: "Fluid & filter eye-check" },
       { type: "tri", key: "af", label: "Engine air filter", default: "g", section: "Fluid & filter eye-check" },
@@ -425,6 +512,7 @@ export const INSPECTION_ZONES: InspectionZone[] = [
       { type: "select", key: "coolant_type", label: "Coolant type", options: COOLANT_TYPE_OPTIONS, section: "Fluid specifications" },
       { type: "select", key: "brake_fluid_type", label: "Brake fluid type", options: BRAKE_FLUID_OPTIONS, section: "Fluid specifications" },
       { type: "select", key: "transmission_fluid_type", label: "Transmission fluid type", options: TRANSMISSION_FLUID_OPTIONS, section: "Fluid specifications" },
+      { type: "text", key: "power_steering_fluid_type", label: "Power-steering fluid type", section: "Fluid specifications" },
     ],
   },
   {
@@ -432,10 +520,11 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     label: "Underbody",
     short: "Underbody",
     fields: [
-      { type: "tri", key: "link", label: "Front-end linkage", default: "g" },
-      { type: "tri", key: "cv", label: "CV boots / joints", default: "g" },
-      { type: "tri", key: "strut", label: "Struts / shocks", default: "g" },
-      { type: "tri", key: "exh", label: "Exhaust — leaks / hangers", default: "g" },
+      { type: "tri", key: "leaks", label: "Fluid leaks or drips", default: "g" },
+      { type: "tri", key: "cv", label: "Torn CV boots", default: "g" },
+      { type: "tri", key: "strut", label: "Leaking struts", default: "g" },
+      { type: "tri", key: "exh", label: "Exhaust leaks / broken hangers", default: "g" },
+      { type: "tri", key: "damage", label: "Undercarriage damage", default: "g" },
     ],
   },
   {
@@ -446,6 +535,7 @@ export const INSPECTION_ZONES: InspectionZone[] = [
       { type: "tri", key: "lamp", label: "Headlights / hazards / tail", default: "g" },
       { type: "tri", key: "glass", label: "Windshield — chips / cracks", default: "g" },
       { type: "tri", key: "wipe", label: "Wiper blades", default: "g" },
+      { type: "tri", key: "horn", label: "Horn", default: "g" },
     ],
   },
   {
@@ -476,7 +566,10 @@ export type ZoneState = {
   descriptors: Record<string, string[]>;
   text: Record<string, string>;
   select: Record<string, string>;
+  statuses: Record<string, FieldUnavailableStatus>;
+  methods: Record<string, string>;
   photoIds: string[];
+  photoTags: Record<string, InspectionPhotoTag>;
 };
 
 export function toggleInspectionTreadMode(zone: ZoneState): Partial<ZoneState> {
@@ -512,7 +605,10 @@ export function emptyZoneState(): ZoneState {
     descriptors: {},
     text: {},
     select: {},
+    statuses: {},
+    methods: {},
     photoIds: [],
+    photoTags: {},
   };
 }
 
@@ -523,7 +619,13 @@ export function defaultZoneState(zone: InspectionZone): ZoneState {
     else if (field.type === "descriptors")
       state.descriptors[field.key] = [...field.default];
     else if (field.type === "text") state.text[field.key] = field.default ?? "";
-    else if (field.type === "select") state.select[field.key] = field.default ?? "";
+    else if (field.type === "select") {
+      if (field.key === "pad_method" || field.key === "rotor_tool") {
+        state.methods[field.key] = field.default ?? "";
+      } else {
+        state.select[field.key] = field.default ?? "";
+      }
+    }
   }
   return state;
 }
@@ -552,17 +654,108 @@ export type BrakeAxleScope = {
 export type ZoneCompletionContext = {
   serviceNames: string[];
   brakeScope: BrakeAxleScope;
-  tireReplacementPositions?: ReadonlyArray<
-    Extract<ZoneId, "FL" | "FR" | "RL" | "RR">
-  >;
+  tireReplacementPositions?: ReadonlyArray<CornerZoneId>;
+  isFirstShopVisit?: boolean;
+  priorTreadReadings?: Partial<Record<CornerZoneId, number | null>>;
+  rotorPhotoEvidence?: Partial<Record<CornerZoneId, boolean>>;
+  inspectionState?: InspectionState;
+  liftStatus?: "yes" | "no" | "";
+};
+
+export type TierInspectionScope = {
+  tier2Corners: CornerZoneId[];
+  tier3AChecksRequired: boolean;
+  tier3BCorners: CornerZoneId[];
+  bookingScopeError: string | null;
 };
 
 export type ZoneCompletionResult =
   | { valid: true }
   | { valid: false; fieldKey: string; error: string };
 
-const CORNER_IDS: ZoneId[] = ["FL", "FR", "RL", "RR"];
+const CORNER_IDS: CornerZoneId[] = ["FL", "FR", "RL", "RR"];
 const TIRE_SIZE_PATTERN = /^\d{3}\/\d{2}R\d{2}$/i;
+
+export function deriveTierInspectionScope(
+  context: ZoneCompletionContext,
+): TierInspectionScope {
+  const flags = getBookingServiceFlags(context.serviceNames);
+  const selected = new Set<CornerZoneId>();
+  let bookingScopeError: string | null = null;
+
+  if (flags.hasTireRotation || flags.hasTireBalancing) {
+    CORNER_IDS.forEach((corner) => selected.add(corner));
+  }
+  if (flags.hasTireReplacement) {
+    if (!context.tireReplacementPositions?.length) {
+      bookingScopeError = "Tire Replacement is missing its selected tire positions.";
+    } else {
+      context.tireReplacementPositions.forEach((corner) => selected.add(corner));
+    }
+  }
+  if (flags.hasBrakePadReplacement || flags.hasRotorReplacement) {
+    if (!context.brakeScope.front && !context.brakeScope.rear) {
+      bookingScopeError = "Brake service is missing its required axle selection.";
+    } else {
+      if (context.brakeScope.front) {
+        selected.add("FL");
+        selected.add("FR");
+      }
+      if (context.brakeScope.rear) {
+        selected.add("RL");
+        selected.add("RR");
+      }
+    }
+  }
+
+  const tier2Corners = CORNER_IDS.filter((corner) => selected.has(corner));
+  return {
+    tier2Corners,
+    tier3AChecksRequired: flags.hasWheelAlignment,
+    tier3BCorners: [...tier2Corners],
+    bookingScopeError,
+  };
+}
+
+function requiresTier5Identity(
+  zoneId: CornerZoneId,
+  context: ZoneCompletionContext,
+): boolean {
+  if (context.isFirstShopVisit) return true;
+  const zone = context.inspectionState?.zones[zoneId];
+  if (zone?.statuses.tread) return false;
+  const current = Number(zone?.measures.tread);
+  const prior = context.priorTreadReadings?.[zoneId];
+  return Number.isFinite(current) && typeof prior === "number" && current > prior;
+}
+
+export function requiresRotorStampPhoto(
+  state: InspectionState,
+  zoneId: CornerZoneId,
+  context: ZoneCompletionContext,
+): boolean {
+  if (!deriveTierInspectionScope(context).tier2Corners.includes(zoneId)) return false;
+  if (context.rotorPhotoEvidence?.[zoneId]) return false;
+  const zone = state.zones[zoneId];
+  if (zone?.select.rotor_applicable === "no") return false;
+  return !zone?.photoIds.some(
+    (photoId) => zone.photoTags[photoId] === "rotor_stamp",
+  );
+}
+
+export function rotorEvidenceCornersFromSubmission(
+  state: InspectionState,
+  context: ZoneCompletionContext,
+): CornerZoneId[] {
+  return deriveTierInspectionScope(context).tier2Corners.filter((corner) => {
+    if (context.rotorPhotoEvidence?.[corner]) return false;
+    const zone = state.zones[corner];
+    if (zone?.select.rotor_applicable === "no") return false;
+    return !!zone?.done && zone.photoIds.some(
+      (photoId) => zone.photoTags[photoId] === "rotor_stamp",
+    );
+  });
+}
 
 export function normalizeTireSize(value: string): string {
   return value.trim().toUpperCase().replace(/\s+/g, "");
@@ -573,38 +766,57 @@ export function isFieldRequiredForZone(
   fieldKey: string,
   context: ZoneCompletionContext,
 ): boolean {
-  if (CORNER_IDS.includes(zoneId)) {
+  if (CORNER_IDS.includes(zoneId as CornerZoneId)) {
     const flags = getBookingServiceFlags(context.serviceNames);
-    const tireInspectionRequired =
-      flags.hasTireWork || flags.hasBrakeWork || context.brakeScope.hasBrakeWork;
     const isReplacementTire =
       flags.hasTireReplacement &&
       context.tireReplacementPositions?.includes(
-        zoneId as Extract<ZoneId, "FL" | "FR" | "RL" | "RR">,
+        zoneId as CornerZoneId,
       );
-    if (fieldKey === "tire_size") {
-      return tireInspectionRequired;
+    if (["tread", "psi", "wear"].includes(fieldKey)) return !isReplacementTire;
+    if (fieldKey === "brake_visual") return true;
+    if (["tire_brand", "tire_model", "tire_size", "dot_code", "run_flat"].includes(fieldKey)) {
+      return requiresTier5Identity(zoneId as CornerZoneId, context);
     }
-    if (["tread", "wear", "tire_brand"].includes(fieldKey)) {
-      return tireInspectionRequired && !isReplacementTire;
+    const scope = deriveTierInspectionScope(context);
+    if (
+      [
+        "pad_inner",
+        "pad_outer",
+        "pad_method",
+        "rotor_applicable",
+        "rotor",
+        "rotor_tool",
+        "rotor_stamp",
+        "desc",
+        "caliper",
+        "brake_hose",
+        "pad_brand",
+      ].includes(fieldKey)
+    ) {
+      const wheelOff = scope.tier2Corners.includes(zoneId as CornerZoneId);
+      if (!wheelOff) return false;
+      if (
+        ["rotor", "rotor_tool", "rotor_stamp", "desc"].includes(fieldKey) &&
+        context.inspectionState?.zones[zoneId]?.select.rotor_applicable === "no"
+      ) {
+        return false;
+      }
+      return true;
     }
-    if (fieldKey === "psi") {
-      return flags.hasTireWork && !isReplacementTire;
-    }
-    if (fieldKey === "pad" || fieldKey === "rotor") {
-      const front = zoneId === "FL" || zoneId === "FR";
-      return (
-        context.brakeScope.hasBrakeWork &&
-        (front ? context.brakeScope.front : context.brakeScope.rear)
-      );
+    if (["steering_play", "ball_joint_play", "wheel_bearing_play"].includes(fieldKey)) {
+      return scope.tier3BCorners.includes(zoneId as CornerZoneId);
     }
     return false;
   }
   if (zoneId === "ENG") {
     const flags = getBookingServiceFlags(context.serviceNames);
-    if (flags.hasBatteryTest && (fieldKey === "batt" || fieldKey === "term")) {
-      return true;
-    }
+    if (fieldKey === "term") return true;
+    if (fieldKey === "oil") return !flags.hasOilChange;
+    if (fieldKey === "cool") return !flags.hasCoolantFlush;
+    if (fieldKey === "bf") return !flags.hasBrakeFluidFlush;
+    if (fieldKey === "washer" || fieldKey === "warning_lights") return true;
+    if (flags.hasBatteryTest && fieldKey === "batt") return true;
     if (flags.hasOilChange && (fieldKey === "oil_viscosity" || fieldKey === "oil_type")) {
       return true;
     }
@@ -614,8 +826,56 @@ export function isFieldRequiredForZone(
     if (flags.hasTransmissionFluidService && fieldKey === "transmission_fluid_type") {
       return true;
     }
+    if (flags.hasBrakeFluidFlush && fieldKey === "brake_fluid_type") return true;
+    if (flags.hasPowerSteeringFlush && fieldKey === "power_steering_fluid_type") return true;
+  }
+  if (zoneId === "FRT") return ["lamp", "glass", "wipe", "horn"].includes(fieldKey);
+  if (zoneId === "UND") {
+    return deriveTierInspectionScope(context).tier3AChecksRequired;
   }
   return false;
+}
+
+export function isFieldApplicableToZone(
+  zoneId: ZoneId,
+  fieldKey: string,
+  context: ZoneCompletionContext,
+): boolean {
+  if (!CORNER_IDS.includes(zoneId as CornerZoneId)) return true;
+  if (["tire_brand", "tire_model", "tire_size", "dot_code", "run_flat"].includes(fieldKey)) {
+    return isFieldRequiredForZone(zoneId, fieldKey, context);
+  }
+  if (
+    [
+      "pad_inner",
+      "pad_outer",
+      "pad_method",
+      "rotor_applicable",
+      "rotor",
+      "rotor_tool",
+      "rotor_stamp",
+      "desc",
+      "caliper",
+      "brake_hose",
+      "pad_brand",
+    ].includes(fieldKey)
+  ) {
+    const wheelOff = deriveTierInspectionScope(context).tier2Corners.includes(
+      zoneId as CornerZoneId,
+    );
+    if (!wheelOff) return false;
+    if (
+      ["rotor", "rotor_tool", "rotor_stamp", "desc"].includes(fieldKey) &&
+      context.inspectionState?.zones[zoneId]?.select.rotor_applicable === "no"
+    ) {
+      return false;
+    }
+    return true;
+  }
+  if (["steering_play", "ball_joint_play", "wheel_bearing_play"].includes(fieldKey)) {
+    return deriveTierInspectionScope(context).tier3BCorners.includes(zoneId as CornerZoneId);
+  }
+  return true;
 }
 
 export function patchInspectionZone(
@@ -683,25 +943,40 @@ export function validateZoneForCompletion(
 ): ZoneCompletionResult {
   const zone = INSPECTION_ZONES_BY_ID[zoneId];
   const zs = state.zones[zoneId] ?? defaultZoneState(zone);
+  const validationContext = { ...context, inspectionState: state };
   const fail = (fieldKey: string, error: string): ZoneCompletionResult => ({
     valid: false,
     fieldKey,
     error,
   });
 
-  if (CORNER_IDS.includes(zoneId)) {
+  const scopeError = deriveTierInspectionScope(validationContext).bookingScopeError;
+  if (scopeError) return fail("_booking_scope", scopeError);
+
+  if (CORNER_IDS.includes(zoneId as CornerZoneId)) {
     const treadRequired = isFieldRequiredForZone(
       zoneId,
       "tread",
-      context,
+      validationContext,
     );
+    const treadUnavailable = !!zs.statuses.tread;
+    if (zs.select.tread_mode && zs.select.tread_mode !== "detailed") {
+      return fail("tread", "Tread measurement mode has an invalid value.");
+    }
+    if (
+      zs.select.rotor_unit &&
+      zs.select.rotor_unit !== "mm" &&
+      zs.select.rotor_unit !== "in"
+    ) {
+      return fail("rotor", "Rotor measurement unit has an invalid value.");
+    }
     const detailed = zs.select.tread_mode === "detailed";
     const hasDetailedTread = [
       zs.measures.tread_inner,
       zs.measures.tread_center,
       zs.measures.tread_outer,
     ].some((value) => (value ?? "").trim() !== "");
-    if (detailed && (treadRequired || hasDetailedTread)) {
+    if (!treadUnavailable && detailed && (treadRequired || hasDetailedTread)) {
       for (const [key, label] of [
         ["tread_inner", "inner"],
         ["tread_center", "center"],
@@ -723,7 +998,7 @@ export function validateZoneForCompletion(
       if (Number(zs.measures.tread) !== minimum) {
         return fail("tread", "Shallowest tread must match the lowest detailed reading.");
       }
-    } else if (!detailed) {
+    } else if (!treadUnavailable && !detailed) {
       if ((zs.measures.tread ?? "").trim() === "") {
         if (treadRequired) {
           return fail("tread", "Tire tread depth is required.");
@@ -739,24 +1014,45 @@ export function validateZoneForCompletion(
     const tireBrandRequired = isFieldRequiredForZone(
       zoneId,
       "tire_brand",
-      context,
+      validationContext,
     );
-    if (tireBrandRequired && !(zs.text.tire_brand ?? "").trim()) {
+    if (tireBrandRequired && !zs.statuses.tire_brand && !(zs.text.tire_brand ?? "").trim()) {
       return fail("tire_brand", "Tire brand is required.");
     }
     if (zs.text.tire_brand === OTHER_INSPECTION_OPTION) {
       return fail("tire_brand", "Enter the tire brand.");
     }
     const size = normalizeTireSize(zs.text.tire_size ?? "");
-    const sizeRequired = isFieldRequiredForZone(zoneId, "tire_size", context);
-    if (sizeRequired && !size) return fail("tire_size", "Tire size is required.");
+    const sizeRequired = isFieldRequiredForZone(zoneId, "tire_size", validationContext);
+    if (sizeRequired && !zs.statuses.tire_size && !size) return fail("tire_size", "Tire size is required.");
     if (size && !TIRE_SIZE_PATTERN.test(size)) {
       return fail("tire_size", "Tire size must look like 225/45R18.");
+    }
+    if (size && !zs.statuses.tire_size) {
+      const siblingId: CornerZoneId =
+        zoneId === "FL" ? "FR" : zoneId === "FR" ? "FL" : zoneId === "RL" ? "RR" : "RL";
+      const sibling = state.zones[siblingId];
+      const siblingSize = sibling?.statuses.tire_size
+        ? ""
+        : normalizeTireSize(sibling?.text.tire_size ?? "");
+      if (siblingSize && siblingSize !== size) {
+        return fail("tire_size", "Installed tire sizes must match within the axle.");
+      }
     }
   }
 
   for (const field of zone.fields) {
-    const required = isFieldRequiredForZone(zoneId, field.key, context);
+    const required = isFieldRequiredForZone(zoneId, field.key, validationContext);
+    if (zs.statuses[field.key]) {
+      if (
+        zs.statuses[field.key] === "not_applicable" &&
+        ["rotor", "rotor_tool", "rotor_stamp", "desc"].includes(field.key) &&
+        zs.select.rotor_applicable !== "no"
+      ) {
+        return fail(field.key, "N/A is valid only when this corner has no applicable rotor.");
+      }
+      continue;
+    }
     if (field.type === "measure") {
       if (field.key === "tread") continue;
       const raw = (zs.measures[field.key] ?? "").trim();
@@ -765,7 +1061,7 @@ export function validateZoneForCompletion(
         continue;
       }
       const value = Number(raw);
-      const allowZero = field.key === "pad";
+      const allowZero = field.key === "pad_inner" || field.key === "pad_outer";
       if (!Number.isFinite(value) || (allowZero ? value < 0 : value <= 0)) {
         return fail(field.key, `${field.label} must be a valid number.`);
       }
@@ -777,14 +1073,42 @@ export function validateZoneForCompletion(
         return fail(field.key, `${field.label} is required.`);
       }
     } else if (field.type === "select") {
-      if (required && !(zs.select[field.key] ?? "").trim()) {
+      const selected =
+        field.key === "pad_method" || field.key === "rotor_tool"
+          ? zs.methods[field.key] || zs.select[field.key]
+          : zs.select[field.key];
+      if (selected != null && typeof selected !== "string") {
+        return fail(field.key, `${field.label} has an invalid value.`);
+      }
+      if (
+        selected &&
+        !field.options.some((option) => option.value === selected)
+      ) {
+        return fail(field.key, `${field.label} has an invalid value.`);
+      }
+      if (required && !(selected ?? "").trim()) {
         return fail(field.key, `${field.label} is required.`);
       }
     } else if (field.type === "tri") {
       if (required && !zs.tri[field.key]) {
         return fail(field.key, `${field.label} is required.`);
       }
+    } else if (field.type === "descriptors") {
+      const selected = zs.descriptors[field.key] ?? [];
+      if (
+        selected.some((value) => !field.options.includes(value)) ||
+        new Set(selected).size !== selected.length
+      ) {
+        return fail(field.key, `${field.label} contains an invalid selection.`);
+      }
     }
+  }
+
+  if (
+    CORNER_IDS.includes(zoneId as CornerZoneId) &&
+    requiresRotorStampPhoto(state, zoneId as CornerZoneId, validationContext)
+  ) {
+    return fail("rotor_stamp_photo", "Add a rotor-stamp photo for this wheel-off corner.");
   }
 
   return { valid: true };
@@ -797,19 +1121,8 @@ export function validateZoneForCompletion(
  */
 export function requiredZonesForBooking(serviceNames: string[]): ZoneId[] {
   const flags = getBookingServiceFlags(serviceNames);
-  const required = new Set<ZoneId>();
-
-  if (flags.hasTireWork || flags.hasBrakeWork) {
-    CORNER_IDS.forEach((zoneId) => required.add(zoneId));
-  }
-  if (
-    flags.hasOilChange ||
-    flags.hasBatteryTest ||
-    flags.hasCoolantFlush ||
-    flags.hasTransmissionFluidService
-  ) {
-    required.add("ENG");
-  }
+  const required = new Set<ZoneId>([...CORNER_IDS, "ENG", "FRT"]);
+  if (flags.hasWheelAlignment) required.add("UND");
   return INSPECTION_ZONES.filter((z) => required.has(z.id)).map((z) => z.id);
 }
 
@@ -835,6 +1148,7 @@ export function gatherFindings(
     if (!zs) continue;
     if (onlyDone && !zs.done) continue;
     for (const field of zone.fields) {
+      if (zs.statuses[field.key]) continue;
       if (field.type === "tri") {
         const s = zs.tri[field.key];
         if (s === "r") attention.push({ label: field.label, zone: zone.label });
@@ -890,7 +1204,10 @@ function minDefined(a: number | null, b: number | null): number | null {
   return Math.min(a, b);
 }
 
-function deriveRotorCondition(state: InspectionState): RotorCondition | null {
+function deriveRotorCondition(
+  state: InspectionState,
+  context?: ZoneCompletionContext,
+): RotorCondition | null {
   const corners: ZoneId[] = ["FL", "FR", "RL", "RR"];
   let worst: RotorCondition | null = null;
   const rank: Record<RotorCondition, number> = {
@@ -904,17 +1221,24 @@ function deriveRotorCondition(state: InspectionState): RotorCondition | null {
   for (const id of corners) {
     const zs = state.zones[id];
     if (!zs?.done) continue;
+    if (context && !isFieldApplicableToZone(id, "rotor", { ...context, inspectionState: state })) {
+      continue;
+    }
     const zone = INSPECTION_ZONES_BY_ID[id];
     const rotorField = zone.fields.find(
       (f) => f.type === "measure" && f.classify === "rotor",
     );
-    if (rotorField && rotorField.type === "measure") {
+    let rotorInspected = false;
+    if (rotorField && rotorField.type === "measure" && !zs.statuses.rotor) {
+      rotorInspected = (zs.measures.rotor ?? "").trim() !== "";
       const res = classifyInspectionMeasure(rotorField, zs.measures, zs.select);
       if (res.lvl === "bad") bump("needs_attention");
     }
-    const desc = zs.descriptors["desc"] ?? [];
+    const desc = zs.statuses.desc ? [] : (zs.descriptors["desc"] ?? []);
     if (desc.some((d) => ["scored", "pitted", "grooved", "warped"].includes(d))) {
       bump("scored");
+    } else if (rotorInspected) {
+      bump("good");
     }
   }
   return worst;
@@ -926,6 +1250,7 @@ export type DerivePrejobOptions = {
   modifications?: PreJobSurveyPayload["modifications"];
   flaggedVehicleSpecs?: boolean;
   nextMechanicTip?: string | null;
+  completionContext?: ZoneCompletionContext;
 };
 
 export function derivePrejobFromInspection(
@@ -938,17 +1263,25 @@ export function derivePrejobFromInspection(
   const rr = state.zones.RR?.done ? state.zones.RR : undefined;
   const eng = state.zones.ENG?.done ? state.zones.ENG : undefined;
   const corners = [
-    ["front_left", fl],
-    ["front_right", fr],
-    ["rear_left", rl],
-    ["rear_right", rr],
-  ] as const satisfies ReadonlyArray<readonly [TirePosition, ZoneState | undefined]>;
+    ["front_left", "FL", fl],
+    ["front_right", "FR", fr],
+    ["rear_left", "RL", rl],
+    ["rear_right", "RR", rr],
+  ] as const satisfies ReadonlyArray<
+    readonly [TirePosition, CornerZoneId, ZoneState | undefined]
+  >;
+  const applies = (zoneId: CornerZoneId, fieldKey: string) =>
+    !opts.completionContext ||
+    isFieldApplicableToZone(zoneId, fieldKey, {
+      ...opts.completionContext,
+      inspectionState: state,
+    });
 
   const tireTread: TireTreadMeasurements = {};
   const rotorThickness: RotorThicknessMeasurements = {};
-  for (const [position, zone] of corners) {
+  for (const [position, zoneId, zone] of corners) {
     if (!zone) continue;
-    const reported = parseMm(zone.measures.tread);
+    const reported = zone.statuses.tread ? null : parseMm(zone.measures.tread);
     if (reported != null) {
       const reading: TireTreadReading = { reported_min_32nds: reported };
       if (zone.select.tread_mode === "detailed") {
@@ -958,7 +1291,10 @@ export function derivePrejobFromInspection(
       }
       tireTread[position] = reading;
     }
-    const rotor = parseMm(zone.measures.rotor);
+    const rotor =
+      !applies(zoneId, "rotor") || zone.statuses.rotor
+        ? null
+        : parseMm(zone.measures.rotor);
     if (rotor != null) {
       const unit: RotorUnit = zone.select.rotor_unit === "in" ? "in" : "mm";
       rotorThickness[position] = {
@@ -969,71 +1305,129 @@ export function derivePrejobFromInspection(
     }
   }
 
+  const padReading = (
+    zoneId: CornerZoneId,
+    zone: ZoneState | undefined,
+    key: "pad_inner" | "pad_outer",
+  ) =>
+    !zone || !applies(zoneId, key) || zone.statuses[key]
+      ? null
+      : parseMm(zone.measures[key] ?? zone.measures.pad);
   const frontPad = minDefined(
-    parseMm(fl?.measures.pad),
-    parseMm(fr?.measures.pad),
+    minDefined(
+      padReading("FL", fl, "pad_inner"),
+      padReading("FL", fl, "pad_outer"),
+    ),
+    minDefined(
+      padReading("FR", fr, "pad_inner"),
+      padReading("FR", fr, "pad_outer"),
+    ),
   );
   const rearPad = minDefined(
-    parseMm(rl?.measures.pad),
-    parseMm(rr?.measures.pad),
+    minDefined(
+      padReading("RL", rl, "pad_inner"),
+      padReading("RL", rl, "pad_outer"),
+    ),
+    minDefined(
+      padReading("RR", rr, "pad_inner"),
+      padReading("RR", rr, "pad_outer"),
+    ),
   );
 
-  const completedCorners = [fl, fr, rl, rr].filter(
-    (zone): zone is ZoneState => !!zone,
-  );
-  const sharedText = (key: string) =>
-    completedCorners
-      .map((zone) => zone.text[key]?.trim())
-      .find((value) => value && value !== OTHER_INSPECTION_OPTION) || null;
-  const frontSize = [fl, fr]
-    .map((zone) => zone?.text.tire_size?.trim())
+  const frontSize = [["FL", fl], ["FR", fr]] as const;
+  const derivedFrontSize = frontSize
+    .map(([zoneId, zone]) =>
+      !applies(zoneId, "tire_size") || zone?.statuses.tire_size
+        ? undefined
+        : zone?.text.tire_size?.trim(),
+    )
     .find(Boolean);
-  const rearSize = [rl, rr]
-    .map((zone) => zone?.text.tire_size?.trim())
+  const rearSize = [["RL", rl], ["RR", rr]] as const;
+  const derivedRearSize = rearSize
+    .map(([zoneId, zone]) =>
+      !applies(zoneId, "tire_size") || zone?.statuses.tire_size
+        ? undefined
+        : zone?.text.tire_size?.trim(),
+    )
     .find(Boolean);
-  const padBrand = sharedText("pad_brand");
+  const padBrand = corners
+    .map(([, zoneId, zone]) =>
+      !zone || !applies(zoneId, "pad_brand") || zone.statuses.pad_brand
+        ? undefined
+        : zone.text.pad_brand?.trim(),
+    )
+    .find((value) => value && value !== OTHER_INSPECTION_OPTION) || null;
   const tireDetails: NonNullable<PreJobSurveyPayload["tire_details"]> = {};
-  for (const [position, zone] of corners) {
+  for (const [position, zoneId, zone] of corners) {
     if (!zone) continue;
-    const brand = zone.text.tire_brand?.trim();
-    const model = zone.text.tire_model?.trim();
+    const brand =
+      !applies(zoneId, "tire_brand") || zone.statuses.tire_brand
+        ? ""
+        : zone.text.tire_brand?.trim();
+    const model =
+      !applies(zoneId, "tire_model") || zone.statuses.tire_model
+        ? ""
+        : zone.text.tire_model?.trim();
+    const dotCode =
+      !applies(zoneId, "dot_code") || zone.statuses.dot_code
+        ? ""
+        : zone.text.dot_code?.trim();
+    const runFlat =
+      !applies(zoneId, "run_flat") || zone.statuses.run_flat
+        ? ""
+        : zone.select.run_flat;
     if (
       (!brand || brand === OTHER_INSPECTION_OPTION) &&
-      (!model || model === OTHER_INSPECTION_OPTION)
+      (!model || model === OTHER_INSPECTION_OPTION) &&
+      !dotCode &&
+      !runFlat
     ) {
       continue;
     }
     tireDetails[position] = {
       ...(brand && brand !== OTHER_INSPECTION_OPTION ? { brand } : {}),
       ...(model && model !== OTHER_INSPECTION_OPTION ? { model } : {}),
+      ...(dotCode ? { dot_code: dotCode } : {}),
+      ...(runFlat ? { run_flat: runFlat === "yes" } : {}),
     };
   }
 
   const frontTire = worstTireCondition(
-    triToTireCondition(fl?.tri.wear),
-    triToTireCondition(fr?.tri.wear),
+    fl?.statuses.wear ? null : triToTireCondition(fl?.tri.wear),
+    fr?.statuses.wear ? null : triToTireCondition(fr?.tri.wear),
   );
   const rearTire = worstTireCondition(
-    triToTireCondition(rl?.tri.wear),
-    triToTireCondition(rr?.tri.wear),
+    rl?.statuses.wear ? null : triToTireCondition(rl?.tri.wear),
+    rr?.statuses.wear ? null : triToTireCondition(rr?.tri.wear),
   );
 
   const fluidOverrides = {
-    oil_viscosity: eng?.select.oil_viscosity || null,
-    oil_type: eng?.select.oil_type || null,
-    coolant_type: eng?.select.coolant_type || null,
-    brake_fluid_type: eng?.select.brake_fluid_type || null,
-    transmission_fluid_type: eng?.select.transmission_fluid_type || null,
+    oil_viscosity: eng?.statuses.oil_viscosity ? null : eng?.select.oil_viscosity || null,
+    oil_type: eng?.statuses.oil_type ? null : eng?.select.oil_type || null,
+    coolant_type: eng?.statuses.coolant_type ? null : eng?.select.coolant_type || null,
+    brake_fluid_type: eng?.statuses.brake_fluid_type ? null : eng?.select.brake_fluid_type || null,
+    transmission_fluid_type: eng?.statuses.transmission_fluid_type ? null : eng?.select.transmission_fluid_type || null,
+    power_steering_fluid_type: eng?.statuses.power_steering_fluid_type ? null : eng?.text.power_steering_fluid_type || null,
   };
   const hasFluidOverride = Object.values(fluidOverrides).some((v) => v);
+  const filterStatus = (key: "af" | "cf"): FilterStatus | null => {
+    if (!eng) return null;
+    if (eng.statuses[key]) return "not_checked";
+    if (eng.tri[key] === "g") return "looks_clean";
+    if (eng.tri[key] === "y") return "fair";
+    if (eng.tri[key] === "r") return "recommend_replace";
+    return null;
+  };
+  const engineAirFilter = filterStatus("af");
+  const cabinAirFilter = filterStatus("cf");
 
   return {
     mileage: opts.mileage,
     tire_details: Object.keys(tireDetails).length ? tireDetails : null,
     tire_brand: null,
     tire_model: null,
-    tire_size_front: frontSize ? normalizeTireSize(frontSize) : null,
-    tire_size_rear: rearSize ? normalizeTireSize(rearSize) : null,
+    tire_size_front: derivedFrontSize ? normalizeTireSize(derivedFrontSize) : null,
+    tire_size_rear: derivedRearSize ? normalizeTireSize(derivedRearSize) : null,
     front_tire_condition: frontTire,
     rear_tire_condition: rearTire,
     tire_tread: Object.keys(tireTread).length ? tireTread : null,
@@ -1046,9 +1440,8 @@ export function derivePrejobFromInspection(
             pad_brand: padBrand,
             front_pad_mm: frontPad,
             rear_pad_mm: rearPad,
-            // Default to "good" once corners are inspected — server requires a
-            // rotor_condition for brake work, and "no findings" means good.
-            rotor_condition: deriveRotorCondition(state) ?? "good",
+            // Unavailable visual results stay unknown rather than becoming green.
+            rotor_condition: deriveRotorCondition(state, opts.completionContext),
             rotor_thickness: Object.keys(rotorThickness).length
               ? rotorThickness
               : null,
@@ -1056,6 +1449,13 @@ export function derivePrejobFromInspection(
         : null,
     fluids_match_oem: hasFluidOverride ? false : undefined,
     fluid_overrides: hasFluidOverride ? fluidOverrides : null,
+    filters:
+      engineAirFilter || cabinAirFilter
+        ? {
+            engine_air_filter: engineAirFilter,
+            cabin_air_filter: cabinAirFilter,
+          }
+        : null,
     inspection: opts.inspectionStatus ?? null,
     modifications: opts.modifications ?? null,
     flagged_vehicle_specs: opts.flaggedVehicleSpecs ?? false,
@@ -1111,6 +1511,7 @@ function measuresAcrossCorners(
     const zs = state.zones[id];
     if (!zs) continue;
     if (onlyDone && !zs.done) continue;
+    if (zs.statuses[key]) continue;
     const field = INSPECTION_ZONES_BY_ID[id].fields.find(
       (f) => f.type === "measure" && f.key === key,
     );
@@ -1145,7 +1546,16 @@ export function deriveSuggestedRecommendations(
     v === "r" ? "soon" : v === "y" ? "within_3_months" : null;
 
   // --- Measure-based (exact measurements) ---
-  const pad = measuresAcrossCorners(state, "pad", onlyDone);
+  const padInner = measuresAcrossCorners(state, "pad_inner", onlyDone);
+  const padOuter = measuresAcrossCorners(state, "pad_outer", onlyDone);
+  const gradeRank: Record<GradeLevel, number> = { none: 0, ok: 1, warn: 2, bad: 3 };
+  const pad = {
+    worst:
+      gradeRank[padInner.worst] >= gradeRank[padOuter.worst]
+        ? padInner.worst
+        : padOuter.worst,
+    min: minDefined(padInner.min, padOuter.min),
+  };
   const padUrg = gradeUrgency(pad.worst);
   if (padUrg) {
     out.push({
@@ -1191,7 +1601,7 @@ export function deriveSuggestedRecommendations(
     const battField = INSPECTION_ZONES_BY_ID.ENG.fields.find(
       (f) => f.type === "measure" && f.key === "batt",
     );
-    if (battField && battField.type === "measure") {
+    if (battField && battField.type === "measure" && !eng.statuses.batt) {
       const res = classify("batt", eng.measures.batt, battField.ref);
       const battUrg: SuggestedRecUrgency | null =
         res.lvl === "bad" ? "soon" : res.lvl === "warn" ? "next_visit" : null;
@@ -1213,7 +1623,7 @@ export function deriveSuggestedRecommendations(
       slug: string,
       label: string,
     ) => {
-      const urg = triUrgency(eng.tri[triKey]);
+      const urg = eng.statuses[triKey] ? null : triUrgency(eng.tri[triKey]);
       if (urg) {
         out.push({
           key,
@@ -1230,10 +1640,12 @@ export function deriveSuggestedRecommendations(
     triRec("power_steering", "ps", SERVICE_SLUGS.powerSteering, "Power Steering Flush");
 
     // Air + cabin filters share one service — collapse to the worst of the two.
+    const airFilterUrgency = eng.statuses.af ? null : triUrgency(eng.tri.af);
+    const cabinFilterUrgency = eng.statuses.cf ? null : triUrgency(eng.tri.cf);
     const filterUrg =
-      triUrgency(eng.tri.af) === "soon" || triUrgency(eng.tri.cf) === "soon"
+      airFilterUrgency === "soon" || cabinFilterUrgency === "soon"
         ? "soon"
-        : triUrgency(eng.tri.af) ?? triUrgency(eng.tri.cf);
+        : airFilterUrgency ?? cabinFilterUrgency;
     if (filterUrg) {
       out.push({
         key: "filter",
@@ -1264,7 +1676,9 @@ type StoredZone = {
   tri?: Record<string, TriValue> | null;
   descriptors?: Record<string, string[]> | null;
   text?: Record<string, string> | null;
-  select?: Record<string, string> | null;
+  select?: Record<string, string | number> | null;
+  statuses?: Record<string, FieldUnavailableStatus> | null;
+  methods?: Record<string, string> | null;
 };
 
 const TRI_GRADE: Record<TriValue, GradeLevel> = { g: "ok", y: "warn", r: "bad" };
@@ -1280,6 +1694,7 @@ export function zoneHasInput(zoneId: ZoneId, zs: ZoneState): boolean {
   const zone = INSPECTION_ZONES_BY_ID[zoneId];
   if (!zone) return false;
   for (const field of zone.fields) {
+    if (zs.statuses[field.key]) return true;
     if (field.type === "measure") {
       if ((zs.measures[field.key] ?? "").trim() !== "") return true;
     } else if (field.type === "tri") {
@@ -1292,7 +1707,10 @@ export function zoneHasInput(zoneId: ZoneId, zs: ZoneState): boolean {
       if ((zs.select[field.key] ?? "").trim() !== "") return true;
     }
   }
-  return zs.photoIds.length > 0;
+  return (
+    zs.photoIds.length > 0 ||
+    Object.values(zs.methods).some((value) => value.trim() !== "")
+  );
 }
 
 /** Zones with entered data that were never marked complete. */
@@ -1318,6 +1736,16 @@ export function formatZonesForPdf(storedZones: StoredZone[]): PdfZone[] {
     const rows: PdfRow[] = [];
 
     for (const field of zone.fields) {
+      const unavailable = stored.statuses?.[field.key];
+      if (unavailable) {
+        const label: Record<FieldUnavailableStatus, string> = {
+          not_inspected: "Not inspected",
+          not_visible: "Not visible",
+          not_applicable: "N/A",
+        };
+        rows.push({ label: field.label, value: label[unavailable], grade: "none" });
+        continue;
+      }
       if (field.type === "measure") {
         const raw = stored.measures?.[field.key];
         if (raw == null || String(raw).trim() === "") continue;
@@ -1346,7 +1774,11 @@ export function formatZonesForPdf(storedZones: StoredZone[]): PdfZone[] {
         if (!arr.length) continue;
         rows.push({ label: field.label, value: arr.join(", "), grade: "warn" });
       } else if (field.type === "select") {
-        const v = stored.select?.[field.key];
+        const rawValue =
+          field.key === "pad_method" || field.key === "rotor_tool"
+            ? stored.methods?.[field.key] || stored.select?.[field.key]
+            : stored.select?.[field.key];
+        const v = typeof rawValue === "string" ? rawValue : "";
         if (!v) continue;
         const opt = field.options.find((o) => o.value === v);
         rows.push({ label: field.label, value: opt?.label ?? v, grade: "none" });

@@ -6,7 +6,7 @@ import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/ph
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useEntityLabel } from "@/lib/use-entity-label";
-import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, MessageSquare, Package, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
+import { ArrowRight, Car, ChevronDown, Clock, Loader2, MessageSquare, Package, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
 import {
   Select,
   SelectItem,
@@ -379,7 +379,6 @@ export default function CreateBookingDrawer({
     "catalog_parts",
     "diagnostic",
     "notes",
-    "scheduling",
   ] as const;
   type SectionKey = (typeof SECTION_KEYS)[number];
   const [openSections, setOpenSections] = useState<Set<SectionKey>>(
@@ -1358,15 +1357,95 @@ export default function CreateBookingDrawer({
   /* ---- Render ---- */
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
-        <h2 className="text-base font-semibold text-foreground">Create booking</h2>
-        <button
-          onClick={onClose}
-          className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-        >
-          <X className="w-5 h-5" />
-        </button>
+      {/* Header — scheduling lives here so date, time, and assignment are
+          always visible and editable without scrolling. */}
+      <div className="shrink-0 border-b border-border px-5 py-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-foreground">Create booking</h2>
+          <button
+            onClick={onClose}
+            className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Date + time + end, inline */}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <DatePicker
+            className="w-40"
+            value={date}
+            onChange={(next) => next && setDate(next)}
+          />
+          <Select selectedKey={time} onSelectionChange={(key) => setTime(String(key))}>
+            <SelectTrigger className="h-9 w-32 rounded-lg border-border bg-card text-sm px-3">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopover placement="bottom start">
+              <SelectListBox shouldFocusWrap>
+                {filteredTimeOptions.map((o) => (
+                  <SelectItem key={o.value} id={o.value} textValue={o.label}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectListBox>
+            </SelectPopover>
+          </Select>
+          {computedEndLabel ? (
+            <span className="text-xs text-muted-foreground">Ends ~ {computedEndLabel}</span>
+          ) : null}
+        </div>
+
+        {/* Mechanic assignment — small, unboxed, free-flowing */}
+        {mechanics.length > 0 && (
+          <div className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
+            <span>Assigned to</span>
+            <Select
+              selectedKey={assignmentPreference === "any" ? "any" : mechanicId}
+              onSelectionChange={(key) => {
+                if (key === "any") {
+                  setAssignmentPreference("any");
+                  setMechanicId("");
+                  return;
+                }
+                setAssignmentPreference("specific_mechanic");
+                setMechanicId(String(key));
+              }}
+            >
+              <SelectTrigger className="inline-flex h-auto w-auto items-center gap-1 rounded-md border-0 bg-transparent px-1.5 py-0.5 text-sm font-medium text-foreground shadow-none ring-offset-0 hover:text-primary">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopover placement="bottom start">
+                <SelectListBox shouldFocusWrap>
+                  <SelectItem id="any" textValue={entityLabel.anyLabel}>
+                    <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
+                  </SelectItem>
+                  {mechanics.map((m) => (
+                    <SelectItem key={m._id} id={m._id} textValue={m.name}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectListBox>
+              </SelectPopover>
+            </Select>
+          </div>
+        )}
+
+        {/* Scheduling validation */}
+        {(overlapError || blockingHoursError || capacityWarning || outsideHoursWarning) && (
+          <div className="mt-2 space-y-1">
+            {overlapError && <p className="form-error-text text-xs">{overlapError}</p>}
+            {blockingHoursError && (
+              <p className="form-error-text text-xs">{blockingHoursError}</p>
+            )}
+            {capacityWarning && <p className="text-xs text-amber-700">{capacityWarning}</p>}
+            {outsideHoursWarning && (
+              <p className="form-error-text text-xs">
+                This booking extends beyond normal shop hours and will require confirmation.
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Scrollable body */}
@@ -2286,88 +2365,6 @@ export default function CreateBookingDrawer({
             rows={3}
             className={`${drawerInputClassName} resize-none leading-relaxed`}
           />
-        </CollapsibleSection>
-
-        {/* ── Scheduling ── */}
-        <CollapsibleSection
-          sectionKey="scheduling"
-          icon={Calendar}
-          label="Scheduling"
-          open={openSections.has("scheduling")}
-          onToggle={toggleSection}
-          required
-        >
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <DrawerFieldLabel>Date</DrawerFieldLabel>
-                <DatePicker value={date} onChange={(next) => next && setDate(next)} />
-              </div>
-              <div>
-                <DrawerFieldLabel>Time</DrawerFieldLabel>
-                <Select selectedKey={time} onSelectionChange={(key) => setTime(String(key))}>
-                  <SelectTrigger className={drawerSelectTriggerClassName}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectPopover placement="bottom start">
-                    <SelectListBox shouldFocusWrap>
-                      {filteredTimeOptions.map((o) => (
-                        <SelectItem key={o.value} id={o.value} textValue={o.label}>{o.label}</SelectItem>
-                      ))}
-                    </SelectListBox>
-                  </SelectPopover>
-                </Select>
-                {computedEndLabel ? (
-                  <p className="mt-1 text-xs text-gray-500">Ends ~ {computedEndLabel}</p>
-                ) : null}
-              </div>
-            </div>
-            {mechanics.length > 0 && (
-              <div>
-                <DrawerFieldLabel>Assignment</DrawerFieldLabel>
-                <Select
-                  selectedKey={assignmentPreference === "any" ? "any" : mechanicId}
-                  onSelectionChange={(key) => {
-                    if (key === "any") {
-                      setAssignmentPreference("any");
-                      setMechanicId("");
-                      return;
-                    }
-                    setAssignmentPreference("specific_mechanic");
-                    setMechanicId(String(key));
-                  }}
-                >
-                  <SelectTrigger className={drawerSelectTriggerClassName}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectPopover placement="bottom start">
-                    <SelectListBox shouldFocusWrap>
-                      <SelectItem id="any" textValue={entityLabel.anyLabel}>
-                        <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
-                      </SelectItem>
-                      {mechanics.map((m) => (
-                        <SelectItem key={m._id} id={m._id} textValue={m.name}>{m.name}</SelectItem>
-                      ))}
-                    </SelectListBox>
-                  </SelectPopover>
-                </Select>
-              </div>
-            )}
-            {overlapError && (
-              <p className="form-error-text text-xs">{overlapError}</p>
-            )}
-            {blockingHoursError && (
-              <p className="form-error-text text-xs">{blockingHoursError}</p>
-            )}
-            {capacityWarning && (
-              <p className="text-xs text-amber-700">{capacityWarning}</p>
-            )}
-            {outsideHoursWarning && (
-              <p className="form-error-text text-xs">
-                This booking extends beyond normal shop hours and will require confirmation.
-              </p>
-            )}
-          </div>
         </CollapsibleSection>
 
       </div>

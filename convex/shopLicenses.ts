@@ -15,9 +15,19 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { requireShopOwner } from "./shops";
 
-// Known license types. Only the DMV inspection station license is surfaced
-// today; kept as a list so the UI/back end can grow without a schema change.
-export const LICENSE_TYPES = ["dmv_inspection_station"] as const;
+// Known compliance-document types. The client catalog (lib/license-catalog.ts)
+// is the source of truth for labels/grouping; this list is informational only.
+// `addLicense` accepts ANY license_type string (custom "other" documents store
+// their human label directly), so this is not a validation gate.
+export const LICENSE_TYPES = [
+  "dmv_inspection_station",
+  "business_license",
+  "dealer_license",
+  "garage_liability_insurance",
+  "ase_certification",
+  "oem_certification",
+  "epa_609",
+] as const;
 export type LicenseType = (typeof LICENSE_TYPES)[number];
 
 const MAX_LICENSES_PER_SHOP = 25;

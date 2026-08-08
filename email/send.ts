@@ -31,6 +31,7 @@ export async function sendInviteEmail({
   firstName,
   role,
   inviterName,
+  logoUrl,
 }: {
   email: string;
   inviteUrl: string;
@@ -38,6 +39,9 @@ export async function sendInviteEmail({
   firstName?: string;
   role?: string;
   inviterName?: string;
+  /** Resolved from Convex storage by the caller. Falls back to the hosted
+   *  asset when unavailable so the email is never blocked. */
+  logoUrl?: string;
 }) {
   try {
     const result = await resend.emails.send({
@@ -53,8 +57,8 @@ export async function sendInviteEmail({
         role,
         inviterName,
         // Dedicated, tightly-cropped glass logo that reads well on the dark
-        // email header (served from public/ at the deployed domain).
-        logoUrl: "https://otopair.com/otopair-email-logo.png",
+        // email header — served from Convex storage, hosted asset as fallback.
+        logoUrl: logoUrl ?? "https://otopair.com/otopair-email-logo.png",
         year: new Date().getFullYear(),
       }),
     });

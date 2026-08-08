@@ -949,6 +949,9 @@ export default function SchedulePage() {
   // Wider lookahead used only when auto-opening the create-booking drawer to find the
   // next available slot across the next 14 days.
   const wantsAutoOpen = searchParams.get("action") === "newBooking";
+  // Set true by the toolbar "Create booking" button to lazily fetch the 14-day
+  // lookahead (otherwise skipped so we don't pay for it on every schedule load).
+  const [pendingCreate, setPendingCreate] = useState(false);
   const lookaheadRange = useMemo(() => {
     const start = new Date();
     const end = new Date();
@@ -957,7 +960,7 @@ export default function SchedulePage() {
   }, []);
   const lookaheadBookings = useQuery(
     api.schedule.getBookingsForRange,
-    wantsAutoOpen && !autoOpenedRef.current ? lookaheadRange : "skip"
+    (wantsAutoOpen && !autoOpenedRef.current) || pendingCreate ? lookaheadRange : "skip"
   );
 
   const blockedSlots = useQuery(api.schedule.getBlockedSlots, {
@@ -1006,6 +1009,62 @@ export default function SchedulePage() {
 
     router.replace("/schedule", { scroll: false });
   }, [wantsAutoOpen, context?.hours, context?.mechanics, lookaheadBookings, router]);
+
+  // Toolbar "Create booking": arm the lazy lookahead. The effect below opens
+  // the drawer once the 14-day bookings load (same finder the deep-link uses).
+  function openCreateBookingAtNextSlot() {
+    setPendingCreate(true);
+  }
+
+  useEffect(() => {
+    if (!pendingCreate) return;
+    if (!context?.hours || !context?.mechanics || lookaheadBookings === undefined) return;
+
+    // A mechanic viewer gets THEIR own next free slot; owners/front-desk get the
+    // earliest slot across the whole team.
+    const ownLane = context.mechanics.filter(
+      (m) => String(m._id) === String(viewerMechanicId),
+    );
+    const finderMechanics =
+      isMechanicViewer && ownLane.length > 0 ? ownLane : context.mechanics;
+
+    const slot = findNextAvailableSlot({
+      now: new Date(),
+      shopHours: context.hours,
+      mechanics: finderMechanics,
+      bookings: lookaheadBookings,
+      durationMinutes: 60,
+    });
+
+    if (slot) {
+      const [y, mo, d] = slot.date.split("-").map(Number);
+      setCurrentDate(new Date(y, mo - 1, d));
+      setCurrentView("day");
+      setCreateBookingDrawer({
+        date: slot.date,
+        time: slot.time,
+        mechanicId: slot.mechanicId,
+        durationMinutes: slot.durationMinutes,
+      });
+    } else {
+      const fallbackMechanic = finderMechanics[0]?._id ?? "";
+      setCreateBookingDrawer({
+        date: dateToString(new Date()),
+        time: "09:00",
+        mechanicId: fallbackMechanic,
+        durationMinutes: 60,
+      });
+      setToast({ msg: "No open slot found in the next 14 days", key: Date.now() });
+    }
+    setPendingCreate(false);
+  }, [
+    pendingCreate,
+    context?.hours,
+    context?.mechanics,
+    lookaheadBookings,
+    isMechanicViewer,
+    viewerMechanicId,
+  ]);
 
   // Deep-link handler: bell-popover actions navigate here with ?action=… to open
   // the right modal/drawer on the schedule page. The effect retries once
@@ -1498,6 +1557,21 @@ export default function SchedulePage() {
 
           {/* Right: filters + view switcher */}
           <div className="flex items-center gap-3">
+            {/* Create booking — jumps to the next open slot */}
+            <button
+              type="button"
+              onClick={openCreateBookingAtNextSlot}
+              disabled={context.mechanics.length === 0 || pendingCreate}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {pendingCreate ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <CalendarPlus className="w-4 h-4" />
+              )}
+              Create booking
+            </button>
+
             {/* Mechanic filter */}
             {context.mechanics.length > 0 && (
               <Select

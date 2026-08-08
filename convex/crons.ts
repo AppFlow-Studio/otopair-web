@@ -113,6 +113,16 @@ crons.interval(
   internal.bookings.autoDropUnconfirmedBookings,
 );
 
+// Expire unanswered booking REQUESTS: a shop-pending request (pending /
+// pending_shop_acceptance) auto-cancels at the earlier of a 48h response SLA
+// or 2h past the requested appointment time, after nudging the shop. Distinct
+// from auto-drop above, which no-shows already-CONFIRMED bookings.
+crons.interval(
+  "auto-cancel-unconfirmed-requests",
+  { minutes: 10 },
+  internal.bookings.autoCancelUnconfirmedRequests,
+);
+
 crons.interval(
   "process-customer-late-monitors",
   { minutes: 1 },

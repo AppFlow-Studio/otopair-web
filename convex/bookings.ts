@@ -13795,6 +13795,357 @@ export const autoDropUnconfirmedBookings = internalMutation({
 });
 
 // ============================================================================
+// UNANSWERED BOOKING-REQUEST EXPIRY
+// ----------------------------------------------------------------------------
+// A shop-assigned request that sits in `pending` / `pending_shop_acceptance`
+// without the shop accepting is a dead slot for the customer. We nudge the
+// shop as a deadline approaches, then auto-cancel and notify BOTH parties.
+// Deadline = the EARLIER of a response SLA and a grace period past the
+// requested appointment time — so far-future requests don't linger and
+// past-dated ones close promptly. All windows are director-configurable
+// (director_settings singleton, edited from the Director panel → Settings);
+// the values below are the fallback defaults. The customer side (shop-proposed
+// reschedule awaiting the customer) is handled by `revertExpiredReschedules`.
+// ============================================================================
+const UNCONFIRMED_EXPIRY_DEFAULTS = {
+  enabled: true,
+  responseWindowMs: 48 * 60 * 60 * 1000,
+  postTimeGraceMs: 2 * 60 * 60 * 1000,
+  reminder1BeforeMs: 24 * 60 * 60 * 1000,
+  reminder2BeforeMs: 8 * 60 * 60 * 1000,
+  // Past this much beyond the deadline we close the row silently (no notices) —
+  // keeps a first cron run (and any stragglers) from blasting customers about
+  // weeks-old requests.
+  silentIfPastDeadlineMs: 24 * 60 * 60 * 1000,
+};
+type UnconfirmedExpiryConfig = typeof UNCONFIRMED_EXPIRY_DEFAULTS;
+
+// Resolve the director-tuned expiry config from the director_settings
+// singleton, falling back to the defaults for any unset field.
+async function getUnconfirmedExpiryConfig(ctx: any): Promise<UnconfirmedExpiryConfig> {
+  const row = await ctx.db
+    .query("director_settings")
+    .withIndex("by_key", (q: any) => q.eq("key", "global"))
+    .first();
+  if (!row) return { ...UNCONFIRMED_EXPIRY_DEFAULTS };
+  const hMs = (h: any, d: number) =>
+    typeof h === "number" && Number.isFinite(h) && h >= 0 ? h * 60 * 60 * 1000 : d;
+  const mMs = (m: any, d: number) =>
+    typeof m === "number" && Number.isFinite(m) && m >= 0 ? m * 60 * 1000 : d;
+  return {
+    enabled:
+      typeof row.unconfirmed_expiry_enabled === "boolean"
+        ? row.unconfirmed_expiry_enabled
+        : UNCONFIRMED_EXPIRY_DEFAULTS.enabled,
+    responseWindowMs: hMs(
+      row.unconfirmed_response_window_hours,
+      UNCONFIRMED_EXPIRY_DEFAULTS.responseWindowMs,
+    ),
+    postTimeGraceMs: mMs(
+      row.unconfirmed_post_time_grace_minutes,
+      UNCONFIRMED_EXPIRY_DEFAULTS.postTimeGraceMs,
+    ),
+    reminder1BeforeMs: hMs(
+      row.unconfirmed_reminder1_before_hours,
+      UNCONFIRMED_EXPIRY_DEFAULTS.reminder1BeforeMs,
+    ),
+    reminder2BeforeMs: hMs(
+      row.unconfirmed_reminder2_before_hours,
+      UNCONFIRMED_EXPIRY_DEFAULTS.reminder2BeforeMs,
+    ),
+    silentIfPastDeadlineMs: hMs(
+      row.unconfirmed_silent_if_past_deadline_hours,
+      UNCONFIRMED_EXPIRY_DEFAULTS.silentIfPastDeadlineMs,
+    ),
+  };
+}
+
+// Effective cancel deadline for an unconfirmed request. `requestedStartMs` is
+// undefined when the row carries no scheduled date/time (fall back to the SLA).
+function unconfirmedCancelDeadline(
+  createdAt: number,
+  requestedStartMs: number | undefined,
+  cfg: UnconfirmedExpiryConfig,
+) {
+  const slaDeadline = createdAt + cfg.responseWindowMs;
+  if (requestedStartMs == null) return slaDeadline;
+  return Math.min(slaDeadline, requestedStartMs + cfg.postTimeGraceMs);
+}
+
+// A pending row we should NOT auto-expire: quote-stage (no shop) or a
+// reschedule of an existing booking (`previous_status` set) — cancelling those
+// would destroy a previously-confirmed booking. Reschedule non-response is a
+// separate concern from expiring brand-new requests.
+function isExpirableUnconfirmedRequest(booking: any): boolean {
+  if (!booking.shop_id) return false;
+  if (booking.previous_status) return false;
+  if (typeof booking.created_at !== "number") return false;
+  return true;
+}
+
+async function unconfirmedRequestDeadline(
+  ctx: any,
+  booking: any,
+  cfg: UnconfirmedExpiryConfig,
+): Promise<number> {
+  let requestedStartMs: number | undefined;
+  if (booking.scheduled_date && booking.scheduled_time) {
+    const timezone = await getShopTimezone(ctx, booking.shop_id);
+    requestedStartMs = toBookingDateTimeMs(
+      booking.scheduled_date,
+      booking.scheduled_time,
+      timezone,
+    );
+  }
+  return unconfirmedCancelDeadline(booking.created_at, requestedStartMs, cfg);
+}
+
+async function collectPendingShopRequests(ctx: any) {
+  const [pending, pendingShop] = await Promise.all([
+    ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q: any) => q.eq("status", "pending"))
+      .collect(),
+    ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q: any) => q.eq("status", "pending_shop_acceptance"))
+      .collect(),
+  ]);
+  return [...pending, ...pendingShop].filter(isExpirableUnconfirmedRequest);
+}
+
+// Shared backlog cleanup: silently cancel requests already > silent-cutoff past
+// their deadline, with NO notifications. Used by both the internal one-time
+// rollout mutation and the director "Run cleanup now" button.
+async function sweepCloseStaleUnconfirmed(
+  ctx: any,
+  cfg: UnconfirmedExpiryConfig,
+  dryRun: boolean,
+) {
+  const now = Date.now();
+  const requests = await collectPendingShopRequests(ctx);
+  const targets: any[] = [];
+  for (const booking of requests) {
+    const deadline = await unconfirmedRequestDeadline(ctx, booking, cfg);
+    if (now <= deadline + cfg.silentIfPastDeadlineMs) continue;
+    targets.push(booking);
+  }
+
+  if (dryRun) {
+    return {
+      dryRun: true,
+      wouldCancel: targets.length,
+      sample: targets.slice(0, 10).map((b) => ({
+        id: String(b._id),
+        status: b.status,
+        created_at: b.created_at,
+        scheduled_date: b.scheduled_date,
+        scheduled_time: b.scheduled_time,
+      })),
+    };
+  }
+
+  let cancelled = 0;
+  for (const booking of targets) {
+    try {
+      await applyBookingStatusTransition(ctx, {
+        booking,
+        newStatus: "cancelled",
+        reason: "auto_expired_unconfirmed_backfill",
+      });
+      cancelled += 1;
+    } catch {
+      continue;
+    }
+  }
+  return { dryRun: false, cancelled };
+}
+
+// Light gate for director-panel-triggered writes: the caller must reference a
+// real director_users row. Mirrors the actorId the panel already threads.
+async function assertDirectorActor(ctx: any, actorId: any) {
+  if (!actorId) throw new Error("Director session required.");
+  const actor = await ctx.db.get(actorId);
+  if (!actor) throw new Error("Director session required.");
+}
+
+// Cron sweep (every 10 min): remind the shop as the deadline nears, then
+// auto-cancel + notify both parties once it passes. No-ops when disabled.
+export const autoCancelUnconfirmedRequests = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cfg = await getUnconfirmedExpiryConfig(ctx);
+    if (!cfg.enabled) return { cancelled: 0, reminded: 0, disabled: true };
+
+    const now = Date.now();
+    const requests = await collectPendingShopRequests(ctx);
+
+    let cancelled = 0;
+    let reminded = 0;
+
+    for (const booking of requests) {
+      const deadline = await unconfirmedRequestDeadline(ctx, booking, cfg);
+      const dateLabel = booking.scheduled_date ?? "";
+      const timeLabel = booking.scheduled_time ? formatTime(booking.scheduled_time) : "";
+      const whenLabel = dateLabel
+        ? ` for ${dateLabel}${timeLabel ? ` at ${timeLabel}` : ""}`
+        : "";
+
+      // ---- Cancel branch ---------------------------------------------------
+      if (now >= deadline) {
+        try {
+          await applyBookingStatusTransition(ctx, {
+            booking,
+            newStatus: "cancelled",
+            reason: "auto_expired_unconfirmed",
+          });
+        } catch {
+          // Terminal-status race or validation issue — re-evaluated next tick.
+          continue;
+        }
+        cancelled += 1;
+
+        // Long-past rows (rollout backlog / stragglers) close quietly.
+        if (now > deadline + cfg.silentIfPastDeadlineMs) continue;
+
+        const dedupeBase = `booking-request-expired:${String(booking._id)}:${deadline}`;
+        await enqueueNotificationOutbox(ctx, {
+          shopId: booking.shop_id,
+          bookingId: booking._id,
+          userId: booking.user_id,
+          channel: "push",
+          category: "booking_request_expired",
+          dedupeKey: dedupeBase,
+          payload: {
+            title: "Booking request expired",
+            body: `Your request${whenLabel} expired because the shop didn't confirm it in time. Tap to rebook.`,
+            scheduledDate: booking.scheduled_date,
+            scheduledTime: booking.scheduled_time,
+            reason: "auto_expired_unconfirmed",
+          },
+        });
+        await enqueueNotificationOutbox(ctx, {
+          shopId: booking.shop_id,
+          bookingId: booking._id,
+          channel: "front_desk",
+          category: "booking_request_expired",
+          dedupeKey: `${dedupeBase}:shop`,
+          payload: {
+            title: "Request auto-cancelled",
+            body: `A booking request${whenLabel} was auto-cancelled — it wasn't confirmed within the response window.`,
+            scheduledDate: booking.scheduled_date,
+            scheduledTime: booking.scheduled_time,
+            reason: "auto_expired_unconfirmed",
+          },
+        });
+        continue;
+      }
+
+      // ---- Reminder branch -------------------------------------------------
+      // Stages anchored to the deadline. Skip a stage whose due time is at/
+      // before creation (window too short), and fire only the most-recent due
+      // stage this tick so a cron gap can't send both nudges at once (dedupe
+      // stops re-fires on later ticks). A reminder offset of 0 disables it.
+      const stages = [
+        { key: "r1", dueAt: deadline - cfg.reminder1BeforeMs, final: false, enabled: cfg.reminder1BeforeMs > 0 },
+        { key: "r2", dueAt: deadline - cfg.reminder2BeforeMs, final: true, enabled: cfg.reminder2BeforeMs > 0 },
+      ];
+      const due = stages.filter(
+        (s) => s.enabled && s.dueAt > booking.created_at && now >= s.dueAt,
+      );
+      const stage = due.length ? due[due.length - 1] : null;
+      if (!stage) continue;
+
+      const hoursLeft = Math.max(1, Math.round((deadline - now) / (60 * 60 * 1000)));
+      await enqueueNotificationOutbox(ctx, {
+        shopId: booking.shop_id,
+        bookingId: booking._id,
+        channel: "front_desk",
+        category: "booking_unconfirmed_reminder",
+        dedupeKey: `booking-unconfirmed-reminder:${String(booking._id)}:${deadline}:${stage.key}`,
+        payload: {
+          title: stage.final
+            ? "Confirm now — request expiring soon"
+            : "Unconfirmed booking request",
+          body: stage.final
+            ? `A booking request${whenLabel} auto-cancels in ~${hoursLeft}h if you don't accept or decline it.`
+            : `You have an unconfirmed booking request${whenLabel}. Please accept or decline it — it auto-cancels in ~${hoursLeft}h.`,
+          scheduledDate: booking.scheduled_date,
+          scheduledTime: booking.scheduled_time,
+          hoursLeft,
+          stage: stage.key,
+        },
+      });
+      reminded += 1;
+    }
+
+    return { cancelled, reminded };
+  },
+});
+
+// One-time rollout cleanup (internal): silently cancel the long-past backlog of
+// unconfirmed requests WITHOUT notifying anyone. Pass { dryRun: true } first to
+// preview. Recent requests are left for the notifying cron.
+export const closeStaleUnconfirmedSilently = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const cfg = await getUnconfirmedExpiryConfig(ctx);
+    return await sweepCloseStaleUnconfirmed(ctx, cfg, args.dryRun ?? false);
+  },
+});
+
+// Director panel: preview (dryRun) or run the backlog cleanup on demand.
+export const runUnconfirmedBacklogCleanup = mutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    actorName: v.optional(v.string()),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, args) => {
+    await assertDirectorActor(ctx, args.actorId);
+    const cfg = await getUnconfirmedExpiryConfig(ctx);
+    const dryRun = args.dryRun ?? false;
+    const result = await sweepCloseStaleUnconfirmed(ctx, cfg, dryRun);
+    if (!dryRun) {
+      await ctx.db.insert("audit_log", {
+        entity_type: "bookings",
+        entity_id: "unconfirmed_backlog",
+        action: "cleanup",
+        actor: args.actorName ?? "Director",
+        actor_id: args.actorId,
+        detail: `silently cancelled ${(result as any).cancelled ?? 0} stale unconfirmed request(s)`,
+        created_at: Date.now(),
+      });
+    }
+    return result;
+  },
+});
+
+// Director panel: live status for the controls — how many shop-pending requests
+// exist and how many are already past their (configured) deadline / silent cutoff.
+export const unconfirmedExpiryStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const cfg = await getUnconfirmedExpiryConfig(ctx);
+    const now = Date.now();
+    const requests = await collectPendingShopRequests(ctx);
+    let pastDeadline = 0;
+    let pastSilentCutoff = 0;
+    for (const booking of requests) {
+      const deadline = await unconfirmedRequestDeadline(ctx, booking, cfg);
+      if (now >= deadline) pastDeadline += 1;
+      if (now > deadline + cfg.silentIfPastDeadlineMs) pastSilentCutoff += 1;
+    }
+    return {
+      enabled: cfg.enabled,
+      pending: requests.length,
+      pastDeadline,
+      pastSilentCutoff,
+    };
+  },
+});
+
+// ============================================================================
 // TIRE QUOTE REQUESTS — broadcast-quote flow (Apr 23 redesign)
 // ============================================================================
 

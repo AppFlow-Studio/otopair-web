@@ -80,7 +80,8 @@ const STEP_META = [
   },
   {
     title: "Licenses & compliance",
-    description: "Upload the licenses required to offer regulated services.",
+    description:
+      "Upload the licenses and certifications that prove your shop is legit — add what you have now, or finish later in Settings.",
     icon: ShieldCheck,
   },
   {

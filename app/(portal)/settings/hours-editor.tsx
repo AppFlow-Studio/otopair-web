@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Loader2, Clock } from "lucide-react";
 import TimePicker from "@/components/ui/time-picker";
+import { useRegisterSaveable } from "@/components/settings/save-manager";
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -31,9 +32,6 @@ export default function HoursEditor() {
   const updateHours = useMutation(api.shops.updateShopHours);
 
   const [rows, setRows] = useState<HoursRow[]>(defaultHours());
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   const serverHours = useMemo(() => {
     if (!data?.hours) return null;
@@ -56,30 +54,27 @@ export default function HoursEditor() {
     if (serverHours) setRows(serverHours);
   }, [serverHours]);
 
-  async function handleSave() {
-    setError(null);
-    setMessage(null);
+  const dirty = !!serverHours && JSON.stringify(rows) !== JSON.stringify(serverHours);
+
+  const save = useCallback(async () => {
     const invalid = rows.find(
-      (r) => !r.isClosed && (!r.openTime || !r.closeTime || r.openTime >= r.closeTime)
+      (r) => !r.isClosed && (!r.openTime || !r.closeTime || r.openTime >= r.closeTime),
     );
     if (invalid) {
-      setError(`Set a valid opening range for ${invalid.dayName}.`);
-      return;
+      throw new Error(`Set a valid opening range for ${invalid.dayName}.`);
     }
-    setSaving(true);
-    try {
-      await updateHours({ hours: rows });
-      setMessage("Hours saved.");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't save your hours. Please try again.");
-    } finally {
-      setSaving(false);
-    }
-  }
+    await updateHours({ hours: rows });
+  }, [rows, updateHours]);
+
+  const reset = useCallback(() => {
+    setRows(serverHours ?? defaultHours());
+  }, [serverHours]);
+
+  useRegisterSaveable("hours", "Hours", dirty, save, reset);
 
   if (data === undefined) {
     return (
-      <div className="flex items-center gap-2 text-sm text-gray-500">
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Loader2 className="w-4 h-4 animate-spin" /> Loading hours…
       </div>
     );
@@ -88,27 +83,30 @@ export default function HoursEditor() {
   if (!data?.shop) return null;
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide flex items-center gap-2">
+    <div className="rounded-xl border border-border bg-card p-6 shadow-sm sm:p-8">
+      <div className="mb-2">
+        <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
           <Clock className="w-4 h-4" /> Operating Hours
         </h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Set open and close times for each day, or mark a day closed.
+        </p>
       </div>
 
-      <div className="space-y-3">
+      <div className="mt-4 divide-y divide-border border-t border-border">
         {rows.map((row, index) => (
           <div
             key={row.dayOfWeek}
-            className="grid gap-3 rounded-lg border border-gray-200 p-3 md:grid-cols-[140px_1fr_1fr_120px] items-end"
+            className="grid items-end gap-3 py-4 md:grid-cols-[140px_1fr_1fr_120px]"
           >
-            <div>
-              <p className="text-sm font-semibold text-gray-900">{row.dayName}</p>
-              <p className="mt-0.5 text-xs text-gray-500">
+            <div className="md:pb-2.5">
+              <p className="text-sm font-semibold text-foreground">{row.dayName}</p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
                 {row.isClosed ? "Closed" : "Open"}
               </p>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Open</label>
+            <div className={row.isClosed ? "opacity-50 transition-opacity" : "transition-opacity"}>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Open</label>
               <TimePicker
                 value={row.openTime}
                 disabled={row.isClosed}
@@ -120,8 +118,8 @@ export default function HoursEditor() {
                 }
               />
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Close</label>
+            <div className={row.isClosed ? "opacity-50 transition-opacity" : "transition-opacity"}>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">Close</label>
               <TimePicker
                 value={row.closeTime}
                 disabled={row.isClosed}
@@ -133,8 +131,7 @@ export default function HoursEditor() {
                 }
               />
             </div>
-            <label className="flex items-center justify-between gap-2 rounded-md border border-gray-200 px-3 py-2 text-sm">
-              Closed
+            <label className="flex items-center gap-2 text-sm text-foreground md:justify-end md:pb-2.5">
               <input
                 type="checkbox"
                 checked={row.isClosed}
@@ -143,26 +140,12 @@ export default function HoursEditor() {
                     prev.map((r, i) => (i === index ? { ...r, isClosed: e.target.checked } : r))
                   )
                 }
-                className="h-4 w-4 rounded text-blue-600"
+                className="h-4 w-4 rounded border-input text-primary focus:ring-ring"
               />
+              Closed
             </label>
           </div>
         ))}
-      </div>
-
-      <div className="mt-5 flex items-center justify-between gap-3">
-        <div className="text-xs">
-          {error && <span className="text-red-600">{error}</span>}
-          {message && <span className="text-green-600">{message}</span>}
-        </div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50"
-        >
-          {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-          Save Hours
-        </button>
       </div>
     </div>
   );

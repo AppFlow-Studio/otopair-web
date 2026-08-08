@@ -2123,6 +2123,10 @@ export default defineSchema({
     review_count: v.optional(v.number()),
     is_active: v.optional(v.boolean()),
     is_verified: v.optional(v.boolean()),
+    // Director-controlled marketplace promotion lever, informed by the shop's
+    // verified credentials (licenses/certifications). 0/undefined = none,
+    // 1 = boosted, 2 = featured. See shopsDirectory.setShopPromotion.
+    promotion_tier: v.optional(v.number()),
     // Onboarding lifecycle for invite-created shops: "invited" (created by admin
     // approval, awaiting owner claim) -> "active" (claimed). Legacy/self-serve
     // shops leave this undefined.
@@ -3901,6 +3905,14 @@ export default defineSchema({
   director_settings: defineTable({
     key: v.string(),
     round_labor_times_to_15min: v.boolean(),
+    // Unanswered booking-request expiry controls (convex/bookings.ts
+    // autoCancelUnconfirmedRequests). Absent → defaults in directorSettings.ts.
+    unconfirmed_expiry_enabled: v.optional(v.boolean()),
+    unconfirmed_response_window_hours: v.optional(v.number()),
+    unconfirmed_post_time_grace_minutes: v.optional(v.number()),
+    unconfirmed_reminder1_before_hours: v.optional(v.number()),
+    unconfirmed_reminder2_before_hours: v.optional(v.number()),
+    unconfirmed_silent_if_past_deadline_hours: v.optional(v.number()),
     updated_at: v.number(),
     updated_by_user_id: v.optional(v.id("director_users")),
   }).index("by_key", ["key"]),

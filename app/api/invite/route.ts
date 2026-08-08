@@ -11,6 +11,7 @@ const hasActiveShopMembershipQuery = makeFunctionReference<"query">(
   "users:hasActiveShopMembership"
 );
 const createInvitationMutation = makeFunctionReference<"mutation">("invitations:create");
+const getEmailLogoUrlQuery = makeFunctionReference<"query">("files:getEmailLogoUrl");
 
 // Look up the inviter's display name so the email can read
 // "Marcus invited you to join …" instead of an anonymous notice.
@@ -63,6 +64,16 @@ export async function POST(req: NextRequest) {
     }
 
     const inviterName = await getClerkInviterName(userId);
+
+    // Resolve the branded email logo from Convex storage. Best-effort — if it
+    // can't be resolved, sendInviteEmail falls back to the hosted asset.
+    let emailLogoUrl: string | undefined;
+    try {
+      emailLogoUrl =
+        ((await fetchQuery(getEmailLogoUrlQuery, {})) as string | null) ?? undefined;
+    } catch (e) {
+      console.error("Could not resolve email logo URL:", e);
+    }
 
     // Block invites to users who are already an active member of any shop
     const alreadyMember = await fetchQuery(hasActiveShopMembershipQuery, { email });
@@ -118,6 +129,7 @@ export async function POST(req: NextRequest) {
         firstName: inviteeFirstName,
         role,
         inviterName,
+        logoUrl: emailLogoUrl,
       });
       if (!sent.success) {
         console.error("Invite email failed to send:", sent.error);
@@ -178,6 +190,7 @@ export async function POST(req: NextRequest) {
             firstName: inviteeFirstName,
             role,
             inviterName,
+            logoUrl: emailLogoUrl,
           });
           if (!sent.success) {
             console.error("Invite email failed to send:", sent.error);

@@ -80,6 +80,7 @@ export type Profile = {
   reviewCount: number
   isActive: boolean
   isVerified: boolean
+  promotionTier: number
   onboardingComplete: boolean
   stripeAccountId: string | null
   stripeChargesEnabled: boolean

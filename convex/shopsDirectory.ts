@@ -163,6 +163,7 @@ export const shopProfile = query({
       reviewCount: shop.review_count ?? 0,
       isActive: !!shop.is_active,
       isVerified: !!shop.is_verified,
+      promotionTier: (shop as any).promotion_tier ?? 0,
       onboardingComplete: !!shop.onboarding_complete,
       stripeAccountId: shop.stripe_connect_account_id ?? null,
       stripeChargesEnabled: !!shop.stripe_charges_enabled,
@@ -392,6 +393,75 @@ export const reviewShopLicense = mutation({
     });
 
     return { ok: true, status };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Cross-shop verification queue — every shop with a pending compliance
+// document, so a director can work the review backlog in one place. Backed by
+// shop_licenses.by_review_status; joins the shop name for the row link.
+// ---------------------------------------------------------------------------
+export const pendingLicenseReviews = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    await requireDirector(ctx, token);
+
+    const pending = await ctx.db
+      .query("shop_licenses")
+      .withIndex("by_review_status", (q) => q.eq("review_status", "pending_review"))
+      .collect();
+
+    const rows = await Promise.all(
+      pending
+        .sort((a, b) => b.created_at - a.created_at)
+        .map(async (row) => {
+          const shop = await ctx.db.get(row.shop_id);
+          return {
+            _id: String(row._id),
+            shopId: String(row.shop_id),
+            shopName: shop?.name ?? "Unknown shop",
+            licenseType: row.license_type,
+            originalFilename: row.original_filename ?? null,
+            url: row.storage_id ? await ctx.storage.getUrl(row.storage_id) : null,
+            createdAt: row.created_at,
+          };
+        }),
+    );
+
+    // Per-shop pending counts, for a queue-wide summary / subtab badge.
+    const byShop = new Map<string, number>();
+    for (const r of rows) byShop.set(r.shopId, (byShop.get(r.shopId) ?? 0) + 1);
+
+    return { total: rows.length, shopCount: byShop.size, rows };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Director "push" lever, informed by verified credentials. shops.write action
+// that lands in the shop audit trail. (Shop verification itself already lives
+// in director.setShopVerified, surfaced on the Profile tab.)
+// ---------------------------------------------------------------------------
+export const setShopPromotion = mutation({
+  args: {
+    token: v.string(),
+    id: v.id("shops"),
+    // 0 none · 1 boosted · 2 featured
+    tier: v.union(v.literal(0), v.literal(1), v.literal(2)),
+  },
+  handler: async (ctx, { token, id, tier }) => {
+    const actor = await requireDirector(ctx, token, "shops.write");
+    const shop = await ctx.db.get(id);
+    if (!shop) throw new Error("Shop not found.");
+
+    await ctx.db.patch(id, { promotion_tier: tier } as any);
+    const label = tier === 2 ? "featured" : tier === 1 ? "boosted" : "none";
+    await logAudit(ctx, actor, {
+      entity_type: "shop",
+      entity_id: String(id),
+      action: "shop.promotion",
+      detail: `Promotion tier set to ${label} (${tier}).`,
+    });
+    return { ok: true, promotionTier: tier };
   },
 });
 

@@ -95,14 +95,14 @@ export function NotificationPopover({
     router.push(`/bookings/quote-requests?type=${type}`);
   }
 
-  function goToBookings() {
+  function goToAllNotifications() {
     onClose();
-    router.push("/bookings");
+    router.push("/notifications");
   }
 
   function goToSettings() {
     onClose();
-    router.push("/settings/notifications");
+    router.push("/notifications?tab=preferences");
   }
 
   const summary: string[] = [];
@@ -259,10 +259,10 @@ export function NotificationPopover({
           )}
           <button
             type="button"
-            onClick={goToBookings}
+            onClick={goToAllNotifications}
             className="text-xs font-medium text-gray-700 hover:text-gray-900"
           >
-            View all bookings
+            See all notifications
           </button>
         </div>
         <button

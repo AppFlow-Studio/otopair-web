@@ -27,9 +27,6 @@ import { extractPriceFirecrawl } from "./firecrawl";
 import { priceAllSources } from "./priceReextract";
 import { discoverPriceUrls } from "./priceDiscovery";
 import { isPoisonPriceType, isNonPooledPriceType } from "../lib/priceTypes";
-import { computeQuotability } from "./quotability";
-import { PART_FIELD_MAP } from "./v3pipeline";
-import { computeEnrichmentStatus } from "./completionGate";
 
 const DEFAULT_AGE_DAYS = 30;
 
@@ -458,42 +455,25 @@ export const refreshStalePrices = internalAction({
         });
       }
 
+      // Full reconcile + heal-only completion-gate re-run, shared with the
+      // healAfterRun tail and devOnly/gateResweep (completionReevaluate.ts).
+      // It recomputes fill via calculateV3FillRate and quotability from live
+      // fitments — the stored config.fill_rate is a finalize-time snapshot,
+      // and gating on it left every heal-lifted config stuck partial (Aug-8
+      // fresh-VIN round 2: all five, e.g. Palisade run fill 64 → config 91).
       try {
-        const latestRun = await ctx.runQuery(
-          internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+        const gate: any = await ctx.runAction(
+          internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
           { vehicleConfigId: args.vehicleConfigId },
         );
-        const applicableSlugs: string[] = ((latestRun as any)?.quotability?.services ?? []).map(
-          (s: any) => s.slug,
+        console.log(
+          `[price-refresh] reconciled run health: ${gate?.status}` +
+            (gate?.status === "evaluated"
+              ? ` — quotability ${gate.quotability_pct}, fill ${gate.fill} (${gate.fill_source}), ` +
+                `${stillUnpriced.length} part(s) still unpriced` +
+                (gate.promoted ? " — config promoted partial → complete" : "")
+              : ""),
         );
-        if (applicableSlugs.length > 0) {
-          const qFitments = await ctx.runQuery(
-            internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
-            { vehicleConfigId: args.vehicleConfigId },
-          );
-          // Same N/A-role exclusion as the finalize compute — recovered from
-          // the run's field_gaps ledger (not_applicable entries) since the
-          // flat field map is long gone by heal time.
-          const naRoleKeys = new Set<string>(
-            (((latestRun as any)?.field_gaps ?? []) as Array<{ field: string; reason: string }>)
-              .filter((g) => g.reason === "not_applicable" && PART_FIELD_MAP[g.field])
-              .map((g) => PART_FIELD_MAP[g.field].subcategory),
-          );
-          const quotability = computeQuotability(qFitments, applicableSlugs, naRoleKeys);
-          // Keys a gap suffix can carry: subcategory ?? oem ?? part_id.
-          const stillUnpricedKeys = stillUnpriced.flatMap((p) =>
-            [p.subcategory, p.oem_part_number, p.part_id].filter((x): x is string => !!x),
-          );
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchRunPriceHealth, {
-            vehicle_config_id: args.vehicleConfigId,
-            quotability,
-            still_unpriced_keys: stillUnpricedKeys,
-          });
-          console.log(
-            `[price-refresh] reconciled run health: quotability ${quotability.pct}, ` +
-              `${stillUnpriced.length} part(s) still unpriced`,
-          );
-        }
       } catch (e) {
         console.warn("[price-refresh] run-health reconciliation failed (non-fatal):", e);
       }

@@ -24,7 +24,7 @@ import { axlePairGaps, computeQuotability, missingCoreRoles } from "./quotabilit
 import { resourceMissingRoles, soleFlaggedWinnerRoles } from "./utils/roleResource";
 import { extractReplacementCandidates, normalizeCandidate } from "./utils/refuteHarvest";
 import { verifyPartFitments } from "./utils/partFitmentVerifier";
-import { PART_FIELD_MAP } from "./v3pipeline";
+import { PART_FIELD_MAP, calculateV3FillRate } from "./v3pipeline";
 
 /** field_gaps reason per outcome — shared with the pipeline hook's mapping. */
 function gapReasonFor(outcome: string): string {
@@ -234,6 +234,19 @@ export const repairMissingRoles = internalAction({
       ...axleGapsAfter.map((g) => `axle_pair_gap:${g.serviceSlug}:${g.missingRole}`),
     ];
 
+    // Live fill for the reconcile's heal-only gate re-run — the parts this
+    // repair just wrote made the stored (finalize-time) fill_rate stale.
+    let liveFillRate: number | undefined;
+    try {
+      liveFillRate = (
+        await calculateV3FillRate(
+          ctx, args.vehicleConfigId, configRow?.engine_id, configRow?.transmission_id,
+        )
+      ).rate;
+    } catch (e) {
+      console.warn("[role-resource] live fill recompute failed (non-fatal):", e);
+    }
+
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchRunRoleHealth, {
       vehicle_config_id: args.vehicleConfigId,
       quotability,
@@ -241,6 +254,7 @@ export const repairMissingRoles = internalAction({
       role_errors: roleErrors,
       missing_core_roles: missingAfter.map((m) => `${m.serviceSlug}:${m.roleKey}`),
       axle_pair_gaps: axleGapsAfter.map((g) => `${g.serviceSlug}:${g.missingRole}`),
+      live_fill_rate: liveFillRate,
     });
 
     const summary = {
@@ -524,6 +538,21 @@ export const healAfterRun = internalAction({
     } catch (e) {
       console.error("[heal-after-run] price backfill scheduling failed:", e);
     }
+    // Completion-gate re-evaluation on the state the synchronous rungs just
+    // built (live fill + live quotability — the finalize gate judged a
+    // snapshot these rungs have since outgrown). Promote-only; the scheduled
+    // price backfill's epilogue re-runs the same evaluation again after its
+    // prices land, so this only misses when that leg is env-disabled — which
+    // is exactly why it also runs here.
+    let gate: any = null;
+    try {
+      gate = await ctx.runAction(
+        internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.error("[heal-after-run] completion-gate re-evaluation failed (non-fatal):", e);
+    }
     const summary = {
       harvest: harvest?.status ?? "error",
       harvestWritten: harvest?.written ?? [],
@@ -539,6 +568,9 @@ export const healAfterRun = internalAction({
       outcomes: repair?.outcomes ?? [],
       missingAfter: repair?.missingAfter ?? [],
       quotabilityPct: repair?.quotabilityPct,
+      gateReevaluate: gate?.status ?? "error",
+      gateDecision: gate?.decision ?? null,
+      gatePromoted: gate?.promoted ?? false,
     };
     console.log("[heal-after-run]", JSON.stringify(summary));
     return summary;

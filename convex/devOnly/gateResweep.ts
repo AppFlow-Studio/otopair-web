@@ -60,6 +60,38 @@ export const resweepByVins = internalAction({
   },
 });
 
+/** Config-id variant for configs with no VIN attached (listPartialConfigs
+ *  hands out ids). Same engine, same promote-only contract. */
+export const resweepByConfigIds = internalAction({
+  args: {
+    configIds: v.array(v.id("vehicle_configs")),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<any> => {
+    const results: any[] = [];
+    for (const configId of args.configIds) {
+      try {
+        const r: any = await ctx.runAction(
+          internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
+          { vehicleConfigId: configId, dryRun: args.dryRun },
+        );
+        results.push({ configId: String(configId), ...r });
+      } catch (e: any) {
+        results.push({ configId: String(configId), status: "error", message: String(e?.message ?? e) });
+      }
+    }
+    const promoted = results.filter((r) => r.promoted).length;
+    const wouldPromote = results.filter(
+      (r) => r.status === "evaluated" && r.enrichment_status === "partial" && r.decision === "complete",
+    ).length;
+    console.log(
+      `[gate-resweep] ${args.configIds.length} config(s): ${promoted} promoted, ` +
+        `${wouldPromote} pass the gate${args.dryRun ? " [dry-run — no writes]" : ""}`,
+    );
+    return { promoted, wouldPromote, results };
+  },
+});
+
 /** Read-only census of every config currently sitting on "partial" — the
  *  candidate pool for the sweep above. Stored fill only (a live recompute per
  *  row belongs in resweepByVins/dryRun, not a table scan). */

@@ -64,11 +64,13 @@ import type * as devOnly_backfillBrakeSystem from "../devOnly/backfillBrakeSyste
 import type * as devOnly_canaryRun from "../devOnly/canaryRun.js";
 import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
 import type * as devOnly_dedupeConfig from "../devOnly/dedupeConfig.js";
+import type * as devOnly_deployProbe from "../devOnly/deployProbe.js";
 import type * as devOnly_endpointBackfill from "../devOnly/endpointBackfill.js";
 import type * as devOnly_endpointPartPriceBackfill from "../devOnly/endpointPartPriceBackfill.js";
 import type * as devOnly_endpointResearch from "../devOnly/endpointResearch.js";
 import type * as devOnly_estimatorMinutesSpread from "../devOnly/estimatorMinutesSpread.js";
 import type * as devOnly_fallbackVsOlp from "../devOnly/fallbackVsOlp.js";
+import type * as devOnly_gateResweep from "../devOnly/gateResweep.js";
 import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
 import type * as devOnly_laborWebSpread from "../devOnly/laborWebSpread.js";
 import type * as devOnly_olpProbe from "../devOnly/olpProbe.js";
@@ -391,6 +393,7 @@ import type * as vehicleEnrichment_capacityResolver from "../vehicleEnrichment/c
 import type * as vehicleEnrichment_categoryHarvest from "../vehicleEnrichment/categoryHarvest.js";
 import type * as vehicleEnrichment_claimGathering from "../vehicleEnrichment/claimGathering.js";
 import type * as vehicleEnrichment_completionGate from "../vehicleEnrichment/completionGate.js";
+import type * as vehicleEnrichment_completionReevaluate from "../vehicleEnrichment/completionReevaluate.js";
 import type * as vehicleEnrichment_contentSanitization from "../vehicleEnrichment/contentSanitization.js";
 import type * as vehicleEnrichment_cylindersRepair from "../vehicleEnrichment/cylindersRepair.js";
 import type * as vehicleEnrichment_determinismGate from "../vehicleEnrichment/determinismGate.js";
@@ -577,11 +580,13 @@ declare const fullApi: ApiFromModules<{
   "devOnly/canaryRun": typeof devOnly_canaryRun;
   "devOnly/dataFixes": typeof devOnly_dataFixes;
   "devOnly/dedupeConfig": typeof devOnly_dedupeConfig;
+  "devOnly/deployProbe": typeof devOnly_deployProbe;
   "devOnly/endpointBackfill": typeof devOnly_endpointBackfill;
   "devOnly/endpointPartPriceBackfill": typeof devOnly_endpointPartPriceBackfill;
   "devOnly/endpointResearch": typeof devOnly_endpointResearch;
   "devOnly/estimatorMinutesSpread": typeof devOnly_estimatorMinutesSpread;
   "devOnly/fallbackVsOlp": typeof devOnly_fallbackVsOlp;
+  "devOnly/gateResweep": typeof devOnly_gateResweep;
   "devOnly/laborValidation": typeof devOnly_laborValidation;
   "devOnly/laborWebSpread": typeof devOnly_laborWebSpread;
   "devOnly/olpProbe": typeof devOnly_olpProbe;
@@ -904,6 +909,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/categoryHarvest": typeof vehicleEnrichment_categoryHarvest;
   "vehicleEnrichment/claimGathering": typeof vehicleEnrichment_claimGathering;
   "vehicleEnrichment/completionGate": typeof vehicleEnrichment_completionGate;
+  "vehicleEnrichment/completionReevaluate": typeof vehicleEnrichment_completionReevaluate;
   "vehicleEnrichment/contentSanitization": typeof vehicleEnrichment_contentSanitization;
   "vehicleEnrichment/cylindersRepair": typeof vehicleEnrichment_cylindersRepair;
   "vehicleEnrichment/determinismGate": typeof vehicleEnrichment_determinismGate;

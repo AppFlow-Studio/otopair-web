@@ -966,6 +966,21 @@ export const MANUAL_INTERVAL_TO_SERVICE: Record<string, string> = {
   diff_fluid: "differential_service",
   transfer_case_fluid: "transfer_case_service",
   ps_fluid: "power_steering_flush",
+  // ── Wear-adjacent keys (Aug 9 2026) ────────────────────────────────────
+  // battery_replacement / brake_pad_replacement / rotor_replacement /
+  // tire_replacement-by-tread are DELIBERATELY absent: factory schedules
+  // publish "inspect every X" and "replace at wear limit" for those, never a
+  // replacement cadence — and an inspection cadence written as a replacement
+  // interval is a confidently-wrong quote input (pinned by the
+  // "never emits brake_pads" test). The three below are the wear-adjacent
+  // facts manuals DO schedule, mapped to the services they actually describe:
+  // GM's grid schedules wiper replacement outright ("or every three years"),
+  // battery/terminal CHECKS are the battery_test cadence (not replacement),
+  // and several makes print a hard tire AGE ceiling ("replace tires over N
+  // years regardless of tread") — an age-based replacement bound, months-only.
+  wiper_blades: "wiper_blade_replacement",
+  battery_inspection: "battery_test",
+  tire_max_age: "tire_replacement",
 };
 
 /** Deterministic precedence for the shared-service collision. */
@@ -983,6 +998,9 @@ export const MANUAL_INTERVAL_ORDER: readonly string[] = [
   "diff_fluid",
   "transfer_case_fluid",
   "ps_fluid",
+  "wiper_blades",
+  "battery_inspection",
+  "tire_max_age",
 ];
 
 /** Core services whose missing `interval_months` qualifies a config for backfill. */
@@ -1084,6 +1102,7 @@ export function buildManualExtractionPrompt(vehicle: {
     "4. If the schedule is expressed as a repeating table (e.g. columns at 5,000 / 10,000 / 15,000 miles), report the RECURRENCE (the smallest repeating step for that item), not the first column.",
     "5. If the vehicle uses a condition-based reminder system (Honda Maintenance Minder, GM Oil Life) with no fixed mileage, set the mileage to null and say so in `notes` — do not substitute a typical value.",
     "6. Omit any service the document does not schedule. An empty `services` array is a correct answer.",
+    "7. Wear-based items — brake pads, rotors, tires-by-tread, battery REPLACEMENT — have no factory replacement interval, which is why they have no service_key. NEVER convert an 'inspect …' schedule row into a replacement interval for anything. The only wear-adjacent keys: `battery_inspection` is the battery/terminal CHECK cadence; `wiper_blades` only when the schedule explicitly says REPLACE wiper blades; `tire_max_age` only when the document states a maximum tire age regardless of tread (report it as months; e.g. 'replace tires over six years old' → interval_months 72).",
     "",
     `Allowed \`service_key\` values: ${MANUAL_INTERVAL_ORDER.join(", ")}.`,
     "",

@@ -180,6 +180,7 @@ export function buildReductoInstructions(vehicle: {
     "interval_miles/interval_months are the NORMAL schedule; severe_* is the severe-conditions schedule if one is published.",
     "If the schedule is a repeating table (5,000 / 10,000 / 15,000 miles), report the RECURRENCE — the smallest repeating step for that item — not the first column.",
     "If the vehicle uses a condition-based reminder system (Honda Maintenance Minder, GM Oil Life) with no fixed mileage, omit the mileage and say so in notes.",
+    "Wear-based items (brake pads, rotors, tires-by-tread, battery replacement) have no factory replacement interval and no service_key — NEVER convert an 'inspect …' row into a replacement interval. battery_inspection is the battery/terminal CHECK cadence; wiper_blades only when the schedule explicitly says REPLACE them; tire_max_age only when the document states a maximum tire age regardless of tread, reported as months.",
     "Every reported interval needs a verbatim quoted_text from the document.",
   ].join(" ");
 }

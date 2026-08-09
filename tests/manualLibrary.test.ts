@@ -765,8 +765,20 @@ describe("parseManualIntervals", () => {
   const rows = parseManualIntervals(payload);
 
   it("drops unknown service keys instead of inventing a service", () => {
-    // The fixture contains "wiper_blades", which has no interval mapping.
-    expect(rows.some((r) => r.service_key === "wiper_blades")).toBe(false);
+    expect(
+      parseManualIntervals({
+        services: [{ service_key: "fuel_filter", interval_miles: 30000 }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("parses the fixture's wiper_blades row now that wipers are a real key (Aug 9 2026)", () => {
+    // This row was the canonical "unknown key gets dropped" example before
+    // wiper replacement became extractable — GM's schedule prints it as a
+    // real scheduled row ("Replace windshield wiper blades … or every three
+    // years").
+    const wiper = rows.find((r) => r.service_key === "wiper_blades");
+    expect(wiper?.service_slug).toBe("wiper_blade_replacement");
   });
 
   it("drops entries with neither miles nor months", () => {
@@ -815,6 +827,37 @@ describe("parseManualIntervals", () => {
       }),
     ).toEqual([]);
   });
+
+  it("wear-adjacent keys map to the services they actually describe (Aug 9 2026)", () => {
+    // A battery CHECK cadence is battery_test — writing it to
+    // battery_replacement would be the exact inspect→replace corruption the
+    // brake_pads exclusion pins.
+    expect(MANUAL_INTERVAL_TO_SERVICE.battery_inspection).toBe("battery_test");
+    expect(MANUAL_INTERVAL_TO_SERVICE.battery_inspection).not.toBe("battery_replacement");
+    expect(MANUAL_INTERVAL_TO_SERVICE.wiper_blades).toBe("wiper_blade_replacement");
+    expect(MANUAL_INTERVAL_TO_SERVICE.tire_max_age).toBe("tire_replacement");
+    // rotor/pad/tread replacement stay unmapped — wear-to-spec, not scheduled.
+    expect(MANUAL_INTERVAL_TO_SERVICE.rotor_replacement).toBeUndefined();
+    expect(MANUAL_INTERVAL_TO_SERVICE.tire_replacement).toBeUndefined();
+    expect(MANUAL_INTERVAL_TO_SERVICE.battery_replacement).toBeUndefined();
+  });
+
+  it("a months-only tire_max_age row survives parsing (age ceilings have no mileage)", () => {
+    const rows = parseManualIntervals({
+      services: [
+        {
+          service_key: "tire_max_age",
+          interval_miles: null,
+          interval_months: 72,
+          quoted_text: "Replace tires over six years old regardless of tread wear.",
+        },
+      ],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].service_slug).toBe("tire_replacement");
+    expect(rows[0].interval_months).toBe(72);
+    expect(rows[0].interval_miles).toBeNull();
+  });
 });
 
 describe("dedupeIntervalsByService", () => {
@@ -841,6 +884,7 @@ describe("dedupeIntervalsByService", () => {
       "filter_replacement",
       "spark_plugs",
       "brake_fluid_flush",
+      "wiper_blade_replacement",
     ]);
   });
 

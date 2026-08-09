@@ -25,6 +25,9 @@ const DEFAULTS = {
   unconfirmed_reminder1_before_hours: 24,
   unconfirmed_reminder2_before_hours: 8,
   unconfirmed_silent_if_past_deadline_hours: 24,
+  // StubHub-style checkout slot holds (see convex/slotHolds.ts).
+  slot_hold_enabled: true,
+  slot_hold_ttl_minutes: 15,
 };
 
 export const getGlobal = query({
@@ -54,6 +57,10 @@ export const getGlobal = query({
       unconfirmed_silent_if_past_deadline_hours:
         row?.unconfirmed_silent_if_past_deadline_hours ??
         DEFAULTS.unconfirmed_silent_if_past_deadline_hours,
+      slot_hold_enabled:
+        row?.slot_hold_enabled ?? DEFAULTS.slot_hold_enabled,
+      slot_hold_ttl_minutes:
+        row?.slot_hold_ttl_minutes ?? DEFAULTS.slot_hold_ttl_minutes,
       updated_at: row?.updated_at ?? null,
     };
   },
@@ -157,6 +164,55 @@ export const setBookingExpiryConfig = mutation({
       actor: args.actorName ?? "Director",
       actor_id: args.actorId,
       detail: `unconfirmed-request expiry updated: ${JSON.stringify(patch)}`,
+      created_at: now,
+    });
+    return { ok: true };
+  },
+});
+
+// Update the StubHub-style slot-hold controls (see convex/slotHolds.ts). Only
+// provided fields change; ttl is clamped to a sane 1–60 minute range.
+export const setSlotHoldConfig = mutation({
+  args: {
+    enabled: v.optional(v.boolean()),
+    ttlMinutes: v.optional(v.number()),
+    actorName: v.optional(v.string()),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, args) => {
+    const patch: Record<string, number | boolean> = {};
+    if (typeof args.enabled === "boolean") patch.slot_hold_enabled = args.enabled;
+    const ttl = clampNumber(args.ttlMinutes, 1, 60);
+    if (ttl !== undefined) patch.slot_hold_ttl_minutes = ttl;
+
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("director_settings")
+      .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        ...patch,
+        updated_at: now,
+        updated_by_user_id: args.actorId,
+      });
+    } else {
+      await ctx.db.insert("director_settings", {
+        key: SETTINGS_KEY,
+        round_labor_times_to_15min: DEFAULTS.round_labor_times_to_15min,
+        ...patch,
+        updated_at: now,
+        updated_by_user_id: args.actorId,
+      });
+    }
+
+    await ctx.db.insert("audit_log", {
+      entity_type: "director_settings",
+      entity_id: SETTINGS_KEY,
+      action: "field_edit",
+      actor: args.actorName ?? "Director",
+      actor_id: args.actorId,
+      detail: `slot-hold config updated: ${JSON.stringify(patch)}`,
       created_at: now,
     });
     return { ok: true };

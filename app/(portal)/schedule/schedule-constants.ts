@@ -30,6 +30,10 @@ export interface CalendarEvent {
   capturedAmount?: number | null;
   blockTitle?: string | null;
   note?: string | null;
+  /** Synthetic block for another customer's in-flight checkout hold
+   *  (convex/slot_holds). Rendered as a non-interactive "On hold" block so
+   *  staff can see the slot is taken while someone finishes booking it. */
+  isHold?: boolean;
   /** Free-text note the customer left for the mechanic on the Review &
    *  Pay screen. Surfaced on booking cards / drawers so the mechanic can
    *  read it before starting the job. */

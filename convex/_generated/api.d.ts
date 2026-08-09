@@ -74,6 +74,7 @@ import type * as devOnly_gateResweep from "../devOnly/gateResweep.js";
 import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
 import type * as devOnly_laborWebSpread from "../devOnly/laborWebSpread.js";
 import type * as devOnly_olpProbe from "../devOnly/olpProbe.js";
+import type * as devOnly_partResurrectSweep from "../devOnly/partResurrectSweep.js";
 import type * as devOnly_partsCoverage from "../devOnly/partsCoverage.js";
 import type * as devOnly_purgeEstimatorObs from "../devOnly/purgeEstimatorObs.js";
 import type * as devOnly_reassignShopLogins from "../devOnly/reassignShopLogins.js";
@@ -354,6 +355,7 @@ import type * as shopsPipeline from "../shopsPipeline.js";
 import type * as shopsReviews from "../shopsReviews.js";
 import type * as shopsStripeHealth from "../shopsStripeHealth.js";
 import type * as shops_hours from "../shops_hours.js";
+import type * as slotHolds from "../slotHolds.js";
 import type * as smartcar from "../smartcar.js";
 import type * as sms_dispatcher from "../sms_dispatcher.js";
 import type * as snapshotRevalidation from "../snapshotRevalidation.js";
@@ -450,6 +452,7 @@ import type * as vehicleEnrichment_prompts_batch2Prompt from "../vehicleEnrichme
 import type * as vehicleEnrichment_prompts_gapFillPrompt from "../vehicleEnrichment/prompts/gapFillPrompt.js";
 import type * as vehicleEnrichment_queries from "../vehicleEnrichment/queries.js";
 import type * as vehicleEnrichment_quotability from "../vehicleEnrichment/quotability.js";
+import type * as vehicleEnrichment_rejectionResurrect from "../vehicleEnrichment/rejectionResurrect.js";
 import type * as vehicleEnrichment_resourceRoles from "../vehicleEnrichment/resourceRoles.js";
 import type * as vehicleEnrichment_reverseFitment from "../vehicleEnrichment/reverseFitment.js";
 import type * as vehicleEnrichment_roleIdentity from "../vehicleEnrichment/roleIdentity.js";
@@ -590,6 +593,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/laborValidation": typeof devOnly_laborValidation;
   "devOnly/laborWebSpread": typeof devOnly_laborWebSpread;
   "devOnly/olpProbe": typeof devOnly_olpProbe;
+  "devOnly/partResurrectSweep": typeof devOnly_partResurrectSweep;
   "devOnly/partsCoverage": typeof devOnly_partsCoverage;
   "devOnly/purgeEstimatorObs": typeof devOnly_purgeEstimatorObs;
   "devOnly/reassignShopLogins": typeof devOnly_reassignShopLogins;
@@ -870,6 +874,7 @@ declare const fullApi: ApiFromModules<{
   shopsReviews: typeof shopsReviews;
   shopsStripeHealth: typeof shopsStripeHealth;
   shops_hours: typeof shops_hours;
+  slotHolds: typeof slotHolds;
   smartcar: typeof smartcar;
   sms_dispatcher: typeof sms_dispatcher;
   snapshotRevalidation: typeof snapshotRevalidation;
@@ -966,6 +971,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/prompts/gapFillPrompt": typeof vehicleEnrichment_prompts_gapFillPrompt;
   "vehicleEnrichment/queries": typeof vehicleEnrichment_queries;
   "vehicleEnrichment/quotability": typeof vehicleEnrichment_quotability;
+  "vehicleEnrichment/rejectionResurrect": typeof vehicleEnrichment_rejectionResurrect;
   "vehicleEnrichment/resourceRoles": typeof vehicleEnrichment_resourceRoles;
   "vehicleEnrichment/reverseFitment": typeof vehicleEnrichment_reverseFitment;
   "vehicleEnrichment/roleIdentity": typeof vehicleEnrichment_roleIdentity;

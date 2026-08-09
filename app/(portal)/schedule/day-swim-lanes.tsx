@@ -992,18 +992,25 @@ export default function DaySwimLanes({
                   return (
                     <div
                       key={bl.id}
-                      className={`absolute left-0 right-0 z-[5] blocked-slot-pattern group overflow-hidden ${
-                        bl.isDraft
-                          ? "pointer-events-none opacity-70 ring-2 ring-dashed ring-red-400 outline outline-2 outline-dashed outline-red-400 -outline-offset-2 animate-pulse"
-                          : "cursor-pointer"
+                      className={`absolute left-0 right-0 z-[5] group overflow-hidden ${
+                        bl.isHold
+                          ? "pointer-events-none bg-amber-100/80 ring-1 ring-inset ring-amber-300"
+                          : bl.isDraft
+                            ? "blocked-slot-pattern pointer-events-none opacity-70 ring-2 ring-dashed ring-red-400 outline outline-2 outline-dashed outline-red-400 -outline-offset-2 animate-pulse"
+                            : "blocked-slot-pattern cursor-pointer"
                       }`}
                       style={{
                         top: Math.max(0, blTop),
                         height: Math.max(ROW_HEIGHT * 0.5, blHeight),
                       }}
-                      title={bl.note ?? undefined}
+                      title={
+                        bl.isHold
+                          ? "Held by a customer finishing checkout"
+                          : (bl.note ?? undefined)
+                      }
                       onClick={() => {
-                        if (bl.isDraft) return;
+                        // Holds and draft previews aren't editable blocks.
+                        if (bl.isDraft || bl.isHold) return;
                         if (!bl.slotId || !onSelectBlocked) return;
                         onSelectBlocked({
                           slotId: bl.slotId,
@@ -1016,7 +1023,7 @@ export default function DaySwimLanes({
                         });
                       }}
                       onContextMenu={(e) => {
-                        if (bl.isDraft) return;
+                        if (bl.isDraft || bl.isHold) return;
                         if (!bl.slotId || !onContextMenuBlocked) return;
                         e.preventDefault();
                         onContextMenuBlocked({ slotId: bl.slotId, clientX: e.clientX, clientY: e.clientY });
@@ -1029,7 +1036,7 @@ export default function DaySwimLanes({
                           </span>
                         )}
                         <span
-                          className="overflow-hidden text-center text-[11px] font-medium leading-tight text-red-400 whitespace-normal break-words"
+                          className={`overflow-hidden text-center text-[11px] font-medium leading-tight whitespace-normal break-words ${bl.isHold ? "text-amber-700" : "text-red-400"}`}
                           style={{
                             display: "-webkit-box",
                             WebkitBoxOrient: "vertical",

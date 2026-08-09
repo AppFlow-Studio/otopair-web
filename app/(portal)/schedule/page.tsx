@@ -968,6 +968,35 @@ export default function SchedulePage() {
     dateTo: dateRange.to,
   });
 
+  // Stable per-checkout session id for the create-booking drawer, owned here so
+  // the schedule grid can EXCLUDE the current user's own hold (they already see
+  // it as the DRAFT ghost) while every OTHER staff viewer sees it as "On hold".
+  // Minted lazily on open, cleared on close (ref-during-render memo pattern).
+  const bookingHoldSessionRef = useRef<string>("");
+  if (createBookingDrawer) {
+    if (!bookingHoldSessionRef.current) {
+      bookingHoldSessionRef.current =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `hold-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+  } else if (bookingHoldSessionRef.current) {
+    bookingHoldSessionRef.current = "";
+  }
+  const bookingHoldSession = createBookingDrawer
+    ? bookingHoldSessionRef.current
+    : null;
+
+  // Other customers'/staff in-flight checkout holds (StubHub-style). Reactive:
+  // appear and disappear live as holds are acquired/expire, so staff never book
+  // onto a slot someone else is mid-checkout on. Rendered as non-interactive
+  // "On hold" blocks in the day lanes. `sessionId` hides the viewer's OWN hold.
+  const activeSlotHolds = useQuery(api.schedule.getActiveSlotHolds, {
+    dateFrom: dateRange.from,
+    dateTo: dateRange.to,
+    sessionId: bookingHoldSession ?? undefined,
+  });
+
   // Auto-open create-booking drawer with next available slot when ?action=newBooking is set.
   useEffect(() => {
     if (autoOpenedRef.current) return;
@@ -1249,6 +1278,44 @@ export default function SchedulePage() {
         };
       });
 
+    // Other customers'/staff in-flight checkout holds → non-interactive "On
+    // hold" blocks. Reactive, so they vanish the instant the hold expires or
+    // converts to a booking. The current user never sees the hold for the slot
+    // THEIR OWN create-booking drawer is on — they see the "DRAFT — NEW BOOKING"
+    // ghost there instead. `getActiveSlotHolds` already excludes this session's
+    // hold; this slot-match is a belt-and-suspenders guard for the moment right
+    // after a hot-reload when the drawer's hold still carries a stale session.
+    const holdEvents: CalendarEvent[] = (activeSlotHolds ?? [])
+      .filter((h) => mechanicFilter === "all" || h.mechanicId === mechanicFilter)
+      .filter((h) => {
+        if (!createBookingDrawer) return true;
+        const d = createBookingDrawer;
+        const sameSlot =
+          h.date === d.date &&
+          h.startTime === d.time &&
+          String(h.mechanicId ?? "") === String(d.mechanicId ?? "");
+        return !sameSlot;
+      })
+      .map((h) => {
+        const [sh, sm] = h.startTime.split(":").map(Number);
+        const [eh, em] = h.endTime.split(":").map(Number);
+        const start = new Date(h.date + "T00:00:00");
+        start.setHours(sh, sm, 0, 0);
+        const end = new Date(h.date + "T00:00:00");
+        end.setHours(eh, em, 0, 0);
+        return {
+          id: `hold-${h._id}`,
+          title: "On hold",
+          start,
+          end,
+          resourceId: h.mechanicId ?? undefined,
+          type: "blocked" as const,
+          status: "blocked",
+          blockTitle: "On hold",
+          isHold: true,
+        };
+      });
+
     // Draft preview while the Add blocked time drawer is open
     const draftEvents: CalendarEvent[] = [];
     const draftValid =
@@ -1314,10 +1381,12 @@ export default function SchedulePage() {
       }
     }
 
-    return [...bookingEvents, ...blockedEvents, ...draftEvents];
+    return [...bookingEvents, ...blockedEvents, ...holdEvents, ...draftEvents];
   }, [
     bookings,
     blockedSlots,
+    activeSlotHolds,
+    createBookingDrawer,
     mechanicFilter,
     blockTimeDrawer,
     btDate,
@@ -2475,6 +2544,7 @@ export default function SchedulePage() {
               mechanics={mechanics}
               bookings={bookings ?? []}
               shopHours={context?.hours ?? []}
+              holdSessionId={bookingHoldSession ?? ""}
               onClose={() => setCreateBookingDrawer(null)}
               onToast={(msg) => setToast({ msg, key: Date.now() })}
             />

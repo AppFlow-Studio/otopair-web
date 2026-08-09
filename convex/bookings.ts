@@ -80,6 +80,10 @@ import {
   syncShopDateAvailability,
 } from "./lib/timeSlotAvailability";
 import {
+  resolveSlotHoldForConsume,
+  deleteConsumedSlotHold,
+} from "./slotHolds";
+import {
   ensureJobActualRecord,
   finalizeJobActuals,
   getLatestJobActualForBooking,
@@ -888,6 +892,9 @@ export const create = mutation({
     // only by `resolveBookingLaborMinutes` when no enrichment row exists.
     labor_hours: v.optional(v.float64()),
     session_id: v.optional(v.string()),
+    // StubHub-style slot hold acquired during checkout (convex/slotHolds.ts).
+    // Verified + consumed atomically with the booking insert below.
+    hold_id: v.optional(v.id("slot_holds")),
     funnel_id: v.optional(v.id("conversion_funnels")),
     source_recommendation_id: v.optional(v.id("job_recommendations")),
   },
@@ -983,13 +990,24 @@ export const create = mutation({
         : legacySlot
           ? getSlotDurationMinutes(legacySlot)
           : 60;
-    const preferredMechanicId = args.mechanic_id ?? legacySlot?.mechanic_id;
+    // Consume the checkout hold (if any): reuse its pinned mechanic and exclude
+    // the caller's own hold so it can't block the booking it was reserving.
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.hold_id,
+      sessionId: args.session_id,
+      shopId: args.shop_id,
+      date: scheduledDate,
+      startTime: scheduledTime,
+    });
+    const preferredMechanicId =
+      holdConsume.pinnedMechanicId ?? args.mechanic_id ?? legacySlot?.mechanic_id;
     const mechanicId = await resolveMechanicForWindow(ctx, {
       shopId: args.shop_id,
       date: scheduledDate,
       startTime: scheduledTime,
       durationMinutes,
       preferredMechanicId,
+      excludeSessionId: holdConsume.excludeSessionId,
     });
 
     const now = Date.now();
@@ -1016,6 +1034,10 @@ export const create = mutation({
         ? laborCostCheck.aboveEngineByDollars
         : undefined,
     });
+
+    // Atomic with the insert above (same OCC-serializable mutation): free the
+    // hold now that the booking owns the slot.
+    await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     await logBookingStatusChange(
       ctx,
@@ -1353,6 +1375,7 @@ type CreateBatchArgs = {
   platform_fee?: number;
   displayed_labor_minutes?: number;
   session_id?: string;
+  hold_id?: Id<"slot_holds">;
   funnel_id?: Id<"conversion_funnels">;
   source_recommendation_id?: Id<"job_recommendations">;
   customer_notes?: string;
@@ -1414,6 +1437,9 @@ const createBatchArgs = {
     // single-service equivalent.
     displayed_labor_minutes: v.optional(v.float64()),
     session_id: v.optional(v.string()),
+    // StubHub-style slot hold acquired during checkout (convex/slotHolds.ts).
+    // Verified + consumed atomically with the booking insert in createBatchImpl.
+    hold_id: v.optional(v.id("slot_holds")),
     funnel_id: v.optional(v.id("conversion_funnels")),
     source_recommendation_id: v.optional(v.id("job_recommendations")),
     customer_notes: v.optional(v.string()),
@@ -1759,13 +1785,24 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
         : legacySlot
           ? getSlotDurationMinutes(legacySlot)
           : 60;
-    const preferredMechanicId = args.mechanic_id ?? legacySlot?.mechanic_id;
+    // Consume the checkout hold (if any): reuse its pinned mechanic and exclude
+    // the caller's own hold so it can't block the booking it was reserving.
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.hold_id,
+      sessionId: args.session_id,
+      shopId: args.shop_id,
+      date: scheduledDate,
+      startTime: scheduledTime,
+    });
+    const preferredMechanicId =
+      holdConsume.pinnedMechanicId ?? args.mechanic_id ?? legacySlot?.mechanic_id;
     const mechanicId = await resolveMechanicForWindow(ctx, {
       shopId: args.shop_id,
       date: scheduledDate,
       startTime: scheduledTime,
       durationMinutes,
       preferredMechanicId,
+      excludeSessionId: holdConsume.excludeSessionId,
     });
 
     const now = Date.now();
@@ -1833,6 +1870,9 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
             }))
           : undefined,
     });
+
+    // Atomic with the insert above: free the hold now that the booking owns it.
+    await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     if (args.preauthorized_payment) {
       const paymentId = await ctx.db.insert("payments", {
@@ -4476,6 +4516,25 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
   const frontCondition = prejob.front_tire_condition ?? undefined;
   const rearCondition = prejob.rear_tire_condition ?? undefined;
   const fluidOverrides = prejob.fluid_overrides ?? undefined;
+  // Multi-point inspections record tire identity per corner in `tire_details`
+  // and leave the flat `tire_brand`/`tire_model` null. Fall back to the first
+  // corner that reported a brand/model so completing an inspection actually
+  // fills the passport's required `tires.brand` — otherwise `is_complete` can
+  // never flip true for a car that only ever gets non-tire jobs.
+  const tireDetailCorners = [
+    prejob.tire_details?.front_left,
+    prejob.tire_details?.front_right,
+    prejob.tire_details?.rear_left,
+    prejob.tire_details?.rear_right,
+  ];
+  const firstCornerBrand =
+    tireDetailCorners
+      .map((corner: any) => (hasText(corner?.brand) ? corner.brand.trim() : null))
+      .find(Boolean) ?? undefined;
+  const firstCornerModel =
+    tireDetailCorners
+      .map((corner: any) => (hasText(corner?.model) ? corner.model.trim() : null))
+      .find(Boolean) ?? undefined;
   const hasFluidOverride =
     fluidOverrides &&
     Object.values(fluidOverrides).some(
@@ -4491,8 +4550,8 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
         ? prejob.mileage
         : undefined,
     tires: {
-      brand: prejob.tire_brand ?? undefined,
-      model: prejob.tire_model ?? undefined,
+      brand: prejob.tire_brand ?? firstCornerBrand ?? undefined,
+      model: prejob.tire_model ?? firstCornerModel ?? undefined,
       size_front: prejob.tire_size_front ?? undefined,
       size_rear: prejob.tire_size_rear ?? undefined,
       tread_depths: prejob.tire_tread ?? undefined,
@@ -5529,6 +5588,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeSessionId,
     allowAfterClose,
     allowOutsideShopHours,
   }: {
@@ -5540,6 +5600,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId?: any;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
+    excludeSessionId?: string;
     allowAfterClose?: boolean;
     allowOutsideShopHours?: boolean;
   }
@@ -5553,6 +5614,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeSessionId,
     allowAfterClose,
     allowOutsideShopHours,
   });
@@ -10506,6 +10568,10 @@ export const createByShop = mutation({
     partsDeclaration: v.optional(
       v.union(v.literal("none"), v.literal("add"), v.literal("skip")),
     ),
+    // StubHub-style slot hold acquired in the create-booking drawer
+    // (convex/slotHolds.ts). Verified + consumed atomically with the insert.
+    sessionId: v.optional(v.string()),
+    holdId: v.optional(v.id("slot_holds")),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -10635,12 +10701,22 @@ export const createByShop = mutation({
     }
 
     const estimatedMinutes = args.estimatedLaborMinutes ?? 60;
+    // Consume the checkout hold (if any): reuse its pinned mechanic and exclude
+    // the caller's own hold so it can't block the booking it was reserving.
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.holdId,
+      sessionId: args.sessionId,
+      shopId: args.shopId,
+      date: args.scheduledDate,
+      startTime: args.scheduledTime,
+    });
     const resolvedMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: args.shopId,
       date: args.scheduledDate,
       startTime: args.scheduledTime,
       durationMinutes: estimatedMinutes,
-      preferredMechanicId: args.mechanicId,
+      preferredMechanicId: holdConsume.pinnedMechanicId ?? args.mechanicId,
+      excludeSessionId: holdConsume.excludeSessionId,
       allowAfterClose: args.allowOutsideShopHours === true,
     });
 
@@ -10749,6 +10825,9 @@ export const createByShop = mutation({
       mechanic_quoted_price: args.mechanicQuotedPrice,
       catalog_quoted_price: args.catalogQuotedPrice,
     });
+
+    // Atomic with the insert above: free the hold now that the booking owns it.
+    await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     // Per-service labor quote snapshots support analytics without joining
     // bookings through vehicles and vehicle configs on every query.
@@ -13014,6 +13093,42 @@ export const processCustomerLateMonitors = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
+
+    // ── Self-heal monitor coverage ──────────────────────────────────────
+    // A customer no-show only surfaces to the shop via a customer_late_monitors
+    // row (drives the live "mark no-show / reschedule" alert + the front-desk
+    // notifications). Those are normally created when a booking is confirmed,
+    // but a booking confirmed through an edge path (or before this system
+    // existed) can lack one — then the customer no-shows and NOTHING prompts the
+    // mechanic (the reported bug). Bounded to a ±window of dates around today so
+    // a missing monitor for a recent/imminent booking is created here, and —
+    // because the due-times anchor to the APPOINTMENT time, not now — an already
+    // -late booking fires its alert on this very run (the newly-created monitor
+    // is picked up by the active-monitor loop below).
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const toUtcDate = (ms: number) => {
+      const d = new Date(ms);
+      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+    };
+    const dayMs = 24 * 60 * 60 * 1000;
+    // -2 … +1 days (UTC) is tz-robust: covers appointments that already passed
+    // and any that read as "tomorrow" in a far-east shop timezone.
+    for (let off = -2; off <= 1; off += 1) {
+      const dateStr = toUtcDate(now + off * dayMs);
+      const dayBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_scheduled_date", (q: any) =>
+          q.eq("scheduled_date", dateStr),
+        )
+        .collect();
+      for (const booking of dayBookings) {
+        if (!isCustomerLateMonitorEligible(booking)) continue; // confirmed + no arrival
+        const existing = await getCustomerLateMonitorByBookingId(ctx, booking._id);
+        if (existing) continue;
+        await upsertCustomerLateMonitorForBooking(ctx, booking);
+      }
+    }
+
     const active = await ctx.db
       .query("customer_late_monitors")
       .withIndex("by_status", (q: any) => q.eq("status", "active"))

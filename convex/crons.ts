@@ -129,6 +129,17 @@ crons.interval(
   internal.bookings.processCustomerLateMonitors,
 );
 
+// Reap expired StubHub-style slot holds. Only a janitor — availability reads
+// already drop `expires_at <= now` holds in real time, so a slot frees the
+// instant its hold expires; this reclaims the rows. 1-min (not 10) because a
+// 15-min TTL can't tolerate a slot staying falsely blocked for a third of its
+// life waiting on a slower sweep.
+crons.interval(
+  "release-expired-slot-holds",
+  { minutes: 1 },
+  internal.slotHolds.releaseExpiredSlotHolds,
+);
+
 crons.interval(
   "process-appointment-reminder-monitors",
   { minutes: 1 },

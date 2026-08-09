@@ -2427,6 +2427,37 @@ export default defineSchema({
     .index("by_availability", ["is_available"])
     .index("by_series_id", ["series_id"]),
 
+  // Short-lived, self-expiring "StubHub-style" holds. A hold reserves a
+  // SPECIFIC mechanic+window for one checkout session so a second customer
+  // browsing availability sees the slot as taken WHILE the first is still in
+  // the multi-step booking flow (the window the old flow left wide open, which
+  // let two people book the same slot). Distinct from time_slots blocks:
+  // time_slots has no owner/session/expiry, and its readers must never render a
+  // transient hold as a permanent block. Modeled like tire-quote holds — a
+  // separate table joined into availability (see convex/lib/timeSlotAvailability.ts).
+  // `expires_at` is absolute UTC ms (Date.now()+ttl); an expired hold stops
+  // blocking immediately at read time — the 1-min cron only reclaims rows.
+  slot_holds: defineTable({
+    shop_id: v.id("shops"),
+    mechanic_id: v.id("mechanics"), // PINNED at hold time — never null
+    date: v.string(), // "YYYY-MM-DD"
+    start_time: v.string(), // "HH:mm"
+    end_time: v.string(),
+    duration_minutes: v.number(),
+    held_by: v.optional(v.id("users")), // staff/anon web may lack a user id
+    session_id: v.string(), // stable per-checkout id → idempotency key
+    expires_at: v.number(), // Date.now()+ttl, absolute UTC ms
+    status: v.union(
+      v.literal("active"),
+      v.literal("consumed"),
+      v.literal("released"),
+    ),
+    created_at: v.number(),
+  })
+    .index("by_shop_and_date", ["shop_id", "date"]) // availability read
+    .index("by_expiry", ["expires_at"]) // cron sweep
+    .index("by_session", ["session_id"]), // idempotency + getMyActiveHold
+
   // ===== BOOKINGS & PAYMENTS =====
 
   // [D] 21 fields with reschedule tracking (A/W had 16)
@@ -3913,6 +3944,10 @@ export default defineSchema({
     unconfirmed_reminder1_before_hours: v.optional(v.number()),
     unconfirmed_reminder2_before_hours: v.optional(v.number()),
     unconfirmed_silent_if_past_deadline_hours: v.optional(v.number()),
+    // Slot-hold controls (convex/slotHolds.ts getSlotHoldConfig). Absent →
+    // defaults (enabled, 15-minute TTL).
+    slot_hold_enabled: v.optional(v.boolean()),
+    slot_hold_ttl_minutes: v.optional(v.number()),
     updated_at: v.number(),
     updated_by_user_id: v.optional(v.id("director_users")),
   }).index("by_key", ["key"]),

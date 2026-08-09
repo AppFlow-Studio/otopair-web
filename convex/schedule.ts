@@ -561,6 +561,54 @@ export const getBlockedSlots = query({
   },
 });
 
+// Active StubHub-style checkout holds for the schedule grid. Reactive: as soon
+// as any client acquires or releases a hold, every other staff viewer's grid
+// updates. `sessionId` hides the viewer's own in-flight hold (the create-booking
+// drawer already renders its own selection). See convex/slotHolds.ts.
+export const getActiveSlotHolds = query({
+  args: {
+    dateFrom: v.string(),
+    dateTo: v.string(),
+    sessionId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
+
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return [];
+
+    const now = Date.now();
+    // date is the 2nd index field; YYYY-MM-DD sorts chronologically so a string
+    // range is a valid chronological range.
+    const rows = await ctx.db
+      .query("slot_holds")
+      .withIndex("by_shop_and_date", (q: any) =>
+        q
+          .eq("shop_id", primary.shopId)
+          .gte("date", args.dateFrom)
+          .lte("date", args.dateTo),
+      )
+      .collect();
+
+    return rows
+      .filter(
+        (h: any) =>
+          h.status === "active" &&
+          h.expires_at > now &&
+          (!args.sessionId || h.session_id !== args.sessionId),
+      )
+      .map((h: any) => ({
+        _id: h._id,
+        date: h.date,
+        startTime: h.start_time,
+        endTime: h.end_time,
+        mechanicId: h.mechanic_id,
+        expiresAt: h.expires_at,
+      }));
+  },
+});
+
 export const updateShopHours = mutation({
   args: {
     hoursId: v.id("shops_hours"),

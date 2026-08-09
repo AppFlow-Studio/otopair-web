@@ -6,6 +6,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import {
   Bell,
+  CalendarX,
   Check,
   CheckCheck,
   Inbox,
@@ -109,6 +110,14 @@ function InboxView({ isMechanic }: { isMechanic: boolean }) {
   const { alerts: liveAlerts } = useLiveAlerts();
   const scheduleContext = useQuery(api.schedule.getScheduleContext);
   const markAllRead = useMutation(api.mechanicNotifications.markAllRead);
+  // Durable record of customers who never arrived — the persistent counterpart
+  // to the ephemeral live alert, so a missed no-show still leaves a trail even
+  // if the live alert was dismissed. Only `booking_never_started` (the others
+  // in this feed are already covered by the booking/quote feed above).
+  const staffNotifications = useQuery(api.notifications.getShopStaffNotifications);
+  const missedItems = ((staffNotifications ?? []) as any[]).filter(
+    (n) => n.category === "booking_never_started",
+  );
 
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
@@ -159,9 +168,16 @@ function InboxView({ isMechanic }: { isMechanic: boolean }) {
     { id: "rotor", label: "Rotor quotes", count: rotorCount },
   ];
 
+  // Missed appointments show in the "All" and "Live" views (they're urgent),
+  // never filtered away by the booking/quote chips.
+  const showMissed =
+    (filter === "all" || filter === "live") && missedItems.length > 0;
+
   const isLoading = feed === undefined;
   const nothingToShow =
-    !showAlerts && (!showItems || visibleItems.length === 0);
+    !showAlerts &&
+    !showMissed &&
+    (!showItems || visibleItems.length === 0);
 
   return (
     <div className="space-y-4">
@@ -254,6 +270,43 @@ function InboxView({ isMechanic }: { isMechanic: boolean }) {
               <ul className="divide-y divide-border">
                 {visibleAlerts.map((alert) => (
                   <LiveAlertCard key={alert.id} alert={alert} />
+                ))}
+              </ul>
+            </div>
+          )}
+          {showMissed && (
+            <div className="bg-red-50/40">
+              <div className="border-b border-border px-4 py-2 text-[10px] font-semibold uppercase tracking-wider text-red-700">
+                Missed appointments
+              </div>
+              <ul className="divide-y divide-border">
+                {missedItems.map((n) => (
+                  <li
+                    key={String(n._id)}
+                    className="flex items-start gap-3 px-4 py-3"
+                  >
+                    <CalendarX className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-foreground">
+                        {n.customerName ?? "Customer"} never arrived
+                        {n.shortHandle ? (
+                          <span className="ml-1 text-xs font-normal text-muted-foreground">
+                            {n.shortHandle}
+                          </span>
+                        ) : null}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {[
+                          n.vehicleLabel,
+                          n.scheduledDate && n.scheduledTime
+                            ? `${n.scheduledDate} · ${n.scheduledTime}`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </p>
+                    </div>
+                  </li>
                 ))}
               </ul>
             </div>

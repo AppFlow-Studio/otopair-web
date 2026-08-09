@@ -66,6 +66,7 @@ import {
   dedupeIntervalsByService,
   EXTRACTOR_REDUCTO,
   MANUAL_INTERVAL_ORDER,
+  MANUAL_MAX_REJECTIONS,
   normalizeMakeKey,
   parseManualIntervals,
 } from "./manualLibrary";
@@ -109,7 +110,7 @@ export const REDUCTO_INTERVAL_SCHEMA: Record<string, any> = {
     document_matches_vehicle: {
       type: "boolean",
       description:
-        "True ONLY if this document covers the exact year, make and model asked about. If it covers a different model or model year, false.",
+        "False ONLY if this document names a DIFFERENT model or model year than the one asked about. True when it matches — or when the document does not clearly identify a specific model/year (generic covers are common and are not a mismatch).",
     },
     document_vehicle_text: {
       type: "string",
@@ -168,7 +169,12 @@ export function buildReductoInstructions(vehicle: {
 }): string {
   return [
     `This document is manufacturer documentation. The vehicle in question is the ${vehicle.year} ${vehicle.make} ${vehicle.model}.`,
-    "First confirm the document covers that exact vehicle and model year by reading its cover or title page; if it covers something else, set document_matches_vehicle false and return no services.",
+    // Contradiction-only mismatch (Aug 9 2026): Hyundai prints a generic
+    // "HYUNDAI OWNER'S MANUAL" cover with no model name, and the old
+    // "confirm the exact vehicle" wording made Reducto report a mismatch for
+    // the CORRECT 2022 Palisade manual. Unidentified must fail OPEN — the
+    // same semantics as the Anthropic-path prompt.
+    "First read the cover or title page and copy its vehicle identification verbatim into document_vehicle_text. Set document_matches_vehicle to false ONLY when the document names a DIFFERENT model or a different model year than the vehicle in question. If it matches, or the document does not clearly identify a specific model or year, set it to true.",
     "Then find the factory MAINTENANCE SCHEDULE and report each service's interval.",
     "Report only intervals printed in this document — never infer, average, or fill from general knowledge.",
     "interval_miles/interval_months are the NORMAL schedule; severe_* is the severe-conditions schedule if one is published.",
@@ -202,7 +208,7 @@ export const REDUCTO_SPECS_SCHEMA: Record<string, any> = {
     document_matches_vehicle: {
       type: "boolean",
       description:
-        "True ONLY if this document covers the exact year, make and model asked about. If it covers a different model or model year, false.",
+        "False ONLY if this document names a DIFFERENT model or model year than the one asked about. True when it matches — or when the document does not clearly identify a specific model/year (generic covers are common and are not a mismatch).",
     },
     document_vehicle_text: {
       type: "string",
@@ -257,7 +263,7 @@ export function buildReductoSpecsInstructions(vehicle: {
   return [
     `This document is manufacturer documentation. The vehicle in question is the ${vehicle.year} ${vehicle.make} ${vehicle.model}` +
       (vehicle.engine_label ? ` with the ${vehicle.engine_label} engine.` : "."),
-    "First confirm the document covers that exact vehicle and model year from its cover or title page; if it covers something else, set document_matches_vehicle false and return no specs.",
+    "First read the cover or title page and copy its vehicle identification verbatim into document_vehicle_text. Set document_matches_vehicle to false ONLY when the document names a DIFFERENT model or model year; if it matches, or does not clearly identify a specific model/year, set it to true.",
     "Then find the SPECIFICATIONS section (often titled Specifications, Vehicle Data, Technical Data, or Capacities) and report these values:",
     fields + ".",
     "Report only values printed in this document — never infer, convert from a similar model, or fill from general knowledge.",
@@ -340,7 +346,23 @@ export const getReductoContext = internalQuery({
         q.eq("make", normalizeMakeKey(make)).eq("model", normalizeMakeKey(model)).eq("year", cfg.year),
       )
       .first();
-    if (!manual?.storage_id) return null;
+    if (!manual) return null;
+
+    // Prefer our stored copy (original hosts are frequently slow — Ford's
+    // CDN timed out at 60 s in the July research). REFERENCE-ONLY rows
+    // (Aug 9 2026) have no stored bytes at all: manuals past the ~20 MB
+    // action-runtime ceiling can never be downloaded in-action, so the
+    // resolver stores just the source_url and Reducto — which fetches its
+    // input itself, server-side — reads the public PDF directly (the 39 MB
+    // carmans CX-30 manual).
+    const storageUrl = manual.storage_id ? await ctx.storage.getUrl(manual.storage_id) : null;
+    const directPdfUrl =
+      !storageUrl &&
+      typeof manual.source_url === "string" &&
+      /\.pdf(?:[?#]|$)/i.test(manual.source_url)
+        ? manual.source_url
+        : null;
+    if (!storageUrl && !directPdfUrl) return null;
 
     return {
       year: cfg.year as number,
@@ -349,9 +371,9 @@ export const getReductoContext = internalQuery({
       source_url: manual.source_url,
       doc_kind: manual.doc_kind,
       file_bytes: manual.file_bytes ?? null,
-      // A signed, unguessable URL Reducto can fetch. Generated per call rather
-      // than stored, so nothing long-lived points at the bytes.
-      url: await ctx.storage.getUrl(manual.storage_id),
+      // A signed, unguessable URL Reducto can fetch — or, for reference-only
+      // rows, the public source PDF itself.
+      url: storageUrl ?? directPdfUrl,
     };
   },
 });
@@ -440,6 +462,31 @@ export const extractIntervalsViaReducto = internalAction({
         console.log(
           `[manual-reducto] ${label}: no storable intervals (schedule_found=${payload.schedule_found})`,
         );
+        // Mirror the Anthropic path's rejection (Aug 9 2026): a document the
+        // reader says carries NO schedule is the wrong document, and without
+        // this the row sat "fresh" for 180 days — the CX-30's 27 MB
+        // NAVIGATION manual would have blocked its real manual for six
+        // months. Same MANUAL_MAX_REJECTIONS bound as the Anthropic branch.
+        if (payload.schedule_found === false) {
+          try {
+            const manualRow: any = await ctx.runQuery(libApi().getStoredManual, {
+              make: context.make,
+              model: context.model,
+              year: context.year,
+            });
+            const priorRejections = (manualRow?.rejected_urls ?? []).length;
+            if (priorRejections < MANUAL_MAX_REJECTIONS) {
+              await ctx.runMutation(libApi().rejectManualRow, {
+                make: context.make,
+                model: context.model,
+                year: context.year,
+                reason: "reducto: schedule_found=false",
+              });
+            }
+          } catch (e) {
+            console.warn(`[manual-reducto] ${label}: could not record rejection:`, e);
+          }
+        }
         return none("skipped", "no_intervals_extracted");
       }
 

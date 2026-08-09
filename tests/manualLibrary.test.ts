@@ -22,7 +22,10 @@
 import { describe, it, expect } from "vitest";
 import {
   buildManualQueries,
+  buildPdfEmbedMirrorPages,
   contradictsVehicle,
+  extractEmbeddedPdfUrl,
+  isPdfEmbedMirrorPage,
   normalizeMakeKey,
   hostnameOf,
   isOemDomain,
@@ -141,6 +144,67 @@ describe("contradictsVehicle", () => {
     expect(contradictsVehicle(url, "2021 Mazda CX-5 Owner's Manual", { year: 2021, model: "CX-30" })).toMatch(
       /model_number_mismatch:cx5/,
     );
+  });
+});
+
+// ─── PDF-embed mirror adapter (Aug 9 2026) ───────────────────────
+
+describe("extractEmbeddedPdfUrl / isPdfEmbedMirrorPage", () => {
+  const PAGE = "https://www.carmans.net/2019-gmc-sierra/";
+  // Verbatim from the live page — the pdf.js iframe carmans actually serves.
+  const CARMANS_IFRAME =
+    `<iframe id="game" src="/pdf.js/web/viewer.html?file=/wp-content/uploads/pdf/2019-gmc-sierra.pdf#zoom=page-width&pagemode=bookmarks" style="width: 100%" scrolling="no" frameborder="0"></iframe>`;
+
+  it("extracts the ?file= target from the real carmans pdf.js iframe and resolves it", () => {
+    expect(extractEmbeddedPdfUrl(CARMANS_IFRAME, PAGE)).toBe(
+      "https://www.carmans.net/wp-content/uploads/pdf/2019-gmc-sierra.pdf",
+    );
+  });
+  it("decodes a URI-encoded file param", () => {
+    const html = `<iframe src="/viewer.html?file=%2Fwp-content%2Fuploads%2Fpdf%2F2019-gmc-sierra.pdf"></iframe>`;
+    expect(extractEmbeddedPdfUrl(html, PAGE)).toBe(
+      "https://www.carmans.net/wp-content/uploads/pdf/2019-gmc-sierra.pdf",
+    );
+  });
+  it("accepts a viewer URL as the haystack itself (search returns these directly)", () => {
+    const viewerUrl = "https://www.carmans.net/pdf.js/web/viewer.html?file=/wp-content/uploads/pdf/2019-gmc-sierra.pdf";
+    expect(extractEmbeddedPdfUrl(viewerUrl, viewerUrl)).toBe(
+      "https://www.carmans.net/wp-content/uploads/pdf/2019-gmc-sierra.pdf",
+    );
+  });
+  it("falls back to plain .pdf attributes and resolves relative paths", () => {
+    const html = `<embed type="application/pdf" src="docs/owners-manual.pdf?v=2">`;
+    expect(extractEmbeddedPdfUrl(html, PAGE)).toBe(
+      "https://www.carmans.net/2019-gmc-sierra/docs/owners-manual.pdf?v=2",
+    );
+  });
+  it("refuses the bundled pdf.js demo document", () => {
+    const html = `<iframe src="/pdf.js/web/viewer.html?file=compressed.tracemonkey-pldi-09.pdf"></iframe>`;
+    expect(extractEmbeddedPdfUrl(html, PAGE)).toBeNull();
+  });
+  it("returns null when nothing PDF-shaped is present", () => {
+    expect(extractEmbeddedPdfUrl(`<iframe src="/videos/tour.mp4"></iframe>`, PAGE)).toBeNull();
+  });
+
+  it("constructs carmans page candidates including the collapsed trim-family slug", () => {
+    expect(buildPdfEmbedMirrorPages({ year: 2019, make: "GMC", model: "Sierra 1500" })).toEqual([
+      { url: "https://www.carmans.net/2019-gmc-sierra-1500/", title: "2019 GMC Sierra 1500 Owner's Manual (carmans.net)" },
+      { url: "https://www.carmans.net/2019-gmc-sierra/", title: "2019 GMC Sierra 1500 Owner's Manual (carmans.net)" },
+    ]);
+    // Digit-bearing model names dedupe to one URL.
+    expect(buildPdfEmbedMirrorPages({ year: 2021, make: "Mazda", model: "CX-30" })).toEqual([
+      { url: "https://www.carmans.net/2021-mazda-cx-30/", title: "2021 Mazda CX-30 Owner's Manual (carmans.net)" },
+    ]);
+    expect(buildPdfEmbedMirrorPages({ year: NaN, make: "GMC", model: "Sierra" })).toEqual([]);
+  });
+
+  it("classifies carmans HTML pages as adaptable, direct PDFs and other mirrors as not", () => {
+    expect(isPdfEmbedMirrorPage("https://www.carmans.net/2019-gmc-sierra/")).toBe(true);
+    // A direct .pdf on carmans is already a normal candidate — no adaptation.
+    expect(isPdfEmbedMirrorPage("https://www.carmans.net/wp-content/uploads/pdf/2019-gmc-sierra.pdf")).toBe(false);
+    // lemon-manuals is HTML-native (nothing to extract); scribd is the farm.
+    expect(isPdfEmbedMirrorPage("https://lemon-manuals.la/GMC/2019/")).toBe(false);
+    expect(isPdfEmbedMirrorPage("https://www.scribd.com/document/123/manual")).toBe(false);
   });
 });
 

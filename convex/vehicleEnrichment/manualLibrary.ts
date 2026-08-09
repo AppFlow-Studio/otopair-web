@@ -401,6 +401,110 @@ export function looksLikePdfUrl(url: string | null | undefined): boolean {
   return /\.pdf$/i.test(withoutQuery.trim());
 }
 
+/**
+ * Verified mirrors that serve their manuals through an HTML viewer page
+ * (pdf.js) rather than a direct PDF link. Only these earn the embedded-PDF
+ * adapter: lemon-manuals is HTML-native (no PDF to extract) and the mirror
+ * farm stays excluded entirely. carmans.net verified live Aug 9 2026 —
+ * `<iframe src="/pdf.js/web/viewer.html?file=/wp-content/uploads/pdf/
+ * 2019-gmc-sierra.pdf#zoom=…">`, and the ?file= target serves
+ * application/pdf directly. NOTE: it 406s weak user agents even on HTML
+ * pages, so the page fetch must send the full browser UA.
+ */
+export const PDF_EMBED_MIRRORS: readonly string[] = ["carmans.net"];
+
+/** An HTML page on a PDF-embed mirror — adaptable into a direct-PDF candidate. */
+export function isPdfEmbedMirrorPage(url: string | null | undefined): boolean {
+  const host = hostnameOf(url);
+  if (!host) return false;
+  return hostMatches(host, PDF_EMBED_MIRRORS) && !looksLikePdfUrl(url);
+}
+
+/**
+ * Constructible PDF-embed mirror pages for a vehicle — carmans.net paths are
+ * `/{year}-{make}-{model}/` (live-verified: /2019-gmc-sierra/ and
+ * /2021-mazda-cx-30/ both 200). Search proved unreliable at surfacing these
+ * (the site: rescue query returned nothing for the Sierra while the page
+ * existed), so they are appended as candidates directly. Zero cost until one
+ * actually ranks: the page fetch, embedded-PDF extraction, wrong-vehicle
+ * filter, magic-byte check and extractor identity gate all still apply — a
+ * 404 or junk page just falls through to the next candidate.
+ *
+ * Two slug variants: the full model ("sierra-1500") and the alpha-only stem
+ * ("sierra") — carmans collapses trim-number families (the 2019 Sierra 1500
+ * manual lives at /2019-gmc-sierra/).
+ */
+export function buildPdfEmbedMirrorPages(vehicle: {
+  year: number;
+  make: string;
+  model: string;
+}): Array<{ url: string; title: string }> {
+  const hyph = (raw: string): string =>
+    (raw ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  const y = Math.trunc(vehicle.year);
+  const mk = hyph(vehicle.make);
+  const md = hyph(vehicle.model);
+  if (!Number.isFinite(y) || !mk || !md) return [];
+  const alphaOnly = hyph(
+    String(vehicle.model)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(" ")
+      .filter((t) => t && !/^\d+$/.test(t))
+      .join(" "),
+  );
+  // The alpha-only variant models FAMILY collapse ("sierra-1500" → "sierra"),
+  // not name mutilation — "cx-30" must never degrade to "cx". Require a
+  // word-sized stem before offering it.
+  const slugs = [...new Set([md, alphaOnly.length >= 4 ? alphaOnly : ""].filter(Boolean))];
+  return slugs.map((slug) => ({
+    url: `https://www.carmans.net/${y}-${mk}-${slug}/`,
+    title: `${y} ${vehicle.make} ${vehicle.model} Owner's Manual (carmans.net)`,
+  }));
+}
+
+/**
+ * Pull the embedded PDF URL out of a viewer page (or out of a viewer URL
+ * itself — search sometimes returns `viewer.html?file=…` directly).
+ *
+ * Two passes: viewer query params (`?file=` and friends, pdf.js's contract),
+ * then plain attributes pointing at a .pdf. Values resolve against the page
+ * URL, so relative `/wp-content/…` paths work. pdf.js's bundled demo
+ * document (compressed.tracemonkey…) is explicitly refused — extracting it
+ * would hand the pipeline a compiler paper as an owner's manual.
+ */
+export function extractEmbeddedPdfUrl(haystack: string, baseUrl: string): string | null {
+  const resolve = (raw: string): string | null => {
+    let v = raw.trim();
+    try {
+      v = decodeURIComponent(v);
+    } catch {
+      /* not URI-encoded — use as-is */
+    }
+    if (!/\.pdf(?:[?#]|$)/i.test(v)) return null;
+    if (/tracemonkey|\/compressed\.pdf/i.test(v)) return null;
+    try {
+      const abs = new URL(v, baseUrl);
+      if (abs.protocol !== "http:" && abs.protocol !== "https:") return null;
+      abs.hash = "";
+      return abs.toString();
+    } catch {
+      return null;
+    }
+  };
+  for (const m of haystack.matchAll(/[?&](?:file|pdf|url|doc)=([^"'&#\s]+)/gi)) {
+    const hit = resolve(m[1]);
+    if (hit) return hit;
+  }
+  for (const m of haystack.matchAll(
+    /(?:src|href|data|data-src|data-url)\s*=\s*["']([^"']+?\.pdf(?:[?#][^"']*)?)["']/gi,
+  )) {
+    const hit = resolve(m[1]);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export type ManualCandidate = {
   url: string;
   title: string;
@@ -410,6 +514,68 @@ export type ManualCandidate = {
   is_pdf: boolean;
   score: number;
 };
+
+/** A viewer page is a few tens of KB; anything past this is not one. */
+const MIRROR_PAGE_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Hard ceiling for a manual we materialize in ACTION memory. The download,
+ * the storage Blob and the Files-API form body hold ~3 copies at once
+ * against the 64 MB action limit — a ~25 MB mazdausa manual OOM-crashed the
+ * ENTIRE resolve (2021 CX-30, live), which also killed every rescue
+ * candidate ranked behind it. 20 MB × 3 + baseline fits; the 15.7 MB
+ * Palisade manual is the largest verified survivor. An over-limit candidate
+ * now SKIPS with a per-candidate reason instead of taking down the action.
+ */
+const MAX_ACTION_MANUAL_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Fetch a PDF-embed mirror's HTML page (capped read, browser UA — carmans
+ * 406s anonymous clients even for HTML). Returns the page text or null;
+ * never throws.
+ */
+async function fetchMirrorPageForPdf(pageUrl: string, label: string): Promise<string | null> {
+  try {
+    const res = await fetch(pageUrl, {
+      headers: {
+        Accept: "text/html,*/*",
+        "User-Agent": MANUAL_DOWNLOAD_USER_AGENT,
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) {
+      console.log(`[manual-library] ${label}: mirror page ${res.status} from ${pageUrl}`);
+      return null;
+    }
+    const reader = res.body?.getReader?.();
+    if (!reader) {
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength > MIRROR_PAGE_MAX_BYTES) return null;
+      return new TextDecoder().decode(buf);
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > MIRROR_PAGE_MAX_BYTES) {
+        try { await reader.cancel(); } catch { /* already closed */ }
+        return null;
+      }
+      chunks.push(value);
+    }
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) { merged.set(c, offset); offset += c.byteLength; }
+    return new TextDecoder().decode(merged);
+  } catch (e) {
+    console.warn(`[manual-library] ${label}: mirror page fetch failed (non-fatal):`, e);
+    return null;
+  }
+}
 
 /** Doc-kind contribution to the score — schedule > owners manual > warranty. */
 const DOC_KIND_SCORE: Record<ManualDocKind, number> = {
@@ -455,6 +621,14 @@ export function rankManualCandidates(
       // Verified-faithful mirrors take a token penalty (stay below OEM, beat
       // anonymous candidates); the mirror farm keeps the full −40.
       score -= hostMatches(host, VERIFIED_MANUAL_MIRRORS) ? 6 : 40;
+    }
+    // Accessory-system booklets (Aug 9 2026): "2021-cx-30-NAVIGATION-owners-
+    // manual.pdf" carries year, model, OEM host and the words "owners manual"
+    // — it beat the real owner's manual on an alphabetical tiebreak and has
+    // no maintenance schedule inside. Penalize, don't filter: when it is the
+    // only candidate the identity/schedule gates still dispose of it.
+    if (/navigation|infotainment|uconnect|connected[-_ ]?(services|vehicle)|multimedia|audio[-_ ]?system|quick[-_ ]?(start|reference|guide)|bluetooth/i.test(hay)) {
+      score -= 35;
     }
     score += DOC_KIND_SCORE[docKind];
     if (isPdf) score += 25;
@@ -1789,12 +1963,25 @@ export const resolveManualForVehicle = internalAction({
         console.log(`[manual-library] ${label}: direct hit — skipping web search`);
       }
 
+      // Constructible PDF-embed mirror pages (carmans.net) join the pool
+      // unconditionally — they rank as penalized mirrors, so they only ever
+      // WIN when nothing better survived, and cost nothing until they do.
+      for (const page of buildPdfEmbedMirrorPages(args)) {
+        found.push(page);
+      }
+
       // Candidates already read and found wrong for THIS vehicle. Retrying one
       // costs a multi-MB download plus an upload plus an extraction to reach
       // the same verdict, so a rejection has to actually remove it from play.
       const rejectedUrls = new Set<string>(((existing as any)?.rejected_urls ?? []) as string[]);
       const candidates = rankManualCandidates(found, args)
-        .filter((c) => c.is_pdf)
+        // Direct PDFs, plus HTML pages on PDF-embed mirrors (carmans.net) —
+        // those adapt to their embedded PDF at the top of the download loop.
+        // Without this, the site:carmans.net rescue query could never yield
+        // an accepted candidate (its manuals sit behind a pdf.js viewer) and
+        // the 2019 Sierra ended manual-less after its wrong-vehicle manual
+        // was rejected.
+        .filter((c) => c.is_pdf || isPdfEmbedMirrorPage(c.url))
         .filter((c) => !rejectedUrls.has(c.url))
         .filter((c) => {
           // Wrong-vehicle candidates never reach the download loop — the OEM
@@ -1822,7 +2009,38 @@ export const resolveManualForVehicle = internalAction({
       // The candidate that actually PRODUCED lastReason — the old code
       // attributed every failure to candidates[0] regardless.
       let lastFailedCandidate: (typeof candidates)[number] | null = null;
-      for (const candidate of candidates.slice(0, 3)) {
+      for (let candidate of candidates.slice(0, 3)) {
+        if (!candidate.is_pdf) {
+          // PDF-embed mirror page → its embedded PDF. The viewer target
+          // sometimes rides in the search-result URL itself
+          // (viewer.html?file=…), so try the URL before spending a fetch.
+          let pdfUrl = extractEmbeddedPdfUrl(candidate.url, candidate.url);
+          if (!pdfUrl) {
+            const html = await fetchMirrorPageForPdf(candidate.url, label);
+            pdfUrl = html ? extractEmbeddedPdfUrl(html, candidate.url) : null;
+          }
+          if (!pdfUrl) {
+            lastReason = "mirror_page_no_pdf";
+            lastFailedCandidate = candidate;
+            continue;
+          }
+          if (rejectedUrls.has(pdfUrl)) {
+            lastReason = "mirror_pdf_previously_rejected";
+            lastFailedCandidate = candidate;
+            continue;
+          }
+          // The page passed the wrong-vehicle filter; the PDF it embeds must
+          // pass it too (a wrong page could embed a right-named PDF and vice
+          // versa — trust neither side alone).
+          const why = contradictsVehicle(pdfUrl, candidate.title, args);
+          if (why) {
+            lastReason = `mirror_pdf_contradicts:${why}`;
+            lastFailedCandidate = candidate;
+            continue;
+          }
+          console.log(`[manual-library] ${label}: mirror page ${candidate.url} → embedded PDF ${pdfUrl}`);
+          candidate = { ...candidate, url: pdfUrl, is_pdf: true };
+        }
         const meta = {
           url: candidate.url,
           source_domain: candidate.source_domain,
@@ -1864,10 +2082,37 @@ export const resolveManualForVehicle = internalAction({
             continue;
           }
           const declared = Number(res.headers.get("content-length") ?? "");
-          if (Number.isFinite(declared) && declared > MAX_MANUAL_BYTES) {
-            lastReason = `too_large_declared_${declared}`;
-            lastFailedCandidate = candidate;
-            continue;
+          // Stricter than the Files-API 30 MB cap on purpose: past ~20 MB the
+          // COPIES (bytes + Blob + form body) blow the 64 MB action limit.
+          // But a too-big-for-the-runtime manual is NOT a dead end: Reducto
+          // downloads its input itself, server-side. Store a REFERENCE-ONLY
+          // row (source_url, no bytes) routed to the Reducto extractor — the
+          // 39 MB carmans CX-30 manual is unreachable any other way.
+          if (Number.isFinite(declared) && declared > MAX_ACTION_MANUAL_BYTES) {
+            await ctx.runMutation(selfApi().upsertManualRow, {
+              make: args.make,
+              model: args.model,
+              year: args.year,
+              source_url: candidate.url,
+              source_domain: candidate.source_domain,
+              is_oem_domain: candidate.is_oem_domain,
+              doc_kind: candidate.doc_kind,
+              file_bytes: declared,
+              extractor: EXTRACTOR_REDUCTO,
+              expires_at: Date.now() + MANUAL_REFRESH_DAYS * DAY_MS,
+            });
+            console.log(
+              `[manual-library] ${label}: ${(declared / 1024 / 1024).toFixed(1)} MB exceeds the ` +
+                `action runtime — stored reference-only row for Reducto: ${candidate.url}`,
+            );
+            return {
+              status: "uploaded",
+              file_id: null,
+              source_url: candidate.url,
+              is_oem_domain: candidate.is_oem_domain,
+              doc_kind: candidate.doc_kind,
+              reason: "reference_only_oversize",
+            };
           }
           // Capped STREAMING read (Aug 9 2026): when a server omits
           // content-length, the bare arrayBuffer() of a giant PDF blew the
@@ -1888,7 +2133,7 @@ export const resolveManualForVehicle = internalAction({
               if (done) break;
               if (!value) continue;
               total += value.byteLength;
-              if (total > MAX_MANUAL_BYTES) {
+              if (total > MAX_ACTION_MANUAL_BYTES) {
                 overflow = true;
                 try { await reader.cancel(); } catch { /* already closed */ }
                 break;
@@ -1896,9 +2141,31 @@ export const resolveManualForVehicle = internalAction({
               chunks.push(value);
             }
             if (overflow) {
-              lastReason = `too_large_streamed_${total}`;
-              lastFailedCandidate = candidate;
-              continue;
+              // Same Reducto reference-only route as the declared-size skip —
+              // the server just didn't announce the size up front.
+              await ctx.runMutation(selfApi().upsertManualRow, {
+                make: args.make,
+                model: args.model,
+                year: args.year,
+                source_url: candidate.url,
+                source_domain: candidate.source_domain,
+                is_oem_domain: candidate.is_oem_domain,
+                doc_kind: candidate.doc_kind,
+                extractor: EXTRACTOR_REDUCTO,
+                expires_at: Date.now() + MANUAL_REFRESH_DAYS * DAY_MS,
+              });
+              console.log(
+                `[manual-library] ${label}: streamed past the runtime cap — ` +
+                  `stored reference-only row for Reducto: ${candidate.url}`,
+              );
+              return {
+                status: "uploaded",
+                file_id: null,
+                source_url: candidate.url,
+                is_oem_domain: candidate.is_oem_domain,
+                doc_kind: candidate.doc_kind,
+                reason: "reference_only_oversize",
+              };
             }
             const merged = new Uint8Array(total);
             let offset = 0;

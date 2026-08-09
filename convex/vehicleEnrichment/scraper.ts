@@ -647,13 +647,24 @@ async function scrapeManual(
     });
     if (lemon.ok && lemon.markdown.length > 0) {
       const chunk = lemon.markdown.slice(0, MAX_MARKDOWN_CHARS);
+      // The landing page's variant-equivalence assertion rides the source
+      // header so the CACHED scrape result carries it: claims extracted from
+      // these pages also hold for the named sibling variants — except claims
+      // from the excluded page families (Labor Times / Fluids / Tire Fitment),
+      // which stay per-variant. Empty when LEMON printed no header, keeping
+      // the line byte-identical to the pre-equivalence format.
+      const eqVariants = lemon.equivalent_variants;
+      const eqNote =
+        eqVariants.length > 0
+          ? `; identical for ${eqVariants.length} sibling variant(s): ${eqVariants.slice(0, 6).join("; ")}${eqVariants.length > 6 ? `; +${eqVariants.length - 6} more` : ""}${lemon.equivalence_excluded_pages.length > 0 ? ` — except ${lemon.equivalence_excluded_pages.join("/")} pages` : ""}`
+          : "";
       markdownParts.push(
-        `\n\n--- Source: LEMON Manuals (${lemon.host ?? "mirror"}, ${lemon.leaf_count} spec pages, trim "${lemon.resolved_trim}") ---\n${chunk}`,
+        `\n\n--- Source: LEMON Manuals (${lemon.host ?? "mirror"}, ${lemon.leaf_count} spec pages, trim "${lemon.resolved_trim}"${eqNote}) ---\n${chunk}`,
       );
       for (const l of lemon.leaves) sourceUrls.push(l.url);
       totalChars += chunk.length;
       console.log(
-        `[scraper] LEMON manual: +${chunk.length} chars from ${lemon.leaf_count} spec page(s) for ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
+        `[scraper] LEMON manual: +${chunk.length} chars from ${lemon.leaf_count} spec page(s) for ${vehicle.year} ${vehicle.make} ${vehicle.model}${lemon.trim_match ? ` (${lemon.trim_match} trim match${lemon.trim_match === "equivalent" && lemon.matched_variant ? ` via "${lemon.matched_variant}"` : ""})` : ""}`,
       );
     } else {
       console.log(`[scraper] LEMON manual: no content (${lemon.reason})`);

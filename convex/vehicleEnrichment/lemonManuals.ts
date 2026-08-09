@@ -279,6 +279,155 @@ export function pickLemonTrim(
   return run({ ...vehicle, model: designation })?.name ?? null;
 }
 
+// ─── Variant equivalence ("This manual is identical to…") ───────────────────
+
+/**
+ * Trim LANDING pages (the folder page at trimBaseUrl — verified the header
+ * exists nowhere else, not on the single-page index nor on leaves) open with:
+ *
+ *   This manual is identical to the manual for the following model variants,
+ *   except for possibly the "Labor Times", "Fluids", and "Tire Fitment" pages:
+ *   <ul><li>Sierra 1500 Elevation, 5.3L Eng VIN D, 4WD<li>…</ul>
+ *
+ * It is the mirror's own assertion of which sibling folders share this manual
+ * (same sentence verified live on GMC, Honda, and BMW pages, Aug 2026 — the
+ * BMW one even bridges the known Coupe/Convertible body-style residual).
+ * Parsed, it serves two jobs:
+ *   1. resolveLemonVehicle: a best-effort pick whose equivalence names the
+ *      config's trim is exact-by-assertion — the mirror says this manual
+ *      covers that trim (trim_match: "equivalent").
+ *   2. Claim attribution: spec claims extracted from one variant's pages hold
+ *      for the sibling variants too, EXCEPT claims from the page families the
+ *      header excludes — Labor Times / Fluids / Tire Fitment may genuinely
+ *      differ per trim, so those must stay per-variant.
+ */
+export type LemonEquivalence = {
+  /** Sibling folder names the mirror asserts share this manual (doc order). */
+  variants: string[];
+  /**
+   * Page FAMILIES (top-level folders like "Labor Times") the identity claim
+   * excludes. Claims from leaves under these families must never be attributed
+   * across variants. Parsed from the header sentence's quoted names; if the
+   * "except" clause is present but its names fail to parse, falls back to the
+   * known trio rather than silently claiming full identity.
+   */
+  excluded_pages: string[];
+};
+
+/** The excluded-family trio every live header names (the defensive fallback). */
+export const LEMON_EQUIVALENCE_DEFAULT_EXCLUDED: readonly string[] = [
+  "Labor Times",
+  "Fluids",
+  "Tire Fitment",
+];
+
+const LEMON_EQUIVALENCE_SENTENCE_RE =
+  /This manual is identical to the manual for the following model variants([^<]*)/i;
+/** GM equivalence lists (cab × box × engine) run long; bound them anyway. */
+const MAX_EQUIVALENCE_VARIANTS = 64;
+const MAX_VARIANT_NAME_CHARS = 200;
+
+/**
+ * Parse the variant-equivalence header from a trim landing page. Null when the
+ * header is absent or unparseable — callers treat null as "no assertion", so a
+ * page without the header behaves exactly as before this parser existed.
+ */
+export function parseLemonEquivalence(html: string): LemonEquivalence | null {
+  if (typeof html !== "string" || html.length === 0) return null;
+  const m = LEMON_EQUIVALENCE_SENTENCE_RE.exec(html);
+  if (!m) return null;
+
+  // Excluded families ride the sentence tail as quoted names — in the raw HTML
+  // the quotes are &quot; entities, which stripTags decodes.
+  const tail = stripTags(m[1] ?? "");
+  const excluded: string[] = [];
+  const quoted = /"([^"]{1,60})"/g;
+  let qm: RegExpExecArray | null;
+  while ((qm = quoted.exec(tail)) !== null) {
+    const name = qm[1].trim();
+    if (name && !excluded.includes(name)) excluded.push(name);
+  }
+  const excluded_pages =
+    excluded.length > 0
+      ? excluded
+      : /\bexcept\b/i.test(tail)
+        ? [...LEMON_EQUIVALENCE_DEFAULT_EXCLUDED]
+        : [];
+
+  // The variant list is the first <ul> AFTER the sentence (the folder-links
+  // <ul> sits before it). <li> items are unclosed: `<li>A<li>B`.
+  const from = m.index + m[0].length;
+  const ulStart = html.indexOf("<ul>", from);
+  if (ulStart < 0 || ulStart - from > 2_000) return null;
+  const ulEnd = html.indexOf("</ul>", ulStart);
+  if (ulEnd < 0) return null;
+
+  const variants: string[] = [];
+  const seen = new Set<string>();
+  for (const piece of html.slice(ulStart, ulEnd).split(/<li[^>]*>/i).slice(1)) {
+    const name = stripTags(piece).replace(/\s+/g, " ").trim();
+    if (!name || name.length > MAX_VARIANT_NAME_CHARS) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    variants.push(name);
+    if (variants.length >= MAX_EQUIVALENCE_VARIANTS) break;
+  }
+  return variants.length > 0 ? { variants, excluded_pages } : null;
+}
+
+/**
+ * True when the vehicle's WHOLE trim is echoed in a LEMON folder/variant name —
+ * every trim token present as a whole word (the same tokenization
+ * scoreLemonTrim rewards per-token). This is the "exact" bar: "SLT" is covered
+ * by "Sierra 1500 SLT, 4D Pickup Crew Cab, …" but not by "Sierra 1500 SLE, …",
+ * and "430i xDrive" needs both tokens. A vehicle with no trim covers nothing.
+ */
+export function nameCoversTrim(vehicle: { trim?: string | null }, name: string): boolean {
+  const trimToks = (vehicle.trim ?? "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  if (trimToks.length === 0) return false;
+  const nameToks = new Set(name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean));
+  return trimToks.every((t) => nameToks.has(t));
+}
+
+/** First equivalence variant that names the vehicle's trim, or null. */
+export function equivalentVariantForTrim(
+  vehicle: { trim?: string | null },
+  variants: readonly string[],
+): string | null {
+  for (const variant of variants) {
+    if (nameCoversTrim(vehicle, variant)) return variant;
+  }
+  return null;
+}
+
+/**
+ * True when a leaf path (raw href, decoded path, or full URL) falls under a
+ * page family the equivalence header excludes from its identity claim.
+ *
+ * Family = a whole path SEGMENT equal to the family name ("Labor Times/…"),
+ * not a substring match: the excluded "Fluids" is a top-level page family,
+ * while "…/Fluids And Lubricants" is a leaf INSIDE Repair and Diagnosis — a
+ * tree the header asserts identical — so it stays attributable. Trailing-s
+ * tolerance covers singular/plural drift ("Labor Time" vs "Labor Times").
+ */
+export function isEquivalenceExcludedPath(
+  path: string,
+  excludedPages: readonly string[],
+): boolean {
+  const famKeys = excludedPages.map(alnumKey).filter(Boolean);
+  if (famKeys.length === 0) return false;
+  for (const seg of hrefSegments(path)) {
+    const k = alnumKey(seg);
+    if (!k) continue;
+    if (famKeys.some((f) => k === f || k === `${f}s` || `${k}s` === f)) return true;
+  }
+  return false;
+}
+
 /**
  * Leaf-section allowlist, most valuable first. LEMON is a service manual, so the
  * clean structured data lives on spec tables. Each entry: a matcher against the
@@ -555,6 +704,18 @@ export type LemonPreview = {
   leaves: Array<{ url: string; label: string; chars: number }>;
   markdown: string;
   total_chars: number;
+  /** How the resolved folder relates to the config's trim; null when unresolved. */
+  trim_match: LemonTrimMatch | null;
+  /** Sibling variants the mirror asserts share this manual ([] when no header). */
+  equivalent_variants: string[];
+  /**
+   * Page families excluded from that identity claim ([] when no header).
+   * Claims from leaves under these families (isEquivalenceExcludedPath) must
+   * never be attributed to sibling-variant configs.
+   */
+  equivalence_excluded_pages: string[];
+  /** The variant that named the config's trim, when trim_match="equivalent". */
+  matched_variant: string | null;
 };
 
 /**
@@ -572,15 +733,46 @@ export type LemonFetchArgs = {
   maxLeaves?: number;
 };
 
-export type LemonResolved = { host: string; makeFolder: string; trim: string; trimBaseUrl: string };
+/**
+ * How the resolved trim folder relates to the config's trim:
+ *  - "exact": the folder name itself echoes the whole trim;
+ *  - "equivalent": it doesn't, but the landing page's equivalence header names
+ *    a variant that does — the mirror asserts this manual covers the config's
+ *    trim, so the pick is exact-by-assertion (excluded page families aside);
+ *  - "best_effort": neither — the closest folder the scoring gate allows
+ *    (also the classification for trim-less vehicles).
+ */
+export type LemonTrimMatch = "exact" | "equivalent" | "best_effort";
+
+export type LemonResolved = {
+  host: string;
+  makeFolder: string;
+  trim: string;
+  trimBaseUrl: string;
+  /** Only set when resolved with {equivalence:true} (the spec path). */
+  trim_match?: LemonTrimMatch;
+  /** Parsed landing-page header; null when absent/unreachable. Opt-in as above. */
+  equivalence?: LemonEquivalence | null;
+  /** The equivalence variant that named the trim, when trim_match="equivalent". */
+  matched_variant?: string | null;
+};
 
 /**
  * Resolve a vehicle to a live host + best-match trim folder. Shared by the spec
  * ingester (this file) and the labor ingester (lemonLabor.ts). Fail-open: null
  * when no host answers or no trim matches. `trimBaseUrl` ends in "/", ready to
  * append a section folder ("Repair and Diagnosis (Single Page)/", "Labor Times/").
+ *
+ * `opts.equivalence` adds ONE fetch of the ~2KB trim landing page — the only
+ * place the variant-equivalence header exists — and fills the optional
+ * trim_match/equivalence/matched_variant fields. The labor path stays opted
+ * out: Labor Times is an excluded family, so equivalence can never strengthen
+ * a labor pick, and the extra fetch would buy nothing.
  */
-export async function resolveLemonVehicle(args: LemonFetchArgs): Promise<LemonResolved | null> {
+export async function resolveLemonVehicle(
+  args: LemonFetchArgs,
+  opts?: { equivalence?: boolean },
+): Promise<LemonResolved | null> {
   const makeFolder = lemonMakeFolder(args.make);
   const vehicle = {
     model: args.model,
@@ -606,7 +798,25 @@ export async function resolveLemonVehicle(args: LemonFetchArgs): Promise<LemonRe
   const trim = pickLemonTrim(vehicle, folders);
   if (!trim) return null;
   const trimBaseUrl = buildLemonYearUrl(host, makeFolder, args.year) + `${encodeLemonSegment(trim)}/`;
-  return { host, makeFolder, trim, trimBaseUrl };
+  const base: LemonResolved = { host, makeFolder, trim, trimBaseUrl };
+  if (!opts?.equivalence) return base;
+
+  // Fail-open: an unreachable landing page or absent header just leaves the
+  // equivalence null and the classification at what the folder name alone says.
+  const exact = nameCoversTrim(vehicle, trim);
+  let equivalence: LemonEquivalence | null = null;
+  const landing = await lemonFetch(trimBaseUrl, FETCH_TIMEOUT_MS);
+  if (landing.ok && landing.body.length > 0) {
+    equivalence = parseLemonEquivalence(landing.body);
+  }
+  const matched_variant =
+    !exact && equivalence ? equivalentVariantForTrim(vehicle, equivalence.variants) : null;
+  return {
+    ...base,
+    equivalence,
+    matched_variant,
+    trim_match: exact ? "exact" : matched_variant ? "equivalent" : "best_effort",
+  };
 }
 
 /**
@@ -629,21 +839,37 @@ export async function fetchLemonManualMarkdown(args: LemonFetchArgs): Promise<Le
       leaves: [],
       markdown: "",
       total_chars: 0,
+      trim_match: null,
+      equivalent_variants: [],
+      equivalence_excluded_pages: [],
+      matched_variant: null,
       ...extra,
     });
 
     const makeFolder = lemonMakeFolder(args.make);
 
     // ── 1-2. Resolve a live host + best-match trim folder ───────────
-    const resolved = await resolveLemonVehicle(args);
+    // equivalence:true — the spec path wants the landing page's variant-identity
+    // assertion both to classify the pick and to ride the scrape result for
+    // cross-variant claim attribution.
+    const resolved = await resolveLemonVehicle(args, { equivalence: true });
     if (!resolved) return empty("unresolved", { make_folder: makeFolder });
     const { host, trim } = resolved;
+    const equivalenceFields: Pick<
+      LemonPreview,
+      "trim_match" | "equivalent_variants" | "equivalence_excluded_pages" | "matched_variant"
+    > = {
+      trim_match: resolved.trim_match ?? null,
+      equivalent_variants: resolved.equivalence?.variants ?? [],
+      equivalence_excluded_pages: resolved.equivalence?.excluded_pages ?? [],
+      matched_variant: resolved.matched_variant ?? null,
+    };
 
     // ── 3. Fetch the single-page index (link tree) ──────────────────
     const indexUrl = resolved.trimBaseUrl + `${encodeLemonSegment("Repair and Diagnosis (Single Page)")}/`;
     const indexRes = await lemonFetch(indexUrl, INDEX_FETCH_TIMEOUT_MS);
     if (!indexRes.ok || indexRes.body.length === 0) {
-      return empty("index_unreachable", { host, make_folder: makeFolder, resolved_trim: trim, index_url: indexUrl });
+      return empty("index_unreachable", { host, make_folder: makeFolder, resolved_trim: trim, index_url: indexUrl, ...equivalenceFields });
     }
 
     // ── 4. Select the spec leaves ───────────────────────────────────
@@ -655,7 +881,7 @@ export async function fetchLemonManualMarkdown(args: LemonFetchArgs): Promise<Le
     const cap = Math.max(1, Math.trunc(args.maxLeaves ?? MAX_LEMON_LEAVES));
     const chosen = selectRelevantLeaves(extractLeafHrefs(indexRes.body), cap * 3);
     if (chosen.length === 0) {
-      return empty("no_spec_leaves", { host, make_folder: makeFolder, resolved_trim: trim, index_url: indexUrl });
+      return empty("no_spec_leaves", { host, make_folder: makeFolder, resolved_trim: trim, index_url: indexUrl, ...equivalenceFields });
     }
 
     // ── 5. Fetch + render each leaf into markdown ───────────────────
@@ -687,7 +913,7 @@ export async function fetchLemonManualMarkdown(args: LemonFetchArgs): Promise<Le
     }
 
     if (leaves.length === 0) {
-      return empty("leaves_empty", { host, make_folder: makeFolder, resolved_trim: trim, index_url: indexUrl });
+      return empty("leaves_empty", { host, make_folder: makeFolder, resolved_trim: trim, index_url: indexUrl, ...equivalenceFields });
     }
 
     const markdown = parts.join("").slice(0, TOTAL_MARKDOWN_CAP).trim();
@@ -702,6 +928,7 @@ export async function fetchLemonManualMarkdown(args: LemonFetchArgs): Promise<Le
       leaves,
       markdown,
       total_chars: markdown.length,
+      ...equivalenceFields,
     };
 }
 

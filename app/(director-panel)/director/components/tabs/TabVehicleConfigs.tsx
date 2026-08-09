@@ -60,6 +60,24 @@ const enrichmentChip = (status: string, fillRate?: number) => {
   return <Badge tone={tone} dot>{status}{pct}</Badge>
 }
 
+// "Bookable" is a stricter fact than "complete": every applicable core role
+// carries a part AND a trusted price. The round-2 fleet read complete · 91%
+// while spark plugs / ATF / battery had no part on file — the status chip
+// alone was lying to whoever opened the booking flow. Renders nothing while
+// either gaps query is still loading.
+const bookabilityChip = (
+  partGaps: number | undefined,
+  priceGaps: number | undefined,
+) => {
+  if (partGaps == null || priceGaps == null) return null
+  if (partGaps === 0 && priceGaps === 0) return <Badge tone="green">bookable</Badge>
+  const bits = [
+    partGaps > 0 ? `${partGaps} part${partGaps === 1 ? '' : 's'} missing` : null,
+    priceGaps > 0 ? `${priceGaps} unpriced` : null,
+  ].filter(Boolean).join(', ')
+  return <Badge tone="orange">not bookable · {bits}</Badge>
+}
+
 // "3m ago" / "1h ago" / "Just now". Lower-resolution than ageLabel — used for
 // the action-row pills where we want a glanceable freshness signal.
 function relativeTime(ts?: number): string {
@@ -617,6 +635,8 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
     configId ? { vehicle_config_id: configId } : 'skip')
   const serviceGaps = useQuery(api.serviceParts.getServiceGapsForConfig,
     configId ? { vehicleConfigId: configId } : 'skip')
+  const priceGaps = useQuery(api.serviceParts.getPriceGapsForConfig,
+    configId ? { vehicleConfigId: configId } : 'skip')
   const addConfigFitment = useMutation(api.directorConfigActions.addConfigFitment)
   const updateBasics       = useMutation(api.directorConfigActions.updateConfigBasics)
   const updateEngine       = useMutation(api.directorConfigActions.updateEngineFields)
@@ -766,6 +786,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
       eyebrow={detail && <>
         <span className="mono" style={{ fontSize:13, fontWeight:600, color:'var(--blue-700)' }}>{detail.configKey}</span>
         {enrichmentChip(detail.enrichment.status ?? 'unknown', detail.enrichment.fillRate)}
+        {bookabilityChip(serviceGaps?.gaps.length, priceGaps?.gaps.length)}
         {detail.enrichment.version && <Badge tone="indigo">{detail.enrichment.version}</Badge>}
       </>}
       title={ymmt}

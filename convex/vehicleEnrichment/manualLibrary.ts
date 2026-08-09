@@ -587,6 +587,14 @@ export function buildManualQueries(year: number, make: string, model: string): s
     queries.push(`${ymm} maintenance schedule guide filetype:pdf site:${primary}`);
     queries.push(`${ymm} owner's manual pdf site:${primary}`);
   }
+  // Mopar family: the manuals live on vehicleinfo.mopar.com under opaque
+  // publication numbers (P136192_20_WK_…), which the generic queries never
+  // surface — the 2020 Grand Cherokee's real manual sat there while search
+  // returned a 2024 price guide and an Italian Uconnect booklet (both killed
+  // by the identity gates, burning rejection slots). Site-scope it.
+  if (["jeep", "chrysler", "dodge", "ram"].includes(normalizeMakeKey(mk))) {
+    queries.push(`${ymm} owner's manual site:vehicleinfo.mopar.com`);
+  }
   queries.push(`${ymm} warranty and maintenance guide pdf oil change interval`);
   queries.push(`${ymm} owner's manual pdf maintenance schedule miles months`);
   // Verified-faithful mirror, last resort (round-2 audit: it carried the
@@ -1861,7 +1869,42 @@ export const resolveManualForVehicle = internalAction({
             lastFailedCandidate = candidate;
             continue;
           }
-          bytes = new Uint8Array(await res.arrayBuffer());
+          // Capped STREAMING read (Aug 9 2026): when a server omits
+          // content-length, the bare arrayBuffer() of a giant PDF blew the
+          // 64 MB action memory limit and killed the whole resolve (2021
+          // CX-30, live — mazdausa.com full manuals). Read in chunks and
+          // abort past the Files-API cap; peak memory is ~2× the cap
+          // (chunks + merge), which fits the runtime. Oversize manuals fail
+          // honestly instead of crashing the action.
+          const reader = res.body?.getReader?.();
+          if (!reader) {
+            bytes = new Uint8Array(await res.arrayBuffer());
+          } else {
+            const chunks: Uint8Array[] = [];
+            let total = 0;
+            let overflow = false;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (!value) continue;
+              total += value.byteLength;
+              if (total > MAX_MANUAL_BYTES) {
+                overflow = true;
+                try { await reader.cancel(); } catch { /* already closed */ }
+                break;
+              }
+              chunks.push(value);
+            }
+            if (overflow) {
+              lastReason = `too_large_streamed_${total}`;
+              lastFailedCandidate = candidate;
+              continue;
+            }
+            const merged = new Uint8Array(total);
+            let offset = 0;
+            for (const c of chunks) { merged.set(c, offset); offset += c.byteLength; }
+            bytes = merged;
+          }
         } catch (e) {
           lastReason = `download_error:${String(e).slice(0, 120)}`;
           lastFailedCandidate = candidate;

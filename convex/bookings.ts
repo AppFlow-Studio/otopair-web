@@ -5049,6 +5049,60 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
     sources,
     enrichment_status: vehicleConfig?.enrichment_status ?? (vehicle?.vehicle_config_id ? null : "pending"),
     enrichment_fill_rate: vehicleConfig?.fill_rate ?? null,
+    // OEM tire sizes this vehicle actually offers, split per axle, derived from
+    // the wheel-size.com fitments saved on trim_specs.tire_options. Feeds the
+    // inspection tire-size dropdown so it lists the real sizes instead of a
+    // generic catalog. `has_data` is false when nothing is saved yet — the
+    // dialog uses that to trigger a one-time on-demand lookup.
+    available_tire_sizes: buildAvailableTireSizes(trimSpec),
+  };
+}
+
+/**
+ * Collapse `trim_specs.tire_options[]` into distinct per-axle size lists for the
+ * inspection dropdown. OEM-standard fitments are listed first; the rear list
+ * falls back to the front size for non-staggered setups. When no options array
+ * exists we fall back to the single stored front/rear sizes so the field still
+ * has the best value we know.
+ */
+function buildAvailableTireSizes(trimSpec: any): {
+  front: string[];
+  rear: string[];
+  source: string | null;
+  staggered: boolean;
+  has_data: boolean;
+} {
+  const options: any[] = Array.isArray(trimSpec?.tire_options)
+    ? trimSpec.tire_options
+    : [];
+  const front: string[] = [];
+  const rear: string[] = [];
+  const pushUnique = (arr: string[], value: unknown) => {
+    if (typeof value !== "string") return;
+    const size = value.trim().toUpperCase();
+    if (!size || arr.includes(size)) return;
+    arr.push(size);
+  };
+  // Stable ordering: OEM-standard fitments first, original order preserved.
+  const ordered = [...options].sort(
+    (a, b) =>
+      (b?.is_oem_standard === true ? 1 : 0) - (a?.is_oem_standard === true ? 1 : 0),
+  );
+  for (const opt of ordered) {
+    pushUnique(front, opt?.size_front);
+    pushUnique(rear, opt?.size_rear ?? opt?.size_front);
+  }
+  if (front.length === 0) pushUnique(front, trimSpec?.tire_size_front);
+  if (rear.length === 0) {
+    pushUnique(rear, trimSpec?.tire_size_rear ?? trimSpec?.tire_size_front);
+  }
+  return {
+    front,
+    rear,
+    source: trimSpec?.tire_options_source ?? null,
+    staggered:
+      trimSpec?.is_staggered === true || rear.some((r) => !front.includes(r)),
+    has_data: options.length > 0,
   };
 }
 

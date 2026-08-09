@@ -15,9 +15,11 @@
 // from the Convex bundler (convex/inspections.ts) as well as the Next app.
 import { getBookingServiceFlags } from "./vehicle-service-relevance";
 import type {
+  PassportSource,
   PreJobSurveyPayload,
   RotorCondition,
   TireCondition,
+  VehiclePassportSnapshot,
 } from "./vehicle-passport";
 import {
   getTireTreadMinimum,
@@ -1303,6 +1305,83 @@ export function getDirtyIncompleteZones(state: InspectionState): ZoneId[] {
     const zs = state.zones[zone.id];
     if (!zs || zs.done) continue;
     if (zs.dirty) out.push(zone.id);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Spec pre-fill — seed persistent vehicle identity/spec fields from the stored
+// passport so the mechanic reviews (and confirms) them instead of re-typing.
+// ONLY persistent specs are seeded; measured/observed fields (tread, pressure,
+// pad/rotor thickness, battery, every g/y/r rating) always start empty because
+// they genuinely change booking-to-booking.
+// ---------------------------------------------------------------------------
+
+/**
+ * Which inspection fields are pre-filled from the passport, where each pulls
+ * its value from, and which `sources[...]` key carries its provenance.
+ * `bucket` is the `ZoneState` sub-object the value lives in (text combobox vs
+ * select dropdown). `sourceKey === null` ⇒ no provenance tag is tracked for it
+ * (e.g. brake pad brand), so callers treat a stored value as "from records".
+ */
+export const SPEC_PREFILL_FIELDS: ReadonlyArray<{
+  zones: ReadonlyArray<Extract<ZoneId, "FL" | "FR" | "RL" | "RR" | "ENG">>;
+  fieldKey: string;
+  bucket: "text" | "select";
+  /** Path into `VehiclePassportSnapshot` for the stored value. */
+  read: (passport: VehiclePassportSnapshot) => unknown;
+  sourceKey: string | null;
+}> = [
+  { zones: ["FL", "FR", "RL", "RR"], fieldKey: "tire_brand", bucket: "text", read: (p) => p.tires.brand, sourceKey: "tires.brand" },
+  { zones: ["FL", "FR", "RL", "RR"], fieldKey: "tire_model", bucket: "text", read: (p) => p.tires.model, sourceKey: "tires.model" },
+  { zones: ["FL", "FR"], fieldKey: "tire_size", bucket: "text", read: (p) => p.tires.size_front, sourceKey: "tires.size_front" },
+  { zones: ["RL", "RR"], fieldKey: "tire_size", bucket: "text", read: (p) => p.tires.size_rear, sourceKey: "tires.size_rear" },
+  { zones: ["FL", "FR", "RL", "RR"], fieldKey: "pad_brand", bucket: "text", read: (p) => p.brakes.pad_brand, sourceKey: null },
+  { zones: ["ENG"], fieldKey: "oil_viscosity", bucket: "select", read: (p) => p.fluids.oil_viscosity, sourceKey: "fluids.oil_viscosity" },
+  { zones: ["ENG"], fieldKey: "oil_type", bucket: "select", read: (p) => p.fluids.oil_type, sourceKey: "fluids.oil_type" },
+  { zones: ["ENG"], fieldKey: "coolant_type", bucket: "select", read: (p) => p.fluids.coolant_type, sourceKey: "fluids.coolant_type" },
+  { zones: ["ENG"], fieldKey: "brake_fluid_type", bucket: "select", read: (p) => p.fluids.brake_fluid_type, sourceKey: "fluids.brake_fluid_type" },
+  { zones: ["ENG"], fieldKey: "transmission_fluid_type", bucket: "select", read: (p) => p.fluids.transmission_fluid_type, sourceKey: "fluids.transmission_fluid_type" },
+];
+
+export type SpecPrefillEntry = {
+  fieldKey: string;
+  bucket: "text" | "select";
+  value: string;
+  /** Passport provenance for the tag; `null` ⇒ show a generic "from records". */
+  source: PassportSource | null;
+};
+
+/** True when (zone, field) is one we seed from the passport. */
+export function isSpecPrefillField(zoneId: ZoneId, fieldKey: string): boolean {
+  return SPEC_PREFILL_FIELDS.some(
+    (f) => f.fieldKey === fieldKey && (f.zones as ReadonlyArray<ZoneId>).includes(zoneId),
+  );
+}
+
+/**
+ * Build the per-zone list of persistent specs to seed from the passport. Only
+ * fields with a non-empty stored value are returned. Pure — no state mutation.
+ */
+export function specPrefillFromPassport(
+  passport: VehiclePassportSnapshot | null | undefined,
+  sources: Record<string, PassportSource> | null | undefined,
+): Partial<Record<ZoneId, SpecPrefillEntry[]>> {
+  const out: Partial<Record<ZoneId, SpecPrefillEntry[]>> = {};
+  if (!passport) return out;
+  for (const field of SPEC_PREFILL_FIELDS) {
+    const raw = field.read(passport);
+    if (typeof raw !== "string" || raw.trim() === "") continue;
+    const value = raw.trim();
+    const source = field.sourceKey ? sources?.[field.sourceKey] ?? null : null;
+    for (const zone of field.zones) {
+      (out[zone] ??= []).push({
+        fieldKey: field.fieldKey,
+        bucket: field.bucket,
+        value,
+        source,
+      });
+    }
   }
   return out;
 }

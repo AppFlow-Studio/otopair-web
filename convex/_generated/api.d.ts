@@ -368,6 +368,7 @@ import type * as telnyx from "../telnyx.js";
 import type * as test_helpers from "../test_helpers.js";
 import type * as time_slots from "../time_slots.js";
 import type * as tireBrands from "../tireBrands.js";
+import type * as tireOptionsLookup from "../tireOptionsLookup.js";
 import type * as tire_quote_responses from "../tire_quote_responses.js";
 import type * as tires from "../tires.js";
 import type * as tires_catalog from "../tires_catalog.js";
@@ -887,6 +888,7 @@ declare const fullApi: ApiFromModules<{
   test_helpers: typeof test_helpers;
   time_slots: typeof time_slots;
   tireBrands: typeof tireBrands;
+  tireOptionsLookup: typeof tireOptionsLookup;
   tire_quote_responses: typeof tire_quote_responses;
   tires: typeof tires;
   tires_catalog: typeof tires_catalog;

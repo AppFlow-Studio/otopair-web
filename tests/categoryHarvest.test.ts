@@ -131,6 +131,28 @@ describe("pickVehicleSlug", () => {
       "/v-2020-mercedes-benz-glc43-amg--4matic--3-0l-v6-gas",
     );
   });
+  // Aug 9 2026 (Jeep GC round-2): displacement is contradiction-checked, not
+  // required — a slug that states no engine at all must pass, or every store
+  // whose slugs omit displacement no-ops the entire rung.
+  it("accepts a slug that carries NO displacement token when we have one", () => {
+    const engineless = "https://mopar.oempartsonline.com/v-2020-jeep-grand-cherokee-limited";
+    expect(
+      pickVehicleSlug([engineless], { year: 2020, model: "Grand Cherokee", displacement: "3.6" }),
+    ).toBe("/v-2020-jeep-grand-cherokee-limited");
+  });
+  it("still rejects a slug that states a DIFFERENT displacement", () => {
+    const wrong = "https://mopar.oempartsonline.com/v-2020-jeep-grand-cherokee-limited-5-7l-v8-gas";
+    expect(
+      pickVehicleSlug([wrong], { year: 2020, model: "Grand Cherokee", displacement: "3.6" }),
+    ).toBeNull();
+  });
+  it("prefers the displacement-stating slug over the silent one", () => {
+    const engineless = "https://mopar.oempartsonline.com/v-2020-jeep-grand-cherokee-limited";
+    const exact = "https://mopar.oempartsonline.com/v-2020-jeep-grand-cherokee-limited-3-6l-v6-gas";
+    expect(
+      pickVehicleSlug([engineless, exact], { year: 2020, model: "Grand Cherokee", displacement: "3.6" }),
+    ).toBe("/v-2020-jeep-grand-cherokee-limited-3-6l-v6-gas");
+  });
 });
 
 describe("category negative screens", () => {

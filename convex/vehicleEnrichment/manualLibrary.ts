@@ -116,9 +116,9 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
-import { searchAndFetch } from "./firecrawl";
+import { searchLinksOnly } from "./firecrawl";
 import { resolveExtractionModel } from "./utils/enrichmentFlags";
-import { discoverDirectManuals } from "./manualDirectSources";
+import { discoverDirectManuals, USER_AGENT as MANUAL_DOWNLOAD_USER_AGENT } from "./manualDirectSources";
 
 // This module is new — `internal.vehicleEnrichment.manualLibrary` is absent
 // from _generated/api.d.ts until `npx convex dev` regenerates it. Same pattern
@@ -315,6 +315,20 @@ export const MANUAL_MIRROR_DOMAINS: readonly string[] = [
   "lemon-manuals.la", // offshore republisher of OEM manuals; risk accepted 2026-08-05
 ];
 
+/**
+ * Mirrors whose bytes we have VERIFIED faithful to the OEM's (round-2 audit,
+ * Aug 9 2026: carmans.net served the exact 2019 Sierra and 2021 CX-30 owner's
+ * manuals with schedule tables intact; dealereprocess ETag-matched Toyota's
+ * CDN; lemon-manuals risk-accepted 2026-08-05). They still never claim OEM
+ * provenance — but they should not carry the same −40 rank penalty as scribd,
+ * or an anonymous wrong-model candidate outranks a correct verified mirror.
+ */
+export const VERIFIED_MANUAL_MIRRORS: readonly string[] = [
+  "carmans.net",
+  "dealereprocess.org",
+  "lemon-manuals.la",
+];
+
 /** Suffix-match a host against a domain list (`a.b.com` matches `b.com`). */
 function hostMatches(host: string, domains: readonly string[]): boolean {
   return domains.some((d) => {
@@ -437,7 +451,11 @@ export function rankManualCandidates(
 
     let score = 0;
     if (oem) score += 100;
-    if (isMirrorDomain(url)) score -= 40;
+    if (isMirrorDomain(url)) {
+      // Verified-faithful mirrors take a token penalty (stay below OEM, beat
+      // anonymous candidates); the mirror farm keeps the full −40.
+      score -= hostMatches(host, VERIFIED_MANUAL_MIRRORS) ? 6 : 40;
+    }
     score += DOC_KIND_SCORE[docKind];
     if (isPdf) score += 25;
     if (hay.includes(String(vehicle.year))) score += 15;
@@ -483,6 +501,69 @@ export function rankManualCandidates(
 }
 
 /**
+ * Does this candidate URL/title CONTRADICT the vehicle? Returns the reason,
+ * or null when nothing ties the candidate to a DIFFERENT vehicle.
+ *
+ * Round-2 post-mortem (Aug 9 2026): the 2019 Sierra 1500 stored gmc.com's
+ * `/manuals/2015/gmc/sierra_3500hd/2k15sierraden3rdPrint.pdf` — a 2015
+ * Sierra 3500HD Denali manual. The ranker's identity signal is a soft −30
+ * that the +100 OEM bonus steamrolls, and nothing downstream re-checked. This
+ * is a FILTER, not a score, and it is contradiction-only: a candidate that
+ * names no year and no model (Toyota's opaque publication slugs) passes — the
+ * anonymous-candidate penalty still handles ranking those.
+ *
+ *   - Year: candidate names model year(s) — 4-digit 19xx/20xx, a
+ *     "2018-2022" range, or a "2k15" filename token — and none covers ours.
+ *   - Model number: an alphabetic model stem we recognize is immediately
+ *     followed by a DIFFERENT digit run ("sierra3500" for a Sierra 1500,
+ *     "cx5" for a CX-30). Year-shaped runs are exempt (rule 1's job), and
+ *     the rule only fires when the vehicle itself carries digit tokens.
+ */
+export function contradictsVehicle(
+  url: string,
+  title: string | null | undefined,
+  vehicle: { year: number; model: string },
+): string | null {
+  const hay = `${url} ${title ?? ""}`.toLowerCase();
+
+  // ── Year contradiction ──
+  // Digit-lookaround boundaries, not \b: underscore is a word character, so
+  // "…_2022_Grand…" never \b-matches and real years went unseen.
+  const years = new Set<number>();
+  for (const m of hay.matchAll(/(?<!\d)(19[89]\d|20[0-3]\d)(?!\d)/g)) years.add(Number(m[1]));
+  for (const m of hay.matchAll(/(?<![a-z0-9])2k(\d{2})(?!\d)/g)) years.add(2000 + Number(m[1]));
+  let inRange = false;
+  for (const m of hay.matchAll(/(?<!\d)(19[89]\d|20[0-3]\d)\s*[-–]\s*(19[89]\d|20[0-3]\d)(?!\d)/g)) {
+    if (Number(m[1]) <= vehicle.year && vehicle.year <= Number(m[2])) inRange = true;
+  }
+  if (years.size > 0 && !years.has(vehicle.year) && !inRange) {
+    return `year_mismatch:${[...years].sort().join("/")}`;
+  }
+
+  // ── Model-number contradiction ──
+  const tokens = String(vehicle.model)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+  const digitTokens = tokens.filter((t) => /^\d+$/.test(t));
+  const alphaTokens = tokens.filter((t) => /^[a-z]+$/.test(t) && t.length >= 2);
+  if (digitTokens.length > 0) {
+    const flat = hay.replace(/[^a-z0-9]/g, "");
+    for (const stem of alphaTokens) {
+      for (const m of flat.matchAll(new RegExp(`${stem}(\\d{1,4})`, "g"))) {
+        const run = m[1];
+        const asNum = Number(run);
+        if (run.length === 4 && asNum >= 1980 && asNum <= 2035) continue; // year-shaped
+        const matchesOurs = digitTokens.some((d) => d === run || d.startsWith(run) || run.startsWith(d));
+        if (!matchesOurs) return `model_number_mismatch:${stem}${run}`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Discovery queries for one vehicle, most-targeted first.
  *
  * Site-scoped queries come first when the make is in the allowlist — they are
@@ -508,6 +589,9 @@ export function buildManualQueries(year: number, make: string, model: string): s
   }
   queries.push(`${ymm} warranty and maintenance guide pdf oil change interval`);
   queries.push(`${ymm} owner's manual pdf maintenance schedule miles months`);
+  // Verified-faithful mirror, last resort (round-2 audit: it carried the
+  // exact Sierra and CX-30 manuals when the OEM-scoped queries came up dry).
+  queries.push(`${ymm} owner's manual site:carmans.net`);
   return queries;
 }
 
@@ -776,12 +860,25 @@ export function buildManualExtractionSchema(
   return {
     type: "object",
     properties: {
+      // Identity FIRST (Aug 9 2026): the specs pass had this guard, the
+      // intervals pass did not — a wrong-vehicle manual with a clean schedule
+      // would have written data_quality "oem_manual" at 0.95 for the wrong
+      // car (the 2015 Sierra 3500HD PDF stored for a 2019 Sierra 1500).
+      document_matches_vehicle: { type: "boolean" },
+      document_vehicle_text: nullable("string"),
       schedule_found: { type: "boolean" },
       schedule_kind: nullable("string"),
       services: { type: "array", items: manualIntervalEntrySchema(intervalKeys) },
       notes: nullable("string"),
     },
-    required: ["schedule_found", "schedule_kind", "services", "notes"],
+    required: [
+      "document_matches_vehicle",
+      "document_vehicle_text",
+      "schedule_found",
+      "schedule_kind",
+      "services",
+      "notes",
+    ],
     additionalProperties: false,
   };
 }
@@ -792,7 +889,9 @@ export function buildManualExtractionPrompt(vehicle: {
   model: string;
 }): string {
   return [
-    `The attached PDF is the manufacturer's published documentation for the ${vehicle.year} ${vehicle.make} ${vehicle.model}.`,
+    `The attached PDF should be the manufacturer's published documentation for the ${vehicle.year} ${vehicle.make} ${vehicle.model}.`,
+    "",
+    "STEP 0 — VERIFY THE DOCUMENT FIRST. From the cover, title page, or headers, identify which vehicle (year and model) this document is actually for, and copy that identification VERBATIM into `document_vehicle_text`. Set `document_matches_vehicle` to false when the document names a DIFFERENT model year or a different model/series (a 2015 manual for a 2019 vehicle; a Sierra 3500HD manual for a Sierra 1500). When it matches — or the document genuinely does not identify a year/model — set it to true. If it is false, still fill the remaining fields honestly, but expect the caller to discard the extraction.",
     "",
     "Find the MAINTENANCE SCHEDULE (often titled 'Maintenance Schedule', 'Scheduled Maintenance', 'Maintenance Log', or inside a Warranty & Maintenance Guide) and report the factory service intervals.",
     "",
@@ -1663,10 +1762,19 @@ export const resolveManualForVehicle = internalAction({
 
       if (!directSufficient) {
         for (const query of queries) {
-          const results = await searchAndFetch(query, 5);
+          // Links only (Aug 9 2026): the resolver never reads page bodies,
+          // inline scrapes OOM'd on scraped-PDF markdown, and scrape-failed
+          // hits (= most direct PDF links) were silently dropped.
+          const results = await searchLinksOnly(query, 5);
           for (const r of results) found.push({ url: r.url, title: r.title });
           // Stop early once an OEM PDF is in hand — each query costs credits.
-          const ranked = rankManualCandidates(found, args);
+          // The early-break must apply the SAME wrong-vehicle filter the
+          // candidate list does: a wrong-year OEM PDF at rank 0 used to end
+          // the search here, and the rescue queries (carmans.net) never ran
+          // (2019 Sierra, live — all five gmc.com hits were wrong-year).
+          const ranked = rankManualCandidates(found, args).filter(
+            (c) => contradictsVehicle(c.url, c.title, args) == null,
+          );
           if (ranked.length > 0 && ranked[0].is_oem_domain && ranked[0].is_pdf) break;
         }
       } else {
@@ -1679,7 +1787,17 @@ export const resolveManualForVehicle = internalAction({
       const rejectedUrls = new Set<string>(((existing as any)?.rejected_urls ?? []) as string[]);
       const candidates = rankManualCandidates(found, args)
         .filter((c) => c.is_pdf)
-        .filter((c) => !rejectedUrls.has(c.url));
+        .filter((c) => !rejectedUrls.has(c.url))
+        .filter((c) => {
+          // Wrong-vehicle candidates never reach the download loop — the OEM
+          // rank bonus cannot outvote an outright contradiction (the 2015
+          // Sierra 3500HD manual that won for a 2019 Sierra 1500).
+          const why = contradictsVehicle(c.url, c.title, args);
+          if (why) {
+            console.log(`[manual-library] ${label}: DROPPED wrong-vehicle candidate (${why}): ${c.url}`);
+          }
+          return why == null;
+        });
       if (rejectedUrls.size > 0) {
         console.log(
           `[manual-library] ${label}: skipping ${rejectedUrls.size} previously-rejected candidate(s)`,
@@ -1693,6 +1811,9 @@ export const resolveManualForVehicle = internalAction({
 
       // ── 2. Download the best candidate (then the runner-up) ───
       let lastReason = "unknown";
+      // The candidate that actually PRODUCED lastReason — the old code
+      // attributed every failure to candidates[0] regardless.
+      let lastFailedCandidate: (typeof candidates)[number] | null = null;
       for (const candidate of candidates.slice(0, 3)) {
         const meta = {
           url: candidate.url,
@@ -1703,36 +1824,64 @@ export const resolveManualForVehicle = internalAction({
 
         let bytes: Uint8Array | null = null;
         try {
-          const res = await fetch(candidate.url, {
-            headers: { Accept: "application/pdf,*/*" },
+          // Browser UA always — the direct-source PROBE sends one and
+          // succeeds, then this download went out bare and volvocars.com
+          // answered 403 (round-2 XC90). On 403/429 retry once with a
+          // referer, which clears the remaining polite-bot walls.
+          const baseHeaders = {
+            Accept: "application/pdf,*/*",
+            "User-Agent": MANUAL_DOWNLOAD_USER_AGENT,
+            "Accept-Language": "en-US,en;q=0.9",
+          };
+          let res = await fetch(candidate.url, {
+            headers: baseHeaders,
             signal: AbortSignal.timeout(PDF_DOWNLOAD_TIMEOUT_MS),
           });
+          if (res.status === 403 || res.status === 429) {
+            console.log(
+              `[manual-library] ${label}: ${res.status} from ${candidate.source_domain} — retrying with referer`,
+            );
+            res = await fetch(candidate.url, {
+              headers: {
+                ...baseHeaders,
+                Referer: `https://${candidate.source_domain}/`,
+                "Cache-Control": "no-cache",
+              },
+              signal: AbortSignal.timeout(PDF_DOWNLOAD_TIMEOUT_MS),
+            });
+          }
           if (!res.ok) {
             lastReason = `download_${res.status}`;
+            lastFailedCandidate = candidate;
             continue;
           }
           const declared = Number(res.headers.get("content-length") ?? "");
           if (Number.isFinite(declared) && declared > MAX_MANUAL_BYTES) {
             lastReason = `too_large_declared_${declared}`;
+            lastFailedCandidate = candidate;
             continue;
           }
           bytes = new Uint8Array(await res.arrayBuffer());
         } catch (e) {
           lastReason = `download_error:${String(e).slice(0, 120)}`;
+          lastFailedCandidate = candidate;
           continue;
         }
 
         if (bytes.length > MAX_STORED_MANUAL_BYTES) {
           lastReason = `too_large_${bytes.length}`;
+          lastFailedCandidate = candidate;
           continue;
         }
         if (bytes.length < MIN_MANUAL_BYTES) {
           lastReason = `too_small_${bytes.length}`;
+          lastFailedCandidate = candidate;
           continue;
         }
         if (!looksLikePdfBytes(bytes)) {
           // An HTML error page wearing a .pdf URL. Never upload it.
           lastReason = "not_a_pdf_body";
+          lastFailedCandidate = candidate;
           continue;
         }
 
@@ -1763,6 +1912,7 @@ export const resolveManualForVehicle = internalAction({
           const upload = await uploadPdfToFilesApi(bytes, manualFileName(args, candidate.doc_kind));
           if (!upload.ok) {
             lastReason = upload.reason;
+            lastFailedCandidate = candidate;
             continue;
           }
           fileId = upload.result.file_id;
@@ -1772,6 +1922,7 @@ export const resolveManualForVehicle = internalAction({
           // Oversize AND unstorable is a genuine dead end — neither extractor
           // can reach it. Fail so the negative cache applies.
           lastReason = `oversize_unstored_${bytes.length}`;
+          lastFailedCandidate = candidate;
           continue;
         }
 
@@ -1809,11 +1960,12 @@ export const resolveManualForVehicle = internalAction({
         };
       }
 
+      const failedCandidate = lastFailedCandidate ?? candidates[0];
       return await fail(lastReason, {
-        url: candidates[0].url,
-        source_domain: candidates[0].source_domain,
-        is_oem_domain: candidates[0].is_oem_domain,
-        doc_kind: candidates[0].doc_kind,
+        url: failedCandidate.url,
+        source_domain: failedCandidate.source_domain,
+        is_oem_domain: failedCandidate.is_oem_domain,
+        doc_kind: failedCandidate.doc_kind,
       });
     } catch (e) {
       // Belt-and-braces: the contract is "never throws".
@@ -1938,6 +2090,28 @@ export const extractIntervalsFromManual = internalAction({
         });
         if (!res.ok) {
           const detail = (await res.text().catch(() => "")).slice(0, 300);
+          // Files-API hard limits — >600 PDF pages or >1M prompt tokens —
+          // are a ROUTING verdict, not a failure: the document is real, just
+          // oversize for this extractor (2022 Palisade owner's manual, 15.7 MB
+          // under the byte cap but over the page cap; the byte-based
+          // extractorForBytes cannot see page count up front). Hand it to the
+          // same Reducto path oversize-by-bytes manuals already use.
+          if (
+            res.status === 400 &&
+            /maximum of 600 PDF pages|prompt is too long/i.test(detail)
+          ) {
+            console.log(
+              `[manual-library] ${label}: Files-API size limit (${detail.slice(0, 80)}…) — falling back to Reducto`,
+            );
+            try {
+              return await ctx.runAction(
+                (internal as any).vehicleEnrichment.manualReducto.extractIntervalsViaReducto,
+                { vehicleConfigId: args.vehicleConfigId },
+              );
+            } catch (e) {
+              return none("failed", `reducto_fallback_error:${String(e).slice(0, 160)}`);
+            }
+          }
           return none("failed", `messages_${res.status}:${detail}`);
         }
         json = await res.json();
@@ -1949,6 +2123,32 @@ export const extractIntervalsFromManual = internalAction({
 
       const payload = extractToolPayload(json, EXTRACTION_TOOL_NAME);
       if (!payload) return none("failed", "no_tool_payload");
+
+      // Identity verdict BEFORE any interval write (Aug 9 2026): a
+      // wrong-vehicle manual that DOES contain a schedule used to extract
+      // cleanly and land as data_quality "oem_manual" @ 0.95. The reader has
+      // just seen the cover page — its verdict outranks every URL heuristic.
+      // Missing field (pre-upgrade payloads) is treated as a match.
+      if ((payload as any).document_matches_vehicle === false) {
+        const docText = String((payload as any).document_vehicle_text ?? "").slice(0, 200);
+        console.warn(
+          `[manual-library] ${label}: WRONG-VEHICLE manual — document says "${docText}"; rejecting`,
+        );
+        const priorRejections = ((context.manual as any)?.rejected_urls ?? []).length;
+        if (priorRejections < MANUAL_MAX_REJECTIONS) {
+          try {
+            await ctx.runMutation(selfApi().rejectManualRow, {
+              make: context.make,
+              model: context.model,
+              year: context.year,
+              reason: `wrong_vehicle: ${docText || "unidentified"}`,
+            });
+          } catch (e) {
+            console.warn(`[manual-library] ${label}: could not record wrong-vehicle rejection:`, e);
+          }
+        }
+        return none("skipped", "document_vehicle_mismatch");
+      }
 
       const rows = dedupeIntervalsByService(parseManualIntervals(payload));
       const citations = collectCitationSpans(json);

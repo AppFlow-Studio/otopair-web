@@ -30,6 +30,56 @@ function getApiKey(): string {
  * Search Firecrawl and return results with inline markdown content.
  * Uses `include_raw_content: true` so no separate scrape step is needed.
  */
+/**
+ * SERP-only search — url/title/description, NO inline scrapes (Aug 9 2026).
+ *
+ * searchAndFetch attaches a markdown scrape to every hit, which callers that
+ * only need the LINKS pay for twice: in credits, and in memory — the manual
+ * resolver OOM'd at 64 MB when a query's hits included multi-hundred-page
+ * PDFs scraped to markdown (2021 CX-30, live). It also silently DROPS any
+ * hit whose scrape failed (`if (!markdown) continue`), which for direct-PDF
+ * URLs is most of them — the exact candidates the manual path wants.
+ */
+export async function searchLinksOnly(
+  query: string,
+  numResults: number = 5,
+): Promise<Array<{ url: string; title: string }>> {
+  try {
+    const response = await fetch(`${FIRECRAWL_BASE}/search`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${getApiKey()}`,
+      },
+      body: JSON.stringify({ query, limit: numResults, timeout: 30_000 }),
+      signal: AbortSignal.timeout(35_000),
+    });
+    if (!response.ok) {
+      console.error(`Firecrawl link search failed: ${response.status} ${response.statusText}`);
+      return [];
+    }
+    const data = await response.json();
+    const rawData = data.data ?? data;
+    const items: any[] = Array.isArray(rawData)
+      ? rawData
+      : Array.isArray(rawData?.web)
+        ? rawData.web
+        : Array.isArray(rawData?.results)
+          ? rawData.results
+          : [];
+    const out: Array<{ url: string; title: string }> = [];
+    for (const item of items) {
+      const url = item.url ?? "";
+      if (!url) continue;
+      out.push({ url, title: item.title ?? item.metadata?.title ?? "" });
+    }
+    return out;
+  } catch (error) {
+    console.error("Firecrawl link search error:", error);
+    return [];
+  }
+}
+
 export async function searchAndFetch(
   query: string,
   numResults: number = 5,

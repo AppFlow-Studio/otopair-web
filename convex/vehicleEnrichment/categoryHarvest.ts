@@ -135,8 +135,14 @@ const ROLE_CATEGORY_BLOCKS: Record<string, RegExp> = {
  *   - the year must appear in the slug;
  *   - EVERY digit-bearing model token must appear ("43" kills glc63);
  *   - at least one alphabetic model token must appear;
- *   - when the displacement parses, its slug form must appear
- *     ("3.0" → "3-0l"; the GLC63's "4-0l" fails it).
+ *   - displacement is CONTRADICTION-checked, not required (Aug 9 2026,
+ *     Jeep GC round-2 post-mortem): a slug carrying a displacement token
+ *     ("4-0l") that differs from ours ("3-6l") is rejected — the GLC63 still
+ *     dies here — but a slug carrying NO displacement token passes. Many
+ *     RevolutionParts slugs omit the engine entirely, and the old hard
+ *     "must appear" gate no-opped the whole rung (no_vehicle_slug) for
+ *     every such store: the 2020 Grand Cherokee's missing spark plugs sat
+ *     one un-fetched category page away.
  *  No candidate passing all gates → null, and the caller reports an honest
  *  no_vehicle_slug instead of harvesting a neighbor. */
 export function pickVehicleSlug(
@@ -164,7 +170,12 @@ export function pickVehicleSlug(
     if (!flat.includes(String(vehicle.year))) continue;
     if (!digitTokens.every((t) => flat.includes(t))) continue;
     if (alphaTokens.length > 0 && !alphaTokens.some((t) => flat.includes(t))) continue;
-    if (dispL && !slug.includes(dispL)) continue;
+    if (dispL) {
+      // A slug that states SOME displacement that is not ours contradicts the
+      // vehicle — fatal. A slug that states none is merely silent — allowed.
+      const stated = slug.match(/\d+-\d+l/g);
+      if (stated && stated.length > 0 && !stated.includes(dispL)) continue;
+    }
     const score =
       digitTokens.length +
       alphaTokens.filter((t) => flat.includes(t)).length +

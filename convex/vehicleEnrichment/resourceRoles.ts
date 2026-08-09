@@ -458,7 +458,20 @@ export const harvestRefutedReplacements = internalAction({
 export const healAfterRun = internalAction({
   args: { vehicleConfigId: v.id("vehicle_configs") },
   handler: async (ctx, args) => {
-    // Harvest FIRST: the refutation ledger already names replacement
+    // Resurrection FIRST — even cheaper than harvest: the run's own
+    // rejection ledger already holds part numbers the extractor found and
+    // our format gate destroyed (CX-30: 6 core parts). One verify batch,
+    // zero search; self-noops unless a pattern fix unlocked something.
+    let resurrect: any = null;
+    try {
+      resurrect = await ctx.runAction(
+        internal.vehicleEnrichment.rejectionResurrect.resurrectRejectedParts,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.error("[heal-after-run] rejection resurrect failed (non-fatal):", e);
+    }
+    // Harvest next: the refutation ledger already names replacement
     // candidates, so this is the cheapest possible fill (one verify call, no
     // search). The repair pass then only re-searches roles harvest could not
     // close — and its end-of-pass reconcile stamps quotability AFTER both.
@@ -554,6 +567,8 @@ export const healAfterRun = internalAction({
       console.error("[heal-after-run] completion-gate re-evaluation failed (non-fatal):", e);
     }
     const summary = {
+      resurrect: resurrect?.status ?? "error",
+      resurrectWritten: resurrect?.written ?? [],
       harvest: harvest?.status ?? "error",
       harvestWritten: harvest?.written ?? [],
       fluids: fluids?.status ?? "error",

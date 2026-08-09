@@ -71,8 +71,11 @@
 // `isOemDomain`, which is redundant: every builder below already knows whether
 // its host is the manufacturer's, and records that as `tier`.
 
-/** Browser UA — several of these CDNs serve a challenge to unknown clients. */
-const USER_AGENT =
+/** Browser UA — several of these CDNs serve a challenge to unknown clients.
+ *  Exported: manualLibrary's real download must send the SAME identity the
+ *  probe does (round-2 XC90: the probe passed with this UA, then the bare
+ *  download 403'd on volvocars.com). */
+export const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
 
 /** A probe reads the first bytes only — enough for the magic number. */
@@ -214,11 +217,30 @@ export const DIRECT_SOURCE_BUILDERS: readonly DirectSourceBuilder[] = [
     },
     titleFor: (year, _make, model) => `${year} Nissan ${model} Owner's Manual`,
   },
-  // NO hyundai_dam BUILDER — see the header. The glovebox-manual path was
-  // search-sourced, never byte-fetched, and when it was finally probed on
-  // Aug 5 2026 every variant 404'd, including the exact example the research
-  // cited. Hyundai is covered by the dealereprocess entry below (2023 Tucson
-  // verified live), so the pattern bought nothing but a round trip per config.
+  {
+    // REINSTATED Aug 9 2026 — the Aug 5 "every variant 404'd" conclusion was
+    // wrong (transient CDN failure or wrong slug variants): re-probed live
+    // with THIS exact ranged-GET method and the 2022 Palisade answered
+    // 206/application/pdf (16.5 MB), as did 2021 Tucson and 2022 Santa-Fe
+    // (multiword slug = Title-Case hyphenated). Some model-years genuinely
+    // 404 (2020 Elantra, 2023 Sonata) — hence `inferred`, and the probe
+    // decides. This matters because Hyundai's dealereprocess copy missed the
+    // Palisade and search then fetched the HCM FAQ off the OEM domain.
+    name: "hyundai_glovebox",
+    confidence: "inferred",
+    tier: "oem",
+    build: (year, make, model) => {
+      if (normMake(make) !== "hyundai") return null;
+      const dir = hyphenSlug(model);
+      const file = titleHyphenSlug(model);
+      if (!dir || !file) return null;
+      return (
+        `https://owners.hyundaiusa.com/content/dam/hyundai/us/myhyundai/manuals/` +
+        `glovebox-manual/${year}/${dir}/${year}-${file}-Owners-Manual.pdf`
+      );
+    },
+    titleFor: (year, _make, model) => `${year} Hyundai ${model} Owner's Manual`,
+  },
   {
     name: "dealereprocess",
     confidence: "verified",

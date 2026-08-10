@@ -42,11 +42,12 @@ import {
   deriveTierInspectionScope,
   isFieldApplicableToZone,
   isFieldRequiredForZone,
+  isSpecPrefillField,
   normalizeTireSize,
   nextInspectionZoneAfterCompletion,
   patchInspectionZone,
   patchSharedInspectionText,
-  zoneHasInput,
+  specPrefillFromPassport,
   INSPECTION_ZONES,
   INSPECTION_ZONES_BY_ID,
   requiredZonesForBooking,
@@ -58,6 +59,7 @@ import {
   type FieldUnavailableStatus,
   type InspectionField,
   type InspectionState,
+  type SpecPrefillEntry,
   type TriValue,
   type ZoneCompletionContext,
   type ZoneId,
@@ -75,6 +77,7 @@ import {
   TIRE_BRAND_OPTIONS,
   TIRE_MODEL_OPTIONS,
   tireModelOptionsForBrand,
+  tireSizeOptionsFromList,
   TIRE_SIZE_OPTIONS,
   TRANSMISSION_FLUID_OPTIONS,
   type InspectionOption,
@@ -94,6 +97,7 @@ import {
 } from "@/lib/owner-profile-questions";
 import type {
   InspectionStatus,
+  PassportSource,
   PreJobSurveyPayload,
   VehiclePassportData,
 } from "@/lib/vehicle-passport";
@@ -327,7 +331,15 @@ function MultiPointInspectionDialogBody({
     inspection: InspectionInputPayload,
   ) => Promise<void>;
 }) {
-  const isFirstVisit = passportData?.is_first_shop_visit ?? true;
+  // `is_complete` only tracks whether the passport's required spec fields
+  // (mileage, tire brand, tire condition) are filled — NOT whether this car has
+  // ever been serviced here. Split the two so a returning car with a thin
+  // passport reads "Specs incomplete" instead of a bogus "First visit".
+  const specsIncomplete = !!passportData && !passportData.is_complete;
+  const hasPriorVisits = (passportData?.recent_services?.length ?? 0) > 0;
+  const isFirstVisit =
+    passportData?.is_first_shop_visit ??
+    (passportData ? specsIncomplete && !hasPriorVisits : true);
 
   const savedInspection = useQuery(
     api.inspections.getByBooking,
@@ -360,6 +372,30 @@ function MultiPointInspectionDialogBody({
   // optimistically; the query also drops them once the fitment is verified.
   const [verifiedKeys, setVerifiedKeys] = useState<Set<string>>(new Set());
   const services = useQuery(api.services.list);
+
+  // On-demand OEM tire-size fill. Enrichment normally saves the vehicle's
+  // wheel-size.com fitments to trim_specs.tire_options; the passport surfaces
+  // them as `available_tire_sizes`. When a vehicle was never enriched the
+  // passport comes back with `has_data: false` — fetch + save once on open so
+  // the tire-size dropdown lists the vehicle's real sizes. The write reactively
+  // re-runs the passport query, which fills the dropdown. Runs at most once per
+  // booking; failures are silent (the dropdown keeps the generic size list).
+  const ensureVehicleTireOptions = useAction(
+    api.tireOptionsLookup.ensureVehicleTireOptions,
+  );
+  const tireLookupRequestedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!bookingId || !passportData) return;
+    if (passportData.available_tire_sizes?.has_data) return;
+    if (tireLookupRequestedRef.current === bookingId) return;
+    tireLookupRequestedRef.current = bookingId;
+    ensureVehicleTireOptions({ bookingId: bookingId as Id<"bookings"> }).catch(
+      () => {
+        // non-fatal — the generic size list remains available
+      },
+    );
+  }, [bookingId, passportData, ensureVehicleTireOptions]);
+
   const prepareInspectionPhotoUpload = useMutation(
     prepareInspectionPhotoUploadRef,
   ) as (args: {
@@ -423,6 +459,21 @@ function MultiPointInspectionDialogBody({
   >({});
   const [ownerConfirmed, setOwnerConfirmed] = useState(false);
   const [ownerDirty, setOwnerDirty] = useState(false);
+
+  // Zones whose pre-filled persistent specs the mechanic has reviewed this
+  // session — either by tapping "Specs match" or by editing a spec field. A
+  // zone with un-reviewed seeded specs can't be marked complete.
+  const [confirmedSpecZones, setConfirmedSpecZones] = useState<Set<ZoneId>>(
+    () => new Set(),
+  );
+  const markSpecReviewed = useCallback((zoneId: ZoneId) => {
+    setConfirmedSpecZones((prev) => {
+      if (prev.has(zoneId)) return prev;
+      const next = new Set(prev);
+      next.add(zoneId);
+      return next;
+    });
+  }, []);
 
   const requiredZones = useMemo(
     () => requiredZonesForBooking(bookingServices),
@@ -533,6 +584,66 @@ function MultiPointInspectionDialogBody({
 
     setHydrated(true);
   }, [hydrated, bookingId, savedInspection, prefillData]);
+
+  // Persistent vehicle specs (tire identity, pad brand, fluid specs) to seed
+  // from the stored passport so the mechanic reviews them instead of re-typing.
+  // Measured/observed fields are never seeded — they change every visit.
+  const specPrefill = useMemo(
+    () =>
+      specPrefillFromPassport(
+        passportData?.passport,
+        passportData?.sources,
+      ),
+    [passportData],
+  );
+
+  // ---- seed spec fields once, after base hydration and once the passport is
+  // available. Only fills fields that are still empty, so a resumed draft (or a
+  // value the mechanic has since typed) always wins. Seeds leave done/dirty
+  // untouched — they're reference values, not mechanic input.
+  const specsSeededRef = useRef(false);
+  useEffect(() => {
+    if (!hydrated || specsSeededRef.current) return;
+    const entries = Object.entries(specPrefill) as Array<
+      [ZoneId, SpecPrefillEntry[]]
+    >;
+    if (entries.length === 0) return; // passport not loaded yet (or nothing to seed)
+    specsSeededRef.current = true;
+    setState((prev) => {
+      let changed = false;
+      const zones = { ...prev.zones };
+      for (const [zoneId, specs] of entries) {
+        const base =
+          zones[zoneId] ?? defaultZoneState(INSPECTION_ZONES_BY_ID[zoneId]);
+        let text = base.text;
+        let select = base.select;
+        for (const spec of specs) {
+          if (spec.bucket === "text") {
+            if ((text[spec.fieldKey] ?? "").trim() !== "") continue;
+            text = { ...text, [spec.fieldKey]: spec.value };
+          } else {
+            if ((select[spec.fieldKey] ?? "").trim() !== "") continue;
+            select = { ...select, [spec.fieldKey]: spec.value };
+          }
+          changed = true;
+        }
+        if (text !== base.text || select !== base.select) {
+          zones[zoneId] = { ...base, text, select };
+        }
+      }
+      return changed ? { ...prev, zones } : prev;
+    });
+  }, [hydrated, specPrefill]);
+
+  // A zone has un-reviewed pre-filled specs when it carries seeded specs, is not
+  // yet complete, and hasn't been confirmed (via "Specs match" or a spec edit).
+  const zoneNeedsSpecReview = useCallback(
+    (zoneId: ZoneId) =>
+      (specPrefill[zoneId]?.length ?? 0) > 0 &&
+      !state.zones[zoneId]?.done &&
+      !confirmedSpecZones.has(zoneId),
+    [specPrefill, state, confirmedSpecZones],
+  );
 
   // ---- helpers -----------------------------------------------------------
   const zoneState = useCallback(
@@ -742,6 +853,16 @@ function MultiPointInspectionDialogBody({
     const result = validateZoneForCompletion(state, zoneId, completionContext);
     if (!result.valid) {
       showZoneValidationError(zoneId, result);
+      return;
+    }
+    // Pre-filled specs must be actively reviewed before a zone can be completed
+    // — the guard against rubber-stamping a form that's already full.
+    if (zoneNeedsSpecReview(zoneId)) {
+      setError(
+        "Confirm the pre-filled specs match this vehicle, then mark the zone complete.",
+      );
+      setShowResults(false);
+      setActiveZone(zoneId);
       return;
     }
     setError("");
@@ -1077,6 +1198,10 @@ function MultiPointInspectionDialogBody({
           <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-semibold text-primary">
             First visit
           </span>
+        ) : specsIncomplete ? (
+          <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
+            Specs incomplete
+          </span>
         ) : null
       }
       footer={showResults ? undefined : footer}
@@ -1110,9 +1235,22 @@ function MultiPointInspectionDialogBody({
                 {bookingLabel}
               </div>
             </div>
+            <div>
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Current odometer
+              </div>
+              <div className="mt-0.5 flex items-baseline gap-1">
+                <div className="w-24 rounded-lg border border-primary/15 bg-muted/50 px-2 py-1 text-[14px] tabular-nums text-muted-foreground">
+                  {typeof baselineMileage === "number"
+                    ? baselineMileage.toLocaleString()
+                    : "—"}
+                </div>
+                <span className="text-[11px] text-muted-foreground">mi</span>
+              </div>
+            </div>
             <label className="block">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                Odometer <span className="text-red-500">*</span>
+                New reading <span className="text-red-500">*</span>
               </div>
               <div className="mt-0.5 flex items-baseline gap-1">
                 <input
@@ -1289,11 +1427,22 @@ function MultiPointInspectionDialogBody({
                 zs={zoneState(activeZone)}
                 isFirstVisit={isFirstVisit}
                 isRequired={requiredSet.has(activeZone)}
+                tireSizeOptions={tireSizeOptionsFromList(
+                  activeZone === "FL" || activeZone === "FR"
+                    ? passportData?.available_tire_sizes?.front
+                    : activeZone === "RL" || activeZone === "RR"
+                      ? passportData?.available_tire_sizes?.rear
+                      : undefined,
+                )}
                 completionContext={completionContext}
                 fieldError={fieldErrors[activeZone]}
                 canPhoto={!!bookingId}
                 photoBusy={photoBusy}
                 photoUrl={photoUrl}
+                specPrefill={specPrefill[activeZone] ?? []}
+                specConfirmed={confirmedSpecZones.has(activeZone)}
+                onConfirmSpecs={() => markSpecReviewed(activeZone)}
+                onSpecEdited={() => markSpecReviewed(activeZone)}
                 extraHeader={
                   activeZone === "FRT" ? (
                     <InspectionStickerFields
@@ -1486,11 +1635,16 @@ function ZonePanel({
   zs,
   isFirstVisit,
   isRequired,
+  tireSizeOptions,
   completionContext,
   fieldError,
   canPhoto,
   photoBusy,
   photoUrl,
+  specPrefill,
+  specConfirmed,
+  onConfirmSpecs,
+  onSpecEdited,
   extraHeader,
   onPatch,
   onSharedText,
@@ -1504,11 +1658,18 @@ function ZonePanel({
   zs: ZoneState;
   isFirstVisit: boolean;
   isRequired: boolean;
+  /** Axle-resolved tire-size options (vehicle's OEM fitments, generic fallback). */
+  tireSizeOptions: InspectionOption[];
   completionContext: ZoneCompletionContext;
   fieldError?: { fieldKey: string; message: string };
   canPhoto: boolean;
   photoBusy: string | null;
   photoUrl: (storageId: string) => string | undefined;
+  /** Persistent specs seeded from the passport for this zone. */
+  specPrefill: SpecPrefillEntry[];
+  specConfirmed: boolean;
+  onConfirmSpecs: () => void;
+  onSpecEdited: () => void;
   extraHeader?: React.ReactNode;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
@@ -1529,6 +1690,13 @@ function ZonePanel({
     (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
     !!completionContext.inspectionState &&
     requiresRotorStampPhoto(completionContext.inspectionState, zoneId, completionContext);
+  // Per-field lookup of the seeded value/provenance for this zone.
+  const specByKey = new Map(specPrefill.map((s) => [s.fieldKey, s]));
+  const hasSpecPrefill = specPrefill.length > 0;
+  const needsSpecReview = hasSpecPrefill && !zs.done && !specConfirmed;
+  const seededLabels = specPrefill
+    .map((s) => zone.fields.find((f) => f.key === s.fieldKey)?.label ?? s.fieldKey)
+    .filter((label, i, arr) => arr.indexOf(label) === i);
   return (
     <div className="space-y-1">
       <div className="sticky top-0 z-20 -mx-2 mb-2 flex items-center justify-between gap-2 border-b border-primary/10 bg-card/95 px-2 py-2 backdrop-blur">
@@ -1578,6 +1746,31 @@ function ZonePanel({
         </p>
       ) : null}
 
+      {needsSpecReview ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
+          <p className="text-[12px] text-amber-900">
+            <span className="font-semibold">
+              {seededLabels.join(", ")}
+            </span>{" "}
+            {seededLabels.length > 1 ? "are" : "is"} pre-filled from this
+            vehicle&apos;s records. Confirm {seededLabels.length > 1 ? "they" : "it"}{" "}
+            still {seededLabels.length > 1 ? "match" : "matches"} — or edit —
+            before completing this zone.
+          </p>
+          <button
+            type="button"
+            onClick={onConfirmSpecs}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-amber-700"
+          >
+            <Check className="h-3.5 w-3.5" /> Specs match
+          </button>
+        </div>
+      ) : hasSpecPrefill && specConfirmed && !zs.done ? (
+        <p className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[12px] font-medium text-emerald-700">
+          <Check className="h-3.5 w-3.5" /> Specs confirmed
+        </p>
+      ) : null}
+
       {applicableFields.map((field, i) => {
         const prevSection = i > 0 ? applicableFields[i - 1].section : undefined;
         const showSection = field.section && field.section !== prevSection;
@@ -1593,6 +1786,7 @@ function ZonePanel({
               field={field}
               zs={zs}
               isFirstVisit={isFirstVisit}
+              tireSizeOptions={tireSizeOptions}
               required={isFieldRequiredForZone(
                 zoneId,
                 field.key,
@@ -1605,6 +1799,8 @@ function ZonePanel({
                   ? fieldError.message
                   : undefined
               }
+              prefill={specByKey.get(field.key)}
+              onSpecEdited={onSpecEdited}
               onPatch={onPatch}
               onSharedText={onSharedText}
             />
@@ -1672,7 +1868,7 @@ function ZonePanel({
         <InlineFieldError message={fieldError.message} />
       ) : null}
 
-      {!zs.done && zoneHasInput(zoneId, zs) ? (
+      {!zs.done && zs.dirty ? (
         <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
           You&apos;ve entered readings here — tap{" "}
           <span className="font-semibold">Mark zone complete</span> so they count
@@ -1731,8 +1927,11 @@ function FieldRow({
   field,
   zs,
   isFirstVisit,
+  tireSizeOptions,
   required,
   errorMessage,
+  prefill,
+  onSpecEdited,
   onPatch,
   onSharedText,
 }: {
@@ -1740,8 +1939,14 @@ function FieldRow({
   field: InspectionField;
   zs: ZoneState;
   isFirstVisit: boolean;
+  /** Axle-resolved tire-size options for this zone (OEM fitments + fallback). */
+  tireSizeOptions: InspectionOption[];
   required: boolean;
   errorMessage?: string;
+  /** Seeded passport value/provenance for this field, when it's a spec field. */
+  prefill?: SpecPrefillEntry;
+  /** Called when the mechanic edits a pre-filled spec field (marks reviewed). */
+  onSpecEdited?: () => void;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
 }) {
@@ -1892,30 +2097,42 @@ function FieldRow({
         : field.key === "rotor_tool"
           ? !wasMeasured("rotor")
           : false;
+    // Verbatim OEM value that maps to no canonical option (odd coolant/trans
+    // brand strings, or a pre-filled passport value): inject it so the enriched
+    // spec still shows + stays picked.
+    const isKnown = value === "" || field.options.some((o) => o.value === value);
+    const selectOptions = isKnown
+      ? field.options
+      : [...field.options, { value, label: value }];
+    const showPrefillTag = !!prefill && value === prefill.value;
     return (
       <div className="border-b border-primary/10">
         <Row label={field.label} required={required}>
-          <CompactSelect
-            id={`inspection-${zoneId}-${field.key}`}
-            ariaLabel={field.label}
-            value={value}
-            options={field.options}
-            className="w-44"
-            isDisabled={measurementNotTaken}
-            onChange={(next) =>
-              onPatch(
-                isMeasurementMethod
-                  ? {
-                      methods: { ...zs.methods, [field.key]: next },
-                      statuses: clearUnavailable(),
-                    }
-                  : {
-                      select: { ...zs.select, [field.key]: next },
-                      statuses: clearUnavailable(),
-                    },
-              )
-            }
-          />
+          <div className="flex w-44 flex-col items-end gap-1">
+            <CompactSelect
+              id={`inspection-${zoneId}-${field.key}`}
+              ariaLabel={field.label}
+              value={value}
+              options={selectOptions}
+              className="w-44"
+              isDisabled={measurementNotTaken}
+              onChange={(next) => {
+                if (prefill) onSpecEdited?.();
+                onPatch(
+                  isMeasurementMethod
+                    ? {
+                        methods: { ...zs.methods, [field.key]: next },
+                        statuses: clearUnavailable(),
+                      }
+                    : {
+                        select: { ...zs.select, [field.key]: next },
+                        statuses: clearUnavailable(),
+                      },
+                );
+              }}
+            />
+            {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
+          </div>
           {isMeasurementMethod || field.key === "rotor_applicable"
             ? null
             : unavailableControl}
@@ -1930,7 +2147,9 @@ function FieldRow({
   const options =
     field.key === "tire_model"
       ? tireModelOptionsForBrand(zs.text.tire_brand)
-      : optionsForInspectionField(field.key);
+      : field.key === "tire_size"
+        ? tireSizeOptions
+        : optionsForInspectionField(field.key);
   const resolved = resolveInspectionOption(value, options);
   const selected =
     isTier4Spec && zs.statuses[field.key]
@@ -1941,6 +2160,7 @@ function FieldRow({
           ? OTHER_INSPECTION_OPTION
           : "";
   const setText = (next: string) => {
+    if (prefill) onSpecEdited?.();
     if (isTier4Spec && next === NOT_AVAILABLE_OPTION) {
       onPatch({ statuses: { ...zs.statuses, [field.key]: "not_applicable" } });
       return;
@@ -1966,17 +2186,21 @@ function FieldRow({
     onPatch({ statuses: clearUnavailable() });
     onSharedText(field.key, normalized);
   };
+  const showPrefillTag = !!prefill && value === prefill.value;
   if (options.length === 0) {
     return (
       <div className="border-b border-primary/10">
         <Row label={field.label} required={required}>
-          <input
-            id={`inspection-${zoneId}-${field.key}`}
-            aria-invalid={!!errorMessage}
-            value={value}
-            onChange={(event) => setText(event.target.value)}
-            className="w-48 rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
-          />
+          <div className="flex w-48 flex-col items-end gap-1">
+            <input
+              id={`inspection-${zoneId}-${field.key}`}
+              aria-invalid={!!errorMessage}
+              value={value}
+              onChange={(event) => setText(event.target.value)}
+              className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+            />
+            {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
+          </div>
           {unavailableControl}
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
@@ -2028,11 +2252,40 @@ function FieldRow({
               />
             )
           ) : null}
+          {showPrefillTag ? (
+            <div className="flex justify-end">
+              <SpecSourceTag source={prefill!.source} />
+            </div>
+          ) : null}
         </div>
         {isTier4Spec ? null : unavailableControl}
       </Row>
       {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
     </div>
+  );
+}
+
+/** Small provenance chip beside a pre-filled spec field. */
+function SpecSourceTag({ source }: { source: PassportSource | null }) {
+  const label =
+    source === "oem_default"
+      ? "OEM default"
+      : source === "user_reported"
+        ? "Reported"
+        : "From records";
+  const cls =
+    source === "oem_default"
+      ? "border-primary/10 bg-muted text-muted-foreground"
+      : "border-emerald-200 bg-emerald-50 text-emerald-700";
+  return (
+    <span
+      className={cn(
+        "inline-flex w-fit items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.06em]",
+        cls,
+      )}
+    >
+      {label}
+    </span>
   );
 }
 

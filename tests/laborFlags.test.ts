@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { laborFlagsFromEnv } from "../convex/vehicleEnrichment/laborResearch";
 
-const ENV_KEYS = ["LABOR_SOURCE_OLP", "LABOR_SOURCE_WEB", "LABOR_SOURCE_ESTIMATOR_ENDPOINT"] as const;
+const ENV_KEYS = ["LABOR_SOURCE_OLP", "LABOR_SOURCE_WEB", "LABOR_SOURCE_ESTIMATOR_ENDPOINT", "LABOR_SOURCE_LEMON"] as const;
 
 describe("laborFlagsFromEnv", () => {
   // Snapshot and restore env vars so tests don't leak state into the suite.
@@ -26,8 +26,13 @@ describe("laborFlagsFromEnv", () => {
     }
   });
 
-  it("all vars absent → OLP + estimatorEndpoint default-on; web default-off", () => {
-    expect(laborFlagsFromEnv()).toEqual({ olp: true, web: false, estimatorEndpoint: true });
+  it("all vars absent → OLP + estimatorEndpoint + lemon default-on; web default-off", () => {
+    expect(laborFlagsFromEnv()).toEqual({ olp: true, web: false, estimatorEndpoint: true, lemon: true });
+  });
+
+  it("LABOR_SOURCE_LEMON='off' → lemon: false (explicit opt-out)", () => {
+    process.env.LABOR_SOURCE_LEMON = "off";
+    expect(laborFlagsFromEnv()).toMatchObject({ lemon: false });
   });
 
   it("LABOR_SOURCE_ESTIMATOR_ENDPOINT='on' → estimatorEndpoint: true", () => {

@@ -3,7 +3,10 @@
  * and writes each endpoint part's averaged PER-UNIT point into part_prices
  * (source_domain="estimator_endpoint"), joined to the config's fitment by role.
  * Inert to existing consumers (price_type excluded from the pooled aggregate);
- * only resolvePartsCost's gated real-band block reads them. Not prod wiring.
+ * only resolvePartsCost's gated real-band block reads them. Since Aug 2026 the
+ * LIVE per-config projection is vehicleEnrichment/endpointPartPriceProjection.ts
+ * (scheduled by resolveEstimatorEndpointForConfig); this file remains the
+ * manual fleet-sweep driver for historical rows.
  *
  *   npx convex run devOnly/endpointPartPriceBackfill:backfill
  *   npx convex run devOnly/endpointPartPriceBackfill:backfill '{"configIds":["xd7.."]}'

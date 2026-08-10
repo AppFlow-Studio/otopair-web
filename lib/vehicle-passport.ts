@@ -172,6 +172,20 @@ export type VehiclePassportData = {
   sources: Record<string, PassportSource>;
   enrichment_status?: string | null;
   enrichment_fill_rate?: number | null;
+  /**
+   * OEM tire sizes this vehicle actually offers, per axle, derived from the
+   * wheel-size.com fitments saved on `trim_specs.tire_options`. Feeds the
+   * inspection tire-size dropdown so it lists the real sizes instead of a
+   * generic catalog. `has_data` is false when nothing is saved yet, which the
+   * dialog uses to trigger a one-time on-demand lookup + save.
+   */
+  available_tire_sizes?: {
+    front: string[];
+    rear: string[];
+    source: string | null;
+    staggered: boolean;
+    has_data: boolean;
+  };
 };
 
 export type JobActualPartPayload = {

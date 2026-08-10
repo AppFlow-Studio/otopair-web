@@ -24,6 +24,7 @@ import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
 import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
+import { sanitizeCylinders } from "./vehicleEnrichment/cylindersRepair";
 import { acceptNormalizedTrim } from "./vehicleEnrichment/identityResolution";
 import { parseGvwrUpperLbs } from "./vehicleEnrichment/validation/sanityChecks";
 import { assembleVariantFingerprint, type TransmissionFamily } from "./vehicleEnrichment/variantFingerprint";
@@ -294,8 +295,25 @@ export const processVin = internalAction({
         // NHTSA first; VDB only fills the gap when NHTSA is empty. Log a
         // warning on disagreement so we can audit future drift.
         cylinders: (() => {
-          const nhtsaCyl = parseFloat(nhtsa.cylinders || "0") || null;
-          const vdbCyl = vdb?.cylinders ?? null;
+          // Wave-1 guard (Aug 2026): the historical corruption class —
+          // cylinders holding the displacement float ("3.5l_3.5cyl") — enters
+          // through exactly this seam. sanitizeCylinders admits only integers
+          // 2-16, and a VDB value equal to the displacement is rejected
+          // outright (no 2-cyl 2.0L / 4-cyl 4.0L exists in the fleet; losing
+          // a hypothetical legit match just leaves the unknown sentinel,
+          // which is null-over-guess doctrine).
+          const dispNum =
+            parseFloat((vdb?.displacement ? String(vdb.displacement) : "") || nhtsa.displacementL || "") || null;
+          const nhtsaCyl = sanitizeCylinders(parseFloat(nhtsa.cylinders || "0") || null) ?? null;
+          const vdbRaw = vdb?.cylinders ?? null;
+          const vdbMirrors =
+            vdbRaw != null && dispNum != null && dispNum >= 2 && Math.abs(vdbRaw - dispNum) < 0.05;
+          const vdbCyl = vdbMirrors ? null : sanitizeCylinders(vdbRaw) ?? null;
+          if (vdbMirrors) {
+            console.warn(
+              `[decode] VDB cylinders=${vdbRaw} mirrors displacement ${dispNum}L — rejected as corruption.`,
+            );
+          }
           if (nhtsaCyl && vdbCyl && nhtsaCyl !== vdbCyl) {
             console.warn(
               `[decode] cylinders disagreement — NHTSA=${nhtsaCyl}, VDB=${vdbCyl}. Using NHTSA.`,

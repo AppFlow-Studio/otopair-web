@@ -105,6 +105,10 @@ export interface VehicleInput {
   displacement: string;
   cylinders?: number;
   fuelType?: string;
+  /** Optional. Only consumers that can disambiguate drivetrain-qualified source
+   *  variants use it (LEMON publishes sibling "…, AWD" / "…, FWD" manuals whose
+   *  fluid capacities differ). Absent = no signal, not "unknown drivetrain". */
+  drivetrain?: string | null;
 }
 
 // ─── Call Results ────────────────────────────────────────────────

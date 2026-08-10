@@ -17,10 +17,12 @@
 // =============================================================================
 import { v } from "convex/values";
 import { query } from "./_generated/server";
+import { Doc, Id } from "./_generated/dataModel";
 import { requireDirector } from "./directorGate";
 import { passesI1ReadGuard } from "./partSelector";
 import { carInfoFor } from "./dataOverview";
 import { summarizePartPrices } from "./part_prices";
+import { SERVICE_PARTS_REFERENCE, normalizeServiceSlug } from "./lib/servicePartsReference";
 
 const SCAN_WINDOW = 800;
 const MAX_FLAGS = 60;
@@ -261,5 +263,206 @@ export const scanUnpricedParts = query({
       });
     }
     return { flags, truncated: rows.length >= SCAN_WINDOW };
+  },
+});
+
+// =============================================================================
+// Missing CORE parts — a parts-bearing service the config has NO usable OEM
+// fitment for at all (dropped by OEM-strict enrichment or never enriched — the
+// battery on a 2001 740iA). The fleet-wide counterpart of serviceParts.ts
+// getServiceGapsForConfig, so the Needs Attention hub can group "cars with a
+// hole to fill" without opening each config's review sidebar first.
+//
+// Cheap + live, exactly like getPriceGapsForConfig: the latest run's persisted
+// quotability snapshot names WHICH (config, service) pairs are missing a CORE
+// fitment (core_with_fitment < core_total — the pipeline's own applicability-
+// aware count), and we only re-check THOSE services' live fitments. So a part a
+// director just added (mechanic_verified → passes the read guard) clears the
+// flag reactively, and we never re-scan services the snapshot already
+// considers filled.
+// =============================================================================
+
+const MISSING_SCAN_WINDOW = 800;
+const MISSING_MAX_FLAGS = 60;
+// Cap the (config, service) pairs we re-check live before the flag cap, so a
+// fleet mid-backfill can't fan out into thousands of parallel index reads.
+const MISSING_CANDIDATE_LIMIT = 300;
+
+export type MissingPartFlag = {
+  // `${configId}:${serviceSlug}` — stable react key + client-side dedupe key.
+  key: string;
+  configId: string;
+  serviceSlug: string;
+  serviceName: string;
+  // The CORE role a director should fill (the service's primary core role) —
+  // exactly what addConfigFitment expects alongside serviceSlug.
+  roleKey: string;
+  roleLabel: string;
+  // Latest run for this config (the one whose snapshot flagged the gap) — the
+  // "what run do I investigate" pointer, same intent as latestRunFor.
+  runId: string | null;
+  runStatus: string | null;
+  // When that run last observed the gap (missing parts carry no fitment, so
+  // there's no first_confirmed_at to lean on).
+  lastRunAt: number;
+  year: number | null;
+  make: string | null;
+  model: string | null;
+  trim: string | null;
+  vin: string | null;
+  configKey: string | null;
+};
+
+export const scanMissingParts = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }): Promise<{ flags: MissingPartFlag[]; truncated: boolean }> => {
+    await requireDirector(ctx, token);
+
+    // Newest runs first, deduped to the latest run per config — its quotability
+    // snapshot is the current best read of which services still lack a fitment.
+    const runs = await ctx.db.query("enrichment_runs").order("desc").take(MISSING_SCAN_WINDOW);
+    const seenConfig = new Set<string>();
+    type Candidate = { configId: Id<"vehicle_configs">; slug: string; run: Doc<"enrichment_runs"> };
+    const candidates: Candidate[] = [];
+    for (const run of runs) {
+      const cfgKey = String(run.vehicle_config_id);
+      if (seenConfig.has(cfgKey)) continue; // only the latest run per config
+      seenConfig.add(cfgKey);
+      for (const s of run.quotability?.services ?? []) {
+        if (s.core_with_fitment < s.core_total) {
+          candidates.push({ configId: run.vehicle_config_id, slug: s.slug, run });
+        }
+      }
+    }
+    const candidateTruncated = candidates.length > MISSING_CANDIDATE_LIMIT;
+    const scoped = candidates.slice(0, MISSING_CANDIDATE_LIMIT);
+    if (scoped.length === 0) {
+      return { flags: [], truncated: runs.length >= MISSING_SCAN_WINDOW };
+    }
+
+    // Batch every independent per-candidate / per-config lookup at once
+    // (Promise.all), never a sequential await chain — same "too many system
+    // operations" avoidance scanWrongParts needed at this scan size.
+    const uniqueConfigIds = [...new Set(scoped.map((c) => String(c.configId)))].map(
+      (id) => id as Id<"vehicle_configs">,
+    );
+    const [configs, fitmentLists, exclusionLists] = await Promise.all([
+      Promise.all(uniqueConfigIds.map((id) => ctx.db.get(id))),
+      Promise.all(
+        scoped.map((c) =>
+          ctx.db
+            .query("part_fitments")
+            .withIndex("by_config_service", (q) =>
+              q.eq("vehicle_config_id", c.configId).eq("service_type", c.slug),
+            )
+            .collect(),
+        ),
+      ),
+      Promise.all(
+        uniqueConfigIds.map((id) =>
+          ctx.db
+            .query("config_service_exclusions")
+            .withIndex("by_config", (q) => q.eq("vehicle_config_id", id))
+            .collect(),
+        ),
+      ),
+    ]);
+    const configById = new Map(uniqueConfigIds.map((id, i) => [String(id), configs[i]]));
+    const exclusionsByConfig = new Map(
+      uniqueConfigIds.map((id, i) => [
+        String(id),
+        new Set(exclusionLists[i].map((e) => normalizeServiceSlug(e.service_slug))),
+      ]),
+    );
+    const configMakes = await Promise.all(
+      configs.map((c) => (c?.make_id ? ctx.db.get(c.make_id) : null)),
+    );
+    const makeById = new Map(uniqueConfigIds.map((id, i) => [String(id), configMakes[i]]));
+
+    // Parts referenced by the candidate fitments, for the usable-fitment guard.
+    const allPartIds = [...new Set(fitmentLists.flat().map((f) => String(f.part_id)))];
+    const partDocs = await Promise.all(
+      allPartIds.map((id) => ctx.db.get(id as Id<"oem_parts">)),
+    );
+    const partById = new Map(allPartIds.map((id, i) => [id, partDocs[i]]));
+
+    // Role labels (SERVICE_PARTS_REFERENCE) + display names (services table).
+    const specBySlug = new Map<string, any>();
+    for (const spec of Object.values(SERVICE_PARTS_REFERENCE)) {
+      specBySlug.set(normalizeServiceSlug(spec.slug), spec);
+    }
+    const allServices = await ctx.db.query("services").collect();
+    const serviceBySlug = new Map<string, Doc<"services">>();
+    for (const svc of allServices) if (svc.slug) serviceBySlug.set(normalizeServiceSlug(svc.slug), svc);
+
+    const flags: MissingPartFlag[] = [];
+    for (let i = 0; i < scoped.length; i++) {
+      if (flags.length >= MISSING_MAX_FLAGS) break;
+      const c = scoped[i];
+      const cfgId = String(c.configId);
+      const config = configById.get(cfgId);
+      if (!config) continue;
+      const normSlug = normalizeServiceSlug(c.slug);
+
+      // Director marked this service Not-Applicable after the run — no gap.
+      if (exclusionsByConfig.get(cfgId)?.has(normSlug)) continue;
+
+      // Live re-check: has a usable CORE base fitment appeared since the run
+      // (a director added one, or a heal filled it)? If so, no gap now.
+      const makeDoc = makeById.get(cfgId);
+      let hasUsable = false;
+      for (const f of fitmentLists[i]) {
+        if (f.package_code != null) continue;
+        const part = partById.get(String(f.part_id));
+        if (!part) continue;
+        if (
+          passesI1ReadGuard({
+            partMakeId: part.make_id,
+            configMakeId: config.make_id,
+            oemPartNumber: part.oem_part_number,
+            configMakeName: makeDoc?.name,
+            mechanicVerified: f.mechanic_verified === true,
+          })
+        ) {
+          hasUsable = true;
+          break;
+        }
+      }
+      if (hasUsable) continue;
+
+      // The CORE role a director fills — same primary-role logic as
+      // getServiceGapsForConfig, so the Add-part launcher gets a valid target.
+      const spec = specBySlug.get(normSlug);
+      const coreRoles = (spec?.roles ?? []).filter(
+        (r: any) => r.serviceRole === "core" && r.universalFallback == null,
+      );
+      const primary =
+        spec?.roles.find((r: any) => r.primary && r.serviceRole === "core") ?? coreRoles[0];
+      if (!primary) continue; // no fillable CORE role — nothing to add here
+
+      const svc = serviceBySlug.get(normSlug);
+      const car = await carInfoFor(ctx, "vehicle_config", cfgId);
+      flags.push({
+        key: `${cfgId}:${normSlug}`,
+        configId: cfgId,
+        serviceSlug: svc?.slug ?? spec?.slug ?? c.slug,
+        serviceName: svc?.name ?? spec?.slug?.replace(/_/g, " ") ?? normSlug.replace(/_/g, " "),
+        roleKey: primary.roleKey,
+        roleLabel: primary.label,
+        runId: String(c.run._id),
+        runStatus: c.run.status,
+        lastRunAt: c.run.completed_at ?? c.run.created_at ?? c.run._creationTime,
+        year: car.year,
+        make: car.make,
+        model: car.model,
+        trim: car.trim,
+        vin: car.vin,
+        configKey: car.configKey,
+      });
+    }
+    return {
+      flags,
+      truncated: runs.length >= MISSING_SCAN_WINDOW || candidateTruncated,
+    };
   },
 });

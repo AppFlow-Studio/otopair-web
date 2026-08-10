@@ -9,7 +9,7 @@ import {
   Badge, Button, StatusBadge, Modal, AuditButton, Avatar,
   IconStar, IconExternal, IconCheck, IconCard, IconCar,
 } from './Primitives'
-import { money } from './Charts'
+import { money, fmtDate, fmtDateTime } from './Charts'
 import { DirectorNotesPanel } from './DirectorNotesPanel'
 import { gotoEntity } from './directorNav'
 
@@ -200,7 +200,7 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
             <span><b style={{ color:'var(--slate-900)' }}>{detail.user}</b></span>
             <span>·</span>
             <span>{detail.shop}</span>
-            {detail.scheduled !== '—' && <><span>·</span><span>{detail.scheduled}{detail.time !== '—' ? ` at ${detail.time}` : ''}</span></>}
+            {detail.scheduled !== '—' && <><span>·</span><span>{fmtDate(detail.scheduled)}{detail.time !== '—' ? ` at ${detail.time}` : ''}</span></>}
             {detail.vehicleYmm && <><span>·</span>
               <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}>
                 <IconCar size={13} style={{ color:'var(--slate-500)' }} />
@@ -922,7 +922,7 @@ const AuditTimelineTab = ({ token, id }: { token: string; id: Id<'bookings'> }) 
                     <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-800)' }}>{e.title}</span>
                     {e.actor && <span style={{ fontSize:11, color:'var(--slate-400)' }}>by {e.actor}</span>}
                   </div>
-                  <div style={{ fontSize:11, color:'var(--slate-400)' }} title={new Date(e.at).toLocaleString()}>{fmtTs(e.at)}</div>
+                  <div style={{ fontSize:11, color:'var(--slate-400)' }} title={fmtDateTime(e.at)}>{fmtTs(e.at)}</div>
                   {e.detail && <div style={{ marginTop:2, fontSize:12, color:'var(--slate-500)' }}>{e.detail}</div>}
                 </div>
               </div>

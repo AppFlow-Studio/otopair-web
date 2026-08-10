@@ -6,7 +6,7 @@ import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/ph
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useEntityLabel } from "@/lib/use-entity-label";
-import { ArrowRight, Calendar, Car, ChevronDown, Clock, Loader2, MessageSquare, Package, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
+import { ArrowRight, Car, ChevronDown, Clock, Loader2, MessageSquare, Package, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
 import {
   Select,
   SelectItem,
@@ -64,6 +64,9 @@ interface CreateBookingDrawerProps {
   mechanics: Mechanic[];
   bookings: Booking[];
   shopHours: ShopHour[];
+  /** Per-checkout session id owned by the schedule page (so the grid can
+   *  exclude this drawer's own hold from its "On hold" overlay). */
+  holdSessionId: string;
   onClose: () => void;
   onToast: (msg: string) => void;
 }
@@ -108,20 +111,34 @@ function getShopHoursForDate(shopHours: ShopHour[], date: string) {
 }
 
 function getUserFacingErrorMessage(err: unknown): string {
-  if (!(err instanceof Error)) return "Failed to create booking";
+  const fallback = "Failed to create booking";
+  if (!(err instanceof Error)) return fallback;
 
-  const message = err.message.trim();
-  const uncaughtMatch = message.match(/Uncaught Error:\s*(.+?)(?:\.\s*Called by client)?$/);
-  if (uncaughtMatch?.[1]) {
-    return uncaughtMatch[1].trim();
-  }
+  // Prefer a structured ConvexError payload when present (no stack noise).
+  const data = (err as { data?: unknown }).data;
+  let message =
+    typeof data === "string" && data.trim()
+      ? data.trim()
+      : data && typeof (data as { message?: unknown }).message === "string"
+        ? String((data as { message: string }).message).trim()
+        : err.message.trim();
 
-  const calledByClientMatch = message.match(/]\s*(.+?)\.\s*Called by client$/);
-  if (calledByClientMatch?.[1]) {
-    return calledByClientMatch[1].trim();
-  }
+  // Strip the Convex wrapper prefix: "[CONVEX M(...)] [Request ID: ...]
+  // Server Error Uncaught Error: <real message> ...".
+  const afterUncaught = message.match(/Uncaught Error:\s*([\s\S]+)$/);
+  if (afterUncaught?.[1]) message = afterUncaught[1].trim();
 
-  return message || "Failed to create booking";
+  // Cut everything from the first stack frame (" at fn (path:line:col)") and
+  // drop the "Called by client" trailer — leaving just the human sentence.
+  message = message
+    // Cut the first stack frame (" at fn (path)") and everything after it —
+    // [\s\S]* spans newlines without needing the es2018 dotAll flag.
+    .replace(/\s+at\s+(?:async\s+)?[\w.$<>[\]]+\s*\([\s\S]*/, "")
+    .replace(/\s*\.?\s*Called by client\.?\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return message || fallback;
 }
 
 function CollapsibleSection({
@@ -179,6 +196,7 @@ export default function CreateBookingDrawer({
   mechanics,
   bookings,
   shopHours,
+  holdSessionId,
   onClose,
   onToast,
 }: CreateBookingDrawerProps) {
@@ -379,7 +397,6 @@ export default function CreateBookingDrawer({
     "catalog_parts",
     "diagnostic",
     "notes",
-    "scheduling",
   ] as const;
   type SectionKey = (typeof SECTION_KEYS)[number];
   const [openSections, setOpenSections] = useState<Set<SectionKey>>(
@@ -882,6 +899,93 @@ export default function CreateBookingDrawer({
     [mechanicEstimateMinutes, catalogEstimateMinutes],
   );
 
+  /* ---- Slot hold (StubHub-style) ------------------------------------ */
+  // Reserve the chosen mechanic+window for THIS checkout so a customer (mobile)
+  // or another staffer can't grab the same slot while this drawer is open — the
+  // window the old flow left wide open. The hold is idempotent per session,
+  // refreshes as the draft changes, is consumed by createByShop on submit, and
+  // released on close (the 1-min cron reaps it if the tab is killed).
+  const holdSlot = useMutation(api.slotHolds.holdSlot);
+  const releaseSlotHold = useMutation(api.slotHolds.releaseSlotHold);
+  // Session id is owned by the parent (schedule page) so its grid can exclude
+  // this drawer's own hold from the "On hold" overlay.
+  const [hold, setHold] = useState<{
+    holdId: Id<"slot_holds">;
+    expiresAt: number;
+  } | null>(null);
+  const [holdNowMs, setHoldNowMs] = useState(() => Date.now());
+  const holdRef = useRef(hold);
+  holdRef.current = hold;
+  const holdDurationMinutes =
+    effectiveEstimateMinutes > 0 ? effectiveEstimateMinutes : 60;
+
+  useEffect(() => {
+    const shopId = shopData?.shopId;
+    if (!shopId || !date || !time) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await holdSlot({
+          shop_id: shopId as Id<"shops">,
+          mechanic_id: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
+          date,
+          start_time: time,
+          duration_minutes: holdDurationMinutes,
+          session_id: holdSessionId,
+        });
+        if (cancelled) return;
+        setHold(
+          res?.holdId && res.expiresAt != null
+            ? { holdId: res.holdId, expiresAt: res.expiresAt }
+            : null,
+        );
+      } catch {
+        // Taken by another session / unavailable — clear the badge. The submit
+        // path re-asserts availability server-side and surfaces the real error.
+        if (!cancelled) setHold(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    shopData?.shopId,
+    date,
+    time,
+    mechanicId,
+    holdDurationMinutes,
+    holdSlot,
+    holdSessionId,
+  ]);
+
+  // 1s countdown tick while a hold is active.
+  useEffect(() => {
+    if (!hold) return;
+    const id = setInterval(() => setHoldNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [hold]);
+
+  // Release the hold when the drawer unmounts (close / cancel). After a
+  // successful submit the server already deleted it, so this is a safe no-op.
+  useEffect(() => {
+    return () => {
+      const h = holdRef.current;
+      if (h) {
+        releaseSlotHold({ holdId: h.holdId, session_id: holdSessionId }).catch(
+          () => {},
+        );
+      }
+    };
+  }, [releaseSlotHold, holdSessionId]);
+
+  const holdRemainingMs = hold ? Math.max(0, hold.expiresAt - holdNowMs) : 0;
+  const holdExpired = hold != null && holdRemainingMs <= 0;
+  const holdCountdownLabel = hold
+    ? `${Math.floor(holdRemainingMs / 60000)}:${String(
+        Math.floor((holdRemainingMs % 60000) / 1000),
+      ).padStart(2, "0")}`
+    : null;
+
   /* ---- Suggested quoted price (tier labor rate × time + parts) ---- */
   // Tier-aware $/hr labor rate for this vehicle at this shop. Falls back to the
   // shop's flat rate server-side when the vehicle has no resolvable tier.
@@ -1140,6 +1244,11 @@ export default function CreateBookingDrawer({
         mechanicPartEntries:
           mechanicPartEntries.length > 0 ? mechanicPartEntries : undefined,
         partsDeclaration: partsDeclaration ?? undefined,
+        // Consume the checkout hold atomically with the insert (server verifies
+        // + deletes it). sessionId lets the server ignore our own hold so it
+        // can't block the booking it was reserving.
+        sessionId: holdSessionId,
+        holdId: hold?.holdId,
       });
 
       onToast("Booking created");
@@ -1358,15 +1467,114 @@ export default function CreateBookingDrawer({
   /* ---- Render ---- */
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
-        <h2 className="text-base font-semibold text-foreground">Create booking</h2>
-        <button
-          onClick={onClose}
-          className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-        >
-          <X className="w-5 h-5" />
-        </button>
+      {/* Header — scheduling lives here so date, time, and assignment are
+          always visible and editable without scrolling. */}
+      <div className="shrink-0 border-b border-border px-5 py-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-base font-semibold text-foreground">Create booking</h2>
+          <div className="flex items-center gap-2">
+            {holdCountdownLabel && (
+              <span
+                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+                  holdExpired
+                    ? "bg-red-100 text-red-700"
+                    : "bg-emerald-100 text-emerald-700"
+                }`}
+                title={
+                  holdExpired
+                    ? "This slot hold expired — the slot may now be taken. Re-pick a time."
+                    : "This slot is held for you while you finish."
+                }
+              >
+                <Clock className="w-3 h-3" />
+                {holdExpired ? "Hold expired" : `Held ${holdCountdownLabel}`}
+              </span>
+            )}
+            <button
+              onClick={onClose}
+              className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+        </div>
+
+        {/* Date + time + end, inline */}
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <DatePicker
+            className="w-40"
+            value={date}
+            onChange={(next) => next && setDate(next)}
+          />
+          <Select selectedKey={time} onSelectionChange={(key) => setTime(String(key))}>
+            <SelectTrigger className="h-9 w-32 rounded-lg border-border bg-card text-sm px-3">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectPopover placement="bottom start">
+              <SelectListBox shouldFocusWrap>
+                {filteredTimeOptions.map((o) => (
+                  <SelectItem key={o.value} id={o.value} textValue={o.label}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectListBox>
+            </SelectPopover>
+          </Select>
+          {computedEndLabel ? (
+            <span className="text-xs text-muted-foreground">Ends ~ {computedEndLabel}</span>
+          ) : null}
+        </div>
+
+        {/* Mechanic assignment — small, unboxed, free-flowing */}
+        {mechanics.length > 0 && (
+          <div className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
+            <span>Assigned to</span>
+            <Select
+              selectedKey={assignmentPreference === "any" ? "any" : mechanicId}
+              onSelectionChange={(key) => {
+                if (key === "any") {
+                  setAssignmentPreference("any");
+                  setMechanicId("");
+                  return;
+                }
+                setAssignmentPreference("specific_mechanic");
+                setMechanicId(String(key));
+              }}
+            >
+              <SelectTrigger className="inline-flex h-auto w-auto items-center gap-1 rounded-md border-0 bg-transparent px-1.5 py-0.5 text-sm font-medium text-foreground shadow-none ring-offset-0 hover:text-primary">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopover placement="bottom start">
+                <SelectListBox shouldFocusWrap>
+                  <SelectItem id="any" textValue={entityLabel.anyLabel}>
+                    <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
+                  </SelectItem>
+                  {mechanics.map((m) => (
+                    <SelectItem key={m._id} id={m._id} textValue={m.name}>
+                      {m.name}
+                    </SelectItem>
+                  ))}
+                </SelectListBox>
+              </SelectPopover>
+            </Select>
+          </div>
+        )}
+
+        {/* Scheduling validation */}
+        {(overlapError || blockingHoursError || capacityWarning || outsideHoursWarning) && (
+          <div className="mt-2 space-y-1">
+            {overlapError && <p className="form-error-text text-xs">{overlapError}</p>}
+            {blockingHoursError && (
+              <p className="form-error-text text-xs">{blockingHoursError}</p>
+            )}
+            {capacityWarning && <p className="text-xs text-amber-700">{capacityWarning}</p>}
+            {outsideHoursWarning && (
+              <p className="form-error-text text-xs">
+                This booking extends beyond normal shop hours and will require confirmation.
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Scrollable body */}
@@ -2286,88 +2494,6 @@ export default function CreateBookingDrawer({
             rows={3}
             className={`${drawerInputClassName} resize-none leading-relaxed`}
           />
-        </CollapsibleSection>
-
-        {/* ── Scheduling ── */}
-        <CollapsibleSection
-          sectionKey="scheduling"
-          icon={Calendar}
-          label="Scheduling"
-          open={openSections.has("scheduling")}
-          onToggle={toggleSection}
-          required
-        >
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <DrawerFieldLabel>Date</DrawerFieldLabel>
-                <DatePicker value={date} onChange={(next) => next && setDate(next)} />
-              </div>
-              <div>
-                <DrawerFieldLabel>Time</DrawerFieldLabel>
-                <Select selectedKey={time} onSelectionChange={(key) => setTime(String(key))}>
-                  <SelectTrigger className={drawerSelectTriggerClassName}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectPopover placement="bottom start">
-                    <SelectListBox shouldFocusWrap>
-                      {filteredTimeOptions.map((o) => (
-                        <SelectItem key={o.value} id={o.value} textValue={o.label}>{o.label}</SelectItem>
-                      ))}
-                    </SelectListBox>
-                  </SelectPopover>
-                </Select>
-                {computedEndLabel ? (
-                  <p className="mt-1 text-xs text-gray-500">Ends ~ {computedEndLabel}</p>
-                ) : null}
-              </div>
-            </div>
-            {mechanics.length > 0 && (
-              <div>
-                <DrawerFieldLabel>Assignment</DrawerFieldLabel>
-                <Select
-                  selectedKey={assignmentPreference === "any" ? "any" : mechanicId}
-                  onSelectionChange={(key) => {
-                    if (key === "any") {
-                      setAssignmentPreference("any");
-                      setMechanicId("");
-                      return;
-                    }
-                    setAssignmentPreference("specific_mechanic");
-                    setMechanicId(String(key));
-                  }}
-                >
-                  <SelectTrigger className={drawerSelectTriggerClassName}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectPopover placement="bottom start">
-                    <SelectListBox shouldFocusWrap>
-                      <SelectItem id="any" textValue={entityLabel.anyLabel}>
-                        <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
-                      </SelectItem>
-                      {mechanics.map((m) => (
-                        <SelectItem key={m._id} id={m._id} textValue={m.name}>{m.name}</SelectItem>
-                      ))}
-                    </SelectListBox>
-                  </SelectPopover>
-                </Select>
-              </div>
-            )}
-            {overlapError && (
-              <p className="form-error-text text-xs">{overlapError}</p>
-            )}
-            {blockingHoursError && (
-              <p className="form-error-text text-xs">{blockingHoursError}</p>
-            )}
-            {capacityWarning && (
-              <p className="text-xs text-amber-700">{capacityWarning}</p>
-            )}
-            {outsideHoursWarning && (
-              <p className="form-error-text text-xs">
-                This booking extends beyond normal shop hours and will require confirmation.
-              </p>
-            )}
-          </div>
         </CollapsibleSection>
 
       </div>

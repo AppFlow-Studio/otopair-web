@@ -234,12 +234,16 @@ export async function resourceMissingRoles(
   // sourcing failure, the repair simply was not allowed to try. Parts went
   // 4 -> 11, all priced, fill 77 -> 88.
   //
-  // 10 rather than 12: with the BASE slug set now covering all 13 core roles
-  // deterministically, far fewer roles should reach this stage at all, so this
-  // is a safety net for the bad case rather than the primary source of parts.
-  // The cost is bounded — each attempt is one search plus one extraction, and
-  // only ever for roles that are genuinely empty.
-  const maxRoles = opts?.maxRoles ?? Number(process.env.PARTS_ROLE_RESOURCE_MAX ?? "10");
+  // 12, raised from 10 (Aug 2026): the bad case this net exists for is
+  // exactly the case that overflows it. When the deterministic scrape AND
+  // batch-2 both miss (dead Mercedes storefront + batch-2 parse failure), a
+  // vehicle reaches this stage with 11-12 missing roles — the 2020 AMG GLC 43
+  // hit the 10 cap and `atf_fluid` was skipped_run_budget, exactly the
+  // Altima-at-4 shape the last raise fixed. 12 covers the full core-role set
+  // so a total upstream miss can still repair every role in one run. The cost
+  // is bounded — each attempt is one search plus one extraction, and only
+  // ever for roles that are genuinely empty.
+  const maxRoles = opts?.maxRoles ?? Number(process.env.PARTS_ROLE_RESOURCE_MAX ?? "12");
   const lifetimeCap = opts?.lifetimeCap ?? 3;
   const outcomes: RoleResourceOutcome[] = [];
 

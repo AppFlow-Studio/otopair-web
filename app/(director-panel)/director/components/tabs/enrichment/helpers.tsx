@@ -15,6 +15,11 @@ export function fmtWhen(ms: number | null | undefined): string {
   if (!ms) return '—'
   return new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
+/** Exact, readable date+time — "August 7, 2026, 3:45 PM" — for hover titles. */
+export function fmtWhenExact(ms: number | null | undefined): string {
+  if (ms == null) return '—'
+  return new Date(ms).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null) return '—'
   if (ms < 1000) return `${ms}ms`
@@ -92,6 +97,28 @@ export function RunChip({ runId, runStatus, onOpen, approx }: {
         …{runId.slice(-8)}
       </span>
     </button>
+  )
+}
+
+/** Compact run reference for dense car-centric rows (Incomplete Car Configs /
+ *  Missing parts accordions). Unlike RunChip it does NOT show a green
+ *  "complete" status pill on a healthy run — next to a wrong/unpriced/missing
+ *  part that reads like the PART is complete, which is backwards. It shows the
+ *  status pill ONLY when the run is unhealthy (failed/timeout/still running),
+ *  where "this data came from a bad run" is a real signal, and otherwise is
+ *  just a muted "Deep-Dive →" link so the row stays about the part. */
+export function RunLink({ runId, runStatus, onOpen }: { runId: string | null; runStatus: string | null; onOpen: () => void }) {
+  if (!runId) return <span style={{ fontSize: 11, color: 'var(--slate-300)' }}>—</span>
+  const unhealthy = runStatus != null && runStatus !== 'complete' && runStatus !== 'ok'
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+      {unhealthy && <StatusPill status={runStatus!} />}
+      <button type="button" onClick={e => { e.stopPropagation(); onOpen() }}
+        title="Open the enrichment run in Deep-Dive"
+        style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--slate-500)', fontSize: 12, fontFamily: 'inherit', fontWeight: 500, whiteSpace: 'nowrap' }}>
+        Deep-Dive →
+      </button>
+    </span>
   )
 }
 
@@ -353,6 +380,63 @@ export function SubTabs<T extends string>({ tabs, value, onChange, right }: {
   )
 }
 
+// ─── car-centric accordion ───────────────────────────────────────────────────
+
+const TONE_PILL: Record<Tone, { bg: string; fg: string }> = {
+  slate: { bg: 'var(--slate-100)', fg: 'var(--slate-600)' },
+  green: { bg: 'var(--green-50)', fg: 'var(--green-700)' },
+  yellow: { bg: 'var(--yellow-50)', fg: 'var(--yellow-800)' },
+  blue: { bg: 'var(--blue-50)', fg: 'var(--blue-700)' },
+  red: { bg: 'var(--red-50)', fg: 'var(--red-700)' },
+  orange: { bg: 'var(--orange-50)', fg: 'var(--orange-700)' },
+}
+
+/** A small "<n> <label>" count pill for an accordion header — e.g. the
+ *  "2 missing · 1 wrong · 3 unpriced" breakdown on a car row. Renders nothing
+ *  when the count is zero so a car only advertises the buckets it actually has. */
+export function CountPill({ n, label, tone = 'slate' }: { n: number; label: string; tone?: Tone }) {
+  if (!n) return null
+  const c = TONE_PILL[tone]
+  return (
+    <span className="mono" style={{ fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: c.bg, color: c.fg, whiteSpace: 'nowrap' }}>
+      {n} {label}
+    </span>
+  )
+}
+
+/** One collapsible car row — the inline-styled disclosure the car-centric
+ *  Needs Attention tabs (Missing parts, Incomplete Car Configs) are built from.
+ *  Mirrors IncidentsPanel's expand pattern (single-open state owned by the
+ *  parent via `open`/`onToggle`) rather than the Tailwind components/ui
+ *  Accordion, which wouldn't theme against this panel's CSS-var design system. */
+export function CarAccordionItem({ open, onToggle, title, subtitle, badges, children }: {
+  open: boolean
+  onToggle: () => void
+  title: ReactNode
+  subtitle?: ReactNode
+  badges?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <div style={{ border: '1px solid var(--slate-200)', borderRadius: 10, overflow: 'hidden' }}>
+      <div onClick={onToggle}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', cursor: 'pointer', background: open ? 'var(--slate-50)' : '#fff' }}>
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--slate-800)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+          {subtitle && <span style={{ fontSize: 11, color: 'var(--slate-400)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{subtitle}</span>}
+        </span>
+        {badges && <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>{badges}</span>}
+        <span style={{ color: 'var(--slate-300)', flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
+      </div>
+      {open && (
+        <div style={{ padding: '14px 16px', borderTop: '1px solid var(--slate-100)', display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── triggers ────────────────────────────────────────────────────────────────
 
 export type TriggerRequest =
@@ -407,7 +491,7 @@ export function ReviewQueueRow({
       {r.status === 'claimed' && (
         <span style={{ color: 'var(--blue-700)', flexShrink: 0, fontSize: 11 }}>● {r.claimed_by ?? 'claimed'}</span>
       )}
-      <span style={{ color: 'var(--slate-400)', flexShrink: 0 }} title={new Date(r.created_at).toLocaleString()}>{r.age_h}h</span>
+      <span style={{ color: 'var(--slate-400)', flexShrink: 0 }} title={fmtWhenExact(r.created_at)}>{r.age_h}h</span>
       {canClaim && r.status === 'open' && onClaim && (
         <button style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--blue-700)', fontSize: 12, fontFamily: 'inherit', fontWeight: 500, flexShrink: 0 }}
           onClick={e => { e.stopPropagation(); onClaim() }}>Claim</button>

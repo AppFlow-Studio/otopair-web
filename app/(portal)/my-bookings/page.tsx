@@ -9,6 +9,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Briefcase, Calendar, Loader2 } from "lucide-react";
 import { usePortalSidebar } from "../portal-context";
 import DatePicker from "@/components/ui/date-picker";
+import TimePicker from "@/components/ui/time-picker";
 import BookingDetailPanel from "@/components/booking-detail-panel";
 import type { JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import RescheduleConfirmationDialog, {
@@ -226,30 +227,24 @@ export default function MyBookingsPage() {
                 <DatePicker value={dateFrom} onChange={setDateFrom} />
               </div>
             </div>
-            <label className="text-xs font-medium text-muted-foreground">
-              Time
-              <input
-                type="time"
-                value={timeFrom}
-                onChange={(event) => setTimeFrom(event.target.value)}
-                className="mt-1 block w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </label>
+            <div className="text-xs font-medium text-muted-foreground">
+              <span>Time</span>
+              <div className="mt-1">
+                <TimePicker value={timeFrom} onChange={setTimeFrom} minuteStep={15} ariaLabel="From time" />
+              </div>
+            </div>
             <div className="text-xs font-medium text-muted-foreground">
               <span>To</span>
               <div className="mt-1">
                 <DatePicker value={dateTo} onChange={setDateTo} />
               </div>
             </div>
-            <label className="text-xs font-medium text-muted-foreground">
-              Time
-              <input
-                type="time"
-                value={timeTo}
-                onChange={(event) => setTimeTo(event.target.value)}
-                className="mt-1 block w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-              />
-            </label>
+            <div className="text-xs font-medium text-muted-foreground">
+              <span>Time</span>
+              <div className="mt-1">
+                <TimePicker value={timeTo} onChange={setTimeTo} minuteStep={15} ariaLabel="To time" />
+              </div>
+            </div>
           </div>
 
           <div className="flex items-center gap-3">

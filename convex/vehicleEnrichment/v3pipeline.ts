@@ -39,7 +39,7 @@ import {
 import { mergeBlockedDomains } from "./utils/enrichmentFlags";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
-import { BATCH_2_SYSTEM, buildBatch2Prompt } from "./prompts/batch2Prompt";
+import { BATCH_2_SYSTEM, buildBatch2Prompt, SERVICES_RESCUE_SYSTEM, buildServicesRescuePrompt } from "./prompts/batch2Prompt";
 import { GAP_FILL_SYSTEM, buildGapFillPrompt } from "./prompts/gapFillPrompt";
 import { callClaudeWithWebSearch } from "./utils/claudeClient";
 import { deriveEngineFamily } from "./laborSibling";
@@ -673,7 +673,10 @@ export function classifyFieldGaps(
 }
 
 /** V3 fill rate — counts actual data coverage across normalized tables. */
-async function calculateV3FillRate(
+// Exported for the post-heal completion-gate re-evaluation
+// (completionReevaluate.ts / priceRefresh epilogue): the gate must judge the
+// config's CURRENT fill, not the finalize-time snapshot stored on the row.
+export async function calculateV3FillRate(
   ctx: any,
   vehicleConfigId: Id<"vehicle_configs">,
   engineId: Id<"engines">,
@@ -843,7 +846,8 @@ function isRejectedPriceUrl(url: string | null | undefined): boolean {
   return isBlockedDomain(url) || isMarketplaceUrl(url);
 }
 
-function parseBatch2(
+/** Exported for tests (services-rescue parse path). Pure. */
+export function parseBatch2(
   data: Record<string, any>,
   nullFields: string[],
 ): { gapFields: Record<string, FieldResult>; services: ServicePricingResult[] } {
@@ -1949,7 +1953,16 @@ async function writeNormalizedData(
     if (val == null || val.length === 0) {
       const skipReason = rawStr ? "failed_sanitization" : "null_or_empty";
       console.log(`[v8-parts] SKIPPED ${fieldKey}: reason=${skipReason}`);
-      if (rawStr) {
+      // Boolean/none-ish junk is a MODEL-SAID-NO, not a rejected part number
+      // (round-3 audit, Aug 9 2026: the Pacifica run tripped
+      // part_pattern_suspect:Chrysler:9 — every one was the literal string
+      // "false"). Classifying junk as oem_part_rejected polluted the
+      // resurrection ledger and made the pattern-suspect sentinel cry wolf;
+      // treat it like an llm_null instead (nulled, unflagged — batch-2
+      // re-asks it the same way).
+      const isJunkValue =
+        rawStr != null && /^(?:false|true|null|none|n\/?a|unknown|not\s+applicable|-+)$/i.test(rawStr.trim());
+      if (rawStr && !isJunkValue) {
         // A rejected part number must NOT stay "filled" in the field map —
         // that made the loss invisible: no field_gap entry, and batch-2
         // gap-fill never re-asked because the field looked populated, while
@@ -1962,6 +1975,8 @@ async function writeNormalizedData(
           flagged: true,
           flag_reason: `oem_part_rejected: ${rawStr}`,
         } as any;
+      } else if (isJunkValue) {
+        fields[fieldKey] = { ...(fields[fieldKey] ?? {}), value: null } as any;
       }
       continue;
     }
@@ -2904,7 +2919,10 @@ export const enrichVehicleBatchV3 = internalAction({
 
     // STEP 7: FireCrawl scrape — parts catalog + owner's manual
     const scrapeStartedAt = Date.now();
-    const sources = await scrapeVehicleSources(ctx, vehicle);
+    // `vehicle` is built before the decode runs, so fold in the drivetrain we
+    // resolved at STEP 4 — the manual scrape needs it to pick between
+    // drivetrain-qualified source variants (see scrapeManual → LEMON).
+    const sources = await scrapeVehicleSources(ctx, { ...vehicle, drivetrain: nhtsDrivetrain });
     const scrapeEndedAt = Date.now();
 
     // STEP 7b: Record deterministic supersession chains parsed from the same
@@ -2967,7 +2985,15 @@ export const enrichVehicleBatchV3 = internalAction({
         userPrompt: buildBatch1bPrompt(vehicle),
         maxTokens: 16384,
         temperature: 0,
-        maxSearchUses: 1,
+        // 8, raised from 1 (Aug 2026). The prompt asks ~15-20 spec fields at
+        // "1-2 searches per field"; the 1-search budget was latent for months
+        // because batchClient silently dropped max_uses (the request searched
+        // 37 times unbounded and worked). Once the cap was actually enforced,
+        // a 1-search batch1b hit the refusal loop after its single search and
+        // the server ended the turn with stop_reason=pause_turn — no final
+        // JSON, every spec field lost (observed on BOTH web_search tool
+        // versions, runs 2-3 of the GLC-43 verification).
+        maxSearchUses: 8,
         blockedDomains: runtimeBlockedDomains,
         outputSchema: buildBatch1bArraySchema(),
       },
@@ -3528,13 +3554,16 @@ async function runPollBatch1Body(
       total_web_searches: callLog.reduce((s, c) => s + c.webSearches, 0),
     });
 
-    // Give gap-fill more searches when numeric specs (capacities, CCA, gap) are
-    // missing — with the old flat maxSearchUses:1 a single part-number lookup
-    // consumed the whole budget and specs never got searched. Capped to bound cost.
-    const numericSpecGaps = nullFields.filter((k) =>
-      ["coolant_capacity_qts", "oil_capacity_qts", "battery_cca", "spark_plug_gap"].includes(k),
-    ).length;
-    const batch2SearchUses = Math.min(1 + numericSpecGaps, 5);
+    // Search budget scaled to the workload. The old `1 + numericSpecGaps`
+    // (cap 5) formula predates max_uses actually being SENT (batchClient
+    // dropped it, so the model searched unbounded — 48 searches on a "1
+    // search" budget — and the oversized turn ended without its final JSON:
+    // the fleet-wide batch-2 `json_extraction_empty` of Aug 2026). Now that
+    // the cap is enforced, 1-5 searches for ~60 gap fields would starve the
+    // gap fill instead. ~1 search per 8 fields with a floor of 6 keeps small
+    // gap lists cheap and gives a full 59-field re-fill enough road; 14 caps
+    // cost AND keeps the turn short enough to finish with a JSON block.
+    const batch2SearchUses = Math.min(6 + Math.ceil(nullFields.length / 8), 14);
 
     const batch2UserPrompt = buildBatch2Prompt(vehicle, nullFields, oemParts);
     // Audit F18: block-list = hardcoded BLOCKED_DOMAINS + blocked_domains table.
@@ -3603,6 +3632,29 @@ async function runPollBatch1Body(
         attempt: 1,
       },
     );
+
+    // Wave 3 (Aug 2026): catalog-attested-first BRAKES. Rotors/pads were the
+    // most cross-generation-contaminated class when born from LLM extraction
+    // (wrong on all 3 vehicles that had them in the batch-3 audit) — so
+    // harvest the storefront's own vehicle-scoped brake category pages NOW,
+    // while Batch 2 polls, in a separate action budget. Roles Batch 1A
+    // already filled are skipped inside the action (empty-fill only); the
+    // URL itself is the fitment statement, and the usual verifier still
+    // cross-examines at finalize. Kill: PARTS_CATEGORY_HARVEST_EARLY=off.
+    if (process.env.PARTS_CATEGORY_HARVEST_EARLY !== "off") {
+      try {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.vehicleEnrichment.categoryHarvest.harvestVehicleCategories,
+          {
+            vehicleConfigId: args.vehicleConfigId,
+            roleFilter: ["front_brake_pad", "rear_brake_pad", "front_rotor", "rear_rotor"],
+          },
+        );
+      } catch (e) {
+        console.warn("[v8] early brake harvest scheduling failed (non-fatal):", e);
+      }
+    }
 }
 
 // ============================================================================
@@ -3793,14 +3845,104 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           allFields[k] = fv;
         }
       }
+    }
 
-      // Batch 3 (gap-fill re-ask): ONE bounded targeted pass over fields
-      // STILL null after Batch 2 (getNullFields excludes not_applicable —
-      // re-asking N/A fields resurrected impossible data, see comment above
-      // getNullFields). One synchronous web-search call, capped field count,
-      // values flow through the same parseBatch2 → sanity → sanitize gates as
-      // Batch-2 gap fills. No loop — a field that survives this stays in the
-      // run's field_gaps ledger instead.
+    // ── Services rescue rung (fresh-5 round 2, Aug 2026) ─────────────────
+    // On first-contact makes the paid batch-2 turn keeps ending with
+    // `services: []` — the raw payloads (CX-30/Sierra/Jeep/Palisade) all show
+    // stop_reason=end_turn after 12-13 searches with the final text block
+    // empty or fields-only: the model researches, then quits before the
+    // services write-out. That single empty array starves SIX consumers at
+    // once (pricing writes, labor, quotability ×2, role applicability,
+    // repair scope), each of which then limps on its own degraded fallback —
+    // the structural DB list fails open on unknown drivetrain, inflating the
+    // quotability denominator (CX-30 0.58) while ~25 price/labor V4 fields
+    // stay null and drag applicable_fill_rate to batch-1-only levels
+    // (Sierra 14%). One synchronous services-ONLY re-ask — no 60-103-field
+    // gap list competing for the write-out budget — restores the model-judged
+    // set before any consumer runs. Runs whenever batch-2 produced zero
+    // applicable services (r2.error, empty payload, or fields-only partial —
+    // the Jeep/Palisade shape is deliberately NOT an r2.error, because that
+    // would discard the real fields it returned). Not run on timeout
+    // (r2 undefined): the late collector applies the paid batch's result.
+    // Disable: PARTS_SERVICES_RESCUE=off.
+    const batch2RescueErrors: string[] = [];
+    if (r2 && process.env.PARTS_SERVICES_RESCUE !== "off") {
+      const applicableCount = services.filter((s) => s.is_applicable).length;
+      if (applicableCount === 0) {
+        try {
+          const knownParts: Record<string, string> = {};
+          for (const k of Object.keys(PART_FIELD_MAP)) {
+            const v = allFields[k]?.value;
+            if (typeof v === "string" && v.trim()) knownParts[k] = v.trim();
+            if (Object.keys(knownParts).length >= 20) break;
+          }
+          const rescueVehicle: VehicleInput = {
+            vehicleId: args.vehicleId,
+            year: args.year, make: args.make, model: args.model,
+            trim: args.trim, engineCode: args.engineCode, displacement: args.displacement,
+          };
+          const rescueRes = await callClaudeWithWebSearch({
+            system: SERVICES_RESCUE_SYSTEM,
+            userPrompt: buildServicesRescuePrompt(rescueVehicle, knownParts),
+            maxSearchUses: 8,
+            maxTokens: 8000,
+            temperature: 0,
+          });
+          callLog.push({
+            call: "services_rescue",
+            tokensIn: rescueRes.usage.tokensIn,
+            tokensOut: rescueRes.usage.tokensOut,
+            webSearches: rescueRes.usage.webSearches,
+            durationMs: 0,
+          });
+          const rescueParsed = parseBatch2(normalizeBatchShape(rescueRes.data, "2"), []);
+          const rescuedApplicable = rescueParsed.services.filter((s) => s.is_applicable).length;
+          if (rescuedApplicable > 0) {
+            services = rescueParsed.services;
+            const rescuePricing = mapPricingToFields(services);
+            let rescueFilled = 0;
+            for (const [k, fv] of Object.entries(rescuePricing)) {
+              if (allFields[k]?.value == null) {
+                allFields[k] = fv;
+                rescueFilled++;
+              }
+            }
+            batch2RescueErrors.push("applicable_services_rescue_used");
+            console.log(
+              `[v8/services-rescue] batch-2 services empty — rescue returned ` +
+                `${services.length} rows (${rescuedApplicable} applicable), filled ${rescueFilled} price/labor fields`,
+            );
+          } else {
+            batch2RescueErrors.push("applicable_services_rescue_failed");
+            console.warn(
+              `[v8/services-rescue] rescue also returned no applicable services ` +
+                `(${rescueParsed.services.length} rows) — structural fallback will apply`,
+            );
+          }
+        } catch (e) {
+          batch2RescueErrors.push("applicable_services_rescue_failed");
+          console.warn("[v8/services-rescue] rescue pass failed (non-fatal):", e);
+        }
+      }
+    }
+
+    // Batch 3 (gap-fill re-ask): ONE bounded targeted pass over fields STILL
+    // null at this point (getNullFields excludes not_applicable — re-asking
+    // N/A fields resurrected impossible data, see comment above getNullFields).
+    // One synchronous web-search call, capped field count, values flow through
+    // the same parseBatch2 → sanity → sanitize gates as Batch-2 gap fills. No
+    // loop — a field that survives this stays in the run's field_gaps ledger.
+    //
+    // Deliberately a SIBLING of the batch-2 success branch, not a child: when
+    // batch-2 comes back unparseable (json_extraction_empty — the GLC-43 /
+    // round-19 fleet shape) this ranked re-ask is the only part-number rung
+    // left in the run, and nesting it under success skipped it exactly when it
+    // was needed most. Quotability ranking puts core roles (pads, rotors,
+    // battery, coolant, plugs) at the head of the 15-field cap. Not run on
+    // timeout (r2 undefined): the paid batch is still processing and the late
+    // collector applies the full gap fill when it ends.
+    if (r2) {
       if (process.env.PARTS_GAPFILL !== "off") {
         const gapFillMax = Number(process.env.PARTS_GAPFILL_MAX_FIELDS ?? "15");
         // Rank by quotability impact before slicing to the cap — core-role
@@ -4266,7 +4408,7 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
 
       console.log(
         `[v8/labor] laborAllSources for ${args.make} ${args.model} ${args.trim ?? ""}: ` +
-        `flags={olp:${laborFlags.olp},web:${laborFlags.web},repairpalEndpoint:${laborFlags.repairpalEndpoint}}, ` +
+        `flags={olp:${laborFlags.olp},web:${laborFlags.web},estimatorEndpoint:${laborFlags.estimatorEndpoint},lemon:${laborFlags.lemon}}, ` +
         `${laborServices.length} services, buildId=${laborBuildId ? "resolved" : "none"}`,
       );
 
@@ -4618,6 +4760,14 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           }
           priceDiscoveryUsed++;
           const urls = await discoverPriceUrls({ oem: item.oem, make: args.make, name: item.name });
+          if (urls === null) {
+            console.warn(`[v8/price] discovery unavailable for part ${item.partId} (oem=${item.oem})`);
+            priceGaps.push({
+              field: `part_price:${item.subcategory ?? item.oem}`,
+              reason: "price_discovery_unavailable",
+            });
+            continue;
+          }
           if (urls.length === 0) {
             console.warn(`[v8/price] discovery found no usable source for part ${item.partId} (oem=${item.oem})`);
             priceGaps.push({
@@ -6484,6 +6634,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       fields_changed: V4_FIELD_KEYS.filter((k) => allFields[k]?.value != null),
       errors: [
         ...(timedOut ? ["batch2_timeout"] : []),
+        // Batch-2's own parse verdict (json_extraction_empty / _failed /
+        // _empty_payload / API "errored"). Before this it lived only in the
+        // console and the step trace's status — the run row said nothing, so
+        // auditByVin tallied zero and the Aug-2026 empty-services runs could
+        // only be diagnosed by pulling raw batch results from the API.
+        ...(r2?.error ? [`batch2_result_error:${String(r2.error).slice(0, 200)}`] : []),
+        // Services rescue outcome: _used means batch-2's services leg came
+        // back empty (even when no result_error was flagged — the fields-only
+        // partial shape) and the synchronous re-ask restored it; _failed means
+        // the structural fallback was the last resort.
+        ...batch2RescueErrors,
         // The run finalized thin at the 3h timeout and this pass applied the
         // paid batch's gap-fill afterwards — history marker, not an error.
         ...(args.lateCollect ? ["late_collected"] : []),
@@ -6642,6 +6803,29 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       { vehicle_id: args.vehicleId, vehicle_config_id: args.vehicleConfigId },
     );
 
+    // Instant heal (Aug 2026): bookability must not wait for the nightly cron.
+    // The mid-finalize price census (~4780) runs BEFORE the late gates, so a
+    // part written by role-repair — or the survivor left after a pass-2
+    // refutation — finishes the run unpriced with nothing scheduled to fix it
+    // (GLC-43 run 4: battery + spark plug). healAfterRun re-censuses from the
+    // DB after EVERYTHING has run: one more role-repair pass for holes the
+    // late gates opened, then the targeted per-config price backfill, each in
+    // its own action budget. Self-noops on a clean run, so it is scheduled
+    // unconditionally (including on late collection — the bonus gap-fill can
+    // create the same late-born parts). Kill switch: PARTS_IMMEDIATE_HEAL=off.
+    if (process.env.PARTS_IMMEDIATE_HEAL !== "off") {
+      try {
+        await ctx.scheduler.runAfter(
+          5_000, // let the terminal writes settle, same as source discovery
+          internal.vehicleEnrichment.resourceRoles.healAfterRun,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        console.log("[v8] instant heal scheduled (role repair + targeted price backfill)");
+      } catch (e) {
+        console.warn("[v8] instant heal scheduling failed (non-fatal):", e);
+      }
+    }
+
     // Update source reliability scores based on consensus
     try {
       await ctx.runMutation(
@@ -6654,12 +6838,22 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
 
     // Post-enrichment: trigger source discovery if this make has < 3 registered sources.
     // Runs async (scheduled) so it doesn't block the completion path.
+    // Wave-1/2 (Aug 2026): OFF by default. source_registry is the DIRECTOR's
+    // reference surface (data portal /sources), not scraper config — and it
+    // fills as a byproduct of runs (sourceScoring auto-registers every
+    // evidence domain; upsertPartPrice registers price domains), so the
+    // speculative web-search finder here only burned Firecrawl+Haiku to
+    // discover sources the run itself would have recorded for free.
+    // Re-enable with ENRICHMENT_SOURCE_DISCOVERY=on if ever needed.
     try {
-      const existingSources = await ctx.runQuery(
-        internal.vehicleEnrichment.v3queries.getSourcesForMake,
-        { make_id: args.makeId },
-      );
-      if (existingSources.length < 3) {
+      const existingSources =
+        process.env.ENRICHMENT_SOURCE_DISCOVERY === "on"
+          ? await ctx.runQuery(
+              internal.vehicleEnrichment.v3queries.getSourcesForMake,
+              { make_id: args.makeId },
+            )
+          : null;
+      if (existingSources && existingSources.length < 3) {
         console.log(
           `[v8] Source discovery: ${args.make} has ${existingSources.length} sources — scheduling discovery`
         );
@@ -7074,12 +7268,35 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           internal.vehicleEnrichment.manualLibrary.resolveManualForVehicle,
           { make: args.make, model: args.model, year: args.year },
         );
+        const extractDelayMs = Number(process.env.ENRICHMENT_MANUAL_EXTRACT_DELAY_MS ?? "180000");
         await ctx.scheduler.runAfter(
-          Number(process.env.ENRICHMENT_MANUAL_EXTRACT_DELAY_MS ?? "180000"),
+          extractDelayMs,
           internal.vehicleEnrichment.manualLibrary.extractIntervalsFromManual,
           { vehicleConfigId: args.vehicleConfigId },
         );
-        console.log("[v8] Manual library resolve + extract scheduled");
+
+        // ── Second pass over the SAME uploaded PDF: the specifications table ──
+        // The interval pass answers one question; the document also carries
+        // capacities, viscosities, fluid specs, pressures and torque. This pass
+        // files those as field_claims (family owners_manual, weight 3) rather
+        // than writing them, so the reconciler weighs them against the
+        // storefront/aggregator claims already on file — AMSOIL and a manual
+        // agreeing is the first two-family, quote-grade evidence those fields
+        // have ever had.
+        //
+        // Deliberately close behind the interval pass: the document block
+        // carries cache_control, so landing inside the cache window makes this
+        // read ~10% the price of a cold ingest. 60s is comfortably inside the
+        // 5-minute ephemeral TTL while still leaving the first call room to
+        // finish a large PDF.
+        if (process.env.ENRICHMENT_MANUAL_SPECS !== "off") {
+          await ctx.scheduler.runAfter(
+            extractDelayMs + 60_000,
+            (internal as any).vehicleEnrichment.manualSpecs.extractSpecsFromManual,
+            { vehicleConfigId: args.vehicleConfigId, runId: args.runId },
+          );
+        }
+        console.log("[v8] Manual library resolve + extract (+specs) scheduled");
       } catch (e) {
         console.warn("[v8] Manual library trigger failed (non-fatal):", e);
       }

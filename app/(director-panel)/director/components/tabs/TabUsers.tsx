@@ -11,6 +11,7 @@ import { SectionAnchor } from '../Shell'
 import { consumeGoto, consumeStashedGoto } from '../directorNav'
 import { AdminActionPanel, ActionRow, CreditPromptModal } from '../AdminActionPanel'
 import { BookingDetailModal } from '../BookingDetailModal'
+import { fmtDate } from '../Charts'
 import { UserProfileTab } from './users/UserProfileTab'
 import { UserEngagementTab } from './users/UserEngagementTab'
 import { UserGarageTab } from './users/UserGarageTab'
@@ -363,7 +364,7 @@ export const TabUsers = () => {
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)' }} className="mono">{u.phone}</td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} className="mono">{u.vehicles}</td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} className="mono">{u.bookings}</td>
-                    <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{u.lastBooking}</td>
+                    <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{fmtDate(u.lastBooking)}</td>
                     <td style={tableStyles.td}>{loyaltyChip(u.loyalty, u.isPendingDeletion)}</td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} onClick={e => e.stopPropagation()}>
                       <Button size="sm" onClick={() => setOpenId(u.id)}>View</Button>

@@ -116,8 +116,9 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
-import { searchAndFetch } from "./firecrawl";
+import { searchLinksOnly } from "./firecrawl";
 import { resolveExtractionModel } from "./utils/enrichmentFlags";
+import { discoverDirectManuals, USER_AGENT as MANUAL_DOWNLOAD_USER_AGENT } from "./manualDirectSources";
 
 // This module is new — `internal.vehicleEnrichment.manualLibrary` is absent
 // from _generated/api.d.ts until `npx convex dev` regenerates it. Same pattern
@@ -138,9 +139,46 @@ const PDF_DOWNLOAD_TIMEOUT_MS = 60_000;
 const FILE_UPLOAD_TIMEOUT_MS = 120_000;
 const EXTRACTION_TIMEOUT_MS = 180_000;
 
-/** Skip anything above this — the Messages API request cap is 32 MB and a
- *  larger body is a mirror site's bundle, not a manual. */
+/**
+ * Largest body the ANTHROPIC path can take. The Messages API caps a request at
+ * 32 MB, so anything above this cannot be sent as a document block.
+ *
+ * This is no longer a discovery-level rejection: a manual over this size is
+ * still downloaded and stored, and routed to the Reducto extractor instead
+ * (see MAX_STORED_MANUAL_BYTES). It only decides WHICH extractor reads it.
+ */
 export const MAX_MANUAL_BYTES = 30 * 1024 * 1024;
+
+/**
+ * Largest body worth keeping at all.
+ *
+ * Real OEM owner's manuals routinely exceed the Anthropic cap — the 2020
+ * Accord OM is 38.7 MB and the 2017 Mazda3 is 57 MB — and every one of those
+ * vehicles used to be written off as `too_large_*` and never enriched. Above
+ * this ceiling, though, a "PDF" is a mirror site's bundle rather than a
+ * manual, so the guard still exists; it just sits much higher.
+ */
+export const MAX_STORED_MANUAL_BYTES = 80 * 1024 * 1024;
+
+/** Extractor ids recorded on the manual row. */
+export const EXTRACTOR_ANTHROPIC = "anthropic_files";
+export const EXTRACTOR_REDUCTO = "reducto";
+
+/** Which extractor can read a document of this size? Pure, so the routing rule
+ *  is testable without a network or a database. */
+export function extractorForBytes(bytes: number): string {
+  return bytes > MAX_MANUAL_BYTES ? EXTRACTOR_REDUCTO : EXTRACTOR_ANTHROPIC;
+}
+
+/** SHA-256 as lowercase hex. Web Crypto is available in the Convex runtime. */
+export async function sha256Hex(bytes: Uint8Array): Promise<string | null> {
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", bytes as unknown as BufferSource);
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return null; // an integrity nicety must never break enrichment
+  }
+}
 /** Below this a "PDF" is an error page or a redirect stub, not a manual. */
 export const MIN_MANUAL_BYTES = 40 * 1024;
 
@@ -274,6 +312,21 @@ export const MANUAL_MIRROR_DOMAINS: readonly string[] = [
   "amazon.com",
   "goodreads.com",
   "pinterest.com",
+  "lemon-manuals.la", // offshore republisher of OEM manuals; risk accepted 2026-08-05
+];
+
+/**
+ * Mirrors whose bytes we have VERIFIED faithful to the OEM's (round-2 audit,
+ * Aug 9 2026: carmans.net served the exact 2019 Sierra and 2021 CX-30 owner's
+ * manuals with schedule tables intact; dealereprocess ETag-matched Toyota's
+ * CDN; lemon-manuals risk-accepted 2026-08-05). They still never claim OEM
+ * provenance — but they should not carry the same −40 rank penalty as scribd,
+ * or an anonymous wrong-model candidate outranks a correct verified mirror.
+ */
+export const VERIFIED_MANUAL_MIRRORS: readonly string[] = [
+  "carmans.net",
+  "dealereprocess.org",
+  "lemon-manuals.la",
 ];
 
 /** Suffix-match a host against a domain list (`a.b.com` matches `b.com`). */
@@ -348,6 +401,110 @@ export function looksLikePdfUrl(url: string | null | undefined): boolean {
   return /\.pdf$/i.test(withoutQuery.trim());
 }
 
+/**
+ * Verified mirrors that serve their manuals through an HTML viewer page
+ * (pdf.js) rather than a direct PDF link. Only these earn the embedded-PDF
+ * adapter: lemon-manuals is HTML-native (no PDF to extract) and the mirror
+ * farm stays excluded entirely. carmans.net verified live Aug 9 2026 —
+ * `<iframe src="/pdf.js/web/viewer.html?file=/wp-content/uploads/pdf/
+ * 2019-gmc-sierra.pdf#zoom=…">`, and the ?file= target serves
+ * application/pdf directly. NOTE: it 406s weak user agents even on HTML
+ * pages, so the page fetch must send the full browser UA.
+ */
+export const PDF_EMBED_MIRRORS: readonly string[] = ["carmans.net"];
+
+/** An HTML page on a PDF-embed mirror — adaptable into a direct-PDF candidate. */
+export function isPdfEmbedMirrorPage(url: string | null | undefined): boolean {
+  const host = hostnameOf(url);
+  if (!host) return false;
+  return hostMatches(host, PDF_EMBED_MIRRORS) && !looksLikePdfUrl(url);
+}
+
+/**
+ * Constructible PDF-embed mirror pages for a vehicle — carmans.net paths are
+ * `/{year}-{make}-{model}/` (live-verified: /2019-gmc-sierra/ and
+ * /2021-mazda-cx-30/ both 200). Search proved unreliable at surfacing these
+ * (the site: rescue query returned nothing for the Sierra while the page
+ * existed), so they are appended as candidates directly. Zero cost until one
+ * actually ranks: the page fetch, embedded-PDF extraction, wrong-vehicle
+ * filter, magic-byte check and extractor identity gate all still apply — a
+ * 404 or junk page just falls through to the next candidate.
+ *
+ * Two slug variants: the full model ("sierra-1500") and the alpha-only stem
+ * ("sierra") — carmans collapses trim-number families (the 2019 Sierra 1500
+ * manual lives at /2019-gmc-sierra/).
+ */
+export function buildPdfEmbedMirrorPages(vehicle: {
+  year: number;
+  make: string;
+  model: string;
+}): Array<{ url: string; title: string }> {
+  const hyph = (raw: string): string =>
+    (raw ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  const y = Math.trunc(vehicle.year);
+  const mk = hyph(vehicle.make);
+  const md = hyph(vehicle.model);
+  if (!Number.isFinite(y) || !mk || !md) return [];
+  const alphaOnly = hyph(
+    String(vehicle.model)
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(" ")
+      .filter((t) => t && !/^\d+$/.test(t))
+      .join(" "),
+  );
+  // The alpha-only variant models FAMILY collapse ("sierra-1500" → "sierra"),
+  // not name mutilation — "cx-30" must never degrade to "cx". Require a
+  // word-sized stem before offering it.
+  const slugs = [...new Set([md, alphaOnly.length >= 4 ? alphaOnly : ""].filter(Boolean))];
+  return slugs.map((slug) => ({
+    url: `https://www.carmans.net/${y}-${mk}-${slug}/`,
+    title: `${y} ${vehicle.make} ${vehicle.model} Owner's Manual (carmans.net)`,
+  }));
+}
+
+/**
+ * Pull the embedded PDF URL out of a viewer page (or out of a viewer URL
+ * itself — search sometimes returns `viewer.html?file=…` directly).
+ *
+ * Two passes: viewer query params (`?file=` and friends, pdf.js's contract),
+ * then plain attributes pointing at a .pdf. Values resolve against the page
+ * URL, so relative `/wp-content/…` paths work. pdf.js's bundled demo
+ * document (compressed.tracemonkey…) is explicitly refused — extracting it
+ * would hand the pipeline a compiler paper as an owner's manual.
+ */
+export function extractEmbeddedPdfUrl(haystack: string, baseUrl: string): string | null {
+  const resolve = (raw: string): string | null => {
+    let v = raw.trim();
+    try {
+      v = decodeURIComponent(v);
+    } catch {
+      /* not URI-encoded — use as-is */
+    }
+    if (!/\.pdf(?:[?#]|$)/i.test(v)) return null;
+    if (/tracemonkey|\/compressed\.pdf/i.test(v)) return null;
+    try {
+      const abs = new URL(v, baseUrl);
+      if (abs.protocol !== "http:" && abs.protocol !== "https:") return null;
+      abs.hash = "";
+      return abs.toString();
+    } catch {
+      return null;
+    }
+  };
+  for (const m of haystack.matchAll(/[?&](?:file|pdf|url|doc)=([^"'&#\s]+)/gi)) {
+    const hit = resolve(m[1]);
+    if (hit) return hit;
+  }
+  for (const m of haystack.matchAll(
+    /(?:src|href|data|data-src|data-url)\s*=\s*["']([^"']+?\.pdf(?:[?#][^"']*)?)["']/gi,
+  )) {
+    const hit = resolve(m[1]);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export type ManualCandidate = {
   url: string;
   title: string;
@@ -357,6 +514,68 @@ export type ManualCandidate = {
   is_pdf: boolean;
   score: number;
 };
+
+/** A viewer page is a few tens of KB; anything past this is not one. */
+const MIRROR_PAGE_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Hard ceiling for a manual we materialize in ACTION memory. The download,
+ * the storage Blob and the Files-API form body hold ~3 copies at once
+ * against the 64 MB action limit — a ~25 MB mazdausa manual OOM-crashed the
+ * ENTIRE resolve (2021 CX-30, live), which also killed every rescue
+ * candidate ranked behind it. 20 MB × 3 + baseline fits; the 15.7 MB
+ * Palisade manual is the largest verified survivor. An over-limit candidate
+ * now SKIPS with a per-candidate reason instead of taking down the action.
+ */
+const MAX_ACTION_MANUAL_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Fetch a PDF-embed mirror's HTML page (capped read, browser UA — carmans
+ * 406s anonymous clients even for HTML). Returns the page text or null;
+ * never throws.
+ */
+async function fetchMirrorPageForPdf(pageUrl: string, label: string): Promise<string | null> {
+  try {
+    const res = await fetch(pageUrl, {
+      headers: {
+        Accept: "text/html,*/*",
+        "User-Agent": MANUAL_DOWNLOAD_USER_AGENT,
+        "Accept-Language": "en-US,en;q=0.9",
+      },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!res.ok) {
+      console.log(`[manual-library] ${label}: mirror page ${res.status} from ${pageUrl}`);
+      return null;
+    }
+    const reader = res.body?.getReader?.();
+    if (!reader) {
+      const buf = await res.arrayBuffer();
+      if (buf.byteLength > MIRROR_PAGE_MAX_BYTES) return null;
+      return new TextDecoder().decode(buf);
+    }
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > MIRROR_PAGE_MAX_BYTES) {
+        try { await reader.cancel(); } catch { /* already closed */ }
+        return null;
+      }
+      chunks.push(value);
+    }
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const c of chunks) { merged.set(c, offset); offset += c.byteLength; }
+    return new TextDecoder().decode(merged);
+  } catch (e) {
+    console.warn(`[manual-library] ${label}: mirror page fetch failed (non-fatal):`, e);
+    return null;
+  }
+}
 
 /** Doc-kind contribution to the score — schedule > owners manual > warranty. */
 const DOC_KIND_SCORE: Record<ManualDocKind, number> = {
@@ -398,7 +617,19 @@ export function rankManualCandidates(
 
     let score = 0;
     if (oem) score += 100;
-    if (isMirrorDomain(url)) score -= 40;
+    if (isMirrorDomain(url)) {
+      // Verified-faithful mirrors take a token penalty (stay below OEM, beat
+      // anonymous candidates); the mirror farm keeps the full −40.
+      score -= hostMatches(host, VERIFIED_MANUAL_MIRRORS) ? 6 : 40;
+    }
+    // Accessory-system booklets (Aug 9 2026): "2021-cx-30-NAVIGATION-owners-
+    // manual.pdf" carries year, model, OEM host and the words "owners manual"
+    // — it beat the real owner's manual on an alphabetical tiebreak and has
+    // no maintenance schedule inside. Penalize, don't filter: when it is the
+    // only candidate the identity/schedule gates still dispose of it.
+    if (/navigation|infotainment|uconnect|connected[-_ ]?(services|vehicle)|multimedia|audio[-_ ]?system|quick[-_ ]?(start|reference|guide)|bluetooth/i.test(hay)) {
+      score -= 35;
+    }
     score += DOC_KIND_SCORE[docKind];
     if (isPdf) score += 25;
     if (hay.includes(String(vehicle.year))) score += 15;
@@ -444,6 +675,69 @@ export function rankManualCandidates(
 }
 
 /**
+ * Does this candidate URL/title CONTRADICT the vehicle? Returns the reason,
+ * or null when nothing ties the candidate to a DIFFERENT vehicle.
+ *
+ * Round-2 post-mortem (Aug 9 2026): the 2019 Sierra 1500 stored gmc.com's
+ * `/manuals/2015/gmc/sierra_3500hd/2k15sierraden3rdPrint.pdf` — a 2015
+ * Sierra 3500HD Denali manual. The ranker's identity signal is a soft −30
+ * that the +100 OEM bonus steamrolls, and nothing downstream re-checked. This
+ * is a FILTER, not a score, and it is contradiction-only: a candidate that
+ * names no year and no model (Toyota's opaque publication slugs) passes — the
+ * anonymous-candidate penalty still handles ranking those.
+ *
+ *   - Year: candidate names model year(s) — 4-digit 19xx/20xx, a
+ *     "2018-2022" range, or a "2k15" filename token — and none covers ours.
+ *   - Model number: an alphabetic model stem we recognize is immediately
+ *     followed by a DIFFERENT digit run ("sierra3500" for a Sierra 1500,
+ *     "cx5" for a CX-30). Year-shaped runs are exempt (rule 1's job), and
+ *     the rule only fires when the vehicle itself carries digit tokens.
+ */
+export function contradictsVehicle(
+  url: string,
+  title: string | null | undefined,
+  vehicle: { year: number; model: string },
+): string | null {
+  const hay = `${url} ${title ?? ""}`.toLowerCase();
+
+  // ── Year contradiction ──
+  // Digit-lookaround boundaries, not \b: underscore is a word character, so
+  // "…_2022_Grand…" never \b-matches and real years went unseen.
+  const years = new Set<number>();
+  for (const m of hay.matchAll(/(?<!\d)(19[89]\d|20[0-3]\d)(?!\d)/g)) years.add(Number(m[1]));
+  for (const m of hay.matchAll(/(?<![a-z0-9])2k(\d{2})(?!\d)/g)) years.add(2000 + Number(m[1]));
+  let inRange = false;
+  for (const m of hay.matchAll(/(?<!\d)(19[89]\d|20[0-3]\d)\s*[-–]\s*(19[89]\d|20[0-3]\d)(?!\d)/g)) {
+    if (Number(m[1]) <= vehicle.year && vehicle.year <= Number(m[2])) inRange = true;
+  }
+  if (years.size > 0 && !years.has(vehicle.year) && !inRange) {
+    return `year_mismatch:${[...years].sort().join("/")}`;
+  }
+
+  // ── Model-number contradiction ──
+  const tokens = String(vehicle.model)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
+  const digitTokens = tokens.filter((t) => /^\d+$/.test(t));
+  const alphaTokens = tokens.filter((t) => /^[a-z]+$/.test(t) && t.length >= 2);
+  if (digitTokens.length > 0) {
+    const flat = hay.replace(/[^a-z0-9]/g, "");
+    for (const stem of alphaTokens) {
+      for (const m of flat.matchAll(new RegExp(`${stem}(\\d{1,4})`, "g"))) {
+        const run = m[1];
+        const asNum = Number(run);
+        if (run.length === 4 && asNum >= 1980 && asNum <= 2035) continue; // year-shaped
+        const matchesOurs = digitTokens.some((d) => d === run || d.startsWith(run) || run.startsWith(d));
+        if (!matchesOurs) return `model_number_mismatch:${stem}${run}`;
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Discovery queries for one vehicle, most-targeted first.
  *
  * Site-scoped queries come first when the make is in the allowlist — they are
@@ -467,8 +761,19 @@ export function buildManualQueries(year: number, make: string, model: string): s
     queries.push(`${ymm} maintenance schedule guide filetype:pdf site:${primary}`);
     queries.push(`${ymm} owner's manual pdf site:${primary}`);
   }
+  // Mopar family: the manuals live on vehicleinfo.mopar.com under opaque
+  // publication numbers (P136192_20_WK_…), which the generic queries never
+  // surface — the 2020 Grand Cherokee's real manual sat there while search
+  // returned a 2024 price guide and an Italian Uconnect booklet (both killed
+  // by the identity gates, burning rejection slots). Site-scope it.
+  if (["jeep", "chrysler", "dodge", "ram"].includes(normalizeMakeKey(mk))) {
+    queries.push(`${ymm} owner's manual site:vehicleinfo.mopar.com`);
+  }
   queries.push(`${ymm} warranty and maintenance guide pdf oil change interval`);
   queries.push(`${ymm} owner's manual pdf maintenance schedule miles months`);
+  // Verified-faithful mirror, last resort (round-2 audit: it carried the
+  // exact Sierra and CX-30 manuals when the OEM-scoped queries came up dry).
+  queries.push(`${ymm} owner's manual site:carmans.net`);
   return queries;
 }
 
@@ -476,6 +781,8 @@ export function buildManualQueries(year: number, make: string, model: string): s
 
 export type ManualRowLike = {
   file_id?: string | null;
+  /** Our own copy of the bytes — a resolved manual even without a file_id. */
+  storage_id?: string | null;
   failure_reason?: string | null;
   attempts?: number | null;
   fetched_at?: number | null;
@@ -512,12 +819,35 @@ export function shouldSkipManualLookup(
   const refreshTtl = (opts?.refreshDays ?? MANUAL_REFRESH_DAYS) * DAY_MS;
   const fetchedAt = typeof row.fetched_at === "number" ? row.fetched_at : 0;
 
-  if (typeof row.file_id === "string" && row.file_id.length > 0) {
+  const hasFileId = typeof row.file_id === "string" && row.file_id.length > 0;
+  // Bytes only count as "resolved" on a row that is NOT in a failure state.
+  // rejectManualRow clears file_id to force a different candidate; if stored
+  // bytes could stand in for it, a document the extractor already identified
+  // as the WRONG vehicle would read as resolved forever and the
+  // self-correcting loop would never run again. (rejectManualRow also drops
+  // the bytes — this is the belt to that braces.)
+  const failed = typeof row.failure_reason === "string" && row.failure_reason.length > 0;
+  const hasBytes = !failed && typeof row.storage_id === "string" && row.storage_id.length > 0;
+
+  // A row with our OWN copy of the bytes is resolved even without a Files API
+  // id — that is the whole point of storing them. It covers two cases: an
+  // oversize manual that never had a file_id (Reducto reads it from storage),
+  // and one whose file_id expired (re-uploaded from storage, no re-discovery).
+  // Re-running discovery for either would pay a search and a multi-MB download
+  // to arrive at bytes already on disk.
+  if (hasFileId || hasBytes) {
     if (typeof row.expires_at === "number" && row.expires_at <= now) {
-      return { skip: false, reason: "manual_expired" };
+      // Only a document we cannot re-derive locally needs full re-discovery.
+      return hasBytes
+        ? { skip: true, reason: "fresh_manual_stored" }
+        : { skip: false, reason: "manual_expired" };
     }
-    if (now - fetchedAt >= refreshTtl) return { skip: false, reason: "manual_stale" };
-    return { skip: true, reason: "fresh_manual" };
+    if (now - fetchedAt >= refreshTtl) {
+      return hasBytes
+        ? { skip: true, reason: "fresh_manual_stored" }
+        : { skip: false, reason: "manual_stale" };
+    }
+    return { skip: true, reason: hasFileId ? "fresh_manual" : "fresh_manual_stored" };
   }
 
   if (typeof row.failure_reason === "string" && row.failure_reason.length > 0) {
@@ -636,6 +966,21 @@ export const MANUAL_INTERVAL_TO_SERVICE: Record<string, string> = {
   diff_fluid: "differential_service",
   transfer_case_fluid: "transfer_case_service",
   ps_fluid: "power_steering_flush",
+  // ── Wear-adjacent keys (Aug 9 2026) ────────────────────────────────────
+  // battery_replacement / brake_pad_replacement / rotor_replacement /
+  // tire_replacement-by-tread are DELIBERATELY absent: factory schedules
+  // publish "inspect every X" and "replace at wear limit" for those, never a
+  // replacement cadence — and an inspection cadence written as a replacement
+  // interval is a confidently-wrong quote input (pinned by the
+  // "never emits brake_pads" test). The three below are the wear-adjacent
+  // facts manuals DO schedule, mapped to the services they actually describe:
+  // GM's grid schedules wiper replacement outright ("or every three years"),
+  // battery/terminal CHECKS are the battery_test cadence (not replacement),
+  // and several makes print a hard tire AGE ceiling ("replace tires over N
+  // years regardless of tread") — an age-based replacement bound, months-only.
+  wiper_blades: "wiper_blade_replacement",
+  battery_inspection: "battery_test",
+  tire_max_age: "tire_replacement",
 };
 
 /** Deterministic precedence for the shared-service collision. */
@@ -653,6 +998,9 @@ export const MANUAL_INTERVAL_ORDER: readonly string[] = [
   "diff_fluid",
   "transfer_case_fluid",
   "ps_fluid",
+  "wiper_blades",
+  "battery_inspection",
+  "tire_max_age",
 ];
 
 /** Core services whose missing `interval_months` qualifies a config for backfill. */
@@ -712,12 +1060,25 @@ export function buildManualExtractionSchema(
   return {
     type: "object",
     properties: {
+      // Identity FIRST (Aug 9 2026): the specs pass had this guard, the
+      // intervals pass did not — a wrong-vehicle manual with a clean schedule
+      // would have written data_quality "oem_manual" at 0.95 for the wrong
+      // car (the 2015 Sierra 3500HD PDF stored for a 2019 Sierra 1500).
+      document_matches_vehicle: { type: "boolean" },
+      document_vehicle_text: nullable("string"),
       schedule_found: { type: "boolean" },
       schedule_kind: nullable("string"),
       services: { type: "array", items: manualIntervalEntrySchema(intervalKeys) },
       notes: nullable("string"),
     },
-    required: ["schedule_found", "schedule_kind", "services", "notes"],
+    required: [
+      "document_matches_vehicle",
+      "document_vehicle_text",
+      "schedule_found",
+      "schedule_kind",
+      "services",
+      "notes",
+    ],
     additionalProperties: false,
   };
 }
@@ -728,7 +1089,9 @@ export function buildManualExtractionPrompt(vehicle: {
   model: string;
 }): string {
   return [
-    `The attached PDF is the manufacturer's published documentation for the ${vehicle.year} ${vehicle.make} ${vehicle.model}.`,
+    `The attached PDF should be the manufacturer's published documentation for the ${vehicle.year} ${vehicle.make} ${vehicle.model}.`,
+    "",
+    "STEP 0 — VERIFY THE DOCUMENT FIRST. From the cover, title page, or headers, identify which vehicle (year and model) this document is actually for, and copy that identification VERBATIM into `document_vehicle_text`. Set `document_matches_vehicle` to false when the document names a DIFFERENT model year or a different model/series (a 2015 manual for a 2019 vehicle; a Sierra 3500HD manual for a Sierra 1500). When it matches — or the document genuinely does not identify a year/model — set it to true. If it is false, still fill the remaining fields honestly, but expect the caller to discard the extraction.",
     "",
     "Find the MAINTENANCE SCHEDULE (often titled 'Maintenance Schedule', 'Scheduled Maintenance', 'Maintenance Log', or inside a Warranty & Maintenance Guide) and report the factory service intervals.",
     "",
@@ -739,6 +1102,7 @@ export function buildManualExtractionPrompt(vehicle: {
     "4. If the schedule is expressed as a repeating table (e.g. columns at 5,000 / 10,000 / 15,000 miles), report the RECURRENCE (the smallest repeating step for that item), not the first column.",
     "5. If the vehicle uses a condition-based reminder system (Honda Maintenance Minder, GM Oil Life) with no fixed mileage, set the mileage to null and say so in `notes` — do not substitute a typical value.",
     "6. Omit any service the document does not schedule. An empty `services` array is a correct answer.",
+    "7. Wear-based items — brake pads, rotors, tires-by-tread, battery REPLACEMENT — have no factory replacement interval, which is why they have no service_key. NEVER convert an 'inspect …' schedule row into a replacement interval for anything. The only wear-adjacent keys: `battery_inspection` is the battery/terminal CHECK cadence; `wiper_blades` only when the schedule explicitly says REPLACE wiper blades; `tire_max_age` only when the document states a maximum tire age regardless of tread (report it as months; e.g. 'replace tires over six years old' → interval_months 72).",
     "",
     `Allowed \`service_key\` values: ${MANUAL_INTERVAL_ORDER.join(", ")}.`,
     "",
@@ -965,6 +1329,9 @@ export const upsertManualRow = internalMutation({
     file_id: v.optional(v.string()),
     file_bytes: v.optional(v.float64()),
     page_count: v.optional(v.float64()),
+    storage_id: v.optional(v.id("_storage")),
+    content_sha256: v.optional(v.string()),
+    extractor: v.optional(v.string()),
     failure_reason: v.optional(v.string()),
     expires_at: v.optional(v.float64()),
   },
@@ -975,6 +1342,23 @@ export const upsertManualRow = internalMutation({
       .query("vehicle_manuals")
       .withIndex("by_ymm", (q) => q.eq("make", make).eq("model", model).eq("year", args.year))
       .first();
+
+    // A failure write must not orphan a stored copy: if this row already has
+    // bytes and the new write carries none, keep the old reference so the
+    // cheap-refresh path survives a transient discovery failure.
+    const keptStorageId = args.storage_id ?? (existing as any)?.storage_id;
+    if (
+      args.storage_id != null &&
+      (existing as any)?.storage_id != null &&
+      args.storage_id !== (existing as any).storage_id
+    ) {
+      // Replacing the bytes — drop the superseded blob rather than leaking it.
+      try {
+        await ctx.storage.delete((existing as any).storage_id);
+      } catch (e) {
+        console.warn("[manual-library] could not delete superseded blob:", e);
+      }
+    }
 
     const patch = {
       make,
@@ -987,6 +1371,9 @@ export const upsertManualRow = internalMutation({
       file_id: args.file_id,
       file_bytes: args.file_bytes,
       page_count: args.page_count,
+      storage_id: keptStorageId,
+      content_sha256: args.content_sha256 ?? (existing as any)?.content_sha256,
+      extractor: args.extractor ?? (existing as any)?.extractor,
       failure_reason: args.failure_reason,
       attempts: (existing?.attempts ?? 0) + 1,
       fetched_at: Date.now(),
@@ -1034,9 +1421,25 @@ export const rejectManualRow = internalMutation({
     const rejected = new Set<string>((row as any).rejected_urls ?? []);
     if (row.source_url) rejected.add(row.source_url);
 
+    // Drop our copy of the WRONG document. Keeping it would waste storage on
+    // bytes we have already judged useless, and — because stored bytes now
+    // stand in for a Files API id — would let the rejected document keep
+    // reading as a resolved manual.
+    const staleStorageId = (row as any).storage_id;
+    if (staleStorageId) {
+      try {
+        await ctx.storage.delete(staleStorageId);
+      } catch (e) {
+        console.warn("[manual-library] could not delete rejected blob:", e);
+      }
+    }
+
     await ctx.db.patch(row._id, {
       // Cleared so the row stops reading as a fresh success.
       file_id: undefined,
+      storage_id: undefined,
+      content_sha256: undefined,
+      extractor: undefined,
       // Recorded as a FAILURE so the negative cache still applies — a vehicle
       // whose every candidate is wrong must not be re-searched every single
       // run. The 14-day TTL is the right bound for "try again later".
@@ -1092,9 +1495,101 @@ export const getManualExtractionContext = internalQuery({
             failure_reason: manual.failure_reason ?? null,
             fetched_at: manual.fetched_at,
             expires_at: manual.expires_at ?? null,
+            /** Present when we hold our own copy — enables the cheap refresh
+             *  and the oversize path. */
+            storage_id: (manual as any).storage_id ?? null,
+            extractor: (manual as any).extractor ?? null,
           }
         : null,
     };
+  },
+});
+
+/** Read a stored manual's bytes back out for re-upload. */
+export const getStoredManual = internalQuery({
+  args: { make: v.string(), model: v.string(), year: v.float64() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("vehicle_manuals")
+      .withIndex("by_ymm", (q) =>
+        q
+          .eq("make", normalizeMakeKey(args.make))
+          .eq("model", normalizeMakeKey(args.model))
+          .eq("year", args.year),
+      )
+      .first();
+    if (!row?.storage_id) return null;
+    return {
+      _id: row._id,
+      storage_id: row.storage_id,
+      doc_kind: row.doc_kind,
+      extractor: (row as any).extractor ?? null,
+    };
+  },
+});
+
+/** Attach a freshly-minted Files API id to an existing manual row. */
+export const _setManualFileId = internalMutation({
+  args: {
+    manualId: v.id("vehicle_manuals"),
+    file_id: v.string(),
+    file_bytes: v.optional(v.float64()),
+    expires_at: v.optional(v.float64()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.manualId, {
+      file_id: args.file_id,
+      file_bytes: args.file_bytes,
+      expires_at: args.expires_at,
+      // Deliberately NOT touching fetched_at or attempts: this is a re-upload
+      // of a document already resolved, not a new resolution attempt, and
+      // moving those would distort the negative-cache and retry accounting.
+    });
+    return { ok: true };
+  },
+});
+
+/**
+ * Re-upload a stored manual to the Files API.
+ *
+ * The cheap half of a refresh: no search, no download, no chance of resolving
+ * a different document than the one we already validated and (crucially) that
+ * the extractor already confirmed belongs to this vehicle.
+ */
+export const reuploadManualFromStorage = internalAction({
+  args: { make: v.string(), model: v.string(), year: v.float64() },
+  handler: async (ctx, args): Promise<{ file_id: string | null; reason: string }> => {
+    try {
+      const row = await ctx.runQuery(selfApi().getStoredManual, args);
+      if (!row) return { file_id: null, reason: "no_stored_bytes" };
+      if (row.extractor === EXTRACTOR_REDUCTO) {
+        // Oversize: it never had a file_id and cannot have one.
+        return { file_id: null, reason: "oversize_not_uploadable" };
+      }
+
+      const blob = await ctx.storage.get(row.storage_id);
+      if (!blob) return { file_id: null, reason: "blob_missing" };
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (!looksLikePdfBytes(bytes)) return { file_id: null, reason: "stored_bytes_not_pdf" };
+
+      const upload = await uploadPdfToFilesApi(
+        bytes,
+        manualFileName(args, row.doc_kind ?? "manual"),
+      );
+      if (!upload.ok) return { file_id: null, reason: upload.reason };
+
+      await ctx.runMutation(selfApi()._setManualFileId, {
+        manualId: row._id,
+        file_id: upload.result.file_id,
+        file_bytes: upload.result.bytes,
+        expires_at: Date.now() + MANUAL_REFRESH_DAYS * DAY_MS,
+      });
+
+      return { file_id: upload.result.file_id, reason: "ok" };
+    } catch (e) {
+      console.warn("[manual-library] reuploadManualFromStorage failed:", e);
+      return { file_id: null, reason: `unexpected:${String(e).slice(0, 160)}` };
+    }
   },
 });
 
@@ -1426,17 +1921,72 @@ export const resolveManualForVehicle = internalAction({
         }
       }
 
-      // ── 1. Discovery (Firecrawl search — no new scraper) ──────
-      const queries = buildManualQueries(args.year, args.make, args.model);
-      if (queries.length === 0) return await fail("bad_vehicle_args");
-
       const found: Array<{ url: string; title?: string | null }> = [];
-      for (const query of queries) {
-        const results = await searchAndFetch(query, 5);
-        for (const r of results) found.push({ url: r.url, title: r.title });
-        // Stop early once an OEM PDF is in hand — each query costs credits.
-        const ranked = rankManualCandidates(found, args);
-        if (ranked.length > 0 && ranked[0].is_oem_domain && ranked[0].is_pdf) break;
+
+      // ── 1a. Deterministic sources (zero search credits) ───────
+      // A handful of hosts have a stable, live-probed URL grammar (see
+      // manualDirectSources.ts, which also explains why this does not
+      // contradict the "URL construction is not viable" finding above).
+      // Nothing here is trusted on faith: each constructed URL is probed and
+      // must answer with real PDF bytes before it becomes a candidate, and it
+      // then flows through the SAME ranking, download and identity checks as a
+      // search result.
+      //
+      // Asking Toyota's own CDN for a Toyota cannot return a Honda, which is
+      // the failure mode the mirror-farm searches actually produce.
+      let directSufficient = false;
+      if (process.env.ENRICHMENT_MANUAL_DIRECT !== "off") {
+        try {
+          const direct = await discoverDirectManuals(args);
+          for (const c of direct.live) found.push({ url: c.url, title: c.title });
+          directSufficient = direct.sufficient;
+          if (direct.outcomes.length > 0) {
+            console.log(
+              `[manual-library] ${label}: direct probe — ` +
+                direct.outcomes
+                  .map((o) => `${o.candidate.source}:${o.live ? "LIVE" : o.reason}`)
+                  .join(", "),
+            );
+          }
+        } catch (e) {
+          // Discovery must never be worse than not having tried.
+          console.warn(`[manual-library] ${label}: direct probe failed (non-fatal):`, e);
+        }
+      }
+
+      // ── 1b. Search discovery (Firecrawl) ──────────────────────
+      // Skipped entirely when a probed OEM/redistributor PDF is already in
+      // hand — that is the whole credit saving. Still runs for every vehicle
+      // we cannot construct a URL for, which is most of them.
+      const queries = buildManualQueries(args.year, args.make, args.model);
+      if (queries.length === 0 && found.length === 0) return await fail("bad_vehicle_args");
+
+      if (!directSufficient) {
+        for (const query of queries) {
+          // Links only (Aug 9 2026): the resolver never reads page bodies,
+          // inline scrapes OOM'd on scraped-PDF markdown, and scrape-failed
+          // hits (= most direct PDF links) were silently dropped.
+          const results = await searchLinksOnly(query, 5);
+          for (const r of results) found.push({ url: r.url, title: r.title });
+          // Stop early once an OEM PDF is in hand — each query costs credits.
+          // The early-break must apply the SAME wrong-vehicle filter the
+          // candidate list does: a wrong-year OEM PDF at rank 0 used to end
+          // the search here, and the rescue queries (carmans.net) never ran
+          // (2019 Sierra, live — all five gmc.com hits were wrong-year).
+          const ranked = rankManualCandidates(found, args).filter(
+            (c) => contradictsVehicle(c.url, c.title, args) == null,
+          );
+          if (ranked.length > 0 && ranked[0].is_oem_domain && ranked[0].is_pdf) break;
+        }
+      } else {
+        console.log(`[manual-library] ${label}: direct hit — skipping web search`);
+      }
+
+      // Constructible PDF-embed mirror pages (carmans.net) join the pool
+      // unconditionally — they rank as penalized mirrors, so they only ever
+      // WIN when nothing better survived, and cost nothing until they do.
+      for (const page of buildPdfEmbedMirrorPages(args)) {
+        found.push(page);
       }
 
       // Candidates already read and found wrong for THIS vehicle. Retrying one
@@ -1444,8 +1994,24 @@ export const resolveManualForVehicle = internalAction({
       // the same verdict, so a rejection has to actually remove it from play.
       const rejectedUrls = new Set<string>(((existing as any)?.rejected_urls ?? []) as string[]);
       const candidates = rankManualCandidates(found, args)
-        .filter((c) => c.is_pdf)
-        .filter((c) => !rejectedUrls.has(c.url));
+        // Direct PDFs, plus HTML pages on PDF-embed mirrors (carmans.net) —
+        // those adapt to their embedded PDF at the top of the download loop.
+        // Without this, the site:carmans.net rescue query could never yield
+        // an accepted candidate (its manuals sit behind a pdf.js viewer) and
+        // the 2019 Sierra ended manual-less after its wrong-vehicle manual
+        // was rejected.
+        .filter((c) => c.is_pdf || isPdfEmbedMirrorPage(c.url))
+        .filter((c) => !rejectedUrls.has(c.url))
+        .filter((c) => {
+          // Wrong-vehicle candidates never reach the download loop — the OEM
+          // rank bonus cannot outvote an outright contradiction (the 2015
+          // Sierra 3500HD manual that won for a 2019 Sierra 1500).
+          const why = contradictsVehicle(c.url, c.title, args);
+          if (why) {
+            console.log(`[manual-library] ${label}: DROPPED wrong-vehicle candidate (${why}): ${c.url}`);
+          }
+          return why == null;
+        });
       if (rejectedUrls.size > 0) {
         console.log(
           `[manual-library] ${label}: skipping ${rejectedUrls.size} previously-rejected candidate(s)`,
@@ -1459,7 +2025,41 @@ export const resolveManualForVehicle = internalAction({
 
       // ── 2. Download the best candidate (then the runner-up) ───
       let lastReason = "unknown";
-      for (const candidate of candidates.slice(0, 3)) {
+      // The candidate that actually PRODUCED lastReason — the old code
+      // attributed every failure to candidates[0] regardless.
+      let lastFailedCandidate: (typeof candidates)[number] | null = null;
+      for (let candidate of candidates.slice(0, 3)) {
+        if (!candidate.is_pdf) {
+          // PDF-embed mirror page → its embedded PDF. The viewer target
+          // sometimes rides in the search-result URL itself
+          // (viewer.html?file=…), so try the URL before spending a fetch.
+          let pdfUrl = extractEmbeddedPdfUrl(candidate.url, candidate.url);
+          if (!pdfUrl) {
+            const html = await fetchMirrorPageForPdf(candidate.url, label);
+            pdfUrl = html ? extractEmbeddedPdfUrl(html, candidate.url) : null;
+          }
+          if (!pdfUrl) {
+            lastReason = "mirror_page_no_pdf";
+            lastFailedCandidate = candidate;
+            continue;
+          }
+          if (rejectedUrls.has(pdfUrl)) {
+            lastReason = "mirror_pdf_previously_rejected";
+            lastFailedCandidate = candidate;
+            continue;
+          }
+          // The page passed the wrong-vehicle filter; the PDF it embeds must
+          // pass it too (a wrong page could embed a right-named PDF and vice
+          // versa — trust neither side alone).
+          const why = contradictsVehicle(pdfUrl, candidate.title, args);
+          if (why) {
+            lastReason = `mirror_pdf_contradicts:${why}`;
+            lastFailedCandidate = candidate;
+            continue;
+          }
+          console.log(`[manual-library] ${label}: mirror page ${candidate.url} → embedded PDF ${pdfUrl}`);
+          candidate = { ...candidate, url: pdfUrl, is_pdf: true };
+        }
         const meta = {
           url: candidate.url,
           source_domain: candidate.source_domain,
@@ -1469,43 +2069,189 @@ export const resolveManualForVehicle = internalAction({
 
         let bytes: Uint8Array | null = null;
         try {
-          const res = await fetch(candidate.url, {
-            headers: { Accept: "application/pdf,*/*" },
+          // Browser UA always — the direct-source PROBE sends one and
+          // succeeds, then this download went out bare and volvocars.com
+          // answered 403 (round-2 XC90). On 403/429 retry once with a
+          // referer, which clears the remaining polite-bot walls.
+          const baseHeaders = {
+            Accept: "application/pdf,*/*",
+            "User-Agent": MANUAL_DOWNLOAD_USER_AGENT,
+            "Accept-Language": "en-US,en;q=0.9",
+          };
+          let res = await fetch(candidate.url, {
+            headers: baseHeaders,
             signal: AbortSignal.timeout(PDF_DOWNLOAD_TIMEOUT_MS),
           });
+          if (res.status === 403 || res.status === 429) {
+            console.log(
+              `[manual-library] ${label}: ${res.status} from ${candidate.source_domain} — retrying with referer`,
+            );
+            res = await fetch(candidate.url, {
+              headers: {
+                ...baseHeaders,
+                Referer: `https://${candidate.source_domain}/`,
+                "Cache-Control": "no-cache",
+              },
+              signal: AbortSignal.timeout(PDF_DOWNLOAD_TIMEOUT_MS),
+            });
+          }
           if (!res.ok) {
             lastReason = `download_${res.status}`;
+            lastFailedCandidate = candidate;
             continue;
           }
           const declared = Number(res.headers.get("content-length") ?? "");
-          if (Number.isFinite(declared) && declared > MAX_MANUAL_BYTES) {
-            lastReason = `too_large_declared_${declared}`;
-            continue;
+          // Stricter than the Files-API 30 MB cap on purpose: past ~20 MB the
+          // COPIES (bytes + Blob + form body) blow the 64 MB action limit.
+          // But a too-big-for-the-runtime manual is NOT a dead end: Reducto
+          // downloads its input itself, server-side. Store a REFERENCE-ONLY
+          // row (source_url, no bytes) routed to the Reducto extractor — the
+          // 39 MB carmans CX-30 manual is unreachable any other way.
+          if (Number.isFinite(declared) && declared > MAX_ACTION_MANUAL_BYTES) {
+            await ctx.runMutation(selfApi().upsertManualRow, {
+              make: args.make,
+              model: args.model,
+              year: args.year,
+              source_url: candidate.url,
+              source_domain: candidate.source_domain,
+              is_oem_domain: candidate.is_oem_domain,
+              doc_kind: candidate.doc_kind,
+              file_bytes: declared,
+              extractor: EXTRACTOR_REDUCTO,
+              expires_at: Date.now() + MANUAL_REFRESH_DAYS * DAY_MS,
+            });
+            console.log(
+              `[manual-library] ${label}: ${(declared / 1024 / 1024).toFixed(1)} MB exceeds the ` +
+                `action runtime — stored reference-only row for Reducto: ${candidate.url}`,
+            );
+            return {
+              status: "uploaded",
+              file_id: null,
+              source_url: candidate.url,
+              is_oem_domain: candidate.is_oem_domain,
+              doc_kind: candidate.doc_kind,
+              reason: "reference_only_oversize",
+            };
           }
-          bytes = new Uint8Array(await res.arrayBuffer());
+          // Capped STREAMING read (Aug 9 2026): when a server omits
+          // content-length, the bare arrayBuffer() of a giant PDF blew the
+          // 64 MB action memory limit and killed the whole resolve (2021
+          // CX-30, live — mazdausa.com full manuals). Read in chunks and
+          // abort past the Files-API cap; peak memory is ~2× the cap
+          // (chunks + merge), which fits the runtime. Oversize manuals fail
+          // honestly instead of crashing the action.
+          const reader = res.body?.getReader?.();
+          if (!reader) {
+            bytes = new Uint8Array(await res.arrayBuffer());
+          } else {
+            const chunks: Uint8Array[] = [];
+            let total = 0;
+            let overflow = false;
+            for (;;) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              if (!value) continue;
+              total += value.byteLength;
+              if (total > MAX_ACTION_MANUAL_BYTES) {
+                overflow = true;
+                try { await reader.cancel(); } catch { /* already closed */ }
+                break;
+              }
+              chunks.push(value);
+            }
+            if (overflow) {
+              // Same Reducto reference-only route as the declared-size skip —
+              // the server just didn't announce the size up front.
+              await ctx.runMutation(selfApi().upsertManualRow, {
+                make: args.make,
+                model: args.model,
+                year: args.year,
+                source_url: candidate.url,
+                source_domain: candidate.source_domain,
+                is_oem_domain: candidate.is_oem_domain,
+                doc_kind: candidate.doc_kind,
+                extractor: EXTRACTOR_REDUCTO,
+                expires_at: Date.now() + MANUAL_REFRESH_DAYS * DAY_MS,
+              });
+              console.log(
+                `[manual-library] ${label}: streamed past the runtime cap — ` +
+                  `stored reference-only row for Reducto: ${candidate.url}`,
+              );
+              return {
+                status: "uploaded",
+                file_id: null,
+                source_url: candidate.url,
+                is_oem_domain: candidate.is_oem_domain,
+                doc_kind: candidate.doc_kind,
+                reason: "reference_only_oversize",
+              };
+            }
+            const merged = new Uint8Array(total);
+            let offset = 0;
+            for (const c of chunks) { merged.set(c, offset); offset += c.byteLength; }
+            bytes = merged;
+          }
         } catch (e) {
           lastReason = `download_error:${String(e).slice(0, 120)}`;
+          lastFailedCandidate = candidate;
           continue;
         }
 
-        if (bytes.length > MAX_MANUAL_BYTES) {
+        if (bytes.length > MAX_STORED_MANUAL_BYTES) {
           lastReason = `too_large_${bytes.length}`;
+          lastFailedCandidate = candidate;
           continue;
         }
         if (bytes.length < MIN_MANUAL_BYTES) {
           lastReason = `too_small_${bytes.length}`;
+          lastFailedCandidate = candidate;
           continue;
         }
         if (!looksLikePdfBytes(bytes)) {
           // An HTML error page wearing a .pdf URL. Never upload it.
           lastReason = "not_a_pdf_body";
+          lastFailedCandidate = candidate;
           continue;
         }
 
-        // ── 3. Upload to the Anthropic Files API ────────────────
-        const upload = await uploadPdfToFilesApi(bytes, manualFileName(args, candidate.doc_kind));
-        if (!upload.ok) {
-          lastReason = upload.reason;
+        // ── 3. Keep our own copy BEFORE anything else ───────────
+        // Storing first means a Files API outage costs us an upload, not the
+        // download — and a later expiry never re-runs discovery.
+        const extractor = extractorForBytes(bytes.length);
+        let storageId: Id<"_storage"> | undefined;
+        try {
+          storageId = await ctx.storage.store(
+            new Blob([bytes as unknown as BlobPart], { type: "application/pdf" }),
+          );
+        } catch (e) {
+          // Non-fatal: without a stored copy we simply lose the cheap-refresh
+          // and oversize paths for this vehicle, not the enrichment.
+          console.warn(`[manual-library] ${label}: storage.store failed (non-fatal):`, e);
+        }
+        const contentHash = await sha256Hex(bytes);
+
+        // ── 4. Upload to the Anthropic Files API (when it fits) ──
+        // An oversize manual skips this entirely and is read by Reducto from
+        // the stored copy; attempting the upload would only buy a 413.
+        let fileId: string | undefined;
+        let uploadedBytes = bytes.length;
+        let pageCount = estimatePdfPageCount(bytes) ?? undefined;
+
+        if (extractor === EXTRACTOR_ANTHROPIC) {
+          const upload = await uploadPdfToFilesApi(bytes, manualFileName(args, candidate.doc_kind));
+          if (!upload.ok) {
+            lastReason = upload.reason;
+            lastFailedCandidate = candidate;
+            continue;
+          }
+          fileId = upload.result.file_id;
+          uploadedBytes = upload.result.bytes;
+          pageCount = upload.result.page_count ?? pageCount;
+        } else if (!storageId) {
+          // Oversize AND unstorable is a genuine dead end — neither extractor
+          // can reach it. Fail so the negative cache applies.
+          lastReason = `oversize_unstored_${bytes.length}`;
+          lastFailedCandidate = candidate;
           continue;
         }
 
@@ -1517,22 +2263,25 @@ export const resolveManualForVehicle = internalAction({
           source_domain: candidate.source_domain,
           is_oem_domain: candidate.is_oem_domain,
           doc_kind: candidate.doc_kind,
-          file_id: upload.result.file_id,
-          file_bytes: upload.result.bytes,
-          page_count: upload.result.page_count ?? undefined,
+          file_id: fileId,
+          file_bytes: uploadedBytes,
+          page_count: pageCount,
+          storage_id: storageId,
+          content_sha256: contentHash ?? undefined,
+          extractor,
           expires_at: Date.now() + MANUAL_REFRESH_DAYS * DAY_MS,
         });
 
         console.log(
-          `[manual-library] ${label}: uploaded ${upload.result.file_id} ` +
-            `(${(upload.result.bytes / 1024 / 1024).toFixed(2)} MB, ` +
-            `pages≈${upload.result.page_count ?? "?"}, oem=${candidate.is_oem_domain}, ` +
-            `kind=${candidate.doc_kind}) from ${candidate.url}`,
+          `[manual-library] ${label}: stored ${(bytes.length / 1024 / 1024).toFixed(2)} MB ` +
+            `via ${extractor}${fileId ? ` (${fileId})` : " (oversize — Files API skipped)"}, ` +
+            `pages≈${pageCount ?? "?"}, oem=${candidate.is_oem_domain}, ` +
+            `kind=${candidate.doc_kind} from ${candidate.url}`,
         );
 
         return {
           status: "uploaded",
-          file_id: upload.result.file_id,
+          file_id: fileId ?? null,
           source_url: candidate.url,
           is_oem_domain: candidate.is_oem_domain,
           doc_kind: candidate.doc_kind,
@@ -1540,11 +2289,12 @@ export const resolveManualForVehicle = internalAction({
         };
       }
 
+      const failedCandidate = lastFailedCandidate ?? candidates[0];
       return await fail(lastReason, {
-        url: candidates[0].url,
-        source_domain: candidates[0].source_domain,
-        is_oem_domain: candidates[0].is_oem_domain,
-        doc_kind: candidates[0].doc_kind,
+        url: failedCandidate.url,
+        source_domain: failedCandidate.source_domain,
+        is_oem_domain: failedCandidate.is_oem_domain,
+        doc_kind: failedCandidate.doc_kind,
       });
     } catch (e) {
       // Belt-and-braces: the contract is "never throws".
@@ -1591,7 +2341,35 @@ export const extractIntervalsFromManual = internalAction({
       if (!context) return none("skipped", "config_not_resolvable");
 
       const label = `${context.year} ${context.make} ${context.model}`;
-      const fileId = context.manual?.file_id ?? null;
+      let fileId = context.manual?.file_id ?? null;
+
+      // ── Route: oversize documents cannot be sent as a document block ──
+      // The Messages API caps a request at 32 MB / 600 pages. Rather than
+      // returning a 413 (or, worse, silently truncating), hand the document to
+      // the extractor that can read it. Same write path, same precedence.
+      if (!fileId && context.manual?.extractor === EXTRACTOR_REDUCTO) {
+        console.log(`[manual-library] ${label}: oversize — delegating to Reducto`);
+        return await ctx.runAction(
+          (internal as any).vehicleEnrichment.manualReducto.extractIntervalsViaReducto,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+      }
+
+      // ── Cheap refresh: re-upload our own bytes, never re-discover ──
+      // A Files API entry expires; the document does not. Before we kept a
+      // copy this meant a fresh search plus a multi-MB download from a host
+      // that may have moved the file — and another roll of the
+      // wrong-document dice. Now it is one upload of bytes already validated.
+      if (!fileId && context.manual?.storage_id) {
+        const re = await ctx.runAction(selfApi().reuploadManualFromStorage, {
+          make: context.make,
+          model: context.model,
+          year: context.year,
+        });
+        fileId = re?.file_id ?? null;
+        if (fileId) console.log(`[manual-library] ${label}: re-uploaded from storage (${fileId})`);
+      }
+
       if (!fileId) return none("skipped", "no_manual_file");
 
       const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -1641,6 +2419,28 @@ export const extractIntervalsFromManual = internalAction({
         });
         if (!res.ok) {
           const detail = (await res.text().catch(() => "")).slice(0, 300);
+          // Files-API hard limits — >600 PDF pages or >1M prompt tokens —
+          // are a ROUTING verdict, not a failure: the document is real, just
+          // oversize for this extractor (2022 Palisade owner's manual, 15.7 MB
+          // under the byte cap but over the page cap; the byte-based
+          // extractorForBytes cannot see page count up front). Hand it to the
+          // same Reducto path oversize-by-bytes manuals already use.
+          if (
+            res.status === 400 &&
+            /maximum of 600 PDF pages|prompt is too long/i.test(detail)
+          ) {
+            console.log(
+              `[manual-library] ${label}: Files-API size limit (${detail.slice(0, 80)}…) — falling back to Reducto`,
+            );
+            try {
+              return await ctx.runAction(
+                (internal as any).vehicleEnrichment.manualReducto.extractIntervalsViaReducto,
+                { vehicleConfigId: args.vehicleConfigId },
+              );
+            } catch (e) {
+              return none("failed", `reducto_fallback_error:${String(e).slice(0, 160)}`);
+            }
+          }
           return none("failed", `messages_${res.status}:${detail}`);
         }
         json = await res.json();
@@ -1652,6 +2452,32 @@ export const extractIntervalsFromManual = internalAction({
 
       const payload = extractToolPayload(json, EXTRACTION_TOOL_NAME);
       if (!payload) return none("failed", "no_tool_payload");
+
+      // Identity verdict BEFORE any interval write (Aug 9 2026): a
+      // wrong-vehicle manual that DOES contain a schedule used to extract
+      // cleanly and land as data_quality "oem_manual" @ 0.95. The reader has
+      // just seen the cover page — its verdict outranks every URL heuristic.
+      // Missing field (pre-upgrade payloads) is treated as a match.
+      if ((payload as any).document_matches_vehicle === false) {
+        const docText = String((payload as any).document_vehicle_text ?? "").slice(0, 200);
+        console.warn(
+          `[manual-library] ${label}: WRONG-VEHICLE manual — document says "${docText}"; rejecting`,
+        );
+        const priorRejections = ((context.manual as any)?.rejected_urls ?? []).length;
+        if (priorRejections < MANUAL_MAX_REJECTIONS) {
+          try {
+            await ctx.runMutation(selfApi().rejectManualRow, {
+              make: context.make,
+              model: context.model,
+              year: context.year,
+              reason: `wrong_vehicle: ${docText || "unidentified"}`,
+            });
+          } catch (e) {
+            console.warn(`[manual-library] ${label}: could not record wrong-vehicle rejection:`, e);
+          }
+        }
+        return none("skipped", "document_vehicle_mismatch");
+      }
 
       const rows = dedupeIntervalsByService(parseManualIntervals(payload));
       const citations = collectCitationSpans(json);

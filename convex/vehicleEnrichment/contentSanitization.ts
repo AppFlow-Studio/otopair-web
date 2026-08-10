@@ -18,6 +18,7 @@
  *   - Quotes: smart quotes, backticks wrapping values
  *   - List artifacts: "- 0W-20" or "* 0W-20"
  */
+import { makeKeyOf } from "../lib/makeKey";
 
 // ─── HTML / Markdown Stripping ───────────────────────────────────
 
@@ -157,8 +158,16 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   lexus: /^\d{5}(?:-[A-Z0-9]{4,6}(?:-[A-Z0-9]{1,4})?|[A-Z0-9]{5})$/i,
   // Honda/Acura: XXXXX-XXX-XXX parts, XXXXX-XXXX fluids/chemicals (08798-9080),
   // OL999-style accessories, NGK-sourced plug SKUs (9807B-5517W; audit Jul 11).
-  honda: /^(?:\d{5}-[A-Z0-9]{3}-[A-Z0-9]{3,4}|\d{5}-\d{4}|[A-Z]{2}\d{3}-\d{4}|\d{4}[A-Z]-\d{4}[A-Z]?)$/i,
-  acura: /^(?:\d{5}-[A-Z0-9]{3}-[A-Z0-9]{3,4}|\d{5}-\d{4}|[A-Z]{2}\d{3}-\d{4}|\d{4}[A-Z]-\d{4}[A-Z]?)$/i,
+  // Audit findings (Aug 9 2026, CX-30 round-2 ledger replay): hardware 5-5
+  // digits (94109-14000 drain washer), letter-tail chemical SKUs (08200-HCF2
+  // CVT fluid, 08208-HST02, 08200-9008A), digit-led alnum first block with
+  // 3-5 char tail (08CLA-P99-0F0A8 coolant, 08285-P99-0CZA3 PS fluid), and
+  // OL999 tails with revision letters (OL999-9011A) were all real ledgered
+  // SKUs the old digit-only tails rejected.
+  // Round-3 (Aug 9 2026, RDX): AGM battery SKUs carry a 7-char third block
+  // (31500-TZ7-AGM100M) — {3,5} rejected the RDX's real battery.
+  honda: /^(?:\d[A-Z0-9]{4}-[A-Z0-9]{3}-[A-Z0-9]{3,7}|\d{5}-[A-Z0-9]{4,6}|[A-Z]{2}\d{3}-[A-Z0-9]{4,5}|\d{4}[A-Z]-\d{4}[A-Z]?)$/i,
+  acura: /^(?:\d[A-Z0-9]{4}-[A-Z0-9]{3}-[A-Z0-9]{3,7}|\d{5}-[A-Z0-9]{4,6}|[A-Z]{2}\d{3}-[A-Z0-9]{4,5}|\d{4}[A-Z]-\d{4}[A-Z]?)$/i,
   // Ford/Lincoln: OE service numbers (BC3Z-6731-B / F1TZ-...) and Motorcraft
   // lines (BXT-94RH7-730, FL-820-S, SP-515).
   // Second block min 1 char — the XL-3 friction modifier is a real Motorcraft
@@ -170,10 +179,14 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   // (10-9243 Dex-Cool, 10-4133 ATF).
   // Audit findings (Jul 11 2026): digit-first ACDelco battery codes (94RAGM,
   // 48AGM) and 5-digit dash bodies (15-11125 cabin filter).
-  chevrolet: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2}-\d{3,5}[A-Z]?)$/i,
-  gmc: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2}-\d{3,5}[A-Z]?)$/i,
-  cadillac: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2}-\d{3,5}[A-Z]?)$/i,
-  buick: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2}-\d{3,5}[A-Z]?)$/i,
+  // Audit findings (Aug 9 2026, Sierra round-2 ledger replay): ACDelco dash
+  // codes with 3-digit first blocks and letter tails — 78-7YR battery,
+  // 131-160 thermostat — were real ledgered SKUs the 2-digit-dash-3+ shape
+  // rejected.
+  chevrolet: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2,3}-\d{1,5}[A-Z]{0,2})$/i,
+  gmc: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2,3}-\d{1,5}[A-Z]{0,2})$/i,
+  cadillac: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2,3}-\d{1,5}[A-Z]{0,2})$/i,
+  buick: /^(?:\d{7,9}|[A-Z]{1,3}\d{2,6}[A-Z]?|\d{2,3}[A-Z]{2,5}|\d{2,3}-\d{1,5}[A-Z]{0,2})$/i,
   // Hyundai/Kia/Genesis: XXXXX-XXXXX parts, plus chemical/accessory SKUs with
   // a third block or revision suffix (00232-FSYN5-30WAR engine oil,
   // 08950-00020-B gear oil) — the plain 5-5 pattern rejected every fluid SKU
@@ -182,9 +195,15 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   // 11-digit string (a BMW number) parsed as 5+5+1 and slipped through.
   // First block is digit-led alphanumeric, not digits-only: Mobis accessory
   // SKUs like 2SF79-AQ000 cabin filter (2015 Veloster re-run, Jul 11 2026).
-  hyundai: /^\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
-  kia: /^\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
-  genesis: /^\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?$/i,
+  // Audit findings (Aug 9 2026 ledger replay): LETTER-led Mobis accessory
+  // blocks (S9C79-AC100 / S2C79-AC100 cabin filters) and UM-prefix genuine
+  // fluid SKUs (UM020-CH263 coolant, UM022-CH080 oil, UM018-CH130 ATF —
+  // dashless form UM020CH263 also seen). Letter-led branches REQUIRE either
+  // the dash or a letter-letter prefix so a bare digit-led foreign number
+  // can't slip through the widened shape.
+  hyundai: /^(?:\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?|[A-Z]\d[A-Z0-9]{3}-[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?|[A-Z]{2}\d{3}-?[A-Z0-9]{5})$/i,
+  kia: /^(?:\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?|[A-Z]\d[A-Z0-9]{3}-[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?|[A-Z]{2}\d{3}-?[A-Z0-9]{5})$/i,
+  genesis: /^(?:\d[A-Z0-9]{4}-?[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?|[A-Z]\d[A-Z0-9]{3}-[A-Z0-9]{5}(?:-[A-Z0-9]{1,5})?|[A-Z]{2}\d{3}-?[A-Z0-9]{5})$/i,
   // VW/Audi/Porsche (VAG): AAA BBB CCC (+ up to 2-char suffix), first block
   // alphanumeric (06L115562B); old pattern required a digits-only first block.
   // Second alternation: VAG fluid/chemical G- and B-numbers — G + 3 digits +
@@ -222,10 +241,21 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   ram: /^(?:0?\d{7,8}(?:[A-Z]{1,2})?|[A-Z0-9]{6,9}[A-Z]{2})$/i,
   fiat: /^(?:0?\d{7,8}(?:[A-Z]{1,2})?|[A-Z0-9]{6,9}[A-Z]{2})$/i,
   alfaromeo: /^(?:0?\d{7,8}(?:[A-Z]{1,2})?|[A-Z0-9]{6,9}[A-Z]{2})$/i,
-  // Mazda: XXXX-XX-XXX(+suffix), e.g. PE01-14-302A
-  mazda: /^[A-Z0-9]{4,5}-?\d{2}-?\d{3}[A-Z0-9]{0,2}$/i,
-  // Volvo: 8-digit
-  volvo: /^\d{7,8}$/,
+  // Mazda: XXXX-XX-XXX(+suffix), e.g. PE01-14-302A.
+  // REWRITTEN Aug 9 2026 (CX-30/CX-5 round-2 post-mortem): the old
+  // digits-only middle + 3-digit-led tail rejected SIX of the CX-30's real
+  // core parts — DGY9-33-28Z / DGY6-26-43ZA pads, PAJ8-13-3A0A air filter,
+  // BDGF-61-J6X cabin filter — and every Mazda chemical SKU, which carries an
+  // alnum middle and a FOURTH block (0000-77-508F-20 FL22 coolant,
+  // 0000-FZ-113E-01 ATF FZ). 46 ledgered rejections, 0 passing, worst make in
+  // the fleet. Branch 1: fully-dashed 4/5-2-(2..5) with optional -suffix
+  // block. Branch 2: dash-optional compact form, middle required DIGITS so a
+  // bare foreign alnum string can't ride the loosened shape (KD4561J6X9U
+  // cabin filter dashless).
+  mazda: /^(?:[A-Z0-9]{4,5}-[A-Z0-9]{2}-[A-Z0-9]{2,5}(?:-[A-Z0-9]{1,3})?|[A-Z0-9]{4,5}-?\d{2}-?[A-Z0-9]{2,5})$/i,
+  // Volvo: 7-8 digit modern, 6-digit legacy hardware (977751 drain plug
+  // gasket — real ledgered SKU on the 2021 XC90, Aug 9 2026).
+  volvo: /^\d{6,8}$/,
   // Jaguar Land Rover (shared family formats). The old /^LR\d{6}$/ rejected 13
   // of the 2012 Range Rover's real parts (batch-9): JLR uses far more than the
   // modern "LR######" number. Covered here:
@@ -313,7 +343,7 @@ const CORPORATE_FAMILIES: Array<Set<string>> = [
   new Set(["jaguar", "landrover", "rangerover"]),
 ];
 
-const makeKeyOf = (name: string) => name.toLowerCase().replace(/[-\s]/g, "");
+// Single-source identity key — see lib/makeKey.ts (imported at top).
 
 /** True when two make NAMES belong to the same corporate part-sharing family
  *  (or are the same make). */
@@ -398,7 +428,7 @@ export function matchesForeignBrandSignature(
   makeName: string | null | undefined,
 ): string | null {
   if (!makeName) return null;
-  const makeKey = makeName.toLowerCase().replace(/[-\s]/g, "");
+  const makeKey = makeKeyOf(makeName);
   for (const sig of BRAND_SIGNATURES) {
     if (!sig.makes.has(makeKey) && sig.pattern.test(partNumber.trim())) {
       // Foreign signature — but if the number ALSO satisfies the target
@@ -481,7 +511,7 @@ export function sanitizePartNumber(value: string, makeName?: string): string | n
     // deliberately fell through (the BMW pattern was too strict), which let
     // wrong-make and hallucinated numbers into oem_parts; the patterns above
     // have been widened to cover real formats, so a miss now rejects.
-    const makeKey = makeName.toLowerCase().replace(/[-\s]/g, "");
+    const makeKey = makeKeyOf(makeName);
     const pattern = OEM_PART_PATTERNS[makeKey];
     if (pattern && !pattern.test(cleaned)) {
       // Leading-zero salvage: digit-only value 1-2 chars short of the make's
@@ -507,6 +537,13 @@ export function sanitizePartNumber(value: string, makeName?: string): string | n
       );
       return null;
     }
+    // The make's own format matched — that is the FINAL verdict. The generic
+    // plausibility check below exists (per its own doc) for makes WITHOUT a
+    // pattern; applying it on top of a pattern match rejected real numbers:
+    // Mercedes display format with a variant suffix ("000 989 79 02 11") is
+    // FIVE space groups, and the generic gate caps at four (found Aug 2026 —
+    // the oil-product rung's text-mined genuine 0W-40 SKU died here).
+    if (pattern) return cleaned;
   }
 
   // Generic plausibility check

@@ -14,7 +14,7 @@ import { SectionAnchor } from '../Shell'
 import { gotoEntity, consumeGoto, consumeStashedGoto } from '../directorNav'
 import {
   StatCard, DeltaChip, BarRow, DualSparkline,
-  fmtCurrency, fmtPct, fmtNumber, fmtRelative, money,
+  fmtCurrency, fmtPct, fmtNumber, fmtRelative, money, fmtDate,
 } from '../Charts'
 import { can } from '@/lib/portal/capabilities'
 
@@ -138,7 +138,7 @@ const centsToStr = (c: number | null | undefined): string =>
   c == null ? '—' : money(c / 100, { cents: true })
 
 const tsExact = (ms: number | null | undefined): string =>
-  !ms ? '—' : new Date(ms).toLocaleString()
+  !ms ? '—' : new Date(ms).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
 
 // Ops status-pill palette → director Badge tone (superset of paymentTone; adds
 // capture/dispute/won/lost lifecycle states that appear on the detail surface).
@@ -309,7 +309,7 @@ const LiveStripeCard = () => {
               <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'6px 0', borderBottom:'1px solid var(--slate-100)' }}>
                 <span style={{ color:'var(--slate-500)' }}>Next payout</span>
                 <span className="mono" style={{ fontWeight:500 }}>
-                  {fmtMinor(data.nextPayout.amount, data.nextPayout.currency)} · arrives {new Date(data.nextPayout.arrivalDateMs).toLocaleDateString()}
+                  {fmtMinor(data.nextPayout.amount, data.nextPayout.currency)} · arrives {fmtDate(data.nextPayout.arrivalDateMs)}
                 </span>
               </div>
             )}
@@ -413,7 +413,7 @@ const FinancialOverview = ({ period }: { period: Period }) => {
           hint={`${metrics.refunds.countCurrent} bookings refunded`} />
         <StatCard label="Period"
           value={PERIOD_LABELS[metrics.period as Period]}
-          hint={`Since ${new Date(metrics.since).toLocaleDateString()}`} />
+          hint={`Since ${fmtDate(metrics.since)}`} />
       </div>
 
       <Card style={{ marginBottom:16 }}>
@@ -827,7 +827,7 @@ const PaymentDetailModal = ({ id, onClose }: { id: Id<'payments'> | null; onClos
                       <div>
                         <button type="button" onClick={() => { gotoEntity('bookings', String(data.booking!.id)); closeAll() }}
                           style={{ border:'none', background:'transparent', padding:0, cursor:'pointer', fontSize:13, color:'var(--blue-700)', display:'inline-flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
-                          <span>{data.booking.scheduledDate ?? 'booking'} ·</span>
+                          <span>{data.booking.scheduledDate ? fmtDate(data.booking.scheduledDate) : 'booking'} ·</span>
                           <Badge tone={opsStatusTone(data.booking.status)}>{data.booking.status}</Badge>
                           {data.booking.totalCost != null && <span style={{ fontSize:11, color:'var(--slate-400)' }}>{dollars(data.booking.totalCost)}</span>}
                         </button>
@@ -1257,7 +1257,7 @@ const RefundsView = ({ period, onTag }: { period: Period; onTag: (id: Id<'bookin
                     <td style={tableStyles.td}><span className="mono" style={{ color:'var(--blue-700)' }}>{String(b.id).slice(-8)}</span></td>
                     <td style={tableStyles.td}>{b.user}</td>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{b.shop}</td>
-                    <td style={{ ...tableStyles.td, color:'var(--slate-500)', fontSize:12 }}>{b.scheduled}</td>
+                    <td style={{ ...tableStyles.td, color:'var(--slate-500)', fontSize:12 }}>{fmtDate(b.scheduled)}</td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} className="mono">{fmtCurrency(b.total)}</td>
                     <td style={tableStyles.td}>
                       {r ? <Badge tone={r.tone}>{r.label}</Badge>

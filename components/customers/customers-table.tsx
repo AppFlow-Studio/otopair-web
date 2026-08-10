@@ -63,14 +63,14 @@ const COLUMNS: Column[] = [
     label: "Last visit",
     sortable: true,
     align: "right",
-    className: "w-28",
+    className: "w-32",
   },
   {
     key: "lifetimeSpendCents",
-    label: "Lifetime",
+    label: "Lifetime Spend",
     sortable: true,
     align: "right",
-    className: "w-28",
+    className: "w-36",
   },
 ];
 
@@ -119,7 +119,7 @@ export function CustomersTable({
               <th
                 key={col.key}
                 className={cn(
-                  "px-5 py-3 font-medium",
+                  "whitespace-nowrap px-5 py-3 font-medium",
                   col.align === "right" ? "text-right" : "",
                   col.className,
                 )}

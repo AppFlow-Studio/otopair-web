@@ -43,7 +43,8 @@ RULES:
 5. Labor hours: use training knowledge for well-established book times (mark source_type: "training_data", confidence 0.75). Oil change is typically 0.5 hrs.
 6. If you cannot find a price for a specific OEM part after 1-2 targeted searches, OMIT that part from parts_breakdown[]. Do not include it with a null or 0 price. Do not guess.
 7. Return OEM part numbers as JSON STRINGS exactly as printed, preserving leading zeros (e.g. "07119963130", never the bare number 7119963130).
-8. Return VALID JSON only. No markdown fences, no explanation, no preamble.`;
+8. Return VALID JSON only. No markdown fences, no explanation, no preamble.
+9. ONE FINAL ANSWER: finish ALL searching first, then emit exactly ONE JSON object as the last thing in your turn. Never emit a JSON object (or any other text) between searches. An empty "services" array is ALWAYS an invalid answer — every service in the provided list gets a row with is_applicable judged from vehicle facts (drivetrain, engine, steering, belt/chain), which requires no search. When a search failed to find a specific field or price, omit that field or parts_breakdown entry — never blank the whole response.`;
 
 /** Field descriptions used in the gap fill user prompt. Shared with the
  *  Batch-3 gap-fill re-ask pass (gapFillPrompt.ts). */
@@ -199,6 +200,68 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = {
   estimated_labor_timing_service_hrs: "Book labor hours for timing belt replacement (belt engines; null for chain)",
 };
 
+/**
+ * Services-only rescue (Aug 2026, fresh-5 round 2). On first-contact makes the
+ * paid batch-2 turn keeps ending with `services: []` — raw-payload audit of the
+ * CX-30/Sierra/Jeep/Palisade runs showed stop_reason=end_turn after 12-13
+ * searches with the final text block empty or fields-only (the model researches,
+ * then quits before the services write-out; the CX-30's own queries were
+ * price-checking part numbers it never reported). Structured outputs cannot
+ * grammar-force a non-empty array (minItems is unsupported), so the cure is a
+ * second, smaller ask: the services contract ALONE, no 60-103-field gap list
+ * competing for the write-out budget. Same rules as batch-2, same output shape
+ * (array form so normalizeBatchShape → parseBatch2 read it unchanged).
+ */
+export const SERVICES_RESCUE_SYSTEM = `You are a vehicle data specialist for Otopair. ONE JOB — SERVICES: for the exact vehicle given, classify every service in the provided list as applicable or not, and attach labor hours plus OEM parts pricing where you can find it.
+
+RULES:
+1. is_applicable is judged from vehicle facts (drivetrain, engine, steering type, belt vs chain) and requires NO searching. Every service in the list gets a row.
+2. PRICES ARE PER-UNIT: one filter, one pad SET, ONE spark plug, one bottle. THE PRICE THE CUSTOMER PAYS NOW — never MSRP, list/"was", or struck-through prices.
+3. Price via parts_breakdown entries — search "<part_number> OEM price" for the part numbers provided. If no part numbers are provided, you may discover them, but classification and labor come FIRST: a row with is_applicable and labor_hours but no parts_breakdown is complete work; a missing row is not.
+4. If you cannot price a part after 1-2 searches, OMIT its parts_breakdown entry. Never a null or 0 price. Do not guess.
+5. Labor hours from training knowledge for established book times (confidence 0.75). Labor rate $125/hr — do not search for it.
+6. Part numbers are JSON STRINGS exactly as printed, preserving leading zeros.
+7. ONE FINAL ANSWER: finish all searching first, then emit exactly ONE JSON object as the last thing in your turn. Never emit JSON between searches. An empty "services" array is ALWAYS invalid.`;
+
+export function buildServicesRescuePrompt(
+  vehicle: VehicleInput,
+  oemParts: Record<string, string>,
+): string {
+  const partsList = Object.keys(oemParts).length > 0
+    ? Object.entries(oemParts)
+        .map(([field, part]) => `- ${field}: "${part}"`)
+        .join("\n")
+    : "(none known yet — pricing is optional this pass; classify + labor every service regardless)";
+
+  return `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim} — ${vehicle.engineCode} ${vehicle.displacement}L
+
+=== KNOWN OEM PART NUMBERS (for pricing lookup) ===
+${partsList}
+
+Classify ALL of these services for this exact vehicle (is_applicable false where not relevant):
+${SERVICE_LIST.map((s) => `- ${s}`).join("\n")}
+
+REMINDERS:
+- Oil Change: always applicable. Labor typically 0.5 hrs.
+- Serpentine Belt: only if this vehicle uses one.
+- Differential Fluid Service: RWD/AWD/4WD only — is_applicable false for FWD.
+- Transfer Case Fluid Service: AWD/4WD only.
+- Timing Belt/Chain Service: chain engine → is_applicable false or tech_notes "chain — no scheduled replacement".
+- Power Steering Fluid Flush: hydraulic PS only — false for electric.
+- Tire Rotation, Wheel Alignment, Multi-Point Inspection: always applicable, labor-only.
+
+Return ONE object in exactly this shape ("fields" stays an empty array; numbers are BARE):
+{
+  "fields":   [],
+  "services": [ { "service_name": "Oil Change", "is_applicable": true, "labor_hours": 0.5,
+                  "parts_cost_low": 30, "parts_cost_high": 60, "confidence": 0.9, "tech_notes": "",
+                  "parts_breakdown": [ { "oem_part_number": "04152-YZZA1", "price_low": 8.5, "price_high": 12,
+                                         "source_url": "...", "confidence": 0.9 } ] } ]
+}
+"services" must contain one row per service listed above — an empty array is invalid and discarded.
+Emit this object ONCE, only after all searching is done.`;
+}
+
 export function buildBatch2Prompt(
   vehicle: VehicleInput,
   nullFields: string[],
@@ -286,5 +349,7 @@ Return ONE object with TWO ARRAYS. "gap_fields" becomes the "fields" ARRAY;
                                          "source_url": "...", "confidence": 0.9 } ] } ]
 }
 A gap field you cannot determine is OMITTED ENTIRELY — never emit a row whose value is null.
-The "services" array must still list EVERY service, with is_applicable false where it does not apply.`;
+The "services" array must still list EVERY service, with is_applicable false where it does not apply.
+Emit this object ONCE, only after all searching is done. "services" must contain one row per
+service listed above — a response with an empty "services" array is invalid and discarded.`;
 }

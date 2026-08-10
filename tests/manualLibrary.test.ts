@@ -22,6 +22,10 @@
 import { describe, it, expect } from "vitest";
 import {
   buildManualQueries,
+  buildPdfEmbedMirrorPages,
+  contradictsVehicle,
+  extractEmbeddedPdfUrl,
+  isPdfEmbedMirrorPage,
   normalizeMakeKey,
   hostnameOf,
   isOemDomain,
@@ -69,7 +73,7 @@ const CROSSTREK = { make: "Subaru", model: "Crosstrek", year: 2022 };
 describe("buildManualQueries", () => {
   it("puts the OEM site:-scoped queries first for a known make", () => {
     const queries = buildManualQueries(2020, "Toyota", "Camry");
-    expect(queries).toHaveLength(4);
+    expect(queries).toHaveLength(5);
     expect(queries[0]).toBe(
       "2020 Toyota Camry maintenance schedule guide filetype:pdf site:toyota.com",
     );
@@ -77,6 +81,8 @@ describe("buildManualQueries", () => {
     // Generic fallbacks keep working when the site: operator is ignored.
     expect(queries[2]).toContain("warranty and maintenance guide");
     expect(queries[3]).toContain("maintenance schedule miles months");
+    // Verified mirror rescue stays LAST — it must never shadow the OEM pair.
+    expect(queries[4]).toContain("site:carmans.net");
   });
 
   it("scopes to the make's own primary domain, case-insensitively", () => {
@@ -87,8 +93,11 @@ describe("buildManualQueries", () => {
 
   it("degrades to the generic pair for an unknown make rather than guessing a domain", () => {
     const queries = buildManualQueries(2024, "Koenigsegg", "Jesko");
-    expect(queries).toHaveLength(2);
-    expect(queries.some((q) => q.includes("site:"))).toBe(false);
+    expect(queries).toHaveLength(3);
+    // No OEM-domain guess — the only site: left is the verified-mirror rescue.
+    expect(queries.filter((q) => q.includes("site:"))).toEqual([
+      "2024 Koenigsegg Jesko owner's manual site:carmans.net",
+    ]);
     expect(queries[0]).toContain("2024 Koenigsegg Jesko");
   });
 
@@ -96,6 +105,106 @@ describe("buildManualQueries", () => {
     expect(buildManualQueries(2020, "", "Camry")).toEqual([]);
     expect(buildManualQueries(2020, "Toyota", "   ")).toEqual([]);
     expect(buildManualQueries(Number.NaN, "Toyota", "Camry")).toEqual([]);
+  });
+});
+
+// ─── Wrong-vehicle candidate filter (Aug 9 2026) ─────────────────
+
+describe("contradictsVehicle", () => {
+  const SIERRA = { year: 2019, model: "Sierra 1500" };
+
+  it("REJECTS the live wrong-vehicle manual that burned us (2015 Sierra 3500HD for a 2019 1500)", () => {
+    const url =
+      "https://www.gmc.com/ownercenter/content/dam/gmownercenter/gmna/dynamic/manuals/2015/gmc/sierra_3500hd/2k15sierraden3rdPrint.pdf";
+    expect(contradictsVehicle(url, null, SIERRA)).toMatch(/year_mismatch/);
+  });
+  it("rejects on model-number contradiction even without a URL year", () => {
+    const url = "https://www.gmc.com/manuals/gmc/sierra_3500hd/sierraden3rdPrint.pdf";
+    expect(contradictsVehicle(url, null, SIERRA)).toMatch(/model_number_mismatch:sierra3500/);
+  });
+  it("accepts the correct year+model candidate", () => {
+    const url = "https://cdn.dealereprocess.org/cdn/servicemanuals/gmc/2019-sierra1500.pdf";
+    expect(contradictsVehicle(url, null, SIERRA)).toBeNull();
+  });
+  it("accepts anonymous candidates (no year, no model) — ranking handles those", () => {
+    const url = "https://assets.sia.toyota.com/publications/en/omms-s/T-MMS-20Camry/pdf/T-MMS-20Camry.pdf";
+    expect(contradictsVehicle(url, null, { year: 2020, model: "Camry" })).toBeNull();
+  });
+  it("treats a revision date next to the model year as a match, not a contradiction", () => {
+    const url =
+      "https://www.volvocars.com/images/cs/v3/assets/x/y/Volvo_Wty_Manual_2021_CC_05-29-2020.pdf";
+    expect(contradictsVehicle(url, null, { year: 2021, model: "XC90" })).toBeNull();
+  });
+  it("accepts a year RANGE that covers the vehicle", () => {
+    const url = "https://mirror.example.com/manuals/2018-2022_Grand_Cherokee_Service.pdf";
+    expect(contradictsVehicle(url, null, { year: 2019, model: "Grand Cherokee" })).toBeNull();
+  });
+  it("kills the sibling-model trap (CX-5 manual for a CX-30)", () => {
+    const url = "https://www.carmans.net/2021-mazda-cx-5/owners-manual.pdf";
+    expect(contradictsVehicle(url, "2021 Mazda CX-5 Owner's Manual", { year: 2021, model: "CX-30" })).toMatch(
+      /model_number_mismatch:cx5/,
+    );
+  });
+});
+
+// ─── PDF-embed mirror adapter (Aug 9 2026) ───────────────────────
+
+describe("extractEmbeddedPdfUrl / isPdfEmbedMirrorPage", () => {
+  const PAGE = "https://www.carmans.net/2019-gmc-sierra/";
+  // Verbatim from the live page — the pdf.js iframe carmans actually serves.
+  const CARMANS_IFRAME =
+    `<iframe id="game" src="/pdf.js/web/viewer.html?file=/wp-content/uploads/pdf/2019-gmc-sierra.pdf#zoom=page-width&pagemode=bookmarks" style="width: 100%" scrolling="no" frameborder="0"></iframe>`;
+
+  it("extracts the ?file= target from the real carmans pdf.js iframe and resolves it", () => {
+    expect(extractEmbeddedPdfUrl(CARMANS_IFRAME, PAGE)).toBe(
+      "https://www.carmans.net/wp-content/uploads/pdf/2019-gmc-sierra.pdf",
+    );
+  });
+  it("decodes a URI-encoded file param", () => {
+    const html = `<iframe src="/viewer.html?file=%2Fwp-content%2Fuploads%2Fpdf%2F2019-gmc-sierra.pdf"></iframe>`;
+    expect(extractEmbeddedPdfUrl(html, PAGE)).toBe(
+      "https://www.carmans.net/wp-content/uploads/pdf/2019-gmc-sierra.pdf",
+    );
+  });
+  it("accepts a viewer URL as the haystack itself (search returns these directly)", () => {
+    const viewerUrl = "https://www.carmans.net/pdf.js/web/viewer.html?file=/wp-content/uploads/pdf/2019-gmc-sierra.pdf";
+    expect(extractEmbeddedPdfUrl(viewerUrl, viewerUrl)).toBe(
+      "https://www.carmans.net/wp-content/uploads/pdf/2019-gmc-sierra.pdf",
+    );
+  });
+  it("falls back to plain .pdf attributes and resolves relative paths", () => {
+    const html = `<embed type="application/pdf" src="docs/owners-manual.pdf?v=2">`;
+    expect(extractEmbeddedPdfUrl(html, PAGE)).toBe(
+      "https://www.carmans.net/2019-gmc-sierra/docs/owners-manual.pdf?v=2",
+    );
+  });
+  it("refuses the bundled pdf.js demo document", () => {
+    const html = `<iframe src="/pdf.js/web/viewer.html?file=compressed.tracemonkey-pldi-09.pdf"></iframe>`;
+    expect(extractEmbeddedPdfUrl(html, PAGE)).toBeNull();
+  });
+  it("returns null when nothing PDF-shaped is present", () => {
+    expect(extractEmbeddedPdfUrl(`<iframe src="/videos/tour.mp4"></iframe>`, PAGE)).toBeNull();
+  });
+
+  it("constructs carmans page candidates including the collapsed trim-family slug", () => {
+    expect(buildPdfEmbedMirrorPages({ year: 2019, make: "GMC", model: "Sierra 1500" })).toEqual([
+      { url: "https://www.carmans.net/2019-gmc-sierra-1500/", title: "2019 GMC Sierra 1500 Owner's Manual (carmans.net)" },
+      { url: "https://www.carmans.net/2019-gmc-sierra/", title: "2019 GMC Sierra 1500 Owner's Manual (carmans.net)" },
+    ]);
+    // Digit-bearing model names dedupe to one URL.
+    expect(buildPdfEmbedMirrorPages({ year: 2021, make: "Mazda", model: "CX-30" })).toEqual([
+      { url: "https://www.carmans.net/2021-mazda-cx-30/", title: "2021 Mazda CX-30 Owner's Manual (carmans.net)" },
+    ]);
+    expect(buildPdfEmbedMirrorPages({ year: NaN, make: "GMC", model: "Sierra" })).toEqual([]);
+  });
+
+  it("classifies carmans HTML pages as adaptable, direct PDFs and other mirrors as not", () => {
+    expect(isPdfEmbedMirrorPage("https://www.carmans.net/2019-gmc-sierra/")).toBe(true);
+    // A direct .pdf on carmans is already a normal candidate — no adaptation.
+    expect(isPdfEmbedMirrorPage("https://www.carmans.net/wp-content/uploads/pdf/2019-gmc-sierra.pdf")).toBe(false);
+    // lemon-manuals is HTML-native (nothing to extract); scribd is the farm.
+    expect(isPdfEmbedMirrorPage("https://lemon-manuals.la/GMC/2019/")).toBe(false);
+    expect(isPdfEmbedMirrorPage("https://www.scribd.com/document/123/manual")).toBe(false);
   });
 });
 
@@ -656,8 +765,20 @@ describe("parseManualIntervals", () => {
   const rows = parseManualIntervals(payload);
 
   it("drops unknown service keys instead of inventing a service", () => {
-    // The fixture contains "wiper_blades", which has no interval mapping.
-    expect(rows.some((r) => r.service_key === "wiper_blades")).toBe(false);
+    expect(
+      parseManualIntervals({
+        services: [{ service_key: "fuel_filter", interval_miles: 30000 }],
+      }),
+    ).toEqual([]);
+  });
+
+  it("parses the fixture's wiper_blades row now that wipers are a real key (Aug 9 2026)", () => {
+    // This row was the canonical "unknown key gets dropped" example before
+    // wiper replacement became extractable — GM's schedule prints it as a
+    // real scheduled row ("Replace windshield wiper blades … or every three
+    // years").
+    const wiper = rows.find((r) => r.service_key === "wiper_blades");
+    expect(wiper?.service_slug).toBe("wiper_blade_replacement");
   });
 
   it("drops entries with neither miles nor months", () => {
@@ -706,6 +827,37 @@ describe("parseManualIntervals", () => {
       }),
     ).toEqual([]);
   });
+
+  it("wear-adjacent keys map to the services they actually describe (Aug 9 2026)", () => {
+    // A battery CHECK cadence is battery_test — writing it to
+    // battery_replacement would be the exact inspect→replace corruption the
+    // brake_pads exclusion pins.
+    expect(MANUAL_INTERVAL_TO_SERVICE.battery_inspection).toBe("battery_test");
+    expect(MANUAL_INTERVAL_TO_SERVICE.battery_inspection).not.toBe("battery_replacement");
+    expect(MANUAL_INTERVAL_TO_SERVICE.wiper_blades).toBe("wiper_blade_replacement");
+    expect(MANUAL_INTERVAL_TO_SERVICE.tire_max_age).toBe("tire_replacement");
+    // rotor/pad/tread replacement stay unmapped — wear-to-spec, not scheduled.
+    expect(MANUAL_INTERVAL_TO_SERVICE.rotor_replacement).toBeUndefined();
+    expect(MANUAL_INTERVAL_TO_SERVICE.tire_replacement).toBeUndefined();
+    expect(MANUAL_INTERVAL_TO_SERVICE.battery_replacement).toBeUndefined();
+  });
+
+  it("a months-only tire_max_age row survives parsing (age ceilings have no mileage)", () => {
+    const rows = parseManualIntervals({
+      services: [
+        {
+          service_key: "tire_max_age",
+          interval_miles: null,
+          interval_months: 72,
+          quoted_text: "Replace tires over six years old regardless of tread wear.",
+        },
+      ],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].service_slug).toBe("tire_replacement");
+    expect(rows[0].interval_months).toBe(72);
+    expect(rows[0].interval_miles).toBeNull();
+  });
 });
 
 describe("dedupeIntervalsByService", () => {
@@ -732,6 +884,7 @@ describe("dedupeIntervalsByService", () => {
       "filter_replacement",
       "spark_plugs",
       "brake_fluid_flush",
+      "wiper_blade_replacement",
     ]);
   });
 
@@ -795,7 +948,14 @@ describe("buildManualExtractionSchema", () => {
   it("is strict-shaped in the batchSchemas.ts style", () => {
     expect(schema.type).toBe("object");
     expect(schema.additionalProperties).toBe(false);
-    expect(schema.required).toEqual(["schedule_found", "schedule_kind", "services", "notes"]);
+    expect(schema.required).toEqual([
+      "document_matches_vehicle",
+      "document_vehicle_text",
+      "schedule_found",
+      "schedule_kind",
+      "services",
+      "notes",
+    ]);
 
     const entry = schema.properties.services.items;
     expect(entry.additionalProperties).toBe(false);

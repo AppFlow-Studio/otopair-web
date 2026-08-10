@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { computeEnrichmentStatus } from "./completionGate";
+import { computeEnrichmentStatus, explainGateDecision } from "./completionGate";
 import { updateSourceScores } from "../services/sourceScoring";
 import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
@@ -648,6 +648,57 @@ export const updateEngineSpecs = internalMutation({
   },
 });
 
+/** Operator-directed VERIFIED engine-spec correction (Aug 2026) — the CLI
+ *  twin of directorConfigActions.updateEngineFields, for corrections made
+ *  outside a director session (incident response, spec adjudication). Unlike
+ *  updateEngineSpecs above, this WRITES UNCONDITIONALLY — an operator
+ *  correction is the authority the verified ledger exists to protect — then
+ *  stamps every corrected field into engines.verified_fields so no re-enrich
+ *  can write over it, and records the mandatory provenance in audit_log.
+ *  First use: the GLC-43's oil_viscosity held a single-source 0W-30 while
+ *  MB BeVo 229.5 factory fill for the M276 DE30 AL is 0W-40, and the oil
+ *  product rung correctly refused to fetch against a disputed grade. */
+export const correctEngineSpecVerified = internalMutation({
+  args: {
+    engine_id: v.id("engines"),
+    /** REQUIRED: who decided this and on what evidence — lands in audit_log. */
+    provenance: v.string(),
+    oil_viscosity: v.optional(v.string()),
+    oil_capacity_qts: v.optional(v.float64()),
+    coolant_type: v.optional(v.string()),
+    coolant_capacity_qts: v.optional(v.float64()),
+    spark_plug_gap_mm: v.optional(v.float64()),
+  },
+  handler: async (ctx, args) => {
+    const { engine_id, provenance, ...fields } = args;
+    const existing = await ctx.db.get(engine_id);
+    if (!existing) return { ok: false as const, reason: "engine_not_found" };
+    const patch: Record<string, unknown> = {};
+    const changes: string[] = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined) continue;
+      const cur = (existing as any)[key];
+      if (cur === value) continue;
+      patch[key] = value;
+      changes.push(`${key}: ${cur ?? "—"} → ${value}`);
+    }
+    if (changes.length === 0) return { ok: true as const, changes: [] };
+    const verified = new Set(((existing as any).verified_fields ?? []) as string[]);
+    for (const key of Object.keys(patch)) verified.add(key);
+    (patch as any).verified_fields = [...verified];
+    await ctx.db.patch(engine_id, patch as any);
+    await ctx.db.insert("audit_log", {
+      entity_type: "engine",
+      entity_id: String(engine_id),
+      action: "field_edit",
+      actor: "operator-cli",
+      detail: `Verified spec correction · ${changes.join(", ")} · ${provenance}`,
+      created_at: Date.now(),
+    });
+    return { ok: true as const, changes };
+  },
+});
+
 // ============================================================================
 // 5. updateTransmissionSpecs
 // ============================================================================
@@ -1226,6 +1277,34 @@ export const upsertPartPrice = internalMutation({
 
     const now = Date.now();
 
+    // Wave-2 "source with the data": the director's source_registry surface
+    // fills from sources we ACTUALLY used, not a speculative discovery pass.
+    // Evidence-producing domains auto-register in sourceScoring; price-only
+    // domains (the storefronts) registered nowhere until here. One index
+    // read per price write, zero external calls. Non-fatal by construction.
+    try {
+      const registered = await ctx.db
+        .query("source_registry")
+        .withIndex("by_domain", (q) => q.eq("domain", args.source_domain))
+        .first();
+      if (!registered) {
+        await ctx.db.insert("source_registry", {
+          domain: args.source_domain,
+          source_type: "parts_pricing",
+          url_template: args.source_url,
+          reliability_score: 0.5,
+          total_observations: 0,
+          last_scraped_at: now,
+          last_scrape_success: true,
+          created_at: now,
+        });
+      } else if (registered.last_scraped_at == null || registered.last_scraped_at < now - 60_000) {
+        await ctx.db.patch(registered._id, { last_scraped_at: now, last_scrape_success: true });
+      }
+    } catch (e) {
+      console.warn("[upsertPartPrice] source_registry upsert failed (non-fatal):", e);
+    }
+
     const existing = await ctx.db
       .query("part_prices")
       .withIndex("by_part_source", (q) =>
@@ -1635,9 +1714,23 @@ export const reconcileConfigForReenrich = internalMutation({
   },
   handler: async (ctx, args) => {
     const patch: any = {
-      config_key: args.config_key,
       enrichment_status: "enriching",
     };
+    // config_key collision guard (Aug 2026): this patch used to re-key the
+    // config unconditionally — if ANOTHER row already held the target key we
+    // minted a duplicate config_key (the GLC-43 twin-config incident). Mirror
+    // renameConfigKey's conflict behavior: keep the current key and log.
+    const holder = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_config_key", (q) => q.eq("config_key", args.config_key))
+      .first();
+    if (!holder || holder._id === args.config_id) {
+      patch.config_key = args.config_key;
+    } else {
+      console.warn(
+        `[reconcile] config_key conflict: "${args.config_key}" already held by ${String(holder._id)} — keeping existing key on ${String(args.config_id)} (needs manual merge)`,
+      );
+    }
     if (args.drivetrain && args.drivetrain !== "unknown") patch.drivetrain = args.drivetrain;
     if (args.nhtsa_vin_key) patch.nhtsa_vin_key = args.nhtsa_vin_key;
     if (args.transmission_id) patch.transmission_id = args.transmission_id;
@@ -1673,6 +1766,29 @@ export const addEvidenceBatch = internalMutation({
     let count = 0;
 
     for (const row of args.evidence_rows) {
+      // Supersession (Aug 2026, closes June-audit I7/KU-A as "regression"):
+      // a re-observation retires every prior is_latest row for the same
+      // (entity, field) so consensus weighs the CURRENT run's observation
+      // set, not all history. The "mark stale" step was lost when
+      // verification.ts dropped it — nothing ever set is_latest=false, so
+      // the consensus filter was a no-op and a stale spec value could keep
+      // out-voting a fresh re-enrichment forever. Mechanic evidence is
+      // exempt: a human observation is never retired by a pipeline write
+      // (the mechanic-accept path manages its own supersession).
+      const priors = await ctx.db
+        .query("enrichment_evidence")
+        .withIndex("by_entity_field", (q) =>
+          q
+            .eq("entity_type", row.entity_type)
+            .eq("entity_id", row.entity_id)
+            .eq("field_name", row.field_name)
+        )
+        .collect();
+      for (const prior of priors) {
+        if (prior.is_latest && prior.source_type !== "mechanic") {
+          await ctx.db.patch(prior._id, { is_latest: false });
+        }
+      }
       await ctx.db.insert("enrichment_evidence", {
         entity_type: row.entity_type,
         entity_id: row.entity_id,
@@ -1838,6 +1954,20 @@ export const patchRunPriceHealth = internalMutation({
       ),
     }),
     still_unpriced_keys: v.array(v.string()),
+    /** CURRENT config fill, recomputed by the caller via calculateV3FillRate.
+     *  The stored config.fill_rate is a finalize-time snapshot — the heal
+     *  rungs (refute harvest, category pages, interchange, role repair) add
+     *  fitments AFTER it was stamped, so gating on the stored value left
+     *  healed configs stuck partial forever (Aug-8 fresh-VIN round 2: all 5
+     *  finalized partial on the fill leg and never re-evaluated). When
+     *  provided it drives the gate AND is restamped onto the config. */
+    live_fill_rate: v.optional(v.number()),
+    /** Round-12 gate facts at re-evaluation time. Optional — when absent the
+     *  env-staged role gates simply see empty inputs (their default stage is
+     *  log, so this only matters under an explicit enforce). */
+    missing_core_roles: v.optional(v.array(v.string())),
+    axle_pair_gaps: v.optional(v.array(v.string())),
+    interval_provenance_gaps: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const run = await ctx.db
@@ -1865,24 +1995,48 @@ export const patchRunPriceHealth = internalMutation({
     // price rows are only ever ADDED by the heal path, so demotion would mean
     // the gate thresholds moved, not the data.
     const config = await ctx.db.get(args.vehicle_config_id);
-    if (config && (config as any).enrichment_status === "partial") {
-      const newStatus = computeEnrichmentStatus({
-        fillRate: (config as any).fill_rate ?? 0,
+    const status = (config as any)?.enrichment_status;
+    let promoted = false;
+    if (config && status === "partial") {
+      const gateInput = {
+        fillRate: args.live_fill_rate ?? (config as any).fill_rate ?? 0,
         quotabilityPct: args.quotability.pct,
         hasPriceGaps: args.still_unpriced_keys.length > 0,
-      });
+        missingCoreRoles: args.missing_core_roles,
+        axlePairGaps: args.axle_pair_gaps,
+        intervalProvenanceGaps: args.interval_provenance_gaps,
+      };
+      const newStatus = computeEnrichmentStatus(gateInput);
       if (newStatus === "complete") {
         console.log(
-          `[price-heal] config ${args.vehicle_config_id} partial → complete (quotability ${args.quotability.pct}) — notifying owners`,
+          `[price-heal] config ${args.vehicle_config_id} partial → complete — ` +
+            `${explainGateDecision(gateInput)} — notifying owners`,
         );
         await ctx.db.patch(args.vehicle_config_id, { enrichment_status: "complete" });
+        promoted = true;
         await ctx.scheduler.runAfter(
           0,
           internal.vehicleEnrichment.v3mutations.notifyEnrichmentComplete,
           { vehicle_config_id: args.vehicle_config_id },
         );
+      } else {
+        console.log(
+          `[price-heal] config ${args.vehicle_config_id} stays partial — ${explainGateDecision(gateInput)}`,
+        );
       }
     }
+    // Keep the stored fill honest whenever a live recompute is on hand —
+    // terminal statuses only, so a concurrently-started run's fill_rate=0
+    // reset is never overwritten from this path.
+    if (
+      config &&
+      args.live_fill_rate != null &&
+      args.live_fill_rate !== (config as any).fill_rate &&
+      ["partial", "complete", "verified"].includes(status)
+    ) {
+      await ctx.db.patch(args.vehicle_config_id, { fill_rate: args.live_fill_rate });
+    }
+    return { patchedRun: !!run, promoted, status_after: promoted ? "complete" : status ?? null };
   },
 });
 
@@ -1917,6 +2071,10 @@ export const patchRunRoleHealth = internalMutation({
      *  enforce-stage role gate (no promoting a config that still has gaps). */
     missing_core_roles: v.array(v.string()),
     axle_pair_gaps: v.array(v.string()),
+    /** CURRENT config fill recomputed by the caller — same contract as
+     *  patchRunPriceHealth.live_fill_rate (the stored fill_rate is a
+     *  finalize-time snapshot the repair's own part writes just outdated). */
+    live_fill_rate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const run = await ctx.db
@@ -1963,18 +2121,22 @@ export const patchRunRoleHealth = internalMutation({
     // only partial → complete, and only if the gate — including the round-12
     // role legs at their current env stage — now passes.
     const config = await ctx.db.get(args.vehicle_config_id);
-    if (config && (config as any).enrichment_status === "partial") {
-      const newStatus = computeEnrichmentStatus({
-        fillRate: (config as any).fill_rate ?? 0,
+    const status = (config as any)?.enrichment_status;
+    let promoted = false;
+    if (config && status === "partial") {
+      const gateInput = {
+        fillRate: args.live_fill_rate ?? (config as any).fill_rate ?? 0,
         quotabilityPct: args.quotability.pct,
         missingCoreRoles: args.missing_core_roles,
         axlePairGaps: args.axle_pair_gaps,
-      });
+      };
+      const newStatus = computeEnrichmentStatus(gateInput);
       if (newStatus === "complete") {
         console.log(
-          `[role-repair] config ${args.vehicle_config_id} partial → complete (quotability ${args.quotability.pct})`,
+          `[role-repair] config ${args.vehicle_config_id} partial → complete — ${explainGateDecision(gateInput)}`,
         );
         await ctx.db.patch(args.vehicle_config_id, { enrichment_status: "complete" });
+        promoted = true;
         await ctx.scheduler.runAfter(
           0,
           internal.vehicleEnrichment.v3mutations.notifyEnrichmentComplete,
@@ -1982,7 +2144,15 @@ export const patchRunRoleHealth = internalMutation({
         );
       }
     }
-    return { patchedRun: !!run };
+    if (
+      config &&
+      args.live_fill_rate != null &&
+      args.live_fill_rate !== (config as any).fill_rate &&
+      ["partial", "complete", "verified"].includes(status)
+    ) {
+      await ctx.db.patch(args.vehicle_config_id, { fill_rate: args.live_fill_rate });
+    }
+    return { patchedRun: !!run, promoted };
   },
 });
 

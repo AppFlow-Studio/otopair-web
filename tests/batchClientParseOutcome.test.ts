@@ -22,6 +22,7 @@
 import { describe, it, expect } from "vitest";
 import {
   classifyParseOutcome,
+  isPayloadEmpty,
   EMPTY_PARSE_RAWTEXT_FLOOR,
 } from "../convex/vehicleEnrichment/utils/batchClient";
 
@@ -115,5 +116,144 @@ describe("classifyParseOutcome", () => {
     });
     expect(err).toContain("json_extraction_failed");
     expect(err).toContain("unknown");
+  });
+});
+
+/**
+ * Aug 6-7 2026 second canary (2022 Telluride / 2016 C300): batch-2 SUCCEEDED,
+ * parsed cleanly to `{"fields": [], "services": []}` after 14 real web
+ * searches — keys exist, so parsedKeyCount saw a healthy body and the
+ * empty-services starvation sailed through every guard again. The rule added
+ * for it: keys with zero rows after substantial work is ALSO our failure.
+ */
+describe("classifyParseOutcome — empty payload (keys but zero rows)", () => {
+  it("THE TELLURIDE CASE: parsed keys, all-empty values, big searched body → error", () => {
+    const err = classifyParseOutcome({
+      parseThrew: false,
+      parsedKeyCount: 2,
+      rawTextLength: 190_000,
+      payloadEmpty: true,
+      stopReason: "end_turn",
+    });
+    expect(err).toContain("json_extraction_empty_payload");
+  });
+
+  it("a small honest all-empty body stays a non-error", () => {
+    expect(
+      classifyParseOutcome({
+        parseThrew: false,
+        parsedKeyCount: 2,
+        rawTextLength: EMPTY_PARSE_RAWTEXT_FLOOR - 50,
+        payloadEmpty: true,
+      }),
+    ).toBeNull();
+  });
+
+  it("a populated payload is never flagged, whatever the body size", () => {
+    expect(
+      classifyParseOutcome({
+        parseThrew: false,
+        parsedKeyCount: 2,
+        rawTextLength: 190_000,
+        payloadEmpty: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("carries the stop_reason when the turn ended abnormally", () => {
+    const err = classifyParseOutcome({
+      parseThrew: false,
+      parsedKeyCount: 2,
+      rawTextLength: 50_000,
+      payloadEmpty: true,
+      stopReason: "max_tokens",
+    });
+    expect(err).toContain("stop_reason=max_tokens");
+  });
+});
+
+describe("isPayloadEmpty", () => {
+  it("all-empty arrays → true (the batch-2 failure shape)", () => {
+    expect(isPayloadEmpty({ fields: [], services: [] })).toBe(true);
+  });
+
+  it("empty object → false (that is the parsedKeyCount=0 case)", () => {
+    expect(isPayloadEmpty({})).toBe(false);
+  });
+
+  it("any populated section → false", () => {
+    expect(isPayloadEmpty({ fields: [], services: [{ service_name: "Oil Change" }] })).toBe(false);
+    expect(isPayloadEmpty({ gap_fields: { oil_viscosity: { value: "5W-30" } }, services: [] })).toBe(false);
+  });
+
+  it("null and empty-object values count as empty", () => {
+    expect(isPayloadEmpty({ fields: null, services: [], extra: {} })).toBe(true);
+  });
+
+  it("scalar values count as content", () => {
+    expect(isPayloadEmpty({ note: "n/a" })).toBe(false);
+  });
+});
+
+describe("classifyParseOutcome — text-block shape suffix (fresh-5 round 2)", () => {
+  // The Aug 8 fresh-make audit needed raw Batches-API pulls to see WHY the
+  // payload was empty (the 200K-capped run trace cuts the tail off). The
+  // verdict now carries the text-block signature so the two shapes read
+  // directly off errors[]:
+  //   generation gave up ..... textBlocks=1-2, maxTextLen ≤ ~30 (end_turn)
+  //   extraction discarded ... maxTextLen in the thousands (bc3e487 shape)
+  it("empty payload carries the block signature (CX-30 shape)", () => {
+    const err = classifyParseOutcome({
+      parseThrew: false,
+      parsedKeyCount: 2,
+      rawTextLength: 190_000,
+      payloadEmpty: true,
+      stopReason: "end_turn",
+      textBlockCount: 2,
+      maxTextBlockLength: 29,
+      outputTokens: 994,
+    });
+    expect(err).toContain("json_extraction_empty_payload");
+    expect(err).toContain("textBlocks=2");
+    expect(err).toContain("maxTextLen=29");
+    expect(err).toContain("outTokens=994");
+    // end_turn is the normal stop — no stop_reason noise
+    expect(err).not.toContain("stop_reason=");
+  });
+
+  it("zero-keys verdict carries the signature too", () => {
+    const err = classifyParseOutcome({
+      parseThrew: false,
+      parsedKeyCount: 0,
+      rawTextLength: 24_000,
+      textBlockCount: 0,
+      maxTextBlockLength: 0,
+      outputTokens: 512,
+    });
+    expect(err).toContain("json_extraction_empty");
+    expect(err).toContain("textBlocks=0");
+  });
+
+  it("omitting the block stats keeps the legacy verdict byte-stable", () => {
+    const err = classifyParseOutcome({
+      parseThrew: false,
+      parsedKeyCount: 2,
+      rawTextLength: 50_000,
+      payloadEmpty: true,
+    });
+    expect(err).toBe("json_extraction_empty_payload: parsed object has keys but zero rows");
+  });
+
+  it("a healthy parse stays null regardless of block stats", () => {
+    expect(
+      classifyParseOutcome({
+        parseThrew: false,
+        parsedKeyCount: 12,
+        rawTextLength: 8000,
+        textBlockCount: 1,
+        maxTextBlockLength: 21_297,
+        outputTokens: 8442,
+      }),
+    ).toBeNull();
   });
 });

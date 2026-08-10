@@ -200,6 +200,31 @@ export const POWER_STEERING_FLUID_OPTIONS: InspectionOption[] = [
   { value: "universal_psf", label: "Universal PSF" },
 ];
 
+/**
+ * Build tire-size combobox options from an explicit list of sizes — the
+ * vehicle's real OEM fitments from wheel-size.com (front or rear axle). Falls
+ * back to the generic `TIRE_SIZE_OPTIONS` catalog only when we have no
+ * vehicle-specific sizes, so the field is never empty. The "Other / not listed"
+ * escape hatch (added by the dialog) still lets a mechanic type a custom size
+ * for aftermarket / plus-sized wheels.
+ */
+export function tireSizeOptionsFromList(
+  sizes: string[] | null | undefined,
+): InspectionOption[] {
+  if (!sizes || sizes.length === 0) return TIRE_SIZE_OPTIONS;
+  return sizes.map((raw) => {
+    const size = raw.trim().toUpperCase();
+    return {
+      value: size,
+      label: size,
+      aliases: [
+        size.replace(/(\d+)\/(\d+)R(\d+)/i, "$1 / $2 R $3"),
+        size.toLowerCase(),
+      ],
+    };
+  });
+}
+
 export const BRAKE_PAD_BRAND_OPTIONS: InspectionOption[] = [
   { value: "akebono", label: "Akebono" },
   { value: "brembo", label: "Brembo" },

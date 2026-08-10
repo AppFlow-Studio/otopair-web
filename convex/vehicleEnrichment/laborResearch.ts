@@ -28,6 +28,7 @@ import { ESTIMATOR_ENDPOINT_SOURCE } from "../lib/sourceNames";
 const SOURCE_WEIGHTS = {
   estimator_endpoint: 0.9, // exact MOTOR minutes via the estimate endpoint — strongest
   olp_labor: 0.7,
+  lemon_labor: 0.7, // LEMON's "Standard Hours" are factory/MOTOR-grade — on par with OLP
   web_labor: 0.6,
 } as const;
 
@@ -38,7 +39,7 @@ export type LaborAllSourcesResult = {
   resolved: boolean;
   written: number;
   failed: string[];
-  sources: { olp: number; web: number; estimatorEndpoint: number };
+  sources: { olp: number; web: number; estimatorEndpoint: number; lemon: number };
 };
 
 /** The multi-source labor flags, read from env in ONE place so the enrichment
@@ -46,11 +47,12 @@ export type LaborAllSourcesResult = {
  *  OLP + the Estimator estimate ENDPOINT are on unless explicitly "off" (the
  *  endpoint is the authoritative labor source — see resolveBookHours); the
  *  open-web source stays opt-in (=== "on"). */
-export function laborFlagsFromEnv(): { olp: boolean; web: boolean; estimatorEndpoint: boolean } {
+export function laborFlagsFromEnv(): { olp: boolean; web: boolean; estimatorEndpoint: boolean; lemon: boolean } {
   return {
     olp: process.env.LABOR_SOURCE_OLP !== "off",
     web: process.env.LABOR_SOURCE_WEB === "on",
     estimatorEndpoint: process.env.LABOR_SOURCE_ESTIMATOR_ENDPOINT !== "off",
+    lemon: process.env.LABOR_SOURCE_LEMON !== "off",
   };
 }
 
@@ -59,6 +61,7 @@ export function mergeLaborSources(by: {
   olp?: SourceHours;
   web?: SourceHours;
   estimatorEndpoint?: SourceHours;
+  lemon?: SourceHours;
 }): LaborObsRow[] {
   const rows: LaborObsRow[] = [];
   const add = (map: SourceHours | undefined, source: keyof typeof SOURCE_WEIGHTS) => {
@@ -70,6 +73,7 @@ export function mergeLaborSources(by: {
   };
   add(by.estimatorEndpoint, ESTIMATOR_ENDPOINT_SOURCE);
   add(by.olp, "olp_labor");
+  add(by.lemon, "lemon_labor");
   add(by.web, "web_labor");
   return rows;
 }
@@ -104,12 +108,18 @@ export const laborAllSources = internalAction({
       name: v.string(),
       estimator_slug: v.optional(v.union(v.string(), v.null())),
     })),
-    flags: v.object({ olp: v.boolean(), web: v.boolean(), estimatorEndpoint: v.boolean() }),
+    flags: v.object({
+      olp: v.boolean(),
+      web: v.boolean(),
+      estimatorEndpoint: v.boolean(),
+      lemon: v.optional(v.boolean()),
+    }),
   },
   handler: async (ctx, args): Promise<LaborAllSourcesResult> => {
     let olp: SourceHours = {};
     let web: SourceHours = {};
     let estimatorEndpoint: SourceHours = {};
+    let lemon: SourceHours = {};
 
     // --- OLP (only if flagged AND we have a buildId) -------------------------
     if (args.flags.olp && args.buildId) {
@@ -189,8 +199,31 @@ export const laborAllSources = internalAction({
       }
     }
 
+    // --- LEMON Manuals labor times (factory Standard Hours; weight 0.7) ------
+    // Default-on (flag omitted → true). Its own try/catch; a miss is an empty map.
+    if (args.flags.lemon ?? true) {
+      try {
+        const res: any = await ctx.runAction(
+          internal.vehicleEnrichment.lemonLabor.resolveLemonLaborForConfig,
+          {
+            make: args.make,
+            model: args.model,
+            year: args.year,
+            trim: args.trim,
+            drivetrain: args.drivetrain ?? null,
+            displacementL: args.displacementL ?? null,
+            services: args.services.map((s) => ({ slug: s.slug, name: s.name })),
+          },
+        );
+        if (res?.resolved) lemon = res.services ?? {};
+        else console.warn(`laborAllSources: LEMON labor not resolved`);
+      } catch (e) {
+        console.warn(`laborAllSources: LEMON labor resolver threw:`, e);
+      }
+    }
+
     // --- Merge to weighted observation rows ---------------------------------
-    const rows = mergeLaborSources({ olp, web, estimatorEndpoint });
+    const rows = mergeLaborSources({ olp, web, estimatorEndpoint, lemon });
 
     // --- Write each row through the aggregation machinery (per-row isolation) -
     const serviceIdBySlug: Record<string, any> = Object.fromEntries(
@@ -234,6 +267,7 @@ export const laborAllSources = internalAction({
         olp: Object.keys(olp).length,
         web: Object.keys(web).length,
         estimatorEndpoint: Object.keys(estimatorEndpoint).length,
+        lemon: Object.keys(lemon).length,
       },
     };
   },

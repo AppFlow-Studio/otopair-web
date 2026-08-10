@@ -240,7 +240,14 @@ const HONDA_PART_SLUGS: Record<string, string> = { ...BASE_PART_SLUGS };
  */
 const OEM_PARTS_ONLINE_SLUGS: Record<string, string> = { ...BASE_PART_SLUGS };
 
-/** Maps make name → oempartsonline.com subdomain. */
+/** Maps make name → oempartsonline.com subdomain.
+ *  Audited Aug 3 2026: every live RP subdomain answers 403 to plain curl
+ *  (Cloudflare — fine, discovery goes through the SERP and detail pages fetch
+ *  via Firecrawl). `genesis` and `mercedes` answered HTTP 000 — the domains
+ *  DO NOT RESOLVE, so those makes silently ran the weak open-web fallback on
+ *  every vehicle. Genesis parts are served by the HYUNDAI storefront (SERP
+ *  result catalog params literally carry `a=genesis&o=g70`); Mercedes has its
+ *  own RP store (see MERCEDES_CONFIG below). */
 const OEM_PARTS_ONLINE_SUBDOMAINS: Record<string, string> = {
   Ford:            "ford",
   Chevrolet:       "g",
@@ -249,9 +256,7 @@ const OEM_PARTS_ONLINE_SUBDOMAINS: Record<string, string> = {
   Buick:           "g",
   Hyundai:         "hyundai",
   Kia:             "kia",
-  Genesis:         "genesis",
-  Mercedes:        "mercedes",
-  "Mercedes-Benz": "mercedes",
+  Genesis:         "hyundai",
   Volkswagen:      "volkswagen",
   VW:              "volkswagen",
   Audi:            "audi",
@@ -269,6 +274,28 @@ const OEM_PARTS_ONLINE_SUBDOMAINS: Record<string, string> = {
   "Land Rover":    "landrover",
   Jaguar:          "jaguar",
   Mitsubishi:      "mitsubishi",
+};
+
+/** Mercedes-Benz — `mercedes.oempartsonline.com` never resolved (dead DNS,
+ *  verified Aug 3 2026), so every Mercedes vehicle silently degraded to the
+ *  open-web fallback: thin sources, zero deterministic part numbers, and the
+ *  role-resource repair's Tier-1 site-scoped SERP aimed at a domain with no
+ *  index (the 2020 AMG GLC 43 finished 3/9 core parts this way).
+ *  `classicparts.mbusa.com` is MB's OWN RevolutionParts storefront and serves
+ *  MODERN vehicles despite the name — `/oem-parts/…` detail pages with JSON-LD
+ *  prices, exactly the shape scrapePartsPages expects (verified via SERP +
+ *  the GLC-43 run's one good source, a 40k-char category page from it). */
+const MERCEDES_CONFIG: MakeSourceConfig = {
+  parts: {
+    storeBaseUrl: "https://classicparts.mbusa.com",
+    partSlugs: { ...BASE_PART_SLUGS },
+  },
+  manual: {
+    searchQueries: (year, _mk, model) => [
+      `${year} Mercedes-Benz ${model} maintenance schedule oil change intervals miles months`,
+      `${year} Mercedes-Benz ${model} oil capacity coolant capacity specifications`,
+    ],
+  },
 };
 
 function oemPartsOnlineConfig(
@@ -345,8 +372,8 @@ export const SOURCE_REGISTRY: Record<string, MakeSourceConfig> = {
   Hyundai:         oemPartsOnlineConfig("Hyundai"),
   Kia:             oemPartsOnlineConfig("Kia"),
   Genesis:         oemPartsOnlineConfig("Genesis"),
-  "Mercedes-Benz": oemPartsOnlineConfig("Mercedes-Benz"),
-  Mercedes:        oemPartsOnlineConfig("Mercedes"),
+  "Mercedes-Benz": MERCEDES_CONFIG,
+  Mercedes:        MERCEDES_CONFIG,
   Volkswagen:      oemPartsOnlineConfig("Volkswagen"),
   Audi:            oemPartsOnlineConfig("Audi"),
   Subaru:          oemPartsOnlineConfig("Subaru"),

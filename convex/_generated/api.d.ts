@@ -272,6 +272,7 @@ import type * as payments from "../payments.js";
 import type * as payments_backfill from "../payments_backfill.js";
 import type * as payments_backfill_created_at from "../payments_backfill_created_at.js";
 import type * as payments_backfill_helpers from "../payments_backfill_helpers.js";
+import type * as payments_reconcile from "../payments_reconcile.js";
 import type * as payments_stripe from "../payments_stripe.js";
 import type * as platform_settings from "../platform_settings.js";
 import type * as portalSearch from "../portalSearch.js";
@@ -793,6 +794,7 @@ declare const fullApi: ApiFromModules<{
   payments_backfill: typeof payments_backfill;
   payments_backfill_created_at: typeof payments_backfill_created_at;
   payments_backfill_helpers: typeof payments_backfill_helpers;
+  payments_reconcile: typeof payments_reconcile;
   payments_stripe: typeof payments_stripe;
   platform_settings: typeof platform_settings;
   portalSearch: typeof portalSearch;

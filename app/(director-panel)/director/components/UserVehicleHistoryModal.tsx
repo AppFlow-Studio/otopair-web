@@ -4,6 +4,7 @@ import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Modal, Button, Badge, StatusBadge, IconCar } from './Primitives'
+import { fmtDate } from './Charts'
 
 /**
  * UserVehicleHistoryModal
@@ -20,11 +21,6 @@ type Props = {
 
 function fmtCurrency(n: number | undefined): string {
   return `$${(n ?? 0).toFixed(2)}`
-}
-
-function fmtDate(ts?: number): string {
-  if (!ts) return '—'
-  return new Date(ts).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })
 }
 
 export const UserVehicleHistoryModal = ({ userId, vehicleId, onClose }: Props) => {
@@ -103,7 +99,7 @@ export const UserVehicleHistoryModal = ({ userId, vehicleId, onClose }: Props) =
                     borderBottom: i < data.bookings.length - 1 ? '1px solid var(--slate-100)' : 'none',
                     fontSize:12, color:'var(--slate-700)',
                   }}>
-                    <span className="mono">{b.scheduled}</span>
+                    <span className="mono">{fmtDate(b.scheduled)}</span>
                     <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.services.join(', ') || '—'}</span>
                     <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.shop}</span>
                     <span><StatusBadge status={b.status} /></span>

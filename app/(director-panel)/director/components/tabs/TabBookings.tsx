@@ -8,7 +8,7 @@ import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { Badge, Button, Card, Input, Select, Toggle, StatusBadge, SegmentedControl, tableStyles, IconShop } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { consumeGoto, consumeStashedGoto, gotoEntity } from '../directorNav'
-import { StatCard, DailyBars, money } from '../Charts'
+import { StatCard, DailyBars, money, fmtDate } from '../Charts'
 import { BookingDetailModal } from '../BookingDetailModal'
 
 // MEASURED status set on this deployment (mirrors opsBookings.BOOKING_STATUSES).
@@ -158,7 +158,7 @@ const BoardView = ({ token, onOpen }: { token: string; onOpen: (id: Id<'bookings
                         {c.user}
                       </span>
                       <span style={{ flexShrink: 0, fontSize: 11, color: 'var(--slate-400)' }}>
-                        {c.scheduledDate ?? shortDate(c.createdAt)}{c.scheduledTime ? ` ${c.scheduledTime}` : ''}
+                        {c.scheduledDate ? fmtDate(c.scheduledDate) : shortDate(c.createdAt)}{c.scheduledTime ? ` ${c.scheduledTime}` : ''}
                       </span>
                     </div>
                     <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.shop}</div>
@@ -285,7 +285,7 @@ const ListView = ({ token, onOpen }: { token: string; onOpen: (id: Id<'bookings'
                         </span>
                       )}
                     </td>
-                    <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{b.scheduled}{b.time !== '—' ? ` · ${b.time}` : ''}</td>
+                    <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{fmtDate(b.scheduled)}{b.time !== '—' ? ` · ${b.time}` : ''}</td>
                     <td style={tableStyles.td}><StatusBadge status={b.status} /></td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} className="mono">${b.total.toFixed(2)}</td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} onClick={e => e.stopPropagation()}>

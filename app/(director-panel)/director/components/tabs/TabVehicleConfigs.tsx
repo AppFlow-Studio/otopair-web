@@ -21,7 +21,7 @@ import { DirectorSessionCtx } from '../DirectorSessionCtx'
 
 function fmtDate(ts?: number): string {
   if (!ts) return '—'
-  return new Date(ts).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })
+  return new Date(ts).toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })
 }
 
 function ageLabel(ts?: number): string {

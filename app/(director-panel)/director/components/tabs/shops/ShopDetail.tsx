@@ -10,7 +10,7 @@ import {
   Card, Badge, Button, Input, MicroH, tableStyles, Modal, AuditButton, AuditLogCompact,
   IconChevron, IconShop, IconExternal, IconX, IconCheck,
 } from '../../Primitives'
-import { money } from '../../Charts'
+import { money, fmtDate, fmtDateTime } from '../../Charts'
 import { gotoEntity } from '../../directorNav'
 import { AdminActionPanel, ActionRow } from '../../AdminActionPanel'
 import { DirectorNotesPanel } from '../../DirectorNotesPanel'
@@ -25,8 +25,6 @@ import { licenseLabel, documentGroupOf, DOCUMENT_GROUPS, CUSTOM_GROUP_LABEL } fr
 const TABS = ['Profile', 'Hours', 'Services & Rate', 'Compliance', 'Mechanics', 'Calendar', 'Bookings', 'Insights'] as const
 
 const PROMOTION_LABEL = ['None', 'Boosted', 'Featured'] as const
-const fmtDate = (ms: number | null) =>
-  ms ? new Date(ms).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }) : '—'
 const LICENSE_TONE = { pending_review: 'yellow', verified: 'green', rejected: 'red' } as const
 const LICENSE_STATUS_LABEL = { pending_review: 'Pending review', verified: 'Verified', rejected: 'Rejected' } as const
 type Tab = (typeof TABS)[number]
@@ -284,8 +282,8 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
               <Field label="Stripe">{profile.stripeAccountId ? `${profile.stripeAccountId} · charges ${profile.stripeChargesEnabled ? '✓' : '✗'} · payouts ${profile.stripePayoutsEnabled ? '✓' : '✗'}` : 'Not connected'}</Field>
               <Field label="Onboarding">{profile.onboardingComplete ? <span style={{ color:'var(--green-700)' }}>Complete</span> : <span style={{ color:'var(--amber-700, #B45309)' }}>Incomplete</span>}</Field>
               <Field label="Requirements due">{profile.stripeRequirementsDue.length > 0 ? <span style={{ color:'var(--amber-700, #B45309)' }}>{profile.stripeRequirementsDue.join(', ')}</span> : 'None'}</Field>
-              <Field label="Rates updated">{profile.laborRatesUpdatedAt ? new Date(profile.laborRatesUpdatedAt).toLocaleDateString() : '—'}</Field>
-              <Field label="Created">{new Date(profile.createdAt).toLocaleDateString()}</Field>
+              <Field label="Rates updated">{fmtDate(profile.laborRatesUpdatedAt)}</Field>
+              <Field label="Created">{fmtDate(profile.createdAt)}</Field>
             </div>
 
             {profile.description && (
@@ -693,7 +691,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                             {b.customerNotes && <div title={b.customerNotes} style={{ marginTop:2, maxWidth:256, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontSize:11, fontStyle:'italic', color:'var(--slate-400)' }}>“{b.customerNotes}”</div>}
                             {b.recommendationState && b.recommendationState !== 'none' && <Badge tone="purple" style={{ marginTop:2 }}>upsell: {b.recommendationState}</Badge>}
                           </td>
-                          <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{b.date ?? '—'}{b.time ? ` ${b.time}` : ''}</td>
+                          <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{fmtDate(b.date)}{b.time ? ` ${b.time}` : ''}</td>
                           <td style={{ ...tableStyles.td, fontSize:12, color:'var(--slate-600)' }}>
                             {b.estLaborMinutes != null || b.actualDurationMinutes != null
                               ? <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}>
@@ -754,7 +752,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                         <span style={{ fontWeight:600, color:'var(--slate-800)' }}>{money(d.amount, { cents: true })}</span>
                         {d.reason && <span style={{ color:'var(--slate-500)' }}>{d.reason}</span>}
                         {d.booking_id && <span onClick={() => setDrillBooking(d.booking_id as Id<'bookings'>)} style={{ color:'var(--blue-600)', cursor:'pointer' }}>booking →</span>}
-                        <span style={{ marginLeft:'auto', fontSize:11, color:'var(--slate-400)' }}>{new Date(d.openedAt).toLocaleDateString()}</span>
+                        <span style={{ marginLeft:'auto', fontSize:11, color:'var(--slate-400)' }}>{fmtDate(d.openedAt)}</span>
                       </div>
                     ))}
                   </div>}
@@ -786,7 +784,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                           {r.reviewer && <a onClick={() => gotoEntity('users', r.reviewer_id)} style={{ fontSize:12, fontWeight:500, color:'var(--blue-600)', cursor:'pointer' }}>{r.reviewer}</a>}
                           {r.mechanic && <span style={{ fontSize:11, color:'var(--slate-400)' }}>· {r.mechanic}</span>}
                           {r.hidden && <Badge tone="slate">hidden</Badge>}
-                          <span style={{ marginLeft:'auto', fontSize:11, color:'var(--slate-400)' }}>{new Date(r.at).toLocaleDateString()}</span>
+                          <span style={{ marginLeft:'auto', fontSize:11, color:'var(--slate-400)' }}>{fmtDate(r.at)}</span>
                         </div>
                         {(r.vehicle.ymm || r.service_names.length > 0) && (
                           <div style={{ marginTop:2, display:'flex', flexWrap:'wrap', alignItems:'center', gap:6, fontSize:11, color:'var(--slate-500)' }}>
@@ -809,7 +807,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                       {insights.rateHistory.map((h, i) => (
                         <li key={i} style={{ fontSize:12 }}>
                           <div style={{ color:'var(--slate-700)' }}>{h.detail ?? 'rate changed'}</div>
-                          <div style={{ fontSize:11, color:'var(--slate-400)' }}>{new Date(h.at).toLocaleString()} · {h.actor}</div>
+                          <div style={{ fontSize:11, color:'var(--slate-400)' }}>{fmtDateTime(h.at)} · {h.actor}</div>
                         </li>
                       ))}
                     </ol>}

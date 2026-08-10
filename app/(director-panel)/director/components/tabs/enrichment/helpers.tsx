@@ -15,6 +15,11 @@ export function fmtWhen(ms: number | null | undefined): string {
   if (!ms) return '—'
   return new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
+/** Exact, readable date+time — "August 7, 2026, 3:45 PM" — for hover titles. */
+export function fmtWhenExact(ms: number | null | undefined): string {
+  if (ms == null) return '—'
+  return new Date(ms).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+}
 export function fmtDuration(ms: number | null | undefined): string {
   if (ms == null) return '—'
   if (ms < 1000) return `${ms}ms`
@@ -486,7 +491,7 @@ export function ReviewQueueRow({
       {r.status === 'claimed' && (
         <span style={{ color: 'var(--blue-700)', flexShrink: 0, fontSize: 11 }}>● {r.claimed_by ?? 'claimed'}</span>
       )}
-      <span style={{ color: 'var(--slate-400)', flexShrink: 0 }} title={new Date(r.created_at).toLocaleString()}>{r.age_h}h</span>
+      <span style={{ color: 'var(--slate-400)', flexShrink: 0 }} title={fmtWhenExact(r.created_at)}>{r.age_h}h</span>
       {canClaim && r.status === 'open' && onClaim && (
         <button style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--blue-700)', fontSize: 12, fontFamily: 'inherit', fontWeight: 500, flexShrink: 0 }}
           onClick={e => { e.stopPropagation(); onClaim() }}>Claim</button>

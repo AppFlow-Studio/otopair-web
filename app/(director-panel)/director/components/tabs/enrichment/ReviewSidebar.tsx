@@ -21,7 +21,7 @@ import { useMutation, useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Sidebar, MicroH } from '../../Primitives'
-import { CopyableMono, StatusPill, SkeletonBlock, Empty, Linkify, ConfirmPopup, SourceChip, SourceTypeBadge, STREAM_SOURCE, timeAgo } from './helpers'
+import { CopyableMono, StatusPill, SkeletonBlock, Empty, Linkify, ConfirmPopup, SourceChip, SourceTypeBadge, STREAM_SOURCE, timeAgo, fmtWhenExact } from './helpers'
 
 const inputStyle: React.CSSProperties = {
   border: '1px solid var(--slate-200)', borderRadius: 6, padding: '6px 8px',
@@ -222,7 +222,7 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
               <div style={{ fontSize: 12, color: 'var(--slate-500)', lineHeight: 1.6 }}>
                 {STREAM_SOURCE[ctx.stream] ?? ctx.stream}
                 <br />
-                flagged {timeAgo(ctx.createdAt)} <span style={{ color: 'var(--slate-400)' }}>({new Date(ctx.createdAt).toLocaleString()})</span>
+                flagged {timeAgo(ctx.createdAt)} <span style={{ color: 'var(--slate-400)' }}>({fmtWhenExact(ctx.createdAt)})</span>
                 {ctx.runId && (
                   <>
                     <br />

@@ -15,7 +15,7 @@ import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { gotoEntity } from '../directorNav'
 import { StatCard, BarRow, DailyBars, fmtNumber, fmtRelative } from '../Charts'
 
-const fmtDT = (ms: number) => new Date(ms).toLocaleString()
+const fmtDT = (ms: number) => new Date(ms).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
 
 type LogGroup = {
   signature: string

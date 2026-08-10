@@ -111,7 +111,7 @@ export const VehicleConfigTierModal = ({
                   <KV k="Source" v={cfg.pricing_tier_source ?? '—'} />
                   <KV k="Brake system" v={<span className="mono">{assignment?.brake_system ?? '—'}</span>} />
                   <KV k="Powertrain" v={<span className="mono">{assignment?.powertrain_type ?? '—'}</span>} />
-                  <KV k="Set at" v={cfg.pricing_tier_set_at ? new Date(cfg.pricing_tier_set_at).toLocaleString() : '—'} />
+                  <KV k="Set at" v={cfg.pricing_tier_set_at ? new Date(cfg.pricing_tier_set_at).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'} />
                   <KV k="Override?" v={assignment?.is_manual_override ? <Badge tone="yellow">manual</Badge> : <Badge tone="slate">auto</Badge>} />
                 </Grid>
                 {assignment?.classifier_score_breakdown && (

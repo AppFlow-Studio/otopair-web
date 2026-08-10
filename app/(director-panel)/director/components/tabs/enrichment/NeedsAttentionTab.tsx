@@ -20,7 +20,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import { Input, IconSearch } from '../../Primitives'
-import { Panel, Empty, StatusPill, SkeletonBlock, SubTabs, TableWrap, th, td, thRight, tdRight, fmtWhen, PageNav, RunChip, DateRangeFilter, dateInRange, type OpenTrigger, type ReviewRow } from './helpers'
+import { Panel, Empty, StatusPill, SkeletonBlock, SubTabs, TableWrap, th, td, thRight, tdRight, fmtWhen, fmtWhenExact, PageNav, RunChip, DateRangeFilter, dateInRange, type OpenTrigger, type ReviewRow } from './helpers'
 import { WrongPartsPanel } from './WrongPartsPanel'
 import { UnpricedPartsPanel } from './PartQualityPanel'
 import { MissingPartsPanel } from './MissingPartsPanel'
@@ -234,7 +234,7 @@ function ReviewTableRow({ r, active, onOpen, canClaim, onClaim, goDeepDive }: {
         {r.status === 'claimed' ? <span style={{ color: 'var(--blue-700)', fontSize: 12 }}>● {r.claimed_by ?? 'claimed'}</span>
           : <span style={{ color: 'var(--slate-400)', fontSize: 12 }}>open</span>}
       </td>
-      <td style={{ ...tdRight, color: 'var(--slate-500)' }} title={new Date(r.created_at).toLocaleString()}>
+      <td style={{ ...tdRight, color: 'var(--slate-500)' }} title={fmtWhenExact(r.created_at)}>
         {fmtWhen(r.created_at)}<div style={{ fontSize: 10, color: 'var(--slate-400)' }}>{r.age_h}h ago</div>
       </td>
       <td style={tdRight}>

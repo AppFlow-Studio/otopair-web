@@ -17,7 +17,7 @@ import { useMemo, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import { Button, Input, IconSearch } from '../../Primitives'
-import { Panel, Empty, SkeletonBlock, CarAccordionItem, CountPill, RunLink, fmtWhen, type ReviewRow } from './helpers'
+import { Panel, Empty, SkeletonBlock, CarAccordionItem, CountPill, RunLink, fmtWhen, fmtWhenExact, type ReviewRow } from './helpers'
 import { AddMissingPartDrawer, carLabelOf, type MissingPartFlag } from './MissingPartsPanel'
 import { WrongPartDrawer, type WrongPartFlag } from './WrongPartsPanel'
 import { UnpricedPartDrawer, type UnpricedPartFlag } from './PartQualityPanel'
@@ -187,7 +187,7 @@ export function IncompleteConfigsPanel({ token, goDeepDive, onOpenReview }: {
                     <div key={r.id} style={rowStyle}>
                       <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 999, background: 'var(--yellow-50)', color: 'var(--yellow-800)', flexShrink: 0 }}>{r.stream}</span>
                       <span style={{ flex: 1, minWidth: 0, color: 'var(--slate-700)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.title}</span>
-                      <span style={{ color: 'var(--slate-400)', flexShrink: 0 }} title={new Date(r.created_at).toLocaleString()}>{fmtWhen(r.created_at)}</span>
+                      <span style={{ color: 'var(--slate-400)', flexShrink: 0 }} title={fmtWhenExact(r.created_at)}>{fmtWhen(r.created_at)}</span>
                       <Button variant="secondary" size="sm" onClick={() => onOpenReview(r.id, r.title)}>Open</Button>
                     </div>
                   ))}

@@ -12,7 +12,7 @@ import { licenseLabel } from '@/lib/license-catalog'
 // Compliance tab to verify or reject. Backed by shopsDirectory.pendingLicenseReviews.
 
 const fmtDate = (ms: number | null) =>
-  ms ? new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'
+  ms ? new Date(ms).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'
 
 export const LicenseReviewQueue = ({ onOpenShop }: { onOpenShop: (id: string) => void }) => {
   const session = useContext(DirectorSessionCtx)

@@ -6,7 +6,8 @@ import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { DirectorSessionCtx } from '../../DirectorSessionCtx'
 import { Card, Badge, tableStyles } from '../../Primitives'
-import { Loading, fmtDate, fmtMoney, statusTone, openShop } from './usersUi'
+import { Loading, fmtMoney, statusTone, openShop } from './usersUi'
+import { fmtDate } from '../../Charts'
 
 export const UserBookingsTab = ({ userId, onOpenBooking }:
   { userId: Id<'users'>; onOpenBooking: (id: Id<'bookings'>) => void }) => {
@@ -33,7 +34,7 @@ export const UserBookingsTab = ({ userId, onOpenBooking }:
                   <td style={{ ...tableStyles.td, color:'var(--slate-700)' }}>{b.shop_id ? <a onClick={() => openShop(b.shop_id!)} style={{ cursor:'pointer' }}>{b.shop}</a> : b.shop}</td>
                   <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{b.vehicleYmm ?? '—'}</td>
                   <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{b.services.length > 0 ? b.services.join(', ') : '—'}</td>
-                  <td style={{ ...tableStyles.td, color:'var(--slate-500)' }}>{b.scheduledDate ?? '—'}</td>
+                  <td style={{ ...tableStyles.td, color:'var(--slate-500)' }}>{fmtDate(b.scheduledDate)}</td>
                   <td style={{ ...tableStyles.td, color:'var(--slate-500)' }}>{fmtDate(b.created)}</td>
                   <td style={{ ...tableStyles.td, textAlign:'right', color:'var(--slate-700)' }} className="mono">
                     {fmtMoney(b.total)}

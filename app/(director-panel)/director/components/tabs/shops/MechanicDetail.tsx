@@ -11,7 +11,7 @@ import { BookingDetailModal } from '../../BookingDetailModal'
 import { Stars } from './shopsUi'
 import type { MechanicDetail as MechanicDetailShape } from './types'
 
-const fmtDate = (ms: number) => new Date(ms).toLocaleDateString()
+const fmtDate = (ms: number) => new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 
 const VarianceBadge = ({ pct }: { pct: number }) => {
   const abs = Math.abs(pct)

@@ -19,7 +19,7 @@ import { api } from '@/convex/_generated/api'
 import type { FunctionReturnType } from 'convex/server'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Sidebar, MicroH, Input, IconSearch } from '../../Primitives'
-import { Panel, Empty, SkeletonBlock, CopyableMono, ConfirmPopup, TableWrap, th, td, thRight, PageNav, fmtWhen, RunChip, DateRangeFilter, dateInRange } from './helpers'
+import { Panel, Empty, SkeletonBlock, CopyableMono, ConfirmPopup, TableWrap, th, td, thRight, PageNav, fmtWhen, fmtWhenExact, RunChip, DateRangeFilter, dateInRange } from './helpers'
 
 type UnpricedPartFlag = FunctionReturnType<typeof api.directorPartQuality.scanUnpricedParts>['flags'][number]
 
@@ -121,7 +121,7 @@ export function UnpricedPartsPanel({ token, goDeepDive }: {
                       )}
                     </td>
                     <td style={{ ...td, padding: '16px 18px' }}>{f.serviceType ?? '—'}</td>
-                    <td style={{ ...thRight, padding: '16px 18px', color: 'var(--slate-500)' }} title={new Date(f.firstSeenAt).toLocaleString()}>{fmtWhen(f.firstSeenAt)}</td>
+                    <td style={{ ...thRight, padding: '16px 18px', color: 'var(--slate-500)' }} title={fmtWhenExact(f.firstSeenAt)}>{fmtWhen(f.firstSeenAt)}</td>
                     <td style={{ ...thRight, padding: '16px 18px' }}>
                       <RunChip runId={f.runId} runStatus={f.runStatus} approx
                         onOpen={() => goDeepDive(f.configId, f.configKey, f.runId ?? undefined)} />

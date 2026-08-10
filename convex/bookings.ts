@@ -2251,16 +2251,36 @@ export const updateStatus = mutation({
     reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Auth: this generic setter drives operational lifecycle transitions only
+    // (confirm / start work / at-shop). It must NOT be a back door around the
+    // phase→action policy — previously it had NO auth at all, so any caller
+    // could push a booking to any status (incl. cancelled/completed) and skip
+    // the fee, capture, and gating enforced by the dedicated mutations.
+    const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
-    if (args.newStatus === "no_show") {
-      throw new Error("Use markPostThresholdNoShow to mark a booking no-show.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    // Money-moving / terminal states must go through the policy-gated mutations
+    // (cancelBooking/cancel, completeWithPostjob, markNoShow/markPostThresholdNoShow)
+    // so cancellation fees, final capture, and phase gating always run.
+    const POLICY_GATED_STATUSES = new Set([
+      "cancelled",
+      "declined",
+      "no_show",
+      "completed",
+    ]);
+    if (POLICY_GATED_STATUSES.has(args.newStatus)) {
+      throw new Error(
+        `updateStatus can't set "${args.newStatus}" — use the dedicated action so fees and capture are enforced.`,
+      );
     }
 
     return await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: args.newStatus,
-      changedBy: args.changed_by,
+      // Actor is the authenticated staff member — never a caller-supplied id.
+      changedBy: user._id,
       reason: args.reason,
     });
   },

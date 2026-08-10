@@ -2842,6 +2842,15 @@ export default defineSchema({
     final_total_cents: v.optional(v.number()),
     final_capture_amount_cents: v.optional(v.number()),
     final_parts_used_at_capture: v.optional(v.array(postjobPartValidator)),
+    // Settlement tracking (Option A): completion never blocks on payment. When
+    // the captured amount falls short of the final total (hold couldn't be
+    // raised, capture failed, or reauth is pending) the booking is flagged
+    // `awaiting_settlement` with the outstanding cents so the reconciliation
+    // cron + ops can chase it. "settled" once whole (within drift tolerance).
+    settlement_state: v.optional(v.string()),
+    settlement_shortfall_cents: v.optional(v.number()),
+    settlement_reason: v.optional(v.string()),
+    awaiting_settlement_since_ms: v.optional(v.number()),
     sla_expires_at_ms: v.optional(v.number()),
 
     // Pricing v2 sanity-check flags raised when the shop-supplied total

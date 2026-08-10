@@ -127,6 +127,7 @@ const OUTBOX_CATEGORY_LABELS: Record<string, string> = {
   booking_never_started: "Job never started",
   booking_reschedule_proposed: "Reschedule proposed",
   booking_forced_delay_proposed: "Delay proposed",
+  settlement_shortfall: "Payment shortfall",
 };
 
 export function humanizeOutboxCategory(category: string): string {

@@ -149,7 +149,7 @@ export const getMyUnreadCount = query({
 // Shop-staff notification feed (new bookings, quote requests)
 // ============================================================================
 
-const STAFF_CATEGORIES = ["new_booking", "new_quote_request", "booking_never_started"] as const;
+const STAFF_CATEGORIES = ["new_booking", "new_quote_request", "booking_never_started", "settlement_shortfall"] as const;
 const MECHANIC_CATEGORIES = ["new_job_assigned"] as const;
 const OWNER_MANAGER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const FRONT_DESK_ROLES = new Set(["front_desk"]);

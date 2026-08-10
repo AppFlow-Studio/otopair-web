@@ -128,6 +128,56 @@ export const list = query({
   },
 });
 
+type AwaitingSettlementRow = Awaited<ReturnType<typeof bookingRow>> & {
+  settlementShortfallCents: number;
+  settlementReason: string | null;
+  awaitingSinceMs: number | null;
+  escalatedAtMs: number | null;
+  paymentApprovalState: string | null;
+};
+type AwaitingSettlementResult = {
+  rows: AwaitingSettlementRow[];
+  count: number;
+  totalShortfallCents: number;
+  truncated: boolean;
+};
+
+/** Completed jobs still owed money — the reconciliation cron flags these
+ *  `settlement_state = "awaiting_settlement"` when the hold couldn't cover the
+ *  final total (reauth pending, capture failed, no set price). Oldest shortfall
+ *  first so ops chase the most stale. Bounded window; token-gated. */
+export const awaitingSettlementBookings = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }): Promise<AwaitingSettlementResult> => {
+    await requireDirector(ctx, token);
+    const LIMIT = 200;
+    const found = await ctx.db
+      .query("bookings")
+      .withIndex("by_settlement_state", (q) =>
+        q.eq("settlement_state", "awaiting_settlement"),
+      )
+      .take(LIMIT + 1);
+    const truncated = found.length > LIMIT;
+    const window = truncated ? found.slice(0, LIMIT) : found;
+    const rows: AwaitingSettlementRow[] = await Promise.all(
+      window.map(async (b) => ({
+        ...(await bookingRow(ctx, b)),
+        settlementShortfallCents: b.settlement_shortfall_cents ?? 0,
+        settlementReason: b.settlement_reason ?? null,
+        awaitingSinceMs: b.awaiting_settlement_since_ms ?? null,
+        escalatedAtMs: b.settlement_escalated_at_ms ?? null,
+        paymentApprovalState: b.payment_approval_state ?? null,
+      })),
+    );
+    rows.sort((a, b) => (a.awaitingSinceMs ?? 0) - (b.awaitingSinceMs ?? 0));
+    const totalShortfallCents = rows.reduce(
+      (sum, r) => sum + (r.settlementShortfallCents ?? 0),
+      0,
+    );
+    return { rows, count: rows.length, totalShortfallCents, truncated };
+  },
+});
+
 /** Booking detail — wraps the director.ts bookingDetail shape (own gated
  *  query; that file is shared and must not change): booking fields + shop +
  *  user + mechanic + ALL payments for the booking (payments.by_booking_id) +
@@ -792,6 +842,11 @@ export const moneyDetail = query({
       finalTotal: centsToDollars(booking.final_total_cents),
       finalCaptureAmount: centsToDollars(booking.final_capture_amount_cents),
       slaExpiresAtMs: booking.sla_expires_at_ms ?? null,
+      // Settlement tracking (completed jobs still owed money).
+      settlementState: booking.settlement_state ?? null,
+      settlementShortfall: centsToDollars(booking.settlement_shortfall_cents),
+      settlementReason: booking.settlement_reason ?? null,
+      awaitingSettlementSinceMs: booking.awaiting_settlement_since_ms ?? null,
       // Walk-in baselines (dollars on the row).
       mechanicQuotedPrice: booking.mechanic_quoted_price ?? null,
       catalogQuotedPrice: booking.catalog_quoted_price ?? null,

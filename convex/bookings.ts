@@ -8519,6 +8519,7 @@ async function mapMechanicDashboardJob(ctx: any, booking: any) {
     hasDisclosedRange: booking.disclosed_range_high_cents != null,
     paymentApprovalState:
       (booking.payment_approval_state as string | undefined) ?? null,
+    settlementState: (booking.settlement_state as string | undefined) ?? null,
     mechanicSetPriceCents: booking.mechanic_set_price_cents ?? null,
     // Single-point quote (no range) shown to the mechanic. Falls back to
     // total_cost dollars for pre-feature bookings without a quote snapshot.
@@ -9686,6 +9687,8 @@ export const getJobDetail = query({
       isFixedPrice: (booking as any).is_fixed_price === true,
       paymentApprovalState:
         ((booking as any).payment_approval_state as string | undefined) ?? null,
+      settlementState:
+        ((booking as any).settlement_state as string | undefined) ?? null,
       mechanicSetPriceCents:
         ((booking as any).mechanic_set_price_cents as number | undefined) ??
         null,

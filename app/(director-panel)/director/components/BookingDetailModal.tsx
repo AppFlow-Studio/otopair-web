@@ -737,6 +737,12 @@ const MoneyApprovalsTab = ({ token, id }: { token: string; id: Id<'bookings'> })
             Captured {money(data.finalCaptureAmount, { cents: true })} of a {money(data.finalTotal, { cents: true })} final total — {money(data.finalTotal - data.finalCaptureAmount, { cents: true })} not captured (deposit forfeit, partial capture, or refund).
           </div>
         )}
+        {data.settlementState === 'awaiting_settlement' && (
+          <div style={{ marginTop:12, borderRadius:8, background:'var(--yellow-50)', padding:'8px 12px', fontSize:12, color:'var(--yellow-800)' }}>
+            Awaiting settlement — {money(data.settlementShortfall, { cents: true })} outstanding
+            {data.settlementReason ? ` (${data.settlementReason.replace(/_/g, ' ')})` : ''}. The reconciliation cron is retrying capture{data.approvalState === 'reauth_required' ? ' once the customer re-authorizes' : ''}.
+          </div>
+        )}
         {(data.quoteFlags.length > 0 || data.lowConfidenceParts || data.serviceQuoteFlagCount > 0) && (
           <div style={{ marginTop:12, display:'flex', flexWrap:'wrap', gap:6, borderTop:'1px solid var(--slate-100)', paddingTop:12 }}>
             {data.lowConfidenceParts && <Badge tone="yellow">low-confidence parts</Badge>}

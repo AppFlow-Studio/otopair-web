@@ -32,6 +32,7 @@ import { TabDeletionQueue } from './components/tabs/TabDeletionQueue'
 import { TabFollowUps }     from './components/tabs/TabFollowUps'
 import { TabSystemHealth }  from './components/tabs/TabSystemHealth'
 import { TabTransactions }  from './components/tabs/TabTransactions'
+import { TabSettlement }    from './components/tabs/TabSettlement'
 import { TabAnalytics }     from './components/tabs/TabAnalytics'
 
 const SESSION_KEY = 'otopair_director_token'
@@ -46,6 +47,7 @@ const TABS: Record<string, React.ComponentType> = {
   reviews:  TabReviews,
   stripe:      TabStripe,
   transactions: TabTransactions,
+  settlement:  TabSettlement,
   cars:        TabCars,
   configs:     TabVehicleConfigs,
   enrichment:  TabEnrichment,

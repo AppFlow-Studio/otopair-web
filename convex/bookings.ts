@@ -797,6 +797,22 @@ export const getCustomerBookingActions = query({
       maxFreeReschedules: policy.rescheduleMaxFree,
       cancelRequestedAtMs: (booking as any).cancel_requested_at_ms ?? null,
       blockedReason,
+      // Post-completion "final breakdown" is a RECEIPT, not a decision: the
+      // price was agreed before the job started, so there is no approve/decline
+      // here. The app renders this informationally (requiresDecision:false).
+      completion:
+        status === "completed"
+          ? {
+              requiresDecision: false,
+              finalTotalCents:
+                (booking as any).final_capture_amount_cents ??
+                (booking as any).final_total_cents ??
+                null,
+              settlementState: (booking as any).settlement_state ?? "settled",
+              settlementShortfallCents:
+                (booking as any).settlement_shortfall_cents ?? 0,
+            }
+          : null,
     };
   },
 });

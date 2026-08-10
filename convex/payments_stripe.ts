@@ -2082,12 +2082,22 @@ export const finalizeAndChargeForBooking = internalAction({
       );
     }
 
-    // Actuals > approved set price → open post-job re-approval.
-    await ctx.runMutation(internal.booking_approvals.submitPostJobReapproval, {
-      bookingId: args.bookingId,
-      parts: partsSnapshot,
-    });
-    return { status: "post_job_pending" };
+    // Actuals exceeded the pre-agreed set price. The customer approved the
+    // price BEFORE the job started (pre-job approval, plus any mid-job "found
+    // extra work" approvals granted during it), so we do NOT reopen a post-job
+    // negotiation with a decline the customer could use to walk away from
+    // finished work. Capture the agreed price and settle. Any excess beyond
+    // what was agreed is absorbed — never charged without the customer's prior
+    // consent (the mid-job approval is the consented path to raise the price
+    // while the work is still in progress).
+    return await captureAtAmount(
+      ctx,
+      args.bookingId,
+      mechanicSet, // charge the agreed price, not the higher raw actuals
+      mechanicSet, // owed == agreed price → no false "shortfall" to chase
+      partsSnapshot,
+      feeCents,
+    );
   },
 });
 

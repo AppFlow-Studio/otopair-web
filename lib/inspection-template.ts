@@ -133,6 +133,17 @@ export const TRI_LABELS: Record<TriValue, string> = {
   r: "Attention",
 };
 
+// Some tri fields read more honestly under different words than the generic
+// OK/Monitor/Attention scale, even though they store the same g/y/r value
+// and are graded identically everywhere else (findings, urgency, PDFs).
+const TRI_LABEL_OVERRIDES: Partial<Record<string, Record<TriValue, string>>> = {
+  bf: { g: "Full", y: "Mid", r: "Low" },
+};
+
+export function triLabelFor(fieldKey: string, value: TriValue): string {
+  return TRI_LABEL_OVERRIDES[fieldKey]?.[value] ?? TRI_LABELS[value];
+}
+
 // ---------------------------------------------------------------------------
 // Classification — ported verbatim from the prototype `classify()`.
 // ---------------------------------------------------------------------------
@@ -433,11 +444,11 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     label: "Engine bay",
     short: "Engine",
     fields: [
+      { type: "tri", key: "warning_lights", label: "Dashboard warning lights", default: "g", section: "Every-visit checks" },
       { type: "tri", key: "oil", label: "Engine oil level / condition", default: "g", section: "Every-visit checks" },
       { type: "tri", key: "cool", label: "Coolant level / condition", default: "g", section: "Every-visit checks" },
-      { type: "tri", key: "bf", label: "Brake fluid level / condition", default: "g", section: "Every-visit checks" },
       { type: "tri", key: "washer", label: "Washer-fluid level", default: "g", section: "Every-visit checks" },
-      { type: "tri", key: "warning_lights", label: "Dashboard warning lights", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "bf", label: "Brake fluid level / condition", default: "g", section: "Every-visit checks" },
       { type: "tri", key: "trans", label: "Transmission fluid", default: "g", section: "Fluid & filter eye-check" },
       { type: "tri", key: "ps", label: "Power steering fluid", default: "g", section: "Fluid & filter eye-check" },
       { type: "tri", key: "af", label: "Engine air filter", default: "g", section: "Fluid & filter eye-check" },
@@ -756,11 +767,8 @@ export function isFieldRequiredForZone(
     ) {
       const wheelOff = scope.tier2Corners.includes(zoneId as CornerZoneId);
       if (!wheelOff) return false;
-      if (
-        ["rotor", "rotor_stamp", "desc"].includes(fieldKey) &&
-        zoneState?.select.rotor_applicable === "no"
-      ) {
-        return false;
+      if (["rotor", "rotor_stamp", "desc"].includes(fieldKey)) {
+        return zoneState?.select.rotor_applicable === "yes";
       }
       return true;
     }
@@ -823,14 +831,7 @@ export function isFieldApplicableToZone(
     const wheelOff = deriveTierInspectionScope(context).tier2Corners.includes(
       zoneId as CornerZoneId,
     );
-    if (!wheelOff) return false;
-    if (
-      ["rotor", "rotor_tool", "rotor_stamp", "desc"].includes(fieldKey) &&
-      context.inspectionState?.zones[zoneId]?.select.rotor_applicable === "no"
-    ) {
-      return false;
-    }
-    return true;
+    return wheelOff;
   }
   if (["steering_play", "ball_joint_play", "wheel_bearing_play"].includes(fieldKey)) {
     return deriveTierInspectionScope(context).tier3BCorners.includes(zoneId as CornerZoneId);
@@ -1003,16 +1004,7 @@ export function validateZoneForCompletion(
 
   for (const field of zone.fields) {
     const required = isFieldRequiredForZone(zoneId, field.key, validationContext);
-    if (zs.statuses[field.key]) {
-      if (
-        zs.statuses[field.key] === "not_applicable" &&
-        ["rotor", "rotor_tool", "rotor_stamp", "desc"].includes(field.key) &&
-        zs.select.rotor_applicable !== "no"
-      ) {
-        return fail(field.key, "N/A is valid only when this corner has no applicable rotor.");
-      }
-      continue;
-    }
+    if (zs.statuses[field.key]) continue;
     if (field.type === "measure") {
       if (field.key === "tread") continue;
       const raw = (zs.measures[field.key] ?? "").trim();
@@ -1593,7 +1585,7 @@ export function deriveSuggestedRecommendations(
           match: [slug],
           label,
           urgency: urg,
-          reason: `${label} flagged on eye-check (${TRI_LABELS[eng.tri[triKey]!].toLowerCase()})`,
+          reason: `${label} flagged on eye-check (${triLabelFor(triKey, eng.tri[triKey]!).toLowerCase()})`,
         });
       }
     };
@@ -1808,7 +1800,7 @@ export function formatZonesForPdf(storedZones: StoredZone[]): PdfZone[] {
       } else if (field.type === "tri") {
         const v = stored.tri?.[field.key];
         if (!v) continue;
-        rows.push({ label: field.label, value: TRI_LABELS[v], grade: TRI_GRADE[v] });
+        rows.push({ label: field.label, value: triLabelFor(field.key, v), grade: TRI_GRADE[v] });
       } else if (field.type === "descriptors") {
         const arr = stored.descriptors?.[field.key] ?? [];
         if (!arr.length) continue;

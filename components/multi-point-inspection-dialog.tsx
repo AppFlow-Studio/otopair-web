@@ -54,6 +54,7 @@ import {
   requiresRotorStampPhoto,
   toggleInspectionTreadMode,
   TRI_LABELS,
+  triLabelFor,
   validateZoneForCompletion,
   type BrakeAxleScope,
   type FieldUnavailableStatus,
@@ -182,6 +183,31 @@ const TRI_DOT: Record<TriValue, string> = {
   y: "bg-amber-500 border-amber-500",
   r: "bg-red-500 border-red-500",
 };
+
+// Matches the green/blue/red answer-choice palette in pre-job-survey-dialog.tsx
+// (ConditionButtons' conditionPalette), used for tri fields rendered as pills.
+const TRI_PILL_ACTIVE_CLASS: Record<TriValue, string> = {
+  g: "border-emerald-300 bg-emerald-50 text-emerald-700",
+  y: "border-sky-300 bg-sky-50 text-sky-700",
+  r: "border-red-300 bg-red-50 text-red-700",
+};
+
+// Tier 5 identity fields stay on screen every visit — only their required-ness
+// is gated by the Tier 5 trigger (first visit / tread increase). Applicability
+// (isFieldApplicableToZone) still gates payload derivation, so the visibility
+// override lives here, at the render layer, rather than in that function.
+const ALWAYS_VISIBLE_FIELDS = new Set([
+  "tire_brand",
+  "tire_model",
+  "tire_size",
+  "dot_code",
+  "run_flat",
+]);
+
+// "Applicable rotor present" gates whether these fields are grayed out —
+// same pattern as pad measurement method being gated by pad_inner/pad_outer
+// actually having a reading — not whether they're shown at all.
+const ROTOR_GATE_FIELDS = new Set(["rotor", "rotor_tool", "rotor_stamp", "desc"]);
 
 // Tier 4 fields record what's being installed, not an observed condition —
 // they get a "Not available" option in the combobox itself (alongside
@@ -1683,8 +1709,10 @@ function ZonePanel({
   const tireReplacementScheduled =
     (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
     completionContext.tireReplacementPositions?.includes(zoneId);
-  const applicableFields = zone.fields.filter((field) =>
-    isFieldApplicableToZone(zoneId, field.key, completionContext),
+  const applicableFields = zone.fields.filter(
+    (field) =>
+      ALWAYS_VISIBLE_FIELDS.has(field.key) ||
+      isFieldApplicableToZone(zoneId, field.key, completionContext),
   );
   const rotorPhotoRequired =
     (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
@@ -1967,6 +1995,8 @@ function FieldRow({
       }}
     />
   );
+  const rotorNotConfirmed =
+    ROTOR_GATE_FIELDS.has(field.key) && zs.select.rotor_applicable !== "yes";
   if (field.type === "measure") {
     return (
       <MeasureField
@@ -1975,6 +2005,7 @@ function FieldRow({
         zs={zs}
         required={required}
         errorMessage={errorMessage}
+        disabled={rotorNotConfirmed}
         onPatch={onPatch}
       />
     );
@@ -1982,34 +2013,62 @@ function FieldRow({
 
   if (field.type === "tri") {
     const selected = zs.tri[field.key];
+    const hasCustomLabels = (["g", "y", "r"] as TriValue[]).some(
+      (color) => triLabelFor(field.key, color) !== TRI_LABELS[color],
+    );
     return (
       <div className="border-b border-primary/10">
         <Row label={field.label} required={required}>
-          <div className="flex gap-2">
-            {(["g", "y", "r"] as TriValue[]).map((color) => (
-              <button
-                key={color}
-                id={
-                  color === "g"
-                    ? `inspection-${zoneId}-${field.key}`
-                    : undefined
-                }
-                type="button"
-                aria-label={TRI_LABELS[color]}
-                onClick={() =>
-                  onPatch({
-                    tri: { ...zs.tri, [field.key]: color },
-                    statuses: clearUnavailable(),
-                  })
-                }
-                className={cn(
-                  "h-7 w-7 rounded-full border-2 transition-transform active:scale-90",
-                  selected === color && !unavailable
-                    ? TRI_DOT[color]
-                    : "border-primary/25 bg-transparent",
-                )}
-              />
-            ))}
+          <div className="flex flex-wrap gap-2">
+            {(["g", "y", "r"] as TriValue[]).map((color) => {
+              const label = triLabelFor(field.key, color);
+              const active = selected === color && !unavailable;
+              const id =
+                color === "g"
+                  ? `inspection-${zoneId}-${field.key}`
+                  : undefined;
+              if (hasCustomLabels) {
+                return (
+                  <button
+                    key={color}
+                    id={id}
+                    type="button"
+                    onClick={() =>
+                      onPatch({
+                        tri: { ...zs.tri, [field.key]: color },
+                        statuses: clearUnavailable(),
+                      })
+                    }
+                    className={cn(
+                      "rounded-lg border px-3 py-1.5 text-[12px] font-medium transition-colors",
+                      active
+                        ? TRI_PILL_ACTIVE_CLASS[color]
+                        : "border-primary/20 bg-card text-muted-foreground hover:bg-primary/5",
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              }
+              return (
+                <button
+                  key={color}
+                  id={id}
+                  type="button"
+                  aria-label={label}
+                  onClick={() =>
+                    onPatch({
+                      tri: { ...zs.tri, [field.key]: color },
+                      statuses: clearUnavailable(),
+                    })
+                  }
+                  className={cn(
+                    "h-7 w-7 rounded-full border-2 transition-transform active:scale-90",
+                    active ? TRI_DOT[color] : "border-primary/25 bg-transparent",
+                  )}
+                />
+              );
+            })}
             {unavailableControl}
           </div>
         </Row>
@@ -2052,6 +2111,7 @@ function FieldRow({
                     : undefined
                 }
                 type="button"
+                disabled={rotorNotConfirmed}
                 onClick={() => {
                   let next: string[];
                   if (active) {
@@ -2067,7 +2127,7 @@ function FieldRow({
                   });
                 }}
                 className={cn(
-                  "rounded-lg border px-3 py-1.5 text-[12px] transition-colors",
+                  "rounded-lg border px-3 py-1.5 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-40",
                   active
                     ? "border-amber-400 bg-amber-50 font-semibold text-amber-700"
                     : "border-primary/20 bg-card text-muted-foreground hover:bg-primary/5",
@@ -2196,12 +2256,13 @@ function FieldRow({
               id={`inspection-${zoneId}-${field.key}`}
               aria-invalid={!!errorMessage}
               value={value}
+              disabled={rotorNotConfirmed}
               onChange={(event) => setText(event.target.value)}
-              className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+              className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             />
             {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
           </div>
-          {unavailableControl}
+          {rotorNotConfirmed ? null : unavailableControl}
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
       </div>
@@ -2295,6 +2356,7 @@ function MeasureField({
   zs,
   required,
   errorMessage,
+  disabled,
   onPatch,
 }: {
   zoneId: ZoneId;
@@ -2302,6 +2364,7 @@ function MeasureField({
   zs: ZoneState;
   required: boolean;
   errorMessage?: string;
+  disabled?: boolean;
   onPatch: (patch: Partial<ZoneState>) => void;
 }) {
   const value = zs.measures[field.key] ?? "";
@@ -2432,6 +2495,7 @@ function MeasureField({
           aria-invalid={!!errorMessage}
           inputMode="decimal"
           value={value}
+          disabled={disabled}
           onChange={(event) =>
             onPatch({
               measures: {
@@ -2442,7 +2506,7 @@ function MeasureField({
             })
           }
           className={cn(
-            "rounded-lg border border-primary/20 bg-card px-1 py-1.5 text-center text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none",
+            "rounded-lg border border-primary/20 bg-card px-1 py-1.5 text-center text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
             isRotor ? "w-20" : "w-16",
           )}
         />
@@ -2455,6 +2519,7 @@ function MeasureField({
               { value: "in", label: "in" },
             ]}
             className="w-20"
+            isDisabled={disabled}
             onChange={(next) => {
               const nextUnit: RotorUnit = next === "in" ? "in" : "mm";
               const entered = Number(value);
@@ -2480,7 +2545,7 @@ function MeasureField({
           </span>
         )}
         {field.classify ? <GradeTag result={result} /> : null}
-        {unavailableControl}
+        {disabled ? null : unavailableControl}
       </Row>
       {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
     </div>

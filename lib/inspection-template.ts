@@ -188,63 +188,11 @@ export function classifyInspectionMeasure(
 }
 
 // ---------------------------------------------------------------------------
-// Fluid select options (preserve the fluids capture the old pre-job form did).
-// Kept intentionally small; mirrors the option values used elsewhere.
-// ---------------------------------------------------------------------------
-
-const OIL_VISCOSITY_OPTIONS: SelectOption[] = [
-  "0W-8",
-  "0W-16",
-  "0W-20",
-  "0W-30",
-  "0W-40",
-  "5W-20",
-  "5W-30",
-  "5W-40",
-  "10W-30",
-  "10W-40",
-  "15W-40",
-  "20W-50",
-].map((label) => ({ value: label.toLowerCase().replace(/-/g, "_"), label }));
-
-const OIL_TYPE_OPTIONS: SelectOption[] = [
-  { value: "full_synthetic", label: "Full synthetic" },
-  { value: "synthetic_blend", label: "Synthetic blend" },
-  { value: "conventional", label: "Conventional" },
-  { value: "high_mileage", label: "High mileage" },
-  { value: "diesel_hd", label: "Diesel (HD)" },
-];
-
-const COOLANT_TYPE_OPTIONS: SelectOption[] = [
-  { value: "iat", label: "IAT (Green)" },
-  { value: "oat", label: "OAT (Dex-Cool / G12)" },
-  { value: "hoat", label: "HOAT (Yellow / Orange)" },
-  { value: "p_hoat", label: "P-HOAT (Pink / Blue)" },
-  { value: "si_oat", label: "Si-OAT" },
-  { value: "universal", label: "Universal" },
-];
-
-const BRAKE_FLUID_OPTIONS: SelectOption[] = [
-  { value: "dot_3", label: "DOT 3" },
-  { value: "dot_4", label: "DOT 4" },
-  { value: "dot_4_lv", label: "DOT 4 LV" },
-  { value: "dot_5", label: "DOT 5" },
-  { value: "dot_5_1", label: "DOT 5.1" },
-];
-
-const TRANSMISSION_FLUID_OPTIONS: SelectOption[] = [
-  { value: "dexron_vi", label: "Dexron VI" },
-  { value: "toyota_ws", label: "Toyota WS" },
-  { value: "honda_dw1", label: "Honda DW-1" },
-  { value: "cvt", label: "CVT fluid" },
-  { value: "dct", label: "DCT fluid" },
-  { value: "manual_gl4", label: "Manual GL-4" },
-  { value: "manual_gl5", label: "Manual GL-5" },
-];
-
-// ---------------------------------------------------------------------------
 // Zone definitions. Corner metadata is repeated in every corner and the dialog
 // keeps shared values synchronized, so mechanics can enter it from either side.
+// Tier 4 fluid-spec fields (oil/coolant/brake/transmission/power-steering)
+// are "text" type — their catalogs + "Other / not listed" + "Not available"
+// live in the dialog via optionsForInspectionField, same as pad_brand.
 // ---------------------------------------------------------------------------
 
 function cornerFields(opts: {
@@ -399,7 +347,7 @@ function cornerFields(opts: {
       type: "descriptors",
       key: "desc",
       label: "Brake rotor surface issues",
-      options: ["scored", "pitted", "rusted", "warped", "grooved"],
+      options: ["none", "scored", "pitted", "rusted", "warped", "grooved"],
       default: [],
       section: "Brakes · wheel off",
     },
@@ -507,11 +455,11 @@ export const INSPECTION_ZONES: InspectionZone[] = [
       },
       { type: "tri", key: "term", label: "Battery terminals / cables", default: "g", section: "Battery & electrical" },
       // Fluid specs — preserves the detailed fluids capture from the old form.
-      { type: "select", key: "oil_viscosity", label: "Engine oil viscosity", options: OIL_VISCOSITY_OPTIONS, section: "Fluid specifications" },
-      { type: "select", key: "oil_type", label: "Engine oil type", options: OIL_TYPE_OPTIONS, section: "Fluid specifications" },
-      { type: "select", key: "coolant_type", label: "Coolant type", options: COOLANT_TYPE_OPTIONS, section: "Fluid specifications" },
-      { type: "select", key: "brake_fluid_type", label: "Brake fluid type", options: BRAKE_FLUID_OPTIONS, section: "Fluid specifications" },
-      { type: "select", key: "transmission_fluid_type", label: "Transmission fluid type", options: TRANSMISSION_FLUID_OPTIONS, section: "Fluid specifications" },
+      { type: "text", key: "oil_viscosity", label: "Engine oil viscosity", section: "Fluid specifications" },
+      { type: "text", key: "oil_type", label: "Engine oil type", section: "Fluid specifications" },
+      { type: "text", key: "coolant_type", label: "Coolant type", section: "Fluid specifications" },
+      { type: "text", key: "brake_fluid_type", label: "Brake fluid type", section: "Fluid specifications" },
+      { type: "text", key: "transmission_fluid_type", label: "Transmission fluid type", section: "Fluid specifications" },
       { type: "text", key: "power_steering_fluid_type", label: "Power-steering fluid type", section: "Fluid specifications" },
     ],
   },
@@ -779,14 +727,24 @@ export function isFieldRequiredForZone(
       return requiresTier5Identity(zoneId as CornerZoneId, context);
     }
     const scope = deriveTierInspectionScope(context);
+    const zoneState = context.inspectionState?.zones[zoneId];
+    const wasMeasured = (key: string) =>
+      !zoneState?.statuses[key] && !!(zoneState?.measures[key] ?? "").trim();
+    if (fieldKey === "pad_method") {
+      if (!scope.tier2Corners.includes(zoneId as CornerZoneId)) return false;
+      return wasMeasured("pad_inner") || wasMeasured("pad_outer");
+    }
+    if (fieldKey === "rotor_tool") {
+      if (!scope.tier2Corners.includes(zoneId as CornerZoneId)) return false;
+      if (zoneState?.select.rotor_applicable === "no") return false;
+      return wasMeasured("rotor");
+    }
     if (
       [
         "pad_inner",
         "pad_outer",
-        "pad_method",
         "rotor_applicable",
         "rotor",
-        "rotor_tool",
         "rotor_stamp",
         "desc",
         "caliper",
@@ -797,8 +755,8 @@ export function isFieldRequiredForZone(
       const wheelOff = scope.tier2Corners.includes(zoneId as CornerZoneId);
       if (!wheelOff) return false;
       if (
-        ["rotor", "rotor_tool", "rotor_stamp", "desc"].includes(fieldKey) &&
-        context.inspectionState?.zones[zoneId]?.select.rotor_applicable === "no"
+        ["rotor", "rotor_stamp", "desc"].includes(fieldKey) &&
+        zoneState?.select.rotor_applicable === "no"
       ) {
         return false;
       }
@@ -1101,6 +1059,9 @@ export function validateZoneForCompletion(
       ) {
         return fail(field.key, `${field.label} contains an invalid selection.`);
       }
+      if (required && selected.length === 0) {
+        return fail(field.key, `${field.label} is required.`);
+      }
     }
   }
 
@@ -1402,11 +1363,11 @@ export function derivePrejobFromInspection(
   );
 
   const fluidOverrides = {
-    oil_viscosity: eng?.statuses.oil_viscosity ? null : eng?.select.oil_viscosity || null,
-    oil_type: eng?.statuses.oil_type ? null : eng?.select.oil_type || null,
-    coolant_type: eng?.statuses.coolant_type ? null : eng?.select.coolant_type || null,
-    brake_fluid_type: eng?.statuses.brake_fluid_type ? null : eng?.select.brake_fluid_type || null,
-    transmission_fluid_type: eng?.statuses.transmission_fluid_type ? null : eng?.select.transmission_fluid_type || null,
+    oil_viscosity: eng?.statuses.oil_viscosity ? null : eng?.text.oil_viscosity || null,
+    oil_type: eng?.statuses.oil_type ? null : eng?.text.oil_type || null,
+    coolant_type: eng?.statuses.coolant_type ? null : eng?.text.coolant_type || null,
+    brake_fluid_type: eng?.statuses.brake_fluid_type ? null : eng?.text.brake_fluid_type || null,
+    transmission_fluid_type: eng?.statuses.transmission_fluid_type ? null : eng?.text.transmission_fluid_type || null,
     power_steering_fluid_type: eng?.statuses.power_steering_fluid_type ? null : eng?.text.power_steering_fluid_type || null,
   };
   const hasFluidOverride = Object.values(fluidOverrides).some((v) => v);

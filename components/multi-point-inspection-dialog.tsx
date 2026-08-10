@@ -9,6 +9,7 @@ import {
   ChevronRight,
   ChevronUp,
   Download,
+  EyeOff,
   Loader2,
   Trash2,
 } from "lucide-react";
@@ -63,13 +64,19 @@ import {
   type ZoneState,
 } from "@/lib/inspection-template";
 import {
+  BRAKE_FLUID_OPTIONS,
   BRAKE_PAD_BRAND_OPTIONS,
+  COOLANT_TYPE_OPTIONS,
+  OIL_TYPE_OPTIONS,
+  OIL_VISCOSITY_OPTIONS,
   OTHER_INSPECTION_OPTION,
+  POWER_STEERING_FLUID_OPTIONS,
   resolveInspectionOption,
   TIRE_BRAND_OPTIONS,
   TIRE_MODEL_OPTIONS,
   tireModelOptionsForBrand,
   TIRE_SIZE_OPTIONS,
+  TRANSMISSION_FLUID_OPTIONS,
   type InspectionOption,
 } from "@/lib/inspection-options";
 import {
@@ -171,6 +178,19 @@ const TRI_DOT: Record<TriValue, string> = {
   y: "bg-amber-500 border-amber-500",
   r: "bg-red-500 border-red-500",
 };
+
+// Tier 4 fields record what's being installed, not an observed condition —
+// they get a "Not available" option in the combobox itself (alongside
+// "Other / not listed") rather than a separate unavailable toggle.
+const NOT_AVAILABLE_OPTION = "__not_available__";
+const TIER4_SPEC_FIELDS = new Set([
+  "oil_viscosity",
+  "oil_type",
+  "coolant_type",
+  "brake_fluid_type",
+  "transmission_fluid_type",
+  "power_steering_fluid_type",
+]);
 
 const URGENCY_LABEL: Record<string, string> = {
   soon: "Soon",
@@ -1730,13 +1750,14 @@ function FieldRow({
     delete statuses[field.key];
     return statuses;
   };
+  const unavailable = !!zs.statuses[field.key];
   const unavailableControl = (
-    <UnavailableStatusControl
-      value={zs.statuses[field.key] ?? ""}
-      onChange={(next) => {
+    <UnavailableToggle
+      active={unavailable}
+      onToggle={() => {
         const statuses = { ...zs.statuses };
-        if (next) statuses[field.key] = next;
-        else delete statuses[field.key];
+        if (unavailable) delete statuses[field.key];
+        else statuses[field.key] = "not_applicable";
         onPatch({ statuses });
       }}
     />
@@ -1778,16 +1799,16 @@ function FieldRow({
                 }
                 className={cn(
                   "h-7 w-7 rounded-full border-2 transition-transform active:scale-90",
-                  selected === color
+                  selected === color && !unavailable
                     ? TRI_DOT[color]
                     : "border-primary/25 bg-transparent",
                 )}
               />
             ))}
+            {unavailableControl}
           </div>
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
-        {unavailableControl}
       </div>
     );
   }
@@ -1795,10 +1816,24 @@ function FieldRow({
   if (field.type === "descriptors") {
     const selected = zs.descriptors[field.key] ?? [];
     return (
-      <div className="border-b border-primary/10 py-2">
-        <div className="mb-1.5 text-[13px] text-foreground">
+      <div
+        className={cn(
+          "border-b border-primary/10 py-2",
+          required && "border-l-2 border-l-red-400 pl-2",
+        )}
+      >
+        <div
+          className={cn(
+            "mb-1.5 text-[13px] text-foreground",
+            required && "font-medium",
+          )}
+        >
           {field.label}
-          {required ? <span className="ml-1 text-red-500">*</span> : null}
+          {required ? (
+            <span className="ml-1 text-red-500" title="Required">
+              *
+            </span>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
           {field.options.map((option, index) => {
@@ -1812,17 +1847,20 @@ function FieldRow({
                     : undefined
                 }
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  let next: string[];
+                  if (active) {
+                    next = selected.filter((value) => value !== option);
+                  } else if (option === "none") {
+                    next = ["none"];
+                  } else {
+                    next = [...selected.filter((value) => value !== "none"), option];
+                  }
                   onPatch({
-                    descriptors: {
-                      ...zs.descriptors,
-                      [field.key]: active
-                        ? selected.filter((value) => value !== option)
-                        : [...selected, option],
-                    },
+                    descriptors: { ...zs.descriptors, [field.key]: next },
                     statuses: clearUnavailable(),
-                  })
-                }
+                  });
+                }}
                 className={cn(
                   "rounded-lg border px-3 py-1.5 text-[12px] transition-colors",
                   active
@@ -1836,7 +1874,6 @@ function FieldRow({
           })}
         </div>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
-        {unavailableControl}
       </div>
     );
   }
@@ -1847,6 +1884,14 @@ function FieldRow({
     const value = isMeasurementMethod
       ? zs.methods[field.key] || zs.select[field.key] || ""
       : zs.select[field.key] ?? "";
+    const wasMeasured = (key: string) =>
+      !zs.statuses[key] && !!(zs.measures[key] ?? "").trim();
+    const measurementNotTaken =
+      field.key === "pad_method"
+        ? !wasMeasured("pad_inner") && !wasMeasured("pad_outer")
+        : field.key === "rotor_tool"
+          ? !wasMeasured("rotor")
+          : false;
     return (
       <div className="border-b border-primary/10">
         <Row label={field.label} required={required}>
@@ -1856,6 +1901,7 @@ function FieldRow({
             value={value}
             options={field.options}
             className="w-44"
+            isDisabled={measurementNotTaken}
             onChange={(next) =>
               onPatch(
                 isMeasurementMethod
@@ -1870,25 +1916,35 @@ function FieldRow({
               )
             }
           />
+          {isMeasurementMethod || field.key === "rotor_applicable"
+            ? null
+            : unavailableControl}
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
-        {unavailableControl}
       </div>
     );
   }
 
+  const isTier4Spec = TIER4_SPEC_FIELDS.has(field.key);
   const value = zs.text[field.key] ?? "";
   const options =
     field.key === "tire_model"
       ? tireModelOptionsForBrand(zs.text.tire_brand)
       : optionsForInspectionField(field.key);
   const resolved = resolveInspectionOption(value, options);
-  const selected = resolved
-    ? resolved.value
-    : value
-      ? OTHER_INSPECTION_OPTION
-      : "";
+  const selected =
+    isTier4Spec && zs.statuses[field.key]
+      ? NOT_AVAILABLE_OPTION
+      : resolved
+        ? resolved.value
+        : value
+          ? OTHER_INSPECTION_OPTION
+          : "";
   const setText = (next: string) => {
+    if (isTier4Spec && next === NOT_AVAILABLE_OPTION) {
+      onPatch({ statuses: { ...zs.statuses, [field.key]: "not_applicable" } });
+      return;
+    }
     const normalized =
       field.key === "tire_size" && next !== OTHER_INSPECTION_OPTION
         ? normalizeTireSize(next)
@@ -1921,9 +1977,9 @@ function FieldRow({
             onChange={(event) => setText(event.target.value)}
             className="w-48 rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
           />
+          {unavailableControl}
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
-        {unavailableControl}
       </div>
     );
   }
@@ -1941,6 +1997,9 @@ function FieldRow({
             ariaInvalid={!!errorMessage}
             value={selected}
             options={[
+              ...(isTier4Spec
+                ? [{ value: NOT_AVAILABLE_OPTION, label: "Not available" }]
+                : []),
               { value: OTHER_INSPECTION_OPTION, label: "Other / not listed" },
               ...options,
             ]}
@@ -1970,9 +2029,9 @@ function FieldRow({
             )
           ) : null}
         </div>
+        {isTier4Spec ? null : unavailableControl}
       </Row>
       {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
-      {unavailableControl}
     </div>
   );
 }
@@ -1999,13 +2058,14 @@ function MeasureField({
     delete statuses[field.key];
     return statuses;
   };
+  const unavailable = !!zs.statuses[field.key];
   const unavailableControl = (
-    <UnavailableStatusControl
-      value={zs.statuses[field.key] ?? ""}
-      onChange={(next) => {
+    <UnavailableToggle
+      active={unavailable}
+      onToggle={() => {
         const statuses = { ...zs.statuses };
-        if (next) statuses[field.key] = next;
-        else delete statuses[field.key];
+        if (unavailable) delete statuses[field.key];
+        else statuses[field.key] = "not_applicable";
         onPatch({ statuses });
       }}
     />
@@ -2057,6 +2117,7 @@ function MeasureField({
               <GradeTag result={result} />
             </>
           ) : null}
+          {unavailableControl}
         </Row>
         {detailed ? (
           <div className="grid grid-cols-3 gap-2 pt-2">
@@ -2100,7 +2161,6 @@ function MeasureField({
           {detailed ? "Use shallowest only" : "Add inner, center, outer"}
         </button>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
-        {unavailableControl}
       </div>
     );
   }
@@ -2167,35 +2227,36 @@ function MeasureField({
           </span>
         )}
         {field.classify ? <GradeTag result={result} /> : null}
+        {unavailableControl}
       </Row>
       {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
-      {unavailableControl}
     </div>
   );
 }
 
-function UnavailableStatusControl({
-  value,
-  onChange,
+function UnavailableToggle({
+  active,
+  onToggle,
 }: {
-  value: FieldUnavailableStatus | "";
-  onChange: (value: FieldUnavailableStatus | "") => void;
+  active: boolean;
+  onToggle: () => void;
 }) {
   return (
-    <div className="flex justify-end px-2 pb-2">
-      <CompactSelect
-        ariaLabel="Unavailable status"
-        value={value}
-        options={[
-          { value: "", label: "Measured / inspected" },
-          { value: "not_inspected", label: "Not inspected" },
-          { value: "not_visible", label: "Not visible" },
-          { value: "not_applicable", label: "N/A" },
-        ]}
-        className="w-36"
-        onChange={(next) => onChange(next as FieldUnavailableStatus | "")}
-      />
-    </div>
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={active}
+      aria-label="Not visible or not available"
+      title="Not visible or not available"
+      className={cn(
+        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
+        active
+          ? "border-slate-500 bg-slate-500 text-white"
+          : "border-primary/20 bg-transparent text-muted-foreground/40 hover:border-primary/40 hover:text-muted-foreground",
+      )}
+    >
+      <EyeOff className="h-3.5 w-3.5" />
+    </button>
   );
 }
 
@@ -2229,6 +2290,12 @@ function optionsForInspectionField(fieldKey: string): InspectionOption[] {
   if (fieldKey === "tire_model") return TIRE_MODEL_OPTIONS;
   if (fieldKey === "tire_size") return TIRE_SIZE_OPTIONS;
   if (fieldKey === "pad_brand") return BRAKE_PAD_BRAND_OPTIONS;
+  if (fieldKey === "oil_viscosity") return OIL_VISCOSITY_OPTIONS;
+  if (fieldKey === "oil_type") return OIL_TYPE_OPTIONS;
+  if (fieldKey === "coolant_type") return COOLANT_TYPE_OPTIONS;
+  if (fieldKey === "brake_fluid_type") return BRAKE_FLUID_OPTIONS;
+  if (fieldKey === "transmission_fluid_type") return TRANSMISSION_FLUID_OPTIONS;
+  if (fieldKey === "power_steering_fluid_type") return POWER_STEERING_FLUID_OPTIONS;
   return [];
 }
 
@@ -2238,6 +2305,7 @@ function CompactSelect({
   value,
   options,
   className,
+  isDisabled,
   onChange,
 }: {
   id?: string;
@@ -2245,6 +2313,7 @@ function CompactSelect({
   value: string;
   options: InspectionOption[];
   className?: string;
+  isDisabled?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
@@ -2253,6 +2322,7 @@ function CompactSelect({
       onSelectionChange={(key) => onChange(key == null ? "" : String(key))}
       aria-label={ariaLabel}
       placeholder="—"
+      isDisabled={isDisabled}
       className={className}
     >
       <SelectTrigger id={id} className="h-9 px-2 text-[13px]">

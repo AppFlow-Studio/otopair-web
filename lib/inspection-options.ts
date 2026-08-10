@@ -141,6 +141,65 @@ export const TIRE_SIZE_OPTIONS: InspectionOption[] = [
   ],
 }));
 
+export const OIL_VISCOSITY_OPTIONS: InspectionOption[] = [
+  "0W-8",
+  "0W-16",
+  "0W-20",
+  "0W-30",
+  "0W-40",
+  "5W-20",
+  "5W-30",
+  "5W-40",
+  "10W-30",
+  "10W-40",
+  "15W-40",
+  "20W-50",
+].map((label) => ({ value: label.toLowerCase().replace(/-/g, "_"), label }));
+
+export const OIL_TYPE_OPTIONS: InspectionOption[] = [
+  { value: "full_synthetic", label: "Full synthetic" },
+  { value: "synthetic_blend", label: "Synthetic blend" },
+  { value: "conventional", label: "Conventional" },
+  { value: "high_mileage", label: "High mileage" },
+  { value: "diesel_hd", label: "Diesel (HD)" },
+];
+
+export const COOLANT_TYPE_OPTIONS: InspectionOption[] = [
+  { value: "iat", label: "IAT (Green)" },
+  { value: "oat", label: "OAT (Dex-Cool / G12)" },
+  { value: "hoat", label: "HOAT (Yellow / Orange)" },
+  { value: "p_hoat", label: "P-HOAT (Pink / Blue)" },
+  { value: "si_oat", label: "Si-OAT" },
+  { value: "universal", label: "Universal" },
+];
+
+export const BRAKE_FLUID_OPTIONS: InspectionOption[] = [
+  { value: "dot_3", label: "DOT 3" },
+  { value: "dot_4", label: "DOT 4" },
+  { value: "dot_4_lv", label: "DOT 4 LV" },
+  { value: "dot_5", label: "DOT 5" },
+  { value: "dot_5_1", label: "DOT 5.1" },
+];
+
+export const TRANSMISSION_FLUID_OPTIONS: InspectionOption[] = [
+  { value: "dexron_vi", label: "Dexron VI" },
+  { value: "toyota_ws", label: "Toyota WS" },
+  { value: "honda_dw1", label: "Honda DW-1" },
+  { value: "cvt", label: "CVT fluid" },
+  { value: "dct", label: "DCT fluid" },
+  { value: "manual_gl4", label: "Manual GL-4" },
+  { value: "manual_gl5", label: "Manual GL-5" },
+];
+
+export const POWER_STEERING_FLUID_OPTIONS: InspectionOption[] = [
+  { value: "dexron_atf", label: "Dexron / ATF" },
+  { value: "honda_psf", label: "Honda PSF" },
+  { value: "toyota_psf", label: "Toyota PSF" },
+  { value: "chf_11s", label: "CHF 11S (Pentosin)" },
+  { value: "chf_202", label: "CHF 202 (Pentosin)" },
+  { value: "universal_psf", label: "Universal PSF" },
+];
+
 export const BRAKE_PAD_BRAND_OPTIONS: InspectionOption[] = [
   { value: "akebono", label: "Akebono" },
   { value: "brembo", label: "Brembo" },

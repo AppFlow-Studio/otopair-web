@@ -38,6 +38,11 @@ import type { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { getStripe } from "../lib/stripe";
 import { isTerminal, validateTransition } from "./booking_status_history";
+import {
+  resolvePolicy,
+  computeCancellationFee,
+  evaluateRescheduleLimit,
+} from "./lib/cancellation_policy";
 import { mintClaimToken } from "./walkin_claims";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
@@ -578,32 +583,221 @@ export const cancelBooking = mutation({
     bookingId: v.id("bookings"),
     /** Optional free-form reason. Defaults to "user_cancelled". */
     reason: v.optional(v.string()),
+    /** The late-cancellation fee the customer was shown before confirming.
+     *  Server recomputes the real fee; if it now exceeds what was disclosed
+     *  the cancel is rejected so the customer re-confirms the higher amount. */
+    feeAcknowledgedCents: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    const existing = await ctx.db.get(args.bookingId);
-    if (!existing) return;
-    if (existing.status === "cancelled") return;
-    const now = Date.now();
-    const previousStatus = existing.status;
-    await ctx.db.patch(args.bookingId, {
-      status: "cancelled",
-      updated_at: now,
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ cancelled: boolean; feeCents: number; kind: string }> => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have already been removed.");
+    if (booking.user_id !== user._id) throw new Error("Not your booking.");
+
+    // Idempotent: already-terminal bookings can't be cancelled again.
+    if (isTerminal(booking.status)) {
+      return {
+        cancelled: booking.status === "cancelled",
+        feeCents: (booking as any).cancellation_fee_cents ?? 0,
+        kind: (booking as any).cancellation_kind ?? "free",
+      };
+    }
+
+    // Phase gate: once the car is at the shop or work has started, the
+    // customer can't self-cancel — the app routes them to the shop instead.
+    if (booking.status === "in_progress") {
+      throw new Error(
+        "Work is already underway — this booking can no longer be cancelled here. Message the shop to sort it out.",
+      );
+    }
+    if (booking.status === "vehicle_at_shop") {
+      throw new Error(
+        "Your car is already at the shop. Use “Request to cancel & pick up car” so the shop can release it.",
+      );
+    }
+
+    const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const policy = resolvePolicy(shop);
+    const appointmentStartMs =
+      booking.scheduled_date && booking.scheduled_time
+        ? toBookingDateTimeMs(
+            booking.scheduled_date,
+            booking.scheduled_time,
+            await getShopTimezone(ctx, booking.shop_id),
+          )
+        : null;
+    const { feeCents, kind } = computeCancellationFee({
+      appointmentStartMs,
+      nowMs: Date.now(),
+      policy,
+      intent: "cancel",
     });
-    await logBookingStatusChange(
-      ctx,
-      args.bookingId,
-      previousStatus,
-      "cancelled",
-      existing.user_id,
-      args.reason ?? "user_cancelled",
-    );
-    await syncBookingAssignments(ctx, [
-      {
-        shopId: existing.shop_id,
-        mechanicId: existing.mechanic_id ?? undefined,
-        date: existing.scheduled_date,
+
+    // Guard against a stale fee disclosure: if the fee rose past what the
+    // customer acknowledged (e.g. they crossed the cutoff mid-flow), reject
+    // so the app can re-disclose the higher amount.
+    if (
+      typeof args.feeAcknowledgedCents === "number" &&
+      args.feeAcknowledgedCents < feeCents
+    ) {
+      throw new Error(
+        "The cancellation fee changed. Please review the updated amount and try again.",
+      );
+    }
+
+    await applyBookingStatusTransition(ctx, {
+      booking,
+      newStatus: "cancelled",
+      changedBy: user._id,
+      reason: args.reason ?? "user_cancelled",
+      cancellationFeeCents: feeCents,
+      cancellationKind: kind,
+    });
+
+    return { cancelled: true, feeCents, kind };
+  },
+});
+
+/**
+ * Customer "request to cancel & pick up car" — the vehicle_at_shop path.
+ * Once the car is physically at the shop the customer can't self-cancel;
+ * this records the request and notifies the front desk WITHOUT flipping
+ * status. The shop then completes the cancel (with or without a fee) via its
+ * own cancel/markNoShow flow. Idempotent per booking via the outbox dedupe key.
+ */
+export const requestCancellationAtShop = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ requested: boolean }> => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have already been removed.");
+    if (booking.user_id !== user._id) throw new Error("Not your booking.");
+    if (booking.status !== "vehicle_at_shop") {
+      throw new Error("You can only request pickup once your car is at the shop.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(args.bookingId, {
+      cancel_requested_at_ms: now,
+      cancel_request_reason: args.reason,
+      updated_at: now,
+    } as any);
+
+    await enqueueNotificationOutbox(ctx, {
+      shopId: booking.shop_id,
+      bookingId: booking._id,
+      userId: booking.user_id,
+      channel: "front_desk",
+      category: "customer_cancel_pickup_request",
+      dedupeKey: `cancel-pickup:${String(booking._id)}`,
+      payload: {
+        reason: args.reason ?? null,
+        requestedAtMs: now,
       },
-    ]);
+    });
+
+    return { requested: true };
+  },
+});
+
+/**
+ * Single source of truth for what the customer may do to a booking right now
+ * and what it would cost. The app renders Cancel/Reschedule buttons + fee
+ * disclosure straight off this — so UI gating and server enforcement can never
+ * drift. Reactive: the fee/labels update live as the free-cancel cutoff nears.
+ * Returns null when the booking isn't the caller's (don't leak).
+ */
+export const getCustomerBookingActions = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking || !user || booking.user_id !== user._id) return null;
+
+    const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const policy = resolvePolicy(shop);
+    const timezone = (shop as any)?.timezone || DEFAULT_SHOP_TIMEZONE;
+    const appointmentStartMs =
+      booking.scheduled_date && booking.scheduled_time
+        ? toBookingDateTimeMs(booking.scheduled_date, booking.scheduled_time, timezone)
+        : null;
+    const now = Date.now();
+    const status = booking.status as string;
+
+    let blockedReason: string | null = null;
+    let canCancel = false;
+    let canReschedule = false;
+    let cancelKind: "free" | "late_cancel" | "request_shop" = "free";
+
+    if (isTerminal(status)) {
+      blockedReason = `already_${status}`;
+    } else if (status === "in_progress") {
+      blockedReason = "work_in_progress";
+    } else if (status === "vehicle_at_shop") {
+      // Car is physically at the shop: cancel becomes a shop-mediated request,
+      // reschedule is off (customer contacts the shop).
+      canCancel = true;
+      cancelKind = "request_shop";
+    } else {
+      // pending / pending_shop_acceptance / pending_customer_acceptance /
+      // confirmed / quote stages → self-service cancel + reschedule.
+      canCancel = true;
+      canReschedule = true;
+    }
+
+    const cancelFee = computeCancellationFee({
+      appointmentStartMs,
+      nowMs: now,
+      policy,
+      intent: "cancel",
+    });
+    if (canCancel && cancelKind !== "request_shop") {
+      cancelKind = cancelFee.kind === "late_cancel" ? "late_cancel" : "free";
+    }
+    const feeCentsIfCancelledNow =
+      cancelKind === "request_shop" ? 0 : cancelFee.feeCents;
+
+    const reschedulesUsed = (booking as any).reschedule_count ?? 0;
+    const rescheduleEval = evaluateRescheduleLimit({
+      appointmentStartMs,
+      nowMs: now,
+      policy,
+      reschedulesUsed,
+    });
+    const rescheduleKind: "free" | "limited" = canReschedule
+      ? rescheduleEval.kind
+      : "limited";
+
+    const MS_PER_HOUR = 3_600_000;
+    const freeUntilMs =
+      appointmentStartMs != null
+        ? appointmentStartMs - policy.cancelFreeCutoffHours * MS_PER_HOUR
+        : null;
+    const rescheduleFreeUntilMs =
+      appointmentStartMs != null
+        ? appointmentStartMs - policy.rescheduleFreeCutoffHours * MS_PER_HOUR
+        : null;
+
+    return {
+      status,
+      canCancel,
+      cancelKind,
+      feeCentsIfCancelledNow,
+      canReschedule,
+      rescheduleKind,
+      freeUntilMs,
+      rescheduleFreeUntilMs,
+      reschedulesUsed,
+      maxFreeReschedules: policy.rescheduleMaxFree,
+      cancelRequestedAtMs: (booking as any).cancel_requested_at_ms ?? null,
+      blockedReason,
+    };
   },
 });
 
@@ -2707,13 +2901,23 @@ export const markPostThresholdNoShow = mutation({
     await requireShopStaff(ctx, user._id, booking.shop_id);
     await assertCustomerLateThresholdReached(ctx, booking);
 
+    const noShowShop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const { feeCents, kind } = computeCancellationFee({
+      appointmentStartMs: null,
+      nowMs: Date.now(),
+      policy: resolvePolicy(noShowShop),
+      intent: "no_show",
+    });
     const result = await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "no_show",
       changedBy: user._id,
       reason: "post_threshold_customer_no_show",
+      cancellationFeeCents: feeCents,
+      cancellationKind: kind,
     });
-    // Stripe void is scheduled centrally by applyBookingStatusTransition.
+    // Deposit forfeit (or void when fee is 0) is scheduled centrally by
+    // applyBookingStatusTransition.
     return result;
   },
 });
@@ -2732,11 +2936,20 @@ export const markNoShow = mutation({
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
+    const noShowShop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const { feeCents, kind } = computeCancellationFee({
+      appointmentStartMs: null,
+      nowMs: Date.now(),
+      policy: resolvePolicy(noShowShop),
+      intent: "no_show",
+    });
     return await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "no_show",
       changedBy: user._id,
       reason: args.reason ?? "manual_customer_no_show",
+      cancellationFeeCents: feeCents,
+      cancellationKind: kind,
     });
   },
 });
@@ -3122,11 +3335,41 @@ export const customerRequestReschedule = mutation({
     if (!booking.shop_id) {
       throw new Error("This booking doesn't have a shop assigned yet.");
     }
-    if (["cancelled", "completed", "no_show", "in_progress"].includes(booking.status)) {
+    if (
+      ["cancelled", "completed", "no_show", "in_progress", "vehicle_at_shop"].includes(
+        booking.status,
+      )
+    ) {
       const label =
         BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
         String(booking.status).replace(/_/g, " ");
       throw new Error(`This booking can't be rescheduled while it's ${label}.`);
+    }
+
+    // Reschedule limit (v1: limit-only, no fee). Beyond the free count or
+    // inside the reschedule cutoff, the customer must contact the shop.
+    const reschedulePolicy = resolvePolicy(await ctx.db.get(booking.shop_id));
+    const reschedulesUsed = (booking as any).reschedule_count ?? 0;
+    const currentApptMs =
+      booking.scheduled_date && booking.scheduled_time
+        ? toBookingDateTimeMs(
+            booking.scheduled_date,
+            booking.scheduled_time,
+            await getShopTimezone(ctx, booking.shop_id),
+          )
+        : null;
+    const rescheduleLimit = evaluateRescheduleLimit({
+      appointmentStartMs: currentApptMs,
+      nowMs: Date.now(),
+      policy: reschedulePolicy,
+      reschedulesUsed,
+    });
+    if (rescheduleLimit.kind === "limited") {
+      throw new Error(
+        rescheduleLimit.reason === "max_free_reschedules_reached"
+          ? "You've used all your free reschedules for this booking. Message the shop to change your appointment."
+          : "It's too close to your appointment to reschedule here. Message the shop to change your appointment.",
+      );
     }
 
     const currentMechanicId = await getBookingMechanicId(ctx, booking);
@@ -3158,6 +3401,7 @@ export const customerRequestReschedule = mutation({
       reschedule_proposed_at: now,
       schedule_change_mode: "customer_reschedule",
       customer_can_restore_original: false,
+      reschedule_count: reschedulesUsed + 1,
       updated_at: now,
     });
 
@@ -7939,11 +8183,17 @@ export async function applyBookingStatusTransition(
     newStatus,
     changedBy,
     reason,
+    cancellationFeeCents,
+    cancellationKind,
   }: {
     booking: any;
     newStatus: string;
     changedBy?: any;
     reason?: string;
+    /** When cancelling / marking no-show with a fee, the amount to capture
+     *  from the deposit hold (capture instead of void). 0 / undefined = void. */
+    cancellationFeeCents?: number;
+    cancellationKind?: string;
   }
 ) {
   const error = validateTransition(booking.status, newStatus);
@@ -7973,10 +8223,23 @@ export async function applyBookingStatusTransition(
     throw new Error(`This booking is already ${label} and can no longer be updated.`);
   }
 
-  const patch: { status: string; updated_at: number; live_stage?: string } = {
+  const patch: {
+    status: string;
+    updated_at: number;
+    live_stage?: string;
+    cancellation_fee_cents?: number;
+    cancellation_kind?: string;
+  } = {
     status: newStatus,
     updated_at: Date.now(),
   };
+  if (
+    (newStatus === "cancelled" || newStatus === "no_show") &&
+    typeof cancellationFeeCents === "number"
+  ) {
+    patch.cancellation_fee_cents = Math.max(0, Math.round(cancellationFeeCents));
+    if (cancellationKind) patch.cancellation_kind = cancellationKind;
+  }
   if (newStatus === "confirmed" || newStatus === "vehicle_at_shop") {
     patch.live_stage = "booking_confirmed";
   } else if (newStatus === "vehicle_at_shop") {
@@ -8095,18 +8358,39 @@ export async function applyBookingStatusTransition(
       { bookingId: booking._id },
     );
   }
-  // Void the authorization on any pre-capture terminal transition. The
-  // action checks the payments row's status and skips if already captured.
+  // Void OR fee-capture the authorization on a pre-capture terminal
+  // transition. cancelled/no_show with a fee → partial-capture the deposit
+  // (which auto-releases the remainder); otherwise void the whole hold.
+  // `declined` always voids. The actions check the payments row's status and
+  // skip if already captured.
   if (
     newStatus === "cancelled" ||
     newStatus === "declined" ||
     newStatus === "no_show"
   ) {
-    await ctx.scheduler.runAfter(
-      0,
-      (internal as any).lib.stripe_void.voidBookingAuthorization,
-      { bookingId: booking._id },
-    );
+    const feeCents = Math.max(0, Math.round(cancellationFeeCents ?? 0));
+    if (
+      (newStatus === "cancelled" || newStatus === "no_show") &&
+      feeCents > 0
+    ) {
+      await ctx.scheduler.runAfter(
+        0,
+        (internal as any).payments_stripe.captureCancellationFee,
+        {
+          bookingId: booking._id,
+          feeCents,
+          kind:
+            cancellationKind ??
+            (newStatus === "no_show" ? "no_show" : "late_cancel"),
+        },
+      );
+    } else {
+      await ctx.scheduler.runAfter(
+        0,
+        (internal as any).lib.stripe_void.voidBookingAuthorization,
+        { bookingId: booking._id },
+      );
+    }
   }
 
   return { success: true, oldStatus: booking.status, newStatus };

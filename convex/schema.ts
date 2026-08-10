@@ -2156,6 +2156,16 @@ export default defineSchema({
     // 60=1h, 120=2h, 1440=24h, 2880=48h.
     appointment_reminder_lead_minutes: v.optional(v.number()),
 
+    // Cancellation / reschedule policy overrides. Any unset field falls back
+    // to POLICY_DEFAULTS in convex/lib/cancellation_policy.ts. Fee amounts are
+    // captured from the deposit hold, so they should not exceed
+    // BOOKING_DEPOSIT_CENTS. See cancelBooking / markNoShow / getCustomerBookingActions.
+    cancel_free_cutoff_hours: v.optional(v.number()),
+    cancel_late_fee_cents: v.optional(v.number()),
+    no_show_fee_cents: v.optional(v.number()),
+    reschedule_free_cutoff_hours: v.optional(v.number()),
+    reschedule_max_free: v.optional(v.number()),
+
     // Per-vehicle-tier labor rates ($/hr). Unset key = falls back to the
     // legacy single `labor_rate`. Tier present in `declined_tiers` = shop
     // does not service that vehicle class. Edited via setLaborRatesByTier.
@@ -2638,6 +2648,24 @@ export default defineSchema({
     // spiral. See buildDownstreamMovementPlan in convex/bookings.ts.
     cascade_push_count: v.optional(v.number()),
     cascade_pushed_minutes_total: v.optional(v.number()),
+    // Cancellation / reschedule policy tracking (v1: deposit-forfeit fees +
+    // reschedule limit). cancellation_fee_cents/kind record what was actually
+    // charged when the booking went cancelled/no_show. cancel_requested_at_ms
+    // marks a customer "request to cancel & pick up car" while the vehicle is
+    // at the shop — a shop-mediated request that does NOT flip status.
+    // reschedule_count gates the free-reschedule limit (distinct from the
+    // upstream-driven cascade_push_count above). See convex/lib/cancellation_policy.ts.
+    cancellation_fee_cents: v.optional(v.number()),
+    cancellation_kind: v.optional(
+      v.union(
+        v.literal("free"),
+        v.literal("late_cancel"),
+        v.literal("no_show"),
+      ),
+    ),
+    cancel_requested_at_ms: v.optional(v.number()),
+    cancel_request_reason: v.optional(v.string()),
+    reschedule_count: v.optional(v.number()),
     custom_services: v.optional(
       v.array(
         v.object({

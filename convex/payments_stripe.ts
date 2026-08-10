@@ -1733,6 +1733,87 @@ export const captureDepositForfeit = internalAction({
   },
 });
 
+/**
+ * Charge a late-cancellation / no-show fee by PARTIAL-capturing the existing
+ * manual-capture hold. Stripe releases the uncaptured remainder automatically,
+ * so this both charges the fee and frees the rest of the customer's hold.
+ *
+ * The fee is capped at the current authorization — you cannot capture more
+ * than is held — so pre-inspection the ceiling is the $20 deposit. A zero fee
+ * (free cancel) falls through to a plain void. Scheduled from
+ * applyBookingStatusTransition when a booking goes cancelled/no_show with a fee;
+ * mirrors captureDepositForfeit's guards so re-invocation is safe.
+ */
+export const captureCancellationFee = internalAction({
+  args: {
+    bookingId: v.id("bookings"),
+    feeCents: v.number(),
+    kind: v.string(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ status: string; capturedCents?: number; reason?: string }> => {
+    const payment: any = await ctx.runQuery(
+      internal.payments_stripe._getPaymentByBookingId,
+      { bookingId: args.bookingId },
+    );
+    if (!payment?.stripe_payment_intent_id) {
+      return { status: "skipped", reason: "no payment intent" };
+    }
+    if (
+      payment.status === "completed" ||
+      payment.status === "cancelled" ||
+      payment.status === "refunded"
+    ) {
+      return { status: "skipped", reason: `payment is ${payment.status}` };
+    }
+
+    // Never attempt to capture more than the live hold authorizes.
+    const holdCents: number =
+      payment.incremented_total_cents ??
+      payment.hold_amount_cents ??
+      BOOKING_DEPOSIT_CENTS;
+    const captureCents = Math.min(Math.max(0, Math.round(args.feeCents)), holdCents);
+
+    // Zero fee → just void the hold (delegate to the existing void path).
+    if (captureCents <= 0) {
+      return await ctx.runAction(
+        internal.payments_stripe.cancelPaymentIntentForBooking,
+        { bookingId: args.bookingId },
+      );
+    }
+
+    const stripe = getStripe();
+    try {
+      const pi = await stripe.paymentIntents.capture(
+        payment.stripe_payment_intent_id,
+        { amount_to_capture: captureCents },
+      );
+      await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
+        bookingId: args.bookingId,
+        stripeAction: `capture_${args.kind}_fee`,
+      });
+      await ctx.runMutation(internal.payments_stripe._patchBookingCaptured, {
+        bookingId: args.bookingId,
+        finalTotalCents: captureCents,
+        finalCaptureAmountCents: captureCents,
+      });
+      return { status: pi.status, capturedCents: captureCents };
+    } catch (err: any) {
+      // Fee capture failing must NOT block the cancellation itself — mark the
+      // payment row failed for ops/retry and let the status transition stand.
+      await ctx.runMutation(internal.payments_stripe._transitionPayment, {
+        paymentId: payment._id,
+        newStatus: "failed",
+        errorCode: err?.code,
+        errorMessage: err?.message?.slice(0, 500),
+      });
+      return { status: "failed", reason: err?.message };
+    }
+  },
+});
+
 /** Compute the actual final total from job_actuals + booking. Returns
  *  cents. Mirrors computeMechanicSetPrice from booking_approvals.ts but
  *  reads from the persisted post-job data instead of dialog inputs. */

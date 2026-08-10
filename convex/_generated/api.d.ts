@@ -61,6 +61,7 @@ import type * as devOnly_auditCoreRoles from "../devOnly/auditCoreRoles.js";
 import type * as devOnly_auditPartRejections from "../devOnly/auditPartRejections.js";
 import type * as devOnly_auditRunFlow from "../devOnly/auditRunFlow.js";
 import type * as devOnly_backfillBrakeSystem from "../devOnly/backfillBrakeSystem.js";
+import type * as devOnly_backfillSettlement from "../devOnly/backfillSettlement.js";
 import type * as devOnly_canaryRun from "../devOnly/canaryRun.js";
 import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
 import type * as devOnly_dedupeConfig from "../devOnly/dedupeConfig.js";
@@ -73,6 +74,7 @@ import type * as devOnly_fallbackVsOlp from "../devOnly/fallbackVsOlp.js";
 import type * as devOnly_gateResweep from "../devOnly/gateResweep.js";
 import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
 import type * as devOnly_laborWebSpread from "../devOnly/laborWebSpread.js";
+import type * as devOnly_oilCoverage from "../devOnly/oilCoverage.js";
 import type * as devOnly_olpProbe from "../devOnly/olpProbe.js";
 import type * as devOnly_partResurrectSweep from "../devOnly/partResurrectSweep.js";
 import type * as devOnly_partsCoverage from "../devOnly/partsCoverage.js";
@@ -305,6 +307,7 @@ import type * as seeds_patchServiceOptions from "../seeds/patchServiceOptions.js
 import type * as seeds_seedBlockedDomains from "../seeds/seedBlockedDomains.js";
 import type * as seeds_seedCamryBaseline from "../seeds/seedCamryBaseline.js";
 import type * as seeds_seedMakes from "../seeds/seedMakes.js";
+import type * as seeds_seedOilGrades from "../seeds/seedOilGrades.js";
 import type * as seeds_seedPricing from "../seeds/seedPricing.js";
 import type * as seeds_seedPricingV2 from "../seeds/seedPricingV2.js";
 import type * as seeds_seedServiceCategories from "../seeds/seedServiceCategories.js";
@@ -437,6 +440,7 @@ import type * as vehicleEnrichment_marketplaceScraper from "../vehicleEnrichment
 import type * as vehicleEnrichment_mutations from "../vehicleEnrichment/mutations.js";
 import type * as vehicleEnrichment_nhtsa from "../vehicleEnrichment/nhtsa.js";
 import type * as vehicleEnrichment_nhtsaOdi from "../vehicleEnrichment/nhtsaOdi.js";
+import type * as vehicleEnrichment_oilCatalog from "../vehicleEnrichment/oilCatalog.js";
 import type * as vehicleEnrichment_oilProduct from "../vehicleEnrichment/oilProduct.js";
 import type * as vehicleEnrichment_olpLabor from "../vehicleEnrichment/olpLabor.js";
 import type * as vehicleEnrichment_olpLaborScrape from "../vehicleEnrichment/olpLaborScrape.js";
@@ -583,6 +587,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/auditPartRejections": typeof devOnly_auditPartRejections;
   "devOnly/auditRunFlow": typeof devOnly_auditRunFlow;
   "devOnly/backfillBrakeSystem": typeof devOnly_backfillBrakeSystem;
+  "devOnly/backfillSettlement": typeof devOnly_backfillSettlement;
   "devOnly/canaryRun": typeof devOnly_canaryRun;
   "devOnly/dataFixes": typeof devOnly_dataFixes;
   "devOnly/dedupeConfig": typeof devOnly_dedupeConfig;
@@ -595,6 +600,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/gateResweep": typeof devOnly_gateResweep;
   "devOnly/laborValidation": typeof devOnly_laborValidation;
   "devOnly/laborWebSpread": typeof devOnly_laborWebSpread;
+  "devOnly/oilCoverage": typeof devOnly_oilCoverage;
   "devOnly/olpProbe": typeof devOnly_olpProbe;
   "devOnly/partResurrectSweep": typeof devOnly_partResurrectSweep;
   "devOnly/partsCoverage": typeof devOnly_partsCoverage;
@@ -827,6 +833,7 @@ declare const fullApi: ApiFromModules<{
   "seeds/seedBlockedDomains": typeof seeds_seedBlockedDomains;
   "seeds/seedCamryBaseline": typeof seeds_seedCamryBaseline;
   "seeds/seedMakes": typeof seeds_seedMakes;
+  "seeds/seedOilGrades": typeof seeds_seedOilGrades;
   "seeds/seedPricing": typeof seeds_seedPricing;
   "seeds/seedPricingV2": typeof seeds_seedPricingV2;
   "seeds/seedServiceCategories": typeof seeds_seedServiceCategories;
@@ -959,6 +966,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/mutations": typeof vehicleEnrichment_mutations;
   "vehicleEnrichment/nhtsa": typeof vehicleEnrichment_nhtsa;
   "vehicleEnrichment/nhtsaOdi": typeof vehicleEnrichment_nhtsaOdi;
+  "vehicleEnrichment/oilCatalog": typeof vehicleEnrichment_oilCatalog;
   "vehicleEnrichment/oilProduct": typeof vehicleEnrichment_oilProduct;
   "vehicleEnrichment/olpLabor": typeof vehicleEnrichment_olpLabor;
   "vehicleEnrichment/olpLaborScrape": typeof vehicleEnrichment_olpLaborScrape;

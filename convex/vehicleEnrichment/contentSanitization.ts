@@ -164,8 +164,10 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   // 3-5 char tail (08CLA-P99-0F0A8 coolant, 08285-P99-0CZA3 PS fluid), and
   // OL999 tails with revision letters (OL999-9011A) were all real ledgered
   // SKUs the old digit-only tails rejected.
-  honda: /^(?:\d[A-Z0-9]{4}-[A-Z0-9]{3}-[A-Z0-9]{3,5}|\d{5}-[A-Z0-9]{4,6}|[A-Z]{2}\d{3}-[A-Z0-9]{4,5}|\d{4}[A-Z]-\d{4}[A-Z]?)$/i,
-  acura: /^(?:\d[A-Z0-9]{4}-[A-Z0-9]{3}-[A-Z0-9]{3,5}|\d{5}-[A-Z0-9]{4,6}|[A-Z]{2}\d{3}-[A-Z0-9]{4,5}|\d{4}[A-Z]-\d{4}[A-Z]?)$/i,
+  // Round-3 (Aug 9 2026, RDX): AGM battery SKUs carry a 7-char third block
+  // (31500-TZ7-AGM100M) — {3,5} rejected the RDX's real battery.
+  honda: /^(?:\d[A-Z0-9]{4}-[A-Z0-9]{3}-[A-Z0-9]{3,7}|\d{5}-[A-Z0-9]{4,6}|[A-Z]{2}\d{3}-[A-Z0-9]{4,5}|\d{4}[A-Z]-\d{4}[A-Z]?)$/i,
+  acura: /^(?:\d[A-Z0-9]{4}-[A-Z0-9]{3}-[A-Z0-9]{3,7}|\d{5}-[A-Z0-9]{4,6}|[A-Z]{2}\d{3}-[A-Z0-9]{4,5}|\d{4}[A-Z]-\d{4}[A-Z]?)$/i,
   // Ford/Lincoln: OE service numbers (BC3Z-6731-B / F1TZ-...) and Motorcraft
   // lines (BXT-94RH7-730, FL-820-S, SP-515).
   // Second block min 1 char — the XL-3 friction modifier is a real Motorcraft

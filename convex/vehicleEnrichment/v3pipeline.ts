@@ -1953,7 +1953,16 @@ async function writeNormalizedData(
     if (val == null || val.length === 0) {
       const skipReason = rawStr ? "failed_sanitization" : "null_or_empty";
       console.log(`[v8-parts] SKIPPED ${fieldKey}: reason=${skipReason}`);
-      if (rawStr) {
+      // Boolean/none-ish junk is a MODEL-SAID-NO, not a rejected part number
+      // (round-3 audit, Aug 9 2026: the Pacifica run tripped
+      // part_pattern_suspect:Chrysler:9 — every one was the literal string
+      // "false"). Classifying junk as oem_part_rejected polluted the
+      // resurrection ledger and made the pattern-suspect sentinel cry wolf;
+      // treat it like an llm_null instead (nulled, unflagged — batch-2
+      // re-asks it the same way).
+      const isJunkValue =
+        rawStr != null && /^(?:false|true|null|none|n\/?a|unknown|not\s+applicable|-+)$/i.test(rawStr.trim());
+      if (rawStr && !isJunkValue) {
         // A rejected part number must NOT stay "filled" in the field map —
         // that made the loss invisible: no field_gap entry, and batch-2
         // gap-fill never re-asked because the field looked populated, while
@@ -1966,6 +1975,8 @@ async function writeNormalizedData(
           flagged: true,
           flag_reason: `oem_part_rejected: ${rawStr}`,
         } as any;
+      } else if (isJunkValue) {
+        fields[fieldKey] = { ...(fields[fieldKey] ?? {}), value: null } as any;
       }
       continue;
     }

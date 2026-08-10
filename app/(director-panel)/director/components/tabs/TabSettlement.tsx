@@ -7,8 +7,8 @@
 // retrying + escalating; this is the read-only window so ops can chase the
 // stale ones. Oldest shortfall first. Read-only.
 
-import { useContext } from 'react'
-import { useQuery } from 'convex/react'
+import { useContext, useState } from 'react'
+import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { Badge, Card, tableStyles } from '../Primitives'
@@ -69,10 +69,17 @@ type Row = {
 export const TabSettlement = () => {
   const session = useContext(DirectorSessionCtx)
   const token = session?.token ?? ''
+  const retrySettlement = useMutation(api.opsBookings.retrySettlement)
+  const [retried, setRetried] = useState<Record<string, boolean>>({})
 
   const data = useQuery(api.opsBookings.awaitingSettlementBookings, { token }) as
     | { rows: Row[]; count: number; totalShortfallCents: number; truncated: boolean }
     | undefined
+
+  const onRetry = async (id: string) => {
+    setRetried(prev => ({ ...prev, [id]: true }))
+    try { await retrySettlement({ token, id: id as never }) } catch { /* surfaced via row state */ }
+  }
 
   return (
     <SectionAnchor id="settlement" title="Awaiting Settlement"
@@ -165,7 +172,20 @@ export const TabSettlement = () => {
                       {money(r.settlementShortfallCents / 100)}
                     </td>
                     <td style={tableStyles.td}>
-                      <TraceLink onClick={() => gotoEntity('bookings', String(r.id))}>booking →</TraceLink>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+                        <TraceLink onClick={() => gotoEntity('bookings', String(r.id))}>booking →</TraceLink>
+                        <button
+                          onClick={() => onRetry(r.id)}
+                          disabled={retried[r.id]}
+                          style={{
+                            border: '1px solid var(--slate-200)', borderRadius: 6, padding: '2px 8px',
+                            fontSize: 11, fontWeight: 600, cursor: retried[r.id] ? 'default' : 'pointer',
+                            background: retried[r.id] ? 'var(--slate-50)' : 'white',
+                            color: retried[r.id] ? 'var(--slate-400)' : 'var(--slate-700)', fontFamily: 'inherit',
+                          }}>
+                          {retried[r.id] ? 'queued' : 'retry'}
+                        </button>
+                      </span>
                     </td>
                   </tr>
                 )

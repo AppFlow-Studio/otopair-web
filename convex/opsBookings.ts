@@ -9,7 +9,8 @@
 // =============================================================================
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { query } from "./_generated/server";
+import { query, mutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { requireDirector } from "./directorGate";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
@@ -175,6 +176,25 @@ export const awaitingSettlementBookings = query({
       0,
     );
     return { rows, count: rows.length, totalShortfallCents, truncated };
+  },
+});
+
+/** Ops "retry capture now" — the reconciliation cron already retries every
+ *  30 min; this lets a director force an immediate attempt from the Settlement
+ *  tab. Schedules the same capture-at-ceiling path (idempotent: skips if the
+ *  payment is already captured). Token-gated. */
+export const retrySettlement = mutation({
+  args: { token: v.string(), id: v.id("bookings") },
+  handler: async (ctx, { token, id }): Promise<{ queued: boolean }> => {
+    await requireDirector(ctx, token);
+    const booking = await ctx.db.get(id);
+    if (!booking) throw new Error("Booking not found.");
+    await ctx.scheduler.runAfter(
+      0,
+      internal.payments_stripe.finalizeAndChargeForBooking,
+      { bookingId: id, forceCaptureAtCeiling: true },
+    );
+    return { queued: true };
   },
 });
 

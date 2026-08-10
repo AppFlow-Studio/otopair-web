@@ -178,3 +178,56 @@ export const reconcileUnsettledBookings = internalAction({
     return { scanned: rows.length, settled, stillAwaiting, escalated };
   },
 });
+
+// Stripe card authorizations expire ~7 days after they're placed. A booking
+// scheduled far out (or one that stalls pre-service) can have its hold die
+// before the job is ever captured. We can't silently re-auth (the platform
+// isn't enrolled in Stripe incremental auth), so warn ops ~1 day ahead so they
+// can reschedule / re-confirm before the hold lapses.
+const AUTH_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
+const AUTH_WARN_MS = 6 * 24 * 60 * 60 * 1000;
+// Terminal / already-handled elsewhere: completed → reconciliation cron;
+// cancelled/no_show/declined → the void path. We only chase ACTIVE holds.
+const HANDLED_BOOKING_STATUSES = new Set([
+  "completed",
+  "cancelled",
+  "no_show",
+  "declined",
+]);
+
+export const flagExpiringHolds = internalMutation({
+  args: {},
+  handler: async (ctx): Promise<{ scanned: number; flagged: number }> => {
+    const now = Date.now();
+    const cutoff = now - AUTH_WARN_MS;
+    const dayBucket = Math.floor(now / MS_PER_DAY);
+    const processing = await ctx.db
+      .query("payments")
+      .withIndex("by_status", (q) => q.eq("status", "processing"))
+      .take(500);
+
+    let flagged = 0;
+    for (const p of processing) {
+      const created = p.created_at ?? p._creationTime;
+      if (created > cutoff) continue; // hold still comfortably within its window
+      const booking = await ctx.db.get(p.booking_id);
+      if (!booking || HANDLED_BOOKING_STATUSES.has(booking.status)) continue;
+
+      await enqueueNotificationOutbox(ctx, {
+        shopId: booking.shop_id,
+        bookingId: booking._id,
+        userId: booking.user_id,
+        channel: "front_desk",
+        category: "hold_expiring",
+        dedupeKey: `hold_expiring:${String(booking._id)}:${dayBucket}`,
+        payload: {
+          holdPlacedAtMs: created,
+          expiresApproxMs: created + AUTH_LIFETIME_MS,
+          bookingStatus: booking.status,
+        },
+      });
+      flagged += 1;
+    }
+    return { scanned: processing.length, flagged };
+  },
+});

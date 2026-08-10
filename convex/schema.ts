@@ -593,6 +593,14 @@ export default defineSchema({
     discount: v.optional(v.number()),
     refreshed_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
+    /** Container size this fluid row was divided by to reach a PER-UNIT
+     *  price (lib/fluidPackSize). Set once, at the moment of normalization.
+     *  Its presence is what makes the repair idempotent: the listing title
+     *  still says "1 Gallon" after the fact, so without this marker a second
+     *  pass would divide an already-correct $8.57/qt down to $2.14. Also
+     *  makes a derived price auditable — `price` is per unit, `price x
+     *  pack_quarts` is what the source actually charged. */
+    pack_quarts: v.optional(v.number()),
   })
     .index("by_part", ["part_id"])
     .index("by_part_source", ["part_id", "source_domain"]),

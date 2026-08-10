@@ -25,6 +25,85 @@ import { v } from "convex/values";
 import { lookupOeOil, normalizeViscosity } from "../vehicleEnrichment/oilCatalog";
 import { passesI1ReadGuardNamed } from "../lib/makeIdentity";
 
+/**
+ * Observed per-quart engine-oil prices, grouped by the vehicle's SAE grade.
+ *
+ * The catalog's per-quart figures started as market-typical estimates. This
+ * replaces the estimate with evidence: every REAL (non-consumable) engine_oil
+ * part we have scraped, its price rows, and the grade of the engines it is
+ * fitted to — so the seed price for "0W-20" can be the median of what 0W-20
+ * bottles actually cost on the sources we already trust.
+ *
+ * Marketplace/poison price types are excluded by the same standard the
+ * quotability path uses (has_trusted_price), so a $60 eBay jug cannot move a
+ * median.
+ */
+export const observedOilPrices = internalQuery({
+  args: { limit: v.optional(v.float64()) },
+  handler: async (ctx, args) => {
+    const configs = await ctx.db
+      .query("vehicle_configs")
+      .order("desc")
+      .take(args.limit ?? 250);
+
+    const byGrade = new Map<string, number[]>();
+    const samples: Array<{ grade: string; oem: string; price: number; type: string }> = [];
+    const seenPart = new Set<string>();
+
+    for (const cfg of configs as any[]) {
+      const engine: any = cfg.engine_id ? await ctx.db.get(cfg.engine_id) : null;
+      const grade = normalizeViscosity(engine?.oil_viscosity);
+      if (!grade) continue;
+
+      const fitments = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_vehicle_config", (q: any) => q.eq("vehicle_config_id", cfg._id))
+        .collect();
+
+      for (const f of fitments as any[]) {
+        const part: any = f.part_id ? await ctx.db.get(f.part_id) : null;
+        if (!part || part.subcategory !== "engine_oil") continue;
+        if (part.category === "consumable") continue; // seeds aren't evidence
+        const key = `${grade}|${String(part._id)}`;
+        if (seenPart.has(key)) continue;
+        seenPart.add(key);
+
+        const prices = await ctx.db
+          .query("part_prices")
+          .withIndex("by_part", (q: any) => q.eq("part_id", part._id))
+          .collect();
+        for (const p of prices as any[]) {
+          const price = Number(p.price);
+          if (!Number.isFinite(price) || price <= 0) continue;
+          const type = String(p.price_type ?? "");
+          // Seeded and marketplace rows are not market evidence.
+          if (type === "manual_seed") continue;
+          byGrade.set(grade, [...(byGrade.get(grade) ?? []), price]);
+          samples.push({ grade, oem: part.oem_part_number, price, type });
+        }
+      }
+    }
+
+    const median = (xs: number[]): number => {
+      const s = [...xs].sort((a, b) => a - b);
+      const mid = Math.floor(s.length / 2);
+      return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+    };
+
+    const perGrade = [...byGrade.entries()]
+      .map(([grade, xs]) => ({
+        grade,
+        n: xs.length,
+        min: Math.min(...xs),
+        median: Math.round(median(xs) * 100) / 100,
+        max: Math.max(...xs),
+      }))
+      .sort((a, b) => b.n - a.n);
+
+    return { perGrade, sampleCount: samples.length, samples: samples.slice(0, 25) };
+  },
+});
+
 export const census = internalQuery({
   args: { limit: v.optional(v.float64()) },
   handler: async (ctx, args) => {

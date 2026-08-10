@@ -31,6 +31,7 @@ export const seedOilGrades = internalMutation({
     let created = 0;
     let skipped = 0;
     let pricesSeeded = 0;
+    let pricesRepriced = 0;
 
     for (const row of Object.values(OE_OIL_CATALOG)) {
       let part = await ctx.db
@@ -73,9 +74,29 @@ export const seedOilGrades = internalMutation({
           created_at: now,
         });
         pricesSeeded++;
+      } else if (
+        // Re-derived catalog prices must reach rows seeded by an EARLIER run
+        // (the Aug 9 estimates were replaced by observed medians). Strictly
+        // limited to OUR OWN untouched seed row: a director correction or a
+        // real scraped price is never overwritten.
+        existingPrice.price_type === "manual_seed" &&
+        existingPrice.source_domain === "otopair_seed" &&
+        Number(existingPrice.price) !== row.pricePerQuartUsd
+      ) {
+        await ctx.db.patch(existingPrice._id, {
+          price: row.pricePerQuartUsd,
+          refreshed_at: now,
+        });
+        pricesRepriced++;
       }
     }
 
-    return { grades: Object.keys(OE_OIL_CATALOG).length, created, skipped, pricesSeeded };
+    return {
+      grades: Object.keys(OE_OIL_CATALOG).length,
+      created,
+      skipped,
+      pricesSeeded,
+      pricesRepriced,
+    };
   },
 });

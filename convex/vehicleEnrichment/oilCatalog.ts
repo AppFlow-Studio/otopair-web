@@ -84,77 +84,87 @@ export function normalizeViscosity(raw: string | null | undefined): string | nul
  * The catalog. One row per grade observed across the fleet, ordered by how
  * common the grade is (0W-20 is 44% of engines).
  *
- * Prices are market-typical per-quart figures for OE-grade full synthetic and
- * are placeholders in the same sense the old flat $11 was — except they are
- * now grade-aware, so a 0W-8 hybrid oil and a 15W-40 diesel oil no longer
- * quote at the same number. Real observed prices supersede them.
+ * PRICES ARE EVIDENCE-BASED (Aug 9 2026). They are not estimates: each is the
+ * MEDIAN of real per-quart prices we have already scraped for that grade,
+ * across 119 price rows on 7 grades (devOnly/oilCoverage:observedOilPrices).
+ * The first-pass estimates were wrong in both directions — 0W-30 was under by
+ * a third ($10.50 vs an observed $14.06) and 0W-40 over by 14% — which is
+ * exactly why they were replaced with measurement.
+ *
+ * Median, not mean, on purpose: the observed rows carry MULTI-QUART JUG
+ * contamination (a "0W-20" row at $102.10, several at $36) that a mean would
+ * swallow whole. Four grades have no observed rows yet and carry an anchored
+ * estimate, labelled as such on the line.
+ *
+ * Re-derive after any material price refresh:
+ *   npx convex run devOnly/oilCoverage:observedOilPrices '{}'
  */
 export const OE_OIL_CATALOG: Readonly<Record<string, OeOilRow>> = {
   "0W-20": {
     viscosity: "0W-20",
     name: "Engine oil 0W-20 (OE-grade full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-0W20",
-    pricePerQuartUsd: 9.5,
+    pricePerQuartUsd: 10.5, // observed median 10.53 (n=53)
   },
   "5W-30": {
     viscosity: "5W-30",
     name: "Engine oil 5W-30 (OE-grade full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-5W30",
-    pricePerQuartUsd: 9.5,
+    pricePerQuartUsd: 9.75, // observed median 9.79 (n=24)
   },
   "5W-20": {
     viscosity: "5W-20",
     name: "Engine oil 5W-20 (OE-grade full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-5W20",
-    pricePerQuartUsd: 9.5,
+    pricePerQuartUsd: 9.5, // observed median 9.49 (n=15)
   },
   "0W-30": {
     viscosity: "0W-30",
     name: "Engine oil 0W-30 (OE-grade full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-0W30",
-    pricePerQuartUsd: 10.5,
+    pricePerQuartUsd: 14.0, // observed median 14.06 (n=6)
   },
   "0W-16": {
     viscosity: "0W-16",
     name: "Engine oil 0W-16 (OE-grade full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-0W16",
-    pricePerQuartUsd: 11.5,
+    pricePerQuartUsd: 10.0, // observed median 10.00 (n=5)
   },
   "0W-40": {
     viscosity: "0W-40",
     name: "Engine oil 0W-40 (OE-grade full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-0W40",
-    pricePerQuartUsd: 12.5,
+    pricePerQuartUsd: 11.0, // observed median 10.99 (n=9)
   },
   "5W-40": {
     viscosity: "5W-40",
     name: "Engine oil 5W-40 (OE-grade full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-5W40",
-    pricePerQuartUsd: 12.0,
+    pricePerQuartUsd: 10.5, // observed median 10.40 (n=7)
   },
   "10W-30": {
     viscosity: "10W-30",
     name: "Engine oil 10W-30 (OE-grade full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-10W30",
-    pricePerQuartUsd: 9.0,
+    pricePerQuartUsd: 9.5, // no observed rows — anchored to the cheapest evidenced grade (5W-20)
   },
   "15W-40": {
     viscosity: "15W-40",
     name: "Engine oil 15W-40 (OE-grade diesel full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-15W40",
-    pricePerQuartUsd: 9.0,
+    pricePerQuartUsd: 9.5, // no observed rows — bulk diesel oil, anchored to 5W-20
   },
   "0W-8": {
     viscosity: "0W-8",
     name: "Engine oil 0W-8 (OE-grade full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-0W8",
-    pricePerQuartUsd: 13.0,
+    pricePerQuartUsd: 14.0, // no observed rows — anchored to the dearest evidenced grade (0W-30)
   },
   "5W-50": {
     viscosity: "5W-50",
     name: "Engine oil 5W-50 (OE-grade full synthetic)",
     identifier: "OTOPAIR-UNIV-ENGINE-OIL-5W50",
-    pricePerQuartUsd: 13.0,
+    pricePerQuartUsd: 13.0, // no observed rows — performance grade, estimate
   },
 };
 

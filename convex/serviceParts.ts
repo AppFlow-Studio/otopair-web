@@ -21,6 +21,8 @@ import {
   type CandidateInput,
   type TraceEntry,
 } from "./partSelector";
+import { passesI1ReadGuardNamed } from "./lib/makeIdentity";
+import { lookupOeOil, isOeCatalogOil } from "./vehicleEnrichment/oilCatalog";
 import {
   getServicePartsSpec,
   normalizeServiceSlug,
@@ -113,6 +115,21 @@ function gapServiceApplies(
 export const PART_CONFIDENCE_GATE_THRESHOLD = 0.7;
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+/** Cached make-name lookup for the duplicate-makes-row escape
+ *  (lib/makeIdentity.passesI1ReadGuardNamed). Module-level cache is safe:
+ *  make names are effectively immutable, and the guard only compares them
+ *  case-insensitively. One db.get per distinct make id per isolate. */
+const _makeNameCache = new Map<string, string | null>();
+async function partMakeNameCached(ctx: { db: any }, id: unknown): Promise<string | null> {
+  if (id == null) return null;
+  const k = String(id);
+  const hit = _makeNameCache.get(k);
+  if (hit !== undefined) return hit;
+  const name = ((await ctx.db.get(id as any)) as any)?.name ?? null;
+  _makeNameCache.set(k, name);
+  return name;
+}
 
 /**
  * Per-service parts rule. Replaces the legacy `BILLABLE_SUBCATEGORIES_BY_SERVICE`
@@ -303,11 +320,12 @@ export const getPartsForService = query({
       // a foreign brand — unless a mechanic physically verified the fitment,
       // which overrides both heuristics (see passesI1ReadGuard).
       if (
-        !passesI1ReadGuard({
+        !passesI1ReadGuardNamed({
           partMakeId: part.make_id,
           configMakeId: config.make_id,
           oemPartNumber: part.oem_part_number,
           configMakeName: makeDocForGuard?.name,
+          partMakeName: await partMakeNameCached(ctx, part.make_id),
           mechanicVerified: f.mechanic_verified === true,
         })
       )
@@ -386,11 +404,12 @@ export const getOemPartsForBooking = query({
         // First pass without the fitment lookup — clean rows (the vast
         // majority) never touch part_fitments.
         if (
-          passesI1ReadGuard({
+          passesI1ReadGuardNamed({
             partMakeId: part?.make_id ?? null,
             configMakeId: guardMakeId,
             oemPartNumber: row.oem_number,
             configMakeName: guardMakeDoc?.name,
+            partMakeName: await partMakeNameCached(ctx, part?.make_id ?? null),
           })
         )
           return true;
@@ -507,11 +526,12 @@ export const getOemPartsForBooking = query({
         // I1 make guard + brand-signature backstop; mechanic verification
         // overrides both (see passesI1ReadGuard).
         if (
-          !passesI1ReadGuard({
+          !passesI1ReadGuardNamed({
             partMakeId: part.make_id,
             configMakeId,
             oemPartNumber: part.oem_part_number,
             configMakeName: makeDocForGuard?.name,
+            partMakeName: await partMakeNameCached(ctx, part.make_id),
             mechanicVerified: f.mechanic_verified === true,
           })
         )
@@ -864,11 +884,12 @@ export const getPartsNeedingVerification = query({
         if (f.package_code != null) continue;
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
-        const passes = passesI1ReadGuard({
+        const passes = passesI1ReadGuardNamed({
           partMakeId: part.make_id,
           configMakeId,
           oemPartNumber: part.oem_part_number,
           configMakeName: makeDoc?.name,
+          partMakeName: await partMakeNameCached(ctx, part.make_id),
           mechanicVerified: f.mechanic_verified === true,
         });
         if (passes) continue; // survivors already flow through the resolver
@@ -1045,11 +1066,12 @@ export const getPartsNeedingVerification = query({
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
         if (
-          passesI1ReadGuard({
+          passesI1ReadGuardNamed({
             partMakeId: part.make_id,
             configMakeId,
             oemPartNumber: part.oem_part_number,
             configMakeName: makeDoc?.name,
+            partMakeName: await partMakeNameCached(ctx, part.make_id),
             mechanicVerified: f.mechanic_verified === true,
           })
         ) {
@@ -1145,11 +1167,12 @@ export const getServiceGapsForConfig = query({
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
         if (
-          passesI1ReadGuard({
+          passesI1ReadGuardNamed({
             partMakeId: part.make_id,
             configMakeId,
             oemPartNumber: part.oem_part_number,
             configMakeName: makeDoc?.name,
+            partMakeName: await partMakeNameCached(ctx, part.make_id),
             mechanicVerified: f.mechanic_verified === true,
           })
         ) {
@@ -1486,12 +1509,29 @@ async function synthesizeUniversalCandidate(
   serviceRole: ServiceRole,
 ): Promise<WinnerCandidate | null> {
   if (!role.universalFallback) return null;
-  const universalPart = await ctx.db
+  const consumables = await ctx.db
     .query("oem_parts")
     .withIndex("by_subcategory", (q: any) => q.eq("subcategory", role.roleKey))
     .filter((q: any) => q.eq(q.field("category"), "consumable"))
-    .first();
-  if (!universalPart) return null; // seed not run yet — skip silently
+    .collect();
+  if (consumables.length === 0) return null; // seed not run yet — skip silently
+
+  // Engine oil is GRADE-critical (Aug 2026). The lane used to hold one
+  // nameless "Engine oil (per quart)" row handed to every vehicle, so a
+  // 0W-8 hybrid and a 15W-40 diesel billed the same anonymous line. Prefer
+  // the row matching THIS engine's viscosity; fall back to the generic row
+  // only when the grade is unknown or uncatalogued — never substitute a
+  // neighbouring grade, since the wrong oil is worse than an unnamed one.
+  let universalPart = consumables[0];
+  if (role.roleKey === "engine_oil") {
+    const config: any = await ctx.db.get(vehicleConfigId);
+    const engine: any = config?.engine_id ? await ctx.db.get(config.engine_id) : null;
+    const graded = lookupOeOil(engine?.oil_viscosity);
+    const match = graded
+      ? consumables.find((p: any) => p.oem_part_number === graded.identifier)
+      : null;
+    universalPart = match ?? consumables.find((p: any) => !isOeCatalogOil(p.oem_part_number)) ?? consumables[0];
+  }
   const priceSummary = await summarizePartPrices(ctx, universalPart._id);
   if (priceSummary.sample_size === 0) return null; // unpriced seed — skip
   const stubFitment = {
@@ -1613,11 +1653,12 @@ export async function resolveWinningPartForService(
     // Motorcraft BXT-… on an Alfa Romeo). A mechanic-verified fitment
     // overrides both — quarantine spares those rows for the same reason.
     if (
-      !passesI1ReadGuard({
+      !passesI1ReadGuardNamed({
         partMakeId: part.make_id,
         configMakeId,
         oemPartNumber: part.oem_part_number,
         configMakeName: makeDocForGuard?.name,
+        partMakeName: await partMakeNameCached(ctx, part.make_id),
         mechanicVerified: f.mechanic_verified === true,
       })
     )
@@ -1918,6 +1959,7 @@ export async function resolveWinningPartForService(
       source_domains: c.fitment.source_domains ?? [],
       prices: c.priceSummary.sources_used.map((s) => ({
         price: s.price,
+        source_domain: s.source_domain,
         refreshed_days_ago:
           s.refreshed_at != null
             ? Math.max(0, Math.floor((now - s.refreshed_at) / MS_PER_DAY))

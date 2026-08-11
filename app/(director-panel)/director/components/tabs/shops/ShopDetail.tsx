@@ -10,7 +10,7 @@ import {
   Card, Badge, Button, Input, MicroH, tableStyles, Modal, AuditButton, AuditLogCompact,
   IconChevron, IconShop, IconExternal, IconX, IconCheck,
 } from '../../Primitives'
-import { money } from '../../Charts'
+import { money, fmtDate, fmtDateTime } from '../../Charts'
 import { gotoEntity } from '../../directorNav'
 import { AdminActionPanel, ActionRow } from '../../AdminActionPanel'
 import { DirectorNotesPanel } from '../../DirectorNotesPanel'
@@ -18,9 +18,15 @@ import { BookingDetailModal } from '../../BookingDetailModal'
 import { HealthDot } from './shopsUi'
 import type {
   Profile, HourRow, ServicesResult, RosterMechanic, CalendarResult, ShopBookingRow, ShopInsights,
+  ShopComplianceResult,
 } from './types'
+import { licenseLabel, documentGroupOf, DOCUMENT_GROUPS, CUSTOM_GROUP_LABEL } from '@/lib/license-catalog'
 
-const TABS = ['Profile', 'Hours', 'Services & Rate', 'Mechanics', 'Calendar', 'Bookings', 'Insights'] as const
+const TABS = ['Profile', 'Hours', 'Services & Rate', 'Compliance', 'Mechanics', 'Calendar', 'Bookings', 'Insights'] as const
+
+const PROMOTION_LABEL = ['None', 'Boosted', 'Featured'] as const
+const LICENSE_TONE = { pending_review: 'yellow', verified: 'green', rejected: 'red' } as const
+const LICENSE_STATUS_LABEL = { pending_review: 'Pending review', verified: 'Verified', rejected: 'Rejected' } as const
 type Tab = (typeof TABS)[number]
 
 // ── week helpers (ported from /shops/all/[id]) ──
@@ -89,6 +95,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
   const mechanics = useQuery(api.shopsDirectory.shopMechanics, tab === 'Mechanics' ? { token, id: sid } : 'skip') as RosterMechanic[] | undefined
   const bookings = useQuery(api.shopsDirectory.shopBookings, tab === 'Bookings' ? { token, id: sid } : 'skip') as ShopBookingRow[] | undefined
   const insights = useQuery(api.shopsDirectory.shopInsights, tab === 'Insights' ? { token, id: sid } : 'skip') as ShopInsights | undefined
+  const compliance = useQuery(api.shopsDirectory.shopLicenses, tab === 'Compliance' ? { token, id: sid } : 'skip') as ShopComplianceResult | undefined
 
   const [weekMonday, setWeekMonday] = useState(() => mondayOf(new Date()))
   const dates = useMemo(() => weekDates(weekMonday), [weekMonday])
@@ -105,6 +112,8 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
   const setShopActive = useMutation(api.director.setShopActive)
   const setShopVerified = useMutation(api.director.setShopVerified)
   const setLaborRate = useMutation(api.shopsDirectory.setLaborRate)
+  const reviewShopLicense = useMutation(api.shopsDirectory.reviewShopLicense)
+  const setShopPromotion = useMutation(api.shopsDirectory.setShopPromotion)
   const createOnboardingLink = useAction(api.directorStripeLive.createOrResendOnboardingLink)
 
   useEffect(() => { logView({ entity_type: 'shop', entity_id: shopId, actorName, actorId }) }, [shopId])
@@ -123,6 +132,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
   }, [profile?.id])
 
   const [confirmAction, setConfirmAction] = useState<string | null>(null)
+  const [reviewTarget, setReviewTarget] = useState<{ id: string; status: 'verified' | 'rejected' } | null>(null)
   const [stripeLoading, setStripeLoading] = useState(false)
 
   // Rate ceremony
@@ -151,6 +161,21 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
     if (action === 'Mark Verified') await setShopVerified({ id: sid, verified: true, reason, actorName, actorId })
     if (action === 'Remove Verification') await setShopVerified({ id: sid, verified: false, reason, actorName, actorId })
     setToast(`${action} done — logged in audit.`)
+  }
+
+  const handleReviewLicense = async (reason: string) => {
+    if (!reviewTarget) return
+    try {
+      await reviewShopLicense({ token, licenseId: reviewTarget.id as Id<'shop_licenses'>, status: reviewTarget.status, note: reason })
+      setToast(`License ${reviewTarget.status} — logged in audit.`)
+    } catch (e) { setToast(e instanceof Error ? e.message : 'Review failed.') }
+  }
+
+  const handleSetPromotion = async (tier: 0 | 1 | 2) => {
+    try {
+      await setShopPromotion({ token, id: sid, tier })
+      setToast(`Promotion set to ${PROMOTION_LABEL[tier]} — logged in audit.`)
+    } catch (e) { setToast(e instanceof Error ? e.message : 'Update failed.') }
   }
 
   const handleStripeOnboarding = async () => {
@@ -257,8 +282,8 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
               <Field label="Stripe">{profile.stripeAccountId ? `${profile.stripeAccountId} · charges ${profile.stripeChargesEnabled ? '✓' : '✗'} · payouts ${profile.stripePayoutsEnabled ? '✓' : '✗'}` : 'Not connected'}</Field>
               <Field label="Onboarding">{profile.onboardingComplete ? <span style={{ color:'var(--green-700)' }}>Complete</span> : <span style={{ color:'var(--amber-700, #B45309)' }}>Incomplete</span>}</Field>
               <Field label="Requirements due">{profile.stripeRequirementsDue.length > 0 ? <span style={{ color:'var(--amber-700, #B45309)' }}>{profile.stripeRequirementsDue.join(', ')}</span> : 'None'}</Field>
-              <Field label="Rates updated">{profile.laborRatesUpdatedAt ? new Date(profile.laborRatesUpdatedAt).toLocaleDateString() : '—'}</Field>
-              <Field label="Created">{new Date(profile.createdAt).toLocaleDateString()}</Field>
+              <Field label="Rates updated">{fmtDate(profile.laborRatesUpdatedAt)}</Field>
+              <Field label="Created">{fmtDate(profile.createdAt)}</Field>
             </div>
 
             {profile.description && (
@@ -445,6 +470,108 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
         </div>
       )}
 
+      {/* ── Compliance (licenses & certificates) ── */}
+      {tab === 'Compliance' && (
+        <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
+          {compliance === undefined ? (
+            <Card><div style={{ color:'var(--slate-500)', fontSize:13 }}>Loading…</div></Card>
+          ) : (() => {
+            const licenses = compliance.licenses
+            const verifiedCount = licenses.filter(l => l.reviewStatus === 'verified').length
+            const pendingCount = licenses.filter(l => l.reviewStatus === 'pending_review').length
+            const rejectedCount = licenses.filter(l => l.reviewStatus === 'rejected').length
+            const tier = profile?.promotionTier ?? 0
+            // Group uploaded docs by catalog group; custom docs (unknown type) fall to "Other".
+            const sections = [
+              ...DOCUMENT_GROUPS.map(g => ({ label: g.label, items: licenses.filter(l => documentGroupOf(l.licenseType) === g.group) })),
+              { label: CUSTOM_GROUP_LABEL, items: licenses.filter(l => documentGroupOf(l.licenseType) === null) },
+            ].filter(s => s.items.length > 0)
+
+            const renderCard = (lic: any) => (
+              <div key={lic._id} style={{ border:'1px solid var(--slate-200)', borderRadius:10, padding:14, display:'flex', flexDirection:'column', gap:12 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', gap:12, flexWrap:'wrap' }}>
+                  <div style={{ display:'flex', flexDirection:'column', gap:3 }}>
+                    <div style={{ fontSize:14, fontWeight:600, color:'var(--slate-800)' }}>{licenseLabel(lic.licenseType)}</div>
+                    <div style={{ fontSize:12.5 }}>
+                      {lic.url
+                        ? <a href={lic.url} target="_blank" rel="noopener noreferrer" style={{ color:'var(--blue-600)', textDecoration:'none' }}>{lic.originalFilename ?? 'View document'} <IconExternal size={11} /></a>
+                        : <span style={{ color:'var(--slate-500)' }}>{lic.originalFilename ?? 'Document'}</span>}
+                    </div>
+                  </div>
+                  <Badge tone={LICENSE_TONE[lic.reviewStatus]}>{LICENSE_STATUS_LABEL[lic.reviewStatus]}</Badge>
+                </div>
+
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(3, 1fr)', gap:'10px 24px' }}>
+                  <Field label="Reference #">{lic.licenseNumber ?? '—'}</Field>
+                  <Field label="Expires">{fmtDate(lic.expiresAt)}</Field>
+                  <Field label="Uploaded">{fmtDate(lic.createdAt)}</Field>
+                  {lic.reviewStatus !== 'pending_review' && <Field label="Reviewed by">{lic.reviewedBy ?? '—'}</Field>}
+                  {lic.reviewNote && <Field label="Review note">{lic.reviewNote}</Field>}
+                </div>
+
+                <div style={{ display:'flex', gap:8 }}>
+                  <Button size="sm" variant="primary" disabled={!canWriteShops || lic.reviewStatus === 'verified'} onClick={() => setReviewTarget({ id: lic._id, status: 'verified' })}>Verify</Button>
+                  <Button size="sm" variant="danger" disabled={!canWriteShops || lic.reviewStatus === 'rejected'} onClick={() => setReviewTarget({ id: lic._id, status: 'rejected' })}>Reject</Button>
+                </div>
+              </div>
+            )
+
+            return (
+              <>
+                {/* Verification + promotion summary — the director's "push" levers. */}
+                <Card>
+                  <MicroH>Verification &amp; promotion</MicroH>
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:14, marginTop:12, alignItems:'center' }}>
+                    <div style={{ fontSize:13, color:'var(--slate-600)' }}>
+                      <strong style={{ color:'var(--slate-800)' }}>{verifiedCount}</strong> verified · {pendingCount} pending · {rejectedCount} rejected
+                    </div>
+                    {profile?.isVerified ? <Badge tone="green">Shop verified</Badge> : <Badge tone="slate">Not verified</Badge>}
+                  </div>
+                  <div style={{ marginTop:16 }}>
+                    <div style={{ fontSize:11, fontWeight:600, textTransform:'uppercase', letterSpacing:'0.04em', color:'var(--slate-400)', marginBottom:6 }}>Marketplace promotion</div>
+                    <div style={{ display:'flex', gap:8 }}>
+                      {[0, 1, 2].map(t => (
+                        <Button key={t} size="sm" variant={tier === t ? 'primary' : undefined}
+                          disabled={!canWriteShops || tier === t} onClick={() => handleSetPromotion(t as 0 | 1 | 2)}>
+                          {PROMOTION_LABEL[t]}
+                        </Button>
+                      ))}
+                    </div>
+                    <div style={{ fontSize:12, color:'var(--slate-500)', marginTop:6 }}>
+                      Boost shops with strong verified credentials. Marking the shop verified lives on the Profile tab.
+                    </div>
+                  </div>
+                </Card>
+
+                {compliance.offersInspectionServices &&
+                  !licenses.some(l => l.licenseType === 'dmv_inspection_station' && l.reviewStatus === 'verified') && (
+                  <div style={{ display:'flex', gap:10, alignItems:'flex-start', padding:'12px 14px', borderRadius:10, border:'1px solid #FDE68A', background:'var(--yellow-50, #FEFCE8)', color:'var(--yellow-800, #854D0E)', fontSize:13 }}>
+                    <span style={{ fontSize:15, lineHeight:1 }}>⚠</span>
+                    <div>This shop offers <strong>State Inspection / Emissions Test</strong> but has no <strong>verified</strong> NY DMV inspection station license on file.</div>
+                  </div>
+                )}
+
+                {licenses.length === 0 ? (
+                  <Card>
+                    <MicroH>Licenses &amp; certificates</MicroH>
+                    <div style={{ color:'var(--slate-500)', fontSize:13, marginTop:10 }}>No documents uploaded yet.</div>
+                  </Card>
+                ) : (
+                  sections.map(section => (
+                    <Card key={section.label}>
+                      <MicroH>{section.label}</MicroH>
+                      <div style={{ display:'flex', flexDirection:'column', gap:12, marginTop:12 }}>
+                        {section.items.map(renderCard)}
+                      </div>
+                    </Card>
+                  ))
+                )}
+              </>
+            )
+          })()}
+        </div>
+      )}
+
       {/* ── Mechanics ── */}
       {tab === 'Mechanics' && (
         <div>
@@ -564,7 +691,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                             {b.customerNotes && <div title={b.customerNotes} style={{ marginTop:2, maxWidth:256, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontSize:11, fontStyle:'italic', color:'var(--slate-400)' }}>“{b.customerNotes}”</div>}
                             {b.recommendationState && b.recommendationState !== 'none' && <Badge tone="purple" style={{ marginTop:2 }}>upsell: {b.recommendationState}</Badge>}
                           </td>
-                          <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{b.date ?? '—'}{b.time ? ` ${b.time}` : ''}</td>
+                          <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{fmtDate(b.date)}{b.time ? ` ${b.time}` : ''}</td>
                           <td style={{ ...tableStyles.td, fontSize:12, color:'var(--slate-600)' }}>
                             {b.estLaborMinutes != null || b.actualDurationMinutes != null
                               ? <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}>
@@ -625,7 +752,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                         <span style={{ fontWeight:600, color:'var(--slate-800)' }}>{money(d.amount, { cents: true })}</span>
                         {d.reason && <span style={{ color:'var(--slate-500)' }}>{d.reason}</span>}
                         {d.booking_id && <span onClick={() => setDrillBooking(d.booking_id as Id<'bookings'>)} style={{ color:'var(--blue-600)', cursor:'pointer' }}>booking →</span>}
-                        <span style={{ marginLeft:'auto', fontSize:11, color:'var(--slate-400)' }}>{new Date(d.openedAt).toLocaleDateString()}</span>
+                        <span style={{ marginLeft:'auto', fontSize:11, color:'var(--slate-400)' }}>{fmtDate(d.openedAt)}</span>
                       </div>
                     ))}
                   </div>}
@@ -657,7 +784,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                           {r.reviewer && <a onClick={() => gotoEntity('users', r.reviewer_id)} style={{ fontSize:12, fontWeight:500, color:'var(--blue-600)', cursor:'pointer' }}>{r.reviewer}</a>}
                           {r.mechanic && <span style={{ fontSize:11, color:'var(--slate-400)' }}>· {r.mechanic}</span>}
                           {r.hidden && <Badge tone="slate">hidden</Badge>}
-                          <span style={{ marginLeft:'auto', fontSize:11, color:'var(--slate-400)' }}>{new Date(r.at).toLocaleDateString()}</span>
+                          <span style={{ marginLeft:'auto', fontSize:11, color:'var(--slate-400)' }}>{fmtDate(r.at)}</span>
                         </div>
                         {(r.vehicle.ymm || r.service_names.length > 0) && (
                           <div style={{ marginTop:2, display:'flex', flexWrap:'wrap', alignItems:'center', gap:6, fontSize:11, color:'var(--slate-500)' }}>
@@ -680,7 +807,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                       {insights.rateHistory.map((h, i) => (
                         <li key={i} style={{ fontSize:12 }}>
                           <div style={{ color:'var(--slate-700)' }}>{h.detail ?? 'rate changed'}</div>
-                          <div style={{ fontSize:11, color:'var(--slate-400)' }}>{new Date(h.at).toLocaleString()} · {h.actor}</div>
+                          <div style={{ fontSize:11, color:'var(--slate-400)' }}>{fmtDateTime(h.at)} · {h.actor}</div>
                         </li>
                       ))}
                     </ol>}
@@ -720,6 +847,9 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
 
       {/* Confirm verify/activate */}
       {confirmAction && <ConfirmDialog action={confirmAction} onConfirm={reason => handleAction(confirmAction, reason)} onClose={() => setConfirmAction(null)} />}
+
+      {/* Confirm license verify/reject */}
+      {reviewTarget && <ConfirmDialog action={reviewTarget.status === 'verified' ? 'Verify License' : 'Reject License'} onConfirm={reason => handleReviewLicense(reason)} onClose={() => setReviewTarget(null)} />}
 
       {/* Booking drill */}
       <BookingDetailModal bookingId={drillBooking} onClose={() => setDrillBooking(null)} />

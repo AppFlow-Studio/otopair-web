@@ -847,6 +847,17 @@ function PostJobSurveyDialogBody({
     cycle,
   });
   const [submittedForApproval, setSubmittedForApproval] = useState(false);
+  // When the mechanic clicks "Revise estimate" on a declined / SLA-expired
+  // status panel we drop them back to the form. The booking row is still in a
+  // terminal *_declined / sla_expired state, so without this guard the
+  // re-entry effect below would immediately re-promote them back to the panel
+  // (the button would look dead). Sticks until they resubmit or reopen.
+  const manualReviseRef = useRef(false);
+  // Reset the revise intent whenever the dialog is (re)opened so a fresh open
+  // on a still-declined booking correctly shows the status panel, not the form.
+  useEffect(() => {
+    if (open) manualReviseRef.current = false;
+  }, [open]);
   // Re-entry: if the dialog opens on a booking that already has an in-flight
   // approval for *this* cycle, jump straight to the status panel.
   // A mid-job dialog opened on a booking still at pre_job_approved /
@@ -854,6 +865,7 @@ function PostJobSurveyDialogBody({
   useEffect(() => {
     if (!cycle) return;
     if (submittedForApproval) return;
+    if (manualReviseRef.current) return;
     const state = workflow.state;
     const matchesCycle =
       (cycle === "pre_job" &&
@@ -908,6 +920,14 @@ function PostJobSurveyDialogBody({
       ? String(Math.round(passportData.passport.mileage))
       : ""
   );
+  // Last odometer reading on file for this VIN. The server rejects a
+  // completion mileage below this (odometers don't run backward), so mirror
+  // the rule client-side to catch it inline instead of on final submit.
+  const baselineMileage =
+    typeof passportData?.passport.mileage === "number" &&
+    Number.isFinite(passportData.passport.mileage)
+      ? Math.round(passportData.passport.mileage)
+      : null;
   const [parts, setParts] = useState<PartRowState[]>(() => {
     // Read the parts ACTUALLY quoted on this booking first — the snapshot the
     // customer confirmed — not the catalog's broader suggestions. This is what
@@ -1196,6 +1216,21 @@ function PostJobSurveyDialogBody({
       if (mileageIdx >= 0) setStepIndex(mileageIdx);
       return;
     }
+    // Odometer can't read below the last value on file — the server enforces
+    // this too, so catch it here and send the mechanic back to the field.
+    if (
+      !cycle &&
+      baselineMileage != null &&
+      Number.isFinite(parsedMileage) &&
+      parsedMileage < baselineMileage
+    ) {
+      setError(
+        `Completion mileage can't be below the last recorded reading of ${baselineMileage.toLocaleString("en-US")} mi.`
+      );
+      const mileageIdx = visibleSteps.indexOf("mileage");
+      if (mileageIdx >= 0) setStepIndex(mileageIdx);
+      return;
+    }
 
     const normalizedParts = normalizeParts();
     const partsRequiredList = passportData?.parts_required_services ?? [];
@@ -1325,6 +1360,9 @@ function PostJobSurveyDialogBody({
         }
         if (result) {
           onApprovalSubmitted?.(result as any);
+          // Fresh estimate sent — clear the revise intent so a subsequent
+          // decline correctly re-promotes the status panel on re-entry.
+          manualReviseRef.current = false;
           setSubmittedForApproval(true);
         }
         return;
@@ -1530,7 +1568,14 @@ function PostJobSurveyDialogBody({
           workflow={workflow}
           cycle={cycle}
           onDismiss={onClose}
-          onReviseRequested={() => setSubmittedForApproval(false)}
+          onReviseRequested={() => {
+            manualReviseRef.current = true;
+            setSubmittedForApproval(false);
+            // Drop back to the first step of the estimate flow, not the
+            // summary step they submitted from.
+            setStepIndex(0);
+            setError("");
+          }}
           bookingLabel={bookingLabel}
         />
       </SurveyDialogShell>
@@ -1627,6 +1672,7 @@ function PostJobSurveyDialogBody({
             setTimeReasonNote={setTimeReasonNote}
             completionMileage={completionMileage}
             setCompletionMileage={setCompletionMileage}
+            baselineMileage={baselineMileage}
             actualLaborMinutes={actualLaborMinutes}
             setActualLaborMinutes={setActualLaborMinutes}
             parts={parts}
@@ -1763,6 +1809,7 @@ function PostJobSurveyDialogBody({
                 onClick={goNext}
                 disabled={!canAdvance(currentStep, {
                   completionMileage,
+                  baselineMileage,
                   timeReason,
                   timeReasonNote,
                   partsAccuracyStatus,
@@ -1791,6 +1838,7 @@ function canAdvance(
   step: StepKey,
   state: {
     completionMileage: string;
+    baselineMileage: number | null;
     timeReason: TimeVarianceReason | null;
     timeReasonNote: string;
     partsAccuracyStatus: PartsAccuracyStatus | null;
@@ -1809,7 +1857,16 @@ function canAdvance(
       return true;
     });
   }
-  if (step === "mileage") return state.completionMileage.trim() !== "";
+  if (step === "mileage") {
+    if (state.completionMileage.trim() === "") return false;
+    const parsed = Number(state.completionMileage);
+    if (!Number.isFinite(parsed)) return false;
+    // Odometer can't read below the last value on file.
+    if (state.baselineMileage != null && parsed < state.baselineMileage) {
+      return false;
+    }
+    return true;
+  }
   if (step === "time_reason") {
     if (state.timeReason === "other") return state.timeReasonNote.trim() !== "";
     return state.timeReason !== null;
@@ -1847,6 +1904,7 @@ function StepContent(props: {
   setTimeReasonNote: (value: string) => void;
   completionMileage: string;
   setCompletionMileage: (value: string) => void;
+  baselineMileage: number | null;
   actualLaborMinutes: string;
   setActualLaborMinutes: (value: string) => void;
   parts: PartRowState[];
@@ -1959,15 +2017,33 @@ function StepContent(props: {
           ) : null}
         </QuestionScreen>
       );
-    case "mileage":
+    case "mileage": {
+      const parsedCompletion = Number(props.completionMileage);
+      const belowBaseline =
+        props.baselineMileage != null &&
+        props.completionMileage.trim() !== "" &&
+        Number.isFinite(parsedCompletion) &&
+        parsedCompletion < props.baselineMileage;
       return (
         <QuestionScreen
           eyebrow="Required"
           question="What's the current odometer?"
           hint="Vehicle passport keeps this on the VIN."
         >
-          <div className="mx-auto flex max-w-md items-center gap-3 rounded-2xl border border-primary/15 bg-card px-5 py-4 shadow-[0_1px_2px_rgba(17,24,28,0.04)] transition-colors focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
-            <Gauge className="h-5 w-5 shrink-0 text-primary/70" />
+          <div
+            className={cn(
+              "mx-auto flex max-w-md items-center gap-3 rounded-2xl border bg-card px-5 py-4 shadow-[0_1px_2px_rgba(17,24,28,0.04)] transition-colors focus-within:ring-4",
+              belowBaseline
+                ? "border-destructive/50 focus-within:border-destructive focus-within:ring-destructive/10"
+                : "border-primary/15 focus-within:border-primary focus-within:ring-primary/10",
+            )}
+          >
+            <Gauge
+              className={cn(
+                "h-5 w-5 shrink-0",
+                belowBaseline ? "text-destructive/70" : "text-primary/70",
+              )}
+            />
             <input
               value={
                 props.completionMileage
@@ -1988,6 +2064,15 @@ function StepContent(props: {
               mi
             </span>
           </div>
+          {belowBaseline ? (
+            <p className="mx-auto mt-3 max-w-md text-center text-[12px] font-medium text-destructive">
+              Below the last recorded reading of{" "}
+              {props.baselineMileage?.toLocaleString("en-US")} mi. Odometers
+              don&apos;t run backward — double-check the number. If the reading
+              on file is wrong, it has to be corrected in the vehicle&apos;s
+              profile before you can close the job.
+            </p>
+          ) : null}
           {props.estimatedLaborMinutes ? (
             <div className="mx-auto mt-6 flex max-w-md flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
               <label className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
@@ -2017,6 +2102,7 @@ function StepContent(props: {
           ) : null}
         </QuestionScreen>
       );
+    }
     case "parts":
       return (
         <PartsStep

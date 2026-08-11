@@ -994,13 +994,33 @@ export const expireApprovals = internalAction({
         bookingId: row.bookingId,
       });
       if (row.cycle === "pre_job") {
-        // Capture the $20 deposit forfeit so the mechanic is compensated for
-        // inspection time. Scheduled so a single bad Stripe call doesn't
-        // poison the batch.
+        // Customer never approved the initial estimate — forfeit the $20
+        // deposit so the mechanic is paid for the inspection. Scheduled so a
+        // single bad Stripe call doesn't poison the batch.
         await ctx.scheduler.runAfter(
           0,
           internal.payments_stripe.captureDepositForfeit,
           { bookingId: row.bookingId },
+        );
+      } else if (row.cycle === "mid_job") {
+        // A mid-job scope increase the customer let lapse. performSubmission
+        // optimistically bumped mechanic_set_price_cents at request time, so
+        // roll it back to the last approved ceiling — otherwise completion
+        // would capture an increase the customer never approved.
+        await ctx.runMutation(
+          internal.booking_approvals._revertToPriorCeilingAfterExpiry,
+          { bookingId: row.bookingId },
+        );
+      } else if (row.cycle === "post_job") {
+        // Legacy rows only — Wave 4 stopped creating post_job cycles. The
+        // customer already agreed to the prior ceiling before the job started,
+        // so capture that rather than let a completed job go uncaptured on a
+        // lapsed prompt. captureAtAmount caps at the live hold + flags any
+        // shortfall for the reconciliation cron.
+        await ctx.scheduler.runAfter(
+          0,
+          internal.payments_stripe.finalizeAndChargeForBooking,
+          { bookingId: row.bookingId, forceCaptureAtCeiling: true },
         );
       }
       processed += 1;
@@ -1205,5 +1225,32 @@ export const _markApprovalExpired = internalMutation({
       sla_expires_at_ms: undefined,
       updated_at: now,
     });
+  },
+});
+
+/** Mid-job expiry recovery. performSubmission bumps mechanic_set_price_cents to
+ *  the requested amount at REQUEST time (before approval), so a mid-job scope
+ *  increase the customer lets lapse would otherwise be captured at completion
+ *  even though it was never approved. Roll mechanic_set back to the last
+ *  approved ceiling and restore an approved state so the job completes and
+ *  captures only the agreed price. Called by expireApprovals for the mid_job
+ *  branch, immediately after _markApprovalExpired. */
+export const _revertToPriorCeilingAfterExpiry = internalMutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const booking: any = await ctx.db.get(args.bookingId);
+    if (!booking) return;
+    const ceiling = booking.running_approved_ceiling_cents as
+      | number
+      | undefined;
+    const now = Date.now();
+    const patch: any = {
+      // There is a standing approved ceiling → the job proceeds at it; if none
+      // exists fall back to "none" (legacy) rather than the dead-end sla_expired.
+      payment_approval_state: ceiling != null ? "pre_job_approved" : "none",
+      updated_at: now,
+    };
+    if (ceiling != null) patch.mechanic_set_price_cents = ceiling;
+    await ctx.db.patch(args.bookingId, patch);
   },
 });

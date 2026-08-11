@@ -8,6 +8,7 @@ import { ShopsMapTab } from './shops/ShopsMapTab'
 import { MechanicsDirectory } from './shops/MechanicsDirectory'
 import { NetworkReviews } from './shops/NetworkReviews'
 import { AttentionList } from './shops/AttentionList'
+import { LicenseReviewQueue } from './shops/LicenseReviewQueue'
 import { ShopDetail } from './shops/ShopDetail'
 import { MechanicDetail } from './shops/MechanicDetail'
 import { CapacityHeatmap } from './shops/CapacityHeatmap'
@@ -25,6 +26,7 @@ const SUBTABS = [
   { id: 'mechanics',   label: 'Mechanics' },
   { id: 'reviews',     label: 'Reviews' },
   { id: 'attention',   label: 'Attention' },
+  { id: 'verification', label: 'Verification' },
   { id: 'capacity',    label: 'Capacity' },
   { id: 'offerings',   label: 'Offerings' },
   { id: 'performance', label: 'Performance' },
@@ -89,6 +91,7 @@ export const TabShops = () => {
       {sub === 'mechanics'   && <MechanicsDirectory onOpenMechanic={openMechanic} onOpenShop={openShop} />}
       {sub === 'reviews'     && <NetworkReviews onOpenShop={openShop} onOpenMechanic={openMechanic} />}
       {sub === 'attention'   && <AttentionList onOpenShop={openShop} />}
+      {sub === 'verification' && <LicenseReviewQueue onOpenShop={openShop} />}
       {sub === 'capacity'    && <CapacityHeatmap />}
       {sub === 'offerings'   && <OfferingsMatrix />}
       {sub === 'performance' && <PerformanceCalibration />}

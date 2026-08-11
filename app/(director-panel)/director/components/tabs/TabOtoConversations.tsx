@@ -27,7 +27,7 @@ import { Button, Input, Card, Badge, IconSearch } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { gotoEntity } from '../directorNav'
-import { StatCard, DailyBars, BarRow, money, fmtNumber, dayLabel } from '../Charts'
+import { StatCard, DailyBars, BarRow, money, fmtNumber, dayLabel, fmtDate } from '../Charts'
 
 const formatTs = (ts: number | null | undefined) =>
   ts
@@ -557,7 +557,7 @@ const T5Viewer = ({ token }: { token: string }) => {
                 <Badge tone="green">{transcript.bookingOutcome.status.replace(/_/g, ' ')}</Badge>
                 {(transcript.bookingOutcome.scheduledDate || transcript.bookingOutcome.shopName) && (
                   <span style={{ color: '#047857' }}>
-                    {[transcript.bookingOutcome.scheduledDate, transcript.bookingOutcome.scheduledTime].filter(Boolean).join(' ')}
+                    {[transcript.bookingOutcome.scheduledDate ? fmtDate(transcript.bookingOutcome.scheduledDate) : null, transcript.bookingOutcome.scheduledTime].filter(Boolean).join(' ')}
                     {transcript.bookingOutcome.shopName ? ` · ${transcript.bookingOutcome.shopName}` : ''}
                   </span>
                 )}

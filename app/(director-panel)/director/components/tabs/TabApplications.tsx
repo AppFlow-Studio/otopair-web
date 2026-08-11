@@ -37,7 +37,7 @@ const FILTERS: { id: StatusFilter; label: string }[] = [
 ]
 
 const fmtDate = (ms: number | null | undefined) =>
-  ms == null ? '—' : new Date(ms).toLocaleDateString()
+  ms == null ? '—' : new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 
 // ---------------------------------------------------------------------------
 // Reject ceremony — Modal with an optional reason.

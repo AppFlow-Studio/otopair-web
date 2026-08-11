@@ -9,6 +9,7 @@ import { makeFunctionReference } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import {
   LayoutDashboard,
+  Bell,
   Briefcase,
   Calendar,
   CreditCard,
@@ -27,10 +28,12 @@ import {
   Wrench,
   Contact,
   History,
+  type LucideIcon,
 } from "lucide-react";
 import { UserSupportPage } from "./user-support-page";
 import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { PortalSidebarContext } from "./portal-context";
 import CustomerSchedulingAlerts from "@/components/customer-scheduling-alerts";
 import NotificationBell from "@/components/notification-bell";
@@ -41,6 +44,7 @@ const ownerManagerLinks = [
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/previous-bookings", label: "Previous Bookings", icon: History },
   { href: "/team", label: "Team", icon: Users },
+  { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/payouts", label: "Payments", icon: CreditCard },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
@@ -50,6 +54,7 @@ const frontDeskLinks = [
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/previous-bookings", label: "Previous Bookings", icon: History },
   { href: "/team", label: "Team", icon: Users },
+  { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
 const mechanicLinks = [
@@ -57,6 +62,7 @@ const mechanicLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/previous-bookings", label: "Previous Bookings", icon: History },
+  { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
 const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
@@ -69,6 +75,194 @@ const bookingSubLinks = [
 
 const OWNER_MANAGER_ROLES = ["owner", "shop_owner", "admin"];
 const getPortalAccessQuery = makeFunctionReference<"query">("shops:getMyPortalAccess");
+
+// Instant hover tooltip for the collapsed sidebar. The <aside> clips its own
+// overflow-x and establishes a containing block via `transform`, so the tooltip
+// is portaled to <body> and positioned `fixed` just past the sidebar's right edge
+// — that's the only way it can escape the rail without a hover delay.
+function NavTooltip({
+  label,
+  enabled,
+  children,
+}: {
+  label: string;
+  enabled: boolean;
+  children: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+
+  const show = () => {
+    const el = ref.current;
+    if (!enabled || !el) return;
+    const rect = el.getBoundingClientRect();
+    const aside = el.closest("aside");
+    const right = aside ? aside.getBoundingClientRect().right : rect.right;
+    setCoords({ top: rect.top + rect.height / 2, left: right + 8 });
+  };
+  const hide = () => setCoords(null);
+
+  return (
+    <div ref={ref} onMouseEnter={show} onMouseLeave={hide}>
+      {children}
+      {enabled && coords && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              role="tooltip"
+              style={{ top: coords.top, left: coords.left }}
+              className="pointer-events-none fixed z-[60] -translate-y-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg ring-1 ring-black/5"
+            >
+              {label}
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
+  );
+}
+
+// Collapsed-rail Bookings entry. The expanded sidebar uses an inline accordion,
+// but at w-16 there's no room for sub-items, so clicking the icon opens a
+// portaled flyout with the booking sub-links. Hovering (while the flyout is
+// closed) still shows the instant "Bookings" label like every other rail item.
+function CollapsedBookingsButton({
+  active,
+  links,
+  pathname,
+  onNavigate,
+  disabled,
+  disabledClass,
+}: {
+  active: boolean;
+  links: { href: string; label: string; icon: LucideIcon }[];
+  pathname: string;
+  onNavigate: () => void;
+  disabled?: boolean;
+  disabledClass: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState<{ top: number; left: number } | null>(null);
+  const [tip, setTip] = useState<{ top: number; left: number } | null>(null);
+  const open = menu !== null;
+
+  const anchor = () => {
+    const el = ref.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    const aside = el.closest("aside");
+    const right = aside ? aside.getBoundingClientRect().right : rect.right;
+    return { rect, right };
+  };
+
+  const toggleMenu = () => {
+    if (open) {
+      setMenu(null);
+      return;
+    }
+    const a = anchor();
+    if (a) {
+      setMenu({ top: a.rect.top, left: a.right + 8 });
+      setTip(null);
+    }
+  };
+  const showTip = () => {
+    if (open) return;
+    const a = anchor();
+    if (a) setTip({ top: a.rect.top + a.rect.height / 2, left: a.right + 8 });
+  };
+  const hideTip = () => setTip(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!ref.current?.contains(t) && !t.closest("[data-bookings-flyout]")) setMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenu(null);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className={disabledClass}>
+      <div ref={ref} onMouseEnter={showTip} onMouseLeave={hideTip}>
+        <button
+          type="button"
+          onClick={toggleMenu}
+          aria-disabled={disabled || undefined}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          className={`flex w-full items-center justify-center rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+            active || open
+              ? "bg-blue-50 text-blue-700"
+              : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+          }`}
+        >
+          <Briefcase className="w-5 h-5 shrink-0" />
+        </button>
+      </div>
+
+      {tip && !open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              role="tooltip"
+              style={{ top: tip.top, left: tip.left }}
+              className="pointer-events-none fixed z-[60] -translate-y-1/2 whitespace-nowrap rounded-md bg-gray-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg ring-1 ring-black/5"
+            >
+              Bookings
+            </div>,
+            document.body,
+          )
+        : null}
+
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              data-bookings-flyout
+              style={{ top: menu.top, left: menu.left }}
+              className="fixed z-[60] min-w-[192px] rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl"
+            >
+              <p className="px-2 pb-1 pt-0.5 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                Bookings
+              </p>
+              {links.map((link) => {
+                const isActive =
+                  link.href === "/bookings"
+                    ? pathname === "/bookings"
+                    : pathname === link.href || pathname.startsWith(link.href + "/");
+                const Icon = link.icon;
+                return (
+                  <Link
+                    key={link.href}
+                    href={link.href}
+                    onClick={() => {
+                      onNavigate();
+                      setMenu(null);
+                    }}
+                    className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors ${
+                      isActive
+                        ? "bg-blue-50 text-blue-700"
+                        : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                    }`}
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    {link.label}
+                  </Link>
+                );
+              })}
+            </div>,
+            document.body,
+          )
+        : null}
+    </div>
+  );
+}
 
 export default function PortalLayout({
   children,
@@ -108,6 +302,8 @@ export default function PortalLayout({
     | null
     | undefined;
   const unconfirmedBookingCount = useQuery(api.schedule.getUnconfirmedBookingCount) ?? 0;
+  const notificationUnreadCount =
+    useQuery(api.mechanicNotifications.getFeed)?.unreadCount ?? 0;
   const seedBookings = useMutation(api.seed.seedDashboardBookings);
   const clearDashboardBookingsBatch = useMutation(api.seed.clearDashboardBookingsBatch);
   const seedLateStartReviewScenario = useMutation(api.seed.seedLateStartReviewScenario);
@@ -180,6 +376,41 @@ export default function PortalLayout({
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <Loader2 className="w-8 h-8 text-blue-600 animate-spin" />
       </div>
+    );
+  }
+
+  // Onboarding: strip the portal chrome down to a logo + account menu so the
+  // shop-registration flow is the only thing competing for the owner's attention.
+  if (isOnboarding && !isAcceptInvite) {
+    return (
+      <PortalSidebarContext.Provider value={{ setSidebarCompact: setSidebarAutoCompact }}>
+        <div className="min-h-screen flex flex-col bg-gray-50">
+          <header className="sticky top-0 z-40 flex items-center gap-3 border-b border-gray-200 bg-white px-6 py-4">
+            <Link href="/dashboard" className="flex items-center gap-2" aria-label="Otopair">
+              <Image src="/logo.png" alt="Otopair" width={28} height={28} />
+              <span className="text-base font-semibold text-gray-900">Otopair</span>
+            </Link>
+            <div className="ml-auto flex items-center gap-3">
+              <UserButton
+                userProfileProps={{
+                  appearance: {
+                    elements: { profileSection__danger: { display: "none" } },
+                  },
+                }}
+              >
+                <UserButton.UserProfilePage
+                  label="Support"
+                  url="support"
+                  labelIcon={<LifeBuoy className="w-4 h-4" />}
+                >
+                  <UserSupportPage />
+                </UserButton.UserProfilePage>
+              </UserButton>
+            </div>
+          </header>
+          <main className="flex-1 px-6 pt-6 pb-6">{children}</main>
+        </div>
+      </PortalSidebarContext.Provider>
     );
   }
 
@@ -338,91 +569,105 @@ export default function PortalLayout({
 
           <nav className="flex-1 px-3 py-4 space-y-1">
             {/* Dashboard */}
-            <Link
-              href="/dashboard"
-              onClick={() => setSidebarOpen(false)}
-              title={onboardingTooltip ?? (sidebarCompact ? "Dashboard" : undefined)}
-              aria-disabled={isOnboarding || undefined}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-                pathname === "/dashboard" || pathname.startsWith("/dashboard/")
-                  ? "bg-blue-50 text-blue-700"
-                  : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-              } ${onboardingDisabledClass}`}
-            >
-              <LayoutDashboard className="w-5 h-5 shrink-0" />
-              <NavText>Dashboard</NavText>
-            </Link>
-
-            {/* Bookings accordion — hidden for mechanics (they use My Bookings) */}
-            {!isMechanic && (
-            <div className={onboardingDisabledClass}>
-              <button
-                onClick={() => {
-                  if (!sidebarCompact) setBookingsOpen((o) => !o);
-                }}
-                title={onboardingTooltip ?? (sidebarCompact ? "Bookings" : undefined)}
+            <NavTooltip label="Dashboard" enabled={sidebarCompact}>
+              <Link
+                href="/dashboard"
+                onClick={() => setSidebarOpen(false)}
+                title={onboardingTooltip}
                 aria-disabled={isOnboarding || undefined}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors w-full ${
-                  isBookingsActive
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  pathname === "/dashboard" || pathname.startsWith("/dashboard/")
                     ? "bg-blue-50 text-blue-700"
                     : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                }`}
+                } ${onboardingDisabledClass}`}
               >
-                <Briefcase className="w-5 h-5 shrink-0" />
-                <NavText flex1>Bookings</NavText>
-                {/* Chevron fades with text so it doesn't float awkwardly */}
-                <ChevronDown
-                  className={`w-4 h-4 shrink-0 transition-all duration-300 ${
-                    bookingsOpen ? "rotate-180" : ""
-                  } ${sidebarCompact ? "opacity-0 max-w-0 overflow-hidden" : "opacity-100 max-w-[16px]"}`}
+                <LayoutDashboard className="w-5 h-5 shrink-0" />
+                <NavText>Dashboard</NavText>
+              </Link>
+            </NavTooltip>
+
+            {/* Bookings — inline accordion when expanded, click-flyout when collapsed.
+                Hidden for mechanics (they use My Bookings). */}
+            {!isMechanic &&
+              (sidebarCompact ? (
+                <CollapsedBookingsButton
+                  active={isBookingsActive}
+                  links={bookingSubLinks}
+                  pathname={pathname}
+                  onNavigate={() => setSidebarOpen(false)}
+                  disabled={isOnboarding}
+                  disabledClass={onboardingDisabledClass}
                 />
-              </button>
-              <div
-                className="overflow-hidden transition-all duration-300"
-                style={{ maxHeight: !sidebarCompact && bookingsOpen ? "120px" : "0px" }}
-              >
-                <div className="mt-1 ml-4 space-y-1 border-l border-gray-200 pl-3">
-                  {bookingSubLinks.map((link) => {
-                    const isActive =
-                      link.href === "/bookings"
-                        ? pathname === "/bookings"
-                        : pathname === link.href ||
-                          pathname.startsWith(link.href + "/");
-                    return (
-                      <Link
-                        key={link.href}
-                        href={link.href}
-                        onClick={() => setSidebarOpen(false)}
-                        className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
-                          isActive
-                            ? "bg-blue-50 text-blue-700"
-                            : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
-                        }`}
-                      >
-                        <link.icon className="w-4 h-4" />
-                        {link.label}
-                      </Link>
-                    );
-                  })}
+              ) : (
+                <div className={onboardingDisabledClass}>
+                  <button
+                    onClick={() => setBookingsOpen((o) => !o)}
+                    title={onboardingTooltip}
+                    aria-disabled={isOnboarding || undefined}
+                    className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors w-full ${
+                      isBookingsActive
+                        ? "bg-blue-50 text-blue-700"
+                        : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                    }`}
+                  >
+                    <Briefcase className="w-5 h-5 shrink-0" />
+                    <NavText flex1>Bookings</NavText>
+                    <ChevronDown
+                      className={`w-4 h-4 shrink-0 transition-transform duration-300 ${
+                        bookingsOpen ? "rotate-180" : ""
+                      }`}
+                    />
+                  </button>
+                  <div
+                    className="overflow-hidden transition-all duration-300"
+                    style={{ maxHeight: bookingsOpen ? "120px" : "0px" }}
+                  >
+                    <div className="mt-1 ml-4 space-y-1 border-l border-gray-200 pl-3">
+                      {bookingSubLinks.map((link) => {
+                        const isActive =
+                          link.href === "/bookings"
+                            ? pathname === "/bookings"
+                            : pathname === link.href ||
+                              pathname.startsWith(link.href + "/");
+                        return (
+                          <Link
+                            key={link.href}
+                            href={link.href}
+                            onClick={() => setSidebarOpen(false)}
+                            className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${
+                              isActive
+                                ? "bg-blue-50 text-blue-700"
+                                : "text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+                            }`}
+                          >
+                            <link.icon className="w-4 h-4" />
+                            {link.label}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-            )}
+              ))}
 
             {/* Role-specific links */}
             {sidebarLinks.map((link) => {
               const isActive =
                 pathname === link.href || pathname.startsWith(link.href + "/");
-              const showUnconfirmedBadge =
-                link.href === "/schedule" && unconfirmedBookingCount > 0;
-              const badgeLabel =
-                unconfirmedBookingCount > 99 ? "99+" : String(unconfirmedBookingCount);
+              const badgeCount =
+                link.href === "/schedule"
+                  ? unconfirmedBookingCount
+                  : link.href === "/notifications"
+                    ? notificationUnreadCount
+                    : 0;
+              const showUnconfirmedBadge = badgeCount > 0;
+              const badgeLabel = badgeCount > 99 ? "99+" : String(badgeCount);
               return (
+                <NavTooltip key={link.href} label={link.label} enabled={sidebarCompact}>
                 <Link
-                  key={link.href}
                   href={link.href}
                   onClick={() => setSidebarOpen(false)}
-                  title={onboardingTooltip ?? (sidebarCompact ? link.label : undefined)}
+                  title={onboardingTooltip}
                   aria-disabled={isOnboarding || undefined}
                   className={`relative flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                     isActive
@@ -436,7 +681,7 @@ export default function PortalLayout({
                     {showUnconfirmedBadge && sidebarCompact && (
                       <span
                         className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold leading-none text-white"
-                        aria-label={`${unconfirmedBookingCount} unconfirmed bookings`}
+                        aria-label={`${badgeCount} ${link.href === "/notifications" ? "unread notifications" : "unconfirmed bookings"}`}
                       >
                         {badgeLabel}
                       </span>
@@ -447,12 +692,13 @@ export default function PortalLayout({
                   {showUnconfirmedBadge && !sidebarCompact && (
                     <span
                       className="ml-auto flex h-5 min-w-[20px] items-center justify-center rounded-full bg-blue-600 px-1.5 text-xs font-semibold leading-none text-white"
-                      aria-label={`${unconfirmedBookingCount} unconfirmed bookings`}
+                      aria-label={`${badgeCount} ${link.href === "/notifications" ? "unread notifications" : "unconfirmed bookings"}`}
                     >
                       {badgeLabel}
                     </span>
                   )}
                 </Link>
+                </NavTooltip>
               );
             })}
           </nav>

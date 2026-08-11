@@ -731,6 +731,7 @@ export const getMyOnboardingData = query({
             defaultLaborHours: number;
             displayOrder: number;
             isOffered: boolean;
+            requiresInspectionLicense: boolean;
           }>,
         },
       ])
@@ -746,6 +747,10 @@ export const getMyOnboardingData = query({
         defaultLaborHours: (service.default_labor_hours ?? 1) as number,
         displayOrder: (service.display_order ?? 0) as number,
         isOffered: offeredIds.has(String(service._id)),
+        // Services that legally require a NY DMV inspection station license.
+        requiresInspectionLicense: Boolean(
+          service.requires_state_inspection || service.requires_emissions_test,
+        ),
       });
     }
 

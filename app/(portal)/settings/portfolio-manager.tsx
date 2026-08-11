@@ -134,16 +134,16 @@ export default function PortfolioManager({
   }
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6">
+    <div className="rounded-xl border border-border bg-card p-6 shadow-sm sm:p-8">
       <div className="mb-1 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wide">
+        <h2 className="text-base font-semibold text-foreground">
           Photo Gallery
         </h2>
         <span className="text-xs text-gray-400">
           {count} / {MAX_PORTFOLIO_IMAGES} photos
         </span>
       </div>
-      <p className="mb-4 text-sm text-gray-500">
+      <p className="mb-4 text-sm text-muted-foreground">
         Show customers the cars you&apos;ve worked on. Photos appear on your shop&apos;s public
         profile in the order below.
       </p>
@@ -154,7 +154,7 @@ export default function PortfolioManager({
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           {images.map((image, index) => (
             <figure key={String(image._id)} className="group">
-              <div className="relative aspect-[4/3] overflow-hidden rounded-lg border border-gray-200 bg-gray-100">
+              <div className="relative aspect-[4/3] overflow-hidden rounded-lg border border-border bg-gray-100">
                 {/* eslint-disable-next-line @next/next/no-img-element -- Convex storage
                     URLs aren't in next.config images.remotePatterns; plain <img> by design. */}
                 <img
@@ -164,7 +164,7 @@ export default function PortfolioManager({
                 />
                 {busyId === String(image._id) && (
                   <div className="absolute inset-0 flex items-center justify-center bg-white/70">
-                    <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                   </div>
                 )}
                 {canEdit && (
@@ -175,7 +175,7 @@ export default function PortfolioManager({
                         aria-label="Move photo earlier"
                         onClick={() => void handleMove(index, -1)}
                         disabled={index === 0 || busyId !== null || isUploading}
-                        className="rounded-md bg-white/90 p-1 text-gray-700 shadow-sm hover:bg-white disabled:opacity-40"
+                        className="rounded-md bg-white/90 p-1 text-foreground shadow-sm hover:bg-white disabled:opacity-40"
                       >
                         <ChevronLeft className="h-4 w-4" />
                       </button>
@@ -184,7 +184,7 @@ export default function PortfolioManager({
                         aria-label="Move photo later"
                         onClick={() => void handleMove(index, 1)}
                         disabled={index === images.length - 1 || busyId !== null || isUploading}
-                        className="rounded-md bg-white/90 p-1 text-gray-700 shadow-sm hover:bg-white disabled:opacity-40"
+                        className="rounded-md bg-white/90 p-1 text-foreground shadow-sm hover:bg-white disabled:opacity-40"
                       >
                         <ChevronRight className="h-4 w-4" />
                       </button>
@@ -217,10 +217,10 @@ export default function PortfolioManager({
                   onKeyDown={(e) => {
                     if (e.key === "Enter") e.currentTarget.blur();
                   }}
-                  className="mt-1.5 w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-xs text-gray-700 outline-none transition-colors placeholder:text-gray-400 hover:border-gray-200 focus:border-blue-500 focus:bg-white"
+                  className="mt-1.5 w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-xs text-foreground outline-none transition-colors placeholder:text-gray-400 hover:border-border focus:border-ring focus:bg-white"
                 />
               ) : image.caption ? (
-                <figcaption className="mt-1.5 px-1 text-xs text-gray-600">{image.caption}</figcaption>
+                <figcaption className="mt-1.5 px-1 text-xs text-muted-foreground">{image.caption}</figcaption>
               ) : null}
             </figure>
           ))}
@@ -230,7 +230,7 @@ export default function PortfolioManager({
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={isUploading}
-              className="flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-gray-300 text-gray-400 transition-colors hover:border-blue-400 hover:text-blue-500 disabled:opacity-60"
+              className="flex aspect-[4/3] flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary disabled:opacity-60"
             >
               {isUploading ? (
                 <>
@@ -255,7 +255,7 @@ export default function PortfolioManager({
         </div>
       )}
 
-      {message && <p className="mt-3 text-xs text-gray-600">{message}</p>}
+      {message && <p className="mt-3 text-xs text-muted-foreground">{message}</p>}
 
       <input
         ref={fileInputRef}

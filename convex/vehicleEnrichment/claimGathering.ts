@@ -32,6 +32,8 @@ import {
   byField,
 } from "./sourceAdapters/registry";
 import { reconcileClaims, resolveOperator, type ClaimConsensus } from "./sourceAdapters/claimLedger";
+import { scraplingEnabled, scraplingFetchUrlWithHtml } from "./scrapling";
+import { parseAmsoilVehiclePage } from "./sourceAdapters/amsoil";
 import type { AdapterVehicle, Claim, SourceAdapter } from "./sourceAdapters/types";
 
 /** Per-adapter wall-clock ceiling. Adapters already carry per-request
@@ -358,26 +360,73 @@ export const gatherClaims = internalAction({
           continue;
         }
         if (ADAPTER_FETCHABILITY[adapter.name] === "needs_headless") {
-          // Not attempted. There is no headless tier reachable from Convex, so
-          // this would be a guaranteed 20s timeout, not a chance of data.
-          result.skipped_headless.push(adapter.name);
-          result.adapters.push({
-            adapter: adapter.name,
-            ok: false,
-            claims: 0,
-            needs_headless: true,
-            error: "skipped: no headless fetch tier available",
-          });
-          continue;
+          // Wave 3 (Aug 2026): Scrapling IS the headless tier now. When it's
+          // configured, attempt the adapter — amsoil's whole API cascade is
+          // plain-fetch-fine; only its final Cloudflare-fronted page 403s,
+          // and that exact failure is rescued below via a stealth fetch of
+          // the URL the adapter names. Without Scrapling, the old skip
+          // stands (a guaranteed 20s timeout is not a chance of data).
+          // Only adapters with a wired rescue seam attempt — summitCentric's
+          // WHOLE flow needs a browser, so attempting it would just burn
+          // ~45s of the gather deadline for nothing.
+          const scraplingOn =
+            process.env.PARTS_SCRAPLING === "on" &&
+            scraplingEnabled() &&
+            adapter.name === "amsoil";
+          if (!scraplingOn) {
+            result.skipped_headless.push(adapter.name);
+            result.adapters.push({
+              adapter: adapter.name,
+              ok: false,
+              claims: 0,
+              needs_headless: true,
+              error: "skipped: no headless fetch tier available",
+            });
+            continue;
+          }
         }
 
         // Never let one adapter's ceiling overrun what's left of the total.
         const remaining = GATHER_DEADLINE_MS - (Date.now() - gatherStartedAt);
-        const outcome = await withDeadline(
+        let outcome = await withDeadline(
           adapter,
           vehicle,
           Math.min(ADAPTER_DEADLINE_MS, Math.max(1000, remaining)),
         );
+        // Scrapling rescue: amsoil reports the blocked page's URL in its
+        // error by design ("…the headless tier can go straight to the page
+        // and feed parseAmsoilVehiclePage"). Stealth-fetch that one page and
+        // parse it — the claims are indistinguishable from a direct success.
+        if (
+          !outcome.ok &&
+          outcome.needs_headless &&
+          adapter.name === "amsoil" &&
+          process.env.PARTS_SCRAPLING === "on" &&
+          scraplingEnabled()
+        ) {
+          const pageUrl = /(https?:\/\/\S+)$/.exec(outcome.error ?? "")?.[1] ?? null;
+          if (pageUrl) {
+            try {
+              const fetched = await scraplingFetchUrlWithHtml(pageUrl, {
+                mode: "stealth",
+                timeoutMs: 30_000,
+              });
+              // null is now the miss signal (upstream 4xx, empty, or an
+              // interstitial). Falling to "" yields zero claims, so the rescue
+              // reports failure instead of parsing a challenge page as a page.
+              const html = fetched?.html ?? fetched?.markdown ?? "";
+              const claims = parseAmsoilVehiclePage(html, {
+                source_url: pageUrl,
+                observed_at: Date.now(),
+              });
+              if (claims.length > 0) {
+                outcome = { ok: true, claims, error: `headless_rescue: ${pageUrl}` };
+              }
+            } catch (e) {
+              console.warn("[claims] scrapling rescue failed (non-fatal):", e);
+            }
+          }
+        }
         result.ran.push(adapter.name);
         result.adapters.push({
           adapter: adapter.name,

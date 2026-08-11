@@ -9,9 +9,9 @@ import { Card } from '../../Primitives'
 import { gotoEntity, stashGoto } from '../../directorNav'
 
 export const fmtDate = (ms: number | null | undefined): string =>
-  ms == null ? '—' : new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+  ms == null ? '—' : new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 export const fmtDateTime = (ms: number | null | undefined): string =>
-  ms == null ? '—' : new Date(ms).toLocaleString()
+  ms == null ? '—' : new Date(ms).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
 export const fmtMoney = (n: number | null | undefined): string =>
   n == null ? '—' : `$${n.toFixed(2)}`
 

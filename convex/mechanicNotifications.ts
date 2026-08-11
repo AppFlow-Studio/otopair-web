@@ -286,6 +286,9 @@ export const getFeed = query({
         return {
           kind: "booking" as const,
           bookingId: booking._id as Id<"bookings">,
+          // Assigned mechanic (may be null for unassigned). Powers the
+          // owner-side "filter by mechanic" control on the /notifications page.
+          mechanicId: (booking.mechanic_id ?? null) as Id<"mechanics"> | null,
           createdAt,
           isUnread: createdAt > lastSeenAt,
           customer: formatCustomerName(customer),
@@ -324,6 +327,7 @@ export const getFeed = query({
         return {
           kind: "tire_quote" as const,
           bookingId: booking._id as Id<"bookings">,
+          mechanicId: null as Id<"mechanics"> | null,
           createdAt,
           isUnread: createdAt > lastSeenAt,
           customer: formatCustomerName(customer),
@@ -350,6 +354,7 @@ export const getFeed = query({
         return {
           kind: "rotor_quote" as const,
           bookingId: booking._id as Id<"bookings">,
+          mechanicId: null as Id<"mechanics"> | null,
           createdAt,
           isUnread: createdAt > lastSeenAt,
           customer: formatCustomerName(customer),

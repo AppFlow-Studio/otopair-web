@@ -51,6 +51,7 @@ const isPortalRoute = createRouteMatcher([
   "/schedule(.*)",
   "/team(.*)",
   "/mechanics(.*)",
+  "/notifications(.*)",
   "/settings(.*)",
   "/payouts(.*)",
   "/my-jobs(.*)",

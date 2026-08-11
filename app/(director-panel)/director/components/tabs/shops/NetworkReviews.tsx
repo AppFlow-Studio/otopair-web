@@ -12,7 +12,7 @@ import { BookingDetailModal } from '../../BookingDetailModal'
 import { Stars } from './shopsUi'
 import type { ShopReviewGroup } from './types'
 
-const fmtDate = (ms: number) => new Date(ms).toLocaleDateString()
+const fmtDate = (ms: number) => new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 
 // Network reviews grouped by shop — /shops/reviews ported. Read-only here
 // (moderation lands in a later #reviews tab). Reviewer → #users, mechanic →

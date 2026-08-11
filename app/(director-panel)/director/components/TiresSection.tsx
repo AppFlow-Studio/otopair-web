@@ -78,7 +78,7 @@ const conditionTone = (c?: string | null): 'green' | 'yellow' | 'red' | 'slate' 
 
 function fmtDate(ts?: number | null): string {
   if (!ts) return '—'
-  return new Date(ts).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })
+  return new Date(ts).toLocaleDateString('en-US', { month:'long', day:'numeric', year:'numeric' })
 }
 
 const TireOptionCard = ({ opt }: { opt: TireOption }) => (

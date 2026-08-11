@@ -1,312 +1,310 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import {
-  AlertTriangle,
-  Ban,
-  DollarSign,
-  Loader2,
-  Save,
-  X,
-} from "lucide-react";
+import { AlertTriangle } from "lucide-react";
+import { SettingsCard } from "@/components/settings/primitives";
+import { useRegisterSaveable } from "@/components/settings/save-manager";
 
-const TIER_ORDER = ["T1", "T2a", "T2b", "T2c", "T3a", "T3b", "T4"] as const;
-type Tier = (typeof TIER_ORDER)[number];
+type TierCode = "T1" | "T2a" | "T2b" | "T2c" | "T3a" | "T3b" | "T4";
 
-const TIER_EXAMPLES: Record<Tier, string> = {
-  T1: "Toyota, Honda, Ford, Hyundai, Kia, Mazda, Nissan, Subaru",
-  T2a: "Lexus, Acura, Genesis, Volvo, Infiniti, Buick",
-  T2b: "Mercedes (non-AMG), Audi (non-S/RS), VW GTI/Golf R",
-  T2c: "BMW 3/5/X3/X5, MINI JCW, Macan base",
-  T3a: "BMW M3/M5/X3M, Mercedes-AMG C63/E63, Audi RS/S",
-  T3b: "Porsche 911 / Cayman / Boxster, AMG GT, Audi R8",
-  T4: "Ferrari, Lamborghini, Rolls-Royce, Bentley, McLaren",
-};
+/**
+ * The four shop-facing vehicle groups — the same taxonomy the onboarding labor
+ * step shows (`app/(portal)/shop/setup/page.tsx`). Each group maps to one or
+ * more internal pricing tiers; a group's rate is written to every tier it owns.
+ */
+const VEHICLE_GROUPS: {
+  id: string;
+  name: string;
+  examples: string;
+  rangeLow: number;
+  rangeHigh: number;
+  tiers: TierCode[];
+}[] = [
+  {
+    id: "everyday",
+    name: "Everyday cars",
+    examples: "Toyota, Honda, Ford, Hyundai, Kia, Mazda, Nissan, Subaru",
+    rangeLow: 130,
+    rangeHigh: 150,
+    tiers: ["T1"],
+  },
+  {
+    id: "luxury",
+    name: "Luxury sedans & SUVs",
+    examples: "Lexus, Acura, Genesis, Volvo, Mercedes, Audi, BMW, Macan",
+    rangeLow: 160,
+    rangeHigh: 210,
+    tiers: ["T2a", "T2b", "T2c"],
+  },
+  {
+    id: "performance",
+    name: "Performance & sports",
+    examples: "BMW M, AMG, Audi RS, Porsche 911 / Cayman, Audi R8",
+    rangeLow: 195,
+    rangeHigh: 275,
+    tiers: ["T3a", "T3b"],
+  },
+  {
+    id: "exotic",
+    name: "Exotic",
+    examples: "Ferrari, Lamborghini, Rolls-Royce, Bentley, McLaren",
+    rangeLow: 250,
+    rangeHigh: 400,
+    tiers: ["T4"],
+  },
+];
 
-type FormRow = {
-  tier: Tier;
-  label: string;
-  band: { lo: number; hi: number; label: string };
-  declined: boolean;
-  rateInput: string;
-};
+type GroupRow = { rate: string; notServiced: boolean };
 
 type TierRow = {
-  tier: Tier;
+  tier: TierCode;
   label: string;
   state: "priced" | "declined" | "unset";
   rate: number | null;
   band: { lo: number; hi: number; label: string };
 };
 
+/** Collapse the per-tier data the backend returns into one row per group. */
+function deriveGroupRows(tiers: TierRow[]): Record<string, GroupRow> {
+  const byTier = new Map<TierCode, TierRow>(tiers.map((t) => [t.tier, t]));
+  const out: Record<string, GroupRow> = {};
+  for (const group of VEHICLE_GROUPS) {
+    const rows = group.tiers.map((t) => byTier.get(t)).filter(Boolean) as TierRow[];
+    const notServiced = rows.length > 0 && rows.every((r) => r.state === "declined");
+    let rate = "";
+    for (const tier of group.tiers) {
+      const r = byTier.get(tier);
+      if (r && r.rate != null) {
+        rate = String(r.rate);
+        break;
+      }
+    }
+    out[group.id] = { rate, notServiced };
+  }
+  return out;
+}
+
 export default function LaborRateCard({ shopId }: { shopId: Id<"shops"> }) {
   const tierData = useQuery(api.shopLaborRates.getLaborRatesByTier, { shop_id: shopId });
   const setTierRates = useMutation(api.shopLaborRates.setLaborRatesByTier);
 
-  const [rows, setRows] = useState<FormRow[]>([]);
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [rows, setRows] = useState<Record<string, GroupRow>>({});
   const [warnings, setWarnings] = useState<
     { tier: string; kind: string; message: string }[]
   >([]);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  const baseline = useMemo<Record<string, GroupRow>>(() => {
+    if (!tierData) return {};
+    return deriveGroupRows(tierData.tiers as TierRow[]);
+  }, [tierData]);
 
   useEffect(() => {
     if (!tierData) return;
-    const tiers = tierData.tiers as TierRow[];
-    setRows(
-      tiers.map((row) => ({
-        tier: row.tier,
-        label: row.label,
-        band: row.band,
-        declined: row.state === "declined",
-        rateInput: row.rate != null ? String(row.rate) : "",
-      })),
-    );
+    setRows(deriveGroupRows(tierData.tiers as TierRow[]));
   }, [tierData]);
 
-  const inputsValid = rows.every((r) => {
-    if (r.declined) return true;
-    if (r.rateInput.trim() === "") return true; // empty = leave unset, allowed
-    const n = Number(r.rateInput);
+  const inputsValid = VEHICLE_GROUPS.every((group) => {
+    const row = rows[group.id];
+    if (!row || row.notServiced) return true;
+    const trimmed = row.rate.trim();
+    if (trimmed === "") return true; // empty = leave unset, allowed
+    const n = Number(trimmed);
     return Number.isFinite(n) && n >= 50 && n <= 900;
   });
 
-  const tiersChanged = useMemo(() => {
-    if (!tierData) return false;
-    const tiers = tierData.tiers as TierRow[];
-    const before = new Map<Tier, { state: TierRow["state"]; rate: number | null }>(
-      tiers.map((t) => [t.tier, { state: t.state, rate: t.rate }]),
-    );
-    for (const r of rows) {
-      const prev = before.get(r.tier);
-      if (!prev) return true;
-      const trimmed = r.rateInput.trim();
-      const nowState = r.declined
-        ? "declined"
-        : trimmed === ""
-          ? "unset"
-          : "priced";
-      if (prev.state !== nowState) return true;
-      if (nowState === "priced") {
-        const n = Number(trimmed);
-        if (!Number.isFinite(n) || Math.round(n) !== prev.rate) return true;
-      }
+  const changed = useMemo(() => {
+    for (const group of VEHICLE_GROUPS) {
+      const cur = rows[group.id];
+      const base = baseline[group.id];
+      if (!cur || !base) continue;
+      if (cur.notServiced !== base.notServiced) return true;
+      if (!cur.notServiced && cur.rate.trim() !== base.rate.trim()) return true;
     }
     return false;
-  }, [rows, tierData]);
+  }, [rows, baseline]);
 
-  const canSave = tiersChanged && inputsValid && !saving;
-
-  function setRow(tier: Tier, patch: Partial<FormRow>) {
-    setRows((prev) => prev.map((r) => (r.tier === tier ? { ...r, ...patch } : r)));
+  function setRow(groupId: string, patch: Partial<GroupRow>) {
+    setRows((prev) => ({
+      ...prev,
+      [groupId]: { ...(prev[groupId] ?? { rate: "", notServiced: false }), ...patch },
+    }));
   }
 
-  function openConfirm() {
-    if (!canSave) return;
-    setError(null);
-    setMessage(null);
-    setWarnings([]);
-    setConfirmOpen(true);
-  }
-
-  async function handleSave() {
-    setSaving(true);
-    setError(null);
-    setMessage(null);
-    setWarnings([]);
-    try {
-      const rateMap: Partial<Record<Tier, number>> = {};
-      const declined: Tier[] = [];
-      for (const r of rows) {
-        if (r.declined) {
-          declined.push(r.tier);
-          continue;
-        }
-        const trimmed = r.rateInput.trim();
-        if (trimmed === "") continue;
-        const n = Number(trimmed);
-        if (Number.isFinite(n)) rateMap[r.tier] = Math.round(n);
-      }
-      const result = await setTierRates({
-        shop_id: shopId,
-        rates: rateMap,
-        declined_tiers: declined,
-      });
-      if (result.warnings.length > 0) setWarnings(result.warnings);
-      setMessage("Labor rates saved.");
-      setConfirmOpen(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't save labor rates.");
-    } finally {
-      setSaving(false);
+  const save = useCallback(async () => {
+    if (!inputsValid) {
+      throw new Error("Enter labor rates between $50 and $900/hr.");
     }
-  }
+    const rateMap: Partial<Record<TierCode, number>> = {};
+    const declined: TierCode[] = [];
+    for (const group of VEHICLE_GROUPS) {
+      const row = rows[group.id];
+      if (!row) continue;
+      if (row.notServiced) {
+        declined.push(...group.tiers);
+        continue;
+      }
+      const trimmed = row.rate.trim();
+      if (trimmed === "") continue;
+      const n = Number(trimmed);
+      if (Number.isFinite(n)) {
+        for (const tier of group.tiers) rateMap[tier] = Math.round(n);
+      }
+    }
+    const result = await setTierRates({
+      shop_id: shopId,
+      rates: rateMap,
+      declined_tiers: declined,
+    });
+    setWarnings(result.warnings ?? []);
+  }, [inputsValid, rows, setTierRates, shopId]);
+
+  const reset = useCallback(() => {
+    if (tierData) setRows(deriveGroupRows(tierData.tiers as TierRow[]));
+    setWarnings([]);
+  }, [tierData]);
+
+  useRegisterSaveable("pricing", "Pricing", changed, save, reset);
 
   if (!tierData) {
     return (
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <p className="text-sm text-gray-400">Loading labor rates...</p>
-      </div>
+      <SettingsCard title="Labor rates">
+        <p className="text-sm text-muted-foreground">Loading labor rates…</p>
+      </SettingsCard>
     );
   }
 
+  const basePlaceholder =
+    tierData.legacy_labor_rate != null ? String(tierData.legacy_labor_rate) : "150";
+
   return (
-    <div className="bg-white rounded-xl border border-gray-200 p-6">
-      <h2 className="text-sm font-semibold text-gray-900 mb-1 uppercase tracking-wide">
-        Labor Rate Card
-      </h2>
-      <p className="text-sm text-gray-500 mb-5">
-        Set your hourly rate for each vehicle tier.{" "}
-        {tierData.legacy_labor_rate != null ? (
-          <>
-            Blank tiers fall back to your shop&apos;s base labor rate of{" "}
-            <span className="font-medium text-gray-700">
-              ${tierData.legacy_labor_rate}/hr
-            </span>
-            .
-          </>
-        ) : (
-          <>Blank tiers won&apos;t be priced until a rate is set.</>
-        )}{" "}
-        Use Decline to mark a tier you don&apos;t service.
-      </p>
-
-      <div className="overflow-hidden rounded-lg border border-gray-200">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-            <tr>
-              <th className="px-4 py-3 text-left font-semibold w-[40%]">Tier</th>
-              <th className="px-4 py-3 text-left font-semibold">
-                Suggested band
-              </th>
-              <th className="px-4 py-3 text-left font-semibold">Rate ($/hr)</th>
-              <th className="px-4 py-3 text-right font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-100">
-            {rows.map((row) => {
-              const trimmed = row.rateInput.trim();
-              const numeric = Number(trimmed);
-              const inputValid =
-                row.declined ||
-                trimmed === "" ||
-                (Number.isFinite(numeric) && numeric >= 50 && numeric <= 900);
-              const outOfBand =
-                !row.declined &&
-                trimmed !== "" &&
-                Number.isFinite(numeric) &&
-                (numeric < row.band.lo || numeric > row.band.hi);
-              return (
-                <tr key={row.tier} className="bg-white align-top">
-                  <td className="px-4 py-3">
-                    <div className="font-semibold text-gray-900">
-                      {row.tier}{" "}
-                      <span className="font-normal text-gray-500">
-                        · {row.label}
-                      </span>
-                    </div>
-                    <div className="mt-1 text-xs text-gray-500 leading-snug">
-                      e.g. {TIER_EXAMPLES[row.tier]}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-gray-600 whitespace-nowrap">
-                    ${row.band.lo}–${row.band.hi}/hr
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <div className="relative">
-                        <DollarSign className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
-                        <input
-                          type="text"
-                          inputMode="numeric"
-                          value={row.rateInput}
-                          onChange={(event) =>
-                            setRow(row.tier, { rateInput: event.target.value })
-                          }
-                          disabled={row.declined}
-                          placeholder={
-                            tierData.legacy_labor_rate != null
-                              ? String(tierData.legacy_labor_rate)
-                              : "—"
-                          }
-                          className={`w-28 rounded-md border bg-white py-1.5 pl-7 pr-2 text-sm text-gray-900 outline-none transition-colors focus:border-blue-500 disabled:bg-gray-50 disabled:text-gray-400 ${
-                            inputValid ? "border-gray-200" : "border-red-300"
-                          }`}
-                        />
-                      </div>
-                      {outOfBand ? (
-                        <span
-                          className="inline-flex items-center text-amber-600"
-                          title="Outside the typical NYC band — allowed, but flagged."
-                        >
-                          <AlertTriangle className="h-3.5 w-3.5" />
-                        </span>
-                      ) : null}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {row.declined ? (
-                      <button
-                        type="button"
-                        onClick={() => setRow(row.tier, { declined: false })}
-                        className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
-                      >
-                        Restore
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setRow(row.tier, { declined: true, rateInput: "" })
-                        }
-                        className="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-600 transition-colors hover:bg-gray-50"
-                        title="Mark this tier as not serviced"
-                      >
-                        <Ban className="h-3 w-3" />
-                        Decline
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+    <SettingsCard
+      title="Labor rates"
+      description={
+        <>
+          Set your hourly rate for each vehicle group.{" "}
+          {tierData.legacy_labor_rate != null ? (
+            <>
+              Blank groups fall back to your base rate of{" "}
+              <span className="font-medium text-foreground">
+                ${tierData.legacy_labor_rate}/hr
+              </span>
+              .
+            </>
+          ) : (
+            <>Blank groups won&apos;t be priced until a rate is set.</>
+          )}
+        </>
+      }
+    >
+      <div className="hidden grid-cols-[minmax(0,1fr)_6rem_8rem_9rem] gap-4 pb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground md:grid">
+        <span>Vehicle group</span>
+        <span className="text-center">Typical range</span>
+        <span>Your rate</span>
+        <span aria-hidden />
       </div>
 
-      <div className="mt-5 flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={openConfirm}
-          disabled={!canSave}
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Save className="h-4 w-4" />
-          Save labor rates
-        </button>
-        {tierData.profile ? (
-          <span className="text-xs text-gray-500">
-            Shop profile:{" "}
-            <span className="font-medium text-gray-700">{tierData.profile}</span>
-          </span>
-        ) : null}
-        {message ? (
-          <p className="text-sm text-green-700">{message}</p>
-        ) : null}
-        {error ? <p className="text-sm text-red-600">{error}</p> : null}
-      </div>
+      <ul className="divide-y divide-border border-t border-border">
+        {VEHICLE_GROUPS.map((group) => {
+          const row = rows[group.id] ?? { rate: "", notServiced: false };
+          const trimmed = row.rate.trim();
+          const numeric = Number(trimmed);
+          const inputValid =
+            row.notServiced ||
+            trimmed === "" ||
+            (Number.isFinite(numeric) && numeric >= 50 && numeric <= 900);
+          const outOfBand =
+            !row.notServiced &&
+            trimmed !== "" &&
+            Number.isFinite(numeric) &&
+            (numeric < group.rangeLow || numeric > group.rangeHigh);
+          return (
+            <li
+              key={group.id}
+              className="grid grid-cols-1 items-center gap-x-4 gap-y-3 py-5 md:grid-cols-[minmax(0,1fr)_6rem_8rem_9rem]"
+            >
+              <div
+                title={`Internal pricing groups: ${group.tiers.join(", ")}`}
+                className={row.notServiced ? "opacity-50 transition-opacity" : "transition-opacity"}
+              >
+                <p className="text-sm font-semibold text-foreground">{group.name}</p>
+                <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                  e.g. {group.examples}
+                </p>
+              </div>
+
+              <p className="whitespace-nowrap text-xs text-muted-foreground md:text-center">
+                ${group.rangeLow} – ${group.rangeHigh}
+              </p>
+
+              <div className="flex items-center gap-2">
+                {row.notServiced ? (
+                  <span className="inline-flex items-center rounded-xl bg-muted px-3.5 py-2.5 text-xs text-muted-foreground">
+                    Not serviced
+                  </span>
+                ) : (
+                  <div
+                    className={`inline-flex items-center rounded-xl border bg-white transition-colors focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring ${
+                      inputValid ? "border-input" : "border-destructive/50"
+                    }`}
+                  >
+                    <span className="pl-3 pr-1 text-sm text-muted-foreground">$</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={row.rate}
+                      onChange={(event) =>
+                        setRow(group.id, {
+                          rate: event.target.value.replace(/[^0-9]/g, ""),
+                        })
+                      }
+                      placeholder={basePlaceholder}
+                      aria-label={`Your hourly rate for ${group.name}`}
+                      className="w-16 bg-transparent py-2.5 pr-3 text-sm font-medium text-foreground outline-none"
+                    />
+                  </div>
+                )}
+                {outOfBand ? (
+                  <span
+                    className="inline-flex items-center text-amber-600"
+                    title="Outside the typical band — allowed, but flagged."
+                  >
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                  </span>
+                ) : null}
+              </div>
+
+              <div className="md:text-right">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setRow(group.id, {
+                      rate: row.notServiced ? row.rate : "",
+                      notServiced: !row.notServiced,
+                    })
+                  }
+                  className={`text-xs underline-offset-4 hover:underline ${
+                    row.notServiced
+                      ? "text-primary"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {row.notServiced ? "Undo" : "I don't work on these"}
+                </button>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
 
       {warnings.length > 0 ? (
-        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3">
           <div className="flex items-start gap-2 text-amber-800">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <div className="text-xs">
-              <p className="font-semibold mb-1">Saved with notes</p>
+              <p className="mb-1 font-semibold">Saved with notes</p>
               <ul className="space-y-1">
                 {warnings.map((w) => (
                   <li key={`${w.tier}-${w.kind}`}>{w.message}</li>
@@ -317,130 +315,11 @@ export default function LaborRateCard({ shopId }: { shopId: Id<"shops"> }) {
         </div>
       ) : null}
 
-      {confirmOpen ? (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-[90] flex items-center justify-center px-4 py-6"
-        >
-          <div
-            className="absolute inset-0 bg-black/40"
-            onClick={saving ? undefined : () => setConfirmOpen(false)}
-          />
-          <div className="relative z-[91] w-full max-w-lg overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl">
-            <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-6 py-5">
-              <div>
-                <div className="flex items-center gap-2 text-amber-600">
-                  <AlertTriangle className="h-4 w-4" />
-                  <span className="text-xs font-semibold uppercase tracking-[0.2em]">
-                    Confirm change
-                  </span>
-                </div>
-                <h2 className="mt-2 text-lg font-semibold text-gray-900">
-                  Update labor rates?
-                </h2>
-              </div>
-              <button
-                type="button"
-                onClick={() => setConfirmOpen(false)}
-                disabled={saving}
-                className="rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-60"
-                aria-label="Close"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="px-6 py-5 space-y-3 text-sm text-gray-700">
-              <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                  Per-tier changes
-                </p>
-                <ul className="space-y-1 text-xs">
-                  {rows.map((r) => {
-                    const tiers = tierData.tiers as TierRow[];
-                    const prev = tiers.find((t) => t.tier === r.tier);
-                    if (!prev) return null;
-                    const trimmed = r.rateInput.trim();
-                    const nowState = r.declined
-                      ? "declined"
-                      : trimmed === ""
-                        ? "unset"
-                        : "priced";
-                    const nowRate =
-                      nowState === "priced" ? Math.round(Number(trimmed)) : null;
-                    const changed =
-                      prev.state !== nowState ||
-                      (nowState === "priced" && nowRate !== prev.rate);
-                    if (!changed) return null;
-                    return (
-                      <li key={r.tier} className="flex justify-between gap-3">
-                        <span className="font-medium text-gray-700">
-                          {r.tier} · {r.label}
-                        </span>
-                        <span className="text-gray-600">
-                          {formatState(
-                            prev.state,
-                            prev.rate,
-                            tierData.legacy_labor_rate,
-                          )}{" "}
-                          <span className="text-gray-400">→</span>{" "}
-                          <span className="font-semibold text-gray-900">
-                            {formatState(
-                              nowState,
-                              nowRate,
-                              tierData.legacy_labor_rate,
-                            )}
-                          </span>
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-              <p className="text-xs text-gray-500">
-                Applies immediately to new bookings and the labor portion of
-                future invoices. Already-confirmed bookings keep the rate that
-                was disclosed to the customer.
-              </p>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 border-t border-gray-200 bg-gray-50 px-6 py-4">
-              <button
-                type="button"
-                onClick={() => setConfirmOpen(false)}
-                disabled={saving}
-                className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-100 disabled:opacity-60"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSave()}
-                disabled={saving}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {saving ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="h-4 w-4" />
-                )}
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
+      <p className="mt-4 text-xs text-muted-foreground">
+        Rate changes apply immediately to new bookings and the labor portion of
+        future invoices. Already-confirmed bookings keep the rate that was
+        disclosed to the customer.
+      </p>
+    </SettingsCard>
   );
-}
-
-function formatState(
-  state: string,
-  rate: number | null,
-  fallback: number | null,
-) {
-  if (state === "declined") return "Not serviced";
-  if (state === "priced" && rate != null) return `$${rate}/hr`;
-  return fallback != null ? `$${fallback}/hr (base)` : "Unset";
 }

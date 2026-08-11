@@ -80,6 +80,7 @@ export type Profile = {
   reviewCount: number
   isActive: boolean
   isVerified: boolean
+  promotionTier: number
   onboardingComplete: boolean
   stripeAccountId: string | null
   stripeChargesEnabled: boolean
@@ -316,4 +317,26 @@ export type ShopReviewGroup = {
   low_this_week: number
   trend_30d: { week: string; count: number; avg: number | null }[]
   reviews: ShopReviewRow[]
+}
+
+/* ---------- Compliance (api.shopsDirectory.shopLicenses) ---------- */
+export type ShopLicense = {
+  _id: string
+  licenseType: string
+  url: string | null
+  originalFilename: string | null
+  mimeType: string | null
+  licenseNumber: string | null
+  issuer: string | null
+  expiresAt: number | null
+  reviewStatus: 'pending_review' | 'verified' | 'rejected'
+  reviewNote: string | null
+  reviewedAt: number | null
+  reviewedBy: string | null
+  createdAt: number
+}
+
+export type ShopComplianceResult = {
+  offersInspectionServices: boolean
+  licenses: ShopLicense[]
 }

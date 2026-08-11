@@ -55,6 +55,7 @@ import type {
   SourceAdapter,
 } from "./types";
 import { normalizeOemNumber } from "../priceParser";
+import { adapterFetch } from "./http";
 
 const ADAPTER_NAME = "rockauto";
 const BASE = "https://www.rockauto.com";
@@ -292,16 +293,18 @@ export function attestationToClaim(
 type FetchOutcome = { status: number; body: string };
 
 async function get(url: string): Promise<FetchOutcome> {
-  const res = await fetch(url, {
-    method: "GET",
+  const r = await adapterFetch(url, {
     headers: {
       "User-Agent": USER_AGENT,
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
     },
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    timeoutMs: REQUEST_TIMEOUT_MS,
+    // No try/catch here originally — keep letting a dead host unwind to the
+    // adapter's own entry-point handler.
+    throwOnError: true,
   });
-  return { status: res.status, body: await res.text() };
+  return { status: r.status, body: r.body };
 }
 
 function looksBlocked(o: FetchOutcome): boolean {

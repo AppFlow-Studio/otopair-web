@@ -48,7 +48,7 @@ function fmtPayloadValue(key: string, value: unknown): string {
   if (typeof value === 'boolean') return value ? 'Yes' : 'No'
   if (typeof value === 'number') {
     if (key.endsWith('_cents')) return `$${(value / 100).toFixed(2)}`
-    if (key.endsWith('_at')) return new Date(value).toLocaleDateString()
+    if (key.endsWith('_at')) return new Date(value).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
     return String(value)
   }
   return String(value)

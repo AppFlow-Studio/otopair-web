@@ -6,6 +6,7 @@ import { api } from '@/convex/_generated/api'
 import { DirectorSessionCtx } from '../../DirectorSessionCtx'
 import { Badge } from '../../Primitives'
 import { LoadingBlock } from './shopsUi'
+import { fmtDate } from '../../Charts'
 import type { CapacityResult } from '@/convex/shopsCapacity'
 
 // 14-day capacity heatmap: shops × days. Each cell = available / total slots.
@@ -118,7 +119,7 @@ export const CapacityHeatmap = () => {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
                   <Badge tone="red">Double-booked</Badge>
                   <span style={{ fontWeight: 500, color: 'var(--slate-800)' }}>{iss.shop}</span>
-                  <span style={{ color: 'var(--slate-400)' }}>{iss.date}</span>
+                  <span style={{ color: 'var(--slate-400)' }}>{fmtDate(iss.date)}</span>
                 </div>
                 <div style={{ color: 'var(--slate-600)' }}>{iss.detail}</div>
               </div>

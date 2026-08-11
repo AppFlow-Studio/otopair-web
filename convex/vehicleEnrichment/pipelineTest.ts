@@ -275,61 +275,6 @@ export const runV3Test = internalAction({
   },
 });
 
-// ─── Call 1B Diagnostic ────────────────────────────────────────────
-
-export const diagnoseCall1B = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    const { callClaudeWithWebSearch } = await import("./claudeExtractor");
-    const { SYSTEM_PROMPT, buildCall1BPrompt } = await import("./extractionPrompts");
-    const { preGatherSources } = await import("./searchPreGather");
-    const { filterByConfidence } = await import("./sourceVerifier");
-
-    const vehicle = {
-      vehicleId: "test",
-      year: BMW_M550I.year,
-      make: BMW_M550I.make,
-      model: BMW_M550I.model,
-      trim: BMW_M550I.trim,
-      engineCode: BMW_M550I.engineCode,
-      displacement: BMW_M550I.displacement,
-    };
-
-    console.log("[DIAG] Step 1: Pre-gather sources for parts...");
-    const preGather = await preGatherSources(vehicle);
-    console.log(`[DIAG] Got ${preGather.partsResults.length} parts sources`);
-    for (const s of preGather.partsResults) {
-      console.log(`[DIAG] Parts source: ${s.url} (${s.markdown.length} chars)`);
-    }
-
-    console.log("[DIAG] Step 2: Running Call 1B with web_search...");
-    const prompt = buildCall1BPrompt(vehicle, preGather.partsResults);
-    console.log(`[DIAG] Call 1B prompt length: ${prompt.length} chars`);
-
-    const raw1B = await callClaudeWithWebSearch(SYSTEM_PROMPT, prompt, 10, 8000);
-
-    console.log("[DIAG] Step 3: Raw Call 1B output:");
-    console.log(JSON.stringify(raw1B, null, 2));
-
-    console.log("[DIAG] Step 4: After filterByConfidence:");
-    const filtered = filterByConfidence(raw1B, "BMW");
-    for (const [key, val] of Object.entries(filtered)) {
-      const hasValue = val && val.value != null;
-      console.log(`[DIAG] ${key}: ${hasValue ? `"${val.value}" (conf=${val.confidence})` : "NULL"}`);
-    }
-
-    return {
-      rawFieldCount: Object.keys(raw1B).length,
-      rawNonNull: Object.entries(raw1B).filter(([_, v]) => v?.value != null).length,
-      filteredNonNull: Object.entries(filtered).filter(([_, v]) => v?.value != null).length,
-      raw: raw1B,
-      filtered: Object.fromEntries(
-        Object.entries(filtered).map(([k, v]) => [k, { value: v.value, confidence: v.confidence }]),
-      ),
-    };
-  },
-});
-
 // ─── Multi-Vehicle Test ──────────────────────────────────────────────
 
 export const runMultiTest = internalAction({

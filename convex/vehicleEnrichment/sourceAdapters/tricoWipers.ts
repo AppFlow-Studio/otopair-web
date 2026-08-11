@@ -59,6 +59,7 @@ import type {
   Claim,
   SourceAdapter,
 } from "./types";
+import { adapterFetch } from "./http";
 
 const ADAPTER_NAME = "trico_wipers";
 const HOST = "www.tricoproducts.com";
@@ -251,16 +252,16 @@ function slugify(label: string): string {
 type FetchOutcome = { status: number; body: string };
 
 async function fetchPage(url: string): Promise<FetchOutcome> {
-  const res = await fetch(url, {
-    method: "GET",
+  const r = await adapterFetch(url, {
     headers: {
       "User-Agent": USER_AGENT,
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
     },
-    signal: AbortSignal.timeout(20_000),
+    timeoutMs: 20_000,
+    throwOnError: true,
   });
-  return { status: res.status, body: await res.text() };
+  return { status: r.status, body: r.body };
 }
 
 /** POST the Amasty options cascade endpoint; returns <option> HTML. */

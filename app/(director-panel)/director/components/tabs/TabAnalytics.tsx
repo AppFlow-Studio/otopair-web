@@ -43,7 +43,7 @@ type FunnelSummary = {
   drop_reasons: { reason: string; count: number }[]
 }
 
-const fmtDT = (ms: number) => new Date(ms).toLocaleString()
+const fmtDT = (ms: number) => new Date(ms).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
 
 // ---------------------------------------------------------------------------
 // MiniBars — dependency-free hourly bar strip (ChartKit MiniBars replacement).

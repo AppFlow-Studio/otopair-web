@@ -949,6 +949,9 @@ export default function SchedulePage() {
   // Wider lookahead used only when auto-opening the create-booking drawer to find the
   // next available slot across the next 14 days.
   const wantsAutoOpen = searchParams.get("action") === "newBooking";
+  // Set true by the toolbar "Create booking" button to lazily fetch the 14-day
+  // lookahead (otherwise skipped so we don't pay for it on every schedule load).
+  const [pendingCreate, setPendingCreate] = useState(false);
   const lookaheadRange = useMemo(() => {
     const start = new Date();
     const end = new Date();
@@ -957,12 +960,41 @@ export default function SchedulePage() {
   }, []);
   const lookaheadBookings = useQuery(
     api.schedule.getBookingsForRange,
-    wantsAutoOpen && !autoOpenedRef.current ? lookaheadRange : "skip"
+    (wantsAutoOpen && !autoOpenedRef.current) || pendingCreate ? lookaheadRange : "skip"
   );
 
   const blockedSlots = useQuery(api.schedule.getBlockedSlots, {
     dateFrom: dateRange.from,
     dateTo: dateRange.to,
+  });
+
+  // Stable per-checkout session id for the create-booking drawer, owned here so
+  // the schedule grid can EXCLUDE the current user's own hold (they already see
+  // it as the DRAFT ghost) while every OTHER staff viewer sees it as "On hold".
+  // Minted lazily on open, cleared on close (ref-during-render memo pattern).
+  const bookingHoldSessionRef = useRef<string>("");
+  if (createBookingDrawer) {
+    if (!bookingHoldSessionRef.current) {
+      bookingHoldSessionRef.current =
+        typeof crypto !== "undefined" && "randomUUID" in crypto
+          ? crypto.randomUUID()
+          : `hold-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+  } else if (bookingHoldSessionRef.current) {
+    bookingHoldSessionRef.current = "";
+  }
+  const bookingHoldSession = createBookingDrawer
+    ? bookingHoldSessionRef.current
+    : null;
+
+  // Other customers'/staff in-flight checkout holds (StubHub-style). Reactive:
+  // appear and disappear live as holds are acquired/expire, so staff never book
+  // onto a slot someone else is mid-checkout on. Rendered as non-interactive
+  // "On hold" blocks in the day lanes. `sessionId` hides the viewer's OWN hold.
+  const activeSlotHolds = useQuery(api.schedule.getActiveSlotHolds, {
+    dateFrom: dateRange.from,
+    dateTo: dateRange.to,
+    sessionId: bookingHoldSession ?? undefined,
   });
 
   // Auto-open create-booking drawer with next available slot when ?action=newBooking is set.
@@ -1006,6 +1038,62 @@ export default function SchedulePage() {
 
     router.replace("/schedule", { scroll: false });
   }, [wantsAutoOpen, context?.hours, context?.mechanics, lookaheadBookings, router]);
+
+  // Toolbar "Create booking": arm the lazy lookahead. The effect below opens
+  // the drawer once the 14-day bookings load (same finder the deep-link uses).
+  function openCreateBookingAtNextSlot() {
+    setPendingCreate(true);
+  }
+
+  useEffect(() => {
+    if (!pendingCreate) return;
+    if (!context?.hours || !context?.mechanics || lookaheadBookings === undefined) return;
+
+    // A mechanic viewer gets THEIR own next free slot; owners/front-desk get the
+    // earliest slot across the whole team.
+    const ownLane = context.mechanics.filter(
+      (m) => String(m._id) === String(viewerMechanicId),
+    );
+    const finderMechanics =
+      isMechanicViewer && ownLane.length > 0 ? ownLane : context.mechanics;
+
+    const slot = findNextAvailableSlot({
+      now: new Date(),
+      shopHours: context.hours,
+      mechanics: finderMechanics,
+      bookings: lookaheadBookings,
+      durationMinutes: 60,
+    });
+
+    if (slot) {
+      const [y, mo, d] = slot.date.split("-").map(Number);
+      setCurrentDate(new Date(y, mo - 1, d));
+      setCurrentView("day");
+      setCreateBookingDrawer({
+        date: slot.date,
+        time: slot.time,
+        mechanicId: slot.mechanicId,
+        durationMinutes: slot.durationMinutes,
+      });
+    } else {
+      const fallbackMechanic = finderMechanics[0]?._id ?? "";
+      setCreateBookingDrawer({
+        date: dateToString(new Date()),
+        time: "09:00",
+        mechanicId: fallbackMechanic,
+        durationMinutes: 60,
+      });
+      setToast({ msg: "No open slot found in the next 14 days", key: Date.now() });
+    }
+    setPendingCreate(false);
+  }, [
+    pendingCreate,
+    context?.hours,
+    context?.mechanics,
+    lookaheadBookings,
+    isMechanicViewer,
+    viewerMechanicId,
+  ]);
 
   // Deep-link handler: bell-popover actions navigate here with ?action=… to open
   // the right modal/drawer on the schedule page. The effect retries once
@@ -1190,6 +1278,44 @@ export default function SchedulePage() {
         };
       });
 
+    // Other customers'/staff in-flight checkout holds → non-interactive "On
+    // hold" blocks. Reactive, so they vanish the instant the hold expires or
+    // converts to a booking. The current user never sees the hold for the slot
+    // THEIR OWN create-booking drawer is on — they see the "DRAFT — NEW BOOKING"
+    // ghost there instead. `getActiveSlotHolds` already excludes this session's
+    // hold; this slot-match is a belt-and-suspenders guard for the moment right
+    // after a hot-reload when the drawer's hold still carries a stale session.
+    const holdEvents: CalendarEvent[] = (activeSlotHolds ?? [])
+      .filter((h) => mechanicFilter === "all" || h.mechanicId === mechanicFilter)
+      .filter((h) => {
+        if (!createBookingDrawer) return true;
+        const d = createBookingDrawer;
+        const sameSlot =
+          h.date === d.date &&
+          h.startTime === d.time &&
+          String(h.mechanicId ?? "") === String(d.mechanicId ?? "");
+        return !sameSlot;
+      })
+      .map((h) => {
+        const [sh, sm] = h.startTime.split(":").map(Number);
+        const [eh, em] = h.endTime.split(":").map(Number);
+        const start = new Date(h.date + "T00:00:00");
+        start.setHours(sh, sm, 0, 0);
+        const end = new Date(h.date + "T00:00:00");
+        end.setHours(eh, em, 0, 0);
+        return {
+          id: `hold-${h._id}`,
+          title: "On hold",
+          start,
+          end,
+          resourceId: h.mechanicId ?? undefined,
+          type: "blocked" as const,
+          status: "blocked",
+          blockTitle: "On hold",
+          isHold: true,
+        };
+      });
+
     // Draft preview while the Add blocked time drawer is open
     const draftEvents: CalendarEvent[] = [];
     const draftValid =
@@ -1255,10 +1381,12 @@ export default function SchedulePage() {
       }
     }
 
-    return [...bookingEvents, ...blockedEvents, ...draftEvents];
+    return [...bookingEvents, ...blockedEvents, ...holdEvents, ...draftEvents];
   }, [
     bookings,
     blockedSlots,
+    activeSlotHolds,
+    createBookingDrawer,
     mechanicFilter,
     blockTimeDrawer,
     btDate,
@@ -1498,6 +1626,21 @@ export default function SchedulePage() {
 
           {/* Right: filters + view switcher */}
           <div className="flex items-center gap-3">
+            {/* Create booking — jumps to the next open slot */}
+            <button
+              type="button"
+              onClick={openCreateBookingAtNextSlot}
+              disabled={context.mechanics.length === 0 || pendingCreate}
+              className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {pendingCreate ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <CalendarPlus className="w-4 h-4" />
+              )}
+              Create booking
+            </button>
+
             {/* Mechanic filter */}
             {context.mechanics.length > 0 && (
               <Select
@@ -2401,6 +2544,7 @@ export default function SchedulePage() {
               mechanics={mechanics}
               bookings={bookings ?? []}
               shopHours={context?.hours ?? []}
+              holdSessionId={bookingHoldSession ?? ""}
               onClose={() => setCreateBookingDrawer(null)}
               onToast={(msg) => setToast({ msg, key: Date.now() })}
             />

@@ -609,3 +609,44 @@ export function dayLabel(d: number | string | Date): string {
   if (Number.isNaN(date.getTime())) return String(d)
   return `${date.getMonth() + 1}/${date.getDate()}`
 }
+
+// A date input we render across the director surfaces: a ms timestamp, a Date,
+// or the ISO strings Convex hands back — either "YYYY-MM-DD" or a full ISO
+// datetime. Sentinels (null / "" / "—") and unparseable strings pass through so
+// callers can drop the value straight in without guarding.
+type DateInput = number | string | Date | null | undefined
+
+function toDate(d: DateInput): Date | null {
+  if (d == null || d === '' || d === '—') return null
+  // ISO date-only ("YYYY-MM-DD") is parsed at local midnight so the calendar
+  // day never shifts backward in negative-offset time zones.
+  const date =
+    typeof d === 'string'
+      ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(d) ? `${d}T00:00:00` : d)
+      : new Date(d)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+/**
+ * Readable long date — "August 7, 2026". Accepts a ms timestamp, a Date, or an
+ * ISO "YYYY-MM-DD" / ISO datetime string. Non-date inputs (null, "", "—", or an
+ * unparseable string) pass through: the raw string is returned as-is, others as
+ * "—". The single director-wide date format.
+ */
+export function fmtDate(d: DateInput): string {
+  const date = toDate(d)
+  if (!date) return typeof d === 'string' && d ? d : '—'
+  return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
+}
+
+/**
+ * Readable date + time — "August 7, 2026, 3:45 PM". Same input handling as
+ * `fmtDate`; for the surfaces that previously showed a fully-numeric timestamp.
+ */
+export function fmtDateTime(d: DateInput): string {
+  const date = toDate(d)
+  if (!date) return typeof d === 'string' && d ? d : '—'
+  return date.toLocaleString('en-US', {
+    month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit',
+  })
+}

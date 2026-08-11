@@ -1479,6 +1479,49 @@ export const _patchBookingCaptured = internalMutation({
   },
 });
 
+/** Settlement marker (Option A). Completion never blocks on payment; instead we
+ *  record whether the final total was fully captured. A shortfall (hold
+ *  couldn't be raised, capture failed, or reauth is pending) flags the booking
+ *  `awaiting_settlement` with the outstanding cents so the reconciliation cron +
+ *  ops can chase the rest. A near-full capture (within the drift tolerance)
+ *  counts as settled and clears any prior awaiting flag. First-seen timestamp is
+ *  preserved so the cron can age the shortfall. */
+export const _stampSettlement = internalMutation({
+  args: {
+    bookingId: v.id("bookings"),
+    capturedCents: v.number(),
+    finalCents: v.number(),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const shortfall = Math.max(
+      0,
+      Math.round(args.finalCents) - Math.round(args.capturedCents),
+    );
+    if (shortfall <= FINALIZE_DRIFT_TOLERANCE_CENTS) {
+      await ctx.db.patch(args.bookingId, {
+        settlement_state: "settled",
+        settlement_shortfall_cents: 0,
+        settlement_reason: undefined,
+        awaiting_settlement_since_ms: undefined,
+        updated_at: now,
+      });
+      return { state: "settled" as const };
+    }
+    const existing: any = await ctx.db.get(args.bookingId);
+    await ctx.db.patch(args.bookingId, {
+      settlement_state: "awaiting_settlement",
+      settlement_shortfall_cents: shortfall,
+      settlement_reason: args.reason,
+      awaiting_settlement_since_ms:
+        existing?.awaiting_settlement_since_ms ?? now,
+      updated_at: now,
+    });
+    return { state: "awaiting_settlement" as const, shortfall };
+  },
+});
+
 /** Increments the manual-capture authorization to the booking's current
  *  `mechanic_set_price_cents` (or `running_approved_ceiling_cents`, whichever
  *  is larger). Falls through to a reauth flow when Stripe rejects the
@@ -1733,6 +1776,87 @@ export const captureDepositForfeit = internalAction({
   },
 });
 
+/**
+ * Charge a late-cancellation / no-show fee by PARTIAL-capturing the existing
+ * manual-capture hold. Stripe releases the uncaptured remainder automatically,
+ * so this both charges the fee and frees the rest of the customer's hold.
+ *
+ * The fee is capped at the current authorization — you cannot capture more
+ * than is held — so pre-inspection the ceiling is the $20 deposit. A zero fee
+ * (free cancel) falls through to a plain void. Scheduled from
+ * applyBookingStatusTransition when a booking goes cancelled/no_show with a fee;
+ * mirrors captureDepositForfeit's guards so re-invocation is safe.
+ */
+export const captureCancellationFee = internalAction({
+  args: {
+    bookingId: v.id("bookings"),
+    feeCents: v.number(),
+    kind: v.string(),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ status: string; capturedCents?: number; reason?: string }> => {
+    const payment: any = await ctx.runQuery(
+      internal.payments_stripe._getPaymentByBookingId,
+      { bookingId: args.bookingId },
+    );
+    if (!payment?.stripe_payment_intent_id) {
+      return { status: "skipped", reason: "no payment intent" };
+    }
+    if (
+      payment.status === "completed" ||
+      payment.status === "cancelled" ||
+      payment.status === "refunded"
+    ) {
+      return { status: "skipped", reason: `payment is ${payment.status}` };
+    }
+
+    // Never attempt to capture more than the live hold authorizes.
+    const holdCents: number =
+      payment.incremented_total_cents ??
+      payment.hold_amount_cents ??
+      BOOKING_DEPOSIT_CENTS;
+    const captureCents = Math.min(Math.max(0, Math.round(args.feeCents)), holdCents);
+
+    // Zero fee → just void the hold (delegate to the existing void path).
+    if (captureCents <= 0) {
+      return await ctx.runAction(
+        internal.payments_stripe.cancelPaymentIntentForBooking,
+        { bookingId: args.bookingId },
+      );
+    }
+
+    const stripe = getStripe();
+    try {
+      const pi = await stripe.paymentIntents.capture(
+        payment.stripe_payment_intent_id,
+        { amount_to_capture: captureCents },
+      );
+      await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
+        bookingId: args.bookingId,
+        stripeAction: `capture_${args.kind}_fee`,
+      });
+      await ctx.runMutation(internal.payments_stripe._patchBookingCaptured, {
+        bookingId: args.bookingId,
+        finalTotalCents: captureCents,
+        finalCaptureAmountCents: captureCents,
+      });
+      return { status: pi.status, capturedCents: captureCents };
+    } catch (err: any) {
+      // Fee capture failing must NOT block the cancellation itself — mark the
+      // payment row failed for ops/retry and let the status transition stand.
+      await ctx.runMutation(internal.payments_stripe._transitionPayment, {
+        paymentId: payment._id,
+        newStatus: "failed",
+        errorCode: err?.code,
+        errorMessage: err?.message?.slice(0, 500),
+      });
+      return { status: "failed", reason: err?.message };
+    }
+  },
+});
+
 /** Compute the actual final total from job_actuals + booking. Returns
  *  cents. Mirrors computeMechanicSetPrice from booking_approvals.ts but
  *  reads from the persisted post-job data instead of dialog inputs. */
@@ -1917,6 +2041,14 @@ export const finalizeAndChargeForBooking = internalAction({
         booking.disclosed_range_high_cents ??
         0;
       if (safeCap <= 0) {
+        // Completed job we genuinely can't charge (no set price, no ceiling).
+        // Flag it so it surfaces for ops instead of vanishing.
+        await ctx.runMutation(internal.payments_stripe._stampSettlement, {
+          bookingId: args.bookingId,
+          capturedCents: 0,
+          finalCents,
+          reason: "no_ceiling_or_set_price",
+        });
         return { status: "skipped", reason: "no ceiling and no mechanic set price" };
       }
       // Capture at min(actuals, ceiling) — never above what the customer
@@ -1950,12 +2082,22 @@ export const finalizeAndChargeForBooking = internalAction({
       );
     }
 
-    // Actuals > approved set price → open post-job re-approval.
-    await ctx.runMutation(internal.booking_approvals.submitPostJobReapproval, {
-      bookingId: args.bookingId,
-      parts: partsSnapshot,
-    });
-    return { status: "post_job_pending" };
+    // Actuals exceeded the pre-agreed set price. The customer approved the
+    // price BEFORE the job started (pre-job approval, plus any mid-job "found
+    // extra work" approvals granted during it), so we do NOT reopen a post-job
+    // negotiation with a decline the customer could use to walk away from
+    // finished work. Capture the agreed price and settle. Any excess beyond
+    // what was agreed is absorbed — never charged without the customer's prior
+    // consent (the mid-job approval is the consented path to raise the price
+    // while the work is still in progress).
+    return await captureAtAmount(
+      ctx,
+      args.bookingId,
+      mechanicSet, // charge the agreed price, not the higher raw actuals
+      mechanicSet, // owed == agreed price → no false "shortfall" to chase
+      partsSnapshot,
+      feeCents,
+    );
   },
 });
 
@@ -1989,7 +2131,18 @@ async function captureAtAmount(
     return { status: "skipped", reason: "already completed" };
   }
   const stripe = getStripe();
-  const amountToCapture = Math.max(1, Math.round(captureCents));
+  // Never ask Stripe to capture more than the live hold authorizes — an over-
+  // capture 400s and would otherwise strand the whole charge. Cap at what the
+  // authorization actually covers (Option A: capture the ceiling, never $0);
+  // any shortfall vs the final total is flagged for settlement below.
+  const holdCents: number =
+    payment.incremented_total_cents ??
+    payment.hold_amount_cents ??
+    BOOKING_DEPOSIT_CENTS;
+  const amountToCapture = Math.max(
+    1,
+    Math.min(Math.round(captureCents), Math.round(holdCents)),
+  );
   const captureParams: Record<string, number> = {
     amount_to_capture: amountToCapture,
   };
@@ -2008,18 +2161,29 @@ async function captureAtAmount(
     await ctx.runMutation(internal.payments_stripe._patchBookingCaptured, {
       bookingId,
       finalTotalCents: finalCents,
-      finalCaptureAmountCents: captureCents,
+      // What we actually captured (capped at the hold), not the requested total.
+      finalCaptureAmountCents: amountToCapture,
       partsSnapshot,
     });
     await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
       bookingId,
       stripeAction: "capture_final",
     });
+    // Flag any shortfall: the hold couldn't cover the full final total, so the
+    // job is captured-at-ceiling and the remainder is chased via settlement.
+    await ctx.runMutation(internal.payments_stripe._stampSettlement, {
+      bookingId,
+      capturedCents: amountToCapture,
+      finalCents,
+      reason:
+        amountToCapture < finalCents ? "hold_below_final_total" : undefined,
+    });
     return { status: pi.status };
   } catch (err: any) {
-    // Mirror capturePaymentIntentForBooking: surface the failure on the row
-    // so the UI can react, instead of leaving the booking completed with an
-    // uncaptured authorization that nobody sees.
+    // Capture is impossible right now (PI not capturable — e.g. reauth pending /
+    // requires_action). Surface it on the payment row AND flag the completed job
+    // for settlement so the reconciliation cron + ops chase it — never leave it
+    // silently uncaptured with nobody watching.
     console.error(
       `[captureAtAmount] capture failed booking=${String(bookingId)} pi=${activePiId} amount=${amountToCapture}: ${err?.message ?? err}`,
     );
@@ -2031,6 +2195,12 @@ async function captureAtAmount(
         errorMessage: err?.message?.slice(0, 500),
       });
     }
+    await ctx.runMutation(internal.payments_stripe._stampSettlement, {
+      bookingId,
+      capturedCents: 0,
+      finalCents,
+      reason: `capture_failed:${err?.code ?? "unknown"}`,
+    });
     return { status: "failed", reason: err?.message };
   }
 }

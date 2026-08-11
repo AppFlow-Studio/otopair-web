@@ -25,6 +25,7 @@ const NAV_GROUPS: NavGroup[] = [
   { section:'Money', items: [
     { id:'stripe',       label:'Stripe',       Icon:IconStripe,  badge:'stripe' },
     { id:'transactions', label:'Transactions', Icon:IconCard },
+    { id:'settlement',   label:'Settlement',   Icon:IconClock,   badge:'settlement' },
   ] },
   { section:'Catalog', items: [
     { id:'cars',         label:'Cars',            Icon:IconCar },
@@ -55,7 +56,7 @@ const NAV_GROUPS: NavGroup[] = [
 ]
 
 type Counts = { bugs?: number; feedback?: number; otoFeedback?: number; stripe?: number; mechanicEdits?: number
-  deletionQueue?: number; reviews?: number; systemHealth?: number }
+  deletionQueue?: number; reviews?: number; systemHealth?: number; settlement?: number }
 type CurrentUser = { name: string; role: string }
 
 export const Sidebar = ({ active, onNavigate, counts, currentUser, onLogout }: {

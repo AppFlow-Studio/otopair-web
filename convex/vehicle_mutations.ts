@@ -8,6 +8,7 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { sanitizePartNumber } from "./vehicleEnrichment/contentSanitization";
+import { getOrCreateMake } from "./lib/makeKey";
 import { normalizeOemNumber } from "./vehicleEnrichment/priceParser";
 
 // ============================================
@@ -169,28 +170,10 @@ export const createTestUser = internalMutation({
 export const upsertMake = internalMutation({
   args: { name: v.string() },
   handler: async (ctx, args) => {
-    // Try exact match first
-    const exact = await ctx.db
-      .query("makes")
-      .withIndex("by_name", (q) => q.eq("name", args.name))
-      .first();
-    if (exact) return exact._id;
-
-    // Fall back to case-insensitive slug match.
-    // VIN decoders return "MERCEDES-BENZ" but seeded makes use "Mercedes-Benz".
-    const slug = args.name.toLowerCase().replace(/\s+/g, "-");
-    const bySlug = await ctx.db
-      .query("makes")
-      .withIndex("by_slug", (q) => q.eq("slug", slug))
-      .first();
-    if (bySlug) return bySlug._id;
-
-    // Only create if truly new — include slug so future lookups work
-    return await ctx.db.insert("makes", {
-      name: args.name,
-      slug,
-      logo_url: "",
-    });
+    // Normalized get-or-create via lib/makeKey (by_name → by_make_key → keyed
+    // scan). The old slug fallback missed rows created without a slug — which
+    // is exactly how the "MERCEDES-BENZ" twin of "Mercedes-Benz" was minted.
+    return await getOrCreateMake(ctx.db, args.name);
   },
 });
 

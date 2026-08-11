@@ -34,6 +34,7 @@ import {
   getPartsSearchPlans,
   getManualSearchQueries,
   BLOCKED_DOMAINS,
+  isMarketplaceDomain,
   type MakeSourceConfig,
 } from "./sourceRegistry";
 import { isStorefrontHomepage, detailPageVehicleVerdict, parseDetailTitle } from "./rpCatalog";
@@ -42,9 +43,13 @@ import { checkRoleIdentity, ROLEKEYS_BY_PART_SLUG } from "./roleIdentity";
 import { CACHE_FORMAT_VERSION } from "./scraperQueries";
 import type { VehicleInput } from "./types";
 import { scrapeWheelSizeOptions, type WheelSizeResult } from "./utils/wheelSizeScraper";
+import { fetchLemonManualMarkdown, normalizeDrivetrain } from "./lemonManuals";
 import { resolveScrapeRedirect } from "./buildSourceResolver";
 
 const TTL_PARTS_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+/** Owner-manual content doesn't churn like storefront catalogs — 90 days,
+ *  matching the ttl_days the cache row itself records for owner_manual. */
+const TTL_MANUAL_MS = 90 * 24 * 60 * 60 * 1000;
 const MAX_MARKDOWN_CHARS = 40_000;
 const MAX_PER_PAGE_CHARS =  8_000; // per-page cap when concatenating multiple pages
 /** Wall-clock budget for the registry parts-fetch loop (see scrapePartsPages).
@@ -240,6 +245,15 @@ async function searchPartsPages(
       for (const r of results) {
         const host = (() => { try { return new URL(r.url).hostname.replace(/^www\./, ""); } catch { return ""; } })();
         if (BLOCKED_DOMAINS.some((d) => host === d || host.endsWith("." + d))) continue;
+        // Marketplace listings never enter the parts context. Their prices are
+        // already refused at every price choke point, but the MARKDOWN still
+        // fed Batch-1 (the GLC-43 scrape ingested two eBay item pages as
+        // "parts catalog" sources): mixed-seller listings poison part-number
+        // extraction the same way they poison prices.
+        if (isMarketplaceDomain(host)) {
+          console.log(`[scraper] marketplace domain skipped for parts context: ${r.url}`);
+          continue;
+        }
         // A search hit that is really a RevolutionParts storefront HOMEPAGE
         // (redirect rot) carries featured-product tiles — never ingest it.
         if (isStorefrontHomepage(r.html ?? null, r.markdown ?? null)) continue;
@@ -588,9 +602,17 @@ async function scrapeManual(
   vehicle: VehicleInput,
   queries: string[],
 ): Promise<{ markdown: string; urls: string[] }> {
+  // Cache key: the manual markdown became drivetrain-SPECIFIC when LEMON came
+  // in ("CR-V EX, AWD" and "…, FWD" are different manuals — the FWD car has no
+  // rear differential). Keying by trim alone let the first sibling to run
+  // poison the other's manual for the full 90-day TTL. Partition by the
+  // normalized drivetrain when known; unknown-drivetrain configs keep the bare
+  // trim key, so existing cache rows stay valid for them.
+  const manualDt = normalizeDrivetrain(vehicle.drivetrain ?? null);
+  const manualCacheTrim = manualDt ? `${vehicle.trim ?? ""}|${manualDt}` : (vehicle.trim ?? "");
   const cached = await ctx.runQuery(
     internal.vehicleEnrichment.scraperQueries.getCachedScrape,
-    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: vehicle.trim ?? "", sourceType: "owner_manual" },
+    { vehicleMake: vehicle.make, vehicleModel: vehicle.model, vehicleYear: vehicle.year, vehicleTrim: manualCacheTrim, sourceType: "owner_manual" },
   );
   if (cached?.markdown && cached.url) {
     console.log(`[scraper] Cache hit: owner_manual for ${vehicle.year} ${vehicle.make} ${vehicle.model}`);
@@ -602,6 +624,54 @@ async function scrapeManual(
   const markdownParts: string[] = [];
   const sourceUrls: string[] = [];
   let totalChars = 0;
+
+  // LEMON Manuals — a deterministic mirror of factory SERVICE manuals. Its
+  // "Standards and Service Limits" leaves are clean spec tables (fluids,
+  // capacities, torque). Prepend them ahead of open-web results so they survive
+  // the MAX_MARKDOWN_CHARS cap, and let batch1a extract them the same way it
+  // extracts any manual markdown. Fail-open: a miss adds nothing and never
+  // interrupts the search path. Provenance stays mirror-grade (lemon-manuals.la
+  // is in MANUAL_MIRROR_DOMAINS) — it is never claimed as OEM.
+  try {
+    const lemon = await fetchLemonManualMarkdown({
+      make: vehicle.make,
+      model: vehicle.model,
+      year: vehicle.year,
+      trim: vehicle.trim || null,
+      // Drivetrain matters here: LEMON publishes "CR-V EX, AWD" and "CR-V EX,
+      // FWD" as separate manuals and their capacities differ (only the AWD car
+      // has a rear differential). Without it the two folders tie and the
+      // tiebreak silently picked one.
+      drivetrain: vehicle.drivetrain ?? null,
+      displacement_l: vehicle.displacement ? parseFloat(vehicle.displacement) || null : null,
+    });
+    if (lemon.ok && lemon.markdown.length > 0) {
+      const chunk = lemon.markdown.slice(0, MAX_MARKDOWN_CHARS);
+      // The landing page's variant-equivalence assertion rides the source
+      // header so the CACHED scrape result carries it: claims extracted from
+      // these pages also hold for the named sibling variants — except claims
+      // from the excluded page families (Labor Times / Fluids / Tire Fitment),
+      // which stay per-variant. Empty when LEMON printed no header, keeping
+      // the line byte-identical to the pre-equivalence format.
+      const eqVariants = lemon.equivalent_variants;
+      const eqNote =
+        eqVariants.length > 0
+          ? `; identical for ${eqVariants.length} sibling variant(s): ${eqVariants.slice(0, 6).join("; ")}${eqVariants.length > 6 ? `; +${eqVariants.length - 6} more` : ""}${lemon.equivalence_excluded_pages.length > 0 ? ` — except ${lemon.equivalence_excluded_pages.join("/")} pages` : ""}`
+          : "";
+      markdownParts.push(
+        `\n\n--- Source: LEMON Manuals (${lemon.host ?? "mirror"}, ${lemon.leaf_count} spec pages, trim "${lemon.resolved_trim}"${eqNote}) ---\n${chunk}`,
+      );
+      for (const l of lemon.leaves) sourceUrls.push(l.url);
+      totalChars += chunk.length;
+      console.log(
+        `[scraper] LEMON manual: +${chunk.length} chars from ${lemon.leaf_count} spec page(s) for ${vehicle.year} ${vehicle.make} ${vehicle.model}${lemon.trim_match ? ` (${lemon.trim_match} trim match${lemon.trim_match === "equivalent" && lemon.matched_variant ? ` via "${lemon.matched_variant}"` : ""})` : ""}`,
+      );
+    } else {
+      console.log(`[scraper] LEMON manual: no content (${lemon.reason})`);
+    }
+  } catch (e) {
+    console.warn("[scraper] LEMON manual fetch failed (fail-open):", e);
+  }
 
   for (const query of queries) {
     if (totalChars >= MAX_MARKDOWN_CHARS) break;
@@ -632,9 +702,9 @@ async function scrapeManual(
       vehicleMake: vehicle.make,
       vehicleModel: vehicle.model,
       vehicleYear: vehicle.year,
-      vehicleTrim: vehicle.trim ?? "",
+      vehicleTrim: manualCacheTrim, // must mirror the lookup key above
       sourceType: "owner_manual",
-      expiresAt: now + TTL_PARTS_MS,
+      expiresAt: now + TTL_MANUAL_MS,
     });
   }
 

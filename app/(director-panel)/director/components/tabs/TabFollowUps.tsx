@@ -25,7 +25,7 @@ import { StatCard, DailyBars, fmtNumber } from '../Charts'
 
 // --- Local helpers (no director equivalent) ----------------------------------
 
-const fmtDT = (ms: number) => new Date(ms).toLocaleString()
+const fmtDT = (ms: number) => new Date(ms).toLocaleString('en-US', { month: 'long', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
 
 /** Countdown to the scheduled fire time, matching the ops copy exactly. */
 function countdown(ms: number): string {

@@ -27,7 +27,7 @@ export function NotificationEmptyState({
         type="button"
         onClick={() => {
           onClose?.();
-          router.push("/settings/notifications");
+          router.push("/notifications?tab=preferences");
         }}
         className="mt-4 inline-flex items-center rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
       >

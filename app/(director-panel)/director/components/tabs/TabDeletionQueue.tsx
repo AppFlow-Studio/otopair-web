@@ -54,7 +54,7 @@ function providerLabel(p: string | null): string | null {
 }
 
 const fmtDate = (ms: number | null) =>
-  ms == null ? '—' : new Date(ms).toLocaleDateString()
+  ms == null ? '—' : new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 const fmtSpend = (n: number) => (n > 0 ? `$${Math.round(n).toLocaleString()}` : '—')
 
 type Row = {
@@ -228,7 +228,7 @@ export const TabDeletionQueue = () => {
                       <div style={{ color:'var(--slate-400)' }}>joined {fmtDate(r.createdAt)}</div>
                     </td>
                     <td style={{ ...tableStyles.td, verticalAlign:'top', color:'var(--slate-600)' }}>
-                      {r.requested_at == null ? '—' : new Date(r.requested_at).toLocaleDateString()}
+                      {fmtDate(r.requested_at)}
                     </td>
                     <td style={{ ...tableStyles.td, verticalAlign:'top' }}>
                       <AgePill days={days} />

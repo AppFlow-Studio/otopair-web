@@ -1,4 +1,5 @@
 import { internalMutation } from "../_generated/server";
+import { findMakeByName, getOrCreateMake } from "../lib/makeKey";
 
 const FALLBACK_PATTERN = "^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$";
 
@@ -37,29 +38,35 @@ const MAKES = [
 
 /**
  * Seeds the makes table with 30 manufacturers.
- * Safe to re-run: skips if makes table already has data.
+ * Safe to re-run: per-row get-or-create via lib/makeKey (key-normalized, so a
+ * pre-existing "MERCEDES-BENZ" row counts as Mercedes-Benz and is healed, not
+ * duplicated). Existing rows only have MISSING pattern/country filled in —
+ * nothing is overwritten.
  *
  * Run via: npx convex run seeds/seedMakes:seedMakes
  */
 export const seedMakes = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const existing = await ctx.db.query("makes").first();
-    if (existing) {
-      console.log("Makes table already has data — skipping seed.");
-      return;
-    }
-
+    let created = 0;
+    let existing = 0;
     for (const make of MAKES) {
-      const slug = make.name.toLowerCase().replace(/\s+/g, "-");
-      await ctx.db.insert("makes", {
-        name: make.name,
-        slug,
+      const found = await findMakeByName(ctx.db, make.name);
+      if (found) {
+        const heal: Record<string, unknown> = {};
+        if (!found.oem_part_pattern) heal.oem_part_pattern = make.oem_part_pattern;
+        if (!found.country) heal.country = make.country;
+        if (Object.keys(heal).length) await ctx.db.patch(found._id, heal);
+        existing++;
+        continue;
+      }
+      await getOrCreateMake(ctx.db, make.name, {
         oem_part_pattern: make.oem_part_pattern,
         country: make.country,
       });
+      created++;
     }
 
-    console.log(`Seeded ${MAKES.length} makes.`);
+    console.log(`Seeded makes: ${created} created, ${existing} already present.`);
   },
 });

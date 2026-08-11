@@ -21,7 +21,7 @@ import { StatCard, DailyBars, fmtNumber } from '../Charts'
 // Local helpers (no director equivalent)
 // ---------------------------------------------------------------------------
 
-const fmtDate = (ms: number) => new Date(ms).toLocaleDateString()
+const fmtDate = (ms: number) => new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 
 const SegmentedView = <T extends string>({ value, options, onChange }:
   { value: T; options: { value: T; label: string }[]; onChange: (v: T) => void }) => (

@@ -38,6 +38,11 @@ import type { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { getStripe } from "../lib/stripe";
 import { isTerminal, validateTransition } from "./booking_status_history";
+import {
+  resolvePolicy,
+  computeCancellationFee,
+  evaluateRescheduleLimit,
+} from "./lib/cancellation_policy";
 import { mintClaimToken } from "./walkin_claims";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
@@ -79,6 +84,10 @@ import {
   syncMechanicDayAvailability,
   syncShopDateAvailability,
 } from "./lib/timeSlotAvailability";
+import {
+  resolveSlotHoldForConsume,
+  deleteConsumedSlotHold,
+} from "./slotHolds";
 import {
   ensureJobActualRecord,
   finalizeJobActuals,
@@ -574,32 +583,237 @@ export const cancelBooking = mutation({
     bookingId: v.id("bookings"),
     /** Optional free-form reason. Defaults to "user_cancelled". */
     reason: v.optional(v.string()),
+    /** The late-cancellation fee the customer was shown before confirming.
+     *  Server recomputes the real fee; if it now exceeds what was disclosed
+     *  the cancel is rejected so the customer re-confirms the higher amount. */
+    feeAcknowledgedCents: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
-    const existing = await ctx.db.get(args.bookingId);
-    if (!existing) return;
-    if (existing.status === "cancelled") return;
-    const now = Date.now();
-    const previousStatus = existing.status;
-    await ctx.db.patch(args.bookingId, {
-      status: "cancelled",
-      updated_at: now,
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ cancelled: boolean; feeCents: number; kind: string }> => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have already been removed.");
+    if (booking.user_id !== user._id) throw new Error("Not your booking.");
+
+    // Idempotent: already-terminal bookings can't be cancelled again.
+    if (isTerminal(booking.status)) {
+      return {
+        cancelled: booking.status === "cancelled",
+        feeCents: (booking as any).cancellation_fee_cents ?? 0,
+        kind: (booking as any).cancellation_kind ?? "free",
+      };
+    }
+
+    // Phase gate: once the car is at the shop or work has started, the
+    // customer can't self-cancel — the app routes them to the shop instead.
+    if (booking.status === "in_progress") {
+      throw new Error(
+        "Work is already underway — this booking can no longer be cancelled here. Message the shop to sort it out.",
+      );
+    }
+    if (booking.status === "vehicle_at_shop") {
+      throw new Error(
+        "Your car is already at the shop. Use “Request to cancel & pick up car” so the shop can release it.",
+      );
+    }
+
+    const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const policy = resolvePolicy(shop);
+    const appointmentStartMs =
+      booking.scheduled_date && booking.scheduled_time
+        ? toBookingDateTimeMs(
+            booking.scheduled_date,
+            booking.scheduled_time,
+            await getShopTimezone(ctx, booking.shop_id),
+          )
+        : null;
+    const { feeCents, kind } = computeCancellationFee({
+      appointmentStartMs,
+      nowMs: Date.now(),
+      policy,
+      intent: "cancel",
     });
-    await logBookingStatusChange(
-      ctx,
-      args.bookingId,
-      previousStatus,
-      "cancelled",
-      existing.user_id,
-      args.reason ?? "user_cancelled",
-    );
-    await syncBookingAssignments(ctx, [
-      {
-        shopId: existing.shop_id,
-        mechanicId: existing.mechanic_id ?? undefined,
-        date: existing.scheduled_date,
+
+    // Guard against a stale fee disclosure: if the fee rose past what the
+    // customer acknowledged (e.g. they crossed the cutoff mid-flow), reject
+    // so the app can re-disclose the higher amount.
+    if (
+      typeof args.feeAcknowledgedCents === "number" &&
+      args.feeAcknowledgedCents < feeCents
+    ) {
+      throw new Error(
+        "The cancellation fee changed. Please review the updated amount and try again.",
+      );
+    }
+
+    await applyBookingStatusTransition(ctx, {
+      booking,
+      newStatus: "cancelled",
+      changedBy: user._id,
+      reason: args.reason ?? "user_cancelled",
+      cancellationFeeCents: feeCents,
+      cancellationKind: kind,
+    });
+
+    return { cancelled: true, feeCents, kind };
+  },
+});
+
+/**
+ * Customer "request to cancel & pick up car" — the vehicle_at_shop path.
+ * Once the car is physically at the shop the customer can't self-cancel;
+ * this records the request and notifies the front desk WITHOUT flipping
+ * status. The shop then completes the cancel (with or without a fee) via its
+ * own cancel/markNoShow flow. Idempotent per booking via the outbox dedupe key.
+ */
+export const requestCancellationAtShop = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ requested: boolean }> => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have already been removed.");
+    if (booking.user_id !== user._id) throw new Error("Not your booking.");
+    if (booking.status !== "vehicle_at_shop") {
+      throw new Error("You can only request pickup once your car is at the shop.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(args.bookingId, {
+      cancel_requested_at_ms: now,
+      cancel_request_reason: args.reason,
+      updated_at: now,
+    } as any);
+
+    await enqueueNotificationOutbox(ctx, {
+      shopId: booking.shop_id,
+      bookingId: booking._id,
+      userId: booking.user_id,
+      channel: "front_desk",
+      category: "customer_cancel_pickup_request",
+      dedupeKey: `cancel-pickup:${String(booking._id)}`,
+      payload: {
+        reason: args.reason ?? null,
+        requestedAtMs: now,
       },
-    ]);
+    });
+
+    return { requested: true };
+  },
+});
+
+/**
+ * Single source of truth for what the customer may do to a booking right now
+ * and what it would cost. The app renders Cancel/Reschedule buttons + fee
+ * disclosure straight off this — so UI gating and server enforcement can never
+ * drift. Reactive: the fee/labels update live as the free-cancel cutoff nears.
+ * Returns null when the booking isn't the caller's (don't leak).
+ */
+export const getCustomerBookingActions = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking || !user || booking.user_id !== user._id) return null;
+
+    const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const policy = resolvePolicy(shop);
+    const timezone = (shop as any)?.timezone || DEFAULT_SHOP_TIMEZONE;
+    const appointmentStartMs =
+      booking.scheduled_date && booking.scheduled_time
+        ? toBookingDateTimeMs(booking.scheduled_date, booking.scheduled_time, timezone)
+        : null;
+    const now = Date.now();
+    const status = booking.status as string;
+
+    let blockedReason: string | null = null;
+    let canCancel = false;
+    let canReschedule = false;
+    let cancelKind: "free" | "late_cancel" | "request_shop" = "free";
+
+    if (isTerminal(status)) {
+      blockedReason = `already_${status}`;
+    } else if (status === "in_progress") {
+      blockedReason = "work_in_progress";
+    } else if (status === "vehicle_at_shop") {
+      // Car is physically at the shop: cancel becomes a shop-mediated request,
+      // reschedule is off (customer contacts the shop).
+      canCancel = true;
+      cancelKind = "request_shop";
+    } else {
+      // pending / pending_shop_acceptance / pending_customer_acceptance /
+      // confirmed / quote stages → self-service cancel + reschedule.
+      canCancel = true;
+      canReschedule = true;
+    }
+
+    const cancelFee = computeCancellationFee({
+      appointmentStartMs,
+      nowMs: now,
+      policy,
+      intent: "cancel",
+    });
+    if (canCancel && cancelKind !== "request_shop") {
+      cancelKind = cancelFee.kind === "late_cancel" ? "late_cancel" : "free";
+    }
+    const feeCentsIfCancelledNow =
+      cancelKind === "request_shop" ? 0 : cancelFee.feeCents;
+
+    const reschedulesUsed = (booking as any).reschedule_count ?? 0;
+    const rescheduleEval = evaluateRescheduleLimit({
+      appointmentStartMs,
+      nowMs: now,
+      policy,
+      reschedulesUsed,
+    });
+    const rescheduleKind: "free" | "limited" = canReschedule
+      ? rescheduleEval.kind
+      : "limited";
+
+    const MS_PER_HOUR = 3_600_000;
+    const freeUntilMs =
+      appointmentStartMs != null
+        ? appointmentStartMs - policy.cancelFreeCutoffHours * MS_PER_HOUR
+        : null;
+    const rescheduleFreeUntilMs =
+      appointmentStartMs != null
+        ? appointmentStartMs - policy.rescheduleFreeCutoffHours * MS_PER_HOUR
+        : null;
+
+    return {
+      status,
+      canCancel,
+      cancelKind,
+      feeCentsIfCancelledNow,
+      canReschedule,
+      rescheduleKind,
+      freeUntilMs,
+      rescheduleFreeUntilMs,
+      reschedulesUsed,
+      maxFreeReschedules: policy.rescheduleMaxFree,
+      cancelRequestedAtMs: (booking as any).cancel_requested_at_ms ?? null,
+      blockedReason,
+      // Post-completion "final breakdown" is a RECEIPT, not a decision: the
+      // price was agreed before the job started, so there is no approve/decline
+      // here. The app renders this informationally (requiresDecision:false).
+      completion:
+        status === "completed"
+          ? {
+              requiresDecision: false,
+              finalTotalCents:
+                (booking as any).final_capture_amount_cents ??
+                (booking as any).final_total_cents ??
+                null,
+              settlementState: (booking as any).settlement_state ?? "settled",
+              settlementShortfallCents:
+                (booking as any).settlement_shortfall_cents ?? 0,
+            }
+          : null,
+    };
   },
 });
 
@@ -888,6 +1102,9 @@ export const create = mutation({
     // only by `resolveBookingLaborMinutes` when no enrichment row exists.
     labor_hours: v.optional(v.float64()),
     session_id: v.optional(v.string()),
+    // StubHub-style slot hold acquired during checkout (convex/slotHolds.ts).
+    // Verified + consumed atomically with the booking insert below.
+    hold_id: v.optional(v.id("slot_holds")),
     funnel_id: v.optional(v.id("conversion_funnels")),
     source_recommendation_id: v.optional(v.id("job_recommendations")),
   },
@@ -983,13 +1200,24 @@ export const create = mutation({
         : legacySlot
           ? getSlotDurationMinutes(legacySlot)
           : 60;
-    const preferredMechanicId = args.mechanic_id ?? legacySlot?.mechanic_id;
+    // Consume the checkout hold (if any): reuse its pinned mechanic and exclude
+    // the caller's own hold so it can't block the booking it was reserving.
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.hold_id,
+      sessionId: args.session_id,
+      shopId: args.shop_id,
+      date: scheduledDate,
+      startTime: scheduledTime,
+    });
+    const preferredMechanicId =
+      holdConsume.pinnedMechanicId ?? args.mechanic_id ?? legacySlot?.mechanic_id;
     const mechanicId = await resolveMechanicForWindow(ctx, {
       shopId: args.shop_id,
       date: scheduledDate,
       startTime: scheduledTime,
       durationMinutes,
       preferredMechanicId,
+      excludeSessionId: holdConsume.excludeSessionId,
     });
 
     const now = Date.now();
@@ -1016,6 +1244,10 @@ export const create = mutation({
         ? laborCostCheck.aboveEngineByDollars
         : undefined,
     });
+
+    // Atomic with the insert above (same OCC-serializable mutation): free the
+    // hold now that the booking owns the slot.
+    await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     await logBookingStatusChange(
       ctx,
@@ -1353,6 +1585,7 @@ type CreateBatchArgs = {
   platform_fee?: number;
   displayed_labor_minutes?: number;
   session_id?: string;
+  hold_id?: Id<"slot_holds">;
   funnel_id?: Id<"conversion_funnels">;
   source_recommendation_id?: Id<"job_recommendations">;
   customer_notes?: string;
@@ -1414,6 +1647,9 @@ const createBatchArgs = {
     // single-service equivalent.
     displayed_labor_minutes: v.optional(v.float64()),
     session_id: v.optional(v.string()),
+    // StubHub-style slot hold acquired during checkout (convex/slotHolds.ts).
+    // Verified + consumed atomically with the booking insert in createBatchImpl.
+    hold_id: v.optional(v.id("slot_holds")),
     funnel_id: v.optional(v.id("conversion_funnels")),
     source_recommendation_id: v.optional(v.id("job_recommendations")),
     customer_notes: v.optional(v.string()),
@@ -1759,13 +1995,24 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
         : legacySlot
           ? getSlotDurationMinutes(legacySlot)
           : 60;
-    const preferredMechanicId = args.mechanic_id ?? legacySlot?.mechanic_id;
+    // Consume the checkout hold (if any): reuse its pinned mechanic and exclude
+    // the caller's own hold so it can't block the booking it was reserving.
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.hold_id,
+      sessionId: args.session_id,
+      shopId: args.shop_id,
+      date: scheduledDate,
+      startTime: scheduledTime,
+    });
+    const preferredMechanicId =
+      holdConsume.pinnedMechanicId ?? args.mechanic_id ?? legacySlot?.mechanic_id;
     const mechanicId = await resolveMechanicForWindow(ctx, {
       shopId: args.shop_id,
       date: scheduledDate,
       startTime: scheduledTime,
       durationMinutes,
       preferredMechanicId,
+      excludeSessionId: holdConsume.excludeSessionId,
     });
 
     const now = Date.now();
@@ -1833,6 +2080,9 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
             }))
           : undefined,
     });
+
+    // Atomic with the insert above: free the hold now that the booking owns it.
+    await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     if (args.preauthorized_payment) {
       const paymentId = await ctx.db.insert("payments", {
@@ -2017,16 +2267,36 @@ export const updateStatus = mutation({
     reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Auth: this generic setter drives operational lifecycle transitions only
+    // (confirm / start work / at-shop). It must NOT be a back door around the
+    // phase→action policy — previously it had NO auth at all, so any caller
+    // could push a booking to any status (incl. cancelled/completed) and skip
+    // the fee, capture, and gating enforced by the dedicated mutations.
+    const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
-    if (args.newStatus === "no_show") {
-      throw new Error("Use markPostThresholdNoShow to mark a booking no-show.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    // Money-moving / terminal states must go through the policy-gated mutations
+    // (cancelBooking/cancel, completeWithPostjob, markNoShow/markPostThresholdNoShow)
+    // so cancellation fees, final capture, and phase gating always run.
+    const POLICY_GATED_STATUSES = new Set([
+      "cancelled",
+      "declined",
+      "no_show",
+      "completed",
+    ]);
+    if (POLICY_GATED_STATUSES.has(args.newStatus)) {
+      throw new Error(
+        `updateStatus can't set "${args.newStatus}" — use the dedicated action so fees and capture are enforced.`,
+      );
     }
 
     return await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: args.newStatus,
-      changedBy: args.changed_by,
+      // Actor is the authenticated staff member — never a caller-supplied id.
+      changedBy: user._id,
       reason: args.reason,
     });
   },
@@ -2667,13 +2937,23 @@ export const markPostThresholdNoShow = mutation({
     await requireShopStaff(ctx, user._id, booking.shop_id);
     await assertCustomerLateThresholdReached(ctx, booking);
 
+    const noShowShop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const { feeCents, kind } = computeCancellationFee({
+      appointmentStartMs: null,
+      nowMs: Date.now(),
+      policy: resolvePolicy(noShowShop),
+      intent: "no_show",
+    });
     const result = await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "no_show",
       changedBy: user._id,
       reason: "post_threshold_customer_no_show",
+      cancellationFeeCents: feeCents,
+      cancellationKind: kind,
     });
-    // Stripe void is scheduled centrally by applyBookingStatusTransition.
+    // Deposit forfeit (or void when fee is 0) is scheduled centrally by
+    // applyBookingStatusTransition.
     return result;
   },
 });
@@ -2692,11 +2972,20 @@ export const markNoShow = mutation({
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
+    const noShowShop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const { feeCents, kind } = computeCancellationFee({
+      appointmentStartMs: null,
+      nowMs: Date.now(),
+      policy: resolvePolicy(noShowShop),
+      intent: "no_show",
+    });
     return await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "no_show",
       changedBy: user._id,
       reason: args.reason ?? "manual_customer_no_show",
+      cancellationFeeCents: feeCents,
+      cancellationKind: kind,
     });
   },
 });
@@ -3082,11 +3371,41 @@ export const customerRequestReschedule = mutation({
     if (!booking.shop_id) {
       throw new Error("This booking doesn't have a shop assigned yet.");
     }
-    if (["cancelled", "completed", "no_show", "in_progress"].includes(booking.status)) {
+    if (
+      ["cancelled", "completed", "no_show", "in_progress", "vehicle_at_shop"].includes(
+        booking.status,
+      )
+    ) {
       const label =
         BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
         String(booking.status).replace(/_/g, " ");
       throw new Error(`This booking can't be rescheduled while it's ${label}.`);
+    }
+
+    // Reschedule limit (v1: limit-only, no fee). Beyond the free count or
+    // inside the reschedule cutoff, the customer must contact the shop.
+    const reschedulePolicy = resolvePolicy(await ctx.db.get(booking.shop_id));
+    const reschedulesUsed = (booking as any).reschedule_count ?? 0;
+    const currentApptMs =
+      booking.scheduled_date && booking.scheduled_time
+        ? toBookingDateTimeMs(
+            booking.scheduled_date,
+            booking.scheduled_time,
+            await getShopTimezone(ctx, booking.shop_id),
+          )
+        : null;
+    const rescheduleLimit = evaluateRescheduleLimit({
+      appointmentStartMs: currentApptMs,
+      nowMs: Date.now(),
+      policy: reschedulePolicy,
+      reschedulesUsed,
+    });
+    if (rescheduleLimit.kind === "limited") {
+      throw new Error(
+        rescheduleLimit.reason === "max_free_reschedules_reached"
+          ? "You've used all your free reschedules for this booking. Message the shop to change your appointment."
+          : "It's too close to your appointment to reschedule here. Message the shop to change your appointment.",
+      );
     }
 
     const currentMechanicId = await getBookingMechanicId(ctx, booking);
@@ -3118,6 +3437,7 @@ export const customerRequestReschedule = mutation({
       reschedule_proposed_at: now,
       schedule_change_mode: "customer_reschedule",
       customer_can_restore_original: false,
+      reschedule_count: reschedulesUsed + 1,
       updated_at: now,
     });
 
@@ -4476,6 +4796,25 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
   const frontCondition = prejob.front_tire_condition ?? undefined;
   const rearCondition = prejob.rear_tire_condition ?? undefined;
   const fluidOverrides = prejob.fluid_overrides ?? undefined;
+  // Multi-point inspections record tire identity per corner in `tire_details`
+  // and leave the flat `tire_brand`/`tire_model` null. Fall back to the first
+  // corner that reported a brand/model so completing an inspection actually
+  // fills the passport's required `tires.brand` — otherwise `is_complete` can
+  // never flip true for a car that only ever gets non-tire jobs.
+  const tireDetailCorners = [
+    prejob.tire_details?.front_left,
+    prejob.tire_details?.front_right,
+    prejob.tire_details?.rear_left,
+    prejob.tire_details?.rear_right,
+  ];
+  const firstCornerBrand =
+    tireDetailCorners
+      .map((corner: any) => (hasText(corner?.brand) ? corner.brand.trim() : null))
+      .find(Boolean) ?? undefined;
+  const firstCornerModel =
+    tireDetailCorners
+      .map((corner: any) => (hasText(corner?.model) ? corner.model.trim() : null))
+      .find(Boolean) ?? undefined;
   const hasFluidOverride =
     fluidOverrides &&
     Object.values(fluidOverrides).some(
@@ -4491,8 +4830,8 @@ function buildPassportPatchFromPrejob(prejob: any, existingPassport: any) {
         ? prejob.mileage
         : undefined,
     tires: {
-      brand: prejob.tire_brand ?? undefined,
-      model: prejob.tire_model ?? undefined,
+      brand: prejob.tire_brand ?? firstCornerBrand ?? undefined,
+      model: prejob.tire_model ?? firstCornerModel ?? undefined,
       size_front: prejob.tire_size_front ?? undefined,
       size_rear: prejob.tire_size_rear ?? undefined,
       tread_depths: prejob.tire_tread ?? undefined,
@@ -4990,6 +5329,60 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
     sources,
     enrichment_status: vehicleConfig?.enrichment_status ?? (vehicle?.vehicle_config_id ? null : "pending"),
     enrichment_fill_rate: vehicleConfig?.fill_rate ?? null,
+    // OEM tire sizes this vehicle actually offers, split per axle, derived from
+    // the wheel-size.com fitments saved on trim_specs.tire_options. Feeds the
+    // inspection tire-size dropdown so it lists the real sizes instead of a
+    // generic catalog. `has_data` is false when nothing is saved yet — the
+    // dialog uses that to trigger a one-time on-demand lookup.
+    available_tire_sizes: buildAvailableTireSizes(trimSpec),
+  };
+}
+
+/**
+ * Collapse `trim_specs.tire_options[]` into distinct per-axle size lists for the
+ * inspection dropdown. OEM-standard fitments are listed first; the rear list
+ * falls back to the front size for non-staggered setups. When no options array
+ * exists we fall back to the single stored front/rear sizes so the field still
+ * has the best value we know.
+ */
+function buildAvailableTireSizes(trimSpec: any): {
+  front: string[];
+  rear: string[];
+  source: string | null;
+  staggered: boolean;
+  has_data: boolean;
+} {
+  const options: any[] = Array.isArray(trimSpec?.tire_options)
+    ? trimSpec.tire_options
+    : [];
+  const front: string[] = [];
+  const rear: string[] = [];
+  const pushUnique = (arr: string[], value: unknown) => {
+    if (typeof value !== "string") return;
+    const size = value.trim().toUpperCase();
+    if (!size || arr.includes(size)) return;
+    arr.push(size);
+  };
+  // Stable ordering: OEM-standard fitments first, original order preserved.
+  const ordered = [...options].sort(
+    (a, b) =>
+      (b?.is_oem_standard === true ? 1 : 0) - (a?.is_oem_standard === true ? 1 : 0),
+  );
+  for (const opt of ordered) {
+    pushUnique(front, opt?.size_front);
+    pushUnique(rear, opt?.size_rear ?? opt?.size_front);
+  }
+  if (front.length === 0) pushUnique(front, trimSpec?.tire_size_front);
+  if (rear.length === 0) {
+    pushUnique(rear, trimSpec?.tire_size_rear ?? trimSpec?.tire_size_front);
+  }
+  return {
+    front,
+    rear,
+    source: trimSpec?.tire_options_source ?? null,
+    staggered:
+      trimSpec?.is_staggered === true || rear.some((r) => !front.includes(r)),
+    has_data: options.length > 0,
   };
 }
 
@@ -5529,6 +5922,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeSessionId,
     allowAfterClose,
     allowOutsideShopHours,
   }: {
@@ -5540,6 +5934,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId?: any;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
+    excludeSessionId?: string;
     allowAfterClose?: boolean;
     allowOutsideShopHours?: boolean;
   }
@@ -5553,6 +5948,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeSessionId,
     allowAfterClose,
     allowOutsideShopHours,
   });
@@ -7823,11 +8219,17 @@ export async function applyBookingStatusTransition(
     newStatus,
     changedBy,
     reason,
+    cancellationFeeCents,
+    cancellationKind,
   }: {
     booking: any;
     newStatus: string;
     changedBy?: any;
     reason?: string;
+    /** When cancelling / marking no-show with a fee, the amount to capture
+     *  from the deposit hold (capture instead of void). 0 / undefined = void. */
+    cancellationFeeCents?: number;
+    cancellationKind?: string;
   }
 ) {
   const error = validateTransition(booking.status, newStatus);
@@ -7857,10 +8259,23 @@ export async function applyBookingStatusTransition(
     throw new Error(`This booking is already ${label} and can no longer be updated.`);
   }
 
-  const patch: { status: string; updated_at: number; live_stage?: string } = {
+  const patch: {
+    status: string;
+    updated_at: number;
+    live_stage?: string;
+    cancellation_fee_cents?: number;
+    cancellation_kind?: string;
+  } = {
     status: newStatus,
     updated_at: Date.now(),
   };
+  if (
+    (newStatus === "cancelled" || newStatus === "no_show") &&
+    typeof cancellationFeeCents === "number"
+  ) {
+    patch.cancellation_fee_cents = Math.max(0, Math.round(cancellationFeeCents));
+    if (cancellationKind) patch.cancellation_kind = cancellationKind;
+  }
   if (newStatus === "confirmed" || newStatus === "vehicle_at_shop") {
     patch.live_stage = "booking_confirmed";
   } else if (newStatus === "vehicle_at_shop") {
@@ -7979,18 +8394,39 @@ export async function applyBookingStatusTransition(
       { bookingId: booking._id },
     );
   }
-  // Void the authorization on any pre-capture terminal transition. The
-  // action checks the payments row's status and skips if already captured.
+  // Void OR fee-capture the authorization on a pre-capture terminal
+  // transition. cancelled/no_show with a fee → partial-capture the deposit
+  // (which auto-releases the remainder); otherwise void the whole hold.
+  // `declined` always voids. The actions check the payments row's status and
+  // skip if already captured.
   if (
     newStatus === "cancelled" ||
     newStatus === "declined" ||
     newStatus === "no_show"
   ) {
-    await ctx.scheduler.runAfter(
-      0,
-      (internal as any).lib.stripe_void.voidBookingAuthorization,
-      { bookingId: booking._id },
-    );
+    const feeCents = Math.max(0, Math.round(cancellationFeeCents ?? 0));
+    if (
+      (newStatus === "cancelled" || newStatus === "no_show") &&
+      feeCents > 0
+    ) {
+      await ctx.scheduler.runAfter(
+        0,
+        (internal as any).payments_stripe.captureCancellationFee,
+        {
+          bookingId: booking._id,
+          feeCents,
+          kind:
+            cancellationKind ??
+            (newStatus === "no_show" ? "no_show" : "late_cancel"),
+        },
+      );
+    } else {
+      await ctx.scheduler.runAfter(
+        0,
+        (internal as any).lib.stripe_void.voidBookingAuthorization,
+        { bookingId: booking._id },
+      );
+    }
   }
 
   return { success: true, oldStatus: booking.status, newStatus };
@@ -8083,6 +8519,7 @@ async function mapMechanicDashboardJob(ctx: any, booking: any) {
     hasDisclosedRange: booking.disclosed_range_high_cents != null,
     paymentApprovalState:
       (booking.payment_approval_state as string | undefined) ?? null,
+    settlementState: (booking.settlement_state as string | undefined) ?? null,
     mechanicSetPriceCents: booking.mechanic_set_price_cents ?? null,
     // Single-point quote (no range) shown to the mechanic. Falls back to
     // total_cost dollars for pre-feature bookings without a quote snapshot.
@@ -9250,6 +9687,8 @@ export const getJobDetail = query({
       isFixedPrice: (booking as any).is_fixed_price === true,
       paymentApprovalState:
         ((booking as any).payment_approval_state as string | undefined) ?? null,
+      settlementState:
+        ((booking as any).settlement_state as string | undefined) ?? null,
       mechanicSetPriceCents:
         ((booking as any).mechanic_set_price_cents as number | undefined) ??
         null,
@@ -10506,6 +10945,10 @@ export const createByShop = mutation({
     partsDeclaration: v.optional(
       v.union(v.literal("none"), v.literal("add"), v.literal("skip")),
     ),
+    // StubHub-style slot hold acquired in the create-booking drawer
+    // (convex/slotHolds.ts). Verified + consumed atomically with the insert.
+    sessionId: v.optional(v.string()),
+    holdId: v.optional(v.id("slot_holds")),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -10635,12 +11078,22 @@ export const createByShop = mutation({
     }
 
     const estimatedMinutes = args.estimatedLaborMinutes ?? 60;
+    // Consume the checkout hold (if any): reuse its pinned mechanic and exclude
+    // the caller's own hold so it can't block the booking it was reserving.
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.holdId,
+      sessionId: args.sessionId,
+      shopId: args.shopId,
+      date: args.scheduledDate,
+      startTime: args.scheduledTime,
+    });
     const resolvedMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: args.shopId,
       date: args.scheduledDate,
       startTime: args.scheduledTime,
       durationMinutes: estimatedMinutes,
-      preferredMechanicId: args.mechanicId,
+      preferredMechanicId: holdConsume.pinnedMechanicId ?? args.mechanicId,
+      excludeSessionId: holdConsume.excludeSessionId,
       allowAfterClose: args.allowOutsideShopHours === true,
     });
 
@@ -10749,6 +11202,9 @@ export const createByShop = mutation({
       mechanic_quoted_price: args.mechanicQuotedPrice,
       catalog_quoted_price: args.catalogQuotedPrice,
     });
+
+    // Atomic with the insert above: free the hold now that the booking owns it.
+    await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     // Per-service labor quote snapshots support analytics without joining
     // bookings through vehicles and vehicle configs on every query.
@@ -13014,6 +13470,42 @@ export const processCustomerLateMonitors = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
+
+    // ── Self-heal monitor coverage ──────────────────────────────────────
+    // A customer no-show only surfaces to the shop via a customer_late_monitors
+    // row (drives the live "mark no-show / reschedule" alert + the front-desk
+    // notifications). Those are normally created when a booking is confirmed,
+    // but a booking confirmed through an edge path (or before this system
+    // existed) can lack one — then the customer no-shows and NOTHING prompts the
+    // mechanic (the reported bug). Bounded to a ±window of dates around today so
+    // a missing monitor for a recent/imminent booking is created here, and —
+    // because the due-times anchor to the APPOINTMENT time, not now — an already
+    // -late booking fires its alert on this very run (the newly-created monitor
+    // is picked up by the active-monitor loop below).
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const toUtcDate = (ms: number) => {
+      const d = new Date(ms);
+      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+    };
+    const dayMs = 24 * 60 * 60 * 1000;
+    // -2 … +1 days (UTC) is tz-robust: covers appointments that already passed
+    // and any that read as "tomorrow" in a far-east shop timezone.
+    for (let off = -2; off <= 1; off += 1) {
+      const dateStr = toUtcDate(now + off * dayMs);
+      const dayBookings = await ctx.db
+        .query("bookings")
+        .withIndex("by_scheduled_date", (q: any) =>
+          q.eq("scheduled_date", dateStr),
+        )
+        .collect();
+      for (const booking of dayBookings) {
+        if (!isCustomerLateMonitorEligible(booking)) continue; // confirmed + no arrival
+        const existing = await getCustomerLateMonitorByBookingId(ctx, booking._id);
+        if (existing) continue;
+        await upsertCustomerLateMonitorForBooking(ctx, booking);
+      }
+    }
+
     const active = await ctx.db
       .query("customer_late_monitors")
       .withIndex("by_status", (q: any) => q.eq("status", "active"))
@@ -13791,6 +14283,357 @@ export const autoDropUnconfirmedBookings = internalMutation({
     }
 
     return dropped;
+  },
+});
+
+// ============================================================================
+// UNANSWERED BOOKING-REQUEST EXPIRY
+// ----------------------------------------------------------------------------
+// A shop-assigned request that sits in `pending` / `pending_shop_acceptance`
+// without the shop accepting is a dead slot for the customer. We nudge the
+// shop as a deadline approaches, then auto-cancel and notify BOTH parties.
+// Deadline = the EARLIER of a response SLA and a grace period past the
+// requested appointment time — so far-future requests don't linger and
+// past-dated ones close promptly. All windows are director-configurable
+// (director_settings singleton, edited from the Director panel → Settings);
+// the values below are the fallback defaults. The customer side (shop-proposed
+// reschedule awaiting the customer) is handled by `revertExpiredReschedules`.
+// ============================================================================
+const UNCONFIRMED_EXPIRY_DEFAULTS = {
+  enabled: true,
+  responseWindowMs: 48 * 60 * 60 * 1000,
+  postTimeGraceMs: 2 * 60 * 60 * 1000,
+  reminder1BeforeMs: 24 * 60 * 60 * 1000,
+  reminder2BeforeMs: 8 * 60 * 60 * 1000,
+  // Past this much beyond the deadline we close the row silently (no notices) —
+  // keeps a first cron run (and any stragglers) from blasting customers about
+  // weeks-old requests.
+  silentIfPastDeadlineMs: 24 * 60 * 60 * 1000,
+};
+type UnconfirmedExpiryConfig = typeof UNCONFIRMED_EXPIRY_DEFAULTS;
+
+// Resolve the director-tuned expiry config from the director_settings
+// singleton, falling back to the defaults for any unset field.
+async function getUnconfirmedExpiryConfig(ctx: any): Promise<UnconfirmedExpiryConfig> {
+  const row = await ctx.db
+    .query("director_settings")
+    .withIndex("by_key", (q: any) => q.eq("key", "global"))
+    .first();
+  if (!row) return { ...UNCONFIRMED_EXPIRY_DEFAULTS };
+  const hMs = (h: any, d: number) =>
+    typeof h === "number" && Number.isFinite(h) && h >= 0 ? h * 60 * 60 * 1000 : d;
+  const mMs = (m: any, d: number) =>
+    typeof m === "number" && Number.isFinite(m) && m >= 0 ? m * 60 * 1000 : d;
+  return {
+    enabled:
+      typeof row.unconfirmed_expiry_enabled === "boolean"
+        ? row.unconfirmed_expiry_enabled
+        : UNCONFIRMED_EXPIRY_DEFAULTS.enabled,
+    responseWindowMs: hMs(
+      row.unconfirmed_response_window_hours,
+      UNCONFIRMED_EXPIRY_DEFAULTS.responseWindowMs,
+    ),
+    postTimeGraceMs: mMs(
+      row.unconfirmed_post_time_grace_minutes,
+      UNCONFIRMED_EXPIRY_DEFAULTS.postTimeGraceMs,
+    ),
+    reminder1BeforeMs: hMs(
+      row.unconfirmed_reminder1_before_hours,
+      UNCONFIRMED_EXPIRY_DEFAULTS.reminder1BeforeMs,
+    ),
+    reminder2BeforeMs: hMs(
+      row.unconfirmed_reminder2_before_hours,
+      UNCONFIRMED_EXPIRY_DEFAULTS.reminder2BeforeMs,
+    ),
+    silentIfPastDeadlineMs: hMs(
+      row.unconfirmed_silent_if_past_deadline_hours,
+      UNCONFIRMED_EXPIRY_DEFAULTS.silentIfPastDeadlineMs,
+    ),
+  };
+}
+
+// Effective cancel deadline for an unconfirmed request. `requestedStartMs` is
+// undefined when the row carries no scheduled date/time (fall back to the SLA).
+function unconfirmedCancelDeadline(
+  createdAt: number,
+  requestedStartMs: number | undefined,
+  cfg: UnconfirmedExpiryConfig,
+) {
+  const slaDeadline = createdAt + cfg.responseWindowMs;
+  if (requestedStartMs == null) return slaDeadline;
+  return Math.min(slaDeadline, requestedStartMs + cfg.postTimeGraceMs);
+}
+
+// A pending row we should NOT auto-expire: quote-stage (no shop) or a
+// reschedule of an existing booking (`previous_status` set) — cancelling those
+// would destroy a previously-confirmed booking. Reschedule non-response is a
+// separate concern from expiring brand-new requests.
+function isExpirableUnconfirmedRequest(booking: any): boolean {
+  if (!booking.shop_id) return false;
+  if (booking.previous_status) return false;
+  if (typeof booking.created_at !== "number") return false;
+  return true;
+}
+
+async function unconfirmedRequestDeadline(
+  ctx: any,
+  booking: any,
+  cfg: UnconfirmedExpiryConfig,
+): Promise<number> {
+  let requestedStartMs: number | undefined;
+  if (booking.scheduled_date && booking.scheduled_time) {
+    const timezone = await getShopTimezone(ctx, booking.shop_id);
+    requestedStartMs = toBookingDateTimeMs(
+      booking.scheduled_date,
+      booking.scheduled_time,
+      timezone,
+    );
+  }
+  return unconfirmedCancelDeadline(booking.created_at, requestedStartMs, cfg);
+}
+
+async function collectPendingShopRequests(ctx: any) {
+  const [pending, pendingShop] = await Promise.all([
+    ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q: any) => q.eq("status", "pending"))
+      .collect(),
+    ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q: any) => q.eq("status", "pending_shop_acceptance"))
+      .collect(),
+  ]);
+  return [...pending, ...pendingShop].filter(isExpirableUnconfirmedRequest);
+}
+
+// Shared backlog cleanup: silently cancel requests already > silent-cutoff past
+// their deadline, with NO notifications. Used by both the internal one-time
+// rollout mutation and the director "Run cleanup now" button.
+async function sweepCloseStaleUnconfirmed(
+  ctx: any,
+  cfg: UnconfirmedExpiryConfig,
+  dryRun: boolean,
+) {
+  const now = Date.now();
+  const requests = await collectPendingShopRequests(ctx);
+  const targets: any[] = [];
+  for (const booking of requests) {
+    const deadline = await unconfirmedRequestDeadline(ctx, booking, cfg);
+    if (now <= deadline + cfg.silentIfPastDeadlineMs) continue;
+    targets.push(booking);
+  }
+
+  if (dryRun) {
+    return {
+      dryRun: true,
+      wouldCancel: targets.length,
+      sample: targets.slice(0, 10).map((b) => ({
+        id: String(b._id),
+        status: b.status,
+        created_at: b.created_at,
+        scheduled_date: b.scheduled_date,
+        scheduled_time: b.scheduled_time,
+      })),
+    };
+  }
+
+  let cancelled = 0;
+  for (const booking of targets) {
+    try {
+      await applyBookingStatusTransition(ctx, {
+        booking,
+        newStatus: "cancelled",
+        reason: "auto_expired_unconfirmed_backfill",
+      });
+      cancelled += 1;
+    } catch {
+      continue;
+    }
+  }
+  return { dryRun: false, cancelled };
+}
+
+// Light gate for director-panel-triggered writes: the caller must reference a
+// real director_users row. Mirrors the actorId the panel already threads.
+async function assertDirectorActor(ctx: any, actorId: any) {
+  if (!actorId) throw new Error("Director session required.");
+  const actor = await ctx.db.get(actorId);
+  if (!actor) throw new Error("Director session required.");
+}
+
+// Cron sweep (every 10 min): remind the shop as the deadline nears, then
+// auto-cancel + notify both parties once it passes. No-ops when disabled.
+export const autoCancelUnconfirmedRequests = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const cfg = await getUnconfirmedExpiryConfig(ctx);
+    if (!cfg.enabled) return { cancelled: 0, reminded: 0, disabled: true };
+
+    const now = Date.now();
+    const requests = await collectPendingShopRequests(ctx);
+
+    let cancelled = 0;
+    let reminded = 0;
+
+    for (const booking of requests) {
+      const deadline = await unconfirmedRequestDeadline(ctx, booking, cfg);
+      const dateLabel = booking.scheduled_date ?? "";
+      const timeLabel = booking.scheduled_time ? formatTime(booking.scheduled_time) : "";
+      const whenLabel = dateLabel
+        ? ` for ${dateLabel}${timeLabel ? ` at ${timeLabel}` : ""}`
+        : "";
+
+      // ---- Cancel branch ---------------------------------------------------
+      if (now >= deadline) {
+        try {
+          await applyBookingStatusTransition(ctx, {
+            booking,
+            newStatus: "cancelled",
+            reason: "auto_expired_unconfirmed",
+          });
+        } catch {
+          // Terminal-status race or validation issue — re-evaluated next tick.
+          continue;
+        }
+        cancelled += 1;
+
+        // Long-past rows (rollout backlog / stragglers) close quietly.
+        if (now > deadline + cfg.silentIfPastDeadlineMs) continue;
+
+        const dedupeBase = `booking-request-expired:${String(booking._id)}:${deadline}`;
+        await enqueueNotificationOutbox(ctx, {
+          shopId: booking.shop_id,
+          bookingId: booking._id,
+          userId: booking.user_id,
+          channel: "push",
+          category: "booking_request_expired",
+          dedupeKey: dedupeBase,
+          payload: {
+            title: "Booking request expired",
+            body: `Your request${whenLabel} expired because the shop didn't confirm it in time. Tap to rebook.`,
+            scheduledDate: booking.scheduled_date,
+            scheduledTime: booking.scheduled_time,
+            reason: "auto_expired_unconfirmed",
+          },
+        });
+        await enqueueNotificationOutbox(ctx, {
+          shopId: booking.shop_id,
+          bookingId: booking._id,
+          channel: "front_desk",
+          category: "booking_request_expired",
+          dedupeKey: `${dedupeBase}:shop`,
+          payload: {
+            title: "Request auto-cancelled",
+            body: `A booking request${whenLabel} was auto-cancelled — it wasn't confirmed within the response window.`,
+            scheduledDate: booking.scheduled_date,
+            scheduledTime: booking.scheduled_time,
+            reason: "auto_expired_unconfirmed",
+          },
+        });
+        continue;
+      }
+
+      // ---- Reminder branch -------------------------------------------------
+      // Stages anchored to the deadline. Skip a stage whose due time is at/
+      // before creation (window too short), and fire only the most-recent due
+      // stage this tick so a cron gap can't send both nudges at once (dedupe
+      // stops re-fires on later ticks). A reminder offset of 0 disables it.
+      const stages = [
+        { key: "r1", dueAt: deadline - cfg.reminder1BeforeMs, final: false, enabled: cfg.reminder1BeforeMs > 0 },
+        { key: "r2", dueAt: deadline - cfg.reminder2BeforeMs, final: true, enabled: cfg.reminder2BeforeMs > 0 },
+      ];
+      const due = stages.filter(
+        (s) => s.enabled && s.dueAt > booking.created_at && now >= s.dueAt,
+      );
+      const stage = due.length ? due[due.length - 1] : null;
+      if (!stage) continue;
+
+      const hoursLeft = Math.max(1, Math.round((deadline - now) / (60 * 60 * 1000)));
+      await enqueueNotificationOutbox(ctx, {
+        shopId: booking.shop_id,
+        bookingId: booking._id,
+        channel: "front_desk",
+        category: "booking_unconfirmed_reminder",
+        dedupeKey: `booking-unconfirmed-reminder:${String(booking._id)}:${deadline}:${stage.key}`,
+        payload: {
+          title: stage.final
+            ? "Confirm now — request expiring soon"
+            : "Unconfirmed booking request",
+          body: stage.final
+            ? `A booking request${whenLabel} auto-cancels in ~${hoursLeft}h if you don't accept or decline it.`
+            : `You have an unconfirmed booking request${whenLabel}. Please accept or decline it — it auto-cancels in ~${hoursLeft}h.`,
+          scheduledDate: booking.scheduled_date,
+          scheduledTime: booking.scheduled_time,
+          hoursLeft,
+          stage: stage.key,
+        },
+      });
+      reminded += 1;
+    }
+
+    return { cancelled, reminded };
+  },
+});
+
+// One-time rollout cleanup (internal): silently cancel the long-past backlog of
+// unconfirmed requests WITHOUT notifying anyone. Pass { dryRun: true } first to
+// preview. Recent requests are left for the notifying cron.
+export const closeStaleUnconfirmedSilently = internalMutation({
+  args: { dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const cfg = await getUnconfirmedExpiryConfig(ctx);
+    return await sweepCloseStaleUnconfirmed(ctx, cfg, args.dryRun ?? false);
+  },
+});
+
+// Director panel: preview (dryRun) or run the backlog cleanup on demand.
+export const runUnconfirmedBacklogCleanup = mutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    actorName: v.optional(v.string()),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, args) => {
+    await assertDirectorActor(ctx, args.actorId);
+    const cfg = await getUnconfirmedExpiryConfig(ctx);
+    const dryRun = args.dryRun ?? false;
+    const result = await sweepCloseStaleUnconfirmed(ctx, cfg, dryRun);
+    if (!dryRun) {
+      await ctx.db.insert("audit_log", {
+        entity_type: "bookings",
+        entity_id: "unconfirmed_backlog",
+        action: "cleanup",
+        actor: args.actorName ?? "Director",
+        actor_id: args.actorId,
+        detail: `silently cancelled ${(result as any).cancelled ?? 0} stale unconfirmed request(s)`,
+        created_at: Date.now(),
+      });
+    }
+    return result;
+  },
+});
+
+// Director panel: live status for the controls — how many shop-pending requests
+// exist and how many are already past their (configured) deadline / silent cutoff.
+export const unconfirmedExpiryStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const cfg = await getUnconfirmedExpiryConfig(ctx);
+    const now = Date.now();
+    const requests = await collectPendingShopRequests(ctx);
+    let pastDeadline = 0;
+    let pastSilentCutoff = 0;
+    for (const booking of requests) {
+      const deadline = await unconfirmedRequestDeadline(ctx, booking, cfg);
+      if (now >= deadline) pastDeadline += 1;
+      if (now > deadline + cfg.silentIfPastDeadlineMs) pastSilentCutoff += 1;
+    }
+    return {
+      enabled: cfg.enabled,
+      pending: requests.length,
+      pastDeadline,
+      pastSilentCutoff,
+    };
   },
 });
 

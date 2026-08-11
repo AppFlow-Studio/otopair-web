@@ -20,14 +20,16 @@ import { useMemo, useState } from 'react'
 import { useQuery } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import { Input, IconSearch } from '../../Primitives'
-import { Panel, Empty, StatusPill, SkeletonBlock, SubTabs, TableWrap, th, td, thRight, tdRight, fmtWhen, PageNav, RunChip, DateRangeFilter, dateInRange, type OpenTrigger, type ReviewRow } from './helpers'
+import { Panel, Empty, StatusPill, SkeletonBlock, SubTabs, TableWrap, th, td, thRight, tdRight, fmtWhen, fmtWhenExact, PageNav, RunChip, DateRangeFilter, dateInRange, type OpenTrigger, type ReviewRow } from './helpers'
 import { WrongPartsPanel } from './WrongPartsPanel'
 import { UnpricedPartsPanel } from './PartQualityPanel'
+import { MissingPartsPanel } from './MissingPartsPanel'
+import { IncompleteConfigsPanel } from './IncompleteConfigsPanel'
 import { IncidentsPanel } from './IncidentsPanel'
 
 const STREAMS = ['consensus', 'correction', 'report', 'survey'] as const
 type StreamFilter = 'all' | (typeof STREAMS)[number]
-type Section = 'failed' | 'reviews' | 'wrong' | 'unpriced' | 'incidents'
+type Section = 'failed' | 'reviews' | 'wrong' | 'unpriced' | 'missing' | 'configs' | 'incidents'
 const REVIEWS_PAGE_SIZE = 15
 
 const linkBtn: React.CSSProperties = { background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--blue-700)', fontSize: 12, fontFamily: 'inherit', fontWeight: 500, whiteSpace: 'nowrap' }
@@ -54,7 +56,7 @@ export function NeedsAttentionTab({ token, goDeepDive, openTrigger, canWrite, ca
   activeReviewId: string | null
   onOpenReview: (id: string, title: string) => void
 }) {
-  const [section, setSection] = useState<Section>('failed')
+  const [section, setSection] = useState<Section>('configs')
   const [stream, setStream] = useState<StreamFilter>('all')
   const [reviewSearch, setReviewSearch] = useState('')
   const [reviewDateFrom, setReviewDateFrom] = useState('')
@@ -68,6 +70,7 @@ export function NeedsAttentionTab({ token, goDeepDive, openTrigger, canWrite, ca
   // this doesn't double the network cost of the panel's own useQuery below.
   const wrongPartsQ = useQuery(api.directorPartQuality.scanWrongParts, { token })
   const unpricedPartsQ = useQuery(api.directorPartQuality.scanUnpricedParts, { token })
+  const missingPartsQ = useQuery(api.directorPartQuality.scanMissingParts, { token })
   const incidentsQ = useQuery(api.dataProvenance.listIncidents, { token })
 
   const streamRows = (openReviewsQ?.rows ?? []).filter(r => stream === 'all' || r.stream === stream)
@@ -87,6 +90,17 @@ export function NeedsAttentionTab({ token, goDeepDive, openTrigger, canWrite, ca
   }, {})
   const openIncidentsCount = (incidentsQ ?? []).filter(i => i.status !== 'resolved').length
 
+  // Distinct cars across the four part/review scans — the Incomplete Car
+  // Configs tab's badge and the count its accordion renders.
+  const incompleteConfigCount = useMemo(() => {
+    const ids = new Set<string>()
+    for (const f of missingPartsQ?.flags ?? []) ids.add(f.configId)
+    for (const f of wrongPartsQ?.flags ?? []) ids.add(f.configId)
+    for (const f of unpricedPartsQ?.flags ?? []) ids.add(f.configId)
+    for (const r of openReviewsQ?.rows ?? []) if (r.config_id) ids.add(r.config_id)
+    return ids.size
+  }, [missingPartsQ, wrongPartsQ, unpricedPartsQ, openReviewsQ])
+
   const reviewPageCount = Math.max(1, Math.ceil(rows.length / REVIEWS_PAGE_SIZE))
   const reviewClampedPage = Math.min(reviewPage, reviewPageCount - 1)
   const reviewPageRows = rows.slice(reviewClampedPage * REVIEWS_PAGE_SIZE, reviewClampedPage * REVIEWS_PAGE_SIZE + REVIEWS_PAGE_SIZE)
@@ -94,10 +108,12 @@ export function NeedsAttentionTab({ token, goDeepDive, openTrigger, canWrite, ca
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <SubTabs<Section> value={section} onChange={setSection} tabs={[
+        { id: 'configs', label: 'Incomplete Car Configs', badge: countBadge(incompleteConfigCount) },
         { id: 'failed', label: 'Failed runs', badge: countBadge(attention?.failed_runs_all_total, true) },
         { id: 'reviews', label: 'Open reviews', badge: countBadge(openReviewsQ?.rows.length) },
         { id: 'wrong', label: 'Wrong parts', badge: countBadge(wrongPartsQ?.flags.length, true) },
         { id: 'unpriced', label: 'Unpriced parts', badge: countBadge(unpricedPartsQ?.flags.length) },
+        { id: 'missing', label: 'Missing parts', badge: countBadge(missingPartsQ?.flags.length, true) },
         { id: 'incidents', label: 'Data Incidents', badge: countBadge(openIncidentsCount) },
       ]} />
 
@@ -185,6 +201,8 @@ export function NeedsAttentionTab({ token, goDeepDive, openTrigger, canWrite, ca
 
       {section === 'wrong' && <WrongPartsPanel token={token} goDeepDive={goDeepDive} />}
       {section === 'unpriced' && <UnpricedPartsPanel token={token} goDeepDive={goDeepDive} />}
+      {section === 'missing' && <MissingPartsPanel token={token} goDeepDive={goDeepDive} />}
+      {section === 'configs' && <IncompleteConfigsPanel token={token} goDeepDive={goDeepDive} onOpenReview={onOpenReview} />}
       {section === 'incidents' && <IncidentsPanel token={token} canWrite={canWrite} canTrigger={canTrigger} goDeepDive={goDeepDive} />}
     </div>
   )
@@ -216,7 +234,7 @@ function ReviewTableRow({ r, active, onOpen, canClaim, onClaim, goDeepDive }: {
         {r.status === 'claimed' ? <span style={{ color: 'var(--blue-700)', fontSize: 12 }}>● {r.claimed_by ?? 'claimed'}</span>
           : <span style={{ color: 'var(--slate-400)', fontSize: 12 }}>open</span>}
       </td>
-      <td style={{ ...tdRight, color: 'var(--slate-500)' }} title={new Date(r.created_at).toLocaleString()}>
+      <td style={{ ...tdRight, color: 'var(--slate-500)' }} title={fmtWhenExact(r.created_at)}>
         {fmtWhen(r.created_at)}<div style={{ fontSize: 10, color: 'var(--slate-400)' }}>{r.age_h}h ago</div>
       </td>
       <td style={tdRight}>

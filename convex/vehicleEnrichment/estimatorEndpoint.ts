@@ -186,6 +186,22 @@ export const resolveEstimatorEndpointForConfig = internalAction({
       }
     }
 
-    return { resolved: Object.keys(services).length > 0, services };
+    const resolved = Object.keys(services).length > 0;
+    // Project the stored endpoint parts into part_prices (the non-pooled
+    // per-unit points resolvePartsCost's real-band block reads). Scheduled,
+    // not awaited — its fitment matching must not eat this action's budget,
+    // and the projection is idempotent per (part, source_domain).
+    if (resolved) {
+      try {
+        await ctx.scheduler.runAfter(
+          0,
+          internal.vehicleEnrichment.endpointPartPriceProjection.projectEndpointPartPricesForConfig,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+      } catch (e) {
+        console.warn("[estimator-endpoint] price projection scheduling failed (non-fatal):", e);
+      }
+    }
+    return { resolved, services };
   },
 });

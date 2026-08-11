@@ -13,7 +13,7 @@ import { SectionAnchor } from '../Shell'
 import { gotoEntity } from '../directorNav'
 import {
   StatCard, BarRow, DualSparkline,
-  fmtCurrency, fmtPct, fmtNumber, fmtRelative, money,
+  fmtCurrency, fmtPct, fmtNumber, fmtRelative, money, fmtDate, fmtDateTime,
 } from '../Charts'
 
 // Status label map for the ops activity feed + needs-attention rows (from
@@ -370,7 +370,7 @@ export const TabOverview = () => {
                     {e.amount != null && (
                       <span className="mono" style={{ marginTop:1, flexShrink:0, fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{money(e.amount)}</span>
                     )}
-                    <span style={{ marginTop:1, flexShrink:0, fontSize:11, color:'var(--slate-400)' }} title={new Date(e.at).toLocaleString()}>{fmtRelative(e.at)}</span>
+                    <span style={{ marginTop:1, flexShrink:0, fontSize:11, color:'var(--slate-400)' }} title={fmtDateTime(e.at)}>{fmtRelative(e.at)}</span>
                     <span onClick={goDetail}
                       style={{ marginTop:1, flexShrink:0, fontSize:12, color:'var(--slate-300)', cursor:'pointer' }} aria-label="Open detail">→</span>
                   </div>
@@ -421,7 +421,7 @@ export const TabOverview = () => {
                     {(() => {
                       const parts: React.ReactNode[] = [
                         b.total != null ? money(b.total) : null,
-                        b.scheduled ? `scheduled ${b.scheduled}` : null,
+                        b.scheduled ? `scheduled ${fmtDate(b.scheduled)}` : null,
                         b.vin ? <a key="vin" href={`/director/data/vins/${b.vin}`} onClick={ev => ev.stopPropagation()} style={{ color:'var(--slate-500)', textDecoration:'underline' }}>{`VIN ${b.vin}`}</a> : null,
                       ].filter(Boolean)
                       if (parts.length === 0) return 'no quote yet'

@@ -1,4 +1,5 @@
 import { Resend } from 'resend';
+import { renderInviteEmailHtml } from './invite-template';
 
 let _resend: Resend | null = null;
 function getResend(): Resend {
@@ -19,102 +20,47 @@ const resend = new Proxy({} as Resend, {
 });
 
 /**
- * Send invite link email to an existing Clerk user
+ * Send the branded Otopair invite email. Used for every team invitation
+ * (mechanics, front desk, owners). `inviteUrl` may be a Clerk ticket URL
+ * (one-click, email pre-verified) or our own /accept-invite link.
  */
 export async function sendInviteEmail({
   email,
   inviteUrl,
   shopName,
+  firstName,
+  role,
+  inviterName,
+  logoUrl,
 }: {
   email: string;
   inviteUrl: string;
   shopName?: string;
+  firstName?: string;
+  role?: string;
+  inviterName?: string;
+  /** Resolved from Convex storage by the caller. Falls back to the hosted
+   *  asset when unavailable so the email is never blocked. */
+  logoUrl?: string;
 }) {
   try {
     const result = await resend.emails.send({
       from: 'Otopair <info@otopair.com>',
       to: email,
       subject: shopName
-        ? `You've been invited to join ${shopName} on Otopair`
+        ? `You're invited to join ${shopName} on Otopair`
         : "You've been invited to join a shop on Otopair",
-      html: `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>You're Invited to Otopair</title>
-</head>
-<body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f9fafb;">
-  <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f9fafb;">
-    <tr>
-      <td align="center" style="padding: 40px 20px;">
-        <table role="presentation" style="max-width: 600px; width: 100%; border-collapse: collapse; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-          <!-- Header -->
-          <tr>
-            <td style="padding: 40px 40px 30px; text-align: center; background: linear-gradient(135deg, #0d72ff 0%, #3b82f6 100%); border-radius: 12px 12px 0 0;">
-              <h1 style="margin: 0; color: #ffffff; font-size: 28px; font-weight: 700; letter-spacing: -0.5px;">You're Invited!</h1>
-            </td>
-          </tr>
-
-          <!-- Content -->
-          <tr>
-            <td style="padding: 40px;">
-              <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
-                Hi there,
-              </p>
-
-              <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
-                You've been invited to join ${shopName ? `<strong>${shopName}</strong> on ` : ''}<strong>Otopair</strong>. Click the button below to accept your invitation and get started.
-              </p>
-
-              <!-- CTA Button -->
-              <table role="presentation" style="width: 100%; border-collapse: collapse; margin: 30px 0;">
-                <tr>
-                  <td align="center" style="padding: 0;">
-                    <a href="${inviteUrl}" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #0d72ff 0%, #3b82f6 100%); color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 14px rgba(13, 114, 255, 0.3);">
-                      Accept Invitation
-                    </a>
-                  </td>
-                </tr>
-              </table>
-
-              <p style="margin: 20px 0 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
-                If the button doesn't work, copy and paste this link into your browser:<br/>
-                <a href="${inviteUrl}" style="color: #0d72ff; word-break: break-all;">${inviteUrl}</a>
-              </p>
-            </td>
-          </tr>
-
-          <!-- Footer -->
-          <tr>
-            <td style="padding: 30px 40px 40px; background-color: #ffffff; border-radius: 0 0 12px 12px; border-top: 1px solid #e5e7eb;">
-              <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                <tr>
-                  <td align="center" style="padding: 0 0 8px;">
-                    <p style="margin: 0; color: #1f2937; font-size: 18px; font-weight: 600; letter-spacing: -0.3px;">Otopair</p>
-                  </td>
-                </tr>
-                <tr>
-                  <td align="center" style="padding: 0 0 16px;">
-                    <p style="margin: 0; color: #6b7280; font-size: 14px; line-height: 1.5;">The future of car repair coordination</p>
-                  </td>
-                </tr>
-                <tr>
-                  <td align="center">
-                    <p style="margin: 0; color: #9ca3af; font-size: 12px; line-height: 1.6;">© Otopair ${new Date().getFullYear()}</p>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>
-      `,
+      html: renderInviteEmailHtml({
+        inviteUrl,
+        shopName,
+        firstName,
+        role,
+        inviterName,
+        // Dedicated, tightly-cropped glass logo that reads well on the dark
+        // email header — served from Convex storage, hosted asset as fallback.
+        logoUrl: logoUrl ?? "https://otopair.com/otopair-email-logo.png",
+        year: new Date().getFullYear(),
+      }),
     });
 
     return { success: true, data: result };

@@ -113,10 +113,31 @@ crons.interval(
   internal.bookings.autoDropUnconfirmedBookings,
 );
 
+// Expire unanswered booking REQUESTS: a shop-pending request (pending /
+// pending_shop_acceptance) auto-cancels at the earlier of a 48h response SLA
+// or 2h past the requested appointment time, after nudging the shop. Distinct
+// from auto-drop above, which no-shows already-CONFIRMED bookings.
+crons.interval(
+  "auto-cancel-unconfirmed-requests",
+  { minutes: 10 },
+  internal.bookings.autoCancelUnconfirmedRequests,
+);
+
 crons.interval(
   "process-customer-late-monitors",
   { minutes: 1 },
   internal.bookings.processCustomerLateMonitors,
+);
+
+// Reap expired StubHub-style slot holds. Only a janitor — availability reads
+// already drop `expires_at <= now` holds in real time, so a slot frees the
+// instant its hold expires; this reclaims the rows. 1-min (not 10) because a
+// 15-min TTL can't tolerate a slot staying falsely blocked for a third of its
+// life waiting on a slower sweep.
+crons.interval(
+  "release-expired-slot-holds",
+  { minutes: 1 },
+  internal.slotHolds.releaseExpiredSlotHolds,
 );
 
 crons.interval(
@@ -152,6 +173,28 @@ crons.interval(
   internal.booking_approvals.expireApprovals,
 );
 
+// Safety net for the completion-capture path: retry capture on completed jobs
+// still flagged `awaiting_settlement` (belated customer re-auth, transient
+// Stripe failure), and escalate the aged ones. Without this a shortfall sits
+// uncaptured forever — the completion transition fires capture only once and
+// the webhooks never initiate one.
+crons.interval(
+  "reconcile-unsettled-bookings",
+  { minutes: 30 },
+  internal.payments_reconcile.reconcileUnsettledBookings,
+  {},
+);
+
+// Warn ops ~1 day before a card authorization hits Stripe's ~7-day expiry on a
+// still-active (pre-service) booking, so the hold can be re-confirmed or the
+// booking rescheduled before it lapses and capture becomes impossible.
+crons.daily(
+  "flag-expiring-holds",
+  { hourUTC: 9, minuteUTC: 0 },
+  internal.payments_reconcile.flagExpiringHolds,
+  {},
+);
+
 // Pre-Job Approval: drain notification_outbox rows with channel="push" via
 // the Expo Push API. Existing SMS/email dispatchers handle their own
 // channels; this is the push sibling.
@@ -159,6 +202,31 @@ crons.interval(
   "dispatch-pending-push",
   { minutes: 1 },
   (internal as any).lib.push_dispatcher.dispatchPendingPush,
+);
+
+// Determinism sentinel (Wave 4): weekly probe of ONE operator-supplied VIN
+// (DETERMINISM_SENTINEL_VINS="label:VIN,…" — unset = free no-op). Sunday
+// 03:00 UTC so the ~1h probe chain finishes well before the repair/price
+// crons. Variance routes to the review queue; the same VIN enriched twice
+// must produce the same core signature, or that's a tracked defect.
+crons.weekly(
+  "determinism-sentinel-probe",
+  { dayOfWeek: "sunday", hourUTC: 3, minuteUTC: 0 },
+  internal.vehicleEnrichment.determinismProbe.runScheduledProbe,
+  {},
+);
+
+// Fleet role repair (Wave 2): nightly census of configs whose latest run
+// shows missing binding core roles, scheduling the batch repair over the
+// worst under PARTS_ROLE_REPAIR_FLEET_BUDGET (0 = census-only, no spend).
+// Runs 45 min before the price refresh so healed parts get priced same
+// night. The logged fleetResidual is the metric that decides when the
+// core-role/axle completion gates can flip from "log" to "enforce".
+crons.daily(
+  "repair-fleet-missing-roles",
+  { hourUTC: 8, minuteUTC: 15 },
+  internal.vehicleEnrichment.resourceRoles.repairFleetSweep,
+  {},
 );
 
 // Part prices: nightly re-verification of parts whose newest price row is

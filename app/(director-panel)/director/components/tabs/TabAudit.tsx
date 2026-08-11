@@ -9,7 +9,7 @@ import type { AuditEntry } from '../../data'
 import { Badge, Button, Input, Select, Modal, Card, MicroH, Skeleton, Avatar, StatusBadge, GlobalAuditTable, auditMeta, IconSearch, IconExternal, IconBolt } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { gotoEntity } from '../directorNav'
-import { DailyBars, BarRow, fmtNumber } from '../Charts'
+import { DailyBars, BarRow, fmtNumber, fmtDate } from '../Charts'
 
 const ACTION_LABELS: Record<string, string> = {
   refund_issued:    'Refund issued',
@@ -108,7 +108,7 @@ const EntityPreview = ({ entityType, entityId }: { entityType: string; entityId:
   if (entityType === 'booking') {
     if (booking === undefined) return wrap('Booking', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)
     if (!booking) return wrap('Booking', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Deleted or not found</span>)
-    return wrap('Booking', <>{row('Services', booking.services.map(s => s.name).join(', '))}{row('Shop', booking.shop)}{row('User', booking.user)}{row('Date', `${booking.scheduled} ${booking.time}`.trim())}{row('Status', booking.status)}{row('Total', booking.total ? `$${booking.total.toFixed(2)}` : undefined)}</>)
+    return wrap('Booking', <>{row('Services', booking.services.map(s => s.name).join(', '))}{row('Shop', booking.shop)}{row('User', booking.user)}{row('Date', `${fmtDate(booking.scheduled)} ${booking.time}`.trim())}{row('Status', booking.status)}{row('Total', booking.total ? `$${booking.total.toFixed(2)}` : undefined)}</>)
   }
   if (entityType === 'bug') {
     if (bug === undefined) return wrap('Bug', <span style={{ fontSize:12, color:'var(--slate-400)' }}>Loading…</span>)

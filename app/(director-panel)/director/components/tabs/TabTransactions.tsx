@@ -19,7 +19,7 @@ import { StatCard, DailyBars, Sparkline, money, fmtNumber } from '../Charts'
 // Local helpers — no director equivalent
 // ---------------------------------------------------------------------------
 
-const fmtDate = (ms: number) => new Date(ms).toLocaleDateString()
+const fmtDate = (ms: number) => new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 
 // Signed +/- amount, e.g. "−$42.00 USD" / "+$118.00 USD".
 const fmtAmt = (n: number, cur: string) =>

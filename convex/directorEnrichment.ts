@@ -1036,7 +1036,7 @@ export type EvidenceDetail = {
  *  bounded by_entity index reads. is_latest is NOT trusted: addEvidenceBatch
  *  stamps it true on every run and never retires prior rows — latest = max
  *  observed_at (fallback _creationTime). */
-async function latestEvidenceMapForConfig(
+export async function latestEvidenceMapForConfig(
   ctx: QueryCtx,
   cfg: Doc<"vehicle_configs">,
 ): Promise<Map<string, EvidenceDetail>> {

@@ -71,6 +71,7 @@ import type * as devOnly_endpointPartPriceBackfill from "../devOnly/endpointPart
 import type * as devOnly_endpointResearch from "../devOnly/endpointResearch.js";
 import type * as devOnly_estimatorMinutesSpread from "../devOnly/estimatorMinutesSpread.js";
 import type * as devOnly_fallbackVsOlp from "../devOnly/fallbackVsOlp.js";
+import type * as devOnly_fluidPackAudit from "../devOnly/fluidPackAudit.js";
 import type * as devOnly_gateResweep from "../devOnly/gateResweep.js";
 import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
 import type * as devOnly_laborWebSpread from "../devOnly/laborWebSpread.js";
@@ -143,6 +144,7 @@ import type * as lib_email_provider from "../lib/email_provider.js";
 import type * as lib_estimatorApi from "../lib/estimatorApi.js";
 import type * as lib_estimatorEstimates from "../lib/estimatorEstimates.js";
 import type * as lib_fallbackSnapshots from "../lib/fallbackSnapshots.js";
+import type * as lib_fluidPackSize from "../lib/fluidPackSize.js";
 import type * as lib_haloVariantInference from "../lib/haloVariantInference.js";
 import type * as lib_haloVariantRules from "../lib/haloVariantRules.js";
 import type * as lib_intervals from "../lib/intervals.js";
@@ -597,6 +599,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/endpointResearch": typeof devOnly_endpointResearch;
   "devOnly/estimatorMinutesSpread": typeof devOnly_estimatorMinutesSpread;
   "devOnly/fallbackVsOlp": typeof devOnly_fallbackVsOlp;
+  "devOnly/fluidPackAudit": typeof devOnly_fluidPackAudit;
   "devOnly/gateResweep": typeof devOnly_gateResweep;
   "devOnly/laborValidation": typeof devOnly_laborValidation;
   "devOnly/laborWebSpread": typeof devOnly_laborWebSpread;
@@ -669,6 +672,7 @@ declare const fullApi: ApiFromModules<{
   "lib/estimatorApi": typeof lib_estimatorApi;
   "lib/estimatorEstimates": typeof lib_estimatorEstimates;
   "lib/fallbackSnapshots": typeof lib_fallbackSnapshots;
+  "lib/fluidPackSize": typeof lib_fluidPackSize;
   "lib/haloVariantInference": typeof lib_haloVariantInference;
   "lib/haloVariantRules": typeof lib_haloVariantRules;
   "lib/intervals": typeof lib_intervals;

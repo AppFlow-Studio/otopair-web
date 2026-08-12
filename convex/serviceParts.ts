@@ -21,6 +21,8 @@ import {
   type CandidateInput,
   type TraceEntry,
 } from "./partSelector";
+import { passesI1ReadGuardNamed } from "./lib/makeIdentity";
+import { lookupOeOil, isOeCatalogOil } from "./vehicleEnrichment/oilCatalog";
 import {
   getServicePartsSpec,
   normalizeServiceSlug,
@@ -113,6 +115,21 @@ function gapServiceApplies(
 export const PART_CONFIDENCE_GATE_THRESHOLD = 0.7;
 
 const MS_PER_DAY = 1000 * 60 * 60 * 24;
+
+/** Cached make-name lookup for the duplicate-makes-row escape
+ *  (lib/makeIdentity.passesI1ReadGuardNamed). Module-level cache is safe:
+ *  make names are effectively immutable, and the guard only compares them
+ *  case-insensitively. One db.get per distinct make id per isolate. */
+const _makeNameCache = new Map<string, string | null>();
+async function partMakeNameCached(ctx: { db: any }, id: unknown): Promise<string | null> {
+  if (id == null) return null;
+  const k = String(id);
+  const hit = _makeNameCache.get(k);
+  if (hit !== undefined) return hit;
+  const name = ((await ctx.db.get(id as any)) as any)?.name ?? null;
+  _makeNameCache.set(k, name);
+  return name;
+}
 
 /**
  * Per-service parts rule. Replaces the legacy `BILLABLE_SUBCATEGORIES_BY_SERVICE`
@@ -303,11 +320,12 @@ export const getPartsForService = query({
       // a foreign brand — unless a mechanic physically verified the fitment,
       // which overrides both heuristics (see passesI1ReadGuard).
       if (
-        !passesI1ReadGuard({
+        !passesI1ReadGuardNamed({
           partMakeId: part.make_id,
           configMakeId: config.make_id,
           oemPartNumber: part.oem_part_number,
           configMakeName: makeDocForGuard?.name,
+          partMakeName: await partMakeNameCached(ctx, part.make_id),
           mechanicVerified: f.mechanic_verified === true,
         })
       )
@@ -386,11 +404,12 @@ export const getOemPartsForBooking = query({
         // First pass without the fitment lookup — clean rows (the vast
         // majority) never touch part_fitments.
         if (
-          passesI1ReadGuard({
+          passesI1ReadGuardNamed({
             partMakeId: part?.make_id ?? null,
             configMakeId: guardMakeId,
             oemPartNumber: row.oem_number,
             configMakeName: guardMakeDoc?.name,
+            partMakeName: await partMakeNameCached(ctx, part?.make_id ?? null),
           })
         )
           return true;
@@ -507,11 +526,12 @@ export const getOemPartsForBooking = query({
         // I1 make guard + brand-signature backstop; mechanic verification
         // overrides both (see passesI1ReadGuard).
         if (
-          !passesI1ReadGuard({
+          !passesI1ReadGuardNamed({
             partMakeId: part.make_id,
             configMakeId,
             oemPartNumber: part.oem_part_number,
             configMakeName: makeDocForGuard?.name,
+            partMakeName: await partMakeNameCached(ctx, part.make_id),
             mechanicVerified: f.mechanic_verified === true,
           })
         )
@@ -597,6 +617,189 @@ export type PartsNeedingVerification = {
  * Walk-ins (which suppress the catalog cascade) and configless bookings are
  * skipped — the dialog then renders no verify gate.
  */
+/**
+ * Per-axle OEM rotor minimum for a booking's vehicle, shaped for
+ * lib/inspection-template.ts `buildInspectionZones`.
+ *
+ * Returned even when nothing is on file: `{minMm: null, kind: "none"}` is the
+ * signal that classify() must NOT grade the rotor. The mechanic then sees
+ * "No OEM minimum on file — read MIN TH cast on the rotor" instead of a made-up
+ * reference, which is the whole point — the fleet used to be graded against a
+ * hardcoded 23.0 / 8.0 labelled "OEM min".
+ */
+export const rotorSpecsForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const none = {
+      front: { minMm: null, kind: "none" as const, nominalMm: null, sourceDomain: null },
+      rear: { minMm: null, kind: "none" as const, nominalMm: null, sourceDomain: null },
+      configId: null as Id<"vehicle_configs"> | null,
+    };
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return none;
+
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+      .first();
+    if (!vehicle?.vehicle_config_id) return none;
+    const cfg = await ctx.db.get(vehicle.vehicle_config_id);
+    if (!cfg) return none;
+
+    let sourceDomain: string | null = null;
+    if (cfg.rotor_min_source_url) {
+      try {
+        sourceDomain = new URL(cfg.rotor_min_source_url).hostname;
+      } catch {
+        sourceDomain = null;
+      }
+    }
+    const axleRef = (
+      minMm: number | undefined,
+      quality: string | undefined,
+      nominalMm: number | undefined,
+    ) => ({
+      minMm: minMm ?? null,
+      // A minimum with no recorded quality is still a real one — default to the
+      // sourced label rather than silently demoting it to an estimate.
+      kind: minMm == null ? "none" : (quality ?? "oem_spec"),
+      nominalMm: nominalMm ?? null,
+      sourceDomain,
+    });
+    return {
+      front: axleRef(
+        cfg.rotor_front_min_thickness_mm,
+        cfg.rotor_front_min_quality,
+        cfg.rotor_front_nominal_thickness_mm,
+      ),
+      rear: axleRef(
+        cfg.rotor_rear_min_thickness_mm,
+        cfg.rotor_rear_min_quality,
+        cfg.rotor_rear_nominal_thickness_mm,
+      ),
+      configId: vehicle.vehicle_config_id,
+    };
+  },
+});
+
+/**
+ * Record the OEM minimum a mechanic read off the rotor casting.
+ *
+ * This is the highest-trust source we have: the number is cast into the part
+ * itself and a human is looking straight at it. It outranks every scrape and
+ * is stamped into verified_fields so no re-enrich can overwrite it.
+ *
+ * PROPAGATION IS BY OEM PART NUMBER ONLY — never by model, trim or chassis.
+ * Minimums differ across trims (a sports trim's rotor can have a higher
+ * minimum), but a different trim carries a DIFFERENT rotor part number, so
+ * part-number identity is the only key under which two configs provably share
+ * one casting. Configs that already carry a human-supplied value are skipped.
+ */
+export const recordCastRotorMinimum = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    axle: v.union(v.literal("front"), v.literal("rear")),
+    minMm: v.number(),
+  },
+  handler: async (ctx, args) => {
+    if (!Number.isFinite(args.minMm) || args.minMm <= 0) {
+      return { ok: false as const, reason: "invalid_value" };
+    }
+    // Same plausibility floor/ceiling the enrichment sanity rules apply, so a
+    // fat-fingered reading can't become a grading reference.
+    const band = args.axle === "front" ? [8, 40] : [4, 32];
+    if (args.minMm < band[0] || args.minMm > band[1]) {
+      return { ok: false as const, reason: "out_of_range" };
+    }
+
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return { ok: false as const, reason: "booking_not_found" };
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
+      .first();
+    if (!vehicle?.vehicle_config_id) {
+      return { ok: false as const, reason: "no_config" };
+    }
+
+    const isFront = args.axle === "front";
+    const minCol = isFront
+      ? "rotor_front_min_thickness_mm"
+      : "rotor_rear_min_thickness_mm";
+    const qualCol = isFront
+      ? "rotor_front_min_quality"
+      : "rotor_rear_min_quality";
+    const write = async (configId: Id<"vehicle_configs">) => {
+      const cfg = await ctx.db.get(configId);
+      if (!cfg) return false;
+      // Never overwrite a director's confirmed value.
+      const curQuality = isFront
+        ? cfg.rotor_front_min_quality
+        : cfg.rotor_rear_min_quality;
+      if (curQuality === "director_verified") return false;
+      const verified = new Set(cfg.verified_fields ?? []);
+      verified.add(minCol);
+      verified.add(qualCol);
+      await ctx.db.patch(configId, {
+        ...(isFront
+          ? {
+              rotor_front_min_thickness_mm: args.minMm,
+              rotor_front_min_quality: "mechanic_read",
+            }
+          : {
+              rotor_rear_min_thickness_mm: args.minMm,
+              rotor_rear_min_quality: "mechanic_read",
+            }),
+        verified_fields: [...verified],
+      });
+      return true;
+    };
+
+    await write(vehicle.vehicle_config_id);
+
+    // Fan out to configs sharing the exact same rotor part number.
+    const roleKey = args.axle === "front" ? "front_rotor" : "rear_rotor";
+    let propagated = 0;
+    try {
+      const ownFitments = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_vehicle_config", (q) =>
+          q.eq("vehicle_config_id", vehicle.vehicle_config_id!),
+        )
+        .collect();
+      const ownParts = await Promise.all(
+        ownFitments.map(async (f) => ({ f, part: await ctx.db.get(f.part_id) })),
+      );
+      const normalized = ownParts.find(
+        (p) => p.part?.subcategory === roleKey,
+      )?.part?.oem_part_number_normalized;
+
+      if (normalized) {
+        const siblings = await ctx.db
+          .query("part_fitments")
+          .withIndex("by_part", (q) =>
+            q.eq(
+              "part_id",
+              ownParts.find((p) => p.part?.subcategory === roleKey)!.f.part_id,
+            ),
+          )
+          .take(200);
+        const seen = new Set<string>([String(vehicle.vehicle_config_id)]);
+        for (const sib of siblings) {
+          const id = String(sib.vehicle_config_id);
+          if (seen.has(id)) continue;
+          seen.add(id);
+          if (await write(sib.vehicle_config_id)) propagated += 1;
+        }
+      }
+    } catch {
+      // Propagation is a bonus; the vehicle in the bay is already correct.
+    }
+
+    return { ok: true as const, propagated };
+  },
+});
+
 export const getPartsNeedingVerification = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args): Promise<PartsNeedingVerification> => {
@@ -681,11 +884,12 @@ export const getPartsNeedingVerification = query({
         if (f.package_code != null) continue;
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
-        const passes = passesI1ReadGuard({
+        const passes = passesI1ReadGuardNamed({
           partMakeId: part.make_id,
           configMakeId,
           oemPartNumber: part.oem_part_number,
           configMakeName: makeDoc?.name,
+          partMakeName: await partMakeNameCached(ctx, part.make_id),
           mechanicVerified: f.mechanic_verified === true,
         });
         if (passes) continue; // survivors already flow through the resolver
@@ -862,11 +1066,12 @@ export const getPartsNeedingVerification = query({
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
         if (
-          passesI1ReadGuard({
+          passesI1ReadGuardNamed({
             partMakeId: part.make_id,
             configMakeId,
             oemPartNumber: part.oem_part_number,
             configMakeName: makeDoc?.name,
+            partMakeName: await partMakeNameCached(ctx, part.make_id),
             mechanicVerified: f.mechanic_verified === true,
           })
         ) {
@@ -962,11 +1167,12 @@ export const getServiceGapsForConfig = query({
         const part = await ctx.db.get(f.part_id);
         if (!part) continue;
         if (
-          passesI1ReadGuard({
+          passesI1ReadGuardNamed({
             partMakeId: part.make_id,
             configMakeId,
             oemPartNumber: part.oem_part_number,
             configMakeName: makeDoc?.name,
+            partMakeName: await partMakeNameCached(ctx, part.make_id),
             mechanicVerified: f.mechanic_verified === true,
           })
         ) {
@@ -988,6 +1194,77 @@ export const getServiceGapsForConfig = query({
       });
     }
 
+    return { gaps };
+  },
+});
+
+export type ConfigPriceGap = {
+  serviceSlug: string;
+  serviceName: string;
+  roleKey: string | null;
+  partId: string;
+  oemNumber: string | null;
+  partName: string | null;
+};
+
+/**
+ * Parts this config HAS a fitment for but no trusted price (part_prices row
+ * that survives the poison/non-pooled/price-band filter — same standard
+ * quotability.ts's has_trusted_price and summarizePartPrices use). Reads
+ * "which services" off the latest run's persisted `quotability` snapshot
+ * (the pipeline's own per-role-aware computation — not re-derived here) and
+ * only re-checks live pricing for THOSE services' actual fitments, so this
+ * stays cheap and never drifts from what the run itself flagged as
+ * unquotable. Powers the director "Add price" control in the review-resolve
+ * modal.
+ */
+export const getPriceGapsForConfig = query({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, { vehicleConfigId }): Promise<{ gaps: ConfigPriceGap[] }> => {
+    const latest = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", vehicleConfigId))
+      .order("desc")
+      .first();
+    const services = latest?.quotability?.services ?? [];
+    const gappedSlugs = services.filter((s) => s.core_with_price < s.core_total).map((s) => s.slug);
+    if (gappedSlugs.length === 0) return { gaps: [] };
+
+    const allServices = await ctx.db.query("services").collect();
+    const serviceBySlug = new Map<string, Doc<"services">>();
+    for (const svc of allServices) {
+      if (svc.slug) serviceBySlug.set(normalizeServiceSlug(svc.slug), svc);
+    }
+
+    const gaps: ConfigPriceGap[] = [];
+    const seenParts = new Set<string>();
+    for (const slug of gappedSlugs) {
+      const rows = await ctx.db
+        .query("part_fitments")
+        .withIndex("by_config_service", (q) =>
+          q.eq("vehicle_config_id", vehicleConfigId).eq("service_type", slug),
+        )
+        .collect();
+      const svc = serviceBySlug.get(slug);
+      for (const f of rows) {
+        if (f.package_code != null) continue;
+        const key = String(f.part_id);
+        if (seenParts.has(key)) continue;
+        const part = await ctx.db.get(f.part_id);
+        if (!part) continue;
+        const summary = await summarizePartPrices(ctx, f.part_id);
+        if (summary.sample_size > 0) continue; // has a trusted price already
+        seenParts.add(key);
+        gaps.push({
+          serviceSlug: svc?.slug ?? slug,
+          serviceName: svc?.name ?? slug.replace(/_/g, " "),
+          roleKey: part.subcategory ?? null,
+          partId: String(part._id),
+          oemNumber: part.oem_part_number ?? null,
+          partName: part.name ?? null,
+        });
+      }
+    }
     return { gaps };
   },
 });
@@ -1232,12 +1509,29 @@ async function synthesizeUniversalCandidate(
   serviceRole: ServiceRole,
 ): Promise<WinnerCandidate | null> {
   if (!role.universalFallback) return null;
-  const universalPart = await ctx.db
+  const consumables = await ctx.db
     .query("oem_parts")
     .withIndex("by_subcategory", (q: any) => q.eq("subcategory", role.roleKey))
     .filter((q: any) => q.eq(q.field("category"), "consumable"))
-    .first();
-  if (!universalPart) return null; // seed not run yet — skip silently
+    .collect();
+  if (consumables.length === 0) return null; // seed not run yet — skip silently
+
+  // Engine oil is GRADE-critical (Aug 2026). The lane used to hold one
+  // nameless "Engine oil (per quart)" row handed to every vehicle, so a
+  // 0W-8 hybrid and a 15W-40 diesel billed the same anonymous line. Prefer
+  // the row matching THIS engine's viscosity; fall back to the generic row
+  // only when the grade is unknown or uncatalogued — never substitute a
+  // neighbouring grade, since the wrong oil is worse than an unnamed one.
+  let universalPart = consumables[0];
+  if (role.roleKey === "engine_oil") {
+    const config: any = await ctx.db.get(vehicleConfigId);
+    const engine: any = config?.engine_id ? await ctx.db.get(config.engine_id) : null;
+    const graded = lookupOeOil(engine?.oil_viscosity);
+    const match = graded
+      ? consumables.find((p: any) => p.oem_part_number === graded.identifier)
+      : null;
+    universalPart = match ?? consumables.find((p: any) => !isOeCatalogOil(p.oem_part_number)) ?? consumables[0];
+  }
   const priceSummary = await summarizePartPrices(ctx, universalPart._id);
   if (priceSummary.sample_size === 0) return null; // unpriced seed — skip
   const stubFitment = {
@@ -1359,11 +1653,12 @@ export async function resolveWinningPartForService(
     // Motorcraft BXT-… on an Alfa Romeo). A mechanic-verified fitment
     // overrides both — quarantine spares those rows for the same reason.
     if (
-      !passesI1ReadGuard({
+      !passesI1ReadGuardNamed({
         partMakeId: part.make_id,
         configMakeId,
         oemPartNumber: part.oem_part_number,
         configMakeName: makeDocForGuard?.name,
+        partMakeName: await partMakeNameCached(ctx, part.make_id),
         mechanicVerified: f.mechanic_verified === true,
       })
     )
@@ -1660,8 +1955,11 @@ export async function resolveWinningPartForService(
       data_quality: normalizeDataQuality(
         c.fitment.data_quality ?? c.part.data_quality ?? null,
       ),
+      refute_flagged: c.fitment.refute_flagged === true,
+      source_domains: c.fitment.source_domains ?? [],
       prices: c.priceSummary.sources_used.map((s) => ({
         price: s.price,
+        source_domain: s.source_domain,
         refreshed_days_ago:
           s.refreshed_at != null
             ? Math.max(0, Math.floor((now - s.refreshed_at) / MS_PER_DAY))

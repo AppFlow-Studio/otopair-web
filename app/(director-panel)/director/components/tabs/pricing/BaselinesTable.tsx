@@ -34,7 +34,7 @@ const fmtMoney = (cents: number) =>
   `$${(cents / 100).toFixed(2)}`
 
 const fmtDate = (ts?: number | null) =>
-  ts ? new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'
+  ts ? new Date(ts).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }) : '—'
 
 export const BaselinesTable = () => {
   const baselines = useQuery(api.directorPricing.baselinesList) as BaselineRow[] | undefined

@@ -12,6 +12,8 @@
  * scraped OEM source is still only flagged (kept for review), never dropped.
  */
 
+import { estimatorSpecDomains } from "../../lib/estimatorApi";
+
 /**
  * Known community forums and crowd-answer domains. Distinct from sourceRegistry's
  * BLOCKED_DOMAINS (hard web_search blocklist) — these are allowed to be gathered but
@@ -89,7 +91,12 @@ export const HIGH_AUTHORITY_SPEC_DOMAINS: readonly string[] = [
   // ── Professional service data / spec databases ──
   "alldata.com", "alldatadiy.com", "mitchell1.com", "prodemand.com",
   "identifix.com", "chiltondiy.com", "chilton.com", "haynes.com",
-  "motor.com", "repairpal.com", "carcarekiosk.com",
+  "carcarekiosk.com",
+  // NOTE: the estimator provider's own spec domains are NOT listed here — they
+  // are supplied per deployment via ESTIMATOR_SPEC_DOMAINS and merged in by
+  // isHighAuthorityDomain below, so the repository never names the vendor.
+  // Unset → those hosts simply lose single-source accept (they still gather and
+  // still corroborate); nothing errors.
   // ── Fluid-capacity spec references ──
   "engineoilcapacity.com", "oilcapacity.net", "fluidcapacity.com",
   "capacity.report", "oilspecifications.org",
@@ -107,5 +114,9 @@ export function isHighAuthorityDomain(urlOrDomain: string | null | undefined): b
   const host = toHostname(urlOrDomain);
   if (!host) return false;
   if (HIGH_AUTHORITY_SET.has(host)) return true;
-  return HIGH_AUTHORITY_SPEC_DOMAINS.some((d) => host.endsWith(`.${d}`));
+  if (HIGH_AUTHORITY_SPEC_DOMAINS.some((d) => host.endsWith(`.${d}`))) return true;
+  // Env-supplied provider domains (ESTIMATOR_SPEC_DOMAINS) — read per call so a
+  // deployment can add them without a code change.
+  const envDomains = estimatorSpecDomains();
+  return envDomains.some((d) => host === d || host.endsWith(`.${d}`));
 }

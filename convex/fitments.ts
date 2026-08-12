@@ -2,6 +2,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { partFitsConfigMake } from "./partSelector";
+import { partFitsConfigMakeNamed } from "./lib/makeIdentity";
 import { makesSameFamily } from "./vehicleEnrichment/contentSanitization";
 import { normalizeOemNumber } from "./vehicleEnrichment/priceParser";
 import { accrueVehiclePreference } from "./shop_part_preferences";
@@ -59,9 +60,41 @@ const attachPart = async (ctx: { db: any }, fitment: any) => {
   return { ...fitment, part };
 };
 
-// I1 make guard: drop cross-make contaminant parts
-const dropCrossMake = (expanded: any[], config: { make_id?: any } | null) =>
-  expanded.filter((f) => !f.part || partFitsConfigMake(f.part.make_id, config?.make_id));
+// I1 make guard: drop cross-make contaminant parts. Make NAMES are resolved
+// (and cached) so the duplicate-makes-row escape in partFitsConfigMake can
+// tell "same make, different row" from a genuine cross-make contaminant.
+const dropCrossMake = async (
+  ctx: { db: any },
+  expanded: any[],
+  config: { make_id?: any } | null,
+) => {
+  const configMakeDoc = config?.make_id ? await ctx.db.get(config.make_id) : null;
+  const configMakeName = (configMakeDoc as any)?.name ?? null;
+  const nameCache = new Map<string, string | null>();
+  const partMakeName = async (id: any): Promise<string | null> => {
+    if (id == null) return null;
+    const k = String(id);
+    if (!nameCache.has(k)) {
+      nameCache.set(k, ((await ctx.db.get(id)) as any)?.name ?? null);
+    }
+    return nameCache.get(k)!;
+  };
+  const out: any[] = [];
+  for (const f of expanded) {
+    if (
+      !f.part ||
+      partFitsConfigMakeNamed(
+        f.part.make_id,
+        config?.make_id,
+        await partMakeName(f.part.make_id),
+        configMakeName,
+      )
+    ) {
+      out.push(f);
+    }
+  }
+  return out;
+};
 
 /**
  * Family-aware WRITE guard — mirror of vehicleEnrichment/v3mutations
@@ -582,7 +615,7 @@ export const listFitmentsExpanded = query({
       .collect();
     const config = await ctx.db.get(args.vehicle_config_id);
     const expanded = await Promise.all(fitments.map((f) => attachPart(ctx, f)));
-    return dropCrossMake(expanded, config);
+    return await dropCrossMake(ctx, expanded, config);
   },
 });
 
@@ -676,7 +709,7 @@ export const listEngineFitmentsExpanded = query({
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", config._id))
       .collect();
     const expanded = await Promise.all(fitments.map((f) => attachPart(ctx, f)));
-    return dropCrossMake(expanded, config);
+    return await dropCrossMake(ctx, expanded, config);
   },
 });
 
@@ -757,7 +790,7 @@ export const listTransmissionFitmentsExpanded = query({
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", config._id))
       .collect();
     const expanded = await Promise.all(fitments.map((f) => attachPart(ctx, f)));
-    return dropCrossMake(expanded, config);
+    return await dropCrossMake(ctx, expanded, config);
   },
 });
 
@@ -849,6 +882,6 @@ export const listTrimFitmentsExpanded = query({
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", config._id))
       .collect();
     const expanded = await Promise.all(fitments.map((f) => attachPart(ctx, f)));
-    return dropCrossMake(expanded, config);
+    return await dropCrossMake(ctx, expanded, config);
   },
 });

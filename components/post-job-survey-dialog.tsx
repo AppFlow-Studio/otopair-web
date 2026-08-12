@@ -68,6 +68,12 @@ import {
 import type { Id } from "@/convex/_generated/dataModel";
 import { cn } from "@/lib/utils";
 import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
+import {
+  BRAKE_PAD_BRAND_OPTIONS,
+  TIRE_BRAND_OPTIONS,
+  TIRE_MODEL_OPTIONS,
+  TIRE_SIZE_OPTIONS,
+} from "@/lib/inspection-options";
 import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
 
 /** Best-effort axle from a part name ("Front Brake Pads" → "front"). Mirrors
@@ -171,6 +177,7 @@ type RecRowState = {
     type: string;
     tier: string;
     quantity: number;
+    positions?: Array<"FL" | "FR" | "RL" | "RR">;
   } | null;
 };
 
@@ -341,132 +348,12 @@ const TRANSMISSION_FLUID_DROPDOWN: FluidOption[] = [
   { value: "manual_75w90_gl5", label: "Manual 75W-90 GL-5", aliases: ["75w90 gl-5", "gl-5"] },
 ];
 
-// keep in sync with pre-job-survey-dialog.tsx TIRE_BRAND_OPTIONS — same slugs so pre-job and post-job round-trip
-const TIRE_BRAND_DROPDOWN: FluidOption[] = [
-  { value: "goodyear", label: "Goodyear" },
-  { value: "michelin", label: "Michelin" },
-  { value: "bridgestone", label: "Bridgestone" },
-  { value: "firestone", label: "Firestone" },
-  { value: "continental", label: "Continental" },
-  { value: "pirelli", label: "Pirelli" },
-  { value: "cooper", label: "Cooper" },
-  { value: "hankook", label: "Hankook" },
-  { value: "yokohama", label: "Yokohama" },
-  { value: "bfgoodrich", label: "BFGoodrich", aliases: ["bf goodrich", "b.f. goodrich"] },
-  { value: "toyo", label: "Toyo" },
-  { value: "falken", label: "Falken" },
-  { value: "general", label: "General" },
-  { value: "kumho", label: "Kumho" },
-  { value: "dunlop", label: "Dunlop" },
-  { value: "nitto", label: "Nitto" },
-  { value: "nexen", label: "Nexen" },
-  { value: "mastercraft", label: "Mastercraft" },
-  { value: "sumitomo", label: "Sumitomo" },
-];
+const TIRE_BRAND_DROPDOWN: FluidOption[] = TIRE_BRAND_OPTIONS;
 
-// keep in sync with pre-job — pre-job does not yet curate tire model, so post-job defines the canonical slugs
-const TIRE_MODEL_DROPDOWN: FluidOption[] = [
-  // Michelin
-  { value: "michelin_defender", label: "Michelin Defender", aliases: ["defender", "defender t+h", "defender ltx m/s"] },
-  { value: "michelin_crossclimate2", label: "Michelin CrossClimate2", aliases: ["crossclimate", "crossclimate 2", "cc2"] },
-  { value: "michelin_pilot_sport_4s", label: "Michelin Pilot Sport 4S", aliases: ["ps4s", "pilot sport 4s"] },
-  { value: "michelin_pilot_sport_as", label: "Michelin Pilot Sport A/S", aliases: ["pilot sport as", "ps as"] },
-  { value: "michelin_primacy", label: "Michelin Primacy", aliases: ["primacy", "primacy mxm4", "primacy tour"] },
-  // Continental
-  { value: "continental_truecontact", label: "Continental TrueContact Tour", aliases: ["truecontact", "true contact"] },
-  { value: "continental_extremecontact_dws06", label: "Continental ExtremeContact DWS06+", aliases: ["dws06", "extremecontact dws"] },
-  { value: "continental_purecontact_ls", label: "Continental PureContact LS", aliases: ["purecontact"] },
-  { value: "continental_procontact", label: "Continental ProContact", aliases: ["procontact"] },
-  // Bridgestone
-  { value: "bridgestone_turanza", label: "Bridgestone Turanza", aliases: ["turanza"] },
-  { value: "bridgestone_potenza", label: "Bridgestone Potenza", aliases: ["potenza", "potenza re980", "potenza s007"] },
-  { value: "bridgestone_blizzak", label: "Bridgestone Blizzak", aliases: ["blizzak", "blizzak ws90"] },
-  { value: "bridgestone_dueler", label: "Bridgestone Dueler", aliases: ["dueler", "dueler h/l"] },
-  // Goodyear
-  { value: "goodyear_assurance_weatherready", label: "Goodyear Assurance WeatherReady", aliases: ["assurance weatherready", "weatherready"] },
-  { value: "goodyear_eagle_sport", label: "Goodyear Eagle Sport", aliases: ["eagle sport", "eagle f1"] },
-  { value: "goodyear_wrangler", label: "Goodyear Wrangler", aliases: ["wrangler", "wrangler trailrunner"] },
-  // Pirelli
-  { value: "pirelli_pzero", label: "Pirelli P Zero", aliases: ["pzero", "p zero"] },
-  { value: "pirelli_cinturato_p7", label: "Pirelli Cinturato P7", aliases: ["cinturato", "cinturato p7"] },
-  { value: "pirelli_scorpion", label: "Pirelli Scorpion", aliases: ["scorpion", "scorpion verde"] },
-  // Hankook
-  { value: "hankook_kinergy", label: "Hankook Kinergy", aliases: ["kinergy", "kinergy gt", "kinergy pt"] },
-  { value: "hankook_ventus", label: "Hankook Ventus", aliases: ["ventus", "ventus v12"] },
-  { value: "hankook_dynapro", label: "Hankook Dynapro", aliases: ["dynapro"] },
-  // Yokohama
-  { value: "yokohama_avid_ascend", label: "Yokohama Avid Ascend", aliases: ["avid ascend", "avid ascend gt"] },
-  { value: "yokohama_geolandar", label: "Yokohama Geolandar", aliases: ["geolandar"] },
-  { value: "yokohama_advan", label: "Yokohama Advan", aliases: ["advan", "advan sport"] },
-  // Toyo
-  { value: "toyo_proxes", label: "Toyo Proxes", aliases: ["proxes", "proxes sport"] },
-  { value: "toyo_open_country", label: "Toyo Open Country", aliases: ["open country", "open country at"] },
-  // Falken
-  { value: "falken_azenis", label: "Falken Azenis", aliases: ["azenis", "azenis fk510"] },
-  { value: "falken_wildpeak", label: "Falken Wildpeak", aliases: ["wildpeak", "wildpeak at3w"] },
-  // BFGoodrich
-  { value: "bfg_advantage_ta", label: "BFGoodrich Advantage T/A", aliases: ["advantage ta", "advantage t/a"] },
-  { value: "bfg_at_ko2", label: "BFGoodrich All-Terrain T/A KO2", aliases: ["ko2", "at ko2", "all terrain ko2"] },
-  // Cooper / General
-  { value: "cooper_discoverer", label: "Cooper Discoverer", aliases: ["discoverer", "discoverer at3"] },
-  { value: "general_altimax", label: "General AltiMAX", aliases: ["altimax", "altimax rt43"] },
-];
+const TIRE_MODEL_DROPDOWN: FluidOption[] = TIRE_MODEL_OPTIONS;
 
-// keep in sync with pre-job — normalized form (e.g. "225/45R18") matches normalizeTireSizeValue() in pre-job-survey-dialog.tsx
-const TIRE_SIZE_DROPDOWN: FluidOption[] = [
-  "195/65R15",
-  "205/55R16",
-  "215/55R17",
-  "215/60R16",
-  "225/45R17",
-  "225/45R18",
-  "225/50R17",
-  "225/55R17",
-  "225/60R17",
-  "235/45R18",
-  "235/55R18",
-  "235/60R18",
-  "245/40R18",
-  "245/40R19",
-  "245/45R18",
-  "245/45R19",
-  "255/35R19",
-  "255/40R19",
-  "255/45R20",
-  "265/70R17",
-  "275/35R19",
-  "275/35R20",
-  "275/40R19",
-  "275/40R20",
-  "275/45R20",
-  "285/45R22",
-  "295/35R21",
-].map((size) => ({
-  value: size,
-  label: size,
-  aliases: [size.replace(/(\d+)\/(\d+)R(\d+)/i, "$1 / $2 R $3"), size.toLowerCase()],
-}));
-
-// keep in sync with pre-job — pre-job does not yet curate pad brand, so post-job defines the canonical slugs
-const BRAKE_PAD_BRAND_DROPDOWN: FluidOption[] = [
-  { value: "akebono", label: "Akebono" },
-  { value: "brembo", label: "Brembo" },
-  { value: "ebc", label: "EBC" },
-  { value: "wagner", label: "Wagner" },
-  { value: "bosch", label: "Bosch" },
-  { value: "raybestos", label: "Raybestos" },
-  { value: "power_stop", label: "Power Stop", aliases: ["powerstop"] },
-  { value: "hawk", label: "Hawk" },
-  { value: "nrs_galvanized", label: "NRS Galvanized", aliases: ["nrs"] },
-  { value: "acdelco", label: "ACDelco", aliases: ["ac delco", "ac-delco"] },
-  { value: "motorcraft", label: "Motorcraft" },
-  { value: "mopar", label: "Mopar" },
-  { value: "stoptech", label: "StopTech", aliases: ["stop tech"] },
-  { value: "centric", label: "Centric" },
-  { value: "carquest", label: "Carquest" },
-  { value: "napa", label: "NAPA" },
-  { value: "oem", label: "OEM (vehicle brand)", aliases: ["oe", "factory"] },
-];
+const TIRE_SIZE_DROPDOWN: FluidOption[] = TIRE_SIZE_OPTIONS;
+const BRAKE_PAD_BRAND_DROPDOWN: FluidOption[] = BRAKE_PAD_BRAND_OPTIONS;
 
 // keep in sync with pre-job — pre-job does not yet curate oil filter brand, so post-job defines the canonical slugs
 const OIL_FILTER_BRAND_DROPDOWN: FluidOption[] = [
@@ -960,6 +847,17 @@ function PostJobSurveyDialogBody({
     cycle,
   });
   const [submittedForApproval, setSubmittedForApproval] = useState(false);
+  // When the mechanic clicks "Revise estimate" on a declined / SLA-expired
+  // status panel we drop them back to the form. The booking row is still in a
+  // terminal *_declined / sla_expired state, so without this guard the
+  // re-entry effect below would immediately re-promote them back to the panel
+  // (the button would look dead). Sticks until they resubmit or reopen.
+  const manualReviseRef = useRef(false);
+  // Reset the revise intent whenever the dialog is (re)opened so a fresh open
+  // on a still-declined booking correctly shows the status panel, not the form.
+  useEffect(() => {
+    if (open) manualReviseRef.current = false;
+  }, [open]);
   // Re-entry: if the dialog opens on a booking that already has an in-flight
   // approval for *this* cycle, jump straight to the status panel.
   // A mid-job dialog opened on a booking still at pre_job_approved /
@@ -967,6 +865,7 @@ function PostJobSurveyDialogBody({
   useEffect(() => {
     if (!cycle) return;
     if (submittedForApproval) return;
+    if (manualReviseRef.current) return;
     const state = workflow.state;
     const matchesCycle =
       (cycle === "pre_job" &&
@@ -1021,6 +920,14 @@ function PostJobSurveyDialogBody({
       ? String(Math.round(passportData.passport.mileage))
       : ""
   );
+  // Last odometer reading on file for this VIN. The server rejects a
+  // completion mileage below this (odometers don't run backward), so mirror
+  // the rule client-side to catch it inline instead of on final submit.
+  const baselineMileage =
+    typeof passportData?.passport.mileage === "number" &&
+    Number.isFinite(passportData.passport.mileage)
+      ? Math.round(passportData.passport.mileage)
+      : null;
   const [parts, setParts] = useState<PartRowState[]>(() => {
     // Read the parts ACTUALLY quoted on this booking first — the snapshot the
     // customer confirmed — not the catalog's broader suggestions. This is what
@@ -1309,6 +1216,21 @@ function PostJobSurveyDialogBody({
       if (mileageIdx >= 0) setStepIndex(mileageIdx);
       return;
     }
+    // Odometer can't read below the last value on file — the server enforces
+    // this too, so catch it here and send the mechanic back to the field.
+    if (
+      !cycle &&
+      baselineMileage != null &&
+      Number.isFinite(parsedMileage) &&
+      parsedMileage < baselineMileage
+    ) {
+      setError(
+        `Completion mileage can't be below the last recorded reading of ${baselineMileage.toLocaleString("en-US")} mi.`
+      );
+      const mileageIdx = visibleSteps.indexOf("mileage");
+      if (mileageIdx >= 0) setStepIndex(mileageIdx);
+      return;
+    }
 
     const normalizedParts = normalizeParts();
     const partsRequiredList = passportData?.parts_required_services ?? [];
@@ -1438,6 +1360,9 @@ function PostJobSurveyDialogBody({
         }
         if (result) {
           onApprovalSubmitted?.(result as any);
+          // Fresh estimate sent — clear the revise intent so a subsequent
+          // decline correctly re-promotes the status panel on re-entry.
+          manualReviseRef.current = false;
           setSubmittedForApproval(true);
         }
         return;
@@ -1643,7 +1568,14 @@ function PostJobSurveyDialogBody({
           workflow={workflow}
           cycle={cycle}
           onDismiss={onClose}
-          onReviseRequested={() => setSubmittedForApproval(false)}
+          onReviseRequested={() => {
+            manualReviseRef.current = true;
+            setSubmittedForApproval(false);
+            // Drop back to the first step of the estimate flow, not the
+            // summary step they submitted from.
+            setStepIndex(0);
+            setError("");
+          }}
           bookingLabel={bookingLabel}
         />
       </SurveyDialogShell>
@@ -1740,6 +1672,7 @@ function PostJobSurveyDialogBody({
             setTimeReasonNote={setTimeReasonNote}
             completionMileage={completionMileage}
             setCompletionMileage={setCompletionMileage}
+            baselineMileage={baselineMileage}
             actualLaborMinutes={actualLaborMinutes}
             setActualLaborMinutes={setActualLaborMinutes}
             parts={parts}
@@ -1876,6 +1809,7 @@ function PostJobSurveyDialogBody({
                 onClick={goNext}
                 disabled={!canAdvance(currentStep, {
                   completionMileage,
+                  baselineMileage,
                   timeReason,
                   timeReasonNote,
                   partsAccuracyStatus,
@@ -1904,6 +1838,7 @@ function canAdvance(
   step: StepKey,
   state: {
     completionMileage: string;
+    baselineMileage: number | null;
     timeReason: TimeVarianceReason | null;
     timeReasonNote: string;
     partsAccuracyStatus: PartsAccuracyStatus | null;
@@ -1922,7 +1857,16 @@ function canAdvance(
       return true;
     });
   }
-  if (step === "mileage") return state.completionMileage.trim() !== "";
+  if (step === "mileage") {
+    if (state.completionMileage.trim() === "") return false;
+    const parsed = Number(state.completionMileage);
+    if (!Number.isFinite(parsed)) return false;
+    // Odometer can't read below the last value on file.
+    if (state.baselineMileage != null && parsed < state.baselineMileage) {
+      return false;
+    }
+    return true;
+  }
   if (step === "time_reason") {
     if (state.timeReason === "other") return state.timeReasonNote.trim() !== "";
     return state.timeReason !== null;
@@ -1960,6 +1904,7 @@ function StepContent(props: {
   setTimeReasonNote: (value: string) => void;
   completionMileage: string;
   setCompletionMileage: (value: string) => void;
+  baselineMileage: number | null;
   actualLaborMinutes: string;
   setActualLaborMinutes: (value: string) => void;
   parts: PartRowState[];
@@ -2072,15 +2017,33 @@ function StepContent(props: {
           ) : null}
         </QuestionScreen>
       );
-    case "mileage":
+    case "mileage": {
+      const parsedCompletion = Number(props.completionMileage);
+      const belowBaseline =
+        props.baselineMileage != null &&
+        props.completionMileage.trim() !== "" &&
+        Number.isFinite(parsedCompletion) &&
+        parsedCompletion < props.baselineMileage;
       return (
         <QuestionScreen
           eyebrow="Required"
           question="What's the current odometer?"
           hint="Vehicle passport keeps this on the VIN."
         >
-          <div className="mx-auto flex max-w-md items-center gap-3 rounded-2xl border border-primary/15 bg-card px-5 py-4 shadow-[0_1px_2px_rgba(17,24,28,0.04)] transition-colors focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
-            <Gauge className="h-5 w-5 shrink-0 text-primary/70" />
+          <div
+            className={cn(
+              "mx-auto flex max-w-md items-center gap-3 rounded-2xl border bg-card px-5 py-4 shadow-[0_1px_2px_rgba(17,24,28,0.04)] transition-colors focus-within:ring-4",
+              belowBaseline
+                ? "border-destructive/50 focus-within:border-destructive focus-within:ring-destructive/10"
+                : "border-primary/15 focus-within:border-primary focus-within:ring-primary/10",
+            )}
+          >
+            <Gauge
+              className={cn(
+                "h-5 w-5 shrink-0",
+                belowBaseline ? "text-destructive/70" : "text-primary/70",
+              )}
+            />
             <input
               value={
                 props.completionMileage
@@ -2101,6 +2064,15 @@ function StepContent(props: {
               mi
             </span>
           </div>
+          {belowBaseline ? (
+            <p className="mx-auto mt-3 max-w-md text-center text-[12px] font-medium text-destructive">
+              Below the last recorded reading of{" "}
+              {props.baselineMileage?.toLocaleString("en-US")} mi. Odometers
+              don&apos;t run backward — double-check the number. If the reading
+              on file is wrong, it has to be corrected in the vehicle&apos;s
+              profile before you can close the job.
+            </p>
+          ) : null}
           {props.estimatedLaborMinutes ? (
             <div className="mx-auto mt-6 flex max-w-md flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between">
               <label className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
@@ -2130,6 +2102,7 @@ function StepContent(props: {
           ) : null}
         </QuestionScreen>
       );
+    }
     case "parts":
       return (
         <PartsStep

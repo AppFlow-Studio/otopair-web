@@ -234,7 +234,22 @@ function getTimelineFooterVerb(status: string): string {
 }
 
 // Payment-approval state badge shown next to the status pill in the header.
-function PaymentApprovalBadge({ state }: { state?: string | null }) {
+function PaymentApprovalBadge({
+  state,
+  settlementState,
+}: {
+  state?: string | null;
+  settlementState?: string | null;
+}) {
+  // A completed job still owed money — the reconciliation cron is chasing it.
+  // Shown over the approval state since it's the actionable signal.
+  if (settlementState === "awaiting_settlement") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+        Awaiting settlement
+      </span>
+    );
+  }
   if (state === "reauth_required") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
@@ -494,6 +509,13 @@ export interface JobDetailData {
   scheduledDate: string;
   scheduledTime: string;
   serviceNames: string[];
+  tireSpecs?: {
+    size: string;
+    type: string;
+    tier: string;
+    quantity: number;
+    positions?: Array<"FL" | "FR" | "RL" | "RR">;
+  } | null;
   totalCost: number;
   laborCost: number;
   partsCost: number;
@@ -1417,6 +1439,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 ? "Could not save the pre-job vehicle check."
                 : "Could not start booking."),
           );
+          throw err;
         }
       } finally {
         setIsSubmittingPrejob(false);
@@ -2048,6 +2071,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     <StatusPill status={job.status} />
                     <PaymentApprovalBadge
                       state={(job as any).paymentApprovalState}
+                      settlementState={(job as any).settlementState}
                     />
                   </div>
                   <p className="mt-0.5 truncate text-sm text-muted-foreground">
@@ -2535,6 +2559,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               : ""
           }
           bookingServices={job?.serviceNames ?? []}
+          tireReplacementPositions={job?.tireSpecs?.positions ?? []}
           passportData={vehiclePassport ?? null}
           prefillData={job?.jobActuals?.prejobReport ?? null}
           isSubmitting={isSubmittingPrejob}

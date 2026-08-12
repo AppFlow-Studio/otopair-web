@@ -24,6 +24,9 @@ export interface ComboboxOption {
 }
 
 interface ComboboxProps {
+  id?: string;
+  ariaLabel?: string;
+  ariaInvalid?: boolean;
   value: string;
   onChange: (value: string) => void;
   options: ComboboxOption[];
@@ -37,6 +40,9 @@ interface ComboboxProps {
 }
 
 export function Combobox({
+  id,
+  ariaLabel,
+  ariaInvalid,
   value,
   onChange,
   options,
@@ -48,8 +54,10 @@ export function Combobox({
   emptyText = "No matches",
   allowCustomValue = true,
 }: ComboboxProps) {
+  const selectedLabel =
+    options.find((option) => option.value === value)?.label ?? value;
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState(value);
+  const [query, setQuery] = useState(selectedLabel);
   const [activeIndex, setActiveIndex] = useState(0);
   const [menuPos, setMenuPos] = useState<MenuPosition | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -58,8 +66,8 @@ export function Combobox({
   const listboxId = useId();
 
   useEffect(() => {
-    setQuery(value);
-  }, [value]);
+    setQuery(selectedLabel);
+  }, [selectedLabel]);
 
   // The menu renders in a portal on document.body to escape ancestor
   // `overflow` clipping (collapsible section cards, scrollable drawer body).
@@ -112,19 +120,19 @@ export function Combobox({
         if (allowCustomValue && query !== value) {
           onChange(query);
         } else if (!allowCustomValue) {
-          setQuery(value);
+          setQuery(selectedLabel);
         }
       }
     }
     document.addEventListener("mousedown", onClickAway);
     return () => document.removeEventListener("mousedown", onClickAway);
-  }, [open, query, value, onChange, allowCustomValue]);
+  }, [open, query, value, selectedLabel, onChange, allowCustomValue]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return options;
+    if (!q || query === selectedLabel) return options;
     return options.filter((o) => o.label.toLowerCase().includes(q));
-  }, [query, options]);
+  }, [query, options, selectedLabel]);
 
   useEffect(() => {
     setActiveIndex(0);
@@ -156,7 +164,7 @@ export function Combobox({
       }
     } else if (e.key === "Escape") {
       setOpen(false);
-      setQuery(value);
+      setQuery(selectedLabel);
     }
   }
 
@@ -164,9 +172,12 @@ export function Combobox({
     <div ref={containerRef} className={cn("relative", className)}>
       <div className="relative">
         <input
+          id={id}
           ref={inputRef}
           type="text"
           role="combobox"
+          aria-label={ariaLabel}
+          aria-invalid={ariaInvalid}
           aria-expanded={open}
           aria-controls={listboxId}
           aria-autocomplete="list"
@@ -185,10 +196,22 @@ export function Combobox({
             inputClassName
           )}
         />
-        <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1 text-muted-foreground">
+        <button
+          type="button"
+          aria-label={`${open ? "Close" : "Open"} ${ariaLabel ?? "combobox"} options`}
+          aria-controls={listboxId}
+          aria-expanded={open}
+          disabled={disabled}
+          onClick={() => {
+            const nextOpen = !open;
+            setOpen(nextOpen);
+            if (nextOpen) inputRef.current?.focus();
+          }}
+          className="absolute inset-y-0 right-0 flex w-9 cursor-pointer items-center justify-center gap-1 rounded-r-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 disabled:cursor-not-allowed"
+        >
           {loading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
           <ChevronDown className="w-4 h-4 opacity-60" />
-        </div>
+        </button>
       </div>
 
       {open && !disabled && menuPos && typeof document !== "undefined" &&
@@ -205,7 +228,7 @@ export function Combobox({
             bottom: menuPos.bottom,
             maxHeight: menuPos.maxHeight,
           }}
-          className="z-50 overflow-auto rounded-md border border-border bg-popover shadow-lg p-1 text-sm"
+          className="z-[100] overflow-auto rounded-md border border-border bg-popover shadow-lg p-1 text-sm"
         >
           {filtered.length === 0 ? (
             <li className="px-3 py-2 text-muted-foreground">

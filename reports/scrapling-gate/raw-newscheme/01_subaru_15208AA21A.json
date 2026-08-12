@@ -1,0 +1,120 @@
+{
+  "sub": "subaru",
+  "oem": "15208AA21A",
+  "search_url": "https://subaru.oempartsonline.com/search?search_str=15208AA21A",
+  "search_legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2276,
+      "content_len": 146620,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/search?search_str=15208AA21A",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 1713
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3368,
+      "content_len": 223391,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/search?search_str=15208AA21A",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 1780
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 377,
+      "content_len": 129248,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/search?search_str=15208AA21A",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3038,
+      "content_len": 139549,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/search?search_str=15208AA21A",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ],
+  "detail_url": "https://subaru.oempartsonline.com/oem-parts/subaru-oil-filter-15208aa21a",
+  "detail_legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2472,
+      "content_len": 449497,
+      "title": "2010-2025 Subaru Oil Filter 15208AA21A | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/oem-parts/subaru-oil-filter-15208aa21a",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 17278
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3169,
+      "content_len": 374209,
+      "title": "2010-2025 Subaru Oil Filter 15208AA21A | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/oem-parts/subaru-oil-filter-15208aa21a",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 12259
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 359,
+      "content_len": 244558,
+      "title": "2010-2025 Subaru Oil Filter 15208AA21A | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/oem-parts/subaru-oil-filter-15208aa21a",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3150,
+      "content_len": 281652,
+      "title": "2010-2025 Subaru Oil Filter 15208AA21A | OEM Parts Online",
+      "final_url": "https://subaru.oempartsonline.com/oem-parts/subaru-oil-filter-15208aa21a",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

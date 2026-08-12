@@ -84,6 +84,23 @@ describe("parsePartPrices — JSON-LD primary", () => {
     expect(out.map((p) => p.price)).not.toContain(3.99);
   });
 
+  it("captures the JSON-LD Product.name as listing-title evidence (round 12)", () => {
+    // The Equinox 84257919 defect: the page's own title said "Battery Cable /
+    // Ground Extension" but parsePartPrices discarded `name`, so no gate could
+    // ever see what the part was.
+    const html = `<script type="application/ld+json">
+      {"@graph":[
+        {"@type":"Product","mpn":"84257919","name":"Battery Cable / Ground Extension","offers":{"price":"27.30","priceCurrency":"USD"}},
+        {"@type":"Product","mpn":"84869896","offers":{"price":"189.99","priceCurrency":"USD"}}
+      ]}</script>`;
+    const out = parsePartPrices(html, OEMPARTSONLINE_URL);
+    const byNum = Object.fromEntries(out.map((p) => [p.oem_part_number, p]));
+    expect(byNum["84257919"].name).toBe("Battery Cable / Ground Extension");
+    // Nameless products stay valid price records — name is optional evidence.
+    expect(byNum["84869896"].price).toBe(189.99);
+    expect(byNum["84869896"].name).toBeUndefined();
+  });
+
   it("reads AggregateOffer.lowPrice when present", () => {
     const html = `<script type="application/ld+json">
       {"@type":"Product","mpn":"AGG-1","offers":{"@type":"AggregateOffer","lowPrice":"55.00","priceCurrency":"USD"}}

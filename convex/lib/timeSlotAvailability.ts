@@ -30,6 +30,7 @@ type AvailabilityContext = {
   bookings: any[];
   blockedSlots: any[];
   tireQuoteHolds: TireQuoteHold[];
+  slotHolds: SlotHoldLite[];
   bufferMinutes: number;
 };
 
@@ -39,6 +40,18 @@ type TireQuoteHold = {
   date: string;
   time: string;
   durationMinutes: number;
+};
+
+// Active StubHub-style checkout hold, projected into the same shape the
+// overlap helpers expect. `session_id` lets a caller exclude its OWN hold so a
+// user's in-flight hold never blocks their own booking consume.
+type SlotHoldLite = {
+  _id: string;
+  mechanic_id: any;
+  date: string;
+  time: string;
+  durationMinutes: number;
+  session_id: string;
 };
 
 type SlotLike = {
@@ -86,6 +99,17 @@ function tireHoldsToScheduleBookings(holds: TireQuoteHold[]): ScheduleBooking[] 
     scheduledTime: hold.time,
     estimatedMinutes: hold.durationMinutes,
     status: "tentative_quote",
+    mechanicId: hold.mechanic_id ? String(hold.mechanic_id) : null,
+  }));
+}
+
+function slotHoldsToScheduleBookings(holds: SlotHoldLite[]): ScheduleBooking[] {
+  return holds.map((hold) => ({
+    _id: String(hold._id),
+    scheduledDate: hold.date,
+    scheduledTime: hold.time,
+    estimatedMinutes: hold.durationMinutes,
+    status: "slot_hold",
     mechanicId: hold.mechanic_id ? String(hold.mechanic_id) : null,
   }));
 }
@@ -188,26 +212,63 @@ async function getLiveTireQuoteHoldsForShopDate(
   return holds;
 }
 
+async function getActiveSlotHoldsForShopDate(
+  ctx: any,
+  shopId: any,
+  date: string,
+  excludeSessionId?: string,
+): Promise<SlotHoldLite[]> {
+  const now = Date.now();
+  const rows = await ctx.db
+    .query("slot_holds")
+    .withIndex("by_shop_and_date", (q: any) =>
+      q.eq("shop_id", shopId).eq("date", date),
+    )
+    .collect();
+
+  return rows
+    .filter(
+      (h: any) =>
+        h.status === "active" &&
+        // Drop stale holds at read time so an expired hold never blocks —
+        // independent of the reaper cron.
+        h.expires_at > now &&
+        // A caller can exclude its own hold so it doesn't block itself.
+        (!excludeSessionId || h.session_id !== excludeSessionId),
+    )
+    .map((h: any) => ({
+      _id: String(h._id),
+      mechanic_id: h.mechanic_id,
+      date: h.date,
+      time: h.start_time,
+      durationMinutes: h.duration_minutes,
+      session_id: h.session_id,
+    }));
+}
+
 async function getAvailabilityContext(
   ctx: any,
   {
     shopId,
     date,
     excludeTireQuoteResponseId,
+    excludeSessionId,
   }: {
     shopId: any;
     date: string;
     excludeTireQuoteResponseId?: string;
+    excludeSessionId?: string;
   },
 ): Promise<AvailabilityContext> {
   const shop = await ctx.db.get(shopId);
-  const [hours, activeMechanics, bookings, blockedSlots, tireQuoteHolds] =
+  const [hours, activeMechanics, bookings, blockedSlots, tireQuoteHolds, slotHolds] =
     await Promise.all([
       getShopHoursForDate(ctx, shopId, date),
       getActiveMechanicsForShop(ctx, shopId),
       getBlockingBookingsForShopDate(ctx, shopId, date),
       getManualBlockedSlotsForShopDate(ctx, shopId, date),
       getLiveTireQuoteHoldsForShopDate(ctx, shopId, date, excludeTireQuoteResponseId),
+      getActiveSlotHoldsForShopDate(ctx, shopId, date, excludeSessionId),
     ]);
 
   return {
@@ -217,6 +278,7 @@ async function getAvailabilityContext(
     bookings,
     blockedSlots,
     tireQuoteHolds,
+    slotHolds,
     bufferMinutes: normalizeBufferMinutes(shop?.buffer_minutes),
   };
 }
@@ -325,6 +387,22 @@ function assertMechanicWindowFreeInContext(
   if (quoteHoldConflict) {
     throw new Error("Cannot assign this mechanic because that time is held by a tire quote.");
   }
+
+  // 4th blocking source: another customer's in-flight checkout hold. The
+  // context already excludes the caller's own session, so this only fires for
+  // OTHER sessions holding the window.
+  const slotHoldConflict = overlapsMechanicBooking(
+    String(mechanicId),
+    date,
+    startTime,
+    endTime,
+    slotHoldsToScheduleBookings(context.slotHolds),
+    undefined,
+    context.bufferMinutes,
+  );
+  if (slotHoldConflict) {
+    throw new Error("That time is being held by another customer. Please pick another slot.");
+  }
 }
 
 function mechanicWorkloadFromContext(
@@ -373,6 +451,7 @@ export async function assertMechanicAvailableForWindow(
     durationMinutes,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeSessionId,
     allowAfterClose,
     allowOutsideShopHours,
   }: {
@@ -383,6 +462,7 @@ export async function assertMechanicAvailableForWindow(
     durationMinutes: number;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
+    excludeSessionId?: string;
     allowAfterClose?: boolean;
     allowOutsideShopHours?: boolean;
   },
@@ -391,6 +471,7 @@ export async function assertMechanicAvailableForWindow(
     shopId,
     date,
     excludeTireQuoteResponseId,
+    excludeSessionId,
   });
   assertMechanicActiveInContext(context, shopId, mechanicId);
   const endTime = assertWindowInsideShopHours(
@@ -419,6 +500,7 @@ export async function isMechanicAvailableForWindow(
     durationMinutes: number;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
+    excludeSessionId?: string;
     allowAfterClose?: boolean;
     allowOutsideShopHours?: boolean;
   },
@@ -442,6 +524,7 @@ export async function resolveAvailableMechanicForWindow(
     excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeSessionId,
     allowAfterClose,
     allowOutsideShopHours,
   }: {
@@ -456,6 +539,9 @@ export async function resolveAvailableMechanicForWindow(
     excludeMechanicId?: any;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
+    /** Ignore this checkout session's own slot_holds so a user's in-flight
+     *  hold never blocks their own booking/consume. */
+    excludeSessionId?: string;
     allowAfterClose?: boolean;
     allowOutsideShopHours?: boolean;
   },
@@ -464,6 +550,7 @@ export async function resolveAvailableMechanicForWindow(
     shopId,
     date,
     excludeTireQuoteResponseId,
+    excludeSessionId,
   });
   const endTime = assertWindowInsideShopHours(
     context,
@@ -535,18 +622,21 @@ export async function getMechanicDayWorkload(
     date,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeSessionId,
   }: {
     shopId: any;
     mechanicId: any;
     date: string;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
+    excludeSessionId?: string;
   },
 ) {
   const context = await getAvailabilityContext(ctx, {
     shopId,
     date,
     excludeTireQuoteResponseId,
+    excludeSessionId,
   });
   return mechanicWorkloadFromContext(context, mechanicId, excludeBookingId);
 }
@@ -560,6 +650,7 @@ export async function listAvailableWindowsForShopDate(
     cutoffTime,
     durationMinutes = SLOT_GRID_MINUTES,
     limit,
+    excludeSessionId,
   }: {
     shopId: any;
     date: string;
@@ -567,9 +658,10 @@ export async function listAvailableWindowsForShopDate(
     cutoffTime?: string;
     durationMinutes?: number;
     limit?: number;
+    excludeSessionId?: string;
   },
 ): Promise<SlotLike[]> {
-  const context = await getAvailabilityContext(ctx, { shopId, date });
+  const context = await getAvailabilityContext(ctx, { shopId, date, excludeSessionId });
   const hours = context.hours;
   if (!hours || hours.is_closed || !hours.open_time || !hours.close_time) return [];
 

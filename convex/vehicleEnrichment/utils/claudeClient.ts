@@ -292,27 +292,16 @@ export function computeSmartDelay(
 
 // ─── JSON Extraction ─────────────────────────────────────────────
 
-/**
- * Extract JSON from Claude response content blocks.
- * Handles mixed web_search responses (text + tool_use blocks).
- */
-export function extractJsonFromContentBlocks(content: any[]): any {
-  const textParts = content
-    .filter((block: any) => block.type === "text")
-    .map((block: any) => block.text)
-    .join("\n");
-
-  const stripped = textParts
+/** Strip markdown code fences so bare JSON remains. */
+function stripJsonFences(text: string): string {
+  return text
     .replace(/```json\n?/g, "")
     .replace(/```\n?/g, "")
     .trim();
+}
 
-  try {
-    return JSON.parse(stripped);
-  } catch {
-    // Fall through to bracket-matching
-  }
-
+/** First balanced {...} or [...] in the string, parsed. Throws when absent. */
+function parseFirstBalancedJson(stripped: string): any {
   const startObj = stripped.indexOf("{");
   const startArr = stripped.indexOf("[");
 
@@ -350,6 +339,61 @@ export function extractJsonFromContentBlocks(content: any[]): any {
 
   if (endIdx === -1) throw new Error("Unbalanced JSON in Claude response");
   return JSON.parse(stripped.slice(startIdx, endIdx + 1));
+}
+
+/**
+ * Extract JSON from Claude response content blocks.
+ * Handles mixed web_search responses (text + tool_use blocks).
+ *
+ * MULTI-BLOCK RULE: a web-search turn under structured outputs may emit MORE
+ * THAN ONE text block — the grammar forces even interim between-search
+ * narration to be schema-valid JSON, so it degenerates to the shortest legal
+ * instance ({"fields": [], "services": []}), followed later by the real
+ * final answer as its own block. Joining the blocks then fails JSON.parse
+ * (two concatenated objects) and first-bracket matching returned the INTERIM
+ * EMPTY object — discarding the full answer sitting right behind it (2021
+ * CX-5, Aug 2026: 33 gap fields + 25 services thrown away, quotability 0.58).
+ * When several blocks parse individually, keep the one with the most content
+ * (serialized length), preferring the LATER block on ties: the final write-up
+ * supersedes interim emissions, but a degenerate empty final must not erase a
+ * rich earlier answer either.
+ */
+export function extractJsonFromContentBlocks(content: any[]): any {
+  const textBlocks = content
+    .filter((block: any) => block.type === "text")
+    .map((block: any) => String(block.text ?? ""));
+
+  const stripped = stripJsonFences(textBlocks.join("\n"));
+
+  try {
+    return JSON.parse(stripped);
+  } catch {
+    // Fall through: per-block selection, then bracket-matching.
+  }
+
+  if (textBlocks.length > 1) {
+    let best: { value: any; mass: number } | null = null;
+    for (const block of textBlocks) {
+      const t = stripJsonFences(block);
+      if (!t) continue;
+      let parsed: any;
+      try {
+        parsed = JSON.parse(t);
+      } catch {
+        try {
+          parsed = parseFirstBalancedJson(t);
+        } catch {
+          continue;
+        }
+      }
+      let mass = 0;
+      try { mass = JSON.stringify(parsed)?.length ?? 0; } catch { mass = 0; }
+      if (!best || mass >= best.mass) best = { value: parsed, mass };
+    }
+    if (best) return best.value;
+  }
+
+  return parseFirstBalancedJson(stripped);
 }
 
 // ─── Web Search Usage Extraction ─────────────────────────────────

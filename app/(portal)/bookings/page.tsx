@@ -11,6 +11,7 @@ import { useSearchParams } from "next/navigation";
 import { usePortalSidebar } from "../portal-context";
 import BookingDetailPanel from "@/components/booking-detail-panel";
 import DatePicker from "@/components/ui/date-picker";
+import TimePicker from "@/components/ui/time-picker";
 import type { JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
@@ -1102,12 +1103,9 @@ function DateTimeFilterPill({
                 <div className="flex-1">
                   <DatePicker value={dateFrom} onChange={onDateFromChange} />
                 </div>
-                <input
-                  type="time"
-                  value={timeFrom}
-                  onChange={(e) => onTimeFromChange(e.target.value)}
-                  className="w-24 text-xs px-2.5 py-1.5 rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
+                <div className="w-28 shrink-0">
+                  <TimePicker value={timeFrom} onChange={onTimeFromChange} minuteStep={15} ariaLabel="From time" />
+                </div>
               </div>
             </div>
             <div>
@@ -1116,12 +1114,9 @@ function DateTimeFilterPill({
                 <div className="flex-1">
                   <DatePicker value={dateTo} onChange={onDateToChange} />
                 </div>
-                <input
-                  type="time"
-                  value={timeTo}
-                  onChange={(e) => onTimeToChange(e.target.value)}
-                  className="w-24 text-xs px-2.5 py-1.5 rounded-md border border-border bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
+                <div className="w-28 shrink-0">
+                  <TimePicker value={timeTo} onChange={onTimeToChange} minuteStep={15} ariaLabel="To time" />
+                </div>
               </div>
             </div>
             {hasValue && (

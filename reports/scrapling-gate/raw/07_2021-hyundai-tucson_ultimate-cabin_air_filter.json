@@ -1,0 +1,61 @@
+{
+  "key": "2021-hyundai-tucson_ultimate-cabin_air_filter",
+  "url": "https://hyundai.oempartsonline.com/oem-2021-hyundai-tucson_ultimate-cabin_air_filter.html",
+  "legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2271,
+      "content_len": 294542,
+      "title": "Online Hyundai Parts Superstore | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3033
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3371,
+      "content_len": 294547,
+      "title": "Online Hyundai Parts Superstore | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3033
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 823,
+      "content_len": 191862,
+      "title": "Online Hyundai Parts Superstore | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3795,
+      "content_len": 203216,
+      "title": "Online Hyundai Parts Superstore | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

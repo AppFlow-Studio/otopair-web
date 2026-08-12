@@ -11,6 +11,62 @@
 
 import type { VehicleInput, VehicleIdentity } from "../types";
 import type { DetectedPackage } from "../../lib/vehicleDatabases";
+import { assembleVariantFingerprint, renderVariantConstraints } from "../variantFingerprint";
+// The prompt's allowed-key lists are generated from the SAME constants the
+// output schema enumerates, so the two contracts cannot drift apart.
+import {
+  BATCH_1A_FIELD_ROW_KEYS,
+  BATCH_1A_INTERVAL_KEYS,
+  OEM_PART_KEYS,
+} from "../utils/batchSchemas";
+import { resolveFuelClass } from "../fuelTypeResolver";
+import { resolveBuildSource } from "../buildSourceResolver";
+
+/** Assemble the variant fingerprint synchronously from the identity available
+ *  at prompt-build time and render its high-consequence facets as an
+ *  authoritative constraints block (P5). All resolvers are pure/sync. Fail-open:
+ *  returns "" when no facet is confident enough to assert. */
+function variantConstraintsFor(vehicle: VehicleInput, vPicData: VehicleIdentity | null): string {
+  const engineCode =
+    vehicle.engineCode && !vehicle.engineCode.includes("_") ? vehicle.engineCode : null;
+  const fuel = resolveFuelClass({
+    nhtsa_fuel_type: vPicData?.fuel_type ?? null,
+    engine_code: vehicle.engineCode ?? null,
+    engine_manufacturer: vPicData?.engine_manufacturer ?? null,
+  });
+  const build = resolveBuildSource({
+    make: vehicle.make,
+    model: vehicle.model,
+    model_year: vehicle.year,
+    engine_manufacturer: vPicData?.engine_manufacturer ?? null,
+  });
+  const fp = assembleVariantFingerprint({
+    make: vehicle.make,
+    model: vehicle.model,
+    model_year: vehicle.year,
+    engine_code: engineCode,
+    raw_fuel_type: vPicData?.fuel_type ?? null,
+    aspiration: vPicData?.turbo ? "turbo" : null,
+    displacement_l:
+      vPicData?.displacement_l ??
+      (vehicle.displacement ? parseFloat(vehicle.displacement) || null : null),
+    cylinders: vPicData?.cylinders ?? null,
+    engine_manufacturer: vPicData?.engine_manufacturer ?? null,
+    // Transmission family is the raw (unreconciled) decode here — deliberately
+    // NOT constrained in the prompt (renderVariantConstraints ignores it).
+    transmission_family: null,
+    speeds: null,
+    drivetrain: (vPicData?.drivetrain as "FWD" | "RWD" | "AWD" | "4WD" | null) ?? null,
+    gvwr_lbs: vPicData?.gvwr_lbs ?? null,
+    resolved_fuel: { fuel_class: fuel.fuel_class, confidence: fuel.confidence, source: fuel.source },
+    resolved_build_source: {
+      build_source_make: build.build_source_make,
+      confidence: build.confidence,
+      source: build.source,
+    },
+  });
+  return renderVariantConstraints(fp);
+}
 
 export const BATCH_1_SYSTEM = `You are a data extraction specialist for Otopair. You will receive raw markdown scraped from OEM parts catalog pages (bmwpartsdeal.com or equivalent) and owner's manual / maintenance schedule pages for a specific vehicle.
 
@@ -24,11 +80,19 @@ RULES:
    - parking_brake_type (electronic vs manual)
    - timing_system (chain vs belt)
 3. If a value is not present in the source documents and is not one of the 4 allowed training data fields, return null. A null is always better than a guess.
-4. For OEM part numbers, validate the format for this vehicle's make:
+4. Transcribe OEM part numbers EXACTLY as the source prints them. Every manufacturer
+   uses its own format; these three are illustrations of that variety, NOT an allowlist:
    - BMW: 11 digits numeric (e.g., 11427583220) OR alphanumeric up to 13 chars (e.g., 64115A1BDB6)
    - Toyota: 5-5 alphanumeric (e.g., 04152-YZZA1)
    - Honda: segmented alphanumeric (e.g., 15400-PLM-A02)
-   If the format doesn't match, return null.
+   If this vehicle's make is not listed above, that means only that no example was given
+   for it — NOT that its numbers are invalid. Return the number as printed.
+   Nissan 16546-6CB0A, Mopar 68453097AB, Subaru 26296FJ020 and Mercedes 0019828008 are
+   all perfectly valid part numbers.
+   Return null ONLY when the source does not show a part number for that role. Never
+   return null because a number "looks wrong" for the make — format checking is done
+   downstream against a per-make pattern table covering 19 makes plus a general
+   fallback, and a number you discard here can never be recovered by it.
 5. Return OEM part numbers as JSON STRINGS exactly as printed, preserving leading zeros (e.g. "07119963130", never the bare number 7119963130 — an unquoted number silently loses the leading zero and the part is rejected).
 6. Return VALID JSON only. No markdown fences, no explanation, no preamble.
 
@@ -128,8 +192,10 @@ If a package's part numbers are unknown or unavailable in the source documents, 
 `
     : "";
 
-  return `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim} — ${vehicle.engineCode} ${vehicle.displacement}L
+  const variantConstraints = variantConstraintsFor(vehicle, vPicData);
 
+  return `Vehicle: ${vehicle.year} ${vehicle.make} ${vehicle.model} ${vehicle.trim} — ${vehicle.engineCode} ${vehicle.displacement}L
+${variantConstraints ? `\n${variantConstraints}` : ""}
 ${vPicSection}
 
 ${partsSection}
@@ -138,106 +204,64 @@ ${manualSection}
 
 ${packagesSection}
 
-Extract into this exact JSON structure. For NHTSA-provided fields (drivetrain, turbo, transmission_type, fuel_injection_type, timing_system), use source_type: "nhtsa" and confidence: 1.0:
+Return ONE JSON object containing FOUR ARRAYS. Each entry is one row.
+
+A field you cannot determine is OMITTED ENTIRELY — do not emit a row whose value
+is null, and never invent a row to fill the shape. An omitted row IS the answer
+"this vehicle has no such value / it was not in the sources"; that is a complete,
+correct response, and it is preferred over a guess.
+
+For NHTSA-provided fields (drivetrain, turbo, transmission_type,
+fuel_injection_type, timing_system) use source_type "nhtsa" and confidence 1.0.
 
 {
-  "fluids": {
-    "oil_viscosity": { "value": "0W-30", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-    "oil_capacity_qts": { "value": 11.1, "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-    "coolant_type": { "value": "BMW HT-12", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-    "coolant_capacity_qts": { "value": 9.25, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 },
-    "brake_fluid_type": { "value": "DOT 4", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
-    "brake_fluid_capacity_oz": { "value": 32, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 },
-    "power_steering_type": { "value": "electric", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
-    "ps_fluid_capacity_oz": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "transmission_fluid_capacity_qts": { "value": 4.5, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 }
-  },
-  "intervals": {
-    "oil_change": {
-      "miles": { "value": 10000, "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-      "months": { "value": 12, "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-      "status": "scheduled",
-      "display_string": "Every 10,000 miles or 12 months"
-    },
-    "spark_plug": { "miles": { ... }, "months": { ... }, "status": "scheduled", "display_string": "..." },
-    "transmission_service": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "coolant_flush": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "air_filter": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "cabin_filter": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "brake_fluid_flush": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "serpentine_belt": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "timing_belt_or_chain_service": { "miles": { ... }, "months": { ... }, "status": "...", "display_string": "..." },
-    "brake_pads": { "miles": { ... }, "months": { ... }, "status": "inspect_only", "display_string": "..." },
-    "tire_rotation": { "miles": { ... }, "months": { ... }, "status": "scheduled", "display_string": "..." }
-  },
-  "attributes": {
-    "timing_system": { "value": "chain", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "drivetrain": { "value": "AWD", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "turbo": { "value": true, "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "fuel_injection_type": { "value": "direct", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "transmission_type": { "value": "automatic", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 }
-  },
-  "oem_parts": {
-    "oil_filter_oem": { "value": "11427583220", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
-    "air_filter_oem": { "value": "...", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "cabin_filter_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "spark_plug_oem": { "value": "...", ... },
-    "front_brake_pad_oem": { "value": "...", ... },
-    "rear_brake_pad_oem": { "value": "...", ... },
-    "rotor_front_oem": { "value": "...", ... },
-    "rotor_rear_oem": { "value": "...", ... },
-    "drain_plug_gasket_oem": { "value": "...", ... },
-    "serpentine_belt_oem": { "value": "...", ... },
-    "timing_belt_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "wiper_blade_set_oem": { "value": "...", ... },
-    "wiper_blade_rear_oem": { "value": "...", ... },
-    "battery_oem": { "value": "...", ... },
-    "coolant_oem": { "value": "...", ... },
-    "engine_oil_oem": { "value": "...", ... },
-    "oil_filter_housing_oring_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "ignition_coil_oem": { "value": "...", ... },
-    "intake_manifold_gasket_oem": { "value": "...", ... },
-    "timing_kit_oem": { "value": "...", ... },
-    "water_pump_oem": { "value": "...", ... },
-    "atf_fluid_oem": { "value": "...", ... },
-    "trans_filter_oem": { "value": "...", ... },
-    "trans_pan_gasket_oem": { "value": "...", ... },
-    "brake_fluid_oem": { "value": "...", ... },
-    "ps_fluid_oem": { "value": "...", ... },
-    "gear_oil_oem": { "value": "...", ... },
-    "friction_modifier_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "brake_hardware_kit_front_oem": { "value": "...", ... },
-    "brake_hardware_kit_rear_oem": { "value": "...", ... },
-    "brake_wear_sensor_front_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "brake_wear_sensor_rear_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "thermostat_oem": { "value": "...", ... },
-    "thermostat_gasket_oem": { "value": "...", ... },
-    "cvt_internal_filter_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null },
-    "cvt_external_filter_oem": { "value": null, "source_url": null, "source_type": null, "confidence": null }
-  },
-  "battery": {
-    "battery_group": { "value": "H8/Group 49", "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "battery_cca": { "value": 850, "source_url": "...", "source_type": "scraped", "confidence": 0.9 }
-  },
-  "spark_plug": {
-    "quantity": { "value": 8, "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
-    "gap_mm": { "value": 0.7, "source_url": "...", "source_type": "scraped", "confidence": 0.9 }
-  },
-  "parking_brake_type": { "value": "electronic", "source_url": null, "source_type": "training_data", "confidence": 0.75 },
-  "trim_specs": {
-    "tire_pressure_front_psi": { "value": 35, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "tire_pressure_rear_psi": { "value": 38, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "lug_nut_torque_ft_lbs": { "value": 103, "source_url": "...", "source_type": "scraped", "confidence": 0.9 },
-    "front_wiper_size": { "value": "26", "source_url": "...", "source_type": "scraped", "confidence": 0.8 },
-    "rear_wiper_size": { "value": null, "source_url": null, "source_type": null, "confidence": null }
-  }
+  "fields": [
+    { "key": "oil_viscosity", "value": "0W-30", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
+    { "key": "oil_capacity_qts", "value": 11.1, "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
+    { "key": "drivetrain", "value": "AWD", "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
+    { "key": "turbo", "value": true, "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
+    { "key": "spark_plug_quantity", "value": 8, "source_url": null, "source_type": "nhtsa", "confidence": 1.0 },
+    { "key": "parking_brake_type", "value": "electronic", "source_url": null, "source_type": "training_data", "confidence": 0.75 }
+  ],
+  "intervals": [
+    { "key": "oil_change", "interval_miles": 10000, "interval_months": 12, "status": "scheduled", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 },
+    { "key": "brake_pads", "interval_miles": 30000, "interval_months": null, "status": "inspect_only", "source_url": "https://...", "source_type": "scraped", "confidence": 0.8 }
+  ],
+  "oem_parts": [
+    { "key": "oil_filter_oem", "value": "11428583898", "observed_title": "Oil Filter Kit", "source_url": "https://...", "source_type": "scraped", "confidence": 0.95 }
+  ],
+  "rotor_specs": [
+    { "axle": "front", "thickness_kind": "discard_min", "value_mm": 24.0, "observed_label": "Minimum Thickness", "observed_value_text": "24.0 mm", "nominal_mm": 26.0, "source_url": "https://...", "source_type": "scraped", "confidence": 0.9 }
+  ]
 }
+
+ALLOWED "key" VALUES — any other key is invalid and will be discarded.
+
+fields: ${BATCH_1A_FIELD_ROW_KEYS.join(", ")}
+
+intervals: ${BATCH_1A_INTERVAL_KEYS.join(", ")}
+
+oem_parts: ${OEM_PART_KEYS.join(", ")}
+
+rotor_specs axle: "front" or "rear" (one row per axle you have data for)
 
 REMINDERS:
 - If timing_system is "chain" (from NHTSA or scraped), set timing_belt_oem to null.
 - spark_plug quantity = cylinder count from NHTSA if available (use source_type: "nhtsa").
 - If status is "not_applicable" (e.g., timing belt on a chain engine), set miles/months values to null.
 - For rotor_front_oem and rotor_rear_oem: both may appear on the same "brake_disc" page. Extract front and rear part numbers separately if they differ by axle position.
+- ROTOR THICKNESS (rotor_specs) — THREE DIFFERENT NUMBERS, NEVER INTERCHANGEABLE:
+  (a) NOMINAL / new thickness. Parts listings print this inside the size string ("330x22mm" = 330 mm DIAMETER x 22 mm NOMINAL thickness) and under labels like "Thickness", "Disc Thickness", "New Thickness".
+  (b) MACHINE-TO / refinish limit — the thinnest a rotor may be machined TO. Labels: "Machining Limit", "Refinish Thickness", "Machine to".
+  (c) DISCARD / MINIMUM — the replace-at number, cast on the rotor hat. Labels: "Minimum Thickness", "Min. Thickness", "Discard Thickness", "Discard at", "Wear Limit", "MIN TH".
+  ONLY (c) is a minimum. Reporting (a) as a minimum makes us condemn healthy rotors and recommend brake jobs that are not needed — a WORSE outcome than returning null.
+- thickness_kind MUST be the category of the label you ACTUALLY READ. A thickness with no qualifying label — a bare "22mm", a size string, or a table row labelled only "Thickness" — is "nominal". NEVER "discard_min".
+- observed_label MUST be copied VERBATIM from the page, and observed_value_text must keep the source's own unit ("0.945 in"). If you cannot quote a label you literally saw, return the whole rotor_specs entry as null — a composed label is a fabricated audit trail, and an unlabelled minimum is discarded downstream anyway.
+- NEVER derive one rotor number from another. Do not subtract an allowance from the nominal to produce a minimum. Nominal-only is a complete, correct answer: return it as nominal_mm with thickness_kind "nominal" and leave value_mm null.
+- The FIRST number in "330x22mm" is the DIAMETER. Never return it as a thickness.
+- Convert inches to mm for value_mm and nominal_mm (mm = in × 25.4), keeping the original in observed_value_text.
+- rotor_specs is per AXLE and can differ by trim and brake package — use the figures for THIS vehicle's rotors, and return null for an axle with drum brakes.
+- Capacities can differ BY DRIVETRAIN on the same engine (2024 Equinox 1.5T: FWD 4.2 qt vs AWD 5.3 qt oil). Use the figure for THIS vehicle's drivetrain (stated in the vehicle description); if the source only gives the other drivetrain's figure, return null.
 - oil_capacity_qts / coolant_capacity_qts must be in US quarts for THIS exact engine. If the source lists the capacity in liters, convert (qts = L × 1.057); never copy a liter figure as a quart figure. Do not use a capacity for a different engine option.
 - coolant_capacity_qts is the TOTAL cooling-system capacity (initial fill). Owner's manuals usually print both "total fill" and "drain and refill" — use total fill (a coolant flush exchanges the full system), never the smaller drain-and-refill figure.
 - brake_fluid_capacity_oz: full-flush brake system capacity in US fluid OUNCES (typical 16-48 oz; 1 L = 33.8 oz). ps_fluid_capacity_oz: power-steering system capacity in US fluid OUNCES — null when power_steering_type is electric.
@@ -253,6 +277,10 @@ REMINDERS:
 - thermostat_oem / thermostat_gasket_oem: replaced only if found bad during a coolant flush — still extract the SKUs when the catalog lists them.
 - ${cvtReminder}
 - brake_pads interval: the manufacturer's INSPECTION / typical pad-life guidance (wear-based, not a hard schedule) — use status "inspect_only" unless the schedule explicitly mandates replacement. tire_rotation: the rotation schedule (typically 5,000-8,000 miles).
+- INTERVALS ARE MODEL-YEAR-SPECIFIC: manufacturers routinely changed schedules at a generation or model-year boundary (e.g. Toyota moved many nameplates from 5,000-mile to 10,000-mile oil intervals at MY2013). Use the schedule published for THIS exact model year; a schedule for the same nameplate's later/earlier years is WRONG. If the source's year coverage does not include this model year, return null rather than the wrong-year value.
+- Interval status "scheduled" is a claim that the cadence is the OEM maintenance schedule (owner's manual / warranty & maintenance guide). A dealer-site or aftermarket convention with no OEM schedule behind it (e.g. "brake fluid every 2 years" on a make whose guide says inspect-only, "transmission service every 60k" when the OEM schedule lists none under normal driving) must use status "inspect_only" or "conditional_severe" — never "scheduled".
+- battery_oem is the 12V STARTER battery (or its OEM group-size part). NEVER a telematics/DCM battery, key-fob battery, auxiliary/backup battery, or hybrid HV pack component — and NEVER battery-adjacent hardware: a battery CABLE, ground strap/extension, terminal, hold-down, tray, bracket, vent tube, or sensor is not a battery.
+- For EVERY *_oem field, also return "observed_title": the EXACT product listing title/heading the source page shows for that part number, copied VERBATIM (null if the page shows no product title). Do not paraphrase or normalize it, and NEVER compose or infer a title — a title you did not literally see on the page must be null (observed_title is evidence, and a composed one corrupts the evidence chain). The title is evidence of WHAT the part is — if the listing's title names an accessory or adjacent hardware (cable, bracket, tray, housing, cap, sensor, hose) instead of the component the field asks for, that number is the WRONG part for the field: return null for value and keep looking in the sources.
 - Conditional existence IS the data: returning null for any of the above means the vehicle does not use that part — do not guess a substitute.
 - Return null for any field not found in sources and not in the 4 allowed training data fields.`;
 }

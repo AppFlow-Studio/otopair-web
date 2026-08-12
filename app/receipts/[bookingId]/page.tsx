@@ -3,16 +3,36 @@
  * BookingDetailsSheet's ReceiptViewer (same `api.invoices.getReceiptForBooking`
  * query, same line items) so the experience is identical between surfaces.
  * Customers usually arrive here from the "View online" button in the invoice
- * email. The page is auth-gated via Clerk middleware and authorized via the
- * Convex query (ownership check on the booking).
+ * email.
+ *
+ * The route is PUBLIC in middleware — deliberately. Authorization happens in
+ * the Convex query, which accepts either Clerk ownership of the booking or a
+ * capability token (`?t=…`) so walk-in customers with no account can open the
+ * link from their email.
+ *
+ * That means an unauthenticated visitor lands here rather than being bounced
+ * to sign-in, and the page has to offer the way forward itself. The query
+ * returns a bare `null` for every failure, so it can't say why — but the
+ * client knows whether Clerk has a session, and splitting on that is enough to
+ * tell "sign in" apart from "wrong account" without the server leaking whether
+ * a given booking exists.
  */
 "use client";
 
 import { use } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useMutation, useQuery } from "convex/react";
-import { ArrowLeft, FileDown, Loader2, ShieldX } from "lucide-react";
+import { useConvexAuth, useMutation, useQuery } from "convex/react";
+import { SignedIn, SignedOut, SignInButton } from "@clerk/nextjs";
+import {
+  ArrowLeft,
+  FileDown,
+  KeyRound,
+  Loader2,
+  LogIn,
+  Mail,
+  ShieldX,
+} from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
@@ -47,13 +67,18 @@ export default function ReceiptPage({
   const { bookingId } = use(params);
   const searchParams = useSearchParams();
   const token = searchParams.get("t");
+  const { isLoading: authLoading } = useConvexAuth();
   const receipt = useQuery(api.invoices.getReceiptForBooking, {
     bookingId: bookingId as Id<"bookings">,
     ...(token ? { token } : {}),
   });
   const requestGeneration = useMutation(api.invoices.requestInvoiceGeneration);
 
-  if (receipt === undefined) {
+  // Wait for Convex to finish authenticating before deciding anything. The
+  // query runs regardless, and an unauthenticated first pass returns null —
+  // without this, a signed-in customer would see the sign-in prompt flash
+  // before their receipt loaded.
+  if (receipt === undefined || authLoading) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-white p-12 text-center">
         <Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin text-[#0d72ff]" />
@@ -63,26 +88,7 @@ export default function ReceiptPage({
   }
 
   if (receipt === null) {
-    return (
-      <div className="rounded-2xl border border-slate-200 bg-white p-10 text-center">
-        <ShieldX className="mx-auto mb-3 h-8 w-8 text-slate-400" />
-        <h1 className="mb-2 text-lg font-semibold text-slate-900">
-          Receipt not available
-        </h1>
-        <p className="mx-auto max-w-md text-sm text-slate-500">
-          This receipt is either still being processed, has been removed, or
-          belongs to a different account. Sign in with the email used for the
-          booking, then refresh this page.
-        </p>
-        <Link
-          href="/"
-          className="mt-6 inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Otopair
-        </Link>
-      </div>
-    );
+    return <ReceiptUnavailable hadToken={!!token} />;
   }
 
   const { invoiceNumber, status, breakdown, emailedAtMs, url } = receipt;
@@ -173,10 +179,12 @@ export default function ReceiptPage({
               label="Subtotal"
               value={formatCents(breakdown.subtotalCents)}
             />
-            {breakdown.taxCents > 0 ? (
+            {/* Both are null on a cash walk-in invoice — the shop's own bill
+                has no sales tax line and no Otopair fee. */}
+            {(breakdown.taxCents ?? 0) > 0 ? (
               <TotalsRow label="Tax" value={formatCents(breakdown.taxCents)} />
             ) : null}
-            {breakdown.platformFeeCents > 0 ? (
+            {(breakdown.platformFeeCents ?? 0) > 0 ? (
               <TotalsRow
                 label="Service fee"
                 value={formatCents(breakdown.platformFeeCents)}
@@ -236,6 +244,99 @@ export default function ReceiptPage({
       </p>
     </div>
   );
+}
+
+/**
+ * The receipt didn't load. Rather than one dead end, split on whether Clerk
+ * has a session — the two cases need different actions.
+ *
+ * Sign-in is a modal so the visitor never leaves the page: the Convex query is
+ * reactive, so the receipt appears in place the moment auth lands.
+ */
+function ReceiptUnavailable({ hadToken }: { hadToken: boolean }) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+      <SignedOut>
+        <div className="p-10 text-center">
+          <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-[#0d72ff]/10">
+            <LogIn className="h-6 w-6 text-[#0d72ff]" />
+          </span>
+          <h1 className="text-lg font-semibold text-slate-900">
+            Sign in to view this receipt
+          </h1>
+          <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
+            Receipts are private to the customer who booked the job. Sign in
+            with the email you used and it&apos;ll open right here.
+          </p>
+
+          <SignInButton mode="modal" forceRedirectUrl={currentUrl()}>
+            <button
+              type="button"
+              className="mt-6 inline-flex items-center gap-2 rounded-xl bg-[#0d72ff] px-5 py-3 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+            >
+              <LogIn className="h-4 w-4" />
+              Sign in
+            </button>
+          </SignInButton>
+
+          {/* Walk-ins never made an account — their emailed link carries a
+              capability token and needs no sign-in at all. Saying so here
+              stops them bouncing off a sign-in wall they can't pass. */}
+          <div className="mx-auto mt-8 max-w-md rounded-xl bg-slate-50 p-4 text-left">
+            <p className="flex items-center gap-2 text-sm font-medium text-slate-900">
+              <Mail className="h-4 w-4 text-slate-400" />
+              No account?
+            </p>
+            <p className="mt-1 text-sm text-slate-500">
+              {hadToken
+                ? "The link you followed has expired or was already replaced by a newer receipt email. Open the most recent invoice email from your shop to get a fresh link."
+                : "Open this receipt straight from your invoice email — that link works without an account."}
+            </p>
+          </div>
+        </div>
+      </SignedOut>
+
+      <SignedIn>
+        <div className="p-10 text-center">
+          <span className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-2xl bg-amber-50">
+            {hadToken ? (
+              <KeyRound className="h-6 w-6 text-amber-600" />
+            ) : (
+              <ShieldX className="h-6 w-6 text-amber-600" />
+            )}
+          </span>
+          <h1 className="text-lg font-semibold text-slate-900">
+            {hadToken
+              ? "This receipt link isn't valid anymore"
+              : "This receipt isn't on your account"}
+          </h1>
+          <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
+            {hadToken
+              ? "Receipt links are replaced whenever a new invoice is issued for the job. Open the most recent invoice email from your shop."
+              : "You're signed in, but this receipt belongs to a different account — or the payment is still being processed. If you booked with another email, switch accounts and try again."}
+          </p>
+          <p className="mx-auto mt-2 max-w-md text-sm text-slate-500">
+            Still stuck? Reply to your invoice email and the Otopair team will
+            sort it out.
+          </p>
+          <Link
+            href="/"
+            className="mt-6 inline-flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Otopair
+          </Link>
+        </div>
+      </SignedIn>
+    </div>
+  );
+}
+
+/** Current URL including the ?t= token, so signing in returns to this exact
+ *  receipt rather than the generic post-sign-in landing page. */
+function currentUrl(): string {
+  if (typeof globalThis.location === "undefined") return "/";
+  return globalThis.location.pathname + globalThis.location.search;
 }
 
 function TotalsRow({ label, value }: { label: string; value: string }) {

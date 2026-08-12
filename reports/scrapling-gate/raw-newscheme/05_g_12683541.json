@@ -1,0 +1,120 @@
+{
+  "sub": "g",
+  "oem": "12683541",
+  "search_url": "https://g.oempartsonline.com/search?search_str=12683541",
+  "search_legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2230,
+      "content_len": 280392,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/search?search_str=12683541",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 1843
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": false,
+      "status": null,
+      "ms": 1608,
+      "content_len": 0,
+      "title": null,
+      "final_url": null,
+      "class": "error",
+      "has_price_class": false,
+      "has_jsonld_product": false,
+      "has_fitment_marker": false,
+      "error": "firecrawl_api_500: Internal Server Error"
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 453,
+      "content_len": 137858,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/search?search_str=12683541",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3324,
+      "content_len": 192399,
+      "title": "Search Results | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/search?search_str=12683541",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ],
+  "detail_url": "https://g.oempartsonline.com/oem-parts/gm-iridium-spark-plug-12683541",
+  "detail_legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2229,
+      "content_len": 475174,
+      "title": "2016-2026 GM Iridium Spark Plug 12683541 | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/oem-parts/gm-iridium-spark-plug-12683541",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 11046
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 2782,
+      "content_len": 473971,
+      "title": "2016-2026 GM Iridium Spark Plug 12683541 | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/oem-parts/gm-iridium-spark-plug-12683541",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 11040
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 459,
+      "content_len": 252590,
+      "title": "2016-2026 GM Iridium Spark Plug 12683541 | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/oem-parts/gm-iridium-spark-plug-12683541",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3113,
+      "content_len": 380727,
+      "title": "2016-2026 GM Iridium Spark Plug 12683541 | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/oem-parts/gm-iridium-spark-plug-12683541",
+      "class": "success",
+      "has_price_class": false,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

@@ -13,8 +13,20 @@
 //    user on this deployment.
 // =============================================================================
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { query, action, internalQuery, internalMutation } from "./_generated/server";
+import { api, internal } from "./_generated/api";
 import { requireDirector } from "./directorGate";
+import {
+  metaMakeModel,
+  resolveVehicleDisplay,
+  resolveVehicleDisplayById,
+} from "./lib/bookingEnrichment";
+import {
+  summarizeOtoActions,
+  resolveBookingOutcome,
+  type OtoAction,
+  type OtoBookingOutcome,
+} from "./lib/otoActivity";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 
@@ -42,6 +54,10 @@ export type OpsUserListRow = {
   isPendingDeletion: boolean;
   authProvider: string | null;
   acquisitionSource: string | null;
+  /** Lifetime captured spend (dollars). */
+  spend: number;
+  /** Primary vehicle "year make model" (or first active), for garage context. */
+  primaryVehicle: string | null;
 };
 
 export type OpsUserProfile = {
@@ -107,12 +123,24 @@ export type OpsUserBookingRow = {
   status: string;
   shop: string;
   shop_id: string | null;
+  vehicleYmm: string | null;
   services: string[];
   scheduledDate: string | null;
   created: number;
   total: number | null;
   laborCost: number | null;
   partsCost: number | null;
+};
+
+export type OpsUserOtoConversation = {
+  id: string;
+  started_at: number;
+  message_count: number | null;
+  mood: string | null;
+  vehicleYmm: string | null;
+  led_to_booking: boolean;
+  bookingOutcome: OtoBookingOutcome;
+  actions: OtoAction[];
 };
 
 export type OpsUserEngagement = {
@@ -263,6 +291,13 @@ async function resolveSpecLine(
       }
     }
   }
+  // Manually-input vehicles carry make/model on metadata, not a trim_id chain.
+  if (!makeName || !modelName) {
+    const meta = metaMakeModel(vehicle.metadata);
+    if (!makeName) makeName = meta.make || undefined;
+    if (!modelName) modelName = meta.model || undefined;
+    if (!trimName) trimName = meta.trim || undefined;
+  }
   let engine: string | null = null;
   if (vehicle.engine_id) {
     const e = await ctx.db.get(vehicle.engine_id);
@@ -279,6 +314,26 @@ async function resolveSpecLine(
   }
   const ymm = [vehicle.year, makeName, modelName].filter(Boolean).join(" ");
   return { ymm, trim: trimName ?? null, engine };
+}
+
+/**
+ * Lifetime captured spend (dollars) for a user — the money-tab `capturedTotal`
+ * rollup factored out so the Users list and the deletion queue can surface a
+ * spend figure. Prefers `captured_amount_cents`, else counts succeeded rows.
+ */
+export async function capturedTotalForUser(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+): Promise<number> {
+  const payments = await ctx.db
+    .query("payments")
+    .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+    .collect();
+  return payments.reduce((s, p) => {
+    if (p.captured_amount_cents != null) return s + p.captured_amount_cents / 100;
+    const isCaptured = ["succeeded", "captured", "paid", "completed"].includes(p.status);
+    return s + (isCaptured ? p.amount : 0);
+  }, 0);
 }
 
 // -----------------------------------------------------------------------------
@@ -302,6 +357,12 @@ export const list = query({
             .withIndex("by_user_id", (q) => q.eq("user_id", u._id))
             .collect(),
         ]);
+        // Spend + primary vehicle for garage/money context on the row.
+        const primaryOwner = owners.find((o) => o.is_primary) ?? owners[0] ?? null;
+        const [spend, primaryVeh] = await Promise.all([
+          capturedTotalForUser(ctx, u._id),
+          primaryOwner ? resolveVehicleDisplay(ctx, primaryOwner.vin) : Promise.resolve(null),
+        ]);
         return {
           id: u._id,
           name: fullName(u),
@@ -318,6 +379,8 @@ export const list = query({
           isPendingDeletion: u.isPendingDeletion ?? false,
           authProvider: u.auth_provider ?? null,
           acquisitionSource: u.acquisition_source ?? null,
+          spend,
+          primaryVehicle: primaryVeh?.ymm ?? null,
         };
       }),
     );
@@ -431,6 +494,19 @@ export const bookings = query({
       .order("desc")
       .take(100);
 
+    // Resolve each DISTINCT vin once (a user reuses the same car across bookings)
+    // through the shared resolver — so the Bookings tab shows which car, with the
+    // manual-entry metadata fallback applied like every other ops surface.
+    const distinctVins = [
+      ...new Set(rows.map((b) => b.vin).filter((v): v is string => !!v)),
+    ];
+    const vehByVin = new Map<string, string | null>();
+    await Promise.all(
+      distinctVins.map(async (vin) => {
+        vehByVin.set(vin, (await resolveVehicleDisplay(ctx, vin)).ymm);
+      }),
+    );
+
     return Promise.all(
       rows.map(async (b) => {
         const shop = b.shop_id ? await ctx.db.get(b.shop_id) : null;
@@ -447,12 +523,66 @@ export const bookings = query({
           status: b.status,
           shop: shop?.name ?? "—",
           shop_id: b.shop_id ? String(b.shop_id) : null,
+          vehicleYmm: b.vin ? (vehByVin.get(b.vin) ?? null) : null,
           services,
           scheduledDate: b.scheduled_date ?? null,
           created: b.created_at ?? b._creationTime,
           total: b.total_cost ?? null,
           laborCost: b.labor_cost ?? null,
           partsCost: b.parts_cost ?? null,
+        };
+      }),
+    );
+  },
+});
+
+// Recent Oto conversations for this user, enriched with the vehicle display,
+// what Oto DID (summarizeOtoActions), and the booking outcome — the same
+// shared surfacing as /ops/oto-ai, so the user profile shows recent
+// conversations + actions in one place. Capped tight (per-conversation audit
+// + telemetry reads) since this is an on-demand profile tab.
+export const otoConversations = query({
+  args: { token: v.string(), id: v.id("users") },
+  handler: async (ctx, { token, id }): Promise<OpsUserOtoConversation[]> => {
+    await requireDirector(ctx, token);
+    const convos = await ctx.db
+      .query("ai_conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", id))
+      .order("desc")
+      .take(12);
+
+    const vehById = new Map<string, string | null>();
+    return Promise.all(
+      convos.map(async (c) => {
+        let vehicleYmm: string | null = null;
+        if (c.vehicle_id) {
+          const key = String(c.vehicle_id);
+          if (!vehById.has(key)) {
+            vehById.set(key, (await resolveVehicleDisplayById(ctx, c.vehicle_id)).ymm);
+          }
+          vehicleYmm = vehById.get(key) ?? null;
+        }
+        const [audit, telemetry] = await Promise.all([
+          ctx.db
+            .query("conversation_audit")
+            .withIndex("by_conversation_turn", (q) => q.eq("conversation_id", c._id))
+            .take(200),
+          ctx.db
+            .query("oto_telemetry")
+            .withIndex("by_conversation_id", (q) => q.eq("conversation_id", c._id))
+            .take(200),
+        ]);
+        const actions = summarizeOtoActions(audit, telemetry);
+        const bookingOutcome = await resolveBookingOutcome(ctx, c, actions);
+        return {
+          id: String(c._id),
+          started_at: c.started_at,
+          message_count: c.message_count ?? null,
+          mood: c.mood ?? null,
+          vehicleYmm,
+          led_to_booking: c.led_to_booking === true,
+          bookingOutcome,
+          actions,
         };
       }),
     );
@@ -886,5 +1016,128 @@ export const vehicleRecords = query({
         completedAt: c.completed_at ?? null,
       })),
     };
+  },
+});
+
+// =============================================================================
+// Signup-method backfill — the Clerk webhook now persists auth_provider going
+// forward, but existing users predate that. This one-shot, director-gated
+// action fetches each user's Clerk record (raw Backend API + CLERK_SECRET_KEY,
+// the same access pattern as convex/cleanup.ts) and derives the provider.
+// =============================================================================
+
+/** Real-Clerk users still missing a signup method (stub ids are skipped — they
+ *  have no Clerk record to fetch). */
+export const usersMissingAuthProvider = internalQuery({
+  args: { limit: v.number() },
+  handler: async (
+    ctx,
+    { limit },
+  ): Promise<{ id: Id<"users">; clerkUserId: string }[]> => {
+    const users = await ctx.db.query("users").order("desc").take(2000);
+    return users
+      .filter(
+        (u) =>
+          !u.auth_provider &&
+          u.clerkUserId &&
+          !u.clerkUserId.startsWith("shop-created-") &&
+          !u.clerkUserId.startsWith("presignup-"),
+      )
+      .slice(0, limit)
+      .map((u) => ({ id: u._id, clerkUserId: u.clerkUserId }));
+  },
+});
+
+/** First-touch patch — only sets auth_provider if still empty. */
+export const setAuthProvider = internalMutation({
+  args: { id: v.id("users"), authProvider: v.string() },
+  handler: async (ctx, { id, authProvider }) => {
+    const u = await ctx.db.get(id);
+    if (u && !u.auth_provider) {
+      await ctx.db.patch(id, { auth_provider: authProvider });
+    }
+  },
+});
+
+export const logAuthProviderBackfill = internalMutation({
+  args: {
+    actorId: v.id("director_users"),
+    actorName: v.string(),
+    scanned: v.number(),
+    updated: v.number(),
+  },
+  handler: async (ctx, { actorId, actorName, scanned, updated }) => {
+    await ctx.db.insert("audit_log", {
+      entity_type: "system",
+      entity_id: "auth_provider_backfill",
+      action: "backfill_auth_providers",
+      actor: actorName,
+      actor_id: actorId,
+      detail: `Backfilled signup method for ${updated}/${scanned} users via Clerk API`,
+      created_at: Date.now(),
+    });
+  },
+});
+
+export const backfillAuthProviders = action({
+  args: { token: v.string(), limit: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    { token, limit },
+  ): Promise<{ scanned: number; updated: number; skipped: number }> => {
+    const session = await ctx.runQuery(api.director_auth.validateSession, { token });
+    if (!session) throw new Error("unauthorized: invalid or expired director session");
+    const secret = process.env.CLERK_SECRET_KEY;
+    if (!secret) throw new Error("CLERK_SECRET_KEY not set in Convex env");
+
+    const users = await ctx.runQuery(internal.opsUsers.usersMissingAuthProvider, {
+      limit: Math.min(500, Math.max(1, limit ?? 200)),
+    });
+
+    let updated = 0;
+    let skipped = 0;
+    for (const u of users) {
+      try {
+        const res = await fetch(`https://api.clerk.com/v1/users/${u.clerkUserId}`, {
+          headers: { Authorization: `Bearer ${secret}` },
+        });
+        if (!res.ok) {
+          skipped++;
+          continue;
+        }
+        const data = (await res.json()) as {
+          external_accounts?: { provider?: string }[];
+          password_enabled?: boolean;
+          phone_numbers?: unknown[];
+        };
+        const ext = data.external_accounts?.[0]?.provider;
+        const provider = ext
+          ? String(ext)
+          : data.password_enabled
+            ? "password"
+            : data.phone_numbers?.length
+              ? "phone"
+              : null;
+        if (!provider) {
+          skipped++;
+          continue;
+        }
+        await ctx.runMutation(internal.opsUsers.setAuthProvider, {
+          id: u.id,
+          authProvider: provider,
+        });
+        updated++;
+      } catch {
+        skipped++;
+      }
+    }
+
+    await ctx.runMutation(internal.opsUsers.logAuthProviderBackfill, {
+      actorId: session.userId,
+      actorName: session.name,
+      scanned: users.length,
+      updated,
+    });
+    return { scanned: users.length, updated, skipped };
   },
 });

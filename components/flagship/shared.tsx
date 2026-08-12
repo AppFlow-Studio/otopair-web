@@ -191,10 +191,24 @@ export function UnderlineLink({
   children: React.ReactNode;
   className?: string;
 }) {
+  const cls = `group relative inline-block ${className}`;
+  const underline = (
+    <span className="absolute -bottom-0.5 left-0 h-px w-full origin-left scale-x-0 bg-current transition-transform duration-300 ease-out group-hover:scale-x-100" />
+  );
+  // In-page anchors stay plain <a> so Lenis's anchor handler owns the scroll
+  // (next/link's own hash handling fights it).
+  if (href.startsWith("#")) {
+    return (
+      <a href={href} className={cls}>
+        {children}
+        {underline}
+      </a>
+    );
+  }
   return (
-    <Link href={href} className={`group relative inline-block ${className}`}>
+    <Link href={href} className={cls}>
       {children}
-      <span className="absolute -bottom-0.5 left-0 h-px w-full origin-left scale-x-0 bg-current transition-transform duration-300 ease-out group-hover:scale-x-100" />
+      {underline}
     </Link>
   );
 }

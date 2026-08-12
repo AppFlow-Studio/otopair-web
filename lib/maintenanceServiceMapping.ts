@@ -18,6 +18,11 @@ export const MAINTENANCE_TYPE_TO_CATEGORY: Record<string, ServiceCategory> = {
   tires: "tires_wheels",
   battery: "basic_maintenance",
   inspection: "basic_maintenance",
+  // Consolidated "Warning Lights Active" item (id `warning-…`) opens
+  // the system_diagnostics tab so the diagnostic scan is the first
+  // thing the user sees. A lit warning light is rarely fixable by a
+  // single specific service — scan first, then scope.
+  warning: "system_diagnostics",
 };
 
 // Conservative defaults — used only when the description-based matcher
@@ -30,6 +35,10 @@ export const MAINTENANCE_TYPE_TO_SLUG: Record<string, string> = {
   tires: "tire_rotation",
   battery: "battery_test",
   inspection: "ny_state_inspection",
+  // Warning-light item → diagnostic scan. Matches the SLUG_DIAGNOSTIC_SCAN
+  // constant in constants/serviceTaxonomy.ts (same string, kept
+  // hard-coded here to avoid the lib/ → constants/ import cycle).
+  warning: "diagnostic_scan",
 };
 
 /**

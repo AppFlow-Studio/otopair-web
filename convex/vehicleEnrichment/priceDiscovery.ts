@@ -96,17 +96,28 @@ export function prioritizeDiscoveryQueue<
     .map((x) => x.item);
 }
 
+/** Default searcher runs STRICT so an HTTP/network failure surfaces as a throw
+ *  instead of an empty result set. discoverPriceUrls turns that throw into
+ *  `null` — without this, a Firecrawl outage is indistinguishable from "zero
+ *  sellers" and every part swept during it gets a durable no_listing verdict
+ *  that suppresses re-discovery for PARTS_PRICE_NO_LISTING_RETRY_DAYS
+ *  (observed live during the Aug 6 2026 credit outage). */
+const strictSearchAndFetch: UrlSearcher = (query, numResults) =>
+  searchAndFetch(query, numResults, false, { throwOnError: true });
+
 export async function discoverPriceUrls(
   args: { oem: string; make?: string | null; name?: string | null },
-  search: UrlSearcher = searchAndFetch,
-): Promise<string[]> {
+  search: UrlSearcher = strictSearchAndFetch,
+): Promise<string[] | null> {
   const query = buildPriceSearchQuery(args);
   let results: Array<{ url: string }> = [];
   try {
     results = await search(query, 5);
   } catch (e) {
-    console.warn(`[priceDiscovery] search failed for "${args.oem}": ${e}`);
-    return [];
+    // null = discovery channel unavailable. Callers must treat this as "no
+    // answer" — never as evidence that nothing sells the part.
+    console.warn(`[priceDiscovery] search unavailable for "${args.oem}": ${e}`);
+    return null;
   }
 
   const seenDomains = new Set<string>();

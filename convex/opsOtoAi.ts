@@ -11,6 +11,14 @@ import {
   resolveVehicleDisplayById,
   userDisplayName,
 } from "./lib/bookingEnrichment";
+import {
+  summarizeOtoActions,
+  resolveBookingOutcome,
+  renderCardsFromToolCalls,
+  type OtoAction,
+  type OtoBookingOutcome,
+  type RenderCard,
+} from "./lib/otoActivity";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -40,6 +48,9 @@ export type ConversationRow = {
   vehicleYmm: string | null;
   message_count: number | null;
   led_to_booking: boolean;
+  /** Status of the linked booking when led_to_booking — lets the list pill
+   *  show the real outcome (pending / completed / cancelled) not just "→". */
+  booking_status: string | null;
 };
 export type ConversationsResult = {
   rows: ConversationRow[];
@@ -74,6 +85,11 @@ export const conversations = query({
         }
         ymm = vehicleYmm.get(vid) ?? null;
       }
+      // Resolve the linked booking's status (only for the few rows that have one).
+      let bookingStatus: string | null = null;
+      if (c.booking_id) {
+        bookingStatus = (await ctx.db.get(c.booking_id))?.status ?? null;
+      }
       out.push({
         id: String(c._id),
         user: userName.get(uid) ?? null,
@@ -86,6 +102,7 @@ export const conversations = query({
         vehicleYmm: ymm,
         message_count: c.message_count ?? null,
         led_to_booking: c.led_to_booking === true,
+        booking_status: bookingStatus,
       });
     }
     const since7d = Date.now() - 7 * DAY;
@@ -115,6 +132,9 @@ export type TranscriptMessage = {
   timestamp: number;
   confidence: number | null;
   metadata: unknown;
+  // Render sheets (booking / vehicle-update) this bubble produced, reconstructed
+  // from the turn's tool_calls — so empty render bubbles show their contents.
+  render: RenderCard[];
 };
 
 export type TranscriptTurn = {
@@ -149,6 +169,11 @@ export type TranscriptResult = {
     p50LatencyMs: number;
     models: string[];
   } | null;
+  // What Oto DID this conversation (renders + data/memory writes), from
+  // conversation_audit.tool_calls with a telemetry-name fallback for older rows.
+  actions: OtoAction[];
+  // Whether the conversation actually produced a booking (or over-claimed one).
+  bookingOutcome: OtoBookingOutcome;
 };
 
 export const transcript = query({
@@ -157,7 +182,7 @@ export const transcript = query({
     await requireDirector(ctx, token);
     const convo = await ctx.db.get(conversationId);
     if (!convo) return null;
-    const [messages, telemetryRows, vehicle] = await Promise.all([
+    const [messages, telemetryRows, auditRows, vehicle] = await Promise.all([
       ctx.db
         .query("ai_messages")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
@@ -166,8 +191,46 @@ export const transcript = query({
         .query("oto_telemetry")
         .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
         .take(500),
+      ctx.db
+        .query("conversation_audit")
+        .withIndex("by_conversation_turn", (q) => q.eq("conversation_id", conversationId))
+        .take(500),
       resolveVehicleDisplayById(ctx, convo.vehicle_id),
     ]);
+
+    // What Oto did + whether it actually booked. Shared with the director
+    // debug view and the user profile so the surfacing stays consistent.
+    const actions = summarizeOtoActions(auditRows, telemetryRows);
+    const bookingOutcome = await resolveBookingOutcome(ctx, convo, actions);
+
+    // Correlate each turn's render tool_calls to the (usually empty) assistant
+    // bubble it produced — nearest timestamp, each bubble claimed once, since
+    // the ai_message + conversation_audit rows are written in the same turn.
+    const assistantMsgs = messages
+      .filter((m) => m.role === "assistant")
+      .sort((a, b) => a.timestamp - b.timestamp);
+    const renderByMsgId = new Map<string, RenderCard[]>();
+    const claimedMsg = new Set<string>();
+    const auditRenders = auditRows
+      .map((a) => ({ ts: a.timestamp ?? 0, cards: renderCardsFromToolCalls(a.tool_calls) }))
+      .filter((x) => x.cards.length > 0)
+      .sort((a, b) => a.ts - b.ts);
+    for (const ar of auditRenders) {
+      let best: (typeof assistantMsgs)[number] | null = null;
+      let bestDelta = Infinity;
+      for (const m of assistantMsgs) {
+        if (claimedMsg.has(String(m._id))) continue;
+        const d = Math.abs((m.timestamp ?? 0) - ar.ts);
+        if (d < bestDelta) {
+          bestDelta = d;
+          best = m;
+        }
+      }
+      if (best) {
+        claimedMsg.add(String(best._id));
+        renderByMsgId.set(String(best._id), ar.cards);
+      }
+    }
 
     const turns: TranscriptTurn[] = telemetryRows
       .map((t) => {
@@ -215,6 +278,7 @@ export const transcript = query({
           timestamp: m.timestamp,
           confidence: m.confidence_score ?? null,
           metadata: m.metadata ?? null,
+          render: renderByMsgId.get(String(m._id)) ?? [],
         }))
         .sort((a, b) => a.timestamp - b.timestamp),
       scenario: convo.scenario_detected ?? null,
@@ -222,6 +286,8 @@ export const transcript = query({
       vehicleYmm: vehicle.ymm,
       turns,
       telemetry,
+      actions,
+      bookingOutcome,
     };
   },
 });

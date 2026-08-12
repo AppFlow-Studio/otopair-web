@@ -6,15 +6,23 @@ import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import {
-  Badge, Button, Card, Select, StatusBadge, tableStyles, Avatar,
-  IconBolt, IconStar, IconBug, IconMessage, IconShop,
+  Badge, Button, Card, Select, Skeleton, StatusBadge, tableStyles, Avatar,
+  IconBolt, IconStar, IconBug, IconMessage, IconShop, IconClock,
 } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { gotoEntity } from '../directorNav'
 import {
   StatCard, BarRow, DualSparkline,
-  fmtCurrency, fmtPct, fmtNumber, fmtRelative,
+  fmtCurrency, fmtPct, fmtNumber, fmtRelative, money, fmtDate, fmtDateTime,
 } from '../Charts'
+
+// Status label map for the ops activity feed + needs-attention rows (from
+// app/(portals)/ops/page.tsx STATUS_LABEL).
+const OPS_STATUS_LABEL: Record<string, string> = {
+  pending_quote: 'pending quote',
+  quotes_ready: 'quotes ready',
+  vehicle_at_shop: 'vehicle at shop',
+}
 
 type Period = 'today' | '7d' | '30d' | '90d'
 const PERIOD_LABELS: Record<Period, string> = { today: 'Today', '7d': '7 days', '30d': '30 days', '90d': '90 days' }
@@ -38,6 +46,23 @@ export const TabOverview = () => {
   const serviceMix = useQuery(api.directorOverview.overviewServiceMix,  { token, period, limit: 10 }) as ServiceMixRow[] | undefined
   const today      = useQuery(api.directorOverview.overviewBookingsToday, { token, period, limit: 30 }) as TodayRow[] | undefined
   const triage     = useQuery(api.directorOverview.overviewTriageQueues, { token }) as TriageData | undefined
+
+  // Ops-fed live surfaces (ported from app/(portals)/ops/page.tsx).
+  const kpis       = useQuery(api.opsOverview.kpis, { token }) as OpsKpis | undefined
+  const feed       = useQuery(api.opsOverview.activityFeed, { token, limit: 30 }) as FeedItem[] | undefined
+  const attention  = useQuery(api.opsOverview.needsAttention, { token }) as AttentionData | undefined
+
+  // Lifetime KPI counters (portal_stats, R2) + daily series for the KPI-tile
+  // sparklines — ported verbatim from app/(portals)/ops/page.tsx.
+  const stats      = useQuery(api.portalStats.getStats, { token, keys: ['ops.users_total', 'ops.active_users_7d'] }) as StatsRow | undefined
+  const opsDays    = period === '7d' ? 7 : period === '90d' ? 90 : 30
+  const paymentsDaily = useQuery(api.portalSeries.paymentsDaily, { token, days: opsDays }) as { captured_usd: number }[] | undefined
+  const bookingsDaily = useQuery(api.portalSeries.bookingsDaily, { token, days: opsDays }) as { created: number }[] | undefined
+
+  const usersTotal    = stats?.['ops.users_total']?.value ?? null
+  const activeUsers7d  = stats?.['ops.active_users_7d']?.value ?? null
+  const capturedSpark = paymentsDaily?.map(d => d.captured_usd)
+  const bookingsSpark = bookingsDaily?.map(d => d.created)
 
   return (
     <SectionAnchor id="overview" title="Overview"
@@ -85,6 +110,37 @@ export const TabOverview = () => {
           hint={metrics ? `${metrics.feedback.negative} negative` : ''} Icon={IconMessage} />
         <SmallStat label="Oto thumbs-down"   value={metrics ? fmtNumber(metrics.otoFeedback.thumbsDown) : '…'}
           hint={metrics ? `${metrics.otoFeedback.recent} new this period` : ''} Icon={IconBolt} />
+      </div>
+
+      {/* Ops KPI strip — today's live pulse (api.opsOverview.kpis) + lifetime
+          counters (api.portalStats.getStats). Sparklines from api.portalSeries. */}
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(7, 1fr)', gap:12, marginBottom:16 }}>
+        <StatCard label="Bookings today" tone="blue"
+          value={kpis === undefined ? '…' : fmtNumber(kpis.bookings_today)}
+          spark={bookingsSpark}
+          onClick={() => { window.location.hash = 'bookings' }} />
+        <StatCard label="GMV today" tone="slate"
+          value={kpis === undefined ? '…' : money(kpis.gmv_today)} />
+        <StatCard label="Captured today" tone="green"
+          value={kpis === undefined ? '…' : money(kpis.captured_today)}
+          spark={capturedSpark}
+          onClick={() => { window.location.hash = 'transactions' }} />
+        <StatCard label="Failed payments 24h" tone={kpis && kpis.failed_payments_24h > 0 ? 'red' : 'slate'}
+          value={kpis === undefined ? '…'
+            : kpis.failed_payments_24h > 0
+              ? <span style={{ color:'var(--red-600)' }}>{fmtNumber(kpis.failed_payments_24h)}</span>
+              : fmtNumber(kpis.failed_payments_24h)}
+          accent={kpis && kpis.failed_payments_24h > 0 ? <Badge tone="red">attention</Badge> : undefined}
+          onClick={() => { window.location.hash = 'transactions' }} />
+        <StatCard label="Pending deletions" tone={kpis && kpis.pending_deletions > 0 ? 'yellow' : 'slate'}
+          value={kpis === undefined ? '…' : fmtNumber(kpis.pending_deletions)}
+          accent={kpis && kpis.pending_deletions > 0 ? <Badge tone="yellow">queue</Badge> : undefined}
+          onClick={() => { window.location.hash = 'deletionQueue' }} />
+        <StatCard label="Users total" tone="purple"
+          value={stats === undefined ? '…' : fmtNumber(usersTotal)}
+          onClick={() => { window.location.hash = 'users' }} />
+        <StatCard label="Active users 7d" tone="slate"
+          value={stats === undefined ? '…' : fmtNumber(activeUsers7d)} />
       </div>
 
       {/* Daily chart */}
@@ -266,6 +322,121 @@ export const TabOverview = () => {
           }
         </Card>
       </div>
+
+      {/* Ops live rails — Activity feed + Needs attention (api.opsOverview.*) */}
+      <div style={{ display:'grid', gridTemplateColumns:'1.35fr 1fr', gap:12, marginBottom:16 }}>
+        {/* Activity feed — merged recent bookings + payments */}
+        <Card padded={false}>
+          <div style={{ padding:'14px 16px', borderBottom:'1px solid var(--slate-200)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>Live activity</span>
+            <span style={{ display:'inline-flex', alignItems:'center', gap:5, fontSize:11, fontWeight:500, color:'var(--green-700)' }}>
+              <span style={{ width:6, height:6, borderRadius:999, background:'var(--green-600)' }} />Live
+            </span>
+          </div>
+          {feed === undefined ? (
+            <div style={{ padding:'12px 16px', display:'flex', flexDirection:'column', gap:8 }}>
+              {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} height={30} />)}
+            </div>
+          ) : feed.length === 0 ? (
+            <div style={{ padding:32, textAlign:'center', color:'var(--slate-400)', fontSize:13, fontStyle:'italic' }}>Quiet so far today.</div>
+          ) : (
+            <div style={{ maxHeight:360, overflowY:'auto' }}>
+              {feed.map(e => {
+                const context = [
+                  e.vehicleYmm,
+                  e.services.filter(s => s && s !== '—').join(', ') || null,
+                  e.shop,
+                ].filter(Boolean).join(' · ')
+                const goDetail = () =>
+                  e.kind === 'booking'
+                    ? gotoEntity('bookings', e.bookingId ?? e.id)
+                    : gotoEntity('transactions', e.id)
+                return (
+                  <div key={`${e.kind}-${e.id}`}
+                    style={{ display:'flex', alignItems:'flex-start', gap:10, padding:'10px 16px', borderBottom:'1px solid var(--slate-100)' }}>
+                    <Badge tone={e.kind === 'booking' ? 'blue' : 'green'} style={{ marginTop:2, flexShrink:0 }}>{e.kind}</Badge>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ display:'flex', alignItems:'baseline', gap:6, fontSize:13 }}>
+                        <span style={{ fontWeight:500, color:'var(--slate-900)', cursor:'pointer' }}
+                          onClick={() => gotoEntity('users', e.user.id)}>{e.user.name}</span>
+                        <span style={{ color:'var(--slate-400)' }}>·</span>
+                        <span style={{ color:'var(--slate-600)' }}>{OPS_STATUS_LABEL[e.status] ?? e.status.replace(/_/g, ' ')}</span>
+                      </div>
+                      <div onClick={goDetail}
+                        style={{ marginTop:1, fontSize:12, color:'var(--slate-500)', cursor:'pointer', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                        {context || 'no vehicle / service on file'}
+                      </div>
+                    </div>
+                    {e.amount != null && (
+                      <span className="mono" style={{ marginTop:1, flexShrink:0, fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{money(e.amount)}</span>
+                    )}
+                    <span style={{ marginTop:1, flexShrink:0, fontSize:11, color:'var(--slate-400)' }} title={fmtDateTime(e.at)}>{fmtRelative(e.at)}</span>
+                    <span onClick={goDetail}
+                      style={{ marginTop:1, flexShrink:0, fontSize:12, color:'var(--slate-300)', cursor:'pointer' }} aria-label="Open detail">→</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </Card>
+
+        {/* Needs attention — stuck bookings + pending deletions */}
+        <Card padded={false} style={{ border:'1px solid var(--yellow-300, #FCD34D)' }}>
+          <div style={{ padding:'14px 16px', borderBottom:'1px solid var(--slate-200)', display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+            <span style={{ fontSize:11, color:'var(--slate-500)', fontWeight:600, textTransform:'uppercase', letterSpacing:'0.06em' }}>Needs attention</span>
+            {kpis && kpis.failed_payments_24h > 0 && (
+              <Badge tone="red" dot>{fmtNumber(kpis.failed_payments_24h)} failed 24h</Badge>
+            )}
+          </div>
+          {attention === undefined ? (
+            <div style={{ padding:'12px 16px', display:'flex', flexDirection:'column', gap:8 }}>
+              {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} height={30} />)}
+            </div>
+          ) : (
+            <div style={{ padding:'10px 12px', display:'flex', flexDirection:'column', gap:8 }}>
+              {attention.pending_deletions > 0 && (
+                <div onClick={() => { window.location.hash = 'deletionQueue' }}
+                  style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, padding:'8px 12px', borderRadius:8, background:'var(--yellow-50, #FEFCE8)', cursor:'pointer', fontSize:13, color:'var(--slate-700)' }}>
+                  <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}>
+                    <IconClock size={13} style={{ color:'var(--yellow-700, #A16207)' }} />
+                    {attention.pending_deletions} deletion request{attention.pending_deletions === 1 ? '' : 's'} pending
+                    {attention.oldest_deletion_age_days != null && ` — oldest ${attention.oldest_deletion_age_days}d`}
+                  </span>
+                  <span style={{ flexShrink:0, fontWeight:600, color:'var(--blue-600)' }}>Fix →</span>
+                </div>
+              )}
+              {attention.stuck_bookings.map(b => (
+                <div key={b.id} onClick={() => gotoEntity('bookings', b.id)}
+                  style={{ padding:'8px 12px', borderRadius:8, background:'var(--yellow-50, #FEFCE8)', cursor:'pointer', fontSize:13, color:'var(--slate-700)' }}>
+                  <div>
+                    <span style={{ display:'inline-flex', alignItems:'center', gap:6 }}>
+                      <IconBolt size={13} style={{ color:'var(--yellow-700, #A16207)' }} />
+                      <span style={{ fontWeight:500, color:'var(--slate-900)' }}>{b.user}</span>
+                    </span>
+                    {"'s booking at "}
+                    <span style={{ fontWeight:500, color:'var(--slate-900)' }}>{b.shop}</span> — stuck in{' '}
+                    <span style={{ fontWeight:500 }}>{OPS_STATUS_LABEL[b.status] ?? b.status}</span> {b.age_h}h
+                  </div>
+                  <div style={{ marginTop:2, fontSize:11, color:'var(--slate-500)' }}>
+                    {(() => {
+                      const parts: React.ReactNode[] = [
+                        b.total != null ? money(b.total) : null,
+                        b.scheduled ? `scheduled ${fmtDate(b.scheduled)}` : null,
+                        b.vin ? <a key="vin" href={`/director/data/vins/${b.vin}`} onClick={ev => ev.stopPropagation()} style={{ color:'var(--slate-500)', textDecoration:'underline' }}>{`VIN ${b.vin}`}</a> : null,
+                      ].filter(Boolean)
+                      if (parts.length === 0) return 'no quote yet'
+                      return parts.reduce<React.ReactNode[]>((acc, part, i) => i === 0 ? [part] : [...acc, ' · ', part], [])
+                    })()}
+                  </div>
+                </div>
+              ))}
+              {attention.pending_deletions === 0 && attention.stuck_bookings.length === 0 && (
+                <div style={{ padding:'8px 4px', fontSize:13, color:'var(--slate-500)' }}>Nothing needs attention right now.</div>
+              )}
+            </div>
+          )}
+        </Card>
+      </div>
     </SectionAnchor>
   )
 }
@@ -300,4 +471,43 @@ type TodayRow = { id: Id<'bookings'>; user: string; shop: string; service: strin
 type TriageData = {
   bugs:     { id: Id<'bugs'>;         title: string; status: string; source: string; createdAt?: number }[]
   feedback: { id: Id<'app_feedback'>; title: string; status: string; category: string; sentiment: string; source: string; createdAt?: number }[]
+}
+
+// ---- api.portalStats.getStats shape (ops.users_total / ops.active_users_7d) ----
+type StatsRow = Record<string, { value: number; meta?: unknown; computed_at: number } | null>
+
+// ---- api.opsOverview.* shapes (ported from app/(portals)/ops/page.tsx) ----
+type OpsKpis = {
+  bookings_today: number
+  gmv_today: number
+  captured_today: number
+  failed_payments_24h: number
+  pending_deletions: number
+}
+type FeedItem = {
+  kind: 'booking' | 'payment'
+  id: string
+  bookingId: string | null
+  at: number
+  status: string
+  amount: number | null
+  user: { id: string; name: string }
+  vehicleYmm: string | null
+  services: string[]
+  shop: string | null
+}
+type StuckBooking = {
+  id: string
+  status: string
+  age_h: number
+  user: string
+  shop: string
+  vin: string | null
+  total: number | null
+  scheduled: string | null
+}
+type AttentionData = {
+  oldest_deletion_age_days: number | null
+  pending_deletions: number
+  stuck_bookings: StuckBooking[]
 }

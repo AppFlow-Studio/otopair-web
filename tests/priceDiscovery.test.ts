@@ -55,10 +55,18 @@ describe("discoverPriceUrls", () => {
     expect(urls).toHaveLength(3);
   });
 
-  it("returns [] when the search throws", async () => {
+  it("returns null (channel unavailable, NOT empty) when the search throws", async () => {
+    // [] means "search ran, nothing sells this" and earns a durable no_listing
+    // verdict; a thrown search must never be mistaken for that (Aug 6 2026
+    // Firecrawl outage stamped no_listing across every part swept during it).
     const search: UrlSearcher = async () => {
       throw new Error("firecrawl down");
     };
+    expect(await discoverPriceUrls({ oem: "1" }, search)).toBeNull();
+  });
+
+  it("returns [] when the search runs but yields nothing usable", async () => {
+    const search = stub([]);
     expect(await discoverPriceUrls({ oem: "1" }, search)).toEqual([]);
   });
 });

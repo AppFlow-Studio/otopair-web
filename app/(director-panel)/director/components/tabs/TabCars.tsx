@@ -12,6 +12,7 @@ import { DirectorNotesPanel } from '../DirectorNotesPanel'
 import { SectionAnchor } from '../Shell'
 import { consumeGoto, gotoEntity } from '../directorNav'
 import { UserVehicleHistoryModal } from '../UserVehicleHistoryModal'
+import { fmtDate } from '../Charts'
 import { TiresSection } from '../TiresSection'
 import { AdminActionPanel, ActionRow, Toast, ReasonPromptModal } from '../AdminActionPanel'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
@@ -19,11 +20,6 @@ import { DirectorSessionCtx } from '../DirectorSessionCtx'
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function fmtDate(ts?: number): string {
-  if (!ts) return '—'
-  return new Date(ts).toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' })
-}
 
 function ageLabel(ts?: number): string {
   if (!ts) return '—'
@@ -399,7 +395,7 @@ const CarModal = ({ carId, onClose }: { carId: Id<'vehicles'> | null; onClose: (
                     borderBottom: i < detail.bookings.length - 1 ? '1px solid var(--slate-100)' : 'none',
                     fontSize:12, color:'var(--slate-700)',
                   }}>
-                    <span className="mono">{b.scheduled}</span>
+                    <span className="mono">{fmtDate(b.scheduled)}</span>
                     <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.userName}</span>
                     <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.services.join(', ') || '—'}</span>
                     <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.shop}</span>

@@ -452,7 +452,11 @@ export const OTOPAIR_SERVICE_SLUGS = [
   "brake_fluid_flush",
   "coolant_flush",
   "transmission_service",
-  "serpentine_belt_replacement",
+  // Census P0.1 R9: was "serpentine_belt_replacement", which matches no seeded
+  // services.slug — every VDB belt action resolved to null and its interval +
+  // labor rows were silently dropped. The seeded slug is "serpentine_belt"
+  // (a dataset-only service: is_bookable false, data still collected).
+  "serpentine_belt",
   "timing_belt",
   "battery_replacement",
   "battery_test",                // inspect-only

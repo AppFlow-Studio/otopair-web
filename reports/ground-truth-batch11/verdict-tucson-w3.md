@@ -1,0 +1,45 @@
+# Tucson wave-3 delta verdict (batch 11, post round-10) — 2021 Hyundai Tucson Ultimate 2.4 G4KJ TL, VIN KM8J3CAL1MU359440
+
+**VERDICT: PARTIAL (up from wave-2 FAIL).** All three wave-2 P1 part-poisoning defects are cleared and the fitment-refute rule flipped from semantically inverted (0 bad caught / 3 good killed) to **2-for-2 correct kills** — but both kills left their slots empty (spark_plug AND oil_filter now null, oil filter a regression from a wave-2 exact-correct value), the round-10 adversarial corrector **overwrote the verbatim-correct 120k coolant interval with a wrong 50k**, and the three P2 interval defects recurred. Fill 90 → 95, parts 18. No new wrong-generation or wrong-engine part shipped (all new part numbers web-verified).
+
+Inputs: baseline `verdict-hyundai-tucson.md`, `gt-hyundai-tucson.md` (this dir); wave-3 outputs `w3-collect-tucson.json` + `w3-audit-tucson.json` (scratchpad `b11/`).
+
+## Wave-2 defect scorecard
+
+| Wave-2 defect | Wave-3 status | Evidence |
+|---|---|---|
+| **P1-1** wrong-gen NX4 spark plug 18871-11070 in core signature + priced | **PARTIAL** | 18871-11070 is gone — no NX4 plug anywhere. But the correct **18849-11070** (GT row 5a, NGK SILZKR7E11) was never stored: the only candidate was **18847-11160**, correctly refuted (see run_errors adjudication), so `part:spark_plug` is **null**. Poisoning fixed; coverage not recovered. |
+| **P1-2** chassis "NX4" → 3 false refutes (air filter 28113-D3300, brake fluid 00232-19053, drain washer 21513-23001) nulled | **FIXED** | All three verified-correct parts are present, priced, and in core_signature: 28113-D3300 conf 0.95 ($23.85–32.96, inside GT ~$24–33 band), 00232-19053 conf 0.85 ($6.76–7.25), 21513-23001 conf 0.95 ($0.93–2.22). Zero false refutes this run; "NX4" no longer stored (chassis now "LET" — see below). |
+| **P1-3** 1.6L intake gasket 28313-2B700 (wrong engine, trap 5) | **FIXED** | Replaced by **28313-2GTA0**, web-verified genuine fitment **2015-2021 Tucson 2.0/2.4** (also Sonata 15-19, Santa Fe Sport, Sportage/Optima/Sorento 2.0/2.4) — hyundaipartsdeal, hyundai.oempartsonline "2015-2021", partshyundai, multiple Amazon OEM listings. Correct engine family. (Still attached to service_type "spark_plugs" — taxonomy oddity persists, P3.) |
+| **Chassis mis-ID** ("NX4" on a TL car) | **PARTIAL** | Stored `"chassis": "LET"` — **not the correct TL**, and not NX4. Web-verified: "LET" is not a real Hyundai Tucson chassis/platform code (generations are JM → LM → **TL** (2016-2021) → NX4 (2022+); no "LET" exists in Hyundai VIN/platform references). Unlike wave-2's NX4, the unknown code was **not poisonous**: the generation gate failed **open** on it — both refutes this run were driven by year-band fitment, not a chassis premise, and both were correct. Severity **P2**: wrong metadata + no valid generation anchor = the gate's correctness this run is luck of the year-band, not a resolved fingerprint. The P1 variant-ID scope (chassis-generation in the pre-extraction fingerprint) is still the fix. |
+| **P2-a** spark_plugs interval 105,000 mi/84 mo "scheduled" (GT verbatim 97,500 mi, no month cap) | **RECURRED** | Identical row: 105000/84, conf 0.9, 2 sources, status "scheduled", data_quality "enriched". Exactly the wrong-Hyundai-engine mirror value GT pre-warned about. |
+| **P2-b** filter_replacement merged 30k/24mo + sanity FP on verbatim cabin 7.5k | **RECURRED** (value moved, still wrong) | Single merged row now **15,000 mi** (no months), conf 0.9, "vdb_schedule", status "active". GT: air REPLACE 22,500/36mo, cabin 7,500/12mo — 15k matches **neither** (looks like a split-the-difference artifact). `sanity:cabin_filter_miles` fired again on the verbatim-correct 7.5k (trap 7). Bundling taxonomy still cannot diverge air vs cabin. |
+| **P2-c** phantom Oil Filter Housing Cap O-Ring 26414-3F501 (Genesis 5.0 Tau cartridge part; G4KJ is spin-on) | **RECURRED** | Identical row, conf 0.85, now **three** corroborating prices ($23.45–24.54). Third consecutive appearance of the phantom-cartridge-o-ring class from hyundai.oempartsonline.com. |
+| P3 brake_fluid_flush 30k/**24 mo** (OM 48 mo), "estimated" | RECURRED (unchanged) | 30000/24, conf 0.85, estimated. |
+| P3 coolant_flush 120k/120mo stuck at "estimated" | **REGRESSED → see NEW-1** | The correct 120k value is gone entirely. |
+| P3 thermostat 25600-2GGB5 $376.91 outlier | RECURRED (softened) | Now 3 sources $256.77–376.91 — consistently high, so more likely an assembly listing than a one-source glitch; still no outlier flag. |
+| P3 foreign-domain prices (autodoc.co.uk in USD lists) | RECURRED | Front rotor $25.99 autodoc.co.uk in a $101–143 band; rear wiper priced from autodoc.parts/autodoc.co.uk again. |
+| P3 malformed battery row (null identity + orphan price) | **FIXED** | Battery row fully formed: 37110-1R680, conf 0.9, $176.86, join intact. |
+| P3 engine oil 00232-FSYN5-20WAR empty prices | RECURRED | `"prices": []`. |
+
+## run_errors adjudication (both refutes are RIGHT kills)
+
+- `fitment_refuted:oil_filter:26350-2S000` — **correct refute.** Web-verified: 26350-2S000 is the **2020+ Smartstream 2.5L cartridge** oil filter kit (2022-2024 Tucson NX4, 2020-2023 Sonata, 2021+ Santa Fe/K5/Sorento — WIX/ECOGARD/hyundaipartsdeal all agree). Exactly GT trap 2's cartridge decoy family (sibling of 26350-2S001). Killing it protected the record. **But** the correct spin-on **26300-35505** — which wave-2 stored exactly, with in-band prices — was never selected, so `part:oil_filter` is **null** (NEW-2).
+- `fitment_refuted:spark_plug:18847-11160` — **correct refute.** Web-verified: 18847-11160 is the **2011-2016-era Theta II plug** (Denso FXU16HR11 class: 2011-2014 Sonata, 2011-2016 Optima, Santa Fe Sport ~2009-2015 2.4) — hyundai.oempartsonline "2011-2016", hyundaipartsdeal, Walmart/Denso cross-refs; no listing includes 2016-2021 Tucson. Wrong year-band for this VIN (correct = 18849-11070, 2016-2021 Theta II GDI). Right kill; but no correct candidate replaced it → `part:spark_plug` null (folds into P1-1 PARTIAL).
+- `sanity:cabin_filter_miles` — **false positive again** on the OM-verbatim 7.5k/12mo cabin interval (trap 7); see P2-b.
+
+## NEW defects
+
+**NEW-1 (P2). coolant_flush 50,000 mi, `data_quality: "adversarial_corrected"`, conf 0.7 — the round-10 corrector destroyed a correct value.** Wave-2 stored the OM-verbatim first-change **120,000 mi/120 mo** (2 sources, conf 0.85; only defect was status under-grading). Wave-3 ships **50k**, which matches nothing in the OM — not the 120k/10yr first change, not the 30k/24mo follow-up cadence (GT row 4c). This is the round-6 corrector-harm class recurring under a new label: an "adversarial correction" overwriting trap-7 look-wrong-but-correct ground truth. Round-6 was downgraded to flag-only for exactly this failure mode (38d18eb); the round-10 corrector path needs the same treatment or a trap-7 exclusion list.
+
+**NEW-2 (P2). `part:oil_filter` null — regression from wave-2's exact-correct 26300-35505.** The refute correctly killed the wrong-gen cartridge candidate, but the pipeline apparently surfaced only the NX4 cartridge this run and never the TL spin-on, so a core oil-change part went from exact-correct+priced to absent. Kill-without-replace: the refute rule needs a re-query/fallback step ("refuted the only candidate → re-collect with generation-anchored query") rather than shipping a hole in the highest-volume service slot. Same shape as the spark_plug outcome; together the two nulls mean the oil-change + plug-change quotes both lack their headline part despite fill "95".
+
+No new P1: every part number in the wave-3 output was checked; none is wrong-generation or wrong-engine for this VIN (the only wrong-vehicle part present is the recurring wave-2 P2-c o-ring).
+
+## Round-10 behavior notes
+
+- **Fitment refute rule: semantics now correct on this vehicle.** Wave-2: 3 good parts killed, 0 bad caught, wrong chassis premise. Wave-3: 2 bad wrong-gen parts killed (NX4 cartridge, 2011-2016 plug), 0 good parts killed, and all three wave-2 victims restored. The rule works when driven by year-band fitment — but it now exposes the missing second half: candidate replacement after a kill (NEW-2).
+- **Chassis/generation gate: failed open on an unknown code.** "LET" is not a real code; nothing downstream keyed off it (fortunately). The gate neither identified TL nor blocked on failure — the variant-fingerprint scope remains the structural fix.
+- **Adversarial corrector: net-harmful on its one firing** (NEW-1, 0-for-1), on a value GT explicitly listed under trap 7 "do NOT fix". Direct echo of round-6's 0-for-2.
+- **Interval status semantics held** (wear items/fallbacks "estimated", transmission_service 60k "estimated" honest), but new statuses "active"/"vdb_schedule" appear on oil/tire/filter rows — oil 7,500/12 and tire 7,500/12 remain exactly right.
+- **Fluids core remains perfect**: 5W-20, 5.1 qt, SP-IV string exact, 6AT, phosphate/HOAT coolant, MDPS ps_fluid null, DOT-4 brake fluid part kept. Trap 2's fluid legs, trap 3, trap 1 all avoided again.

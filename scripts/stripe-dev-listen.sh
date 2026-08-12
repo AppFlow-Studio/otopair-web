@@ -13,6 +13,10 @@
 # The signing secret printed below must be set as STRIPE_WEBHOOK_SECRET in the
 # Convex dev deployment (`npx convex env set STRIPE_WEBHOOK_SECRET whsec_...`).
 # Re-run `npx convex env set` if the CLI rotates the secret on a new session.
+#
+# NOTE: charge.refund.updated must also be enabled on the real webhook endpoints
+# in the Stripe dashboard, not just here. Without it a refund the bank later
+# rejects stays counted and payments.refunded_amount_cents is overstated.
 
 set -euo pipefail
 
@@ -48,6 +52,7 @@ payment_intent.canceled,\
 payment_intent.amount_capturable_updated,\
 payment_intent.requires_action,\
 charge.refunded,\
+charge.refund.updated,\
 charge.dispute.created,\
 charge.dispute.updated,\
 charge.dispute.closed,\

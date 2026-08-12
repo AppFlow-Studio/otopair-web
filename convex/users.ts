@@ -420,6 +420,40 @@ export const completeEssentialOnboarding = mutation({
 });
 
 /**
+ * MUTATION: deferOnboarding
+ * User explicitly tapped "Finish later" mid-onboarding. Flips
+ * `onboardingDeferred = true` so re-login routes to home instead
+ * of dumping them back at the first incomplete step. No field
+ * gates — this must succeed regardless of what data the user has
+ * filled in so far.
+ */
+export const deferOnboarding = mutation({
+  args: {
+    // Step the user was on when they hit "Finish later" — persisted
+    // so the home-page "Finish setup" card can resume from the exact
+    // spot, even across sign-outs (SecureStore doesn't survive).
+    step: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!user) throw new Error("User not found");
+
+    await ctx.db.patch(user._id, {
+      onboardingDeferred: true,
+      ...(args.step ? { onboardingDeferredStep: args.step } : {}),
+      lastUpdated: Date.now(),
+    });
+    return await ctx.db.get(user._id);
+  },
+});
+
+/**
  * MUTATION: registerExpoPushToken
  * Persists the Expo push token on the current user so the
  * `lib/push_dispatcher.dispatchPendingPush` cron can route approval
@@ -492,6 +526,12 @@ export const upsertFromClerk = mutation({
     last_name: v.optional(v.string()),
     profile_photo_url: v.optional(v.string()),
     role: v.optional(v.string()),
+    // Clerk-derived signup method + verification/username (see the webhook).
+    // auth_provider is first-touch (never overwritten once set).
+    authProvider: v.optional(v.string()),
+    emailConfirmed: v.optional(v.boolean()),
+    phoneVerified: v.optional(v.boolean()),
+    username: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing = await ctx.db
@@ -518,6 +558,14 @@ export const upsertFromClerk = mutation({
         profile_photo_url: args.profile_photo_url ?? undefined,
         ...(args.phone ? { phone: args.phone } : {}),
         ...(args.role ? { role: args.role } : {}),
+        // Signup method — first-touch: only set if we don't already have one.
+        ...(args.authProvider && !existing.auth_provider
+          ? { auth_provider: args.authProvider }
+          : {}),
+        // Verification flags + username refresh whenever Clerk sends them.
+        ...(args.emailConfirmed !== undefined ? { emailConfirmed: args.emailConfirmed } : {}),
+        ...(args.phoneVerified !== undefined ? { phoneVerified: args.phoneVerified } : {}),
+        ...(args.username ? { username: args.username } : {}),
         ...(existing.essentialOnboardingCompleted !== true &&
         (existing.onboardingCompleted === true || hasEssentialOnboardingFields(nextUser))
           ? { essentialOnboardingCompleted: true }
@@ -561,6 +609,12 @@ export const upsertFromClerk = mutation({
         profile_photo_url: args.profile_photo_url ?? undefined,
         phone: normalizedIncomingPhone ?? claimable.phone,
         role: args.role ?? claimable.role ?? "user",
+        ...(args.authProvider && !claimable.auth_provider
+          ? { auth_provider: args.authProvider }
+          : {}),
+        ...(args.emailConfirmed !== undefined ? { emailConfirmed: args.emailConfirmed } : {}),
+        ...(args.phoneVerified !== undefined ? { phoneVerified: args.phoneVerified } : {}),
+        ...(args.username ? { username: args.username } : {}),
         onboardingCompleted: true,
         essentialOnboardingCompleted: true,
         lastUpdated: now,
@@ -577,6 +631,10 @@ export const upsertFromClerk = mutation({
       last_name: args.last_name,
       profile_photo_url: args.profile_photo_url ?? undefined,
       role: args.role ?? "user",
+      ...(args.authProvider ? { auth_provider: args.authProvider } : {}),
+      ...(args.emailConfirmed !== undefined ? { emailConfirmed: args.emailConfirmed } : {}),
+      ...(args.phoneVerified !== undefined ? { phoneVerified: args.phoneVerified } : {}),
+      ...(args.username ? { username: args.username } : {}),
       onboardingCompleted: false,
       essentialOnboardingCompleted: false,
       createdAt: now,

@@ -61,7 +61,6 @@ export function calculateBookingConfirmLayout({
     lottieTranslateY = -36;
     copyTopPercent = "29%";
   } else if (isWideCompact) {
-    sheetHeight = Math.min(sheetHeight, Math.max(480, Math.round(height * 0.5)));
     lottieTranslateY = -12;
     copyTopPercent = "34%";
   } else if (isVeryCompactHeight) {

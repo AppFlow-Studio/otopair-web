@@ -3,9 +3,29 @@
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
-import { useSession, useUser, useClerk } from "@clerk/nextjs";
+import { useSession, useUser, useClerk, useAuth } from "@clerk/nextjs";
 import { api } from "@/convex/_generated/api";
 import { CheckCircle2, XCircle, Loader2, AlertTriangle } from "lucide-react";
+
+// Pull the role claim straight out of a Clerk session JWT so we can tell,
+// deterministically, when the freshly-granted role has landed in the token
+// that middleware will read on the next navigation.
+function readRoleFromJwt(jwt: string | null | undefined): string | undefined {
+  if (!jwt) return undefined;
+  const parts = jwt.split(".");
+  if (parts.length < 2) return undefined;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
+    const claims = JSON.parse(atob(b64 + pad)) as {
+      metadata?: { role?: string };
+      public_metadata?: { role?: string };
+    };
+    return claims?.metadata?.role ?? claims?.public_metadata?.role;
+  } catch {
+    return undefined;
+  }
+}
 
 export default function AcceptInvitePage() {
   return (
@@ -33,6 +53,7 @@ function AcceptInviteContent() {
   const { session } = useSession();
   const { user: clerkUser, isLoaded: isUserLoaded } = useUser();
   const { signOut } = useClerk();
+  const { getToken } = useAuth();
 
   const invitation = useQuery(
     api.invitations.getByToken,
@@ -46,6 +67,7 @@ function AcceptInviteContent() {
   >("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const hasAccepted = useRef(false);
+  const hasEntered = useRef(false);
 
   // Check if the logged-in user matches the invitation email
   const loggedInEmail = clerkUser?.primaryEmailAddress?.emailAddress;
@@ -68,7 +90,7 @@ function AcceptInviteContent() {
 
     if (
       invitation.status === "expired" ||
-      Date.now() > invitation.expires_at
+      (invitation.expires_at != null && Date.now() > invitation.expires_at)
     ) {
       setStatus("error");
       setErrorMessage(
@@ -95,22 +117,10 @@ function AcceptInviteContent() {
       return;
     }
 
+    // Already accepted (returning user, or the reactive query re-firing right
+    // after our own acceptance) — just make sure the role is live and enter.
     if (invitation.status === "accepted") {
-      // Ensure Clerk metadata is set, reload session, then redirect
-      (async () => {
-        try {
-          await fetch("/api/finalize-invite", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ role: invitation.role }),
-          });
-          await session?.reload();
-        } catch {
-          // Non-fatal
-        }
-        setStatus("accepted");
-        setTimeout(() => router.push("/dashboard"), 2500);
-      })();
+      void finalizeAndEnter(invitation.role);
       return;
     }
 
@@ -118,23 +128,12 @@ function AcceptInviteContent() {
     if (!hasAccepted.current) {
       hasAccepted.current = true;
       acceptAsCurrentUser({ token })
-        .then(async (result) => {
+        .then((result) => {
           const role =
             result && typeof result === "object" && "role" in result
               ? (result as { role: string }).role
               : invitation.role;
-          try {
-            await fetch("/api/finalize-invite", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ role }),
-            });
-            await session?.reload();
-          } catch {
-            // Non-fatal
-          }
-          setStatus("accepted");
-          setTimeout(() => router.push("/dashboard"), 2500);
+          return finalizeAndEnter(role);
         })
         .catch((err: Error) => {
           setStatus("error");
@@ -143,6 +142,7 @@ function AcceptInviteContent() {
           );
         });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     invitation,
     router,
@@ -153,7 +153,60 @@ function AcceptInviteContent() {
     isUserLoaded,
     loggedInEmail,
     invitationEmail,
+    getToken,
   ]);
+
+  // Grant the role in Clerk, then wait until that role is actually present in a
+  // freshly-minted session token BEFORE doing the full-page nav. This closes
+  // the propagation race that previously made middleware bounce the user back
+  // (the "refresh / close the tab and it works" symptom).
+  async function finalizeAndEnter(role: string) {
+    if (hasEntered.current) return;
+    hasEntered.current = true;
+
+    // Set role + is_active on Clerk public_metadata (retry once — this is the
+    // one call that must succeed for the portal to let the user in).
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const res = await fetch("/api/finalize-invite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role }),
+        });
+        if (res.ok) break;
+      } catch {
+        // retry
+      }
+    }
+
+    try {
+      await session?.reload();
+    } catch {
+      // non-fatal
+    }
+
+    // Poll a fresh (uncached) session token until it carries the new role.
+    const deadline = Date.now() + 12000;
+    let roleLive = false;
+    while (Date.now() < deadline) {
+      try {
+        const jwt = await getToken({ skipCache: true });
+        if (readRoleFromJwt(jwt)) {
+          roleLive = true;
+          break;
+        }
+      } catch {
+        // keep polling
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    setStatus("accepted");
+    // Short beat so the success state is visible, then a full-page nav so
+    // middleware re-reads the refreshed session cookie. `roleLive` is true in
+    // the common case; the timeout fallback still navigates so we never hang.
+    setTimeout(() => window.location.assign("/dashboard"), roleLive ? 700 : 1200);
+  }
 
   async function handleSwitchAccount() {
     // Sign out the current user and redirect to sign-in with a return URL
@@ -173,8 +226,8 @@ function AcceptInviteContent() {
               Setting up your account…
             </h1>
             <p className="text-sm text-gray-500">
-              Just a moment while we verify your invitation and set up your shop
-              access.
+              Hang tight — we&apos;re verifying your invitation and getting your
+              shop access ready. This only takes a few seconds.
             </p>
           </>
         )}
@@ -186,7 +239,7 @@ function AcceptInviteContent() {
               You&apos;re in!
             </h1>
             <p className="text-sm text-gray-500">
-              Your account is set up. Redirecting you to your dashboard…
+              Your account is ready. Taking you to your dashboard…
             </p>
           </>
         )}

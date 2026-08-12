@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, mutation } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { computeEnrichmentStatus } from "./completionGate";
+import { computeEnrichmentStatus, explainGateDecision } from "./completionGate";
 import { updateSourceScores } from "../services/sourceScoring";
 import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
@@ -9,7 +9,13 @@ import { isLaborOnlyService } from "../lib/servicePartsReference";
 import { partFitsConfigMake } from "../partSelector";
 import { makesSameFamily, sanitizePartNumber } from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
+import { checkRoleIdentity } from "./roleIdentity";
 import { isMarketplaceDomain, isMarketplaceUrl } from "./sourceRegistry";
+import { normalizeFluidPrice } from "../lib/fluidPackSize";
+import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
+import type { ExistenceVerdict } from "./partIndex";
+import { isRunStale, RUN_IN_PROGRESS_STATUSES, stripVerifiedFields } from "./runFence";
+import { WEAR_ITEM_SERVICE_SLUGS, parseFrontWiperSizes } from "./types";
 
 /**
  * Family-aware make compatibility for WRITE paths. The strict id-equality
@@ -40,6 +46,137 @@ async function partMakeCompatibleForWrite(
  */
 function clonedConfidence(source: number | null | undefined): number {
   return Math.max((source ?? 0) - 0.03, 0);
+}
+
+// ─── part-number existence gate (pure policy — exported for tests) ──────────
+//
+// The oracle in partIndex.ts answers "found" | "absent" | "no_index" for a
+// (make, number) pair. This is the half that decides what a write does with
+// that answer. It is pure and separate because "absent" is the only verdict in
+// the pipeline that can discard a value the extractor believed in, so the rule
+// has to be readable in one screen and testable without a database.
+
+/** data_quality stamped on a fitment whose number a COMPLETE, FRESH catalog
+ *  index does not contain. Mirrors fitmentQuarantine's cross_make_quarantined
+ *  convention: stamp, never delete, so the call stays inspectable and one
+ *  patch reverses it. */
+export const PART_NOT_IN_CATALOG_QUALITY = "part_number_not_in_catalog";
+
+export type PartExistenceGateMode = "off" | "log" | "enforce";
+
+/** Anything that is not exactly "enforce" or "off" — including unset, empty,
+ *  and typos — is "log". A misspelled env var must not silently arm a gate
+ *  that quarantines fitments, and must not silently disarm one either. */
+export function parsePartExistenceGateMode(
+  raw: string | null | undefined,
+): PartExistenceGateMode {
+  const value = String(raw ?? "").trim().toLowerCase();
+  return value === "enforce" || value === "off" ? value : "log";
+}
+
+/** Read at CALL time, never at module load: `npx convex env set` must take
+ *  effect on the next write, not the next deploy. Same staging discipline as
+ *  the round-12 gates in completionGate.ts, which dark-launched in "log". */
+export function partExistenceGateMode(): PartExistenceGateMode {
+  return parsePartExistenceGateMode(process.env.ENRICHMENT_PART_EXISTENCE_GATE);
+}
+
+export type PartWriteAction = {
+  /** "quarantine" stamps the fitment out of the corpus; "allow" writes it
+   *  exactly as an ungated run would. */
+  action: "allow" | "quarantine";
+  /** The gate observed something worth reporting even when it did not act —
+   *  this is what makes "log" mode a measurement rather than a no-op. */
+  record: boolean;
+  /** Machine-stable code; null when the gate had nothing to say. */
+  reason: string | null;
+};
+
+const ALLOW_SILENTLY: PartWriteAction = { action: "allow", record: false, reason: null };
+
+/**
+ * What a part write does given the oracle's verdict, the gate's stage, and
+ * whether a human already vouched for this exact fitment.
+ *
+ * Only "absent" can ever stop a write, and "absent" is issued only from a
+ * completed index for this make that is inside the freshness window — see
+ * decideExistenceVerdict. "no_index" covers every form of not-knowing (make
+ * never crawled, ingest running, ingest failed, index aged out) and is
+ * indistinguishable here from "found": both write. That asymmetry is the whole
+ * gate. An index we do not have must never read as evidence that a part is
+ * fake, because a missing part costs one gap-fill re-ask while a wrongly
+ * discarded real part costs a quote that cannot be built.
+ */
+export function decidePartWriteAction(input: {
+  verdict: ExistenceVerdict;
+  mode: PartExistenceGateMode;
+  mechanicVerified: boolean;
+}): PartWriteAction {
+  if (input.mode === "off") return ALLOW_SILENTLY;
+  if (input.verdict !== "absent") return ALLOW_SILENTLY;
+  // A human signed off on this row. Catalogs are incomplete in both directions
+  // — superseded numbers vanish from storefronts while the part is still the
+  // right one on the bench — so a mechanic outranks the index, exactly as in
+  // fitmentQuarantine's cross-make sweep.
+  if (input.mechanicVerified) {
+    return {
+      action: "allow",
+      record: true,
+      reason: "part_not_in_catalog:mechanic_verified_exempt",
+    };
+  }
+  if (input.mode === "log") {
+    return { action: "allow", record: true, reason: "part_not_in_catalog:log_only" };
+  }
+  return { action: "quarantine", record: true, reason: "part_not_in_catalog" };
+}
+
+/**
+ * Combine per-make verdicts the way sanitizePartNumber combines makes: a
+ * badge-engineered car (P2.5) carries the BUILDER's numbers, so either
+ * catalog vouching is enough, and we may only fail closed when every catalog
+ * we were able to consult positively lacks the number. One "no_index" among
+ * them means an unconsulted catalog could still carry it.
+ */
+export function combineExistenceVerdicts(
+  verdicts: readonly ExistenceVerdict[],
+): ExistenceVerdict {
+  if (verdicts.length === 0) return "no_index";
+  if (verdicts.includes("found")) return "found";
+  return verdicts.every((v) => v === "absent") ? "absent" : "no_index";
+}
+
+/**
+ * Ask the oracle whether this number exists in any of these makes' catalogs.
+ *
+ * ANY failure resolves to "no_index": the query throwing, an unregistered
+ * function reference, a shape we don't recognise, an empty result. Uncertainty
+ * about the infrastructure is not evidence about the part, and the one thing
+ * this path must never do is manufacture an "absent".
+ */
+async function lookupExistenceVerdict(
+  ctx: { runQuery: (ref: any, args: any) => Promise<any> },
+  makes: readonly string[],
+  partNumber: string,
+): Promise<ExistenceVerdict> {
+  const verdicts: ExistenceVerdict[] = [];
+  for (const make of makes) {
+    try {
+      const res = await ctx.runQuery(
+        internal.vehicleEnrichment.partIndex.lookupPartNumbers,
+        { make, partNumbers: [partNumber] },
+      );
+      const verdict = res?.results?.[0]?.verdict;
+      verdicts.push(verdict === "absent" || verdict === "found" ? verdict : "no_index");
+    } catch (e) {
+      console.warn(
+        `[v8-parts] part-index oracle unavailable for ${make}/${partNumber} — failing open:`,
+        e,
+      );
+      verdicts.push("no_index");
+    }
+  }
+  return combineExistenceVerdicts(verdicts);
 }
 
 // ============================================================================
@@ -91,7 +228,14 @@ export const upsertVehicleConfig = internalMutation({
       if (args.nhtsa_vin_key && !existing.nhtsa_vin_key) {
         patch.nhtsa_vin_key = args.nhtsa_vin_key;
       }
-      await ctx.db.patch(existing._id, patch);
+      // F31: finalize calls THIS mutation, not patchVehicleConfig — without
+      // the same verified_fields filter a director-verified drivetrain was
+      // re-clobbered every re-enrich. Operational keys (enrichment_status,
+      // fill_rate, ...) are hard-exempt inside stripVerifiedFields.
+      await ctx.db.patch(
+        existing._id,
+        stripVerifiedFields(patch, (existing as any).verified_fields),
+      );
       return existing._id;
     }
 
@@ -119,6 +263,22 @@ export const upsertVehicleConfig = internalMutation({
 // ============================================================================
 // 1b. patchVehicleConfig — patch individual fields on vehicle_configs
 // ============================================================================
+
+/** The only columns `clear_fields` may remove — a sanity-rejected rotor value
+ *  must not survive as a stale stored spec (a pre-gate-era diameter-as-thickness
+ *  otherwise outlives every re-run because the re-extracted bad value nulls →
+ *  undefined → skipped). Generalizing beyond rotor columns requires its own
+ *  reject-provenance design; do not add fields casually. */
+const CLEARABLE_ROTOR_COLUMNS: ReadonlySet<string> = new Set([
+  "rotor_front_min_thickness_mm",
+  "rotor_rear_min_thickness_mm",
+  "rotor_front_min_quality",
+  "rotor_rear_min_quality",
+  "rotor_front_min_observed_label",
+  "rotor_rear_min_observed_label",
+  "rotor_min_observed_label",
+  "rotor_min_source_url",
+]);
 
 export const patchVehicleConfig = internalMutation({
   args: {
@@ -156,14 +316,45 @@ export const patchVehicleConfig = internalMutation({
         v.literal("carbon_ceramic"),
       ),
     ),
+    // Rotor thickness — see the schema comment on vehicle_configs. The minimum
+    // and the nominal are separate columns and nothing promotes one to the other.
+    rotor_front_min_thickness_mm: v.optional(v.float64()),
+    rotor_rear_min_thickness_mm: v.optional(v.float64()),
+    rotor_front_nominal_thickness_mm: v.optional(v.float64()),
+    rotor_rear_nominal_thickness_mm: v.optional(v.float64()),
+    rotor_front_min_quality: v.optional(v.string()),
+    rotor_rear_min_quality: v.optional(v.string()),
+    rotor_min_source_url: v.optional(v.string()),
+    rotor_min_observed_label: v.optional(v.string()),
+    rotor_front_min_observed_label: v.optional(v.string()),
+    rotor_rear_min_observed_label: v.optional(v.string()),
+    // Explicit clears for columns whose stored value a sanity REJECT invalidated
+    // this run. Whitelisted to rotor columns only — the global undefined-skip
+    // below stays untouched because it is what protects every other field from
+    // batch-null erasure. verified_fields still outranks a clear.
+    clear_fields: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    const { vehicle_config_id, ...fields } = args;
-    const patch: Record<string, unknown> = {};
+    const { vehicle_config_id, clear_fields, ...fields } = args;
+    let patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
       if (value !== undefined) {
         patch[key] = value;
       }
+    }
+    for (const key of clear_fields ?? []) {
+      if (!CLEARABLE_ROTOR_COLUMNS.has(key)) continue;
+      if (key in patch && patch[key] !== undefined) continue; // a fresh value wins over a clear
+      patch[key] = undefined; // ctx.db.patch removes the field
+    }
+    // Columns a human confirmed or corrected are never overwritten by the
+    // pipeline, mirroring how updateEngineSpecs respects engines.verified_fields.
+    // Without this a director's rotor minimum — and today their drivetrain /
+    // brake_fluid_capacity_oz / ps_fluid_capacity_oz corrections — is silently
+    // clobbered by the next finalize. Shared with upsertVehicleConfig (F31).
+    if (Object.keys(patch).length > 0) {
+      const cfg = await ctx.db.get(vehicle_config_id);
+      patch = stripVerifiedFields(patch, (cfg as any)?.verified_fields);
     }
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(vehicle_config_id, patch);
@@ -357,8 +548,18 @@ export const upsertTrimSpecs = internalMutation({
     if (args.tire_pressure_rear !== undefined) patch.recommended_tire_pressure_rear_psi = args.tire_pressure_rear;
     // Wheels
     if (args.lug_nut_torque_ft_lbs !== undefined) patch.lug_nut_torque_ft_lbs = args.lug_nut_torque_ft_lbs;
-    // Wipers: v3 names → legacy schema names
-    if (args.front_wiper_size_in !== undefined) patch.wiper_blade_driver_size_in = parseFloat(args.front_wiper_size_in) || undefined;
+    // Wipers: v3 names → legacy schema names. The front field carries a SET
+    // (driver first, then passenger — "26/18"); parseFloat kept only the
+    // driver, so the passenger column was never written on either table. When
+    // the source states one size, driver gets it and passenger stays null —
+    // the two blades legitimately differ, so copying would be present-but-wrong.
+    if (args.front_wiper_size_in !== undefined) {
+      const frontWipers = parseFrontWiperSizes(args.front_wiper_size_in);
+      patch.wiper_blade_driver_size_in = frontWipers.driver;
+      if (frontWipers.passenger !== undefined) {
+        patch.wiper_blade_passenger_size_in = frontWipers.passenger;
+      }
+    }
     if (args.rear_wiper_size_in !== undefined) patch.wiper_blade_rear_size_in = parseFloat(args.rear_wiper_size_in) || undefined;
     // v3-only fields (exist in schema as added fields)
     if (args.is_staggered !== undefined) patch.is_staggered = args.is_staggered;
@@ -410,6 +611,10 @@ export const updateEngineSpecs = internalMutation({
     water_pump_timing_driven: v.optional(v.boolean()),
     engine_family: v.optional(v.string()),
     displacement_l: v.optional(v.float64()),
+    // NHTSA-decoded regulatory facts (round-4): GVWR upper-bound lbs → duty-class
+    // sanity bands; engine manufacturer → engine-maker fluid specs in the verifier.
+    gvwr_lbs: v.optional(v.float64()),
+    engine_manufacturer: v.optional(v.string()),
     data_quality: v.optional(v.string()),
     // Field names to actively ERASE (patch to undefined → Convex deletes the
     // column). A value that sanity-checks REJECTED as wrong must not linger:
@@ -442,6 +647,57 @@ export const updateEngineSpecs = internalMutation({
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(engine_id, patch);
     }
+  },
+});
+
+/** Operator-directed VERIFIED engine-spec correction (Aug 2026) — the CLI
+ *  twin of directorConfigActions.updateEngineFields, for corrections made
+ *  outside a director session (incident response, spec adjudication). Unlike
+ *  updateEngineSpecs above, this WRITES UNCONDITIONALLY — an operator
+ *  correction is the authority the verified ledger exists to protect — then
+ *  stamps every corrected field into engines.verified_fields so no re-enrich
+ *  can write over it, and records the mandatory provenance in audit_log.
+ *  First use: the GLC-43's oil_viscosity held a single-source 0W-30 while
+ *  MB BeVo 229.5 factory fill for the M276 DE30 AL is 0W-40, and the oil
+ *  product rung correctly refused to fetch against a disputed grade. */
+export const correctEngineSpecVerified = internalMutation({
+  args: {
+    engine_id: v.id("engines"),
+    /** REQUIRED: who decided this and on what evidence — lands in audit_log. */
+    provenance: v.string(),
+    oil_viscosity: v.optional(v.string()),
+    oil_capacity_qts: v.optional(v.float64()),
+    coolant_type: v.optional(v.string()),
+    coolant_capacity_qts: v.optional(v.float64()),
+    spark_plug_gap_mm: v.optional(v.float64()),
+  },
+  handler: async (ctx, args) => {
+    const { engine_id, provenance, ...fields } = args;
+    const existing = await ctx.db.get(engine_id);
+    if (!existing) return { ok: false as const, reason: "engine_not_found" };
+    const patch: Record<string, unknown> = {};
+    const changes: string[] = [];
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined) continue;
+      const cur = (existing as any)[key];
+      if (cur === value) continue;
+      patch[key] = value;
+      changes.push(`${key}: ${cur ?? "—"} → ${value}`);
+    }
+    if (changes.length === 0) return { ok: true as const, changes: [] };
+    const verified = new Set(((existing as any).verified_fields ?? []) as string[]);
+    for (const key of Object.keys(patch)) verified.add(key);
+    (patch as any).verified_fields = [...verified];
+    await ctx.db.patch(engine_id, patch as any);
+    await ctx.db.insert("audit_log", {
+      entity_type: "engine",
+      entity_id: String(engine_id),
+      action: "field_edit",
+      actor: "operator-cli",
+      detail: `Verified spec correction · ${changes.join(", ")} · ${provenance}`,
+      created_at: Date.now(),
+    });
+    return { ok: true as const, changes };
   },
 });
 
@@ -497,6 +753,17 @@ export const updateTransmissionSpecs = internalMutation({
           `[v8] Transmission display/type contradiction — "${(existing as any)?.transmission_type}" vs canonical "${patch.type}"; display reconciled`,
         );
       }
+    }
+    // Round 10 (batch-11 Crosstrek speeds:8, GH speeds:1): a CVT has no
+    // discrete gear count — paddle-step counts and eCVT "1" are data-shape
+    // noise that downstream reconcilers then argue with. When the resolved
+    // family is CVT, never store speeds (and clear any previously stored).
+    const resolvedType = String(
+      patch.type ?? patch.transmission_type ?? (await ctx.db.get(transmission_id) as any)?.type ?? "",
+    ).toLowerCase();
+    if (resolvedType.includes("cvt") || resolvedType.includes("continuously variable")) {
+      if (patch.speeds !== undefined) delete patch.speeds;
+      (patch as Record<string, unknown>).speeds = undefined;
     }
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(transmission_id, patch);
@@ -600,6 +867,16 @@ export const upsertPartAndFitment = internalMutation({
     service_role: v.optional(v.string()),
     confidence: v.float64(),
     source_domain: v.optional(v.string()),
+    /** P2.5: builder brand for a badge-engineered vehicle (e.g. "Mazda" for a
+     *  Toyota Yaris) — the choke-point sanitizer below accepts a part matching
+     *  EITHER the config make OR this builder brand, so the correct builder OEM
+     *  numbers aren't rejected as "foreign" to the badge make. */
+    build_source_make: v.optional(v.string()),
+    /** Round 12: the source page's verbatim listing title for this number
+     *  (JSON-LD Product.name, or the extraction's observed_title echo).
+     *  Component-identity evidence for the role-identity gate below; persisted
+     *  as oem_parts.scraped_name. `name` stays the generic role label. */
+    observed_title: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -617,6 +894,71 @@ export const upsertPartAndFitment = internalMutation({
 
     const config = await ctx.db.get(args.vehicle_config_id);
 
+    // Round 8 (batch-10): a FWD SRX persisted a core-role GL-5 gear-oil
+    // fitment on differential_service — harmless only because the drivetrain
+    // gate suppressed the service downstream. The interval/labor writers
+    // already skip requires_differential services on FWD; the part path had no
+    // equivalent. Reject diff-service consumables when the config positively
+    // has no differential (has_differential === false; unknown fails open).
+    const DIFF_ONLY_SUBCATEGORIES = new Set(["gear_oil", "diff_fluid", "friction_modifier"]);
+    // Round 11 (batch-11 SRX, 4th recurrence): the gate required an explicit
+    // has_differential === false, which nothing sets — undefined sailed
+    // through and a fresh wrong gear-oil/friction-modifier number appeared
+    // every run. A FWD config with no explicit differential flag has no
+    // serviceable differential (transaxle final drive shares the ATF); derive
+    // the class from drivetrain so the gate fires without per-config setup.
+    const configDrivetrain = String((config as any)?.drivetrain ?? "").toUpperCase();
+    const hasNoDifferential =
+      (config as any)?.has_differential === false ||
+      ((config as any)?.has_differential == null && configDrivetrain === "FWD");
+    if (hasNoDifferential && DIFF_ONLY_SUBCATEGORIES.has(args.subcategory)) {
+      console.log(
+        `[v8-parts] REJECTED diff-service part on no-differential config (${configDrivetrain || "?"}): ${args.oem_part_number} (${args.subcategory})`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "no_differential" as const };
+    }
+
+    // Round 12: role-identity gate — a genuine, fitment-correct part can still
+    // be the WRONG COMPONENT for its role: a battery ground-extension CABLE
+    // stored as the battery (Equinox 84257919), a telematics/DCM battery
+    // (round-11 Crosstrek — that battery-only guard is folded into
+    // ROLE_IDENTITY_LEXICON.battery.block, strict superset). Deterministic:
+    // rejects only on POSITIVE wrong-component evidence in the observed
+    // listing title (falling back to caller name for legacy paths). Flag-mode
+    // roles and require-misses never reject here — those promote to the
+    // fitment verifier instead (round-6 lesson: reject/flag on positive
+    // evidence only; never substitute). Deliberately NO refuted_fitments
+    // write: the regex re-fires identically every run, so it is its own
+    // durable memory and a lexicon bug is reversible by one file edit.
+    const titleForGate = args.observed_title ?? args.name;
+    const idVerdict = checkRoleIdentity(args.subcategory, titleForGate);
+    if (idVerdict.verdict === "reject" && idVerdict.mode === "reject") {
+      console.log(
+        `[v8-parts] REJECTED role-identity: ${args.oem_part_number} (${args.subcategory}) titled "${titleForGate}" — matched wrong-component term "${idVerdict.matched}"`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "role_identity" as const };
+    }
+
+    // Round 8 (batch-10): an unfindable drain-plug-gasket number persisted
+    // with zero source domains (likely hallucinated — the engine's plug has an
+    // integrated washer). Low-consequence commodity hardware must carry at
+    // least one source domain to be stored; the priced/core roles are covered
+    // by the fitment verifier instead.
+    const COMMODITY_SUBCATEGORIES = new Set([
+      "drain_plug_gasket",
+      "oil_filter_housing_oring",
+      "thermostat_gasket",
+    ]);
+    if (
+      COMMODITY_SUBCATEGORIES.has(args.subcategory) &&
+      !(args.source_domain && args.source_domain.trim())
+    ) {
+      console.log(
+        `[v8-parts] REJECTED sourceless commodity part: ${args.oem_part_number} (${args.subcategory}) — no source_domain`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "commodity_no_source" as const };
+    }
+
     // CHOKE-POINT sanitization: every part write funnels through this mutation
     // (batch1/batch2 pipeline, diagnoseVin backfills, future admin tools), so
     // the cross-make + per-make-format validation runs here regardless of
@@ -624,10 +966,21 @@ export const upsertPartAndFitment = internalMutation({
     // sanitize at extraction (better logging/context there) — this is the
     // guarantee that no NEW path can ever skip it.
     const configMakeDoc = config?.make_id ? await ctx.db.get(config.make_id) : null;
-    const cleanNumber = sanitizePartNumber(args.oem_part_number, configMakeDoc?.name);
+    const badgeMake = configMakeDoc?.name;
+    // Accept a part matching EITHER the config make OR the builder brand (P2.5:
+    // badge-engineered cars carry the builder's OEM numbers — a Mazda part on a
+    // Toyota Yaris must not be rejected as "foreign").
+    let cleanNumber = sanitizePartNumber(args.oem_part_number, badgeMake);
+    if (
+      !cleanNumber &&
+      args.build_source_make &&
+      args.build_source_make.toLowerCase() !== (badgeMake ?? "").toLowerCase()
+    ) {
+      cleanNumber = sanitizePartNumber(args.oem_part_number, args.build_source_make);
+    }
     if (!cleanNumber) {
       console.log(
-        `[v8-parts] REJECTED part number at write: "${args.oem_part_number}" (${args.subcategory}) failed sanitization for make=${configMakeDoc?.name ?? "?"}`,
+        `[v8-parts] REJECTED part number at write: "${args.oem_part_number}" (${args.subcategory}) failed sanitization for make=${badgeMake ?? "?"}${args.build_source_make ? `/${args.build_source_make}` : ""}`,
       );
       return { part_id: null, fitment_id: null, rejected: "invalid_number" as const };
     }
@@ -636,6 +989,47 @@ export const upsertPartAndFitment = internalMutation({
     // variants ("5Q0 698 451 A" vs "5Q0698451A") resolve to one row instead of
     // splitting fitments and price history across duplicates.
     const normalized = normalizeOemNumber(cleanNumber);
+
+    // Round 10 (batch-11 SRX): durable refute memory. A number the fitment
+    // verifier hard-killed for THIS config must not walk back in on a purge
+    // + re-run ("block"); a soft-flagged one re-enters pre-demoted ("flag").
+    const refutedRow = await ctx.db
+      .query("refuted_fitments")
+      .withIndex("by_config_oem", (q) =>
+        q.eq("vehicle_config_id", args.vehicle_config_id)
+         .eq("oem_part_number_normalized", normalized)
+      )
+      .first();
+    if (refutedRow && refutedRow.mode === "block") {
+      console.log(
+        `[v8-parts] REJECTED at write: ${cleanNumber} (${args.subcategory}) is on this config's refute blocklist — ${refutedRow.reason}`,
+      );
+      return { part_id: null, fitment_id: null, rejected: "refuted" as const };
+    }
+
+    // FAIL-CLOSED PART-NUMBER GATE. Resolved HERE, before any oem_parts or
+    // part_fitments row is touched, so the verdict is a property of the write
+    // and not of whatever the write already did. The action it implies is
+    // applied at the fitment below, where mechanic_verified is in hand.
+    //
+    // Asked of the SAME make set sanitizePartNumber accepted above: the badge
+    // make plus the builder brand, because a badge-engineered car (P2.5)
+    // carries the builder's OEM numbers and a Mazda number is genuinely absent
+    // from Toyota's catalog without being fake. Skipping the query when the
+    // gate is "off" or no make resolves keeps the common path free.
+    const existenceMode = partExistenceGateMode();
+    const existenceMakes = [
+      badgeMake,
+      args.build_source_make &&
+      args.build_source_make.toLowerCase() !== (badgeMake ?? "").toLowerCase()
+        ? args.build_source_make
+        : null,
+    ].filter((m): m is string => !!m && m.trim().length > 0);
+    const existenceVerdict: ExistenceVerdict =
+      existenceMode === "off"
+        ? "no_index"
+        : await lookupExistenceVerdict(ctx, existenceMakes, cleanNumber);
+
     let part = await ctx.db
       .query("oem_parts")
       .withIndex("by_part_number_normalized", (q) =>
@@ -685,6 +1079,26 @@ export const upsertPartAndFitment = internalMutation({
       return { part_id: null, fitment_id: null, rejected: "cross_make" as const };
     }
 
+    // Round 12b (live purge+re-run finding): when this config already carries
+    // a role_identity refute for this number, the STORED adjudicated title is
+    // the evidence of record — Batch-2's web-search echoed a COMPOSED title
+    // ("Battery — Equinox 1.5l Primary (Labeled 84257919)") that asserted
+    // battery-ness, passed the lexicon, and overwrote the sweep's verified
+    // "Negative Battery Extension Cable". So: (a) re-run the identity gate on
+    // the STORED title, which the caller cannot fabricate away; (b) never let
+    // a caller title overwrite evidence on a role_identity-contested part.
+    const roleIdentityContested =
+      !!refutedRow && String(refutedRow.reason ?? "").startsWith("role_identity");
+    if (roleIdentityContested && part?.scraped_name) {
+      const storedVerdict = checkRoleIdentity(args.subcategory, part.scraped_name);
+      if (storedVerdict.verdict === "reject" && storedVerdict.mode === "reject") {
+        console.log(
+          `[v8-parts] REJECTED role-identity (stored evidence): ${args.oem_part_number} (${args.subcategory}) — adjudicated title "${part.scraped_name}" matched "${storedVerdict.matched}"`,
+        );
+        return { part_id: null, fitment_id: null, rejected: "role_identity" as const };
+      }
+    }
+
     let partId;
     if (part) {
       partId = part._id;
@@ -701,6 +1115,15 @@ export const upsertPartAndFitment = internalMutation({
         oem_part_number_normalized: normalizeOemNumber(part.oem_part_number),
         last_confirmed_at: now,
         source_count: (part.source_count ?? 0) + 1,
+        // Round 12: observed listing title. Never clobbered with null — a
+        // titleless re-confirm keeps the prior evidence. (After a supersession
+        // redirect this stamps the OLD listing's title on the successor row:
+        // same product family, acceptable evidence.) Round 12b: a
+        // role_identity-contested part keeps its ADJUDICATED title — caller
+        // echoes must not overwrite the evidence of record.
+        ...(args.observed_title && !roleIdentityContested
+          ? { scraped_name: args.observed_title }
+          : {}),
       });
     } else {
       partId = await ctx.db.insert("oem_parts", {
@@ -716,6 +1139,7 @@ export const upsertPartAndFitment = internalMutation({
         source_count: 1,
         data_quality: "scraped",
         created_at: now,
+        ...(args.observed_title ? { scraped_name: args.observed_title } : {}),
       });
     }
 
@@ -738,6 +1162,29 @@ export const upsertPartAndFitment = internalMutation({
     // Corroboration signal: distinct domains that attested this fitment.
     const domain = args.source_domain?.toLowerCase().replace(/^www\./, "") || null;
 
+    // Apply the existence verdict now that mechanic_verified is readable. Only
+    // an EXISTING row can be human-verified, so a first write is never exempt —
+    // the exemption is a claim about a fitment someone inspected, not about a
+    // number someone typed.
+    const existenceDecision = decidePartWriteAction({
+      verdict: existenceVerdict,
+      mode: existenceMode,
+      mechanicVerified: existingFitment?.mechanic_verified === true,
+    });
+    if (existenceDecision.record) {
+      console.warn(
+        `[v8-parts] part-existence gate ${existenceDecision.action.toUpperCase()}: ${cleanNumber} ` +
+          `(${args.subcategory}) is absent from the ${existenceMakes.join("/") || "?"} catalog index ` +
+          `— mode=${existenceMode} reason=${existenceDecision.reason}`,
+      );
+    }
+    // The catalog now carries a number this gate previously quarantined —
+    // positive evidence, so the stamp comes off. Only ever OUR stamp: a
+    // cross_make_quarantined row is another gate's verdict to lift.
+    const releaseQuarantine =
+      existenceVerdict === "found" &&
+      existingFitment?.data_quality === PART_NOT_IN_CATALOG_QUALITY;
+
     let fitmentId;
     if (existingFitment) {
       fitmentId = existingFitment._id;
@@ -749,6 +1196,11 @@ export const upsertPartAndFitment = internalMutation({
         ...(domain && !domains.includes(domain)
           ? { source_domains: [...domains, domain] }
           : {}),
+        ...(existenceDecision.action === "quarantine"
+          ? { data_quality: PART_NOT_IN_CATALOG_QUALITY }
+          : releaseQuarantine
+            ? { data_quality: undefined }
+            : {}),
         // Backfill/refresh the reference role on re-confirm so older rows that
         // predate role stamping pick it up. Only when the caller supplies one.
         ...(args.service_role ? { service_role: args.service_role } : {}),
@@ -765,6 +1217,17 @@ export const upsertPartAndFitment = internalMutation({
         confidence: args.confidence,
         source_count: 1,
         ...(domain ? { source_domains: [domain] } : {}),
+        // Round 10: a soft-refuted number re-enters pre-demoted so the flag
+        // (and the selector's demotion) survives purge + re-run.
+        ...(refutedRow && refutedRow.mode === "flag"
+          ? { refute_flagged: true, refute_reason: refutedRow.reason }
+          : {}),
+        // Born quarantined rather than not born at all: the row records WHICH
+        // number the enrichment believed in, which is what makes the gate
+        // auditable and one patch reversible if the index turns out wrong.
+        ...(existenceDecision.action === "quarantine"
+          ? { data_quality: PART_NOT_IN_CATALOG_QUALITY }
+          : {}),
         first_confirmed_at: now,
         last_confirmed_at: now,
         mechanic_verified: false,
@@ -772,7 +1235,20 @@ export const upsertPartAndFitment = internalMutation({
       });
     }
 
-    return { part_id: partId, fitment_id: fitmentId };
+    return {
+      part_id: partId,
+      fitment_id: fitmentId,
+      // Structured outcome for the caller's ledger — present on every write so
+      // "log" mode is measurable without reading logs. Callers that only read
+      // part_id/fitment_id are unaffected.
+      part_existence: {
+        verdict: existenceVerdict,
+        mode: existenceMode,
+        action: existenceDecision.action,
+        reason: existenceDecision.reason,
+        makes: existenceMakes,
+      },
+    };
   },
 });
 
@@ -803,6 +1279,79 @@ export const upsertPartPrice = internalMutation({
 
     const now = Date.now();
 
+    // ── Fluid container gate (Aug 2026) ───────────────────────────────────
+    // Fluids bill per quart x capacity, so a 5-quart JUG price stored in the
+    // per-unit column over-quotes by the pack size (a $36 jug on a 6-quart
+    // car = $216 of oil). The absolute price bands cannot catch it — that $36
+    // sits inside engine_oil's [4, 40]. Only the listing title distinguishes
+    // a dear bottle from a cheap jug. Audited live: 57 of 382 usable fluid
+    // rows read as container prices, and 20 parts had NO usable per-unit row
+    // at all, so the median could not save them.
+    //
+    // Normalize when the size is stated (a jug is legitimate evidence once
+    // divided); when it is not stated and the figure is implausible per unit,
+    // keep the row for audit but type it `unverified` — the poison list then
+    // excludes it from customer-facing math, exactly as a band violation.
+    let effectivePrice = args.price;
+    let effectivePriceType = args.price_type;
+    let effectivePackQuarts: number | undefined;
+    try {
+      const pricedPart: any = await ctx.db.get(args.part_id);
+      if (pricedPart) {
+        const verdict = normalizeFluidPrice({
+          subcategory: pricedPart.subcategory ?? null,
+          price: args.price,
+          title: pricedPart.scraped_name ?? pricedPart.name ?? null,
+        });
+        if (verdict.action === "normalized") {
+          console.log(
+            `[upsertPartPrice] fluid pack normalized: ${pricedPart.oem_part_number} ` +
+              `$${args.price} / ${verdict.packQuarts}qt → $${verdict.price}/qt`,
+          );
+          effectivePrice = verdict.price;
+          effectivePackQuarts = verdict.packQuarts ?? undefined;
+        } else if (verdict.action === "suspect_unpriceable") {
+          console.warn(
+            `[upsertPartPrice] fluid price $${args.price} for ${pricedPart.oem_part_number} ` +
+              `(${pricedPart.subcategory}) reads as a container price with no stated size — ` +
+              `storing as ${UNVERIFIED_PRICE_TYPE}`,
+          );
+          effectivePriceType = UNVERIFIED_PRICE_TYPE;
+        }
+      }
+    } catch (e) {
+      // Never let the gate cost us a price row.
+      console.warn("[upsertPartPrice] fluid pack gate failed (non-fatal):", e);
+    }
+
+    // Wave-2 "source with the data": the director's source_registry surface
+    // fills from sources we ACTUALLY used, not a speculative discovery pass.
+    // Evidence-producing domains auto-register in sourceScoring; price-only
+    // domains (the storefronts) registered nowhere until here. One index
+    // read per price write, zero external calls. Non-fatal by construction.
+    try {
+      const registered = await ctx.db
+        .query("source_registry")
+        .withIndex("by_domain", (q) => q.eq("domain", args.source_domain))
+        .first();
+      if (!registered) {
+        await ctx.db.insert("source_registry", {
+          domain: args.source_domain,
+          source_type: "parts_pricing",
+          url_template: args.source_url,
+          reliability_score: 0.5,
+          total_observations: 0,
+          last_scraped_at: now,
+          last_scrape_success: true,
+          created_at: now,
+        });
+      } else if (registered.last_scraped_at == null || registered.last_scraped_at < now - 60_000) {
+        await ctx.db.patch(registered._id, { last_scraped_at: now, last_scrape_success: true });
+      }
+    } catch (e) {
+      console.warn("[upsertPartPrice] source_registry upsert failed (non-fatal):", e);
+    }
+
     const existing = await ctx.db
       .query("part_prices")
       .withIndex("by_part_source", (q) =>
@@ -812,20 +1361,22 @@ export const upsertPartPrice = internalMutation({
 
     if (existing) {
       await ctx.db.patch(existing._id, {
-        price: args.price,
-        price_type: args.price_type,
+        price: effectivePrice,
+        price_type: effectivePriceType,
         source_url: args.source_url,
         msrp: args.msrp,
         discount: args.discount,
         refreshed_at: now,
+        ...(effectivePackQuarts != null ? { pack_quarts: effectivePackQuarts } : {}),
       });
       return existing._id;
     }
 
     return await ctx.db.insert("part_prices", {
       part_id: args.part_id,
-      price: args.price,
-      price_type: args.price_type,
+      price: effectivePrice,
+      price_type: effectivePriceType,
+      ...(effectivePackQuarts != null ? { pack_quarts: effectivePackQuarts } : {}),
       source_url: args.source_url,
       source_domain: args.source_domain,
       msrp: args.msrp,
@@ -912,16 +1463,14 @@ export const upsertServiceInterval = internalMutation({
     // as "replace brake pads every 12 months" (Jul 2026 5-VIN test: Atlas
     // pads landed 10k/12mo at 0.95 — an inspection cadence stored as a
     // replacement schedule). Strip months for these services on every write
-    // path that funnels through this mutation.
-    const WEAR_ITEM_SLUGS = new Set([
-      "brake_pad_replacement",
-      "rotor_replacement",
-      "tire_replacement",
-      "battery_replacement",
-    ]);
+    // path that funnels through this mutation. Round 9: also force status
+    // "estimated" — a wear estimate must never read as an OEM schedule,
+    // whichever writer called us (batch-11: pads 50k "scheduled" on 3 configs).
     const svc = await ctx.db.get(args.service_id);
-    const isWearItem = WEAR_ITEM_SLUGS.has(((svc as any)?.slug ?? "").replace(/-/g, "_"));
+    const isWearItem = WEAR_ITEM_SERVICE_SLUGS.has(((svc as any)?.slug ?? "").replace(/-/g, "_"));
     const intervalMonths = isWearItem ? undefined : args.interval_months;
+    const effectiveStatus =
+      isWearItem && args.status === "scheduled" ? "estimated" : args.status;
 
     const existing = await ctx.db
       .query("service_intervals")
@@ -937,7 +1486,7 @@ export const upsertServiceInterval = internalMutation({
       service_id: args.service_id,
       interval_miles: args.interval_miles,
       interval_months: intervalMonths,
-      status: args.status,
+      status: effectiveStatus,
       display_string: args.display_string,
       confidence: args.confidence,
       data_quality: args.data_quality,
@@ -959,6 +1508,13 @@ export const upsertServiceInterval = internalMutation({
           confidence: Math.max(args.confidence, existing.confidence ?? 0),
           interval_months: isWearItem ? undefined : (intervalMonths ?? existing.interval_months),
           display_string: args.display_string ?? existing.display_string,
+          // A real months arriving from a source supersedes a defaulted one, so
+          // the override stamp must be cleared — otherwise a genuinely sourced
+          // months keeps reading as "default_fallback" forever. When this write
+          // carries no months the stored (possibly defaulted) one survives, and
+          // so must its stamp.
+          interval_months_source:
+            intervalMonths != null ? undefined : (existing as any).interval_months_source,
         });
       } else {
         // Disagreement: source_count wins ("4 sources vs 2 sources").
@@ -968,11 +1524,15 @@ export const upsertServiceInterval = internalMutation({
           await ctx.db.patch(existing._id, {
             interval_miles: args.interval_miles,
             interval_months: intervalMonths,
-            status: args.status,
+            status: effectiveStatus,
             display_string: args.display_string,
             confidence: args.confidence,
             data_quality: args.data_quality,
             source_count: 1,
+            // This branch REPLACES the row's interval values outright, so any
+            // months-provenance override from a prior default is stale either
+            // way — whether the new months is present or absent.
+            interval_months_source: undefined,
           });
         }
       }
@@ -985,6 +1545,43 @@ export const upsertServiceInterval = internalMutation({
       mechanic_verified: false,
       created_at: Date.now(),
     });
+  },
+});
+
+// Round 10: targeted interval patch for the adversarial-verification writer.
+// Resolves the service by slug (the suspect carries serviceSlug, not an id)
+// and patches the one row. Previously interval corrections were a no-op stub
+// (batch-11 Cobalt DEX-COOL 30k/24mo survived two batches after detection).
+export const patchServiceIntervalBySlug = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    service_slug: v.string(),
+    interval_miles: v.optional(v.float64()),
+    interval_months: v.optional(v.float64()),
+    status: v.optional(v.string()),
+    confidence: v.optional(v.float64()),
+    data_quality: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const slugNorm = args.service_slug.replace(/-/g, "_");
+    const services = await ctx.db.query("services").collect();
+    const svc = services.find((s) => ((s.slug ?? "") as string).replace(/-/g, "_") === slugNorm);
+    if (!svc) return { patched: false, reason: "service_not_found" };
+    const row = await ctx.db
+      .query("service_intervals")
+      .withIndex("by_config_service", (q) =>
+        q.eq("vehicle_config_id", args.vehicle_config_id).eq("service_id", svc._id)
+      )
+      .first();
+    if (!row) return { patched: false, reason: "interval_row_not_found" };
+    const patch: Record<string, unknown> = {};
+    if (args.interval_miles !== undefined) patch.interval_miles = args.interval_miles;
+    if (args.interval_months !== undefined) patch.interval_months = args.interval_months;
+    if (args.status !== undefined) patch.status = args.status;
+    if (args.confidence !== undefined) patch.confidence = args.confidence;
+    if (args.data_quality !== undefined) patch.data_quality = args.data_quality;
+    if (Object.keys(patch).length > 0) await ctx.db.patch(row._id, patch);
+    return { patched: true };
   },
 });
 
@@ -1166,9 +1763,23 @@ export const reconcileConfigForReenrich = internalMutation({
   },
   handler: async (ctx, args) => {
     const patch: any = {
-      config_key: args.config_key,
       enrichment_status: "enriching",
     };
+    // config_key collision guard (Aug 2026): this patch used to re-key the
+    // config unconditionally — if ANOTHER row already held the target key we
+    // minted a duplicate config_key (the GLC-43 twin-config incident). Mirror
+    // renameConfigKey's conflict behavior: keep the current key and log.
+    const holder = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_config_key", (q) => q.eq("config_key", args.config_key))
+      .first();
+    if (!holder || holder._id === args.config_id) {
+      patch.config_key = args.config_key;
+    } else {
+      console.warn(
+        `[reconcile] config_key conflict: "${args.config_key}" already held by ${String(holder._id)} — keeping existing key on ${String(args.config_id)} (needs manual merge)`,
+      );
+    }
     if (args.drivetrain && args.drivetrain !== "unknown") patch.drivetrain = args.drivetrain;
     if (args.nhtsa_vin_key) patch.nhtsa_vin_key = args.nhtsa_vin_key;
     if (args.transmission_id) patch.transmission_id = args.transmission_id;
@@ -1204,6 +1815,29 @@ export const addEvidenceBatch = internalMutation({
     let count = 0;
 
     for (const row of args.evidence_rows) {
+      // Supersession (Aug 2026, closes June-audit I7/KU-A as "regression"):
+      // a re-observation retires every prior is_latest row for the same
+      // (entity, field) so consensus weighs the CURRENT run's observation
+      // set, not all history. The "mark stale" step was lost when
+      // verification.ts dropped it — nothing ever set is_latest=false, so
+      // the consensus filter was a no-op and a stale spec value could keep
+      // out-voting a fresh re-enrichment forever. Mechanic evidence is
+      // exempt: a human observation is never retired by a pipeline write
+      // (the mechanic-accept path manages its own supersession).
+      const priors = await ctx.db
+        .query("enrichment_evidence")
+        .withIndex("by_entity_field", (q) =>
+          q
+            .eq("entity_type", row.entity_type)
+            .eq("entity_id", row.entity_id)
+            .eq("field_name", row.field_name)
+        )
+        .collect();
+      for (const prior of priors) {
+        if (prior.is_latest && prior.source_type !== "mechanic") {
+          await ctx.db.patch(prior._id, { is_latest: false });
+        }
+      }
       await ctx.db.insert("enrichment_evidence", {
         entity_type: row.entity_type,
         entity_id: row.entity_id,
@@ -1280,6 +1914,8 @@ export const updateEnrichmentRun = internalMutation({
           severity: v.string(),
           reason: v.string(),
           value: v.optional(v.string()),
+          // W1.5 (G32/G33): emitting late-gate stage — see utils/lateSanityFlags.ts.
+          stage: v.optional(v.string()),
         }),
       ),
     ),
@@ -1300,6 +1936,7 @@ export const updateEnrichmentRun = internalMutation({
             core_total: v.number(),
             core_with_fitment: v.number(),
             core_with_price: v.number(),
+            missing_roles: v.optional(v.array(v.string())),
           }),
         ),
       }),
@@ -1361,10 +1998,25 @@ export const patchRunPriceHealth = internalMutation({
           core_total: v.number(),
           core_with_fitment: v.number(),
           core_with_price: v.number(),
+          missing_roles: v.optional(v.array(v.string())),
         }),
       ),
     }),
     still_unpriced_keys: v.array(v.string()),
+    /** CURRENT config fill, recomputed by the caller via calculateV3FillRate.
+     *  The stored config.fill_rate is a finalize-time snapshot — the heal
+     *  rungs (refute harvest, category pages, interchange, role repair) add
+     *  fitments AFTER it was stamped, so gating on the stored value left
+     *  healed configs stuck partial forever (Aug-8 fresh-VIN round 2: all 5
+     *  finalized partial on the fill leg and never re-evaluated). When
+     *  provided it drives the gate AND is restamped onto the config. */
+    live_fill_rate: v.optional(v.number()),
+    /** Round-12 gate facts at re-evaluation time. Optional — when absent the
+     *  env-staged role gates simply see empty inputs (their default stage is
+     *  log, so this only matters under an explicit enforce). */
+    missing_core_roles: v.optional(v.array(v.string())),
+    axle_pair_gaps: v.optional(v.array(v.string())),
+    interval_provenance_gaps: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const run = await ctx.db
@@ -1392,17 +2044,148 @@ export const patchRunPriceHealth = internalMutation({
     // price rows are only ever ADDED by the heal path, so demotion would mean
     // the gate thresholds moved, not the data.
     const config = await ctx.db.get(args.vehicle_config_id);
-    if (config && (config as any).enrichment_status === "partial") {
-      const newStatus = computeEnrichmentStatus({
-        fillRate: (config as any).fill_rate ?? 0,
+    const status = (config as any)?.enrichment_status;
+    let promoted = false;
+    if (config && status === "partial") {
+      const gateInput = {
+        fillRate: args.live_fill_rate ?? (config as any).fill_rate ?? 0,
         quotabilityPct: args.quotability.pct,
         hasPriceGaps: args.still_unpriced_keys.length > 0,
-      });
+        missingCoreRoles: args.missing_core_roles,
+        axlePairGaps: args.axle_pair_gaps,
+        intervalProvenanceGaps: args.interval_provenance_gaps,
+      };
+      const newStatus = computeEnrichmentStatus(gateInput);
       if (newStatus === "complete") {
         console.log(
-          `[price-heal] config ${args.vehicle_config_id} partial → complete (quotability ${args.quotability.pct}) — notifying owners`,
+          `[price-heal] config ${args.vehicle_config_id} partial → complete — ` +
+            `${explainGateDecision(gateInput)} — notifying owners`,
         );
         await ctx.db.patch(args.vehicle_config_id, { enrichment_status: "complete" });
+        promoted = true;
+        await ctx.scheduler.runAfter(
+          0,
+          internal.vehicleEnrichment.v3mutations.notifyEnrichmentComplete,
+          { vehicle_config_id: args.vehicle_config_id },
+        );
+      } else {
+        console.log(
+          `[price-heal] config ${args.vehicle_config_id} stays partial — ${explainGateDecision(gateInput)}`,
+        );
+      }
+    }
+    // Keep the stored fill honest whenever a live recompute is on hand —
+    // terminal statuses only, so a concurrently-started run's fill_rate=0
+    // reset is never overwritten from this path.
+    if (
+      config &&
+      args.live_fill_rate != null &&
+      args.live_fill_rate !== (config as any).fill_rate &&
+      ["partial", "complete", "verified"].includes(status)
+    ) {
+      await ctx.db.patch(args.vehicle_config_id, { fill_rate: args.live_fill_rate });
+    }
+    return { patchedRun: !!run, promoted, status_after: promoted ? "complete" : status ?? null };
+  },
+});
+
+// ============================================================================
+// 12a-ter. patchRunRoleHealth — reconcile run health after a role repair
+// ============================================================================
+
+/** Round 12: the standalone repairMissingRoles action's run-row reconcile.
+ *  Mirrors patchRunPriceHealth's shape but touches ONLY role-resource state:
+ *  price gaps are left alone (patchRunPriceHealth with empty
+ *  still_unpriced_keys would wrongly declare every part priced). Replaces the
+ *  run's prior "role_resource:" and "axle_pair_gap:" error entries and its
+ *  resource_* field_gaps with the post-repair truth. */
+export const patchRunRoleHealth = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    quotability: v.object({
+      pct: v.number(),
+      services: v.array(
+        v.object({
+          slug: v.string(),
+          core_total: v.number(),
+          core_with_fitment: v.number(),
+          core_with_price: v.number(),
+          missing_roles: v.optional(v.array(v.string())),
+        }),
+      ),
+    }),
+    role_gaps: v.array(v.object({ field: v.string(), reason: v.string() })),
+    role_errors: v.array(v.string()),
+    /** Post-repair gate facts — the heal-only promotion below must respect an
+     *  enforce-stage role gate (no promoting a config that still has gaps). */
+    missing_core_roles: v.array(v.string()),
+    axle_pair_gaps: v.array(v.string()),
+    /** CURRENT config fill recomputed by the caller — same contract as
+     *  patchRunPriceHealth.live_fill_rate (the stored fill_rate is a
+     *  finalize-time snapshot the repair's own part writes just outdated). */
+    live_fill_rate: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const run = await ctx.db
+      .query("enrichment_runs")
+      .withIndex("by_vehicle_config", (q) =>
+        q.eq("vehicle_config_id", args.vehicle_config_id),
+      )
+      .order("desc")
+      .first();
+    if (run) {
+      // Every reason gapReasonFor can emit. A member missing here is not
+      // cosmetic: the stale entry survives re-adjudication and the run keeps
+      // reporting a gap the repair has already resolved.
+      const RESOURCE_REASONS = new Set([
+        "resourced",
+        "resource_never_found",
+        "resource_refuted_no_replacement",
+        "resource_not_applicable",
+        "resource_skipped_run_budget",
+        "resource_skipped_lifetime_cap",
+        // Legacy label, still present on runs recorded before the split.
+        "resource_skipped_budget",
+      ]);
+      const repairedFields = new Set(args.role_gaps.map((g) => g.field));
+      const keptGaps = (((run as any).field_gaps ?? []) as Array<{ field: string; reason: string }>).filter(
+        (g) =>
+          // Drop stale resource_* entries for fields this repair re-adjudicated
+          // (and any field the repair FILLED — its role_gaps entry is absent).
+          !(RESOURCE_REASONS.has(g.reason) && (repairedFields.has(g.field) || !args.role_gaps.some((n) => n.field === g.field))),
+      );
+      const keptErrors = (((run as any).errors ?? []) as string[]).filter(
+        (e) => !e.startsWith("role_resource:") && !e.startsWith("axle_pair_gap:") && !e.startsWith("quotability:"),
+      );
+      if (args.quotability.pct < 0.8) keptErrors.push(`quotability:${args.quotability.pct}`);
+      await ctx.db.patch(run._id, {
+        quotability: args.quotability,
+        quotability_updated_at: Date.now(),
+        field_gaps: [...keptGaps, ...args.role_gaps],
+        errors: [...keptErrors, ...args.role_errors],
+      });
+    }
+
+    // Heal-only completion-gate re-run (same contract as patchRunPriceHealth):
+    // only partial → complete, and only if the gate — including the round-12
+    // role legs at their current env stage — now passes.
+    const config = await ctx.db.get(args.vehicle_config_id);
+    const status = (config as any)?.enrichment_status;
+    let promoted = false;
+    if (config && status === "partial") {
+      const gateInput = {
+        fillRate: args.live_fill_rate ?? (config as any).fill_rate ?? 0,
+        quotabilityPct: args.quotability.pct,
+        missingCoreRoles: args.missing_core_roles,
+        axlePairGaps: args.axle_pair_gaps,
+      };
+      const newStatus = computeEnrichmentStatus(gateInput);
+      if (newStatus === "complete") {
+        console.log(
+          `[role-repair] config ${args.vehicle_config_id} partial → complete — ${explainGateDecision(gateInput)}`,
+        );
+        await ctx.db.patch(args.vehicle_config_id, { enrichment_status: "complete" });
+        promoted = true;
         await ctx.scheduler.runAfter(
           0,
           internal.vehicleEnrichment.v3mutations.notifyEnrichmentComplete,
@@ -1410,6 +2193,47 @@ export const patchRunPriceHealth = internalMutation({
         );
       }
     }
+    if (
+      config &&
+      args.live_fill_rate != null &&
+      args.live_fill_rate !== (config as any).fill_rate &&
+      ["partial", "complete", "verified"].includes(status)
+    ) {
+      await ctx.db.patch(args.vehicle_config_id, { fill_rate: args.live_fill_rate });
+    }
+    return { patchedRun: !!run, promoted };
+  },
+});
+
+// ============================================================================
+// 12a-bis. addNaRoleKeys — durable role-level not-applicable memory (round 12)
+// ============================================================================
+
+/** Merge positively-established not-applicable roleKeys onto the config
+ *  (rear drums → rear_rotor/rear_brake_pad). Written only from a role
+ *  re-source research finding; read into quotability's naRoleKeys so the
+ *  completeness gates and axle-pair invariant stop asking for a component the
+ *  vehicle physically lacks. Additive-only — removing a wrong entry is a
+ *  director action, not an enrichment one. */
+export const addNaRoleKeys = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    role_keys: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (args.role_keys.length === 0) return { added: 0 };
+    const config = await ctx.db.get(args.vehicle_config_id);
+    if (!config) return { added: 0 };
+    const existing: string[] = ((config as any).na_role_keys ?? []) as string[];
+    const merged = [...new Set([...existing, ...args.role_keys])];
+    const added = merged.length - existing.length;
+    if (added > 0) {
+      await ctx.db.patch(args.vehicle_config_id, { na_role_keys: merged });
+      console.log(
+        `[role-resource] na_role_keys += ${args.role_keys.join(",")} on config ${args.vehicle_config_id}`,
+      );
+    }
+    return { added };
   },
 });
 
@@ -1463,6 +2287,93 @@ export const failEnrichmentRun = internalMutation({
       return { config_restored: true };
     }
     return { config_restored: false };
+  },
+});
+
+// ============================================================================
+// 12c. reapStaleRuns — zombie-run reaper (15-min cron)
+// ============================================================================
+
+/**
+ * A poll chain can die without ANY exit path firing (deploy restart between
+ * scheduled ticks, scheduler state loss) — the run then sits in an in-progress
+ * status forever and its config stays soft-locked. STEP 0's STUCK_MS valve
+ * only fires when a NEW enrichment arrives for the same key, so an unpopular
+ * config never heals (the Jul-21 batch2 zombie). This cron is the sweep that
+ * actually reaps: any in-progress run silent past REAP_MS (30 min; healthy
+ * chains heartbeat every 60s fast / 10 min slow) is marked failed.
+ *
+ * Config restore mirrors failEnrichmentRun's guard: only the LATEST run for a
+ * config may touch it, and only while it still reads in-progress — "pending"
+ * when the chain died before batch-1 data landed (started/scraping), else
+ * "partial". Never schedules a new enrichment (spend is a human/caller
+ * decision) and never writes config data fields.
+ */
+export const reapStaleRuns = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const reaped: Array<{
+      run_id: string;
+      run_status: string;
+      vehicle_config_id: string;
+      config_restored_to: string | null;
+    }> = [];
+
+    for (const status of RUN_IN_PROGRESS_STATUSES) {
+      const runs = await ctx.db
+        .query("enrichment_runs")
+        .withIndex("by_status", (q) => q.eq("status", status))
+        .take(50);
+
+      for (const run of runs) {
+        if (!isRunStale(run, now)) continue;
+
+        await ctx.db.patch(run._id, {
+          status: "failed",
+          errors: [...((run as any).errors ?? []), "reaped_stale_heartbeat"],
+          completed_at: now,
+        });
+
+        // Restore the config ONLY when this run is its latest — reaping an
+        // old orphan must never demote a config a successor run now owns.
+        let restoredTo: string | null = null;
+        const latest = await ctx.db
+          .query("enrichment_runs")
+          .withIndex("by_vehicle_config", (q) =>
+            q.eq("vehicle_config_id", run.vehicle_config_id),
+          )
+          .order("desc")
+          .first();
+        if (latest && latest._id === run._id) {
+          const config = await ctx.db.get(run.vehicle_config_id);
+          if (
+            config &&
+            CONFIG_IN_PROGRESS_STATUSES.has((config as any).enrichment_status ?? "")
+          ) {
+            restoredTo =
+              status === "started" || status === "scraping" ? "pending" : "partial";
+            await ctx.db.patch(run.vehicle_config_id, {
+              enrichment_status: restoredTo,
+            });
+          }
+        }
+
+        console.warn(
+          `[reaper] reaped stale run ${run._id} (was ${status}, silent ${Math.round(
+            (now - Math.max((run as any).started_at ?? run._creationTime, (run as any).last_heartbeat_at ?? 0)) / 60000,
+          )}min)${restoredTo ? ` — config → ${restoredTo}` : ""}`,
+        );
+        reaped.push({
+          run_id: String(run._id),
+          run_status: status,
+          vehicle_config_id: String(run.vehicle_config_id),
+          config_restored_to: restoredTo,
+        });
+      }
+    }
+
+    return { reaped_count: reaped.length, reaped };
   },
 });
 
@@ -1532,9 +2443,305 @@ export const removeRefutedFitments = internalMutation({
         `[fitment-verify] Removing refuted fitment ${String(f._id)} (${oem}, service=${(f as any).service_type ?? "?"}): ${refutedByOem.get(oem)}`,
       );
       await ctx.db.delete(f._id);
+      // Round 10: make the kill durable — a purge + re-run must not
+      // reinsert this number on this config (batch-11 SRX regression).
+      const normalized = normalizeOemNumber((part as any)?.oem_part_number ?? oem);
+      const already = await ctx.db
+        .query("refuted_fitments")
+        .withIndex("by_config_oem", (q) =>
+          q.eq("vehicle_config_id", args.vehicle_config_id)
+           .eq("oem_part_number_normalized", normalized)
+        )
+        .first();
+      if (already) {
+        await ctx.db.patch(already._id, { mode: "block", reason: refutedByOem.get(oem)!, refuted_at: Date.now() });
+      } else {
+        await ctx.db.insert("refuted_fitments", {
+          vehicle_config_id: args.vehicle_config_id,
+          oem_part_number_normalized: normalized,
+          service_type: (f as any).service_type,
+          mode: "block",
+          reason: refutedByOem.get(oem)!,
+          refuted_at: Date.now(),
+        });
+      }
       removed++;
     }
     return { removed };
+  },
+});
+
+// Round 9 (batch-11): marks refuted-but-KEPT fitments (multi-source support
+// blocked the hard delete) so the part selector can demote them. Before this,
+// "kept for review" only meant a run_errors string — the flagged part still
+// competed (and won) in quote selection: the Forester's refuted 2010-2018
+// front pads beat the correct SK-gen pads because only the wrong part had
+// prices attached.
+export const flagRefutedFitments = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    refuted: v.array(v.object({ oem: v.string(), reason: v.string() })),
+  },
+  handler: async (ctx, args) => {
+    if (args.refuted.length === 0) return { flagged: 0 };
+    const refutedByOem = new Map(args.refuted.map((r) => [r.oem.toUpperCase(), r.reason]));
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicle_config_id))
+      .collect();
+    let flagged = 0;
+    for (const f of fitments) {
+      const part = await ctx.db.get(f.part_id);
+      const oem = ((part as any)?.oem_part_number ?? "").toUpperCase();
+      if (!oem || !refutedByOem.has(oem)) continue;
+      await ctx.db.patch(f._id, {
+        refute_flagged: true,
+        refute_reason: refutedByOem.get(oem),
+      });
+      // Round 10: persist the soft flag across purge + re-run (mode "flag":
+      // re-inserts are allowed but come back pre-demoted). Never downgrade
+      // an existing "block" row to "flag".
+      const normalized = normalizeOemNumber((part as any)?.oem_part_number ?? oem);
+      const already = await ctx.db
+        .query("refuted_fitments")
+        .withIndex("by_config_oem", (q) =>
+          q.eq("vehicle_config_id", args.vehicle_config_id)
+           .eq("oem_part_number_normalized", normalized)
+        )
+        .first();
+      if (!already) {
+        await ctx.db.insert("refuted_fitments", {
+          vehicle_config_id: args.vehicle_config_id,
+          oem_part_number_normalized: normalized,
+          service_type: (f as any).service_type,
+          mode: "flag",
+          reason: refutedByOem.get(oem)!,
+          refuted_at: Date.now(),
+        });
+      }
+      flagged++;
+    }
+    return { flagged };
+  },
+});
+
+/**
+ * Clear a soft refute flag when a later verification CONFIRMS the part.
+ *
+ * `refute_flagged` had no way back: it was set in three places
+ * (`flagRefutedFitments` here, the pre-demoted re-insert in
+ * `upsertPartAndFitment`, and the role-identity audit) and cleared in none, so
+ * a single soft flag broke that part's quotability triangle permanently — even
+ * after a later adversarial pass confirmed the exact same number. The 2020
+ * Yaris canary carried one (front wiper 85212-WB003) with no route to recovery.
+ *
+ * The bar to clear is deliberately higher than the bar to flag:
+ *
+ *  - only a `flag`-mode refute is clearable. A `block` row was an adjudicated
+ *    kill; a machine must never overturn it.
+ *  - the durable `refuted_fitments` row is deleted too. Without that, the
+ *    pre-demoted re-insert branch in upsertPartAndFitment re-applies the flag
+ *    on the very next run and the repair silently un-does itself.
+ *  - role-identity refutes (`refute_reason` starting "role_identity") have NO
+ *    backing refuted_fitments row, so they are cleared on the fitment alone.
+ *    Handling them is the difference between fixing one class of flag and
+ *    fixing all three writers.
+ */
+export const resolveRefutedFitment = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    confirmed: v.array(v.object({ oem: v.string(), reason: v.string() })),
+  },
+  handler: async (ctx, args) => {
+    if (args.confirmed.length === 0) return { resolved: 0, blocked_kept: 0 };
+    const confirmedByOem = new Map(
+      args.confirmed.map((r) => [r.oem.toUpperCase(), r.reason]),
+    );
+    const fitments = await ctx.db
+      .query("part_fitments")
+      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", args.vehicle_config_id))
+      .collect();
+
+    let resolved = 0;
+    let blockedKept = 0;
+    for (const f of fitments) {
+      if ((f as any).refute_flagged !== true) continue;
+      const part = await ctx.db.get(f.part_id);
+      const rawOem = (part as any)?.oem_part_number ?? "";
+      const oem = rawOem.toUpperCase();
+      if (!oem || !confirmedByOem.has(oem)) continue;
+
+      const normalized = normalizeOemNumber(rawOem);
+      const durable = await ctx.db
+        .query("refuted_fitments")
+        .withIndex("by_config_oem", (q) =>
+          q
+            .eq("vehicle_config_id", args.vehicle_config_id)
+            .eq("oem_part_number_normalized", normalized),
+        )
+        .first();
+
+      // An adjudicated block stands. Confirmation by a machine is not evidence
+      // enough to resurrect a part a human-reviewed audit killed.
+      if (durable && (durable as any).mode !== "flag") {
+        blockedKept++;
+        continue;
+      }
+
+      await ctx.db.patch(f._id, {
+        refute_flagged: false,
+        refute_reason: undefined,
+      });
+      if (durable) await ctx.db.delete(durable._id);
+      resolved++;
+    }
+
+    if (resolved > 0 || blockedKept > 0) {
+      console.log(
+        `[refute-resolve] config ${args.vehicle_config_id}: cleared ${resolved} soft refute(s), ` +
+          `kept ${blockedKept} adjudicated block(s)`,
+      );
+    }
+    return { resolved, blocked_kept: blockedKept };
+  },
+});
+
+// Round 11: one-time seeding of the refute blocklist from batch-10/11
+// adjudicated verdicts. The round-10 blocklist only remembers kills made
+// AFTER its deploy — wave-3 SRX proved a pre-deploy correct kill (24236933)
+// walks back in priced. Entries below are ONLY parts a human-reviewed audit
+// confirmed wrong for that exact config (never refuted-candidates or
+// look-wrong-but-correct values). Idempotent; run via:
+//   npx convex run vehicleEnrichment/v3mutations:seedRefutedFitmentsFromHistory
+export const seedRefutedFitmentsFromHistory = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const SEED: Record<string, { oem: string; reason: string }[]> = {
+      "2014_cadillac_srx_luxury_collection_lfx": [
+        { oem: "24236933", reason: "6L80/6L90 truck trans filter, not the SRX 6T70 (batch-11)" },
+        { oem: "13508023", reason: "cabin filter fits ATS/CTS/XTS, not 2010-16 SRX (batch-10+11)" },
+        { oem: "12677093", reason: "2017-22 Colorado 3.6 LGZ belt (batch-10)" },
+        { oem: "12593774", reason: "2002-09 Trailblazer/Envoy 4.2L belt (batch-11)" },
+        { oem: "88900401", reason: "differential part on FWD SRX — no diff (batch-10/11)" },
+        { oem: "88863349", reason: "LSD friction modifier on FWD SRX — no diff/LSD (batch-11)" },
+        { oem: "88863089", reason: "gear oil on FWD SRX — no diff (batch-11)" },
+        { oem: "88900330", reason: "LSD friction modifier on FWD SRX — no diff/LSD (batch-11)" },
+      ],
+      "2009_chevrolet_cobalt_lt_lap": [
+        { oem: "PF2257G", reason: "Cruze/Sonic small-engine oil filter (batch-10)" },
+        { oem: "55593191", reason: "Cruze filter-housing o-ring — LAP is spin-on (batch-10)" },
+        { oem: "PF2232", reason: "not a 2.2 LAP application (batch-11 wave-3)" },
+        { oem: "97136425", reason: "unfindable drain-plug gasket PN (batch-10)" },
+      ],
+      "2024_chevrolet_equinox_premier_lsd": [
+        { oem: "84588699", reason: "phantom PN, zero catalog existence (batch-11)" },
+        { oem: "12260882", reason: "phantom DEXRON-VI PN, zero GM-catalog existence (batch-11 wave-3)" },
+      ],
+      "2025_subaru_crosstrek_limited_na": [
+        { oem: "16546AA12A", reason: "2009-14 SJ-gen air filter, wrong for GU (batch-11)" },
+        { oem: "26296SC011", reason: "2010-18 front pads, wrong for 2024+ GU (batch-11)" },
+        { oem: "26300SA001", reason: "legacy 2004-era front rotor, wrong for GU (batch-11)" },
+        { oem: "26700FJ000", reason: "2012-23 GT-gen rear rotor, wrong for GU (batch-11 wave-3)" },
+        { oem: "57433VC000", reason: "telematics DCM battery, not the starter battery (batch-11 wave-3)" },
+      ],
+      "2021_hyundai_tucson_ultimate_g4kj": [
+        { oem: "18871-11070", reason: "2020+ Smartstream plug, wrong for TL G4KJ (batch-11)" },
+        { oem: "26350-2S000", reason: "NX4-era 2.5 cartridge filter, TL 2.4 is spin-on (batch-11 wave-3)" },
+        { oem: "18847-11160", reason: "2011-16 Theta II plug, wrong year-band (batch-11 wave-3)" },
+        { oem: "28313-2B700", reason: "1.6L-family intake gasket, no 2021 US Tucson fitment (batch-11)" },
+        { oem: "26414-3F501", reason: "Genesis Tau cartridge-housing o-ring on a spin-on engine (batch-11)" },
+      ],
+      "2022_honda_accord_sport_se_l15be": [
+        { oem: "17220-64A-A00", reason: "11th-gen 2023+ air filter (batch-11 wave-2/3)" },
+        { oem: "80291-TF3-E01", reason: "11th-gen 2023+ cabin filter (batch-11 wave-2/3)" },
+        { oem: "17115-5A2-A01", reason: "K-series 2.0/2.4 intake gasket on the L15BE (3 waves)" },
+        { oem: "31500-SR1-100M", reason: "Group 51R battery decoy; 10th gen uses 47/H5 (batch-11)" },
+        { oem: "25420-5LJ-003", reason: "CVT strainer fits Accord 1.5 only 2018-20, not 2022 (batch-11 wave-3)" },
+      ],
+      "2024_toyota_grand_highlander_hybrid_15_series_a25a_fxs": [
+        { oem: "04152-YZZA1", reason: "cartridge filter — GH A25A-FXS is spin-on 90915-YZZN1 (batch-11)" },
+        { oem: "17801-F0050", reason: "Camry/gas air filter; GH = 17801-F0080 (batch-11)" },
+        { oem: "90916-A2030", reason: "2GR V6 belt on a beltless hybrid (batch-11 wave-3)" },
+        { oem: "00279-0WQTE-01", reason: "0W-20 quart on the 0W-8/GLV-1 engine (batch-11)" },
+      ],
+      "2019_toyota_camry_l_le_se_xle_a25a_fks": [
+        { oem: "17177-0H020", reason: "2AZ-era intake gasket, wrong gen (batch-11)" },
+        { oem: "90301-79006", reason: "cartridge-cap o-ring on a spin-on engine (batch-11)" },
+        { oem: "00279-0WQTE-01", reason: "0W-20 quart on the 0W-16 engine (batch-11, verifier-confirmed)" },
+      ],
+      "2015_honda_cr_v_ex_l_k24w9": [
+        { oem: "17055-R40-A01", reason: "K24Z injector-base gasket, 2014-only (batch-11)" },
+        { oem: "15312-R40-A01", reason: "K24Z oil-filter-base o-ring; 2015 is spin-on (batch-11)" },
+      ],
+      "2012_toyota_rav4_standard_2ar_fe": [
+        { oem: "90919-01259", reason: "wrong-year plug; correct 90919-01253 (batch-11)" },
+        { oem: "17801-0V020", reason: "wrong-year air filter; correct 17801-31120 (batch-11)" },
+        { oem: "87139-07020", reason: "wrong-vehicle cabin filter; correct 87139-02090 (batch-11)" },
+        { oem: "28800-28100", reason: "2015-18 RAV4 battery (batch-11)" },
+        { oem: "90919-A2002", reason: "2GR-FE V6 coil on the I4 (batch-11)" },
+      ],
+      "2006_ford_f_150_fx4_supercrew_995": [
+        { oem: "5L3Z-1125-BA", reason: "FRONT 7-lug rotor claimed as rear (batch-10)" },
+        { oem: "RT-1194", reason: "Duratec-family thermostat (batch-10)" },
+        { oem: "5L3Z-8620-BA", reason: "4.2L V6 belt on the 5.4 (batch-10/11)" },
+        { oem: "4L3Z-9461-AA", reason: "4.6L intake gasket on the 5.4 3V (batch-10/11)" },
+      ],
+      "2019_subaru_forester_touring_fb25d": [
+        { oem: "16546AA12A", reason: "SJ-gen air filter on the SK (batch-11)" },
+        { oem: "26296SC011", reason: "2010-18 front pads on the SK (batch-11)" },
+        { oem: "26300XC01A", reason: "Ascent-only front rotor (batch-11)" },
+        { oem: "26700XC00A", reason: "Ascent-only rear rotor (batch-11)" },
+        { oem: "23780AA10A", reason: "FA24 Ascent/Legacy belt (batch-11)" },
+        { oem: "SOA868V9210", reason: "old green Long Life coolant; SK uses Super Coolant (batch-11)" },
+      ],
+      "2014_acura_mdx_advance_pkg_w_entertainment_pkg_j35y5": [
+        { oem: "08798-9032", reason: "5W-20 blend on the 0W-20 J35Y5 (batch-10)" },
+        { oem: "19410-5J6-A00", reason: "thermostat housing/water passage, not the thermostat (batch-11)" },
+      ],
+      "2017_nissan_rogue_base_qr25de": [
+        { oem: "11060-3TA0B", reason: "thermostat housing/water outlet, not the element (batch-11)" },
+        { oem: "22401-JA01B", reason: "S35-generation plug on the T32 (batch-11 GT trap)" },
+      ],
+    };
+
+    let inserted = 0;
+    let skipped = 0;
+    let configsMissing = 0;
+    for (const [configKey, entries] of Object.entries(SEED)) {
+      const cfg = await ctx.db
+        .query("vehicle_configs")
+        .withIndex("by_config_key", (q) => q.eq("config_key", configKey))
+        .first();
+      if (!cfg) {
+        configsMissing++;
+        console.warn(`[blocklist-seed] config not found: ${configKey}`);
+        continue;
+      }
+      for (const e of entries) {
+        const normalized = normalizeOemNumber(e.oem);
+        const existing = await ctx.db
+          .query("refuted_fitments")
+          .withIndex("by_config_oem", (q) =>
+            q.eq("vehicle_config_id", cfg._id).eq("oem_part_number_normalized", normalized)
+          )
+          .first();
+        if (existing) {
+          if (existing.mode !== "block") await ctx.db.patch(existing._id, { mode: "block", reason: e.reason });
+          skipped++;
+          continue;
+        }
+        await ctx.db.insert("refuted_fitments", {
+          vehicle_config_id: cfg._id,
+          oem_part_number_normalized: normalized,
+          mode: "block",
+          reason: `[seeded] ${e.reason}`,
+          refuted_at: Date.now(),
+        });
+        inserted++;
+      }
+    }
+    console.log(`[blocklist-seed] inserted=${inserted} skipped=${skipped} configsMissing=${configsMissing}`);
+    return { inserted, skipped, configsMissing };
   },
 });
 
@@ -2044,8 +3251,9 @@ export const ensureAllServiceIntervals = internalMutation({
     // kept stale rows through re-enrichment (Soul re-run kept rotor 72mo /
     // tire 60mo / battery 48mo). Every re-run now repairs existing rows too.
     const svcById = new Map(allServices.map((s) => [s._id.toString(), s]));
-    const WEAR_SLUGS = new Set(["brake_pad_replacement", "rotor_replacement", "tire_replacement", "battery_replacement"]);
+    const WEAR_SLUGS = WEAR_ITEM_SERVICE_SLUGS;
     let cleaned = 0;
+    let monthsFilled = 0;
     for (const row of existingIntervals) {
       const svc = svcById.get(row.service_id.toString());
       if (!svc) continue;
@@ -2064,9 +3272,50 @@ export const ensureAllServiceIntervals = internalMutation({
       if (WEAR_SLUGS.has(slug) && row.interval_months != null) {
         await ctx.db.patch(row._id, { interval_months: undefined });
         cleaned++;
+        continue;
+      }
+
+      // ── Months top-up (2020 Yaris canary: months fill 19%, 5 of 27) ───────
+      // This seeder owns the only months table in the pipeline (SERVICE_DEFAULTS
+      // above, 16 slugs) but was insert-only — `continue` on any service that
+      // already had a row. So a row created earlier by the VDB writer (which
+      // passes interval_miles and never interval_months) or by an extraction
+      // that returned miles-only kept a permanently empty interval_months: no
+      // stage ever came back for it, and the fill metric counts a row as filled
+      // on `miles != null || months != null`, so nothing ever noticed.
+      //
+      // Fill the hole, never overwrite: only when interval_months is absent.
+      // Excluded by design:
+      //   - wear items (handled directly above — a months recurrence for brake
+      //     pads is nonsense, "pads every 48 months" is not a schedule);
+      //   - on_demand rows, which have no recurrence at all;
+      //   - mechanic_verified rows, which a machine never edits.
+      //
+      // The months lands stamped `interval_months_source: "default_fallback"`
+      // so a defaulted months on an `enriched`/`deterministic` row can never be
+      // read as enriched or deterministic. Real months from the manual
+      // extraction later clears that stamp.
+      const defaults = SERVICE_DEFAULTS[slug];
+      if (
+        row.interval_months == null &&
+        defaults?.months != null &&
+        row.status !== "on_demand" &&
+        row.mechanic_verified !== true
+      ) {
+        await ctx.db.patch(row._id, {
+          interval_months: defaults.months,
+          interval_months_source: "default_fallback",
+        });
+        monthsFilled++;
       }
     }
     if (cleaned > 0) console.log(`[fallback] Retro-cleaned ${cleaned} stale interval row(s)`);
+    if (monthsFilled > 0) {
+      console.log(
+        `[fallback] Months top-up: filled ${monthsFilled} row(s) that had miles but no months ` +
+          `(stamped interval_months_source=default_fallback)`,
+      );
+    }
 
     for (const svc of allServices) {
       // Already has an interval — skip
@@ -2096,15 +3345,19 @@ export const ensureAllServiceIntervals = internalMutation({
       // Wear items are condition-based — miles is a wear estimate, a months
       // recurrence is nonsense ("pads every 48 months"). Same guard as
       // upsertServiceInterval.
-      const isWearItem = ["brake_pad_replacement", "rotor_replacement", "tire_replacement", "battery_replacement"]
-        .includes((svc.slug ?? "").replace(/-/g, "_"));
+      const isWearItem = WEAR_ITEM_SERVICE_SLUGS.has((svc.slug ?? "").replace(/-/g, "_"));
 
       await ctx.db.insert("service_intervals", {
         vehicle_config_id: args.vehicle_config_id,
         service_id: svc._id,
         interval_miles: defaults?.miles,
         interval_months: isWearItem ? undefined : defaults?.months,
-        status: isOnDemand ? "on_demand" : "scheduled",
+        // Round 8 (batch-10): fallback cadences carried status "scheduled" on
+        // every config — an invented 70k-mi rotor "schedule" was
+        // indistinguishable (by status) from a real OEM interval. "estimated"
+        // is the honest label; data_quality already says default_fallback but
+        // status is what consumers/UI key on.
+        status: isOnDemand ? "on_demand" : "estimated",
         display_string: isOnDemand ? "As needed" : undefined,
         confidence: 0.50, // low confidence — these are fallback defaults
         data_quality: "default_fallback",
@@ -2116,9 +3369,9 @@ export const ensureAllServiceIntervals = internalMutation({
     }
 
     console.log(
-      `[fallback] Config ${args.vehicle_config_id}: added ${added} default intervals, skipped ${skipped} non-applicable`
+      `[fallback] Config ${args.vehicle_config_id}: added ${added} default intervals, skipped ${skipped} non-applicable, months topped up on ${monthsFilled}`
     );
-    return { added, skipped };
+    return { added, skipped, monthsFilled };
   },
 });
 

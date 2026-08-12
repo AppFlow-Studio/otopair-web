@@ -12,7 +12,7 @@ import { requireDirector, logAudit } from "./directorGate";
 import type { Doc, Id } from "./_generated/dataModel";
 import { listAvailableWindowsForShopDate } from "./lib/timeSlotAvailability";
 import { SLOT_GRID_MINUTES } from "./lib/schedule_overlap";
-import { userDisplayName } from "./lib/bookingEnrichment";
+import { resolveVehicleDisplay, enrichReviews } from "./lib/bookingEnrichment";
 
 // Booking statuses that no longer occupy a bay (mirrors the availability
 // engine's TERMINAL_BOOKING_STATUSES so the portal calendar agrees with what
@@ -154,14 +154,35 @@ export const shopProfile = query({
       lat: shop.lat ?? null,
       lng: shop.lng ?? null,
       description: shop.description ?? null,
+      logo: shop.logo ?? null,
       laborRate: shop.labor_rate ?? null,
+      laborRatesByTier: shop.labor_rates_by_tier ?? null,
+      declinedTiers: shop.declined_tiers ?? [],
+      laborRatesUpdatedAt: shop.labor_rates_updated_at ?? null,
       rating: shop.rating ?? null,
       reviewCount: shop.review_count ?? 0,
       isActive: !!shop.is_active,
       isVerified: !!shop.is_verified,
+      promotionTier: (shop as any).promotion_tier ?? 0,
+      onboardingComplete: !!shop.onboarding_complete,
       stripeAccountId: shop.stripe_connect_account_id ?? null,
       stripeChargesEnabled: !!shop.stripe_charges_enabled,
       stripePayoutsEnabled: !!shop.stripe_payouts_enabled,
+      stripeOnboardingCompletedAt: shop.stripe_onboarding_completed_at ?? null,
+      stripeRequirementsDue: shop.stripe_requirements_currently_due ?? [],
+      // Scheduling configuration — internal knobs, never surfaced before.
+      scheduling: {
+        bufferMinutes: shop.buffer_minutes ?? null,
+        noShowThresholdMinutes: shop.no_show_threshold_minutes ?? null,
+        maxBookingsPerMechanicRollingHour:
+          shop.max_bookings_per_mechanic_rolling_hour ?? null,
+        appointmentReminderLeadMinutes: shop.appointment_reminder_lead_minutes ?? null,
+        overrunDefaultExtensionPercent: shop.overrun_default_extension_percent ?? null,
+        overrunExtensionFloorMinutes: shop.overrun_extension_floor_minutes ?? null,
+        overrunEscalationMinutes: shop.overrun_escalation_minutes ?? null,
+        overrunAutoApplyMinutes: shop.overrun_auto_apply_minutes ?? null,
+        entityLabelMode: shop.entity_label_mode ?? null,
+      },
       mechanicCount: mechanics.filter((m) => m.is_active !== false).length,
       createdAt: shop._creationTime,
       health,
@@ -222,6 +243,14 @@ export const shopServicesList = query({
           category: categoryName ?? "Uncategorized",
           isOffered: r.is_offered,
           defaultLaborHours: svc?.default_labor_hours ?? null,
+          description: svc?.description ?? null,
+          partsKind: svc?.parts_kind ?? null,
+          laborDeterminant: svc?.labor_determinant ?? null,
+          minModelYear: svc?.min_model_year ?? null,
+          repairpalSlug: svc?.repairpal_slug ?? null,
+          isLaborOnly: !!svc?.is_labor_only,
+          requiresParts: !!svc?.requires_parts,
+          hasOptions: !!svc?.has_options,
         };
       }),
     );
@@ -269,6 +298,170 @@ export const setLaborRate = mutation({
         (bigMove ? ` | >±15% move co-signed by: ${coSign}` : ""),
     });
     return { ok: true, previousRate: current, newRate };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Compliance — shop-uploaded licenses & certificates (shop_licenses).
+// Read for the Compliance tab; review (verify/reject) is a shops.write action
+// that lands in the shop audit trail.
+// ---------------------------------------------------------------------------
+export const shopLicenses = query({
+  args: { token: v.string(), id: v.id("shops") },
+  handler: async (ctx, { token, id }) => {
+    await requireDirector(ctx, token);
+
+    const rows = await ctx.db
+      .query("shop_licenses")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+      .collect();
+
+    const licenses = await Promise.all(
+      rows
+        .sort((a, b) => b.created_at - a.created_at)
+        .map(async (row) => {
+          const reviewer = row.reviewed_by
+            ? await ctx.db.get(row.reviewed_by)
+            : null;
+          return {
+            _id: String(row._id),
+            licenseType: row.license_type,
+            url: row.storage_id ? await ctx.storage.getUrl(row.storage_id) : null,
+            originalFilename: row.original_filename ?? null,
+            mimeType: row.mime_type ?? null,
+            licenseNumber: row.license_number ?? null,
+            issuer: row.issuer ?? null,
+            expiresAt: row.expires_at ?? null,
+            reviewStatus: row.review_status,
+            reviewNote: row.review_note ?? null,
+            reviewedAt: row.reviewed_at ?? null,
+            reviewedBy: reviewer?.name ?? null,
+            createdAt: row.created_at,
+          };
+        }),
+    );
+
+    // Does the shop offer any service that legally needs the DMV inspection
+    // station license? Drives the "missing/unverified license" compliance flag.
+    const offered = await ctx.db
+      .query("shop_services")
+      .withIndex("by_shop_id", (q) => q.eq("shop_id", id))
+      .collect();
+    let offersInspectionServices = false;
+    for (const row of offered) {
+      if (!row.is_offered) continue;
+      const svc = await ctx.db.get(row.service_id);
+      if (svc?.requires_state_inspection || svc?.requires_emissions_test) {
+        offersInspectionServices = true;
+        break;
+      }
+    }
+
+    return { offersInspectionServices, licenses };
+  },
+});
+
+export const reviewShopLicense = mutation({
+  args: {
+    token: v.string(),
+    licenseId: v.id("shop_licenses"),
+    status: v.union(v.literal("verified"), v.literal("rejected")),
+    note: v.string(),
+  },
+  handler: async (ctx, { token, licenseId, status, note }) => {
+    const actor = await requireDirector(ctx, token, "shops.write");
+    if (note.trim().length < 4) {
+      throw new Error("A reason of at least 4 characters is required.");
+    }
+
+    const license = await ctx.db.get(licenseId);
+    if (!license) throw new Error("Document not found.");
+
+    await ctx.db.patch(licenseId, {
+      review_status: status,
+      reviewed_by: actor.userId,
+      reviewed_at: Date.now(),
+      review_note: note.trim(),
+      updated_at: Date.now(),
+    });
+
+    await logAudit(ctx, actor, {
+      entity_type: "shop",
+      entity_id: String(license.shop_id),
+      action: `license.${status}`,
+      detail: `${license.license_type} ${status}. Reason: ${note.trim()}`,
+    });
+
+    return { ok: true, status };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Cross-shop verification queue — every shop with a pending compliance
+// document, so a director can work the review backlog in one place. Backed by
+// shop_licenses.by_review_status; joins the shop name for the row link.
+// ---------------------------------------------------------------------------
+export const pendingLicenseReviews = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }) => {
+    await requireDirector(ctx, token);
+
+    const pending = await ctx.db
+      .query("shop_licenses")
+      .withIndex("by_review_status", (q) => q.eq("review_status", "pending_review"))
+      .collect();
+
+    const rows = await Promise.all(
+      pending
+        .sort((a, b) => b.created_at - a.created_at)
+        .map(async (row) => {
+          const shop = await ctx.db.get(row.shop_id);
+          return {
+            _id: String(row._id),
+            shopId: String(row.shop_id),
+            shopName: shop?.name ?? "Unknown shop",
+            licenseType: row.license_type,
+            originalFilename: row.original_filename ?? null,
+            url: row.storage_id ? await ctx.storage.getUrl(row.storage_id) : null,
+            createdAt: row.created_at,
+          };
+        }),
+    );
+
+    // Per-shop pending counts, for a queue-wide summary / subtab badge.
+    const byShop = new Map<string, number>();
+    for (const r of rows) byShop.set(r.shopId, (byShop.get(r.shopId) ?? 0) + 1);
+
+    return { total: rows.length, shopCount: byShop.size, rows };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Director "push" lever, informed by verified credentials. shops.write action
+// that lands in the shop audit trail. (Shop verification itself already lives
+// in director.setShopVerified, surfaced on the Profile tab.)
+// ---------------------------------------------------------------------------
+export const setShopPromotion = mutation({
+  args: {
+    token: v.string(),
+    id: v.id("shops"),
+    // 0 none · 1 boosted · 2 featured
+    tier: v.union(v.literal(0), v.literal(1), v.literal(2)),
+  },
+  handler: async (ctx, { token, id, tier }) => {
+    const actor = await requireDirector(ctx, token, "shops.write");
+    const shop = await ctx.db.get(id);
+    if (!shop) throw new Error("Shop not found.");
+
+    await ctx.db.patch(id, { promotion_tier: tier } as any);
+    const label = tier === 2 ? "featured" : tier === 1 ? "boosted" : "none";
+    await logAudit(ctx, actor, {
+      entity_type: "shop",
+      entity_id: String(id),
+      action: "shop.promotion",
+      detail: `Promotion tier set to ${label} (${tier}).`,
+    });
+    return { ok: true, promotionTier: tier };
   },
 });
 
@@ -436,24 +629,36 @@ export const shopBookings = query({
 
     return Promise.all(
       rows.map(async (b) => {
-        const user = await ctx.db.get(b.user_id);
-        const serviceNames = await Promise.all(
-          b.service_ids.map(async (sid) => {
-            const s = await ctx.db.get(sid);
-            return s?.name ?? "—";
-          }),
-        );
+        const [user, vehicle, serviceNames] = await Promise.all([
+          ctx.db.get(b.user_id),
+          resolveVehicleDisplay(ctx, b.vin),
+          Promise.all(
+            b.service_ids.map(async (sid) => {
+              const s = await ctx.db.get(sid);
+              return s?.name ?? "—";
+            }),
+          ),
+        ]);
         return {
           id: b._id,
           user: user
             ? `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || user.email || "Unknown"
             : "Unknown",
           user_id: String(b.user_id),
+          vehicle: vehicle.ymm,
           services: serviceNames,
           status: b.status,
           date: b.scheduled_date ?? null,
           time: b.scheduled_time ?? null,
           total: b.total_cost ?? null,
+          laborCost: b.labor_cost ?? null,
+          partsCost: b.parts_cost ?? null,
+          estLaborMinutes: b.estimated_labor_minutes ?? null,
+          actualDurationMinutes: b.actual_duration_minutes ?? null,
+          invoiceNumber: b.invoice_number ?? null,
+          customerNotes: b.customer_notes ?? null,
+          recommendationState: b.recommendation_state ?? null,
+          rescheduled: b.previous_scheduled_date != null,
           createdAt: b.created_at ?? b._creationTime,
         };
       }),
@@ -499,52 +704,39 @@ export const shopInsights = query({
           .collect(),
       ]);
 
-    // Portfolio photos — content_id references cdn_assets (url + caption).
+    // Portfolio photos — legacy rows reference cdn_assets via content_id;
+    // owner-uploaded rows reference Convex storage via storage_id.
     const portfolio = (
       await Promise.all(
         portfolioRows
           .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
           .map(async (p) => {
-            const asset = (await ctx.db.get(
-              p.content_id as Id<"cdn_assets">,
-            )) as { url?: string; caption?: string } | null;
-            return { id: String(p._id), url: asset?.url ?? null, caption: asset?.caption ?? null };
+            let url: string | null = null;
+            let caption = p.caption ?? null;
+            if (p.storage_id) {
+              url = await ctx.storage.getUrl(p.storage_id);
+            } else if (p.content_id) {
+              const asset = (await ctx.db.get(
+                p.content_id as Id<"cdn_assets">,
+              )) as { url?: string; caption?: string } | null;
+              url = asset?.url ?? null;
+              caption = caption ?? asset?.caption ?? null;
+            }
+            return { id: String(p._id), url, caption };
           }),
       )
     ).filter((x): x is { id: string; url: string; caption: string | null } => x.url != null);
 
-    // Reviews (visible + hidden), reviewer + mechanic resolved.
-    const userName = new Map<string, string | null>();
-    const mechName = new Map<string, string | null>();
-    const reviews = await Promise.all(
-      reviewRows
-        .sort((a, b) => (b.created_at ?? b._creationTime) - (a.created_at ?? a._creationTime))
-        .slice(0, 50)
-        .map(async (r) => {
-          const uid = String(r.user_id);
-          if (!userName.has(uid)) userName.set(uid, userDisplayName(await ctx.db.get(r.user_id)));
-          let mechanic: string | null = null;
-          if (r.mechanic_id) {
-            const mid = String(r.mechanic_id);
-            if (!mechName.has(mid)) {
-              const m = await ctx.db.get(r.mechanic_id);
-              const mo = m as { first_name?: string; last_name?: string } | null;
-              mechName.set(mid, mo ? [mo.first_name, mo.last_name].filter(Boolean).join(" ") || null : null);
-            }
-            mechanic = mechName.get(mid) ?? null;
-          }
-          return {
-            id: String(r._id),
-            rating: r.rating,
-            comment: r.comment ?? null,
-            reviewer: userName.get(uid) ?? null,
-            reviewerId: uid,
-            mechanic,
-            hidden: r.hidden_at != null,
-            at: r.created_at ?? r._creationTime,
-          };
-        }),
-    );
+    // Reviews (visible + hidden) — shared enriched shape (reviewer / mechanic /
+    // car / services / booking), deduped across the set.
+    const reviews = (
+      await enrichReviews(
+        ctx,
+        reviewRows.sort(
+          (a, b) => (b.created_at ?? b._creationTime) - (a.created_at ?? a._creationTime),
+        ),
+      )
+    ).slice(0, 50);
 
     // Rate-change history from the audit trail.
     const rateHistory = auditRows
@@ -575,11 +767,49 @@ export const shopInsights = query({
     const cancelled = bookings.filter((b) => b.status === "cancelled").length;
     const noShow = bookings.filter((b) => b.status === "no_show").length;
 
+    // Labor-estimate accuracy (QA "surprises") derived from the bookings window:
+    // compare estimated vs actual labor minutes where both exist. A job is
+    // "flagged" when it overran/underran by more than 25%.
+    const varianceSamples: number[] = [];
+    let flaggedJobs = 0;
+    for (const b of bookings) {
+      const est = b.estimated_labor_minutes;
+      const act = b.actual_duration_minutes;
+      if (est != null && est > 0 && act != null) {
+        const v = (act - est) / est;
+        varianceSamples.push(v);
+        if (Math.abs(v) > 0.25) flaggedJobs++;
+      }
+    }
+    const laborQa = {
+      sampled: varianceSamples.length,
+      flagged: flaggedJobs,
+      avgVariancePct:
+        varianceSamples.length > 0
+          ? varianceSamples.reduce((s, v) => s + v, 0) / varianceSamples.length
+          : null,
+    };
+
+    // Dispute detail (not just a count) — reason / status / amount / opened.
+    const disputeRows = disputes
+      .sort((a, b) => b.opened_at_ms - a.opened_at_ms)
+      .map((d) => ({
+        id: String(d._id),
+        booking_id: d.booking_id ? String(d.booking_id) : null,
+        reason: d.reason ?? null,
+        status: d.status,
+        amount: d.amount_cents / 100,
+        openedAt: d.opened_at_ms,
+        closedAt: d.closed_at_ms ?? null,
+      }));
+
     return {
       reviews,
       rateHistory,
       fixedPrices,
       portfolio,
+      laborQa,
+      disputes: disputeRows,
       stats: {
         total,
         completed,

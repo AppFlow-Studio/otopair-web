@@ -6,17 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import {
-  AlertCircle,
-  ArrowRight,
-  Bell,
-  Car,
-  Loader2,
-  PlayCircle,
-  Star,
-  Wrench,
-} from "lucide-react";
-import { StatusPill } from "@/components/status-pill";
+import { ArrowRight, Loader2 } from "lucide-react";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 import MultiPointInspectionDialog, {
   type InspectionInputPayload,
@@ -29,13 +19,63 @@ import type {
   PostJobSurveyPayload,
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
+import {
+  GreetingHeader,
+  MetricRow,
+  Metric,
+  SectionLabel,
+  CommandList,
+  CommandRow,
+  EmptyRow,
+  useListKeyboard,
+  type CommandAction,
+  type Tone,
+} from "@/components/dashboard/command-deck";
 
-const avatarColors = [
-  "bg-blue-100 text-blue-600",
-  "bg-green-100 text-green-600",
-  "bg-orange-100 text-orange-600",
-  "bg-amber-100 text-amber-700",
-];
+/** A shape the mechanic "Needs you now" list can render and drive by keyboard. */
+type NeedItem = {
+  key: string;
+  kind: "active" | "ready" | "diagnostic" | "actuals";
+  dot: Tone;
+  primary: string;
+  secondary?: string;
+  meta?: string;
+  action?: CommandAction;
+  onOpen: () => void;
+};
+
+function statusText(status: string): string {
+  switch (status) {
+    case "confirmed":
+      return "Confirmed";
+    case "vehicle_at_shop":
+      return "Ready";
+    case "in_progress":
+      return "In progress";
+    case "completed":
+      return "Completed";
+    case "pending":
+    case "pending_shop_acceptance":
+      return "Pending";
+    default:
+      return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+}
+
+function statusDot(status: string): Tone {
+  switch (status) {
+    case "in_progress":
+      return "success";
+    case "vehicle_at_shop":
+    case "confirmed":
+      return "primary";
+    case "pending":
+    case "pending_shop_acceptance":
+      return "warning";
+    default:
+      return "muted";
+  }
+}
 
 function getGreeting() {
   const hour = new Date().getHours();
@@ -63,47 +103,6 @@ function formatDate(dateString: string) {
   });
 }
 
-function formatMinutes(minutes?: number | null) {
-  if (!minutes) return "Est. TBD";
-  const total = Math.round(minutes);
-  if (total < 60) return `Est. ${total} min`;
-  const h = Math.floor(total / 60);
-  const m = total - h * 60;
-  if (m === 0) return `Est. ${h} hr`;
-  return `Est. ${h} hr ${m} min`;
-}
-
-function getInitials(name: string) {
-  return name
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("") || "?";
-}
-
-function DashboardCard({
-  label,
-  value,
-  sublabel,
-}: {
-  label: string;
-  value: string;
-  sublabel?: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-border bg-card p-5 shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)]">
-      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        {label}
-      </p>
-      <p className="mt-3 text-3xl font-bold text-foreground">{value}</p>
-      {sublabel ? (
-        <p className="mt-1 text-sm text-muted-foreground">{sublabel}</p>
-      ) : null}
-    </div>
-  );
-}
-
 export default function MechanicDashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -111,10 +110,8 @@ export default function MechanicDashboard() {
     localDate: new Date().toLocaleDateString("en-CA"),
   });
   const customerOnMyWay = useQuery(api.bookings.getCustomerOnMyWayMonitors);
-  const customerLateNotificationSent = useQuery(api.bookings.getCustomerLateNotificationSentMonitors);
 
   const onMyWayIds = useMemo(() => new Set((customerOnMyWay ?? []).map((a: any) => String(a.bookingId))), [customerOnMyWay]);
-  const notifiedIds = useMemo(() => new Set((customerLateNotificationSent ?? []).map((a: any) => String(a.bookingId))), [customerLateNotificationSent]);
   const diagnosticsNeedingFollowUp = useQuery(
     api.bookings.getDiagnosticsNeedingFollowUp,
   );
@@ -305,6 +302,7 @@ export default function MechanicDashboard() {
               ? "Could not save the pre-job vehicle check"
               : "Could not start booking"),
         );
+        throw error;
       }
     } finally {
       setBusyAction(null);
@@ -368,7 +366,128 @@ export default function MechanicDashboard() {
     }
   }
 
+  // The unified "Needs you now" queue — everything the mechanic must act on,
+  // in the order they'd work it: finish the lift, start what's arrived, close
+  // out diagnostics, then finalize actuals. Built before the early returns so
+  // the keyboard hook below never runs conditionally (rules of hooks).
+  const needItems = useMemo<NeedItem[]>(() => {
+    if (!dashboard) return [];
+    const items: NeedItem[] = [];
 
+    // 1) In progress — finish what's on the lift.
+    for (const job of dashboard.todaysJobs) {
+      if (job.status !== "in_progress") continue;
+      const id = String(job._id);
+      const isDiag = !!(job as any).diagnosticSystem;
+      items.push({
+        key: `active-${id}`,
+        kind: "active",
+        dot: "success",
+        primary: `${job.customerDisplayName} · ${job.vehicle}`,
+        secondary: job.serviceNames.join(", ") || undefined,
+        meta: "in progress",
+        action: {
+          label: isDiag ? "Diagnostic" : "Complete",
+          tone: isDiag ? "warning" : "primary",
+          run: () => openWorkflowDialog(id, "postjob"),
+        },
+        onOpen: () => openWorkflowDialog(id, "postjob"),
+      });
+    }
+
+    // 2) Ready to start — the vehicle is here.
+    for (const job of dashboard.todaysJobs) {
+      if (job.status !== "vehicle_at_shop") continue;
+      const id = String(job._id);
+      const passportIncomplete = (job as any).vehiclePassportComplete === false;
+      const enroute = onMyWayIds.has(id);
+      items.push({
+        key: `ready-${id}`,
+        kind: "ready",
+        dot: "primary",
+        primary: `${job.customerDisplayName} · ${job.vehicle}`,
+        secondary: job.serviceNames.join(", ") || undefined,
+        meta: `${formatTime(job.scheduledTime)}${enroute ? " · en route" : ""}`,
+        action: passportIncomplete
+          ? {
+              label: "Confirm specs",
+              tone: "warning",
+              run: () => router.push(`/my-bookings?highlight=${id}`),
+            }
+          : {
+              label: "Start",
+              tone: "primary",
+              run: () => tryStartBooking(id),
+            },
+        onOpen: () =>
+          passportIncomplete
+            ? router.push(`/my-bookings?highlight=${id}`)
+            : tryStartBooking(id),
+      });
+    }
+
+    // 3) Diagnostics needing follow-up.
+    for (const job of diagnosticsNeedingFollowUp ?? []) {
+      const id = String(job._id);
+      items.push({
+        key: `diag-${id}`,
+        kind: "diagnostic",
+        dot: "warning",
+        primary: `${job.customerName} · ${job.vehicle}`,
+        secondary:
+          `${job.serviceNames.join(", ")}${
+            job.diagnosticSystem ? ` · ${job.diagnosticSystem}` : ""
+          }` || undefined,
+        meta: job.followupState === "awaiting_info" ? "awaiting info" : "pending",
+        action: {
+          label: "Follow up",
+          tone: "warning",
+          run: () => openWorkflowDialog(id, "postjob"),
+        },
+        onOpen: () => openWorkflowDialog(id, "postjob"),
+      });
+    }
+
+    // 4) Completed but missing finalized actuals.
+    for (const job of dashboard.needsActuals) {
+      const id = String(job._id);
+      items.push({
+        key: `actuals-${id}`,
+        kind: "actuals",
+        dot: "muted",
+        primary: `${job.customerDisplayName} · ${job.vehicle}`,
+        secondary: `Completed ${formatDate(job.scheduledDate)}`,
+        meta: "needs details",
+        action: {
+          label: "Finalize",
+          tone: "muted",
+          run: () => openActualsDialog(id, "edit"),
+        },
+        onOpen: () => openActualsDialog(id, "edit"),
+      });
+    }
+
+    return items;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dashboard, diagnosticsNeedingFollowUp, onMyWayIds, router]);
+
+  // List keyboard nav is live only when no workflow dialog is open.
+  const listNavEnabled =
+    workflowBookingId === null &&
+    actualsBookingId === null &&
+    pendingActiveBlock === null;
+  const { focused, setFocused } = useListKeyboard({
+    count: needItems.length,
+    enabled: listNavEnabled,
+    onOpen: (i) => needItems[i]?.onOpen(),
+    onAccept: (i) => needItems[i]?.action?.run(),
+    canAccept: (i) => !!needItems[i]?.action && !needItems[i]?.action?.disabled,
+  });
+
+  const inProgressCount =
+    dashboard?.todaysJobs.filter((job: any) => job.status === "in_progress").length ?? 0;
+  const readyCount =
+    dashboard?.todaysJobs.filter((job: any) => job.status === "vehicle_at_shop").length ?? 0;
 
   if (dashboard === undefined) {
     return (
@@ -388,398 +507,157 @@ export default function MechanicDashboard() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col gap-4 rounded-[28px] border border-border bg-[radial-gradient(circle_at_top_left,_rgba(59,130,246,0.12),_transparent_40%),linear-gradient(180deg,_rgba(255,255,255,0.98),_rgba(248,250,252,0.98))] p-7 shadow-[0_10px_30px_rgba(15,23,42,0.06)] sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <p className="text-sm font-medium uppercase tracking-[0.2em] text-primary/80">
-            {dashboard.shopName}
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-foreground">
-            {getGreeting()}, {dashboard.firstName}
-          </h1>
-          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Today has {dashboard.stats.todayCount} assigned booking
-            {dashboard.stats.todayCount === 1 ? "" : "s"} and{" "}
-            {dashboard.needsActuals.length} completed booking
-            {dashboard.needsActuals.length === 1 ? "" : "s"} still need finalized actuals.
-          </p>
-        </div>
-        <Link
-          href="/my-bookings"
-          className="inline-flex items-center gap-2 self-start rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-        >
-          My Bookings
-          <ArrowRight className="w-4 h-4" />
-        </Link>
-      </div>
+      <GreetingHeader
+        greeting={getGreeting()}
+        name={dashboard.firstName}
+        dateLabel={new Date().toLocaleDateString("en-US", {
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+        })}
+        subtitle={dashboard.shopName}
+        right={
+          <Link
+            href="/my-bookings"
+            className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+          >
+            My Bookings
+            <ArrowRight className="h-4 w-4" />
+          </Link>
+        }
+      />
 
-      <div className="grid gap-4 md:grid-cols-3">
-        <DashboardCard
-          label="Today's Bookings"
-          value={String(dashboard.stats.todayCount)}
-          sublabel="Assigned to you"
+      <MetricRow>
+        <Metric
+          label="In the bay"
+          value={String(inProgressCount)}
+          sublabel={
+            inProgressCount > 0
+              ? "job in progress"
+              : readyCount > 0
+                ? `${readyCount} ready to start`
+                : "nothing running"
+          }
+          tone={inProgressCount > 0 ? "success" : "muted"}
         />
-        <DashboardCard
-          label="This Week"
+        <Metric
+          label="Awaiting you"
+          value={String(needItems.length)}
+          sublabel={needItems.length > 0 ? "to act on" : "all clear"}
+          tone={needItems.length > 0 ? "danger" : "muted"}
+          active={needItems.length > 0}
+        />
+        <Metric
+          label="This week"
           value={String(dashboard.stats.weekCompletedCount)}
-          sublabel="Completed bookings"
+          sublabel="completed"
+          tone="success"
         />
-        <DashboardCard
-          label="My Rating"
-          value={dashboard.stats.rating.toFixed(1)}
-          sublabel={`${dashboard.stats.reviewCount} review${dashboard.stats.reviewCount === 1 ? "" : "s"}`}
+        <Metric
+          label="Rating"
+          value={
+            dashboard.stats.reviewCount === 0
+              ? "—"
+              : dashboard.stats.rating.toFixed(1)
+          }
+          sublabel={
+            dashboard.stats.reviewCount === 0
+              ? "no reviews yet"
+              : `${dashboard.stats.reviewCount} review${
+                  dashboard.stats.reviewCount === 1 ? "" : "s"
+                }`
+          }
         />
-      </div>
+      </MetricRow>
 
-      {diagnosticsNeedingFollowUp && diagnosticsNeedingFollowUp.length > 0 ? (
-        <section className="rounded-2xl border border-amber-200 bg-amber-50/40 p-6">
-          <div className="mb-4">
-            <h2 className="text-lg font-semibold text-amber-900">
-              Diagnostics needing follow-up
-            </h2>
-            <p className="text-sm text-amber-900/80">
-              {diagnosticsNeedingFollowUp.length} diagnostic
-              {diagnosticsNeedingFollowUp.length === 1 ? "" : "s"} still waiting on a
-              recommendation or more info.
-            </p>
-          </div>
-          <div className="space-y-2">
-            {diagnosticsNeedingFollowUp.map((job: any) => (
-              <button
-                key={String(job._id)}
-                type="button"
-                onClick={() => openWorkflowDialog(String(job._id), "postjob")}
-                className="flex w-full items-start justify-between gap-3 rounded-xl border border-amber-200 bg-white px-3 py-2.5 text-left hover:bg-amber-50"
-              >
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-foreground">
-                    {job.customerName} · {job.vehicle}
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    {job.serviceNames.join(", ")}
-                    {job.diagnosticSystem ? ` · ${job.diagnosticSystem}` : ""}
-                  </div>
-                  {job.followupState === "awaiting_info" && job.awaitingInfoNote ? (
-                    <div className="mt-1 text-xs text-cyan-800">
-                      Waiting on: {job.awaitingInfoNote}
-                    </div>
-                  ) : null}
-                </div>
-                <span
-                  className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${
-                    job.followupState === "awaiting_info"
-                      ? "bg-cyan-100 text-cyan-900"
-                      : "bg-amber-100 text-amber-900"
-                  }`}
-                >
-                  {job.followupState === "awaiting_info" ? "Awaiting info" : "Pending"}
-                </span>
-              </button>
+      {needItems.length > 0 ? (
+        <section aria-label="Needs you now">
+          <SectionLabel count={needItems.length}>Needs you now</SectionLabel>
+          <CommandList
+            footerHint={
+              <span className="inline-flex flex-wrap items-center gap-x-1">
+                <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">J</kbd>
+                <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">K</kbd>
+                <span>move</span>
+                <span className="px-0.5">·</span>
+                <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">Enter</kbd>
+                <span>open</span>
+                <span className="px-0.5">·</span>
+                <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">A</kbd>
+                <span>act</span>
+              </span>
+            }
+          >
+            {needItems.map((item, index) => (
+              <CommandRow
+                key={item.key}
+                dot={item.dot}
+                primary={item.primary}
+                secondary={item.secondary}
+                meta={item.meta}
+                action={item.action}
+                selected={listNavEnabled && focused === index}
+                onOpen={item.onOpen}
+                onFocus={() => setFocused(index)}
+              />
+            ))}
+          </CommandList>
+        </section>
+      ) : null}
+
+      <section aria-label="Today">
+        <SectionLabel>Today</SectionLabel>
+        <CommandList>
+          {dashboard.todaysJobs.length === 0 ? (
+            <EmptyRow>No bookings scheduled for today</EmptyRow>
+          ) : (
+            dashboard.todaysJobs.map((job) => {
+              const id = String(job._id);
+              return (
+                <CommandRow
+                  key={id}
+                  dot={statusDot(job.status)}
+                  code={formatTime(job.scheduledTime)}
+                  primary={`${job.customerDisplayName} · ${job.vehicle}`}
+                  secondary={job.serviceNames.join(", ") || undefined}
+                  meta={statusText(job.status)}
+                  onOpen={() => router.push(`/my-bookings?highlight=${id}`)}
+                />
+              );
+            })
+          )}
+        </CommandList>
+      </section>
+
+      {groupedUpcoming.length > 0 ? (
+        <section aria-label="Upcoming">
+          <SectionLabel hint="Next 7 days">Upcoming</SectionLabel>
+          <div className="mt-3 space-y-4">
+            {groupedUpcoming.map(([date, jobs]) => (
+              <div key={date}>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  {formatDate(date)}
+                </p>
+                <CommandList>
+                  {jobs.map((job) => {
+                    const id = String(job._id);
+                    return (
+                      <CommandRow
+                        key={id}
+                        dot="muted"
+                        code={formatTime(job.scheduledTime)}
+                        primary={`${job.customerDisplayName} · ${job.vehicle}`}
+                        secondary={job.serviceNames.join(", ") || undefined}
+                        onOpen={() => router.push(`/my-bookings?highlight=${id}`)}
+                      />
+                    );
+                  })}
+                </CommandList>
+              </div>
             ))}
           </div>
         </section>
       ) : null}
-
-      <section className="rounded-2xl border border-border bg-card p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)]">
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-foreground">Today&apos;s Schedule</h2>
-            <p className="text-sm text-muted-foreground">
-              Focused on your confirmed and active work for today.
-            </p>
-          </div>
-          <div className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
-            <PlayCircle className="w-3.5 h-3.5" />
-            Live actions
-          </div>
-        </div>
-
-        {dashboard.todaysJobs.length === 0 ? (
-          <div className="mt-6 rounded-2xl border border-dashed border-border bg-muted/30 px-6 py-10 text-center">
-            <p className="text-base font-medium text-foreground">
-              No bookings scheduled for today.
-            </p>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Check your upcoming queue or return to My Bookings later.
-            </p>
-          </div>
-        ) : (
-          <div className="mt-6 grid gap-4 xl:grid-cols-2">
-            {dashboard.todaysJobs.map((job, index) => {
-              const actionKeyStart = `start:${job._id}`;
-              const actionKeyComplete = `complete:${job._id}`;
-              const initials = getInitials(job.customerDisplayName);
-              return (
-                <div
-                  key={String(job._id)}
-                  className="rounded-2xl border border-border bg-background p-5"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex min-w-0 items-start gap-3">
-                      <div
-                        className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${avatarColors[index % avatarColors.length]}`}
-                      >
-                        {initials}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-base font-semibold text-foreground">
-                            {formatTime(job.scheduledTime)}
-                          </p>
-                          <StatusPill status={job.status} />
-                          {onMyWayIds.has(String(job._id)) && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                              <Car className="h-2.5 w-2.5" />
-                              En route
-                            </span>
-                          )}
-                          {!onMyWayIds.has(String(job._id)) && notifiedIds.has(String(job._id)) && (
-                            <span className="inline-flex items-center gap-1 rounded-full bg-yellow-100 px-2 py-0.5 text-[10px] font-semibold text-yellow-700">
-                              <Bell className="h-2.5 w-2.5" />
-                              Notified
-                            </span>
-                          )}
-                          {((job as any).paymentApprovalState === "pre_job_pending" ||
-                            (job as any).paymentApprovalState === "mid_job_pending" ||
-                            (job as any).paymentApprovalState === "post_job_pending" ||
-                            (job as any).paymentApprovalState === "pre_job_declined" ||
-                            (job as any).paymentApprovalState === "sla_expired") && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                openWorkflowDialog(String(job._id), "prejob_estimate")
-                              }
-                              className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800 transition-colors hover:bg-amber-200"
-                              title="Reopen the estimate workflow"
-                            >
-                              {(job as any).paymentApprovalState === "post_job_pending"
-                                ? "Customer reviewing final billing"
-                                : "Pending customer confirmation"}
-                            </button>
-                          )}
-                          {(job as any).paymentApprovalState === "reauth_required" && (
-                            <span
-                              className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800"
-                              title="The customer's card needs reauthorization before work can proceed."
-                            >
-                              <AlertCircle className="h-2.5 w-2.5" />
-                              Hold reauthorization needed
-                            </span>
-                          )}
-                        </div>
-                        <p className="mt-1 truncate text-sm font-medium text-foreground">
-                          {job.customerDisplayName}
-                        </p>
-                        <p className="truncate text-sm text-muted-foreground">
-                          {job.vehicle}
-                        </p>
-                        <p className="mt-2 text-sm text-muted-foreground">
-                          {job.serviceNames.join(", ")}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="text-right text-xs text-muted-foreground">
-                      {formatMinutes(job.estimatedLaborMinutes)}
-                    </div>
-                  </div>
-
-                  <div className="mt-5 flex flex-wrap gap-2">
-                    {job.status === "confirmed" ? (
-                      <button
-                        disabled
-                        className={`inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-medium opacity-70 ${
-                          onMyWayIds.has(String(job._id))
-                            ? "border-emerald-200 text-emerald-700"
-                            : "border-border text-muted-foreground"
-                        }`}
-                      >
-                        {onMyWayIds.has(String(job._id)) ? (
-                          <><Car className="h-3.5 w-3.5" />Customer en route</>
-                        ) : (
-                          "Awaiting vehicle"
-                        )}
-                      </button>
-                    ) : null}
-
-                    {job.status === "vehicle_at_shop" ? (
-                      <button
-                        onClick={() => tryStartBooking(String(job._id))}
-                        disabled={
-                          busyAction === actionKeyStart ||
-                          job.vehiclePassportComplete === false
-                        }
-                        title={
-                          job.vehiclePassportComplete === false
-                            ? "Open the booking details panel to confirm the required vehicle passport fields first."
-                            : undefined
-                        }
-                        className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
-                      >
-                        {busyAction === actionKeyStart ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <PlayCircle className="w-4 h-4" />
-                        )}
-                        {(() => {
-                          if (job.vehiclePassportComplete === false)
-                            return "Confirm Specs in Details";
-                          const pas = (job as any).paymentApprovalState as
-                            | string
-                            | undefined;
-                          if (pas === "reauth_required")
-                            return "Waiting on customer reauth";
-                          if (pas === "in_range" || pas === "pre_job_approved")
-                            return "Open & start work";
-                          if (
-                            pas === "pre_job_pending" ||
-                            pas === "pre_job_declined" ||
-                            pas === "sla_expired"
-                          )
-                            return "Open estimate";
-                          return "Start Booking";
-                        })()}
-                      </button>
-                    ) : null}
-
-                    {job.status === "in_progress" ? (
-                      <button
-                        onClick={() => openWorkflowDialog(String(job._id), "postjob")}
-                        disabled={busyAction === actionKeyComplete}
-                        className={`inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition-colors disabled:opacity-50 ${
-                          (job as any).diagnosticSystem
-                            ? "border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
-                            : "border border-border text-foreground hover:bg-muted"
-                        }`}
-                      >
-                        {busyAction === actionKeyComplete ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Wrench className="w-4 h-4" />
-                        )}
-                        {(job as any).diagnosticSystem
-                          ? "Run diagnostic checklist"
-                          : "Complete Booking"}
-                      </button>
-                    ) : null}
-
-                    <Link
-                      href={`/my-bookings?highlight=${job._id}`}
-                      className="inline-flex items-center gap-2 rounded-lg border border-border px-3.5 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-                    >
-                      View Details
-                    </Link>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      <div className="grid gap-6 xl:grid-cols-[1.3fr_0.9fr]">
-        <section className="rounded-2xl border border-border bg-card p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)]">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">Upcoming</h2>
-              <p className="text-sm text-muted-foreground">
-                Confirmed bookings over the next seven days.
-              </p>
-            </div>
-            <Star className="w-4 h-4 text-amber-500" />
-          </div>
-
-          {groupedUpcoming.length === 0 ? (
-            <p className="mt-6 text-sm text-muted-foreground">
-              No confirmed upcoming bookings right now.
-            </p>
-          ) : (
-            <div className="mt-6 space-y-5">
-              {groupedUpcoming.map(([date, jobs]) => (
-                <div key={date}>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    {formatDate(date)}
-                  </p>
-                  <div className="mt-3 space-y-3">
-                    {jobs.map((job) => (
-                      <Link
-                        key={String(job._id)}
-                        href={`/my-bookings?highlight=${job._id}`}
-                        className="flex items-center justify-between gap-4 rounded-xl border border-border px-4 py-3 transition-colors hover:bg-muted/40"
-                      >
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-foreground">
-                            {formatTime(job.scheduledTime)} • {job.customerDisplayName}
-                          </p>
-                          <p className="truncate text-sm text-muted-foreground">
-                            {job.vehicle} • {job.serviceNames.join(", ")}
-                          </p>
-                        </div>
-                        <ArrowRight className="w-4 h-4 shrink-0 text-muted-foreground" />
-                      </Link>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-
-        <section className="rounded-2xl border border-border bg-card p-6 shadow-[0_2px_8px_rgba(0,0,0,0.04),0_1px_2px_rgba(0,0,0,0.06)]">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-600" />
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">Needs Attention</h2>
-              <p className="text-sm text-muted-foreground">
-                Completed bookings missing finalized actuals.
-              </p>
-            </div>
-          </div>
-
-          {dashboard.needsActuals.length === 0 ? (
-            <p className="mt-6 text-sm text-muted-foreground">
-              Nothing waiting on follow-up right now.
-            </p>
-          ) : (
-            <div className="mt-6 space-y-3">
-              {dashboard.needsActuals.map((job) => (
-                <div
-                  key={String(job._id)}
-                  className="rounded-xl border border-border bg-amber-50/50 px-4 py-3"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium text-foreground">
-                        {job.customerDisplayName}
-                      </p>
-                      <p className="truncate text-sm text-muted-foreground">
-                        {job.vehicle}
-                      </p>
-                      <p className="mt-1 text-xs text-amber-700">
-                        Completed {formatDate(job.scheduledDate)} at {formatTime(job.scheduledTime)}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => openActualsDialog(String(job._id), "edit")}
-                        className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs font-medium text-amber-800 transition-colors hover:bg-amber-100"
-                      >
-                        Finalize actuals
-                      </button>
-                      <Link
-                        href={`/my-bookings?highlight=${job._id}`}
-                        className="inline-flex items-center text-amber-700 transition-colors hover:text-amber-900"
-                      >
-                        <ArrowRight className="mt-0.5 w-4 h-4" />
-                      </Link>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </div>
-
       <ConfirmationDialog
         open={pendingActiveBlock !== null}
         title="Finish your current job first"
@@ -814,6 +692,9 @@ export default function MechanicDashboard() {
             : ""
         }
         bookingServices={selectedWorkflowBooking?.serviceNames ?? []}
+        tireReplacementPositions={
+          selectedWorkflowBooking?.tireSpecs?.positions ?? []
+        }
         passportData={selectedWorkflowPassport ?? null}
         prefillData={selectedWorkflowBooking?.jobActuals?.prejobReport ?? null}
         isSubmitting={

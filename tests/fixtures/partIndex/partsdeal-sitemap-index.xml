@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Captured live Jul 30 2026 from https://www.toyotapartsdeal.com/sitemap.xml
+  (30 children total; trimmed to 8 that exercise the partsinfo filter). The
+  server pretty-prints the url on its own line INSIDE <loc>, which is why the
+  loc regex has to tolerate surrounding whitespace.
+-->
+<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<sitemap>
+<loc>
+https://www.toyotapartsdeal.com/sitemap/sitemap_accessory_featured1.xml.gz
+</loc>
+<lastmod>2025-05-17</lastmod>
+</sitemap>
+<sitemap>
+<loc>
+https://www.toyotapartsdeal.com/sitemap/sitemap_catalog1.xml.gz
+</loc>
+<lastmod>2025-05-17</lastmod>
+</sitemap>
+<sitemap>
+<loc>
+https://www.toyotapartsdeal.com/sitemap/sitemap_partsinfo1.xml.gz
+</loc>
+<lastmod>2025-05-17</lastmod>
+</sitemap>
+<sitemap>
+<loc>
+https://www.toyotapartsdeal.com/sitemap/sitemap_partsinfo2.xml.gz
+</loc>
+<lastmod>2025-05-17</lastmod>
+</sitemap>
+<sitemap>
+<loc>
+https://www.toyotapartsdeal.com/sitemap/sitemap_partsinfo17.xml.gz
+</loc>
+<lastmod>2025-05-17</lastmod>
+</sitemap>
+<sitemap>
+<loc>
+https://www.toyotapartsdeal.com/sitemap/sitemap_popularparts1.xml.gz
+</loc>
+<lastmod>2025-05-17</lastmod>
+</sitemap>
+<sitemap>
+<loc>
+https://www.toyotapartsdeal.com/sitemap/image-sitemap_illustration1.xml.gz
+</loc>
+<lastmod>2025-05-17</lastmod>
+</sitemap>
+<sitemap>
+<loc>
+https://www.toyotapartsdeal.com/sitemap/image-sitemap_productphoto1.xml.gz
+</loc>
+<lastmod>2025-05-17</lastmod>
+</sitemap>
+</sitemapindex>

@@ -3,7 +3,7 @@
  * band. No Convex imports (unit-tested: tests/partsBand.test.ts).
  *
  * Policy (handoff 2026-06-23, user's chosen design): per role, POOL the gathered
- * SKU prices WITH the RepairPal endpoint averaged per-unit POINT as peers (the
+ * SKU prices WITH the Estimator endpoint averaged per-unit POINT as peers (the
  * endpoint is appended to the role's price pool). When a role has no SKU prices
  * the endpoint point stands alone (the safety net). If a role has neither, the
  * whole service is unreliable and the caller uses the Camry × tier-multiplier
@@ -15,11 +15,11 @@
  *
  * PLANNED (not done) — blend SKU + endpoint into one AVERAGED price:
  * The intent was to average our gathered SKU prices (often aftermarket) with the
- * RepairPal endpoint price (OEM/dealer-flavored) into a single representative
+ * Estimator endpoint price (OEM/dealer-flavored) into a single representative
  * number — i.e. pool them and quote the blended mean/median. This is deliberately
  * NOT enabled yet because the shadow-diff (2026-06-23,
  * docs/superpowers/reviews/2026-06-23-parts-real-primary-shadow-diff.md) found the
- * endpoint's price RANGE is sometimes far too large to average cleanly: RepairPal
+ * endpoint's price RANGE is sometimes far too large to average cleanly: Estimator
  * occasionally returns a wrong-variant value (e.g. a RAV4 12V battery came back at
  * $1507 — the hybrid traction pack — vs the real ~$130 dealer SKU). Today this
  * helper takes raw [min,max], so such an outlier blows the band wide. Revisit by
@@ -34,7 +34,7 @@ export type PartsRoleInput = {
   quantity: number;
   /** gathered per-SKU per-unit prices (excl. the endpoint source), pre-vetted. */
   skuPrices: number[];
-  /** RepairPal endpoint averaged PER-UNIT point (avg ÷ endpoint.quantity), if any. */
+  /** Estimator endpoint averaged PER-UNIT point (avg ÷ endpoint.quantity), if any. */
   endpointUnitPrice?: number | null;
 };
 

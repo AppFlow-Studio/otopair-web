@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import Cropper from "react-easy-crop";
 import type { Area } from "react-easy-crop";
-import { ImageIcon, Loader2 } from "lucide-react";
+import { Camera, ImageIcon, Loader2, Trash2, Upload } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { cropAreaToBlob } from "./crop-image";
@@ -19,10 +19,14 @@ export default function ShopLogoUploader({
   shopId,
   logoUrl,
   memberRole,
+  shopName,
+  shopSlug,
 }: {
   shopId: Id<"shops">;
   logoUrl: string | null;
   memberRole?: string;
+  shopName: string;
+  shopSlug?: string;
 }) {
   const generateUploadUrl = useMutation(api.shops.generateShopLogoUploadUrl);
   const setShopLogo = useMutation(api.shops.setShopLogo);
@@ -115,62 +119,95 @@ export default function ShopLogoUploader({
     }
   }
 
-  return (
-    <div className="flex flex-col items-start gap-2">
-      <div className="relative h-16 w-16 shrink-0 overflow-hidden rounded-full border border-gray-200 bg-gray-100">
-        {logoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element -- Convex storage
-          // URLs aren't in next.config images.remotePatterns; plain <img> by design.
-          <img src={logoUrl} alt="Shop logo" className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center">
-            <ImageIcon className="h-6 w-6 text-gray-400" />
-          </div>
-        )}
-        {(isSaving || isRemoving) && (
-          <div className="absolute inset-0 flex items-center justify-center bg-white/70">
-            <Loader2 className="h-5 w-5 animate-spin text-gray-500" />
-          </div>
-        )}
-      </div>
+  const isBusy = isSaving || isRemoving;
 
-      {canEdit && (
-        <div>
-          <div className="flex items-center gap-3">
+  const avatarContent = (
+    <>
+      {logoUrl ? (
+        // Convex storage URLs aren't in next.config images.remotePatterns; plain <img> by design.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={logoUrl} alt="Shop logo" className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center">
+          <ImageIcon className="h-7 w-7 text-gray-400" />
+        </div>
+      )}
+      {canEdit && !isBusy && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5 bg-black/45 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+          <Camera className="h-5 w-5 text-white" />
+          <span className="text-[10px] font-medium text-white">
+            {logoUrl ? "Change" : "Upload"}
+          </span>
+        </div>
+      )}
+      {isBusy && (
+        <div className="absolute inset-0 flex items-center justify-center bg-white/70">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      )}
+    </>
+  );
+
+  return (
+    <div className="flex items-start gap-4">
+      {canEdit ? (
+        <button
+          type="button"
+          aria-label={logoUrl ? "Change logo" : "Upload logo"}
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isBusy}
+          className="group relative h-20 w-20 shrink-0 overflow-hidden rounded-full bg-gray-100 ring-1 ring-gray-200 transition-shadow hover:ring-2 hover:ring-blue-200"
+        >
+          {avatarContent}
+        </button>
+      ) : (
+        <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-full bg-gray-100 ring-1 ring-gray-200">
+          {avatarContent}
+        </div>
+      )}
+
+      <div className="min-w-0">
+        <h3 className="text-xl font-bold text-foreground">{shopName}</h3>
+        {shopSlug && <p className="text-sm text-muted-foreground">/{shopSlug}</p>}
+        {canEdit && (
+          <div className="mt-2.5 flex items-center gap-2">
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              disabled={isSaving || isRemoving}
-              className="text-sm font-medium text-blue-600 hover:underline disabled:opacity-60"
+              disabled={isBusy}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
             >
+              <Upload className="h-3.5 w-3.5" />
               {logoUrl ? "Change logo" : "Upload logo"}
             </button>
             {logoUrl && (
               <button
                 type="button"
                 onClick={() => void handleRemove()}
-                disabled={isSaving || isRemoving}
-                className="text-sm font-medium text-red-600 hover:underline disabled:opacity-60"
+                disabled={isBusy}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:opacity-60"
               >
+                <Trash2 className="h-3.5 w-3.5" />
                 Remove
               </button>
             )}
           </div>
-          {message && <p className="mt-1 max-w-[200px] text-xs text-gray-600">{message}</p>}
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            className="hidden"
-            onChange={handlePickFile}
-          />
-        </div>
-      )}
+        )}
+        {message && <p className="mt-1.5 text-xs text-muted-foreground">{message}</p>}
+      </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        className="hidden"
+        onChange={handlePickFile}
+      />
 
       {sourceUrl && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
           <div className="w-full max-w-md rounded-xl bg-white p-6">
-            <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-gray-900">
+            <h3 className="mb-4 text-sm font-semibold uppercase tracking-wide text-foreground">
               Crop logo
             </h3>
             <div className="relative h-72 w-full overflow-hidden rounded-lg bg-gray-900">
@@ -187,7 +224,7 @@ export default function ShopLogoUploader({
               />
             </div>
             <div className="mt-4 flex items-center gap-3">
-              <span className="text-xs text-gray-500">Zoom</span>
+              <span className="text-xs text-muted-foreground">Zoom</span>
               <input
                 type="range"
                 min={1}
@@ -205,7 +242,7 @@ export default function ShopLogoUploader({
                 type="button"
                 onClick={closeDialog}
                 disabled={isSaving}
-                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-60"
+                className="rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-60"
               >
                 Cancel
               </button>
@@ -213,7 +250,7 @@ export default function ShopLogoUploader({
                 type="button"
                 onClick={() => void handleSave()}
                 disabled={isSaving || !areaPixels}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-60"
+                className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary/90 disabled:opacity-60"
               >
                 {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 Save logo

@@ -166,3 +166,19 @@ export const markOnboardingComplete = mutation({
     await ctx.db.patch(vehicleOwnerId, { onboardingComplete: true });
   },
 });
+
+/**
+ * Persists in-progress Service History answers (CarInfoStepper) so a user
+ * who taps "Finish for now" returns to their already-answered cards marked
+ * complete. Stored as an opaque blob:
+ *   { answers, questionIndex, progress, completed: string[] }
+ */
+export const saveServiceHistoryDraft = mutation({
+  args: {
+    vehicleOwnerId: v.id("vehicle_owners"),
+    draft: v.any(),
+  },
+  handler: async (ctx, { vehicleOwnerId, draft }) => {
+    await ctx.db.patch(vehicleOwnerId, { serviceHistoryDraft: draft });
+  },
+});

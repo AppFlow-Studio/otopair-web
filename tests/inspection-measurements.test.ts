@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  areTireReplacementPositionsValid,
   buildCustomerInspectionSnapshot,
   convertRotorValue,
+  formatRotorReferenceMinimum,
   formatRotorValue,
+  getBookedTireReplacementPositions,
   getTireTreadMinimum,
   rotorValueToMicrometers,
   validateInspectionMeasurementDraft,
@@ -21,6 +24,23 @@ function completeTread(): InspectionMeasurementsInput["tire_tread"] {
 }
 
 describe("tire tread measurements", () => {
+  it("accepts only explicit unique replacement corners matching the tire quantity", () => {
+    expect(areTireReplacementPositionsValid(2, ["FL", "RR"])).toBe(true);
+    expect(areTireReplacementPositionsValid(2, undefined)).toBe(false);
+    expect(areTireReplacementPositionsValid(2, ["FL"])).toBe(false);
+    expect(areTireReplacementPositionsValid(2, ["FL", "FL"])).toBe(false);
+  });
+
+  it("requires explicit corners before waiving any outgoing-tire checks", () => {
+    expect(getBookedTireReplacementPositions({ quantity: 2 })).toEqual([]);
+    expect(
+      getBookedTireReplacementPositions({
+        quantity: 1,
+        positions: ["RR"],
+      }),
+    ).toEqual(["RR"]);
+  });
+
   it("uses the shallowest inner, center, and outer reading", () => {
     expect(
       getTireTreadMinimum({
@@ -75,6 +95,38 @@ describe("tire tread measurements", () => {
     });
   });
 
+  it("does not require tread for booked replacement positions", () => {
+    expect(
+      validateInspectionMeasurements({
+        tire_tread: {
+          front_left: { reported_min_32nds: 8 },
+          rear_left: { reported_min_32nds: 6 },
+          rear_right: { reported_min_32nds: 5 },
+        },
+        tire_replacement_positions: ["front_right"],
+        brakes: null,
+        brake_scope: { hasBrakeWork: false, front: false, rear: false },
+      }),
+    ).toEqual({ valid: true });
+  });
+
+  it("still validates tread supplied for a booked replacement position", () => {
+    expect(
+      validateInspectionMeasurements({
+        tire_tread: {
+          ...completeTread(),
+          front_right: { reported_min_32nds: 40 },
+        },
+        tire_replacement_positions: ["front_right"],
+        brakes: null,
+        brake_scope: { hasBrakeWork: false, front: false, rear: false },
+      }),
+    ).toEqual({
+      valid: false,
+      error: "Front right tread depth must be a whole number from 0 to 32.",
+    });
+  });
+
   it("allows incomplete detailed readings in a draft", () => {
     expect(
       validateInspectionMeasurementDraft({
@@ -108,6 +160,11 @@ describe("rotor measurements", () => {
   it("formats inches to three decimals and millimeters to two", () => {
     expect(formatRotorValue(1.027, "in")).toBe("1.027");
     expect(formatRotorValue(26.09, "mm")).toBe("26.09");
+  });
+
+  it("formats rotor reference minimums in the selected unit", () => {
+    expect(formatRotorReferenceMinimum(8, "mm")).toBe("8.00 mm");
+    expect(formatRotorReferenceMinimum(8, "in")).toBe("0.315 in");
   });
 
   it("requires both rotor readings on a front-only brake booking", () => {

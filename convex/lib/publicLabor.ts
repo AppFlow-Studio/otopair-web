@@ -3,7 +3,7 @@
  * anything a /v0 API key holder can see (Data spec §12 layer gate).
  *
  * The ladder (quoteEngine.resolveLaborHours) can resolve from licensed Layer-B
- * inputs — vdb / aggregated (RepairPal/MOTOR medians) / vdb_camry_baseline /
+ * inputs — vdb / aggregated (Estimator / Book Rate medians) / vdb_camry_baseline /
  * sibling book_hours — and those raw hours must never leave the building. The
  * public surface serves exactly two source labels:
  *

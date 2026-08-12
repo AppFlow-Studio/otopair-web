@@ -21,15 +21,12 @@
  */
 
 import { v } from "convex/values";
-import { internalAction, internalQuery } from "../_generated/server";
+import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { extractPriceFirecrawl } from "./firecrawl";
 import { priceAllSources } from "./priceReextract";
 import { discoverPriceUrls } from "./priceDiscovery";
 import { isPoisonPriceType, isNonPooledPriceType } from "../lib/priceTypes";
-import { computeQuotability } from "./quotability";
-import { PART_FIELD_MAP } from "./v3pipeline";
-import { computeEnrichmentStatus } from "./completionGate";
 
 const DEFAULT_AGE_DAYS = 30;
 
@@ -106,7 +103,42 @@ type ZeroPricePart = {
   name: string | null;
   subcategory: string | null;
   make_name: string | null;
+  /** Wave 1: a fresh "no_listing" discovery verdict is on file — the part
+   *  stays in the CENSUS (its gap is real and must not read as healed) but
+   *  target selection skips it so budget goes to winnable parts. */
+  discovery_dead?: boolean;
 };
+
+/** How long a "no_listing" verdict suppresses re-discovery. Listings do
+ *  appear over time (restocks, new sellers), so dead parts retry on a slow
+ *  cadence instead of never. */
+function noListingRetryMs(): number {
+  return Number(process.env.PARTS_PRICE_NO_LISTING_RETRY_DAYS ?? "30") * 24 * 60 * 60 * 1000;
+}
+
+function isDiscoveryDead(part: { price_discovery_outcome?: string; price_discovery_at?: number }): boolean {
+  return (
+    part.price_discovery_outcome === "no_listing" &&
+    typeof part.price_discovery_at === "number" &&
+    Date.now() - part.price_discovery_at < noListingRetryMs()
+  );
+}
+
+/** Durable per-part discovery verdict — the answer to the canary's open
+ *  question ("no listing found" vs "budget exhausted" were
+ *  indistinguishable). outcome null clears the marker (a price landed). */
+export const markPriceDiscoveryOutcome = internalMutation({
+  args: {
+    part_id: v.id("oem_parts"),
+    outcome: v.union(v.literal("no_listing"), v.null()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.part_id, {
+      price_discovery_outcome: args.outcome ?? undefined,
+      price_discovery_at: args.outcome ? Date.now() : undefined,
+    });
+  },
+});
 
 /** A part counts as unpriced when it has no TRUSTED row — poison rows
  *  (unverified / online_discount / you_save) and non-pooled fallbacks never
@@ -141,6 +173,10 @@ export const zeroPricePartsPage = internalQuery({
     for (const part of page.page) {
       // Superseded parts are no longer quoted; don't spend backfill budget.
       if (part.is_current === false) continue;
+      // Fresh no_listing verdict → the fleet sweep skips it entirely (the
+      // targeted config census below keeps such parts, flagged, so gaps
+      // stay honest).
+      if (isDiscoveryDead(part as any)) continue;
 
       if (await hasTrustedPriceRow(ctx, part._id)) continue;
 
@@ -197,6 +233,7 @@ export const zeroPricePartsForConfig = internalQuery({
         name: part.name ?? null,
         subcategory: part.subcategory ?? null,
         make_name: make?.name ?? null,
+        discovery_dead: isDiscoveryDead(part as any),
       });
     }
     return out;
@@ -337,8 +374,12 @@ export const refreshStalePrices = internalAction({
           if (page.isDone) break;
         }
       }
-      const targets = zeroTargets.slice(0, backfillBudget);
-      console.log(`[price-refresh] ${targets.length} zero-price parts selected (backfill budget ${backfillBudget})`);
+      const skippedDead = zeroTargets.filter((t) => t.discovery_dead).length;
+      const targets = zeroTargets.filter((t) => !t.discovery_dead).slice(0, backfillBudget);
+      console.log(
+        `[price-refresh] ${targets.length} zero-price parts selected (backfill budget ${backfillBudget}` +
+          (skippedDead > 0 ? `, ${skippedDead} skipped as no_listing` : "") + `)`,
+      );
 
       for (const t of targets) {
         try {
@@ -347,12 +388,34 @@ export const refreshStalePrices = internalAction({
             make: t.make_name,
             name: t.name,
           });
+          if (urls === null) {
+            // Discovery channel down (Firecrawl outage/limit) — leave the part
+            // eligible; a no_listing stamp here would be an outage artifact
+            // suppressing retries for the whole retry window.
+            console.warn(
+              `[price-refresh] backfill: discovery unavailable for ${t.oem_part_number} — no verdict recorded`,
+            );
+            continue;
+          }
           if (urls.length === 0) {
             console.warn(`[price-refresh] backfill: no usable source found for ${t.oem_part_number}`);
+            // Durable verdict: searched, nothing sells this number. Retries
+            // after PARTS_PRICE_NO_LISTING_RETRY_DAYS, not next run.
+            await ctx.runMutation(internal.vehicleEnrichment.priceRefresh.markPriceDiscoveryOutcome, {
+              part_id: t.part_id as any,
+              outcome: "no_listing",
+            });
             continue;
           }
           const wrote = await priceAndWrite({ ...t, urls, discovered: true });
-          if (wrote) backfilledParts++;
+          if (wrote) {
+            backfilledParts++;
+            // A price landed — clear any stale no_listing marker.
+            await ctx.runMutation(internal.vehicleEnrichment.priceRefresh.markPriceDiscoveryOutcome, {
+              part_id: t.part_id as any,
+              outcome: null,
+            });
+          }
         } catch (e) {
           console.error(`[price-refresh] backfill failed for ${t.oem_part_number}:`, e);
         }
@@ -392,42 +455,25 @@ export const refreshStalePrices = internalAction({
         });
       }
 
+      // Full reconcile + heal-only completion-gate re-run, shared with the
+      // healAfterRun tail and devOnly/gateResweep (completionReevaluate.ts).
+      // It recomputes fill via calculateV3FillRate and quotability from live
+      // fitments — the stored config.fill_rate is a finalize-time snapshot,
+      // and gating on it left every heal-lifted config stuck partial (Aug-8
+      // fresh-VIN round 2: all five, e.g. Palisade run fill 64 → config 91).
       try {
-        const latestRun = await ctx.runQuery(
-          internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
+        const gate: any = await ctx.runAction(
+          internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
           { vehicleConfigId: args.vehicleConfigId },
         );
-        const applicableSlugs: string[] = ((latestRun as any)?.quotability?.services ?? []).map(
-          (s: any) => s.slug,
+        console.log(
+          `[price-refresh] reconciled run health: ${gate?.status}` +
+            (gate?.status === "evaluated"
+              ? ` — quotability ${gate.quotability_pct}, fill ${gate.fill} (${gate.fill_source}), ` +
+                `${stillUnpriced.length} part(s) still unpriced` +
+                (gate.promoted ? " — config promoted partial → complete" : "")
+              : ""),
         );
-        if (applicableSlugs.length > 0) {
-          const qFitments = await ctx.runQuery(
-            internal.vehicleEnrichment.v3queries.getFitmentsWithPriceFlag,
-            { vehicleConfigId: args.vehicleConfigId },
-          );
-          // Same N/A-role exclusion as the finalize compute — recovered from
-          // the run's field_gaps ledger (not_applicable entries) since the
-          // flat field map is long gone by heal time.
-          const naRoleKeys = new Set<string>(
-            (((latestRun as any)?.field_gaps ?? []) as Array<{ field: string; reason: string }>)
-              .filter((g) => g.reason === "not_applicable" && PART_FIELD_MAP[g.field])
-              .map((g) => PART_FIELD_MAP[g.field].subcategory),
-          );
-          const quotability = computeQuotability(qFitments, applicableSlugs, naRoleKeys);
-          // Keys a gap suffix can carry: subcategory ?? oem ?? part_id.
-          const stillUnpricedKeys = stillUnpriced.flatMap((p) =>
-            [p.subcategory, p.oem_part_number, p.part_id].filter((x): x is string => !!x),
-          );
-          await ctx.runMutation(internal.vehicleEnrichment.v3mutations.patchRunPriceHealth, {
-            vehicle_config_id: args.vehicleConfigId,
-            quotability,
-            still_unpriced_keys: stillUnpricedKeys,
-          });
-          console.log(
-            `[price-refresh] reconciled run health: quotability ${quotability.pct}, ` +
-              `${stillUnpriced.length} part(s) still unpriced`,
-          );
-        }
       } catch (e) {
         console.warn("[price-refresh] run-health reconciliation failed (non-fatal):", e);
       }

@@ -1,39 +1,58 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ComponentType } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { BOOKING_STATUS_VISUALS, type BookingStatus } from "@/lib/booking-status";
 import { usePortalSidebar } from "../portal-context";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
 import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
 } from "@/components/reschedule-confirmation-dialog";
-import {
-  AlertTriangle,
-  ArrowUpRight,
-  BadgeDollarSign,
-  Bell,
-  CalendarClock,
-  Car,
-  ClipboardList,
-  Loader2,
-  Maximize2,
-  Star,
-  Store,
-} from "lucide-react";
+import { ArrowUpRight, Loader2 } from "lucide-react";
 import MechanicDashboard from "./mechanic-dashboard";
 import LateStartReviewDialog, {
   type LateStartReviewView,
 } from "@/components/late-start-review-dialog";
 import NowWorkingOverlay from "@/components/mechanic/now-working-overlay";
+import {
+  GreetingHeader,
+  MetricRow,
+  Metric,
+  SectionLabel,
+  CommandList,
+  CommandRow,
+  EmptyRow,
+  useListKeyboard,
+  type CommandAction,
+  type Tone,
+} from "@/components/dashboard/command-deck";
+import RevenueSection from "@/components/dashboard/revenue-section";
 
 const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
+
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+/** A shape the "Needs you now" list can render and drive with the keyboard. */
+type NeedItem = {
+  key: string;
+  kind: "enroute" | "notified" | "accept" | "latestart" | "actuals" | "invite";
+  dot: Tone;
+  primary: string;
+  secondary?: string;
+  meta?: string;
+  action?: CommandAction;
+  onOpen: () => void;
+};
 
 function formatLongDate(date: Date): string {
   return date.toLocaleDateString("en-US", {
@@ -49,19 +68,6 @@ function formatCurrency(amount: number): string {
     currency: "USD",
     maximumFractionDigits: 0,
   }).format(amount);
-}
-
-function getInitials(firstName?: string | null, lastName?: string | null): string {
-  const initials = `${firstName?.trim()[0] ?? ""}${lastName?.trim()[0] ?? ""}`.toUpperCase();
-  return initials || "OP";
-}
-
-function formatInviteDate(createdAt: number): string {
-  if (!createdAt) return "Sent recently";
-  return new Date(createdAt).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-  });
 }
 
 function formatScheduledDateLabel(dateString: string): string {
@@ -85,22 +91,6 @@ function formatScheduledDateLabel(dateString: string): string {
   });
 }
 
-function formatTimeLabel(hhmm?: string | null): string {
-  if (!hhmm) return "Time TBD";
-  const [hours, minutes] = hhmm.split(":").map(Number);
-  const date = new Date();
-  date.setHours(hours, minutes, 0, 0);
-  return date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
-function getScheduleStatusClass(status: string): string {
-  return BOOKING_STATUS_VISUALS[status as BookingStatus]?.pillClass ?? "bg-muted text-muted-foreground";
-}
-
 function getScheduleStatusLabel(status: string): string {
   switch (status) {
     case "pending":
@@ -115,119 +105,20 @@ function getScheduleStatusLabel(status: string): string {
   }
 }
 
-function DashboardStatCard({
-  icon: Icon,
-  label,
-  value,
-  sublabel,
-  accentClassName = "text-primary",
-  valueClassName = "text-2xl font-semibold",
-  href,
-}: {
-  icon: ComponentType<{ className?: string }>;
-  label: string;
-  value: string;
-  sublabel?: string;
-  accentClassName?: string;
-  valueClassName?: string;
-  href?: string;
-}) {
-  const interactiveClasses = href
-    ? "cursor-pointer transition-shadow hover:shadow-md"
-    : "";
-  const content = (
-    <>
-      <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
-        <Icon className="h-4 w-4" />
-        {label}
-      </div>
-      <p className={`mt-3 tracking-tight ${valueClassName ?? "text-2xl font-semibold"} ${accentClassName}`}>
-        {value}
-      </p>
-      {sublabel ? <p className="mt-1 text-sm text-muted-foreground">{sublabel}</p> : null}
-    </>
-  );
-
-  if (href) {
-    return (
-      <Link
-        href={href}
-        className={`block rounded-2xl border border-border bg-card p-5 ${interactiveClasses}`}
-      >
-        {content}
-      </Link>
-    );
+function statusDot(status: string): Tone {
+  switch (status) {
+    case "in_progress":
+      return "success";
+    case "confirmed":
+    case "vehicle_at_shop":
+      return "primary";
+    case "pending":
+    case "pending_shop_acceptance":
+    case "pending_customer_acceptance":
+      return "warning";
+    default:
+      return "muted";
   }
-
-  return (
-    <div className="rounded-2xl border border-border bg-card p-5">
-      {content}
-    </div>
-  );
-}
-
-function EmptyCard({
-  title,
-  description,
-  href,
-  hrefLabel,
-}: {
-  title: string;
-  description: string;
-  href?: string;
-  hrefLabel?: string;
-}) {
-  return (
-    <div className="rounded-2xl border border-border bg-muted/40 px-4 py-6 text-sm text-muted-foreground">
-      <p className="font-medium text-foreground">{title}</p>
-      {description ? <p className="mt-1 leading-6">{description}</p> : null}
-      {href && hrefLabel ? (
-        <Link
-          href={href}
-          className="mt-3 inline-flex cursor-pointer items-center gap-1 font-medium text-primary hover:underline"
-        >
-          {hrefLabel}
-          <ArrowUpRight className="h-3.5 w-3.5" />
-        </Link>
-      ) : null}
-    </div>
-  );
-}
-
-function DashboardStatCardSkeleton() {
-  return (
-    <div className="rounded-2xl border border-border bg-card p-5">
-      <div className="animate-pulse">
-        <div className="h-4 w-28 rounded bg-muted" />
-        <div className="mt-3 h-9 w-16 rounded bg-muted" />
-        <div className="mt-2 h-4 w-32 rounded bg-muted" />
-      </div>
-    </div>
-  );
-}
-
-function PendingActionSkeletonCard() {
-  return (
-    <div className="rounded-2xl border border-border bg-muted/70 p-4">
-      <div className="animate-pulse">
-        <div className="flex items-start justify-between gap-3">
-          <div className="space-y-2">
-            <div className="h-4 w-28 rounded bg-muted" />
-            <div className="h-3 w-36 rounded bg-muted" />
-          </div>
-          <div className="h-6 w-8 rounded-full bg-muted" />
-        </div>
-        <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
-          <div className="rounded-2xl border border-border bg-card p-4">
-            <div className="h-4 w-32 rounded bg-muted" />
-            <div className="mt-2 h-3 w-24 rounded bg-muted" />
-            <div className="mt-3 h-3 w-40 rounded bg-muted" />
-          </div>
-        </div>
-        <div className="mt-4 h-4 w-28 rounded bg-muted" />
-      </div>
-    </div>
-  );
 }
 
 export default function DashboardPage() {
@@ -265,6 +156,7 @@ function OwnerDashboardPage({
   } | null;
 }) {
   const { user } = useUser();
+  const router = useRouter();
   const dashboard = useQuery(api.bookings.getMyOwnerDashboard, {
     localDate: new Date().toLocaleDateString("en-CA"),
   });
@@ -335,6 +227,21 @@ function OwnerDashboardPage({
   const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
   const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
   const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+  const acceptBooking = useMutation(api.bookings.accept);
+
+  const handleAcceptBooking = useCallback(
+    async (bookingId: Id<"bookings">) => {
+      try {
+        await acceptBooking({ bookingId });
+        setSuccessMessage("Booking accepted");
+      } catch (error: unknown) {
+        setSuccessMessage(
+          error instanceof Error ? error.message : "Could not accept booking.",
+        );
+      }
+    },
+    [acceptBooking],
+  );
 
   useEffect(() => {
     setSidebarCompact(drawerOpen);
@@ -541,34 +448,184 @@ function OwnerDashboardPage({
     }
   }
 
+  // The unified "Needs you now" queue — every pending-action list from the old
+  // 6-column grid, merged into one priority-ordered, keyboard-drivable list.
+  // Built before the early returns so the keyboard hook below never runs
+  // conditionally (rules of hooks).
+  const needItems = useMemo<NeedItem[]>(() => {
+    if (!dashboard) return [];
+    const items: NeedItem[] = [];
+
+    // 1) Customer en route — the bay is waiting on an arrival.
+    for (const alert of customerOnMyWay ?? []) {
+      if (!alert) continue;
+      const bookingId = alert.bookingId as Id<"bookings">;
+      items.push({
+        key: `enroute-${String(alert._id)}`,
+        kind: "enroute",
+        dot: "success",
+        primary: `${alert.customerName} · ${alert.vehicle ?? "Vehicle"}`,
+        secondary: alert.serviceSummary || undefined,
+        meta: `en route · ${alert.minutesLate}m late`,
+        action: {
+          label: "Vehicle here",
+          tone: "success",
+          run: () => void markVehicleAtShop({ bookingId }),
+        },
+        onOpen: () => setSelectedJobId(bookingId),
+      });
+    }
+
+    // 2) Late notification sent — customer pinged, still not here.
+    for (const alert of customerLateNotificationSent ?? []) {
+      if (!alert) continue;
+      const bookingId = alert.bookingId as Id<"bookings">;
+      items.push({
+        key: `notified-${String(alert._id)}`,
+        kind: "notified",
+        dot: "warning",
+        primary: `${alert.customerName} · ${alert.vehicle ?? "Vehicle"}`,
+        secondary: alert.serviceSummary || undefined,
+        meta: `notified · ${alert.minutesLate}m late`,
+        action: {
+          label: "Vehicle here",
+          tone: "warning",
+          run: () => void markVehicleAtShop({ bookingId }),
+        },
+        onOpen: () => setSelectedJobId(bookingId),
+      });
+    }
+
+    // 3) Bookings to accept — a customer is waiting on a yes.
+    for (const job of dashboard.pendingActions.jobsToAccept) {
+      items.push({
+        key: `accept-${String(job._id)}`,
+        kind: "accept",
+        dot: "primary",
+        primary: `${job.customerName} · ${job.vehicle}`,
+        secondary: job.serviceSummary || undefined,
+        meta: `${formatScheduledDateLabel(job.scheduledDate)} · ${job.scheduledTimeLabel}`,
+        action: {
+          label: "Accept",
+          tone: "primary",
+          run: () => void handleAcceptBooking(job._id),
+        },
+        onOpen: () => setSelectedJobId(job._id),
+      });
+    }
+
+    // 4) Late-start decisions — auto-applies if nobody responds.
+    for (const review of lateStartReviews ?? []) {
+      if (!review) continue;
+      items.push({
+        key: `latestart-${review._id}`,
+        kind: "latestart",
+        dot: "warning",
+        primary: `${review.upstreamCustomerName} · delay chain`,
+        secondary:
+          review.status === "blocked_manual_review"
+            ? "Manual move required"
+            : `${review.proposals.length} affected booking${
+                review.proposals.length === 1 ? "" : "s"
+              }`,
+        meta: `+${review.cycleMinutes}m`,
+        onOpen: () => {
+          setLateStartReviewError("");
+          setSelectedLateStartReviewId(review._id);
+        },
+      });
+    }
+
+    // 5) Jobs missing final details.
+    for (const job of dashboard.pendingActions.actualsNeeded) {
+      items.push({
+        key: `actuals-${String(job._id)}`,
+        kind: "actuals",
+        dot: "muted",
+        primary: `${job.customerName} · ${job.vehicle}`,
+        secondary: job.serviceSummary || undefined,
+        meta: "needs details",
+        action: {
+          label: "Finalize",
+          tone: "muted",
+          run: () => handleOpenActualsDetails(job._id),
+        },
+        onOpen: () => handleOpenActualsDetails(job._id),
+      });
+    }
+
+    // 6) Invites pending — low urgency, tidy up.
+    for (const invite of dashboard.pendingActions.invitesPending) {
+      items.push({
+        key: `invite-${String(invite._id)}`,
+        kind: "invite",
+        dot: "muted",
+        primary: invite.mechanicName || invite.email,
+        secondary: `${invite.role.replace(/_/g, " ")} invitation · ${invite.email}`,
+        meta: "invited",
+        onOpen: () => router.push("/team"),
+      });
+    }
+
+    return items;
+  }, [
+    dashboard,
+    customerOnMyWay,
+    customerLateNotificationSent,
+    lateStartReviews,
+    markVehicleAtShop,
+    handleAcceptBooking,
+    router,
+  ]);
+
+  // List keyboard nav is live only when nothing modal is open — otherwise the
+  // detail panel / dialogs own the keyboard.
+  const listNavEnabled =
+    !selectedJobId &&
+    !actualsBookingId &&
+    !rescheduleProposal &&
+    !selectedLateStartReviewId &&
+    activeOverlayBookingIds.length === 0;
+  const { focused, setFocused } = useListKeyboard({
+    count: needItems.length,
+    enabled: listNavEnabled,
+    onOpen: (i) => needItems[i]?.onOpen(),
+    onAccept: (i) => needItems[i]?.action?.run(),
+    canAccept: (i) => needItems[i]?.kind === "accept",
+  });
+
   if (dashboard === undefined) {
     return (
-      <div className="space-y-6">
-        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-          <div className="animate-pulse">
-            <div className="h-8 w-56 rounded bg-muted" />
-            <div className="mt-3 h-4 w-32 rounded bg-muted" />
+      <div className="space-y-8">
+        <div className="animate-pulse">
+          <div className="h-8 w-64 rounded bg-muted" />
+        </div>
+        <div className="grid grid-cols-2 gap-6 border-b border-border pb-6 md:grid-cols-4">
+          {[0, 1, 2, 3].map((i) => (
+            <div key={i} className="animate-pulse">
+              <div className="h-3 w-20 rounded bg-muted" />
+              <div className="mt-3 h-7 w-16 rounded bg-muted" />
+              <div className="mt-2 h-3 w-24 rounded bg-muted" />
+            </div>
+          ))}
+        </div>
+        <div className="space-y-3">
+          <div className="h-4 w-32 animate-pulse rounded bg-muted" />
+          <div className="overflow-hidden rounded-xl border border-border">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="flex items-center gap-3 border-b border-border px-3 py-3 last:border-b-0"
+              >
+                <div className="h-1.5 w-1.5 animate-pulse rounded-full bg-muted" />
+                <div className="flex-1 animate-pulse space-y-2">
+                  <div className="h-3.5 w-48 rounded bg-muted" />
+                  <div className="h-3 w-32 rounded bg-muted" />
+                </div>
+              </div>
+            ))}
           </div>
-          <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <DashboardStatCardSkeleton />
-            <DashboardStatCardSkeleton />
-            <DashboardStatCardSkeleton />
-            <DashboardStatCardSkeleton />
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-          <div className="animate-pulse">
-            <div className="h-6 w-40 rounded bg-muted" />
-            <div className="mt-2 h-4 w-72 rounded bg-muted" />
-          </div>
-          <div className="mt-6 grid gap-4 xl:grid-cols-4">
-            <PendingActionSkeletonCard />
-            <PendingActionSkeletonCard />
-            <PendingActionSkeletonCard />
-            <PendingActionSkeletonCard />
-          </div>
-        </section>
+        </div>
       </div>
     );
   }
@@ -592,17 +649,8 @@ function OwnerDashboardPage({
     );
   }
 
-  const ownerName =
-    [user?.firstName, user?.lastName].filter(Boolean).join(" ") || user?.primaryEmailAddress?.emailAddress || "Owner";
-  const ownerInitials = `${user?.firstName?.[0] ?? ""}${user?.lastName?.[0] ?? ""}`.toUpperCase() || "OW";
   const todayLabel = formatLongDate(new Date());
   const hasScheduledBookings = dashboard.todaySchedule.some((column) => column.bookings.length > 0);
-  const lateStartReviewCount = lateStartReviews?.length ?? 0;
-  const hasPendingActions =
-    dashboard.pendingActions.jobsToAcceptCount > 0 ||
-    dashboard.pendingActions.actualsNeededCount > 0 ||
-    dashboard.pendingActions.invitesPendingCount > 0 ||
-    lateStartReviewCount > 0;
   const todayScheduleRows = dashboard.todaySchedule
     .flatMap((column) =>
       column.bookings.map((booking) => ({
@@ -626,604 +674,184 @@ function OwnerDashboardPage({
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
+  const overrunningCount = activeJobs.filter(
+    (row: any) => row.booking?.scheduledDate && row.booking.scheduledDate !== todayDateString,
+  ).length;
 
   return (
     <>
       <div className="flex items-start">
-        <div className="min-w-0 flex-1 space-y-6">
-      <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-          <div className="flex min-w-0 items-center gap-4">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-border bg-muted">
-              {dashboard.shop.logoUrl ? (
-                <img
-                  src={dashboard.shop.logoUrl}
-                  alt={dashboard.shop.name}
-                  className="h-full w-full object-cover"
-                />
-              ) : (
-                <Store className="h-7 w-7 text-muted-foreground" />
-              )}
-            </div>
-            <div className="min-w-0">
-              <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-                {dashboard.shop.name}
-              </h1>
-              <p className="mt-2 text-sm text-muted-foreground">Today: {todayLabel}</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-4 self-start">
-            <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-full bg-primary text-sm font-semibold text-white">
-                {user?.imageUrl ? (
-                  <img src={user.imageUrl} alt={ownerName} className="h-full w-full object-cover" />
-                ) : (
-                  ownerInitials
-                )}
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-foreground">{ownerName}</p>
-                <p className="text-xs text-muted-foreground">Shop owner</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <DashboardStatCard
-            icon={CalendarClock}
-            label="Today's bookings"
-            value={String(dashboard.stats.todaysBookingsCount)}
-            sublabel="Scheduled bookings for today"
-            href="/schedule"
+        <div className="min-w-0 flex-1 space-y-8">
+          <GreetingHeader
+            greeting={getGreeting()}
+            name={user?.firstName}
+            dateLabel={todayLabel}
+            subtitle={dashboard.shop.name}
           />
-          <DashboardStatCard
-            icon={ClipboardList}
-            label="Pending acceptance"
-            value={String(dashboard.stats.pendingAcceptanceCount)}
-            sublabel={
-              dashboard.stats.pendingAcceptanceCount > 0
-                ? "Bookings waiting for review"
-                : "No bookings waiting"
-            }
-            accentClassName={
-              dashboard.stats.pendingAcceptanceCount > 0 ? "text-destructive" : "text-foreground"
-            }
-            href="/bookings?filter=pending"
-          />
-          {context?.userRole !== "front_desk" && (
-            <DashboardStatCard
-              icon={BadgeDollarSign}
-              label="This week's revenue"
-              value={formatCurrency(dashboard.stats.weekRevenue)}
-              sublabel="Captured payments this week"
-              accentClassName="text-success"
+
+          <MetricRow>
+            <Metric
+              label="In the bay"
+              value={String(activeJobs.length)}
+              sublabel={
+                activeJobs.length === 0
+                  ? "nothing in progress"
+                  : overrunningCount > 0
+                    ? `${overrunningCount} overrunning`
+                    : `${activeJobs.length} in progress`
+              }
+              tone={activeJobs.length > 0 ? "success" : "muted"}
             />
-          )}
-          <DashboardStatCard
-            icon={Star}
-            label="Shop rating"
-            value={dashboard.stats.reviewCount === 0 ? "No reviews yet" : dashboard.stats.rating.toFixed(1)}
-            sublabel={
-              dashboard.stats.reviewCount === 0
-                ? undefined
-                : `${dashboard.stats.reviewCount} review${dashboard.stats.reviewCount === 1 ? "" : "s"}`
-            }
-            accentClassName={
-              dashboard.stats.reviewCount === 0 ? "text-muted-foreground" : "text-foreground"
-            }
-            valueClassName={dashboard.stats.reviewCount === 0 ? "text-base font-medium" : undefined}
-            href="/settings/reviews"
-          />
-        </div>
-      </section>
+            <Metric
+              label="Awaiting you"
+              value={String(dashboard.stats.pendingAcceptanceCount)}
+              sublabel={
+                dashboard.stats.pendingAcceptanceCount > 0 ? "to accept" : "all caught up"
+              }
+              tone={dashboard.stats.pendingAcceptanceCount > 0 ? "danger" : "muted"}
+              active={dashboard.stats.pendingAcceptanceCount > 0}
+              href="/bookings?filter=pending"
+            />
+            {context?.userRole !== "front_desk" && (
+              <Metric
+                label="Captured"
+                value={formatCurrency(dashboard.stats.weekRevenue)}
+                sublabel="this week"
+                tone="success"
+              />
+            )}
+            <Metric
+              label="Rating"
+              value={
+                dashboard.stats.reviewCount === 0
+                  ? "—"
+                  : dashboard.stats.rating.toFixed(1)
+              }
+              sublabel={
+                dashboard.stats.reviewCount === 0
+                  ? "no reviews yet"
+                  : `${dashboard.stats.reviewCount} review${
+                      dashboard.stats.reviewCount === 1 ? "" : "s"
+                    }`
+              }
+              href="/settings/reviews"
+            />
+          </MetricRow>
 
-      {activeJobs.length > 0 ? (
-        <section
-          id="active-jobs"
-          aria-label="Active jobs"
-          className="scroll-mt-6 rounded-2xl border border-emerald-400/30 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_60%),linear-gradient(180deg,_#0f172a,_#0b1220)] p-5 text-slate-50 shadow-[0_10px_30px_rgba(15,23,42,0.18)]"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-              <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
-                Active jobs · {activeJobs.length}
-              </h2>
-            </div>
-            <p className="text-[11px] text-slate-400">
-              Jump in to monitor side-by-side or take notes.
-            </p>
-          </div>
-          <ul className="mt-4 space-y-2">
-            {activeJobs
-              .map((row: any) => {
-                const column = row;
-                const activeBooking = row.booking;
-                if (!activeBooking) return null;
-                const bookingIdStr = String(activeBooking._id);
-                const isAlreadyOpen = activeOverlayBookingIds.some(
-                  (id) => String(id) === bookingIdStr,
-                );
-                const hasOtherOpen =
-                  activeOverlayBookingIds.length > 0 && !isAlreadyOpen;
-                return (
-                  <li
-                    key={bookingIdStr}
-                    className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
-                  >
-                    <div className="flex min-w-0 items-center gap-3">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-emerald-400/15 text-xs font-semibold text-emerald-200">
-                        {column.photoUrl ? (
-                          <img
-                            src={column.photoUrl}
-                            alt={column.mechanicName}
-                            className="h-full w-full object-cover"
-                          />
-                        ) : (
-                          getInitials(column.firstName, column.lastName)
-                        )}
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="truncate text-sm font-semibold text-slate-100">
-                            {column.mechanicName}
-                          </p>
-                          <span className="text-[10px] uppercase tracking-wider text-slate-500">
-                            Mechanic
-                          </span>
-                          {activeBooking.scheduledDate &&
-                          activeBooking.scheduledDate !== todayDateString ? (
-                            <span className="rounded-full border border-amber-400/40 bg-amber-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
-                              From {activeBooking.scheduledDate}
-                            </span>
-                          ) : null}
-                        </div>
-                        <p className="truncate text-xs text-slate-400">
-                          {activeBooking.vehicle ??
-                            activeBooking.vehicleShort ??
-                            "Vehicle"}{" "}
-                          · {(activeBooking.serviceNames ?? []).join(" · ")}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {activeBooking.scheduledDate ? (
-                        <Link
-                          href={`/schedule?action=focus-booking&bookingId=${bookingIdStr}&date=${activeBooking.scheduledDate}`}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/[0.04] px-3 py-1.5 text-xs font-medium text-slate-200 transition-colors hover:bg-white/[0.08]"
-                        >
-                          View on schedule
-                        </Link>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          openOrAddOverlay(activeBooking._id as Id<"bookings">)
-                        }
-                        disabled={isAlreadyOpen}
-                        className="inline-flex items-center gap-2 rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-emerald-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        <Maximize2 className="h-3.5 w-3.5" />
-                        {isAlreadyOpen
+          {activeJobs.length > 0 ? (
+            <section id="active-jobs" aria-label="Active jobs" className="scroll-mt-6">
+              <SectionLabel count={activeJobs.length} hint="Jump in to monitor side-by-side">
+                In the bay
+              </SectionLabel>
+              <CommandList>
+                {activeJobs.map((row: any) => {
+                  const booking = row.booking;
+                  if (!booking) return null;
+                  const bookingId = booking._id as Id<"bookings">;
+                  const bookingIdStr = String(bookingId);
+                  const isAlreadyOpen = activeOverlayBookingIds.some(
+                    (id) => String(id) === bookingIdStr,
+                  );
+                  const hasOtherOpen =
+                    activeOverlayBookingIds.length > 0 && !isAlreadyOpen;
+                  const overrun =
+                    booking.scheduledDate && booking.scheduledDate !== todayDateString;
+                  return (
+                    <CommandRow
+                      key={bookingIdStr}
+                      dot="success"
+                      primary={`${row.mechanicName} · ${
+                        booking.vehicle ?? booking.vehicleShort ?? "Vehicle"
+                      }`}
+                      secondary={(booking.serviceNames ?? []).join(" · ") || undefined}
+                      meta={overrun ? `from ${booking.scheduledDate}` : "in progress"}
+                      action={{
+                        label: isAlreadyOpen
                           ? "Open"
                           : hasOtherOpen
-                            ? "Open alongside"
-                            : "Jump in"}
-                      </button>
-                    </div>
-                  </li>
-                );
-              })}
-          </ul>
-        </section>
-      ) : null}
-
-      {hasPendingActions ? (
-        <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h2 className="text-xl font-semibold text-foreground">Pending actions</h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Items that need your attention
-              </p>
-            </div>
-          </div>
-
-          <div className="mt-6 grid gap-4 xl:grid-cols-4">
-            <div className="flex max-h-[32rem] flex-col rounded-2xl border border-border bg-muted/70 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-foreground">Bookings to accept</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Bookings waiting for owner review</p>
-                </div>
-                {dashboard.pendingActions.jobsToAcceptCount > 0 ? (
-                  <span className="inline-flex w-10 justify-center rounded-full bg-destructive/10 px-2.5 py-1 text-center text-xs font-semibold text-destructive">
-                    {dashboard.pendingActions.jobsToAcceptCount}
-                  </span>
-                ) : null}
-              </div>
-
-              <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
-                {dashboard.pendingActions.jobsToAccept.length === 0 ? (
-                  <EmptyCard title="No pending approvals" description="" />
-                ) : (
-                  dashboard.pendingActions.jobsToAccept.map((job) => {
-                    const isSelected = selectedJobId === job._id;
-                    return (
-                      <button
-                        key={String(job._id)}
-                        type="button"
-                        onClick={() => setSelectedJobId(isSelected ? null : job._id)}
-                        aria-expanded={isSelected}
-                        className={`block w-full rounded-2xl border border-border bg-card p-4 text-left transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:shadow-sm ${
-                          isSelected ? "border-primary/40 bg-primary/5" : "hover:bg-primary/5"
-                        }`}
-                      >
-                        <p className="text-sm font-semibold text-foreground">{job.customerName}</p>
-                        <p className="mt-1 text-sm text-muted-foreground">{job.vehicle}</p>
-                        <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{job.serviceSummary}</p>
-                        <p className="mt-3 text-xs font-semibold text-primary">
-                          {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
-                        </p>
-                      </button>
-                    );
-                  })
-                )}
-              </div>
-
-              <Link
-                href="/bookings"
-                className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
-              >
-                View all bookings
-                <ArrowUpRight className="h-4 w-4" />
-              </Link>
-            </div>
-
-            {customerOnMyWay && customerOnMyWay.length > 0 ? (
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 shadow-sm">
-                <div className="flex items-center gap-2 text-emerald-700">
-                  <Car className="h-4 w-4" />
-                  <span className="text-xs font-semibold uppercase tracking-[0.2em]">Customer en route</span>
-                </div>
-                <div className="mt-4 grid gap-3 xl:grid-cols-2">
-                  {customerOnMyWay.map((alert: any) => (
-                    <div key={String(alert._id)} className="rounded-2xl border border-emerald-200 bg-white/90 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-foreground">{alert.customerName}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
-                            {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
-                          </p>
-                          <p className="mt-1 text-xs text-emerald-700 font-medium">
-                            Said "on my way" {Math.round((Date.now() - alert.acknowledgedAtMs) / 60_000)}m ago
-                          </p>
-                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                            {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedJobId(alert.bookingId as Id<"bookings">)}
-                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
-                        >
-                          Open
-                        </button>
-                      </div>
-                      <div className="mt-4">
-                        <button
-                          type="button"
-                          onClick={() => void markVehicleAtShop({ bookingId: alert.bookingId as Id<"bookings"> })}
-                          className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
-                        >
-                          Vehicle here
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {customerLateNotificationSent && customerLateNotificationSent.length > 0 ? (
-              <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-4 shadow-sm">
-                <div className="flex items-center gap-2 text-yellow-700">
-                  <Bell className="h-4 w-4" />
-                  <span className="text-xs font-semibold uppercase tracking-[0.2em]">Late notification sent</span>
-                </div>
-                <div className="mt-4 grid gap-3 xl:grid-cols-2">
-                  {customerLateNotificationSent.map((alert: any) => (
-                    <div key={String(alert._id)} className="rounded-2xl border border-yellow-200 bg-white/90 p-4">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-foreground">{alert.customerName}</p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {alert.minutesLate}m late for {formatTimeLabel(alert.scheduledTime)}
-                            {alert.mechanicName ? ` with ${alert.mechanicName}` : ""}
-                          </p>
-                          <p className="mt-1 text-xs text-yellow-700 font-medium">
-                            Notified via {alert.notifiedVia} · Awaiting response
-                          </p>
-                          <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                            {[alert.vehicle, alert.serviceSummary].filter(Boolean).join(" · ")}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedJobId(alert.bookingId as Id<"bookings">)}
-                          className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
-                        >
-                          Open
-                        </button>
-                      </div>
-                      <div className="mt-4">
-                        <button
-                          type="button"
-                          onClick={() => void markVehicleAtShop({ bookingId: alert.bookingId as Id<"bookings"> })}
-                          className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
-                        >
-                          Vehicle here
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            <div className="flex max-h-[32rem] flex-col rounded-2xl border border-amber-200 bg-amber-50/70 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="flex items-center gap-2 text-sm font-semibold text-foreground">
-                    <AlertTriangle className="h-4 w-4 text-amber-700" />
-                    Late start decisions
-                  </p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Delay warnings that need review before auto-apply
-                  </p>
-                </div>
-                {lateStartReviewCount > 0 ? (
-                  <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800">
-                    {lateStartReviewCount}
-                  </span>
-                ) : null}
-              </div>
-
-              <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
-                {!lateStartReviews ? (
-                  <EmptyCard
-                    title="Loading late-start reviews"
-                    description="Checking whether any upcoming bookings need a forced delay."
-                  />
-                ) : lateStartReviews.length === 0 ? (
-                  <EmptyCard
-                    title="No late-start decisions"
-                    description="Warnings about delayed booking chains will appear here."
-                  />
-                ) : (
-                  lateStartReviews.map((review) => (
-                    <button
-                      key={review._id}
-                      type="button"
-                      onClick={() => {
-                        setLateStartReviewError("");
-                        setSelectedLateStartReviewId(review._id);
+                            ? "Alongside"
+                            : "Jump in",
+                        tone: "success",
+                        disabled: isAlreadyOpen,
+                        run: () => openOrAddOverlay(bookingId),
                       }}
-                      className="block w-full rounded-2xl border border-amber-200 bg-white/90 p-4 text-left transition-[border-color,box-shadow,background-color] hover:border-amber-300 hover:bg-white hover:shadow-sm"
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <p className="text-sm font-semibold text-foreground">
-                            {review.upstreamCustomerName}
-                          </p>
-                          <p className="mt-1 text-xs text-muted-foreground">
-                            {formatTimeLabel(review.upstreamScheduledTime)}
-                            {" "}with {review.upstreamMechanicName ?? "an assigned mechanic"}
-                          </p>
-                        </div>
-                        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-800">
-                          +{review.cycleMinutes}m
-                        </span>
-                      </div>
-                      <p className="mt-3 text-xs text-amber-900">
-                        {review.status === "blocked_manual_review"
-                          ? "Automatic delay could not be built safely. A manual move is required."
-                          : `Auto-applies at ${new Date(review.decisionDueAtMs).toLocaleTimeString("en-US", {
-                              hour: "numeric",
-                              minute: "2-digit",
-                            })} if nobody responds.`}
-                      </p>
-                      <p className="mt-2 text-xs font-medium text-amber-800">
-                        {review.proposals.length} affected booking
-                        {review.proposals.length === 1 ? "" : "s"}
-                      </p>
-                    </button>
-                  ))
-                )}
-              </div>
+                      onOpen={() => openOrAddOverlay(bookingId)}
+                    />
+                  );
+                })}
+              </CommandList>
+            </section>
+          ) : null}
 
-              <Link
-                href="/schedule"
-                className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
-              >
-                Open schedule
-                <ArrowUpRight className="h-4 w-4" />
-              </Link>
-            </div>
-
-            <div className="flex max-h-[32rem] flex-col rounded-2xl border border-border bg-muted/70 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">Jobs missing final details</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Finish recording labor, parts, and notes</p>
-                </div>
-                <span className="rounded-full bg-accent/10 px-2.5 py-1 text-xs font-semibold text-accent">
-                  {dashboard.pendingActions.actualsNeededCount}
-                </span>
-              </div>
-
-              <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
-                {dashboard.pendingActions.actualsNeeded.length === 0 ? (
-                  <EmptyCard
-                    title="No missing actuals"
-                    description="Completed bookings without finalized actuals will surface here."
-                  />
-                ) : (
-                  dashboard.pendingActions.actualsNeeded.map((job) => (
-                    <button
-                      key={String(job._id)}
-                      type="button"
-                      onClick={() => handleOpenActualsDetails(job._id)}
-                      className="block w-full cursor-pointer rounded-2xl border border-border bg-card p-4 text-left transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
-                    >
-                      <p className="text-sm font-semibold text-foreground">{job.customerName}</p>
-                      <p className="mt-1 text-sm text-muted-foreground">{job.vehicle}</p>
-                      <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{job.serviceSummary}</p>
-                      <p className="mt-3 text-xs font-semibold text-primary">
-                        Completed booking from {formatScheduledDateLabel(job.scheduledDate)} at {job.scheduledTimeLabel}
-                      </p>
-                    </button>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="flex max-h-[32rem] flex-col rounded-2xl border border-border bg-muted/70 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-semibold text-foreground">Invites pending</p>
-                  <p className="mt-1 text-xs text-muted-foreground">Mechanic invitations not yet accepted</p>
-                </div>
-                {dashboard.pendingActions.invitesPendingCount > 0 ? (
-                  <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-semibold text-primary">
-                    {dashboard.pendingActions.invitesPendingCount}
+          {needItems.length > 0 ? (
+            <section aria-label="Needs you now">
+              <SectionLabel count={needItems.length}>Needs you now</SectionLabel>
+              <CommandList
+                footerHint={
+                  <span className="inline-flex flex-wrap items-center gap-x-1">
+                    <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">J</kbd>
+                    <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">K</kbd>
+                    <span>move</span>
+                    <span className="px-0.5">·</span>
+                    <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">Enter</kbd>
+                    <span>open</span>
+                    <span className="px-0.5">·</span>
+                    <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">A</kbd>
+                    <span>accept</span>
                   </span>
-                ) : null}
-              </div>
-
-              <div className="mt-4 flex-1 space-y-3 overflow-y-auto pr-1">
-                {dashboard.pendingActions.invitesPending.length === 0 ? (
-                  <EmptyCard
-                    title="No pending invites"
-                    description="Team members you invite will appear here until they accept."
-                  />
-                ) : (
-                  dashboard.pendingActions.invitesPending.map((invite) => (
-                    <Link
-                      key={String(invite._id)}
-                      href="/team"
-                      className="block cursor-pointer rounded-2xl border border-border bg-card p-4 transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm"
-                    >
-                      <p className="text-sm font-semibold text-foreground">{invite.mechanicName || invite.email}</p>
-                      <p className="mt-1 text-sm text-muted-foreground">{invite.email}</p>
-                      <p className="mt-2 text-xs text-muted-foreground">
-                        {invite.role.replace(/_/g, " ")} invitation
-                      </p>
-                      <p className="mt-3 text-xs font-semibold text-primary">
-                        Sent {formatInviteDate(invite.createdAt)}
-                      </p>
-                    </Link>
-                  ))
-                )}
-              </div>
-
-              <Link
-                href="/team"
-                className="mt-4 inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
+                }
               >
-                Manage invitations
-                <ArrowUpRight className="h-4 w-4" />
-              </Link>
-            </div>
-          </div>
-        </section>
-      ) : null}
+                {needItems.map((item, index) => (
+                  <CommandRow
+                    key={item.key}
+                    dot={item.dot}
+                    primary={item.primary}
+                    secondary={item.secondary}
+                    meta={item.meta}
+                    action={item.action}
+                    selected={listNavEnabled && focused === index}
+                    onOpen={item.onOpen}
+                    onFocus={() => setFocused(index)}
+                  />
+                ))}
+              </CommandList>
+            </section>
+          ) : null}
 
-      <section className="rounded-2xl border border-border bg-card p-6 shadow-sm">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-foreground">Today&apos;s schedule</h2>
-          </div>
-          <Link
-            href="/bookings"
-            className="inline-flex cursor-pointer items-center gap-2 text-sm font-semibold text-primary hover:underline"
-          >
-            View all bookings
-            <ArrowUpRight className="h-4 w-4" />
-          </Link>
-        </div>
+          <section aria-label="Today">
+            <SectionLabel
+              hint={
+                <Link
+                  href="/bookings"
+                  className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                >
+                  View all bookings
+                  <ArrowUpRight className="h-3.5 w-3.5" />
+                </Link>
+              }
+            >
+              Today
+            </SectionLabel>
+            <CommandList>
+              {!hasScheduledBookings ? (
+                <EmptyRow>No bookings scheduled for today</EmptyRow>
+              ) : (
+                todayScheduleRows.map(({ booking, mechanicName }) => (
+                  <CommandRow
+                    key={String(booking._id)}
+                    dot={statusDot(booking.status)}
+                    code={booking.scheduledTimeLabel || undefined}
+                    primary={`${booking.customerDisplayName} · ${booking.vehicle}`}
+                    secondary={booking.serviceSummary || undefined}
+                    meta={`${mechanicName} · ${getScheduleStatusLabel(booking.status)}`}
+                    onOpen={() => setSelectedJobId(booking._id)}
+                  />
+                ))
+              )}
+            </CommandList>
+          </section>
 
-        {!hasScheduledBookings ? (
-          <div className="mt-6 flex items-center justify-center rounded-2xl border border-border bg-muted/40 px-4 py-10 text-center text-sm text-muted-foreground">
-            No bookings scheduled for today
-          </div>
-        ) : (
-          <ul className="mt-6 max-h-[32rem] space-y-2 overflow-y-auto pr-1">
-            {todayScheduleRows
-              .map(({ booking, mechanicName, mechanicFirstName, mechanicLastName, mechanicPhotoUrl }) => {
-                const isSelected = selectedJobId === booking._id;
-                return (
-                  <li key={String(booking._id)}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedJobId(isSelected ? null : booking._id)}
-                      aria-expanded={isSelected}
-                      className={`flex w-full items-center gap-4 rounded-2xl border border-border bg-card px-4 py-3 text-left transition-[border-color,box-shadow,background-color] hover:border-primary/30 hover:bg-primary/5 hover:shadow-sm ${
-                        isSelected ? "border-primary/40 bg-primary/5" : ""
-                      }`}
-                    >
-                      <div className="w-16 shrink-0">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                          {booking.scheduledTimeLabel || "—"}
-                        </p>
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-foreground">
-                          {booking.customerDisplayName}
-                        </p>
-                        <p className="truncate text-sm text-muted-foreground">{booking.vehicle}</p>
-                        {booking.vin ? (
-                          <p className="truncate font-mono text-[11px] uppercase tracking-wide text-muted-foreground/80">
-                            VIN {booking.vin}
-                          </p>
-                        ) : null}
-                        {booking.serviceSummary ? (
-                          <p className="truncate text-xs text-muted-foreground">
-                            {booking.serviceSummary}
-                          </p>
-                        ) : null}
-                      </div>
-                      <div className="hidden min-w-0 items-center gap-2 sm:flex sm:w-48">
-                        <div className="flex h-7 w-7 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary text-xs font-semibold text-white">
-                          {mechanicPhotoUrl ? (
-                            <img
-                              src={mechanicPhotoUrl}
-                              alt={mechanicName}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            getInitials(mechanicFirstName, mechanicLastName)
-                          )}
-                        </div>
-                        <span className="truncate text-sm text-foreground">{mechanicName}</span>
-                      </div>
-                      <span
-                        className={`inline-flex shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold ${getScheduleStatusClass(
-                          booking.status
-                        )}`}
-                      >
-                        {getScheduleStatusLabel(booking.status)}
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-          </ul>
-        )}
-      </section>
+          {context?.userRole !== "front_desk" ? <RevenueSection /> : null}
         </div>
 
         <JobActualsDialog

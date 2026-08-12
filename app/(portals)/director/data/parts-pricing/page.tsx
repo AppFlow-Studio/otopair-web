@@ -3,7 +3,7 @@
 // Data · Parts Pricing Engine — /data/parts-pricing (Data spec §9.2).
 // Three tabs: Price Strip (the signature layout; the May 28 worked example is
 // the empty state) · Pathologies (poison price_types → split-view verdict,
-// ceremony) · Validation (RepairPal endpoint tier-test runs, read-only).
+// ceremony) · Validation (Estimator endpoint tier-test runs, read-only).
 
 import { useState } from "react";
 import Link from "next/link";
@@ -239,7 +239,7 @@ export default function PartsPricingPage() {
                   <span>· {strip.summary.outliers_removed} outliers removed</span>
                   {(strip.points as StripPoint[]).some((p) => p.non_pooled) && (
                     <span className={`${pill} bg-slate-100 text-slate-600`}>
-                      repairpal_endpoint = fallback point, never pooled
+                      estimator_endpoint = fallback point, never pooled
                     </span>
                   )}
                 </div>
@@ -329,13 +329,13 @@ export default function PartsPricingPage() {
           </div>
         ) : validation.length === 0 ? (
           <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-sm text-slate-500">
-            No RepairPal endpoint runs cached on this deployment. The Jun 18 next-step (tier
+            No Estimator endpoint runs cached on this deployment. The Jun 18 next-step (tier
             test on part prices via the endpoint) lists its runs here as they land.
           </div>
         ) : (
           <div className="rounded-xl border border-slate-200 bg-white">
             <div className="border-b border-slate-100 px-4 py-2.5 text-[12px] text-slate-500">
-              RepairPal endpoint estimates (read-only). Source-weight changes remain code
+              Estimator endpoint estimates (read-only). Source-weight changes remain code
               constants — a weight-shift ceremony ships when weights become data (P2 note).
             </div>
             <table className="w-full text-left text-[13px]">

@@ -20,7 +20,7 @@
 // Labor serves empirical_* values — "the one labor layer that is
 // unambiguously ours" (spec §12) — plus tier-model ESTIMATES gated through
 // lib/publicLabor.ts (the Camry-anchor × own-multiplier derivation). Raw
-// book_hours (RepairPal/MOTOR/VDB blend) is internal-use and never leaves;
+// book_hours (Estimator / Book Rate/VDB blend) is internal-use and never leaves;
 // laborGateCheck is the exit test.
 //
 // Keys: otp_live_… plaintext shown once; SHA-256 hash stored. Per-key
@@ -290,7 +290,7 @@ export const assembleLabor = internalQuery({
     const services: NonNullable<LaborResponse>["services"] = [];
     for (const row of rows) {
       // ONLY the empirical layer leaves the building (spec §12); the blended
-      // book_hours (RepairPal/MOTOR/VDB) is internal-use. Many rows encode
+      // book_hours (Estimator / Book Rate/VDB) is internal-use. Many rows encode
       // "no empirical data yet" as hours=0 / n=0 — a measurement requires a
       // positive value AND at least one real sample.
       if (!row.empirical_hours || !(row.empirical_sample_size && row.empirical_sample_size > 0)) continue;

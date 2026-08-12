@@ -5,7 +5,7 @@
 // deliberately NOT implemented here.
 //
 // Reality notes vs the spec's source names:
-//   - "repairpal_motor"     → labor_observations.source === "repairpal_endpoint"
+//   - "estimator_book"     → labor_observations.source === "estimator_endpoint"
 //   - "vehicle_databases"   → labor_observations.source === "vdb_repair_estimates"
 //   - "empirical"           → labor_times.empirical_* fields (aggregated from
 //                             job_actuals; NOT stored in labor_observations)
@@ -20,6 +20,7 @@ import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
 import { detectTier, resolveLaborHours } from "./lib/quoteEngine";
 import { computeLaborTierFloorHours } from "./lib/laborFallback";
+import { canonicalizeSourceName } from "./lib/sourceNames";
 
 /** Service picker source — services is a small table (23 rows measured). */
 export const servicesList = query({
@@ -33,7 +34,8 @@ export const servicesList = query({
         name: s.name,
         slug: s.slug ?? null,
         default_labor_hours: s.default_labor_hours ?? null,
-        repairpal_slug: s.repairpal_slug ?? null,
+        // DUAL-READ: pre-migration rows still carry the legacy column.
+        estimator_slug: s.estimator_slug ?? (s as any).repairpal_slug ?? null,
         labor_determinant: s.labor_determinant ?? null,
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -157,7 +159,9 @@ export const laborLadder = query({
       observations: observations
         .map((o) => ({
           id: o._id,
-          source: o.source,
+          // Canonicalize at the API boundary so the director UI only ever sees
+          // current source names, regardless of how far the migration has run.
+          source: canonicalizeSourceName(o.source),
           hours: o.hours,
           weight: o.weight,
           tier: o.tier,

@@ -64,7 +64,7 @@ const COLUMNS: Column[] = [
     label: "Last serviced",
     sortable: true,
     align: "right",
-    className: "w-32",
+    className: "w-36",
   },
   {
     key: "jobsCount",
@@ -117,7 +117,7 @@ export function VehiclesTable({
               <th
                 key={col.key}
                 className={cn(
-                  "px-5 py-3 font-medium",
+                  "whitespace-nowrap px-5 py-3 font-medium",
                   col.align === "right" ? "text-right" : "",
                   col.className,
                 )}

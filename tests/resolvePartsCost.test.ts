@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { makeT } from "./helpers";
 import { resolvePartsCost, buildQuote } from "../convex/lib/quoteEngine";
-import { REPAIRPAL_ENDPOINT_PRICE_TYPE } from "../convex/lib/priceTypes";
+import { ESTIMATOR_ENDPOINT_PRICE_TYPE } from "../convex/lib/priceTypes";
 import { CAMRY_FWD_CONFIG_KEY } from "../convex/lib/laborFallback";
 
 afterEach(() => {
@@ -58,8 +58,8 @@ async function seedSparkPlugs(
       await ctx.db.insert("part_prices", {
         part_id: partId,
         price: opts.endpoint,
-        price_type: REPAIRPAL_ENDPOINT_PRICE_TYPE,
-        source_domain: "repairpal_endpoint",
+        price_type: ESTIMATOR_ENDPOINT_PRICE_TYPE,
+        source_domain: "estimator_endpoint",
       });
     }
     return { configId, serviceId };

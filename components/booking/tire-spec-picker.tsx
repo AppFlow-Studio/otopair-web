@@ -8,6 +8,7 @@ import {
   drawerSecondaryButtonClassName,
 } from "@/components/drawer-panel-styles";
 import { cn } from "@/lib/utils";
+import { getBookedTireReplacementPositions } from "@/lib/inspection-measurements";
 
 export type TirePosition = "FL" | "FR" | "RL" | "RR";
 
@@ -16,6 +17,7 @@ export type TireSpecs = {
   type: string;
   tier: string;
   quantity: number;
+  positions?: TirePosition[];
 };
 
 export interface TireSpecPickerProps {
@@ -171,16 +173,6 @@ function TireSizeInput({ value, onChange, className }: { value: string; onChange
   );
 }
 
-// Map a stored quantity back to a default position selection so the picker
-// reopens with the right wheels highlighted.
-function quantityToPositions(q: number | undefined | null): TirePosition[] {
-  if (q === 4) return ["FL", "FR", "RL", "RR"];
-  if (q === 2) return ["FL", "FR"];
-  if (q === 3) return ["FL", "FR", "RL"];
-  if (q === 1) return ["FL"];
-  return [];
-}
-
 function TireSlot({
   position,
   selected,
@@ -245,7 +237,7 @@ export default function TireSpecPicker({
     setSize(initial?.size ?? (sizes.length === 1 ? sizes[0] : ""));
     setType(initial?.type ?? null);
     setTier(initial?.tier ?? null);
-    setPositions(quantityToPositions(initial?.quantity));
+    setPositions(getBookedTireReplacementPositions(initial));
     setShowTierInfo(null);
   }, [open, initial, sizes]);
 
@@ -499,6 +491,7 @@ export default function TireSpecPicker({
                 type: type ?? "",
                 tier: tier ?? "",
                 quantity: positions.length,
+                positions,
               })
             }
             disabled={!valid}

@@ -16,6 +16,7 @@
 
 import { internalMutation } from "../_generated/server";
 import { Id } from "../_generated/dataModel";
+import { findMakeByName, getOrCreateMake } from "../lib/makeKey";
 import { buildQuote, CAMRY_FWD_CONFIG_KEY } from "../lib/quoteEngine";
 import { VehicleTier } from "../lib/vehicleTiers";
 
@@ -244,7 +245,7 @@ const EXPECTATIONS: ReadonlyArray<Expected> = [
     must_flag: "tier_estimate",
   },
 
-  // ── Cross-tier validation table (in-range vs RepairPal market) ───────────
+  // ── Cross-tier validation table (in-range vs Estimator market) ───────────
   // NOTE: 2026-06-09 — oil_change reclassified to filter-only (shops supply
   // engine oil from stock). Our customer-facing quote is intentionally
   // BELOW the market_low these fixtures were calibrated against, because
@@ -394,15 +395,11 @@ export const runAll = internalMutation({
     const modelIdByMakeAndName = new Map<string, Id<"models">>();
 
     for (const f of FIXTURES) {
-      let makeRow = await ctx.db
-        .query("makes")
-        .withIndex("by_name", (q) => q.eq("name", f.make))
-        .first();
+      // Key-normalized get-or-create — a fixture "Toyota" must reuse an
+      // existing "TOYOTA" row rather than minting a case-variant twin.
+      let makeRow = await findMakeByName(ctx.db, f.make);
       if (!makeRow) {
-        const id = await ctx.db.insert("makes", {
-          name: f.make,
-          created_at: now,
-        });
+        const id = await getOrCreateMake(ctx.db, f.make, { created_at: now });
         makeRow = (await ctx.db.get(id))!;
       }
       makeIdByName.set(f.make.toLowerCase(), makeRow._id);

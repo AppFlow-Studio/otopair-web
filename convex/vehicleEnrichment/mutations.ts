@@ -32,6 +32,21 @@ export const updateEnrichedData = internalMutation({
     data: v.any(),
   },
   handler: async (ctx, args) => {
+    // config_key collision guard: a full replace can silently re-key this row
+    // onto a key another config already holds — refuse rather than mint a
+    // duplicate config_key.
+    const key = args.data?.config_key;
+    if (typeof key === "string") {
+      const holder = await ctx.db
+        .query("vehicle_configs")
+        .withIndex("by_config_key", (q) => q.eq("config_key", key))
+        .first();
+      if (holder && holder._id !== args.id) {
+        throw new Error(
+          `updateEnrichedData: config_key "${key}" already held by ${String(holder._id)} — refusing duplicate`,
+        );
+      }
+    }
     await ctx.db.replace(args.id, args.data);
   },
 });

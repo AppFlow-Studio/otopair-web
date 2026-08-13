@@ -100,10 +100,30 @@ export function extractCategoryLinks(
  *  `belts-and-cooling--accessory-drive-belt…` for coolant. Hints are ordered
  *  most-specific-first and every role carries a negative screen. */
 const ROLE_CATEGORY_HINTS: Record<string, RegExp[]> = {
-  oil_filter: [/filter/, /maintenance/],
-  air_filter: [/air-filter/, /filter/, /air-intake/, /maintenance/],
-  cabin_filter: [/cabin/, /filter/, /hvac/, /maintenance/],
-  spark_plug: [/spark-plug/, /spark/, /ignition--ignition-coil/, /^ignition--/],
+  // A BARE /filter/ IS THE SAME MISTAKE AS THE BARE /ignition/ ABOVE, and it
+  // went unnoticed for longer because it fails quietly instead of loudly.
+  // Live-fire (2021 Lincoln Nautilus on ford.oempartsonline.com, Aug 13 2026):
+  // the store publishes FIVE `*--filters` categories and the one that sorts
+  // first in the page is `air-and-fuel-delivery--filters`. Fetched, it holds 48
+  // products — 4 air filters and ZERO oil filters, while `engine--filters`
+  // holds 6 oil filters and `hvac--filters` holds the cabin filter. So the bare
+  // /filter/ hint, sitting at priority 1 for oil and priority 2 for cabin, sent
+  // BOTH roles to the fuel/air page and neither could ever be found on a Ford.
+  // Family-specific hints now come first; the bare /filter/ stays as a
+  // last resort for stores that publish only one filters category (Mercedes'
+  // `maintenance-and-lubrication--filters` holds all three), and the negative
+  // screens below make the outcome independent of page order.
+  oil_filter: [/oil-filter/, /engine--filters/, /lubrication/, /filter/, /maintenance/],
+  // `engine--air-intake` and `air-and-fuel-delivery--filters` return byte-identical
+  // product sets on this store — RevolutionParts aliases them — so these two
+  // hints are interchangeable in practice and ordering between them is moot.
+  air_filter: [/air-filter/, /air-intake/, /air-and-fuel/, /filter/, /maintenance/],
+  cabin_filter: [/cabin/, /hvac--filters/, /hvac/, /climate/, /filter/, /maintenance/],
+  // `ignition--secondary-ignition` is definitionally where plugs live; the coil
+  // category is the wrong part and was only ever reached because it was named
+  // explicitly. (On Ford the two alias to the same set, so this is a no-op
+  // there and a correctness fix on stores where they differ.)
+  spark_plug: [/spark-plug/, /spark/, /secondary-ignition/, /ignition--ignition-coil/, /^ignition--/],
   front_brake_pad: [/front-brake/, /brakes--front/, /brake/],
   rear_brake_pad: [/rear-brake/, /brakes--rear/, /brake/],
   front_rotor: [/front-brake/, /brakes--front/, /brake/],
@@ -117,12 +137,23 @@ const ROLE_CATEGORY_HINTS: Record<string, RegExp[]> = {
   oil_filter_housing_oring: [/filter/, /engine/, /maintenance/],
 };
 
-/** Categories a role must NEVER take, however well a hint matched. */
+/** Categories a role must NEVER take, however well a hint matched.
+ *
+ *  A block is ORDER-INDEPENDENT where hint priority is not, so the three filter
+ *  roles carry one each: on a store that publishes several `*--filters`
+ *  categories, whichever one happens to sort first would otherwise win on a
+ *  loose hint no matter how the list is ordered. */
 const ROLE_CATEGORY_BLOCKS: Record<string, RegExp> = {
   spark_plug: /lock|switch|key|starter/,
   battery: /cable|lock|switch|starter|alternator/,
   coolant: /belt|hose|pump|fan/,
   atf_fluid: /mount|cooler-line/,
+  // The engine oil filter is never in the fuel/air, cabin or gearbox families.
+  oil_filter: /air-and-fuel|air-intake|hvac|cabin|transmission|transaxle/,
+  // The cabin filter is never under the engine or the fuel system.
+  cabin_filter: /air-and-fuel|air-intake|engine--|transmission|transaxle|oil-filter/,
+  // The engine air filter is never the cabin one or a gearbox filter.
+  air_filter: /cabin|hvac|oil-filter|transmission|transaxle/,
 };
 
 /** Pick the vehicle slug from SERP result URLs — EXACT-vehicle or nothing.
@@ -183,6 +214,15 @@ export function pickVehicleSlug(
     if (!best || score > best.score) best = { path, score };
   }
   return best?.path ?? null;
+}
+
+/** Is this role even eligible for the category rung?
+ *
+ *  A role with no hints is skipped in silence by `categoriesForRoles`, which
+ *  reads downstream as "the catalog had nothing" when the truth is "we never
+ *  looked". The caller uses this to tell the two apart in its log. */
+export function hasCategoryHints(roleKey: string): boolean {
+  return ROLE_CATEGORY_HINTS[roleKey] !== undefined;
 }
 
 function positionOfRole(roleKey: string): "front" | "rear" | null {
@@ -475,7 +515,15 @@ async function writeCandidate(
 
 // ─── Rung 1: vehicle-scoped category pages ──────────────────────────────────
 
-const CATEGORY_PAGE_BUDGET = 4;
+/** Category pages fetched per vehicle — one Firecrawl call each.
+ *
+ *  Raised 4 → 6 on Aug 13 2026. Four was below the size of a real gap set: the
+ *  2021 Nautilus came in with SIX missing core roles, every one of which had a
+ *  matching category on the page, and the budget silently discarded the last
+ *  two (rear rotor, spark plug) — the spark plug's category was already being
+ *  fetched for another role. Six covers the observed set exactly. Whatever the
+ *  budget is, what it drops is now logged rather than swallowed. */
+const CATEGORY_PAGE_BUDGET = 6;
 
 /** Universal brake services — assumable on a first run before quotability
  *  exists (every car has brakes; drum-rear vehicles are handled by
@@ -622,7 +670,39 @@ export const harvestVehicleCategories = internalAction({
 
     const missingRoleKeys = [...new Set(missing.map((m) => m.roleKey))];
     const pages = categoriesForRoles(missingRoleKeys, links, CATEGORY_PAGE_BUDGET);
-    if (pages.length === 0) return { status: "no_matching_categories", slugPath } as const;
+
+    // What the rung is NOT going to look for, and why. `no_matching_categories`
+    // used to be the whole story, and it conflated three different failures —
+    // the role has no hints, the hints matched nothing on this store, or the
+    // page budget ran out — which is why the Nautilus read as "Ford's naming
+    // isn't in our table" when the table was fine and the budget was the
+    // problem. Roles dropped here go on to look identical to roles the catalog
+    // genuinely lacks, so this is the only place the difference exists.
+    const covered = new Set(pages.flatMap((p) => p.roles));
+    const uncovered = missingRoleKeys.filter((r) => !covered.has(r));
+    if (uncovered.length > 0) {
+      const unhinted = uncovered.filter((r) => !hasCategoryHints(r));
+      const unmatched = uncovered.filter((r) => hasCategoryHints(r));
+      console.warn(
+        `[category-harvest] ${uncovered.length}/${missingRoleKeys.length} missing role(s) get no category page` +
+          (unhinted.length ? ` — no hints defined: ${unhinted.join(",")}` : "") +
+          (unmatched.length
+            ? ` — hints matched nothing or budget(${CATEGORY_PAGE_BUDGET}) exhausted: ${unmatched.join(",")}`
+            : "") +
+          ` [${links.length} categories on ${slugPath}: ${links.slice(0, 12).map((l) => l.slug).join(", ")}${links.length > 12 ? ", …" : ""}]`,
+      );
+    }
+
+    if (pages.length === 0) {
+      return {
+        status: "no_matching_categories",
+        slugPath,
+        // The store's own vocabulary, so a naming mismatch can be diagnosed
+        // from the run record instead of by re-scraping the site by hand.
+        sawCategories: links.slice(0, 40).map((l) => l.slug),
+        wanted: missingRoleKeys,
+      } as const;
+    }
 
     // 3) Fetch each chosen category page, gather role-gated candidates.
     const candidates: CategoryCandidate[] = [];

@@ -25,6 +25,29 @@ It is **opt-in**: the pipeline only calls it when `PARTS_SCRAPLING=on` and
 > interstitial is 2–5 KB of real HTML and frequently answers `200`, so a
 > status+length check alone passed it straight through as a successful scrape.
 
+`POST /fetch` — **raw bytes, unparsed.** For callers whose own egress is blocked.
+```jsonc
+{ "url": "https://…", "timeout_ms": 60000, "range": "bytes=0-2047", "max_bytes": 0 }
+```
+- Returns the upstream **body itself** (not JSON), with `Content-Type` and
+  `Content-Range` echoed from upstream and the real status in `X-Upstream-Status`.
+- Same envelope law as `/scrape`: a target refusing us is a **200 here** carrying
+  `X-Upstream-Status: 403`. Only a transport failure is a 5xx. Callers must branch
+  on that header, never on `res.ok`.
+- `X-Proxy-Truncated: 1` means the body is a **prefix**, not the document — the
+  service caps what it buffers (24 MB). A truncated PDF still has a valid magic
+  number, so a caller that ignores this header will happily extract half a manual.
+- `range` is passed through: the manual pipeline probes 2 KB before committing to
+  a 40 MB download.
+
+> **Why this exists.** `/scrape` HTML-parses whatever it retrieves, which
+> destroys a PDF. Four owner's-manual URLs that Convex logged as
+> `dealereprocess:http_403` return 206 + real PDF bytes from a workstation; probed
+> from inside Convex with three header variants they returned Cloudflare 403 HTML
+> every time. It is an **IP-range block on Convex's egress**, and it covered 11 of
+> the 12 makes with a deterministic manual path. This service runs elsewhere, so
+> it is the way around it. See `convex/vehicleEnrichment/egressProxy.ts`.
+
 `GET /health` → `{ "ok": true }`
 
 Auth: set `SCRAPLING_TOKEN` and callers must send `Authorization: Bearer <token>`.
@@ -83,10 +106,15 @@ time — no redeploy needed):
 npx convex env set SCRAPLING_URL   https://<your-scraper-host>
 npx convex env set SCRAPLING_TOKEN <same token as the service>
 
-# Two INDEPENDENT consumers — enable them one at a time, not together.
+# Three INDEPENDENT consumers — enable them one at a time, not together.
 npx convex env set PARTS_SCRAPLING          on   # price path (firecrawl.ts)
 npx convex env set PARTS_SCRAPLING_ADAPTERS on   # source adapters (sourceAdapters/http.ts)
+npx convex env set PARTS_EGRESS_PROXY       on   # manual bytes (egressProxy.ts, needs /fetch)
 ```
+
+> `PARTS_EGRESS_PROXY` requires a **redeploy** of this service — `/fetch` is new.
+> With it dark, the manual probe and download are the direct fetches they always
+> were.
 
 `convex/vehicleEnrichment/scrapling.ts` is the client. There are three consumers:
 

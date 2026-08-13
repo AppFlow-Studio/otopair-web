@@ -41,6 +41,17 @@
  *    volkswagen, lexus, ram — those makes are simply absent, so they are not
  *    in the allowlist and are never probed.
  *
+ *    THIS HOST BLOCKS CONVEX'S EGRESS (found Aug 13 2026). It is 11 of the 12
+ *    makes here, and for months it answered every pipeline probe with a
+ *    Cloudflare 403 that we recorded as `dealereprocess:http_403` and read as
+ *    "the source died". It had not: the 2019 Sierra, 2021 CX-30, 2020 Grand
+ *    Cherokee and 2022 Palisade manuals all return 206 + PDF bytes from a
+ *    workstation, and no header variant changes the answer from inside Convex.
+ *    Reachable coverage was therefore 3 makes (Toyota, Nissan, Hyundai) — the
+ *    exact set that ever produced results. Probes and downloads now route
+ *    through the egress proxy; see egressProxy.ts. A 403 from a host is not
+ *    evidence about the host until it has been probed from a second network.
+ *
  * 2. assets.sia.toyota.com/publications/en/omms-s/T-MMS-{YY}{Model}/pdf/…
  *    Toyota's Warranty & Maintenance Guide. 5/5 first-try hits (Camry, RAV4,
  *    Corolla, Tacoma, Highlander). This is the highest-value entry in the
@@ -70,6 +81,12 @@
 // the other direction would be a cycle — and the only thing it would buy is
 // `isOemDomain`, which is redundant: every builder below already knows whether
 // its host is the manufacturer's, and records that as `tier`.
+
+import {
+  declaredLength,
+  fetchMaybeProxied,
+  rangeTotal as rangeTotalOf,
+} from "./egressProxy";
 
 /** Browser UA — several of these CDNs serve a challenge to unknown clients.
  *  Exported: manualLibrary's real download must send the SAME identity the
@@ -302,6 +319,10 @@ export type ProbeOutcome = {
   contentType: string | null;
   contentLength: number | null;
   reason: string;
+  /** Which egress served the answer. A `direct` 403 that becomes a `proxy` 206
+   *  is the signature of an IP-range block rather than a dead source — the
+   *  distinction that cost this pipeline 11 makes (see egressProxy.ts). */
+  via?: "direct" | "proxy";
 };
 
 /** Does the first chunk begin with the PDF magic number? */
@@ -364,29 +385,24 @@ export async function probeDirectCandidate(
     contentLength: null,
   };
   try {
-    const res = await fetch(candidate.url, {
-      headers: {
-        "User-Agent": USER_AGENT,
-        Accept: "application/pdf,*/*",
-        // Ranged so a 40 MB manual costs us 2 KB to verify. Hosts that ignore
-        // Range answer 200 with the whole body; the reader below stops after
-        // the first chunk either way.
-        Range: `bytes=0-${PROBE_BYTES - 1}`,
-      },
-      signal: AbortSignal.timeout(timeoutMs),
+    // Routed through the egress proxy when this host refuses Convex. With the
+    // proxy dark this is the same ranged GET with the same UA it always was.
+    const outcome = await fetchMaybeProxied(candidate.url, USER_AGENT, {
+      accept: "application/pdf,*/*",
+      // Ranged so a 40 MB manual costs us 2 KB to verify. Hosts that ignore
+      // Range answer 200 with the whole body; the reader below stops after
+      // the first chunk either way.
+      range: `bytes=0-${PROBE_BYTES - 1}`,
+      maxBytes: PROBE_BYTES,
+      timeoutMs,
     });
+    const res = outcome.res;
 
     const contentType = res.headers.get("content-type");
     // On a 206 the length is the SLICE, not the document — read the total out
     // of Content-Range instead so the size floor judges the real file.
-    const rangeTotal = (() => {
-      const cr = res.headers.get("content-range");
-      const m = cr ? /\/(\d+)\s*$/.exec(cr) : null;
-      return m ? Number(m[1]) : null;
-    })();
-    const declared = Number(res.headers.get("content-length") ?? "");
-    const contentLength =
-      rangeTotal ?? (Number.isFinite(declared) && declared > 0 ? declared : null);
+    const total = rangeTotalOf(res);
+    const contentLength = total ?? declaredLength(res);
 
     let firstBytes: Uint8Array | null = null;
     try {
@@ -397,20 +413,22 @@ export async function probeDirectCandidate(
     }
 
     const verdict = judgeProbe({
-      status: res.status,
+      // The TARGET's status, not the proxy's own 200.
+      status: outcome.status,
       contentType,
       // A 206 slice must not be judged against the whole-document floor.
-      contentLength: res.status === 206 ? rangeTotal : contentLength,
+      contentLength: outcome.status === 206 ? total : contentLength,
       firstBytes,
     });
 
     return {
       ...base,
-      status: res.status,
+      status: outcome.status,
       contentType,
       contentLength,
       live: verdict.ok,
       reason: verdict.reason,
+      via: outcome.via,
     };
   } catch (e) {
     return { ...base, live: false, reason: `probe_error:${String(e).slice(0, 80)}` };

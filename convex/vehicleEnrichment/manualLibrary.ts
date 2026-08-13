@@ -119,6 +119,12 @@ import type { Id } from "../_generated/dataModel";
 import { searchLinksOnly } from "./firecrawl";
 import { resolveExtractionModel } from "./utils/enrichmentFlags";
 import { discoverDirectManuals, USER_AGENT as MANUAL_DOWNLOAD_USER_AGENT } from "./manualDirectSources";
+import {
+  declaredLength,
+  fetchMaybeProxied,
+  isEgressRefusal,
+  proxyTruncated,
+} from "./egressProxy";
 
 // This module is new — `internal.vehicleEnrichment.manualLibrary` is absent
 // from _generated/api.d.ts until `npx convex dev` regenerates it. Same pattern
@@ -2073,34 +2079,68 @@ export const resolveManualForVehicle = internalAction({
           // succeeds, then this download went out bare and volvocars.com
           // answered 403 (round-2 XC90). On 403/429 retry once with a
           // referer, which clears the remaining polite-bot walls.
-          const baseHeaders = {
-            Accept: "application/pdf,*/*",
-            "User-Agent": MANUAL_DOWNLOAD_USER_AGENT,
-            "Accept-Language": "en-US,en;q=0.9",
+          //
+          // Both legs route through the egress proxy when the host refuses
+          // Convex specifically (egressProxy.ts). The referer retry is kept
+          // because it fixes a DIFFERENT thing: a polite-bot wall that judges
+          // the request, not the IP. Order matters — cheap remedy first.
+          const fetchOpts = {
+            accept: "application/pdf,*/*",
+            timeoutMs: PDF_DOWNLOAD_TIMEOUT_MS,
+            maxBytes: MAX_ACTION_MANUAL_BYTES,
           };
-          let res = await fetch(candidate.url, {
-            headers: baseHeaders,
-            signal: AbortSignal.timeout(PDF_DOWNLOAD_TIMEOUT_MS),
-          });
-          if (res.status === 403 || res.status === 429) {
+          let outcome = await fetchMaybeProxied(
+            candidate.url,
+            MANUAL_DOWNLOAD_USER_AGENT,
+            fetchOpts,
+          );
+          if (isEgressRefusal(outcome.status)) {
             console.log(
-              `[manual-library] ${label}: ${res.status} from ${candidate.source_domain} — retrying with referer`,
+              `[manual-library] ${label}: ${outcome.status} from ${candidate.source_domain} (via ${outcome.via}) — retrying with referer`,
             );
-            res = await fetch(candidate.url, {
-              headers: {
-                ...baseHeaders,
-                Referer: `https://${candidate.source_domain}/`,
-                "Cache-Control": "no-cache",
-              },
-              signal: AbortSignal.timeout(PDF_DOWNLOAD_TIMEOUT_MS),
+            outcome = await fetchMaybeProxied(candidate.url, MANUAL_DOWNLOAD_USER_AGENT, {
+              ...fetchOpts,
+              referer: `https://${candidate.source_domain}/`,
             });
           }
-          if (!res.ok) {
-            lastReason = `download_${res.status}`;
+          // NOT `res.ok` — a proxied response is a 200 envelope carrying the
+          // target's real status, so `ok` would wave a 403 straight through.
+          if (outcome.status < 200 || outcome.status >= 300) {
+            lastReason = `download_${outcome.status}`;
             lastFailedCandidate = candidate;
             continue;
           }
-          const declared = Number(res.headers.get("content-length") ?? "");
+          const res = outcome.res;
+          // The proxy buffers up to a ceiling, so an oversize PDF arrives as a
+          // valid-looking PREFIX — right magic number, right content-type,
+          // wrong document — and the streaming guard below cannot catch it
+          // because the truncation already happened upstream of us. Route it
+          // to Reducto, which downloads server-side and has no such cap.
+          if (proxyTruncated(res)) {
+            await ctx.runMutation(selfApi().upsertManualRow, {
+              make: args.make,
+              model: args.model,
+              year: args.year,
+              source_url: candidate.url,
+              source_domain: candidate.source_domain,
+              is_oem_domain: candidate.is_oem_domain,
+              doc_kind: candidate.doc_kind,
+              extractor: EXTRACTOR_REDUCTO,
+              expires_at: Date.now() + MANUAL_REFRESH_DAYS * DAY_MS,
+            });
+            console.log(
+              `[manual-library] ${label}: proxy truncated ${candidate.url} — stored reference-only row for Reducto`,
+            );
+            return {
+              status: "uploaded",
+              file_id: null,
+              source_url: candidate.url,
+              is_oem_domain: candidate.is_oem_domain,
+              doc_kind: candidate.doc_kind,
+              reason: "reference_only_proxy_truncated",
+            };
+          }
+          const declared = declaredLength(res) ?? NaN;
           // Stricter than the Files-API 30 MB cap on purpose: past ~20 MB the
           // COPIES (bytes + Blob + form body) blow the 64 MB action limit.
           // But a too-big-for-the-runtime manual is NOT a dead end: Reducto

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import { Sidebar } from './components/Shell'
+import { DirectorCommandK } from './components/DirectorCommandK'
 import { DirectorLogin } from './components/DirectorLogin'
 import { DirectorSessionCtx, type DirectorSession } from './components/DirectorSessionCtx'
 import { TabOverview }  from './components/tabs/TabOverview'
@@ -77,6 +78,7 @@ function getHashTab(): string {
 
 const PanelShell = ({ session, onLogout }: { session: DirectorSession; onLogout: () => void }) => {
   const [active, setActive] = useState('overview')
+  const [searchOpen, setSearchOpen] = useState(false)
   const counts = useQuery(api.director.sidebarCounts, { token: session.token })
 
   useEffect(() => {
@@ -84,6 +86,18 @@ const PanelShell = ({ session, onLogout }: { session: DirectorSession; onLogout:
     const onHash = () => setActive(getHashTab())
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  // ⌘K / Ctrl+K toggles the global search palette.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
 
   const navigate = (id: string) => {
@@ -102,11 +116,13 @@ const PanelShell = ({ session, onLogout }: { session: DirectorSession; onLogout:
           counts={counts ?? undefined}
           currentUser={{ name: session.name, role: session.role }}
           onLogout={onLogout}
+          onOpenSearch={() => setSearchOpen(true)}
         />
         <main style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
           <Tab />
         </main>
       </div>
+      <DirectorCommandK open={searchOpen} onOpenChange={setSearchOpen} onNavigateTab={navigate} />
     </DirectorSessionCtx.Provider>
   )
 }

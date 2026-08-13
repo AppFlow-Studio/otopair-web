@@ -1,67 +1,16 @@
 'use client'
 
-import { ReactNode, CSSProperties } from 'react'
-import { IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe, IconAudit, IconSearch, IconSettings, IconCar, IconBolt, IconTag, IconClock, IconStar, IconCard, IconRefresh, Avatar } from './Primitives'
-
-type NavItem = { id: string; label: string; Icon: (p: { size?: number; stroke?: number; style?: React.CSSProperties }) => React.ReactElement; badge?: string }
-type NavGroup = { section?: string; items: NavItem[] }
-
-// Grouped control plane — mirrors the retired /ops nav sections so the panel
-// stays legible now that it carries the full ops + shops surface area.
-const NAV_GROUPS: NavGroup[] = [
-  { items: [
-    { id:'overview',     label:'Overview',     Icon:IconHome },
-  ] },
-  { section:'People', items: [
-    { id:'users',         label:'Users',           Icon:IconUsers },
-    { id:'deletionQueue', label:'Deletion queue',  Icon:IconUsers,   badge:'deletionQueue' },
-  ] },
-  { section:'Marketplace', items: [
-    { id:'shops',        label:'Shops',        Icon:IconShop },
-    { id:'applications', label:'Applications', Icon:IconShop },
-    { id:'bookings',     label:'Bookings',     Icon:IconCalendar },
-    { id:'reviews',      label:'Reviews',      Icon:IconStar,    badge:'reviews' },
-  ] },
-  { section:'Money', items: [
-    { id:'stripe',       label:'Stripe',       Icon:IconStripe,  badge:'stripe' },
-    { id:'transactions', label:'Transactions', Icon:IconCard },
-    { id:'settlement',   label:'Settlement',   Icon:IconClock,   badge:'settlement' },
-  ] },
-  { section:'Catalog', items: [
-    { id:'cars',         label:'Cars',            Icon:IconCar },
-    { id:'configs',      label:'Vehicle configs', Icon:IconSettings },
-    { id:'enrichment',   label:'Enrichment',      Icon:IconRefresh },
-    { id:'pricing',      label:'Pricing & tiers', Icon:IconBolt },
-    { id:'serviceParts', label:'Service Parts',   Icon:IconTag },
-    { id:'estimatorLabor', label:'Estimator & Labor', Icon:IconClock },
-  ] },
-  { section:'Engagement', items: [
-    { id:'otoConversations', label:'Oto History', Icon:IconMessage },
-    { id:'followUps',    label:'Follow-ups',   Icon:IconClock },
-    { id:'otoSim',       label:'Oto Sim',      Icon:IconBolt },
-    { id:'otoFeedback',  label:'Oto feedback', Icon:IconBolt,    badge:'otoFeedback' },
-  ] },
-  { section:'Insight', items: [
-    { id:'analytics',    label:'Analytics',    Icon:IconBolt },
-    { id:'systemHealth', label:'System health', Icon:IconRefresh, badge:'systemHealth' },
-  ] },
-  { section:'Signals', items: [
-    { id:'bugs',         label:'Bugs',         Icon:IconBug,     badge:'bugs' },
-    { id:'feedback',     label:'Feedback',     Icon:IconMessage, badge:'feedback' },
-  ] },
-  { section:'Governance', items: [
-    { id:'audit',         label:'Audit log',      Icon:IconAudit },
-    { id:'mechanicEdits', label:'Mechanic Edits', Icon:IconCar,  badge:'mechanicEdits' },
-  ] },
-]
+import { ReactNode } from 'react'
+import { IconSearch, IconSettings, Avatar } from './Primitives'
+import { NAV_GROUPS } from './navConfig'
 
 type Counts = { bugs?: number; feedback?: number; otoFeedback?: number; stripe?: number; mechanicEdits?: number
   deletionQueue?: number; reviews?: number; systemHealth?: number; settlement?: number }
 type CurrentUser = { name: string; role: string }
 
-export const Sidebar = ({ active, onNavigate, counts, currentUser, onLogout }: {
+export const Sidebar = ({ active, onNavigate, counts, currentUser, onLogout, onOpenSearch }: {
   active: string; onNavigate: (id: string) => void; counts?: Counts
-  currentUser?: CurrentUser; onLogout?: () => void
+  currentUser?: CurrentUser; onLogout?: () => void; onOpenSearch?: () => void
 }) => (
   <aside style={{ width:232, flexShrink:0, background:'var(--slate-900)', color:'var(--slate-300)',
     display:'flex', flexDirection:'column', position:'sticky', top:0, height:'100vh',
@@ -74,12 +23,16 @@ export const Sidebar = ({ active, onNavigate, counts, currentUser, onLogout }: {
         <div style={{ fontSize:10, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.08em', marginTop:1 }}>Director · Internal</div>
       </div>
     </div>
-    <div style={{ margin:'0 14px 14px', padding:'6px 10px', background:'var(--slate-800)', borderRadius:8,
-      fontSize:12, color:'var(--slate-400)', display:'flex', alignItems:'center', gap:8 }}>
+    <button type="button" onClick={onOpenSearch}
+      style={{ margin:'0 14px 14px', padding:'6px 10px', background:'var(--slate-800)', borderRadius:8,
+        fontSize:12, color:'var(--slate-400)', display:'flex', alignItems:'center', gap:8, width:'calc(100% - 28px)',
+        border:'1px solid transparent', cursor:'pointer', fontFamily:'inherit', textAlign:'left', transition:'border-color 120ms' }}
+      onMouseEnter={e => (e.currentTarget as HTMLElement).style.borderColor = 'var(--slate-700)'}
+      onMouseLeave={e => (e.currentTarget as HTMLElement).style.borderColor = 'transparent'}>
       <IconSearch size={13} />
       <span style={{ flex:1 }}>Quick search…</span>
       <span className="mono" style={{ fontSize:10, padding:'1px 5px', borderRadius:4, background:'var(--slate-700)', color:'var(--slate-300)' }}>⌘K</span>
-    </div>
+    </button>
     <nav style={{ padding:'0 10px', flex:1, overflowY:'auto' }}>
       {NAV_GROUPS.map((group, gi) => (
         <div key={group.section ?? `g${gi}`}>

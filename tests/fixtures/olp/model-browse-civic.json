@@ -1,0 +1,16 @@
+{
+  "pageProps": {
+    "data": {
+      "make": {"name": "Honda", "slug": "honda"},
+      "model": {"name": "Civic", "slug": "civic"},
+      "vehicles": [
+        {"vehicleId": "a1", "yearRange": "2019", "displayYear": "2019", "engine": "2.0L I4", "engineSlug": "2.0l-i4", "fuelType": "gas", "timingType": "chain", "forcedInduction": null, "jobCount": 564},
+        {"vehicleId": "a2", "yearRange": "2019", "displayYear": "2019", "engine": "1.5L I4 Turbo", "engineSlug": "1.5l-i4-turbo", "fuelType": "gas", "timingType": "chain", "forcedInduction": "turbo", "jobCount": 566},
+        {"vehicleId": "a3", "yearRange": "2018", "displayYear": "2018", "engine": "2.0L I4", "engineSlug": "2.0l-i4", "fuelType": "gas", "timingType": "chain", "forcedInduction": null, "jobCount": 564},
+        {"vehicleId": "a4", "yearRange": "2018", "displayYear": "2018", "engine": "1.5L I4 Turbo", "engineSlug": "1.5l-i4-turbo", "fuelType": "gas", "timingType": "chain", "forcedInduction": "turbo", "jobCount": 566},
+        {"vehicleId": "a5", "yearRange": "2005", "displayYear": "2005", "engine": "1.7L I4 D17", "engineSlug": "1.7l-i4-d17", "fuelType": "gas", "timingType": "belt", "forcedInduction": null, "jobCount": 564}
+      ]
+    },
+    "availability": {"hasLaborTimes": true}
+  }
+}

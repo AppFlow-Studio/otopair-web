@@ -1,0 +1,34 @@
+{"_creationTime":1775758785450.1345,"_id":"j5701frdjmmnnb1d1wv1tjd98h84hk2m","country":"South Korea","name":"Kia","oem_part_pattern":"^\\d{5}-[A-Z0-9]{5}$","slug":"kia"}
+{"_creationTime":1775758785450.1343,"_id":"j570jh32qy4w4nxqx9fksgaqm984gzej","country":"South Korea","name":"Hyundai","oem_part_pattern":"^\\d{5}-[A-Z0-9]{5}$","slug":"hyundai"}
+{"_creationTime":1775758785450.1338,"_id":"j570p88r705r28py6agvm4gd3584gh3c","country":"Japan","name":"Toyota","oem_part_pattern":"^\\d{5}-[A-Z0-9]{5}$","slug":"toyota"}
+{"_creationTime":1775758785450.1335,"_id":"j5714d2r7zemqzppch1ej7hks184hy4w","country":"Germany","name":"BMW","oem_part_pattern":"^\\d{11}$","slug":"bmw"}
+{"_creationTime":1775758785450.138,"_id":"j571bk5a6wb5bg0d0kzjy24s5184gv3y","country":"Japan","name":"Nissan","oem_part_pattern":"^\\d{5}-[A-Z0-9]{2}[A-Z0-9]{2,4}$","slug":"nissan"}
+{"_creationTime":1775758785450.1357,"_id":"j572hwxwp7xf1x167p0z8btzhn84hm35","country":"USA","name":"Chevrolet","oem_part_pattern":"^\\d{7,8}$","slug":"chevrolet"}
+{"_creationTime":1779146541764.732,"_id":"j572jgfxvd0rt1f8thwh5yjdp986zwxz","logo_url":"","name":"MACK","slug":"mack"}
+{"_creationTime":1771446487448.3591,"_id":"j572x2wy5w0pcxs9t08ffkap3x81dtrq","logo_url":"","name":"HONDA"}
+{"_creationTime":1775758785450.134,"_id":"j573rkttwvfnq685frry8j3av184gdzy","country":"Japan","name":"Honda","oem_part_pattern":"^[A-Z0-9]{3,4}-[A-Z0-9]{3,6}-[A-Z0-9]{2,4}$","slug":"honda"}
+{"_creationTime":1775758785450.1404,"_id":"j574e7vfdc1d55eqkr3erz727984g7yd","country":"USA","name":"Lincoln","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"lincoln"}
+{"_creationTime":1775758785450.1382,"_id":"j574fr1d9s7y6tx1q7h8t2yph584htfy","country":"Japan","name":"Infiniti","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"infiniti"}
+{"_creationTime":1775758785450.136,"_id":"j574g05j6ajs898j6grd0d4fc184gtka","country":"USA","name":"GMC","oem_part_pattern":"^\\d{7,8}$","slug":"gmc"}
+{"_creationTime":1775758785450.1355,"_id":"j574q5dkx66v2frxhq5v3ye0zs84gkfp","country":"USA","name":"Ford","oem_part_pattern":"^[A-Z0-9]{2,4}-[A-Z0-9]{4,6}-[A-Z0-9]{1,4}$","slug":"ford"}
+{"_creationTime":1775758785450.1394,"_id":"j5752g9dx1h8g7nvd7xg90sd1n84g1hv","country":"UK","name":"Land Rover","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"land-rover"}
+{"_creationTime":1775758785450.137,"_id":"j575mjf8jqf5t1n8c0b1k9x8kd84hyez","country":"USA","name":"Dodge","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"dodge"}
+{"_creationTime":1775758785450.1387,"_id":"j576e27222etr6vx0q06z26va984h8mv","country":"Sweden","name":"Volvo","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"volvo"}
+{"_creationTime":1775758785450.1348,"_id":"j576y260e4fvemwt61a48c0nan84gh4d","country":"Germany","name":"Mercedes-Benz","oem_part_pattern":"^[A-Z]\\d{3}\\s?\\d{3}\\s?\\d{2}\\s?\\d{2}$","slug":"mercedes-benz"}
+{"_creationTime":1775758785450.1396,"_id":"j577d3td1fhr0vzxgt1dgt4c9984hg8h","country":"UK","name":"Jaguar","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"jaguar"}
+{"_creationTime":1775758785450.1365,"_id":"j577n1jvagzj7bn8q8sp85nnjn84h3xq","country":"USA","name":"Buick","oem_part_pattern":"^\\d{7,8}$","slug":"buick"}
+{"_creationTime":1775758785450.1384,"_id":"j577y05yjybfywxmcxg5mfrqn984ga4z","country":"Japan","name":"Mazda","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"mazda"}
+{"_creationTime":1770169231706.5283,"_id":"j578a32vhn73qd9400rj3s85dd80hed1","logo_url":"","name":"MERCEDES-BENZ"}
+{"_creationTime":1775758785450.14,"_id":"j578jh1zd4c6rhx37ap47xz2x584gh8c","country":"Japan","name":"Mitsubishi","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"mitsubishi"}
+{"_creationTime":1775758785450.1353,"_id":"j57ba4js515jysmqd1n73kbkh584ggmm","country":"Germany","name":"Volkswagen","oem_part_pattern":"^[A-Z0-9]{3}\\s?\\d{3}\\s?\\d{3}\\s?[A-Z]?$","slug":"volkswagen"}
+{"_creationTime":1775758785450.1377,"_id":"j57bgx65wvd2e57tqkx24rty1h84g0mc","country":"Japan","name":"Subaru","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"subaru"}
+{"_creationTime":1775758785450.1372,"_id":"j57cdn2xz7ww1vr843pk1vfgts84g1yq","country":"USA","name":"Jeep","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"jeep"}
+{"_creationTime":1775758785450.135,"_id":"j57cw055y7skaq593exgy6em2d84hvfm","country":"Germany","name":"Audi","oem_part_pattern":"^[A-Z0-9]{3}\\s?\\d{3}\\s?\\d{3}\\s?[A-Z]?$","slug":"audi"}
+{"_creationTime":1775758785450.1392,"_id":"j57d7b0e77jqj10xpc76ny77mx84gv9g","country":"Japan","name":"Lexus","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"lexus"}
+{"_creationTime":1775758785450.1362,"_id":"j57dsjw80a2c7dt4acfb4kn0z584hx0s","country":"USA","name":"Cadillac","oem_part_pattern":"^\\d{7,8}$","slug":"cadillac"}
+{"_creationTime":1775758785450.1367,"_id":"j57ekr8eqjp9mpgjf5bx3d1v5d84gy1b","country":"USA","name":"Chrysler","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"chrysler"}
+{"_creationTime":1775758785450.139,"_id":"j57f0e0p7njrvn2gh5bgphvxb584g40d","country":"Germany","name":"Porsche","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"porsche"}
+{"_creationTime":1775758785450.1406,"_id":"j57f1by0v6hw99sjnj17bp8mk184g5v7","country":"Japan","name":"Acura","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"acura"}
+{"_creationTime":1775758785450.1375,"_id":"j57fj6425jxz638emd3b4qgv6x84gjq2","country":"USA","name":"Ram","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"ram"}
+{"_creationTime":1775758785450.1401,"_id":"j57fvc4jcjfbjmjejec05wcrj584gp2s","country":"South Korea","name":"Genesis","oem_part_pattern":"^[A-Za-z0-9][A-Za-z0-9\\s\\-\\.]{2,22}[A-Za-z0-9]$","slug":"genesis"}
+{"_creationTime":1769391447493.3628,"_id":"j57fvdsbea2yh1zjb8sr14qzd17zytq9","logo_url":"https://brand.toyota.com/content/dam/brandhub/guidelines/logo/four-column/BHUB_Logo_LogoFamily_01.svg","name":"Toyota"}

@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Otopair — Vehicle ID & Shop Data System v1</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #FAFAFA; color: #1A1A1A; line-height: 1.6;
+    padding: 40px 20px; max-width: 1100px; margin: 0 auto;
+  }
+
+  .doc-header { margin-bottom: 48px; }
+  .doc-header .brand { font-size: 11px; font-weight: 600; letter-spacing: 3px; color: #C8972E; margin-bottom: 4px; text-transform: uppercase; }
+  .doc-header h1 { font-size: 22px; font-weight: 700; color: #1A1A1A; margin-bottom: 6px; }
+  .doc-header .subtitle { font-size: 13px; color: #888; margin-bottom: 16px; max-width: 720px; }
+  .doc-header .meta { font-size: 11px; color: #AAA; letter-spacing: 0.5px; }
+  .doc-header .meta strong { color: #C8972E; }
+
+  .section-label { font-size: 10px; font-weight: 600; letter-spacing: 2.5px; text-transform: uppercase; color: #C8972E; margin-bottom: 6px; }
+  .section-title { font-size: 18px; font-weight: 700; color: #1A1A1A; margin-bottom: 8px; }
+  .section-desc { font-size: 13px; color: #666; margin-bottom: 24px; max-width: 720px; }
+  .divider { border: none; border-top: 1px solid #E8E8E8; margin: 40px 0; }
+
+  .card { background: #FFF; border: 1px solid #E8E8E8; border-radius: 12px; padding: 28px; margin-bottom: 16px; }
+  .card.dark { background: #1A1A1A; border-color: #333; color: #E0E0E0; }
+  .card.dark .card-label { color: #C8972E; }
+  .card.dark .card-title { color: #FFF; }
+  .card.dark p { color: #BBB; }
+  .card.gold { background: #FFF8ED; border-color: #E8D5A8; }
+  .card.red { background: #FFF5F5; border: 1px solid #FFD5D5; }
+  .card.green { background: #F5FFF5; border: 1px solid #D5FFD5; }
+  .card-label { font-size: 10px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase; color: #C8972E; margin-bottom: 6px; }
+  .card-title { font-size: 15px; font-weight: 700; color: #1A1A1A; margin-bottom: 10px; }
+  .card p { font-size: 13px; color: #666; margin-bottom: 8px; }
+  .card p:last-child { margin-bottom: 0; }
+
+  .note {
+    background: #FFF8ED; border-left: 3px solid #C8972E; padding: 14px 20px;
+    margin: 16px 0; font-size: 12px; color: #8B6914; font-style: italic; border-radius: 0 8px 8px 0;
+  }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* Flow steps */
+  .flow-step { display: flex; align-items: flex-start; gap: 16px; margin-bottom: 24px; }
+  .flow-num {
+    width: 36px; height: 36px; border-radius: 50%; background: #1A1A1A; color: #FFF;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; font-weight: 700; flex-shrink: 0;
+  }
+  .flow-num.gold { background: #C8972E; }
+  .flow-num.outline { background: transparent; border: 2px solid #C8972E; color: #C8972E; }
+  .flow-content { flex: 1; }
+  .flow-content h4 { font-size: 14px; font-weight: 700; color: #1A1A1A; margin-bottom: 4px; }
+  .flow-content p { font-size: 12.5px; color: #666; }
+  .flow-content .copy-example {
+    margin-top: 8px; padding: 10px 14px; background: #F8F8F8; border-radius: 8px;
+    font-size: 12px; color: #555; font-style: italic; border-left: 3px solid #C8972E;
+  }
+
+  /* Data field rows */
+  .field-group { margin-bottom: 24px; }
+  .field-group-header {
+    background: #1A1A1A; color: #FFF; padding: 10px 20px; border-radius: 10px 10px 0 0;
+    font-size: 12px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .field-group-header .source-tag {
+    font-size: 9px; padding: 3px 8px; border-radius: 12px; font-weight: 600; letter-spacing: 0.5px;
+  }
+  .field-group-header .source-tag.auto { background: #2E7D32; color: #FFF; }
+  .field-group-header .source-tag.shop { background: #C8972E; color: #FFF; }
+  .field-group-header .source-tag.user { background: #3498DB; color: #FFF; }
+  .field-group-header .source-tag.mixed { background: #666; color: #FFF; }
+
+  .field-table {
+    width: 100%; border-collapse: collapse; background: #FFF;
+    border: 1px solid #E8E8E8; border-top: none; border-radius: 0 0 10px 10px;
+    overflow: hidden;
+  }
+  .field-table th {
+    font-size: 10px; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;
+    padding: 10px 16px; text-align: left; border-bottom: 2px solid #E8E8E8;
+    color: #888; background: #FAFAFA;
+  }
+  .field-table td {
+    padding: 12px 16px; border-bottom: 1px solid #F0F0F0;
+    font-size: 12.5px; color: #444; vertical-align: top;
+  }
+  .field-table tr:last-child td { border-bottom: none; }
+
+  .tag {
+    display: inline-block; padding: 2px 8px; border-radius: 12px;
+    font-size: 10px; font-weight: 600; letter-spacing: 0.3px;
+  }
+  .tag.required { background: #FFEBEE; color: #C62828; }
+  .tag.optional { background: #F0F0F0; color: #888; }
+  .tag.auto { background: #E8F5E9; color: #2E7D32; }
+  .tag.editable { background: #FFF8ED; color: #C8972E; }
+  .tag.readonly { background: #F5F5F5; color: #999; }
+  .tag.verified { background: #E8F5E9; color: #2E7D32; }
+  .tag.unverified { background: #FFF8ED; color: #C8972E; }
+
+  /* UI placement callout */
+  .ui-callout {
+    background: #F0F4FF; border: 1px solid #D0DCFF; border-radius: 12px;
+    padding: 20px 24px; margin: 16px 0;
+  }
+  .ui-callout .ui-label {
+    font-size: 10px; font-weight: 600; letter-spacing: 2px; text-transform: uppercase;
+    color: #3B5998; margin-bottom: 6px;
+  }
+  .ui-callout h4 { font-size: 14px; font-weight: 700; color: #1A1A1A; margin-bottom: 6px; }
+  .ui-callout p { font-size: 12.5px; color: #555; }
+
+  /* Timeline */
+  .timeline-item { display: flex; gap: 16px; margin-bottom: 16px; align-items: flex-start; }
+  .timeline-dot {
+    width: 12px; height: 12px; border-radius: 50%; background: #C8972E;
+    flex-shrink: 0; margin-top: 4px;
+  }
+  .timeline-dot.dark { background: #1A1A1A; }
+  .timeline-dot.green { background: #2E7D32; }
+  .timeline-content { flex: 1; }
+  .timeline-content h5 { font-size: 13px; font-weight: 700; color: #1A1A1A; margin-bottom: 2px; }
+  .timeline-content p { font-size: 12px; color: #666; }
+
+  .doc-footer { margin-top: 48px; font-size: 11px; color: #BBB; }
+</style>
+</head>
+<body>
+
+<!-- ==================== HEADER ==================== -->
+<div class="doc-header">
+  <div class="brand">Otopair</div>
+  <h1>Vehicle ID & Shop Data System — v1</h1>
+  <div class="subtitle">The persistent vehicle passport that travels with every car across every shop interaction. Includes the pre-job confirmation flow, post-job data collection, data hierarchy rules, and UI placement recommendations. Combined spec for Tasks 2 &amp; 3.</div>
+  <div class="meta"><strong>Status:</strong> Spec draft — for team review &nbsp;·&nbsp; <strong>Version:</strong> 1.0 &nbsp;·&nbsp; <strong>Date:</strong> April 2026 &nbsp;·&nbsp; <strong>Source:</strong> Team meeting April 18, 2026</div>
+</div>
+
+<!-- ==================== SECTION 1: WHAT IS THE VEHICLE ID ==================== -->
+<div class="section-label">Section 1</div>
+<div class="section-title">What Is the Vehicle ID?</div>
+<div class="section-desc">A persistent, shop-facing data profile attached to every vehicle in the Otopair system. It's the technical "passport" that a mechanic sees — not what the user sees. Think of it as the vehicle's driver's license: when a car arrives at any partner shop, the shop already knows everything about it.</div>
+
+<div class="two-col">
+  <div class="card dark">
+    <div class="card-label">The Analogy</div>
+    <div class="card-title">Driver's license for the car</div>
+    <p>When you walk into a bar, your ID tells them your name, your age, your address — they don't ask you to fill out a form. Same concept: when a car arrives at any Otopair partner shop, the shop sees the vehicle's ID — everything they need, pre-filled and ready.</p>
+  </div>
+  <div class="card dark">
+    <div class="card-label">The Power</div>
+    <div class="card-title">Every shop already knows your car</div>
+    <p>The mechanic doesn't ask "what oil do you use?" — they already see it. They don't guess the tire size — it's right there. They don't wonder if the brakes were done recently — the service history shows it. And it gets smarter with every visit.</p>
+  </div>
+</div>
+
+<div class="note">The Vehicle ID is shop-facing only. The user sees their clean, minimal vehicle card in the app. The Vehicle ID is the detailed, technical view that the shop sees — written in shop language, structured for shop workflows.</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 2: TWO LAYERS ==================== -->
+<div class="section-label">Section 2</div>
+<div class="section-title">Two Layers of Data</div>
+<div class="section-desc">The Vehicle ID has two distinct layers — what we know from day one, and what we learn over time.</div>
+
+<div class="two-col">
+  <div class="card">
+    <div class="card-label">Layer 1 — Static</div>
+    <div class="card-title">Rarely changes. Known from onboarding.</div>
+    <p>Year, make, model, trim, engine type, displacement, drivetrain, VIN (if provided). This data comes from the vehicle itself and is populated during user onboarding, enriched by Waleed's vehicle data system (wheelsize.com API + fallback defaults).</p>
+    <p><strong>Source:</strong> User onboarding + AI enrichment</p>
+    <p><strong>Editable by shop:</strong> No (read-only — this is factory data)</p>
+  </div>
+  <div class="card gold">
+    <div class="card-label">Layer 2 — Living</div>
+    <div class="card-title">Changes over time. Built through service interactions.</div>
+    <p>Current tires (brand, model, size), brake pad brand, type, and condition (front and rear), rotor condition, oil type and viscosity, brake fluid type, coolant type, current mileage, last service date, mechanic notes, aftermarket modifications. This data starts empty and fills up through shop reports, user input, and service history.</p>
+    <p><strong>Source:</strong> Shop reports (primary), user input (secondary), AI enrichment (fallback)</p>
+    <p><strong>Editable by shop:</strong> Yes — shops confirm or update at every visit</p>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 3: FULL DATA SCHEMA ==================== -->
+<div class="section-label">Section 3</div>
+<div class="section-title">Vehicle ID — Full Data Schema</div>
+<div class="section-desc">Every field, its source, whether it's required or optional, and whether the shop can edit it.</div>
+
+<!-- VEHICLE IDENTITY -->
+<div class="field-group">
+  <div class="field-group-header">
+    Vehicle Identity <span class="source-tag auto">Auto-populated</span>
+  </div>
+  <table class="field-table">
+    <thead><tr><th>Field</th><th>Example</th><th>Source</th><th>Shop Access</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Year</strong></td><td>2021</td><td>User onboarding</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Make</strong></td><td>BMW</td><td>User onboarding</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Model</strong></td><td>330i</td><td>User onboarding</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Trim</strong></td><td>M Sport</td><td>User onboarding</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Engine</strong></td><td>2.0L Turbo I4</td><td>AI enrichment</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Drivetrain</strong></td><td>RWD</td><td>AI enrichment</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>VIN</strong></td><td>WBA5R1C5xM...</td><td>User onboarding (optional)</td><td><span class="tag readonly">Read-only</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- TIRES -->
+<div class="field-group">
+  <div class="field-group-header">
+    Tires <span class="source-tag shop">Shop-reported</span>
+  </div>
+  <table class="field-table">
+    <thead><tr><th>Field</th><th>Example</th><th>Source</th><th>Shop Access</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Tire brand</strong></td><td>Michelin</td><td>Shop report / user photo</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Tire model</strong></td><td>Pilot Sport All Season 4</td><td>Shop report / user photo</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Tire size (front)</strong></td><td>225/45R18</td><td>AI enrichment + shop confirmation</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Tire size (rear)</strong></td><td>255/40R18 (if staggered)</td><td>AI enrichment + shop confirmation</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Run-flat</strong></td><td>Yes</td><td>AI enrichment + shop confirmation</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Tire condition</strong></td><td>Good / Fair / Replace soon</td><td>Shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Date installed</strong></td><td>2024-11-15</td><td>Service history / shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Estimated tread life remaining</strong></td><td>~18,000 mi</td><td>System calculation</td><td><span class="tag readonly">Read-only</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- FLUIDS -->
+<div class="field-group">
+  <div class="field-group-header">
+    Fluids <span class="source-tag mixed">Mixed sources</span>
+  </div>
+  <table class="field-table">
+    <thead><tr><th>Field</th><th>Example</th><th>Source</th><th>Shop Access</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Oil viscosity</strong></td><td>0W-20</td><td>AI enrichment (OEM spec) + shop confirmation</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Oil type</strong></td><td>Full Synthetic</td><td>AI enrichment + shop confirmation</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Oil filter part #</strong></td><td>11 42 7 953 129</td><td>AI enrichment + shop confirmation</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Coolant type</strong></td><td>BMW HT-12</td><td>AI enrichment + shop confirmation</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Brake fluid type</strong></td><td>DOT 4 Low Viscosity</td><td>AI enrichment + shop confirmation</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Transmission fluid</strong></td><td>ZF Lifeguard 8</td><td>AI enrichment + shop confirmation</td><td><span class="tag editable">Editable</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- MILEAGE & USAGE -->
+
+<!-- BRAKES -->
+<div class="field-group">
+  <div class="field-group-header">
+    Brakes <span class="source-tag shop">Shop-reported</span>
+  </div>
+  <table class="field-table">
+    <thead><tr><th>Field</th><th>Example</th><th>Source</th><th>Shop Access</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Front pad brand</strong></td><td>Akebono</td><td>Shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Front pad type</strong></td><td>Ceramic</td><td>Shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Front pad condition</strong></td><td>Good / Fair / Replace soon</td><td>Shop report (visual assessment)</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Front pad thickness</strong></td><td>~7mm</td><td>Shop report (optional measurement)</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Rear pad brand</strong></td><td>Akebono</td><td>Shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Rear pad type</strong></td><td>Ceramic</td><td>Shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Rear pad condition</strong></td><td>Good / Fair / Replace soon</td><td>Shop report (visual assessment)</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Rear pad thickness</strong></td><td>~5mm</td><td>Shop report (optional measurement)</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Front rotor condition</strong></td><td>Good / Scored / Warped / Replace</td><td>Shop report (visual assessment)</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Rear rotor condition</strong></td><td>Good / Scored / Warped / Replace</td><td>Shop report (visual assessment)</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Last brake service date</strong></td><td>2025-08-20</td><td>Service history / shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Last brake service mileage</strong></td><td>38,500 mi</td><td>Service history / shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Estimated pad life remaining</strong></td><td>~15,000 mi</td><td>System calculation</td><td><span class="tag readonly">Read-only</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="note">Brake data is one of the most valuable safety signals in the Vehicle ID. Even if the car comes in for an oil change, if the mechanic glances at the brakes while it's on the lift and notices they're worn, that observation feeds into Vehicle Health and could trigger a proactive recommendation to the user. The condition assessment (Good / Fair / Replace soon) is a quick visual call — not a precise measurement. Pad thickness is optional but valuable when provided.</div>
+
+<!-- STATE INSPECTION -->
+<div class="field-group">
+  <div class="field-group-header">
+    State Inspection <span class="source-tag mixed">Mixed sources</span>
+  </div>
+  <table class="field-table">
+    <thead><tr><th>Field</th><th>Example</th><th>Source</th><th>Shop Access</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Last inspection date</strong></td><td>2025-09-14</td><td>Shop report / user onboarding</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Inspection expiration</strong></td><td>2026-09-14</td><td>System calculation (last date + state interval)</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Inspection status</strong></td><td>Valid / Expiring soon / Expired</td><td>System calculation</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Last result</strong></td><td>Pass / Fail</td><td>Shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Fail reasons (if applicable)</strong></td><td>Emissions, wipers, tire tread</td><td>Shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>Inspection shop</strong></td><td>AutoCare Express — Williamsburg</td><td>Booking history</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Emissions tested</strong></td><td>Yes</td><td>Shop report</td><td><span class="tag editable">Editable</span></td></tr>
+      <tr><td><strong>State</strong></td><td>New York</td><td>User profile (location)</td><td><span class="tag readonly">Read-only</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="note">State inspection is one of the few data points with a hard legal deadline — the user MUST get it done by a specific date. New York requires annual safety and emissions inspection. The system calculates the expiration from the last inspection date, then triggers proactive reminders: 60 days before ("Your inspection expires in 2 months"), 30 days before ("Expires next month — book now"), and 7 days before ("Expires this week"). This is a high-trust moment — the app is protecting the user from a legal issue — AND a natural booking opportunity. When Otopair expands beyond NYC, the state field controls which inspection rules apply (some states don't require inspection at all).</div>
+
+<!-- MILEAGE & USAGE -->
+<div class="field-group">
+  <div class="field-group-header">
+    Mileage & Usage <span class="source-tag mixed">Mixed sources</span>
+  </div>
+  <table class="field-table">
+    <thead><tr><th>Field</th><th>Example</th><th>Source</th><th>Shop Access</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Current mileage</strong></td><td>47,230 mi</td><td>Shop report (updated every visit)</td><td><span class="tag editable">Editable</span> <span class="tag required">Required</span></td></tr>
+      <tr><td><strong>Last reported date</strong></td><td>2026-03-15</td><td>System (auto-logged)</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Monthly mileage velocity</strong></td><td>~1,200 mi/mo</td><td>System calculation</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Driving type</strong></td><td>Mix of both</td><td>User onboarding</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Ownership type</strong></td><td>Owned</td><td>User onboarding</td><td><span class="tag readonly">Read-only</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- SERVICE HISTORY -->
+<div class="field-group">
+  <div class="field-group-header">
+    Recent Service History <span class="source-tag auto">Auto-populated</span>
+  </div>
+  <table class="field-table">
+    <thead><tr><th>Field</th><th>Example</th><th>Source</th><th>Shop Access</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Last 5 services</strong></td><td>Oil Change (Mar 15) · Tire Rotation (Jan 8) · Brake Inspection (Nov 2) ...</td><td>Booking history</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Last service shop</strong></td><td>AutoCare Express — Williamsburg</td><td>Booking history</td><td><span class="tag readonly">Read-only</span></td></tr>
+      <tr><td><strong>Last service mileage</strong></td><td>45,800 mi</td><td>Shop report</td><td><span class="tag readonly">Read-only</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- MECHANIC NOTES -->
+<div class="field-group">
+  <div class="field-group-header">
+    Mechanic Notes <span class="source-tag shop">Shop-reported</span>
+  </div>
+  <table class="field-table">
+    <thead><tr><th>Field</th><th>Example</th><th>Source</th><th>Shop Access</th></tr></thead>
+    <tbody>
+      <tr><td><strong>Persistent notes</strong></td><td>"Drain plug slightly stripped — use oversized gasket. Customer prefers Castrol Edge. Aftermarket exhaust — different hangar setup."</td><td>Mechanics (post-job)</td><td><span class="tag editable">Editable</span> — append only, never delete</td></tr>
+      <tr><td><strong>Modifications / aftermarket</strong></td><td>Aftermarket exhaust, lowering springs, cold air intake</td><td>Shop report</td><td><span class="tag editable">Editable</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="note">Mechanic notes are the institutional knowledge that usually gets lost when a car goes to a different shop. On Otopair, this knowledge travels with the vehicle. Every mechanic who touches the car benefits from previous mechanics' observations. This is a major trust and quality differentiator.</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 4: DATA HIERARCHY ==================== -->
+<div class="section-label">Section 4</div>
+<div class="section-title">Data Hierarchy — Who Do We Trust?</div>
+<div class="section-desc">When multiple sources provide conflicting data, the system needs a clear priority order. This was agreed in the April 18 team meeting.</div>
+
+<div class="card" style="padding: 32px;">
+  <div class="timeline-item">
+    <div class="timeline-dot green"></div>
+    <div class="timeline-content">
+      <h5>Priority 1 — Shop-Reported Data (Source of Truth)</h5>
+      <p>If a shop has confirmed or entered data, it's the most reliable. They physically looked at the car. If the same data point has been confirmed by a shop 2-3 times consecutively, it's marked as <span class="tag verified">Verified</span> and the system stops asking for confirmation on that field.</p>
+    </div>
+  </div>
+  <div class="timeline-item">
+    <div class="timeline-dot"></div>
+    <div class="timeline-content">
+      <h5>Priority 2 — User-Provided Data</h5>
+      <p>Information the user entered during onboarding or through photo capture. Useful for initial population but always superseded by shop data if they conflict. Marked as <span class="tag unverified">Unverified</span> until a shop confirms it.</p>
+    </div>
+  </div>
+  <div class="timeline-item">
+    <div class="timeline-dot dark"></div>
+    <div class="timeline-content">
+      <h5>Priority 3 — AI-Enriched Data (Fallback)</h5>
+      <p>OEM specifications from Waleed's vehicle data system — what the car should have based on year/make/model/trim. Correct for factory specs but may not reflect the car's current state (owner may have changed oil type, aftermarket parts, etc.). Used as a starting point until real data is collected.</p>
+    </div>
+  </div>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 5: LIFECYCLE ==================== -->
+<div class="section-label">Section 5</div>
+<div class="section-title">Vehicle ID Lifecycle — How It Grows</div>
+<div class="section-desc">The Vehicle ID starts thin and gets richer with every interaction. Here's the full lifecycle from vehicle creation to a mature, verified profile.</div>
+
+<div class="card" style="padding: 32px;">
+  <div class="flow-step">
+    <div class="flow-num">1</div>
+    <div class="flow-content">
+      <h4>User adds vehicle during onboarding</h4>
+      <p>Layer 1 (static) populates automatically — year, make, model, trim. AI enrichment fills OEM specs — engine type, drivetrain, factory tire size, oil viscosity. User optionally provides VIN, last service info, driving habits. Layer 2 (living) is mostly empty except for user-provided onboarding answers.</p>
+      <div class="copy-example">Vehicle ID status: Partial. Layer 1 complete. Layer 2 mostly AI defaults with "Unverified" tags.</div>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num gold">2</div>
+    <div class="flow-content">
+      <h4>First shop visit — pre-job confirmation</h4>
+      <p>The car arrives at a partner shop for any service. The shop sees the Vehicle ID with whatever data exists. Layer 1 is filled. Layer 2 has AI defaults and user data. The shop confirms what's there and fills in what's missing — they physically look at the car and report: actual tires on it, oil viscosity sticker, current mileage. This is the pre-job form.</p>
+      <div class="copy-example">Vehicle ID status: Substantially populated. First real-world data layer. Many fields move from "Unverified" to shop-confirmed.</div>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num gold">3</div>
+    <div class="flow-content">
+      <h4>First shop visit — post-job update</h4>
+      <p>After completing the service, the shop reports what changed. New oil type installed, new parts used, mechanic notes. The Vehicle ID updates — "Oil changed to Castrol Edge 0W-20 on March 15 at 47,230 mi." First mechanic note added: "Customer mentioned slight vibration above 60mph — worth checking wheel balance next visit."</p>
+      <div class="copy-example">Vehicle ID status: Rich. Service history started. Living data layer has its first real entries.</div>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num">4</div>
+    <div class="flow-content">
+      <h4>Subsequent visits — progressive enrichment</h4>
+      <p>Every future visit to any partner shop, the shop sees the Vehicle ID pre-filled. They confirm "no changes" on verified fields or update what's different. Mileage updates every visit. Service history grows. Mechanic notes accumulate. After 2-3 consistent confirmations, fields lock as "Verified" and the system stops asking about them.</p>
+      <div class="copy-example">Vehicle ID status: Mature and verified. The system knows this car deeply. Every shop on the network benefits from every previous shop's data.</div>
+    </div>
+  </div>
+</div>
+
+<div class="card dark">
+  <div class="card-label">The Retention Loop</div>
+  <div class="card-title">Leaving Otopair means losing all this accumulated intelligence</div>
+  <p>The more the car is serviced through Otopair, the richer the Vehicle ID becomes. A car with 8 service visits through the platform has a comprehensive profile — tire history, fluid preferences, mechanic notes, mileage trajectory, service timing. That data doesn't exist anywhere else. This is a natural retention mechanism that gets stronger with every interaction.</p>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 6: PRE-JOB FORM ==================== -->
+<div class="section-label">Section 6</div>
+<div class="section-title">Pre-Job Confirmation Form</div>
+<div class="section-desc">What the shop sees and confirms when a car arrives for service. This is the mechanism that creates and updates the Vehicle ID. It must be fast — under 60 seconds for a return vehicle, under 2 minutes for a first-time vehicle.</div>
+
+<div class="card green">
+  <div class="card-label">Design Principle</div>
+  <div class="card-title">Pre-filled, not blank</div>
+  <p>This is NOT a blank form the shop fills out from scratch. It's a pre-filled summary of everything we already know, presented for confirmation or correction. Existing data shows as pre-populated fields. The shop confirms with one tap ("All correct") or edits individual fields. Empty fields are clearly marked as "Not yet reported" for the shop to fill in.</p>
+</div>
+
+<div class="card" style="padding: 32px;">
+  <p style="font-size: 14px; font-weight: 700; margin-bottom: 16px;">Pre-Job Form — Field by Field</p>
+
+  <div class="flow-step">
+    <div class="flow-num">1</div>
+    <div class="flow-content">
+      <h4>Current Mileage</h4>
+      <p>Numeric input. Pre-filled with last reported mileage if available. <span class="tag required">Required</span> — always collected at every visit. This drives the entire service interval engine.</p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num">2</div>
+    <div class="flow-content">
+      <h4>Tires — Current Specs</h4>
+      <p>Pre-filled with whatever we have (AI default, user photo, or previous shop report). Shop confirms or updates: brand, model, size (front/rear if staggered), run-flat status. Also a quick condition assessment: Good / Fair / Replace Soon. <span class="tag required">Required</span> on first visit. On subsequent visits, if verified, show as confirmed with option to update.</p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num">3</div>
+    <div class="flow-content">
+      <h4>Fluids — Current Specs</h4>
+      <p>Pre-filled with OEM defaults from AI enrichment. Shop confirms or updates: oil viscosity, oil type (conventional/blend/synthetic), coolant type, brake fluid type. <span class="tag required">Required</span> on first visit. On subsequent visits, if verified, shows as confirmed.</p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num">4</div>
+    <div class="flow-content">
+      <h4>Modifications / Notes Check</h4>
+      <p>Pre-filled with any existing mechanic notes or reported modifications. Shop confirms "nothing new" or adds observations. <span class="tag optional">Optional</span> — but valuable. If a previous mechanic noted something, the current mechanic should see it and can confirm or update.</p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num">5</div>
+    <div class="flow-content">
+      <h4>"All Correct" Confirmation</h4>
+      <p>Once the shop has reviewed/updated everything, one tap to confirm: "Vehicle specs confirmed." This logs the confirmation with a timestamp and marks fields as shop-verified. On return visits where everything is already verified, this could be the ONLY step — one tap and they're done.</p>
+    </div>
+  </div>
+</div>
+
+<div class="note">Timor's idea from the meeting: if the same data has been confirmed 2-3 times by any shop, the field auto-locks as "Verified" and the form shows it as a confirmed badge instead of an editable field. The shop can still override if something changed, but they don't need to re-confirm static data every visit. This is how the form gets faster over time — a mature Vehicle ID means a one-tap pre-job confirmation.</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 7: POST-JOB FORM ==================== -->
+<div class="section-label">Section 7</div>
+<div class="section-title">Post-Job Data Collection</div>
+<div class="section-desc">What the shop reports after completing the service. This has two parts: mandatory vehicle data (what changed on the car) and optional optimization data (how accurate was our estimate). From the April 18 meeting.</div>
+
+<div class="two-col">
+  <div class="card">
+    <div class="card-label">Part A — Mandatory</div>
+    <div class="card-title">Vehicle data: What changed?</div>
+    <p>This is what updates the Vehicle ID. The shop must report what was done and what's now on the car.</p>
+    <p style="margin-top: 12px; font-size: 12px; color: #999;">This feeds: Vehicle ID, Vehicle Health score, service history, next service predictions.</p>
+  </div>
+  <div class="card">
+    <div class="card-label">Part B — Optional</div>
+    <div class="card-title">Optimization data: How was our estimate?</div>
+    <p>This helps Otopair's system get smarter over time. Was the labor time accurate? Were the parts correct? Any surprises?</p>
+    <p style="margin-top: 12px; font-size: 12px; color: #999;">This feeds: labor time accuracy, parts database, pricing calibration, spec variance tracking.</p>
+  </div>
+</div>
+
+<div class="card" style="padding: 32px; margin-top: 16px;">
+  <p style="font-size: 14px; font-weight: 700; margin-bottom: 4px;">Part A — Mandatory Post-Job Questions</p>
+  <p style="font-size: 12px; color: #999; margin-bottom: 20px;">Shop MUST complete these before marking a job as complete.</p>
+
+  <div class="flow-step">
+    <div class="flow-num">1</div>
+    <div class="flow-content">
+      <h4>Updated mileage</h4>
+      <p>Current mileage at job completion. Pre-filled with pre-job mileage. Shop confirms or updates. <span class="tag required">Required</span></p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num">2</div>
+    <div class="flow-content">
+      <h4>Parts used</h4>
+      <p>What was installed? Repeatable section: part name, brand, OEM part number (optional), cost. Pre-filled with expected parts from vehicle specs if available. Shop confirms or overrides with what they actually used. <span class="tag required">Required</span> — at least one entry for non-labor-only services.</p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num">3</div>
+    <div class="flow-content">
+      <h4>Service-specific updates to Vehicle ID</h4>
+      <p>Depending on the service performed, relevant Vehicle ID fields auto-prompt for update:</p>
+      <div class="copy-example">
+        Oil change → "Update oil type/viscosity on Vehicle ID?"<br>
+        Tire replacement → "Update tire brand/model/size on Vehicle ID?"<br>
+        Brake service → "Update brake pad brand/part # on Vehicle ID?"<br>
+        Coolant flush → "Update coolant type on Vehicle ID?"
+      </div>
+      <p style="margin-top: 8px;">This is context-aware — the form only asks about fields relevant to the service just performed. <span class="tag required">Required</span></p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num">4</div>
+    <div class="flow-content">
+      <h4>Mechanic notes (Tip for next mechanic)</h4>
+      <p>Free-text field for observations that should travel with the car. "Drain plug slightly worn." "Customer asked about timing belt — consider recommending at next visit." "Front left tire wearing unevenly — possible alignment issue." <span class="tag optional">Optional</span> — but strongly encouraged. These are the notes that make Otopair's service quality exceptional.</p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num">5</div>
+    <div class="flow-content">
+      <h4>Flag for review</h4>
+      <p>Checkbox: "Our vehicle specs for this car may be incorrect." If the mechanic found that the OEM data doesn't match reality (e.g., manual says 0W-20 but car actually needs 5W-30), this flags the vehicle record for admin/Waleed review. <span class="tag optional">Optional</span></p>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="padding: 32px; margin-top: 16px;">
+  <p style="font-size: 14px; font-weight: 700; margin-bottom: 4px;">Part B — Optional Post-Job Questions</p>
+  <p style="font-size: 12px; color: #999; margin-bottom: 20px;">Helps Otopair optimize data accuracy. Shop can skip these — they won't block job completion.</p>
+
+  <div class="flow-step">
+    <div class="flow-num outline">1</div>
+    <div class="flow-content">
+      <h4>Actual labor time</h4>
+      <p>How long did the job actually take? Numeric input in minutes. Pre-filled with estimated labor time. Feeds variance tracking — if our estimates are consistently off, we adjust.</p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num outline">2</div>
+    <div class="flow-content">
+      <h4>Difficulty rating</h4>
+      <p>1-5 scale. Was this job easier or harder than expected for this vehicle? Helps calibrate labor time estimates for this specific year/make/model.</p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num outline">3</div>
+    <div class="flow-content">
+      <h4>Parts accuracy</h4>
+      <p>Were the parts we suggested correct? Yes / No — if No, what was different? Feeds the vehicle specs database accuracy over time.</p>
+    </div>
+  </div>
+
+  <div class="flow-step">
+    <div class="flow-num outline">4</div>
+    <div class="flow-content">
+      <h4>Anything else to report?</h4>
+      <p>Open text. Catches anything the structured fields didn't cover. "Customer needs to come back for alignment." "Noticed exhaust leak — unrelated to today's service."</p>
+    </div>
+  </div>
+</div>
+
+<div class="note">From the meeting: Part B is an optional survey. The shop can skip through with "Not available" on any service category they didn't work on and only answer questions relevant to the job they performed. This prevents the form from feeling overwhelming on simple jobs.</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 8: UI PLACEMENT ==================== -->
+<div class="section-label">Section 8</div>
+<div class="section-title">Where This Lives in the Shop Dashboard</div>
+<div class="section-desc">Based on the current shop portal design, here's where the Vehicle ID and forms integrate.</div>
+
+<div class="ui-callout">
+  <div class="ui-label">UI Placement 1</div>
+  <h4>Booking Detail Panel — Vehicle Name as Clickable Link</h4>
+  <p>In the current booking detail panel (right sidebar when you click a job), the vehicle name shows as "2018 Ford F-150". This should become a clickable link or button that opens the full Vehicle ID view. The shop can see the vehicle's complete profile without leaving the booking context. Small icon next to the vehicle name — like a document or ID card icon — signals it's tappable.</p>
+</div>
+
+<div class="ui-callout">
+  <div class="ui-label">UI Placement 2</div>
+  <h4>Pre-Job Form — Triggered on "Accept" or "Start Job"</h4>
+  <p>When the shop accepts a booking OR when the mechanic taps "Start Job," the pre-job confirmation form surfaces as a modal or step before work begins. For first-time vehicles, it's the full form (mileage, tires, fluids, notes). For return vehicles with verified data, it could be a one-tap "Vehicle specs confirmed" with the option to view/edit details.</p>
+</div>
+
+<div class="ui-callout">
+  <div class="ui-label">UI Placement 3</div>
+  <h4>Post-Job Form — Triggered on "Complete Job"</h4>
+  <p>This is already scoped in Daniel's Ticket 2.9 (Job Actuals Input Form) and Ticket 2.15 (Mechanic Job Actuals). The Vehicle ID updates are an ADDITION to the existing job actuals form — not a replacement. Part A (mandatory vehicle data) integrates into the existing required fields. Part B (optional optimization) is a new section at the end.</p>
+</div>
+
+<div class="ui-callout">
+  <div class="ui-label">UI Placement 4</div>
+  <h4>Customer/Vehicle Search — Shop Can Look Up Any Vehicle</h4>
+  <p>In the booking list, the "Vehicle" search filter could also double as a way to pull up a Vehicle ID directly. Shop types "BMW 330i" and can see the full profile even outside of a specific booking context. Useful for when a customer calls and the shop wants to check their car's details.</p>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 9: EXISTING TICKET MAPPING ==================== -->
+<div class="section-label">Section 9</div>
+<div class="section-title">How This Maps to Daniel's Existing Tickets</div>
+<div class="section-desc">Based on the Mechanic Side CRM / Shop Portal Notion page, here's what already exists and what needs to be added.</div>
+
+<div class="card">
+  <div class="card-label">Already Exists</div>
+  <div class="card-title">Ticket 2.9 — Job Actuals Input Form</div>
+  <p>Currently scoped: actual labor minutes, parts used (name, OEM number, cost), difficulty rating, technician notes, start/complete times. <strong>What to add:</strong> Service-specific Vehicle ID updates (Part A, Question 3), mechanic "tip for next mechanic" field, flag for review checkbox. These are additions to the existing form, not a new form.</p>
+</div>
+
+<div class="card">
+  <div class="card-label">Already Exists</div>
+  <div class="card-title">Ticket 2.15 — Mechanic Job Actuals (Mechanic View)</div>
+  <p>Already has: vehicle specs reference panel, pre-filled parts, flag for review. <strong>What to add:</strong> "Tip for next mechanic" note field that persists on the Vehicle ID. This ticket is already close to what we need — minor additions only.</p>
+</div>
+
+<div class="card red">
+  <div class="card-label">New — Needs to be Created</div>
+  <div class="card-title">Pre-Job Vehicle Confirmation Form</div>
+  <p>This does NOT exist in Daniel's current scope. It's a new flow that triggers when a booking is accepted or when "Start Job" is tapped. It surfaces the Vehicle ID for shop confirmation/update. This is the mechanism that populates Layer 2 of the Vehicle ID. Needs a new ticket.</p>
+</div>
+
+<div class="card red">
+  <div class="card-label">New — Needs to be Created</div>
+  <div class="card-title">Vehicle ID Detail View</div>
+  <p>A dedicated view showing the full Vehicle ID for any vehicle. Accessible from the booking detail panel (clickable vehicle name) and from vehicle search. Shows all fields, verification status, service history, mechanic notes. Needs a new ticket.</p>
+</div>
+
+<div class="card red">
+  <div class="card-label">New — Backend</div>
+  <div class="card-title">Vehicle ID Data Table</div>
+  <p>Waleed needs to create the backend table structure that stores the living data layer — current tire specs, fluid specs, mileage history, mechanic notes, verification status per field, modification flags. This is separate from the existing vehicle_specs table (which stores OEM defaults). The Vehicle ID table stores the ACTUAL current state of the car as reported by shops.</p>
+</div>
+
+<hr class="divider">
+
+<!-- ==================== SECTION 10: DELIVERABLES ==================== -->
+<div class="section-label">Section 10</div>
+<div class="section-title">Team Deliverables from This Spec</div>
+
+<div class="card gold">
+  <div class="card-label">For Waleed</div>
+  <div class="card-title">Backend: Vehicle ID data table</div>
+  <p>Create the table that stores the living data layer — separate from vehicle_specs (OEM defaults). Include: field-level verification status, source tracking (who provided each data point), timestamp per field update, mechanic notes as an append-only array.</p>
+</div>
+
+<div class="card gold">
+  <div class="card-label">For Daniel / Ahmed</div>
+  <div class="card-title">Frontend: Three new components</div>
+  <p><strong>1.</strong> Vehicle ID detail view — accessible from booking panel and vehicle search.</p>
+  <p><strong>2.</strong> Pre-job confirmation form — modal/step that surfaces when a job is accepted or started.</p>
+  <p><strong>3.</strong> Additions to existing job actuals form — service-specific Vehicle ID updates, "tip for next mechanic" field, enhanced flag for review.</p>
+</div>
+
+<div class="card gold">
+  <div class="card-label">For Yassin</div>
+  <div class="card-title">Product: Define the "Verified" threshold</div>
+  <p>How many consistent confirmations before a field locks as verified? 2? 3? Does it differ by field type (mileage should never auto-verify since it changes every visit, but oil viscosity could verify after 2 confirmations)? This is a product decision that affects form length and shop experience.</p>
+</div>
+
+<hr class="divider">
+
+<div class="doc-footer">
+  End of document &nbsp;·&nbsp; Otopair Vehicle ID & Shop Data System v1 &nbsp;·&nbsp; April 2026
+</div>
+
+</body>
+</html>

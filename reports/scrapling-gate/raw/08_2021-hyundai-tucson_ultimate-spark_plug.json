@@ -1,0 +1,61 @@
+{
+  "key": "2021-hyundai-tucson_ultimate-spark_plug",
+  "url": "https://hyundai.oempartsonline.com/oem-2021-hyundai-tucson_ultimate-spark_plug.html",
+  "legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2409,
+      "content_len": 294534,
+      "title": "Online Hyundai Parts Superstore | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3033
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 2900,
+      "content_len": 294575,
+      "title": "Online Hyundai Parts Superstore | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3033
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 862,
+      "content_len": 191862,
+      "title": "Online Hyundai Parts Superstore | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3546,
+      "content_len": 203188,
+      "title": "Online Hyundai Parts Superstore | OEM Parts Online",
+      "final_url": "https://hyundai.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

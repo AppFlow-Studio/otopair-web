@@ -1,0 +1,726 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "brembo",
+      "pipeline_extraction",
+      "sylvania_bulbs",
+      "trico_wipers"
+    ],
+    "claim_rows": 18,
+    "families_seen": [
+      "aftermarket_catalog",
+      "web_search"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 0,
+    "fields_multi_family_agreement": 2,
+    "fields_single_source": 14,
+    "fields_with_claims": 16
+  },
+  "external_joins": {
+    "complaint_signal": {
+      "top": "ENGINE",
+      "total": 199
+    },
+    "epa": {
+      "co2": 377,
+      "fuel_cost_yr": 2550,
+      "mpg": [
+        21,
+        27,
+        24
+      ]
+    },
+    "manual": null,
+    "recalls_open": 2
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": 22.4,
+    "brake_fluid_type": "DOT 4",
+    "coolant_capacity_qts": 8.6,
+    "coolant_type": "Ethylene Glycol 50/50 mix (phosphate-free, aluminum-compatible)",
+    "oil_capacity_qts": 5.1,
+    "oil_viscosity": "5W-20",
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": 3.7
+  },
+  "headline": {
+    "epa_joined": true,
+    "field_corroboration": "13%",
+    "fields_with_claims": 16,
+    "fitment_multi_source": "0%",
+    "has_manual": false,
+    "months_fill": "43%",
+    "parts_quotable": "2/4",
+    "rotor_minimums": 1,
+    "status": "partial"
+  },
+  "identity_coherence": {
+    "aspiration": "natural",
+    "cylinders": 4,
+    "displacement_l": 2.4,
+    "engine_code": "G4KJ",
+    "epa_says": {
+      "cylinders": 4,
+      "displacement_l": 2.4,
+      "fuel": "Regular Gasoline",
+      "mismatch": null,
+      "turbo": false
+    },
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": true,
+    "spark_plug_quantity": 4,
+    "timing_system": "chain",
+    "trans_fluid_type": "Hyundai ATF SP-IV / SP4M-1",
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "default_fallback": 10,
+      "deterministic": 8,
+      "enriched": 7,
+      "vdb_schedule": 3
+    },
+    "months_fill": "43%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "battery_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 20000,
+        "months": 24,
+        "provenance": "enriched",
+        "service": "brake_fluid_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "brake_pad_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 120000,
+        "months": 120,
+        "provenance": "enriched",
+        "service": "coolant_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 36,
+        "provenance": "enriched",
+        "service": "differential_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 24,
+        "provenance": "vdb_schedule",
+        "service": "filter_replacement",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "fuel_system_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 7500,
+        "months": 12,
+        "provenance": "vdb_schedule",
+        "service": "oil_change",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "rotor_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": 60000,
+        "months": 72,
+        "provenance": "enriched",
+        "service": "serpentine_belt",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "enriched",
+        "service": "spark_plugs",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "tire_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 7500,
+        "months": 12,
+        "provenance": "vdb_schedule",
+        "service": "tire_rotation",
+        "status": "active"
+      },
+      {
+        "bookable": false,
+        "miles": 30000,
+        "months": 36,
+        "provenance": "enriched",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "transmission_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 28,
+    "with_miles": 14,
+    "with_months": 12
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 7,
+      "default_fallback": 21
+    },
+    "rows": [
+      {
+        "hours": 0.3,
+        "service": "oil_change",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.2,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.3,
+        "service": "battery_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.6,
+        "service": "brake_fluid_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.8,
+        "service": "coolant_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.5,
+        "service": "transmission_service",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "wheel_alignment",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "fuel_system_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "differential_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "battery_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 3,
+        "service": "rotor_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "brake_pad_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.4,
+        "service": "tire_rotation",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "spark_plugs",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "serpentine_belt",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "transfer_case_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 28
+  },
+  "parts": {
+    "corroborated_2plus_sources": 0,
+    "corroboration_rate": "0%",
+    "rows": [
+      {
+        "best_price": 117.83,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "58101s1a00",
+        "price_domains": [
+          "hyundai.oempartsonline.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "front_brake_pad",
+        "scraped_name": "Brake Pads Front",
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "hyundai.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 13.18,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "26350-2S001",
+        "price_domains": [
+          "parts.airhyundai.com",
+          "hyundai.oempartsonline.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": true,
+        "role": "oil_filter",
+        "scraped_name": "Oil Filter",
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "hyundai.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 72.63,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "58302s1a30",
+        "price_domains": [
+          "hyundai.oempartsonline.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "rear_brake_pad",
+        "scraped_name": "Brake Pads Rear",
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "hyundai.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 31.14,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "18875-08085",
+        "price_domains": [
+          "hyundaipartsdeal.com",
+          "hyundai.oempartsonline.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": true,
+        "role": "spark_plug",
+        "scraped_name": "Spark Plug",
+        "service": "spark_plugs",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "hyundai.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 2
+      }
+    ],
+    "total": 4,
+    "triangle_broken": [
+      {
+        "oem": "26350-2S001",
+        "role": "oil_filter",
+        "why": "refute_flagged"
+      },
+      {
+        "oem": "18875-08085",
+        "role": "spark_plug",
+        "why": "refute_flagged"
+      }
+    ],
+    "triangle_ok": 2,
+    "with_observed_title": 4
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": 16,
+    "rear_nominal_mm": 18,
+    "rear_quality": "oem_spec_flagged",
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 47,
+    "duration_min": 19.9,
+    "error_tags": {
+      "applicable_services_structural_fallback_used": 1,
+      "fitment_refuted_pass2": 2,
+      "fitment_verify_pass2": 1,
+      "quotability": 1,
+      "role_resource": 11,
+      "rotor_min": 3,
+      "sanity": 2
+    },
+    "field_gap_count": 78,
+    "fill_rate": 47,
+    "quotability": {
+      "pct": 0.58,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "battery"
+          ],
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "coolant"
+          ],
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "air_filter",
+            "cabin_filter"
+          ],
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "missing_roles": [
+            "front_rotor",
+            "rear_rotor"
+          ],
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "missing_roles": [
+            "atf_fluid"
+          ],
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx734p8th57nkyk8gft8k4qxyh8bqtzp",
+    "sanity_flag_count": 6,
+    "sanity_flags_by_stage": {
+      "(pre-finalize)": 2,
+      "claim_ledger": 2,
+      "completion_gate": 1,
+      "rotor_resolver": 1
+    },
+    "status": "complete",
+    "tokens_in": 20021,
+    "tokens_out": 9830,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 29
+  },
+  "vehicle": {
+    "chassis_code": null,
+    "confidence_avg": 0.8346006066734077,
+    "configId": "w5707zgj7t9jgx388e727cc2hn8bqnjb",
+    "config_key": "2020_hyundai_santa_fe_sel_2_4_g4kj",
+    "drivetrain": "4WD",
+    "enrichment_status": "partial",
+    "fill_rate": 82,
+    "last_enriched_at": 1785692650476,
+    "make": "Hyundai",
+    "model": "Santa Fe",
+    "na_role_keys": [],
+    "trim": "SEL 2.4",
+    "verified_fields": [],
+    "year": 2020
+  }
+}

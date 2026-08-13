@@ -1,0 +1,6 @@
+8/1/2026, 2:01:05 PM [CONVEX A(vehicleEnrichment/v3pipeline:enrichVehicleBatchV3)] [LOG] '[scraper] Parts pages: 5 detail pages from 5/16 searches, 41059 chars, 5 prices'
+8/1/2026, 2:01:32 PM [CONVEX A(vehicleEnrichment/v3pipeline:enrichVehicleBatchV3)] [LOG] '[scraper] Parts pages: 5 detail pages from 5/15 searches, 41042 chars, 5 prices'
+8/1/2026, 2:02:49 PM [CONVEX A(vehicleEnrichment/v3pipeline:enrichVehicleBatchV3)] [LOG] '[scraper] Parts pages: 0 detail pages from 15/15 searches, 0 chars, 0 prices'
+8/1/2026, 2:15:45 PM [CONVEX A(vehicleEnrichment/v3pipeline:enrichVehicleBatchV3)] [WARN] '[scraper] VEHICLE MISMATCH — dropped https://porsche.oempartsonline.com/oem-parts/porsche-cabin-air-filter-pab819439 for "cabin_air_filter" (other_model_named: page is a Cayenne); target 2020 Porsche 911; page title "2019-2026 Porsche Cayenne Cabin Air Filter PAB-819-439"'
+8/1/2026, 2:15:45 PM [CONVEX A(vehicleEnrichment/v3pipeline:enrichVehicleBatchV3)] [LOG] '[scraper] vehicle gate dropped 1 wrong-vehicle detail page(s) for "cabin_air_filter"'
+8/1/2026, 2:15:49 PM [CONVEX A(vehicleEnrichment/v3pipeline:enrichVehicleBatchV3)] [LOG] '[scraper] Parts pages: 6 detail pages from 5/15 searches, 42784 chars, 6 prices'

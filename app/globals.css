@@ -8,39 +8,95 @@ body {
   overscroll-behavior: none;
 }
 
+.form-error-text {
+  color: var(--destructive);
+}
+
+/* Merchant invoice printing (components/payouts/shop-invoice-document.tsx).
+ * "Download PDF" is the browser's own print-to-PDF rather than a second
+ * server-side PDF pipeline — no stored artifact to keep in sync with the
+ * payment it describes. Global rather than styled-jsx so it works regardless
+ * of how the sheet is mounted. */
+@media print {
+  body.invoice-printing * {
+    visibility: hidden;
+  }
+  body.invoice-printing .invoice-sheet,
+  body.invoice-printing .invoice-sheet * {
+    visibility: visible;
+  }
+  body.invoice-printing .invoice-sheet {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    max-width: none;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .no-print {
+    display: none !important;
+  }
+  @page {
+    margin: 16mm;
+  }
+}
+
 :root {
-  --background: rgb(246, 244, 244);
-  --foreground: rgb(30, 41, 59);
+  --background: rgb(245, 245, 247);
+  --foreground: rgb(17, 24, 28);
   --card: rgb(255, 255, 255);
-  --card-foreground: rgb(30, 41, 59);
+  --card-foreground: rgb(17, 24, 28);
   --popover: rgb(255, 255, 255);
-  --popover-foreground: rgb(30, 41, 59);
-  --primary: rgb(99, 102, 241);
+  --popover-foreground: rgb(17, 24, 28);
+  --primary: rgb(82, 153, 254);
   --primary-foreground: rgb(255, 255, 255);
-  --secondary: rgb(229, 231, 235);
-  --secondary-foreground: rgb(55, 65, 81);
-  --muted: rgb(243, 244, 246);
-  --muted-foreground: rgb(107, 114, 128);
-  --accent: rgb(224, 231, 255);
-  --accent-foreground: rgb(55, 65, 81);
+  --secondary: rgb(20, 28, 36);
+  --secondary-foreground: rgb(255, 255, 255);
+  --muted: rgb(245, 245, 247);
+  --muted-foreground: rgb(104, 112, 118);
+  --accent: rgb(10, 126, 164);
+  --accent-foreground: rgb(255, 255, 255);
   --destructive: rgb(239, 68, 68);
   --destructive-foreground: rgb(255, 255, 255);
-  --border: rgb(209, 213, 219);
-  --input: rgb(209, 213, 219);
-  --ring: rgb(99, 102, 241);
-  --chart-1: rgb(99, 102, 241);
-  --chart-2: rgb(79, 70, 229);
-  --chart-3: rgb(67, 56, 202);
-  --chart-4: rgb(55, 48, 163);
-  --chart-5: rgb(49, 46, 129);
-  --sidebar: rgb(243, 244, 246);
-  --sidebar-foreground: rgb(30, 41, 59);
-  --sidebar-primary: rgb(99, 102, 241);
+  --success: rgb(22, 163, 74);
+  --success-foreground: rgb(255, 255, 255);
+  --border: rgb(214, 218, 222);
+  --input: rgb(214, 218, 222);
+  --ring: rgb(82, 153, 254);
+  /* Categorical chart palette.
+   *
+   * The previous values were --primary, two near-blacks and a grey: unusable
+   * as a categorical set (three of five sat below the chroma floor, and the
+   * two near-blacks were indistinguishable as adjacent marks). They had zero
+   * consumers, so redefining them costs nothing.
+   *
+   * Slot order is green → blue → amber → indigo → red rather than blue-first:
+   * with blue in slot 1 the amber/green adjacency lands at ΔE 7.9 under
+   * protanopia, which needs a secondary encoding. This order clears every
+   * adjacency check outright.
+   *
+   * Semantics, so charts across the app agree: 1 money/positive,
+   * 2 activity/volume, 3 attention/pending, 4 alternate series,
+   * 5 failure/refund/dispute.
+   *
+   * Deliberately NOT --primary for marks: rgb(82,153,254) measures 2.86:1 on
+   * a white card, below the 3:1 floor for a graphical object. */
+  --chart-1: rgb(5, 150, 105);
+  --chart-2: rgb(37, 99, 235);
+  --chart-3: rgb(217, 119, 6);
+  --chart-4: rgb(79, 70, 229);
+  --chart-5: rgb(220, 38, 38);
+  --chart-grid: rgb(241, 245, 249);
+  --chart-axis: rgb(156, 163, 175);
+  --sidebar: rgb(255, 255, 255);
+  --sidebar-foreground: rgb(17, 24, 28);
+  --sidebar-primary: rgb(82, 153, 254);
   --sidebar-primary-foreground: rgb(255, 255, 255);
-  --sidebar-accent: rgb(224, 231, 255);
-  --sidebar-accent-foreground: rgb(55, 65, 81);
-  --sidebar-border: rgb(209, 213, 219);
-  --sidebar-ring: rgb(99, 102, 241);
+  --sidebar-accent: rgb(245, 245, 247);
+  --sidebar-accent-foreground: rgb(17, 24, 28);
+  --sidebar-border: rgb(214, 218, 222);
+  --sidebar-ring: rgb(82, 153, 254);
   --font-sans: Inter, sans-serif;
   --font-serif: Roboto_Slab, serif;
   --font-mono: JetBrains Mono, monospace;
@@ -64,38 +120,46 @@ body {
 }
 
 .dark {
-  --background: rgb(48, 48, 48);
-  --foreground: rgb(226, 232, 240);
-  --card: #1e293;
-  --card-foreground: rgb(226, 232, 240);
-  --popover: rgb(30, 41, 59);
-  --popover-foreground: rgb(226, 232, 240);
-  --primary: rgb(234, 203, 165);
-  --primary-foreground: rgb(97, 46, 34);
-  --secondary: rgb(234, 203, 165);
-  --secondary-foreground: #8d5a47;
-  --muted: rgb(21, 32, 50);
-  --muted-foreground: rgb(156, 163, 175);
-  --accent: rgb(55, 65, 81);
-  --accent-foreground: rgb(209, 213, 219);
+  --background: rgb(21, 23, 24);
+  --foreground: rgb(236, 237, 238);
+  --card: rgb(20, 28, 36);
+  --card-foreground: rgb(236, 237, 238);
+  --popover: rgb(20, 28, 36);
+  --popover-foreground: rgb(236, 237, 238);
+  --primary: rgb(82, 153, 254);
+  --primary-foreground: rgb(255, 255, 255);
+  --secondary: rgb(255, 255, 255);
+  --secondary-foreground: rgb(20, 28, 36);
+  --muted: rgb(20, 28, 36);
+  --muted-foreground: rgb(155, 161, 166);
+  --accent: rgb(255, 255, 255);
+  --accent-foreground: rgb(20, 28, 36);
   --destructive: rgb(239, 68, 68);
-  --destructive-foreground: rgb(15, 23, 42);
-  --border: rgb(75, 85, 99);
-  --input: rgb(75, 85, 99);
-  --ring: rgb(129, 140, 248);
-  --chart-1: rgb(129, 140, 248);
-  --chart-2: rgb(99, 102, 241);
-  --chart-3: rgb(79, 70, 229);
-  --chart-4: rgb(67, 56, 202);
-  --chart-5: rgb(55, 48, 163);
-  --sidebar: rgb(30, 41, 59);
-  --sidebar-foreground: rgb(226, 232, 240);
-  --sidebar-primary: rgb(129, 140, 248);
-  --sidebar-primary-foreground: rgb(15, 23, 42);
-  --sidebar-accent: rgb(55, 65, 81);
-  --sidebar-accent-foreground: rgb(209, 213, 219);
-  --sidebar-border: rgb(75, 85, 99);
-  --sidebar-ring: rgb(129, 140, 248);
+  --destructive-foreground: rgb(255, 255, 255);
+  --success: rgb(34, 197, 94);
+  --success-foreground: rgb(255, 255, 255);
+  --border: rgb(52, 58, 64);
+  --input: rgb(52, 58, 64);
+  --ring: rgb(82, 153, 254);
+  --chart-1: rgb(82, 153, 254);
+  --chart-2: rgb(255, 255, 255);
+  --chart-3: rgb(20, 28, 36);
+  --chart-4: rgb(155, 161, 166);
+  --chart-5: rgb(236, 237, 238);
+  /* Defined so the vars are never undefined in dark. The dark chart-1..5 set
+   * above is NOT a validated categorical palette — the shop portal is
+   * light-only today, and picking dark mark colours needs measuring against
+   * the dark card surface, not translating the light ones. */
+  --chart-grid: rgb(52, 58, 64);
+  --chart-axis: rgb(155, 161, 166);
+  --sidebar: rgb(20, 28, 36);
+  --sidebar-foreground: rgb(236, 237, 238);
+  --sidebar-primary: rgb(82, 153, 254);
+  --sidebar-primary-foreground: rgb(255, 255, 255);
+  --sidebar-accent: rgb(21, 23, 24);
+  --sidebar-accent-foreground: rgb(236, 237, 238);
+  --sidebar-border: rgb(52, 58, 64);
+  --sidebar-ring: rgb(82, 153, 254);
   --font-sans: Inter, sans-serif;
   --font-serif: Roboto_Slab, serif;
   --font-mono: JetBrains Mono, monospace;
@@ -116,6 +180,33 @@ body {
   --shadow-2xl: 0px 4px 8px -1px hsl(0 0% 0% / 0.25);
 }
 
+@keyframes ringPulse {
+  0%   { box-shadow: 0 0 0 0   rgba(10, 126, 164, 0.7); }
+  60%  { box-shadow: 0 0 0 16px rgba(10, 126, 164, 0); }
+  100% { box-shadow: 0 0 0 0   rgba(10, 126, 164, 0); }
+}
+
+@keyframes timerDrain {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: 56.55; }
+}
+
+@keyframes cardFadeIn {
+  from { opacity: 0; transform: translateY(8px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)   scale(1);    }
+}
+
+@keyframes cardZoomOut {
+  0%   { opacity: 1; transform: scale(1);    max-height: 300px; }
+  65%  { opacity: 0; transform: scale(0.93); max-height: 300px; overflow: hidden; }
+  100% { opacity: 0; transform: scale(0.93); max-height: 0;     overflow: hidden; padding: 0; margin: 0; }
+}
+
+@keyframes sectionFadeOut {
+  from { opacity: 1; transform: translateY(0);     }
+  to   { opacity: 0; transform: translateY(-10px); }
+}
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -133,6 +224,8 @@ body {
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -141,6 +234,8 @@ body {
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  --color-chart-grid: var(--chart-grid);
+  --color-chart-axis: var(--chart-axis);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -243,4 +338,309 @@ body {
 ::view-transition-new(root) {
   animation: none;
   mix-blend-mode: normal;
+}
+
+/* ------------------------------------------------------------------ */
+/*  react-big-calendar theme overrides                                  */
+/* ------------------------------------------------------------------ */
+
+.schedule-calendar .rbc-calendar {
+  font-family: var(--font-sans);
+}
+
+.schedule-calendar .rbc-header {
+  padding: 8px 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--border);
+  border-left: none;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.schedule-calendar .rbc-header + .rbc-header {
+  border-left: 1px solid var(--border);
+}
+
+.schedule-calendar .rbc-time-view,
+.schedule-calendar .rbc-month-view {
+  border: none;
+  border-top: 1px solid var(--border);
+}
+
+.schedule-calendar .rbc-time-header {
+  border-bottom: none;
+}
+
+.schedule-calendar .rbc-time-content {
+  border-top: 1px solid var(--border);
+}
+
+.schedule-calendar .rbc-time-content > * + * > * {
+  border-left: 1px solid var(--border);
+}
+
+.schedule-calendar .rbc-timeslot-group {
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  min-height: 48px;
+}
+
+.schedule-calendar .rbc-time-slot {
+  border-top: none;
+}
+
+.schedule-calendar .rbc-time-gutter .rbc-timeslot-group {
+  border-bottom: none;
+}
+
+.schedule-calendar .rbc-label {
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+  padding: 0 8px;
+}
+
+.schedule-calendar .rbc-day-slot .rbc-time-slot {
+  border-top: 1px solid color-mix(in srgb, var(--border) 30%, transparent);
+}
+
+.schedule-calendar .rbc-today {
+  background-color: color-mix(in srgb, var(--secondary) 6%, transparent);
+}
+
+.schedule-calendar .rbc-off-range-bg {
+  background-color: var(--muted);
+}
+
+.schedule-calendar .rbc-event {
+  border: none !important;
+  background: transparent !important;
+  padding: 1px 2px !important;
+  border-radius: 6px;
+  outline: none;
+  box-shadow: none;
+}
+
+.schedule-calendar .rbc-event:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+.schedule-calendar .rbc-event-label {
+  display: none;
+}
+
+.schedule-calendar .rbc-event-content {
+  font-size: 0.7rem;
+  line-height: 1.3;
+}
+
+.schedule-calendar .rbc-show-more {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--primary);
+  background: transparent;
+  padding: 2px 4px;
+}
+
+.schedule-calendar .rbc-month-row + .rbc-month-row {
+  border-top: 1px solid var(--border);
+}
+
+.schedule-calendar .rbc-day-bg + .rbc-day-bg {
+  border-left: 1px solid var(--border);
+}
+
+.schedule-calendar .rbc-date-cell {
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  color: var(--foreground);
+  text-align: right;
+}
+
+.schedule-calendar .rbc-date-cell.rbc-now {
+  font-weight: 700;
+  color: var(--primary);
+}
+
+.schedule-calendar .rbc-current-time-indicator {
+  background-color: var(--primary);
+  height: 2px;
+}
+
+.schedule-calendar .rbc-current-time-indicator::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--primary);
+}
+
+.schedule-calendar .rbc-allday-cell {
+  display: none;
+}
+
+.schedule-calendar .rbc-time-view .rbc-allday-cell + .rbc-time-content {
+  border-top: none;
+}
+
+.schedule-calendar .rbc-time-header-content {
+  border-left: 1px solid var(--border);
+}
+
+.schedule-calendar .rbc-selected-cell {
+  background-color: color-mix(in srgb, var(--secondary) 14%, transparent);
+}
+
+/* ---- Flagship landing: live coverage map pins ---- */
+/* ------------------------------------------------------------------ */
+/*  OtoPair map pins — markup built in landing/coverage-map.tsx,        */
+/*  ported from the otopair-1 app's ShopMarker so both products use the */
+/*  same marker. Two states crossfade on zoom: the teardrop logo pin,   */
+/*  and a POI logo circle + shop name once names are readable.          */
+/* ------------------------------------------------------------------ */
+
+/* Mapbox anchors this box bottom-centre on the shop: the teardrop's tip sits
+   on that point, and the POI circle re-centres onto the same point. */
+.oto-pin {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+}
+.oto-pin:hover {
+  z-index: 2;
+}
+
+/* Ground ping — a radar ring on the basemap at the shop's point, which reads
+   better than a halo round the head on a pitched 3D map. Verified shops only. */
+.oto-pin__ping {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0 0 -8px -8px;
+  border-radius: 9999px;
+  background: rgba(82, 153, 254, 0.45);
+  animation: oto-pin-pulse 2.4s ease-out infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.oto-pin__teardrop {
+  position: absolute;
+  inset: 0;
+  display: block;
+  transform-origin: 50% 100%; /* grow from the tip, which marks the shop */
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+  transition:
+    opacity 250ms ease,
+    transform 160ms ease;
+}
+.oto-pin:hover .oto-pin__teardrop {
+  transform: scale(1.1);
+}
+
+/* POI state — 24px logo circle centred on the shop point, name to its right. */
+.oto-pin__poi {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  /* Absolutely positioned with only `left`, this box would be shrink-to-fit
+     against a 34px containing block — squeezing the name to a couple of
+     characters no matter what max-width the label asks for. */
+  width: max-content;
+  opacity: 0;
+  transform: translate(-12px, 12px);
+  pointer-events: none;
+  transition: opacity 250ms ease;
+}
+.oto-pin__poi svg {
+  flex: none;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.25));
+  transition: transform 160ms ease;
+}
+.oto-pin:hover .oto-pin__poi svg {
+  transform: scale(1.1);
+}
+.oto-pin__label {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  /* The app clamps to 100px for a phone-width map; this cell is ~1000px, so
+     take the app's full marker container width (140px) instead. */
+  max-width: 140px;
+  padding-right: 10px;
+  font-size: 12px;
+  line-height: 14px;
+  font-weight: 700;
+  letter-spacing: 0.1px;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+/* Close enough to read names: swap the teardrop for the labelled POI. */
+.oto-map--near .oto-pin__teardrop {
+  opacity: 0;
+}
+.oto-map--near .oto-pin__poi {
+  opacity: 1;
+}
+.oto-map--near .oto-pin__ping {
+  display: none;
+}
+
+/* Onboarding shops don't ping — the pulse means "live". */
+.oto-pin--onboarding .oto-pin__ping {
+  display: none;
+}
+
+/* "Your address" — deliberately NOT the brand blue, so it never reads as a
+   shop pin on a map where every shop is blue. */
+.oto-map-you {
+  position: relative;
+  width: 16px;
+  height: 16px;
+  box-sizing: content-box;
+  border: 3px solid #fff;
+  border-radius: 9999px;
+  background: #0f172a;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35);
+}
+.oto-map-you::before {
+  content: "";
+  position: absolute;
+  inset: -12px;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.18);
+  z-index: -1;
+}
+
+@keyframes oto-pin-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2.6);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oto-pin__ping {
+    display: none;
+  }
+  .oto-pin__teardrop,
+  .oto-pin__poi,
+  .oto-pin__poi svg {
+    transition: none;
+  }
 }

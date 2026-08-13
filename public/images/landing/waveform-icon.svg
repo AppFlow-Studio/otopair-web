@@ -1,0 +1,8 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 23 22" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Group 104">
+<line id="Line 13" x1="0.500001" y1="0.5" x2="0.5" y2="21.5" stroke="var(--stroke-0, white)" stroke-linecap="round"/>
+<line id="Line 14" x1="8.5" y1="12.5" x2="8.5" y2="21.5" stroke="var(--stroke-0, white)" stroke-opacity="0.5" stroke-linecap="round"/>
+<line id="Line 15" x1="15.5" y1="12.5" x2="15.5" y2="21.5" stroke="var(--stroke-0, white)" stroke-opacity="0.5" stroke-linecap="round"/>
+<line id="Line 16" x1="22.5" y1="12.5" x2="22.5" y2="21.5" stroke="var(--stroke-0, white)" stroke-opacity="0.5" stroke-linecap="round"/>
+</g>
+</svg>

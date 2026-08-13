@@ -1,0 +1,3110 @@
+//Codex version
+
+"use client";
+
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { useMutation, useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
+import { ArrowRight, Bell, Car, Clock, Ellipsis, Loader2, MessageSquare, User, X } from "lucide-react";
+import { useEntityLabel } from "@/lib/use-entity-label";
+import OverrunExtendCard from "@/components/mechanic/overrun-extend-card";
+import InvoiceNumberField from "@/components/invoice-number-field";
+import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
+import PostjobReportSection from "@/components/booking/postjob-report-section";
+import SendReceiptCard from "@/components/booking/send-receipt-card";
+import type { JobActualsPayload } from "@/lib/job-actuals";
+import VehiclePassportCard from "@/components/vehicle-passport-card";
+import JobStepIndicator from "@/components/job-step-indicator";
+import MultiPointInspectionDialog, {
+  type InspectionInputPayload,
+} from "@/components/multi-point-inspection-dialog";
+import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
+import RecommendServiceDrawer from "@/components/recommend-service-drawer";
+import EarlyArrivalConfirmDialog from "@/components/early-arrival-confirm-dialog";
+import EndCurrentJobConfirmDialog from "@/components/end-current-job-confirm-dialog";
+import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
+import {
+  EARLY_PUSH_THRESHOLD_MS,
+  getMechanicAssignmentConflict,
+  type ScheduleBlockedSlot,
+  type ScheduleBooking,
+  shouldConfirmMechanicChange,
+} from "@/lib/schedule-overlap";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectItem,
+  SelectListBox,
+  SelectPopover,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  drawerDestructiveButtonClassName,
+  drawerPrimaryButtonClassName,
+  drawerSecondaryButtonClassName,
+  drawerSelectTriggerClassName,
+  DrawerFieldLabel,
+} from "@/components/drawer-panel-styles";
+import { StatusPill } from "@/components/status-pill";
+import BookingTimelineModal from "@/components/booking/booking-timeline-modal";
+import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
+import {
+  type ActivityEvent,
+  formatActivityTimestamp,
+} from "@/lib/booking-activity-format";
+import type {
+  JobActualPartPayload,
+  PostJobSurveyPayload,
+  PreJobSurveyPayload,
+} from "@/lib/vehicle-passport";
+
+/* ------------------------------------------------------------------ */
+/*  Constants                                                           */
+/* ------------------------------------------------------------------ */
+
+const DECLINE_REASONS = [
+  "Mechanic unavailable",
+  "Can't service this vehicle",
+  "Scheduling conflict",
+  "Other",
+];
+
+const CANCEL_REASONS = [
+  "Customer requested cancellation",
+  "Not enough time",
+  "Parts unavailable",
+  "Other",
+];
+
+function getCancelReasons(status?: string | null) {
+  return status === "confirmed" || status === "vehicle_at_shop"
+    ? [
+        CANCEL_REASONS[0],
+        "Customer no-show",
+        CANCEL_REASONS[2],
+        "Shop capacity issue",
+        CANCEL_REASONS[1],
+        CANCEL_REASONS[3],
+      ]
+    : CANCEL_REASONS;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+function todayString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatDurationMinutes(minutes: number): string {
+  const total = Math.round(minutes);
+  if (total < 60) return `${total} min`;
+  const h = Math.floor(total / 60);
+  const m = total - h * 60;
+  if (m === 0) return `${h} hr`;
+  return `${h} hr ${m} min`;
+}
+
+function formatTime(time: string): string {
+  if (!time) return "";
+  const [hours, minutes] = time.split(":").map(Number);
+  const d = new Date();
+  d.setHours(hours, minutes, 0, 0);
+  return d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function formatBookingDate(
+  scheduledDate: string,
+  scheduledTime: string,
+): string {
+  const today = todayString();
+  const timeLabel = formatTime(scheduledTime);
+  if (scheduledDate === today) return `Today, ${timeLabel}`;
+  const d = new Date(scheduledDate + "T00:00:00");
+  const dateLabel = d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+  return `${dateLabel}, ${timeLabel}`;
+}
+
+// Shops have 20 minutes to accept/decline an incoming booking before it shows
+// as overdue. Kept in sync with PENDING_SHOP_RESPONSE_MS in
+// booking-list-shared.ts so list views and the drawer countdown agree.
+const PENDING_SHOP_RESPONSE_MS = 20 * 60 * 1000;
+
+function pendingCountdown(creationTime: number): string | null {
+  if (!creationTime || isNaN(creationTime)) return null;
+  const deadline = creationTime + PENDING_SHOP_RESPONSE_MS;
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return null;
+  const minutesLeft = Math.max(1, Math.ceil(remaining / 60_000));
+  return `${minutesLeft}m left`;
+}
+
+// Display-only MM:SS countdown for the incoming-booking header. There is no
+// real backend auto-decline for pending bookings; this is a soft response
+// deadline (PENDING_SHOP_RESPONSE_MS) shown to nudge the shop. `nowMs` is
+// passed in so the caller's 1s ticker drives the re-render.
+function pendingCountdownClock(
+  creationTime: number,
+  nowMs: number,
+): string | null {
+  if (!creationTime || isNaN(creationTime)) return null;
+  const remaining = creationTime + PENDING_SHOP_RESPONSE_MS - nowMs;
+  if (remaining <= 0) return null;
+  const totalSeconds = Math.ceil(remaining / 1000);
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+// One-line contextual subtext under the header, by booking status.
+function getStatusSubtext(status: string): string | null {
+  switch (status) {
+    case "pending":
+    case "pending_shop_acceptance":
+      return "Booked on the Otopair app — needs your response";
+    case "pending_customer_acceptance":
+      return "Waiting on the customer to confirm the proposed change";
+    case "confirmed":
+      return "On the calendar — mark the vehicle here when it arrives";
+    case "vehicle_at_shop":
+      return "Vehicle is at the shop — run the check, then start the job";
+    case "in_progress":
+      return "Job is underway — add any unforeseen scope before completing";
+    case "completed":
+      return "Job complete — review the report and send the receipt";
+    case "no_show":
+      return "Customer never arrived for this booking";
+    case "cancelled":
+      return "This booking was cancelled";
+    case "declined":
+      return "You declined this booking";
+    default:
+      return null;
+  }
+}
+
+// Verb describing the most recent lifecycle event, for the timeline footer.
+function getTimelineFooterVerb(status: string): string {
+  switch (status) {
+    case "pending":
+    case "pending_shop_acceptance":
+      return "Requested";
+    case "pending_customer_acceptance":
+      return "Change proposed";
+    case "confirmed":
+      return "Confirmed";
+    case "vehicle_at_shop":
+      return "Vehicle arrived";
+    case "in_progress":
+      return "Job started";
+    case "completed":
+      return "Completed";
+    case "no_show":
+      return "Marked no-show";
+    case "cancelled":
+      return "Cancelled";
+    case "declined":
+      return "Declined";
+    default:
+      return "Updated";
+  }
+}
+
+// Payment-approval state badge shown next to the status pill in the header.
+function PaymentApprovalBadge({
+  state,
+  settlementState,
+}: {
+  state?: string | null;
+  settlementState?: string | null;
+}) {
+  // A completed job still owed money — the reconciliation cron is chasing it.
+  // Shown over the approval state since it's the actionable signal.
+  if (settlementState === "awaiting_settlement") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+        Awaiting settlement
+      </span>
+    );
+  }
+  if (state === "reauth_required") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-semibold text-rose-800">
+        Hold reauth needed
+      </span>
+    );
+  }
+  if (state === "post_job_pending") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+        Actuals &gt; estimate &mdash; customer review
+      </span>
+    );
+  }
+  if (state === "pre_job_pending" || state === "mid_job_pending") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
+        Pending customer approval
+      </span>
+    );
+  }
+  if (state === "captured") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-800">
+        Charged
+      </span>
+    );
+  }
+  return null;
+}
+
+const OUT_OF_SCOPE_LABELS: Record<string, string> = {
+  bodywork: "Bodywork",
+  transmission: "Transmission",
+  electrical_major: "Major electrical",
+  other: "Other",
+};
+
+function OutOfScopeCard({ job }: { job: JobDetailData }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-2xl border border-border bg-muted/40 p-4 text-muted-foreground">
+      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider">
+        Out-of-scope finding · discuss at pickup
+      </div>
+      {job.outOfScopeCategory ? (
+        <span className="inline-flex rounded-full bg-background px-2 py-0.5 text-[11px] font-medium text-foreground">
+          {OUT_OF_SCOPE_LABELS[job.outOfScopeCategory] ?? job.outOfScopeCategory}
+        </span>
+      ) : null}
+      {job.outOfScopeNote ? (
+        <>
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-2 text-xs font-medium text-foreground underline-offset-2 hover:underline"
+          >
+            {expanded ? "Hide mechanic's note" : "View mechanic's full note"}
+          </button>
+          {expanded ? (
+            <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-foreground">
+              {job.outOfScopeNote}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+      <p className="mt-3 text-xs">
+        This work is outside Otopair&apos;s service scope. The shop will discuss
+        directly with the customer at pickup.
+      </p>
+    </div>
+  );
+}
+
+const RECOMMENDATION_RESPONSE_WINDOW_MS = 10 * 60 * 1000;
+
+function RecommendedServiceCard({ job }: { job: JobDetailData }) {
+  const decide = useMutation(api.bookings.customerDecideRecommendation);
+  const [busy, setBusy] = useState<"confirmed" | "declined" | null>(null);
+  const state = job.recommendationState ?? "none";
+
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    if (state !== "pending_customer" || !job.recommendationSentAtMs) return;
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [state, job.recommendationSentAtMs]);
+
+  const msRemaining =
+    state === "pending_customer" && job.recommendationSentAtMs
+      ? Math.max(
+          0,
+          job.recommendationSentAtMs +
+            RECOMMENDATION_RESPONSE_WINDOW_MS -
+            nowMs,
+        )
+      : null;
+  const expired = msRemaining === 0;
+  const countdownLabel =
+    msRemaining != null
+      ? `${Math.floor(msRemaining / 60000)}:${String(
+          Math.floor((msRemaining % 60000) / 1000),
+        ).padStart(2, "0")}`
+      : null;
+
+  async function handleDecision(decision: "confirmed" | "declined") {
+    setBusy(decision);
+    try {
+      await decide({ bookingId: job._id, decision });
+    } catch {
+      // toast handled upstream; silent for now
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const tone =
+    state === "confirmed"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+      : state === "declined"
+        ? "border-border bg-muted/40 text-muted-foreground"
+        : "border-amber-200 bg-amber-50 text-amber-900";
+
+  return (
+    <div className={`rounded-2xl border p-4 ${tone}`}>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wider">
+          Recommended service ·{" "}
+          {state === "pending_customer"
+            ? "Sent to customer"
+            : state === "confirmed"
+              ? "Confirmed"
+              : state === "declined"
+                ? "Declined"
+                : state}
+        </span>
+        {countdownLabel ? (
+          <span
+            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums ${
+              expired
+                ? "bg-rose-100 text-rose-900"
+                : "bg-amber-100 text-amber-900"
+            }`}
+            title="Customer has 10 minutes to respond"
+          >
+            {expired ? "Expired" : `${countdownLabel} left`}
+          </span>
+        ) : null}
+      </div>
+      <div className="text-sm font-semibold">
+        {job.recommendedServiceName ?? "Recommended service"}
+      </div>
+      {job.recommendedServiceNote ? (
+        <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed opacity-90">
+          &quot;{job.recommendedServiceNote}&quot;
+        </p>
+      ) : null}
+      {job.recommendedScheduledDate && job.recommendedScheduledTime ? (
+        <p className="mt-2 inline-flex items-center gap-1.5 rounded-md bg-white/60 px-2 py-1 text-[12px] font-medium">
+          <Clock className="h-3.5 w-3.5" aria-hidden="true" />
+          Proposed: {formatBookingDate(
+            job.recommendedScheduledDate,
+            job.recommendedScheduledTime,
+          )}
+        </p>
+      ) : (
+        <p className="mt-2 text-[12px] font-medium opacity-80">
+          Right after this job
+        </p>
+      )}
+      {state === "pending_customer" ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => handleDecision("confirmed")}
+            disabled={busy !== null}
+            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {busy === "confirmed" ? "Confirming…" : "Simulate customer confirm"}
+          </button>
+          <button
+            type="button"
+            onClick={() => handleDecision("declined")}
+            disabled={busy !== null}
+            className="rounded-md border border-border bg-background px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-50"
+          >
+            {busy === "declined" ? "Declining…" : "Simulate customer decline"}
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const DIAGNOSTIC_SYSTEM_LABELS: Record<
+  "brakes" | "tires_wheels" | "engine" | "battery_electrical" | "not_sure",
+  string
+> = {
+  brakes: "Brakes",
+  tires_wheels: "Tires & Wheels",
+  engine: "Engine",
+  battery_electrical: "Battery & Electrical",
+  not_sure: "Not sure",
+};
+
+/* ------------------------------------------------------------------ */
+/*  Types                                                               */
+/* ------------------------------------------------------------------ */
+
+export interface JobDetailData {
+  _id: Id<"bookings">;
+  _creationTime: number;
+  status: string;
+  customerName: string;
+  customerEmail: string;
+  customerNotes?: string | null;
+  diagnosticSystem?:
+    | "brakes"
+    | "tires_wheels"
+    | "engine"
+    | "battery_electrical"
+    | "not_sure"
+    | null;
+  diagnosticChecklist?: Array<{
+    label: string;
+    status: "pending" | "checked" | "skipped";
+    mechanic_note?: string;
+  }> | null;
+  diagnosticChecklistCompletedAtMs?: number | null;
+  recommendedServiceId?: Id<"services"> | null;
+  recommendedServiceName?: string | null;
+  recommendedServiceNote?: string | null;
+  recommendationState?:
+    | "none"
+    | "pending_customer"
+    | "confirmed"
+    | "declined"
+    | "out_of_scope"
+    | null;
+  recommendationSentAtMs?: number | null;
+  recommendedScheduledDate?: string | null;
+  recommendedScheduledTime?: string | null;
+  recommendationDecidedAtMs?: number | null;
+  parentJobId?: Id<"bookings"> | null;
+  diagnosticFollowupState?: "pending" | "awaiting_info" | "resolved" | null;
+  awaitingInfoNote?: string | null;
+  awaitingInfoAtMs?: number | null;
+  outOfScopeNote?: string | null;
+  outOfScopeCategory?:
+    | "bodywork"
+    | "transmission"
+    | "electrical_major"
+    | "other"
+    | null;
+  vehicle: string;
+  vin: string;
+  scheduledDate: string;
+  scheduledTime: string;
+  serviceNames: string[];
+  tireSpecs?: {
+    size: string;
+    type: string;
+    tier: string;
+    quantity: number;
+    positions?: Array<"FL" | "FR" | "RL" | "RR">;
+  } | null;
+  totalCost: number;
+  laborCost: number;
+  partsCost: number;
+  /** True when the customer agreed to a per-(shop, service, tier) flat
+   *  price at create time. Drives the "Fixed price" pill on the booking
+   *  card — does not expose the customer's disclosed ceiling. */
+  isFixedPrice?: boolean;
+  quotedSetPriceDollars?: number | null;
+  quotedBreakdown?: {
+    parts_cents: number;
+    labor_cents: number;
+    tax_cents: number;
+    service_fee_cents: number;
+  } | null;
+  /** Orthogonal payment-approval sub-state ("pre_job_approved",
+   *  "mid_job_approved", "captured", …). Drives the "new agreed price" pill. */
+  paymentApprovalState?: string | null;
+  /** Mechanic's current target price in cents. Once the customer approves a
+   *  pre/mid-job adjustment this is the NEW agreed total — shown in place of
+   *  the original quote. */
+  mechanicSetPriceCents?: number | null;
+  pricedPartsSnapshot?: Array<{
+    service_id: string;
+    part_id?: string;
+    oem_number: string;
+    part_name: string;
+    brand?: string;
+    part_tier?: string;
+    quantity: number;
+    unit_price_cents: number;
+    line_total_cents: number;
+  }> | null;
+  mechanicId?: Id<"mechanics"> | null;
+  assignmentPreference?: "any" | "specific_mechanic";
+  vehicleArrivedAtMs?: number | null;
+  vehicleArrivedByUserId?: Id<"users"> | null;
+  history: Array<{
+    _id: Id<"booking_status_history">;
+    changed_at: number;
+    old_status?: string | null;
+    new_status: string;
+    reason?: string;
+  }>;
+  // Reschedule fields
+  previousScheduledDate?: string | null;
+  previousScheduledTime?: string | null;
+  previousMechanicId?: Id<"mechanics"> | null;
+  previousMechanicName?: string | null;
+  rescheduleProposedAt?: number | null;
+  estimatedLaborMinutes?: number | null;
+  scheduleChangeMode?: string | null;
+  scheduleChangeSourceBookingId?: Id<"bookings"> | null;
+  customerCanRestoreOriginal?: boolean | null;
+  jobActuals?: {
+    _id: Id<"job_actuals">;
+    status: "draft" | "finalized";
+    startedAt?: number | null;
+    completedAtMs?: number | null;
+    loggedAtMs?: number | null;
+    finalizedAtMs?: number | null;
+    actualLaborMinutes?: number | null;
+    actualPartsCost?: number | null;
+    difficultyRating?: number | null;
+    technicianNotes?: string;
+    prejobReport?: PreJobSurveyPayload | null;
+    partsUsed?: Array<{
+      part_name: string;
+      brand?: string | null;
+      oem_number: string;
+      cost: number;
+    }>;
+  } | null;
+  customerLateMonitor?: {
+    pushEnqueuedAtMs: number | null;
+    smsEnqueuedAtMs: number | null;
+    frontdeskEnqueuedAtMs: number | null;
+    customerAcknowledgedAtMs: number | null;
+    thresholdDueAtMs: number;
+    scheduledStartMs: number;
+  } | null;
+}
+
+export interface JobDetailPanelHandle {
+  accept: () => void;
+  showDecline: () => void;
+  startJob: () => void;
+  showMarkCompleted: () => void;
+  showCancelJob: () => void;
+  showCancelReschedule: () => void;
+  openAssignDropdown: () => void;
+  assignMechanic: () => void;
+  hasOpenModal: () => boolean;
+  handleEscape: () => boolean;
+  handleKeyDown: (e: KeyboardEvent) => boolean;
+}
+
+interface RescheduleRequest {
+  eventId: string;
+  originalDate: string;
+  originalTime: string;
+  originalMechanicId: string | undefined;
+  originalMechanicName: string | undefined;
+  newDate: string;
+  newTime: string;
+  newMechanicId: string | undefined;
+  newMechanicName: string | undefined;
+  dateChanged: boolean;
+  timeChanged: boolean;
+  mechanicChanged: boolean;
+}
+
+interface JobDetailPanelProps {
+  job: JobDetailData | null | undefined;
+  mechanics: Array<{ _id: string; name: string }>;
+  scheduleConflicts?: {
+    bookings: ScheduleBooking[];
+    blockedSlots: ScheduleBlockedSlot[];
+  };
+  onRequestRescheduleConfirmation?: (proposal: RescheduleRequest) => void;
+  onRequestReschedule?: () => void;
+  onRequestNewBookingAfterCancel?: (info: {
+    mechanicId: string | null;
+    scheduledDate: string;
+  }) => void;
+  onClose: () => void;
+  onSuccess?: (message: string) => void;
+  showBookingsLink?: boolean;
+  /** Optional parent-supplied callback that switches the panel/route to a
+   *  different booking. Used by the EndCurrentJobConfirmDialog to take the
+   *  user to the mechanic's currently in-progress booking so they can fill
+   *  out the post-job report before starting the new one. */
+  onSwitchToBooking?: (bookingId: Id<"bookings">) => void;
+  /** When true, hides the disclosed customer-facing price range in the
+   *  activity timeline. Mechanics should only see the quoted set price. */
+  hideDisclosedRange?: boolean;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Component                                                           */
+/* ------------------------------------------------------------------ */
+
+const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
+  function JobDetailPanel(
+    {
+      job,
+      mechanics,
+      scheduleConflicts,
+      onRequestRescheduleConfirmation,
+      onRequestReschedule,
+      onRequestNewBookingAfterCancel,
+      onClose,
+      onSuccess,
+      showBookingsLink,
+      onSwitchToBooking,
+      hideDisclosedRange,
+    },
+    ref,
+  ) {
+    const entityLabel = useEntityLabel();
+    const [assigningMechanicId, setAssigningMechanicId] = useState("");
+    const [showMechanicPicker, setShowMechanicPicker] = useState(false);
+    const [isActioning, setIsActioning] = useState(false);
+    const [actionError, setActionError] = useState("");
+    const [showDeclineModal, setShowDeclineModal] = useState(false);
+    const [showTimelineModal, setShowTimelineModal] = useState(false);
+    const [nowMs, setNowMs] = useState(() => Date.now());
+    const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
+    const [declineOtherText, setDeclineOtherText] = useState("");
+    const [showPrejobDialog, setShowPrejobDialog] = useState(false);
+    const [showPostjobDialog, setShowPostjobDialog] = useState(false);
+    const [showPrejobEstimateDialog, setShowPrejobEstimateDialog] = useState(false);
+    const [showMidJobDialog, setShowMidJobDialog] = useState(false);
+    const [showDiagnosticDialog, setShowDiagnosticDialog] = useState(false);
+    const [recommendDrawerCtx, setRecommendDrawerCtx] = useState<
+      import("@/components/recommend-service-drawer").RecommendServiceContext | null
+    >(null);
+    const [isEditingActuals, setIsEditingActuals] = useState(false);
+    const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+    const [createNewAfterCancel, setCreateNewAfterCancel] = useState(false);
+    const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
+    const [cancelOtherText, setCancelOtherText] = useState("");
+    const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
+    const [showEarlyArrivalDialog, setShowEarlyArrivalDialog] = useState(false);
+    const [showEndCurrentJobDialog, setShowEndCurrentJobDialog] = useState(false);
+    // Holds the conflicting booking id parsed from a server-side race error
+    // (`MECHANIC_HAS_ACTIVE_JOB:<id>`). Used to render the dialog with the
+    // right active-job summary during the small window before reactive
+    // `activeJobConflict` catches up.
+    const [raceConflictBookingId, setRaceConflictBookingId] = useState<
+      Id<"bookings"> | null
+    >(null);
+    const [isSubmittingPrejob, setIsSubmittingPrejob] = useState(false);
+    const [isSubmittingPostjob, setIsSubmittingPostjob] = useState(false);
+    const [copiedField, setCopiedField] = useState<"email" | "vin" | null>(null);
+
+    const wrapperRef = useRef<HTMLDivElement>(null);
+    const assignTriggerRef = useRef<HTMLDivElement>(null);
+    const declineTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const cancelTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const copyEmailTimeoutRef = useRef<number | null>(null);
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const [isStepIndicatorCompact, setIsStepIndicatorCompact] = useState(false);
+
+    useEffect(() => {
+      const el = scrollContainerRef.current;
+      if (!el) return;
+      // Wide hysteresis so the indicator's own height change (which shifts
+      // content as it transitions) can't bounce scrollTop back across the
+      // threshold and re-toggle compact mode mid-animation.
+      const COLLAPSE_AT = 96;
+      const EXPAND_AT = 16;
+      let raf = 0;
+      const onScroll = () => {
+        if (raf) return;
+        raf = window.requestAnimationFrame(() => {
+          raf = 0;
+          const top = el.scrollTop;
+          setIsStepIndicatorCompact((prev) =>
+            prev ? top > EXPAND_AT : top > COLLAPSE_AT,
+          );
+        });
+      };
+      onScroll();
+      el.addEventListener("scroll", onScroll, { passive: true });
+      return () => {
+        if (raf) window.cancelAnimationFrame(raf);
+        el.removeEventListener("scroll", onScroll);
+      };
+    }, [job?._id]);
+
+    // Drive the incoming-booking countdown clock. Only ticks while the booking
+    // is awaiting the shop's response, so it idles for every other status.
+    const isIncomingStatus =
+      job?.status === "pending" || job?.status === "pending_shop_acceptance";
+    useEffect(() => {
+      if (!isIncomingStatus) return;
+      setNowMs(Date.now());
+      const id = window.setInterval(() => setNowMs(Date.now()), 1000);
+      return () => window.clearInterval(id);
+    }, [isIncomingStatus, job?._id]);
+
+    const markNotificationsRead = useMutation(
+      api.notifications.markShopNotificationsReadForBooking,
+    );
+    const acceptJob = useMutation(api.bookings.accept);
+    const cancelJob = useMutation(api.bookings.cancel);
+    const updateJob = useMutation(api.bookings.update);
+    const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+    const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
+    const markNoShow = useMutation(api.bookings.markNoShow);
+    const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
+    const savePrejob = useMutation(api.bookings.savePrejob);
+    const startWithPrejob = useMutation(api.bookings.startWithPrejob);
+    const commitInspectionAndAwaitEstimate = useMutation(
+      api.bookings.commitInspectionAndAwaitEstimate,
+    );
+    const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
+    const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
+    const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
+    const reopenActuals = useMutation(api.job_actuals.reopenByBooking);
+    const actualsPrefill = useQuery(
+      api.job_actuals.getPrefillData,
+      job ? { bookingId: job._id } : "skip"
+    );
+    const vehiclePassport = useQuery(
+      api.bookings.getVehiclePassportForBooking,
+      job ? { bookingId: job._id } : "skip"
+    );
+    const oemPartsByService = useQuery(
+      api.serviceParts.getOemPartsForBooking,
+      job ? { bookingId: job._id } : "skip"
+    );
+    // Brake axle scope for this booking — used to keep the snapshot-seeded
+    // parts list from listing an axle the customer didn't book (older
+    // snapshots could freeze front pads regardless of the chosen axle).
+    const brakeScope = useQuery(
+      api.serviceParts.getBrakeScopeForBooking,
+      job ? { bookingId: job._id } : "skip"
+    );
+    // The effective AGREED quote — the latest customer-approved mechanic
+    // adjustment with its frozen breakdown. When present it's the single source
+    // of truth for the locked post-job confirmation (parts + breakdown all
+    // reconcile to its total). Null when the quote was never adjusted.
+    const effectiveQuote = useQuery(
+      (api as any).booking_approvals.getEffectiveQuoteForBooking,
+      job ? { bookingId: job._id } : "skip"
+    ) as
+      | {
+          cycle: string;
+          totalCents: number;
+          partsCents: number;
+          laborCents: number;
+          taxCents: number;
+          feeCents: number;
+          partsSnapshot: Array<{
+            part_name: string;
+            brand?: string | null;
+            oem_number: string;
+            cost: number;
+            quantity?: number;
+            supplied_by?: string;
+            part_tier?: string;
+            service_id?: string | null;
+            source?: "catalog" | "manual";
+          }>;
+        }
+      | null
+      | undefined;
+    // The parts ACTUALLY quoted on this booking, scoped to the booked axle.
+    // This is the source of truth the pre/post-job dialogs seed from — what we
+    // quoted, not the catalog's broader suggestions. Null when the booking has
+    // no snapshot (walk-ins) or nothing survives the axle filter, so the
+    // dialog falls back to its catalog prefill.
+    const scopedQuotedParts = useMemo<JobActualPartPayload[] | null>(() => {
+      const snapshot = job?.pricedPartsSnapshot;
+      if (!snapshot || snapshot.length === 0) return null;
+      const rows: JobActualPartPayload[] = snapshot
+        .filter((p) => {
+          if (!brakeScope?.hasBrakeWork) return true;
+          if (brakeScope.front && brakeScope.rear) return true;
+          const n = p.part_name.toLowerCase();
+          const hasFront = /\bfront\b/.test(n);
+          const hasRear = /\brear\b/.test(n);
+          if (hasFront && !hasRear) return brakeScope.front;
+          if (hasRear && !hasFront) return brakeScope.rear;
+          return true;
+        })
+        .map((p) => ({
+          part_name: p.part_name,
+          brand: p.brand ?? null,
+          oem_number: p.oem_number,
+          cost: p.unit_price_cents / 100,
+          quantity: p.quantity,
+          supplied_by: "shop" as const,
+          part_tier: p.part_tier ?? "oem",
+          service_id: p.service_id ?? null,
+          source: "catalog" as const,
+        }));
+      return rows.length > 0 ? rows : null;
+    }, [job?.pricedPartsSnapshot, brakeScope]);
+    // The locked, customer-approved quote breakdown (cents) that drives the
+    // read-only post-job confirmation. An approved mechanic adjustment wins
+    // (its frozen breakdown reconciles exactly); otherwise the booking's
+    // original quote. originalTotalCents is set only when an adjustment moved
+    // the price, so the confirmation can show original → new.
+    const lockedQuote = useMemo(() => {
+      const APPROVED = new Set([
+        "pre_job_approved",
+        "mid_job_approved",
+        "post_job_approved",
+        "captured",
+      ]);
+      const originalCents =
+        job?.quotedSetPriceDollars != null
+          ? Math.round(job.quotedSetPriceDollars * 100)
+          : job?.quotedBreakdown
+            ? job.quotedBreakdown.parts_cents +
+              job.quotedBreakdown.labor_cents +
+              job.quotedBreakdown.tax_cents +
+              job.quotedBreakdown.service_fee_cents
+            : null;
+      // 1. Approved adjustment WITH its frozen breakdown — reconciles exactly.
+      if (effectiveQuote) {
+        return {
+          partsCents: effectiveQuote.partsCents,
+          laborCents: effectiveQuote.laborCents,
+          taxCents: effectiveQuote.taxCents,
+          feeCents: effectiveQuote.feeCents,
+          totalCents: effectiveQuote.totalCents,
+          originalTotalCents:
+            originalCents != null && originalCents !== effectiveQuote.totalCents
+              ? originalCents
+              : null,
+          hasBreakdown: true,
+        };
+      }
+      // 2. Robust fallback — the booking row itself records an approved
+      //    adjustment (mechanic_set_price_cents). Surface the NEW total +
+      //    original even when the detailed breakdown query isn't available;
+      //    per-line breakdown is suppressed (hasBreakdown:false) since we can't
+      //    reconcile it without the frozen approval row.
+      const agreedCents = job?.mechanicSetPriceCents ?? null;
+      if (
+        !job?.isFixedPrice &&
+        agreedCents != null &&
+        APPROVED.has(job?.paymentApprovalState ?? "") &&
+        originalCents != null &&
+        agreedCents !== originalCents
+      ) {
+        return {
+          partsCents: 0,
+          laborCents: 0,
+          taxCents: 0,
+          feeCents: 0,
+          totalCents: agreedCents,
+          originalTotalCents: originalCents,
+          hasBreakdown: false,
+        };
+      }
+      // 3. No adjustment — original quote breakdown.
+      const bd = job?.quotedBreakdown;
+      if (!bd) return null;
+      const sumCents =
+        bd.parts_cents + bd.labor_cents + bd.tax_cents + bd.service_fee_cents;
+      return {
+        partsCents: bd.parts_cents,
+        laborCents: bd.labor_cents,
+        taxCents: bd.tax_cents,
+        feeCents: bd.service_fee_cents,
+        totalCents: originalCents ?? sumCents,
+        originalTotalCents: null,
+        hasBreakdown: true,
+      };
+    }, [
+      job?.quotedBreakdown,
+      job?.quotedSetPriceDollars,
+      job?.mechanicSetPriceCents,
+      job?.paymentApprovalState,
+      job?.isFixedPrice,
+      effectiveQuote,
+    ]);
+    // Parts shown in the locked confirmation. When an adjustment was approved,
+    // these are its frozen parts_snapshot (matches the breakdown). Otherwise
+    // the booking's original priced snapshot, UNSCOPED — so the rows reconcile
+    // with the quote breakdown rather than mixing a scoped subset with the
+    // full total.
+    const lockedQuoteParts = useMemo<JobActualPartPayload[] | null>(() => {
+      if (effectiveQuote && effectiveQuote.partsSnapshot.length > 0) {
+        return effectiveQuote.partsSnapshot.map((p) => ({
+          part_name: p.part_name,
+          brand: p.brand ?? null,
+          oem_number: p.oem_number,
+          cost: p.cost,
+          quantity: p.quantity,
+          supplied_by: p.supplied_by === "customer" ? "customer" : "shop",
+          part_tier: p.part_tier ?? "oem",
+          service_id: p.service_id ?? null,
+          source: p.source ?? "catalog",
+        }));
+      }
+      const snapshot = job?.pricedPartsSnapshot;
+      if (!snapshot || snapshot.length === 0) return null;
+      return snapshot.map((p) => ({
+        part_name: p.part_name,
+        brand: p.brand ?? null,
+        oem_number: p.oem_number,
+        cost: p.unit_price_cents / 100,
+        quantity: p.quantity,
+        supplied_by: "shop" as const,
+        part_tier: p.part_tier ?? "oem",
+        service_id: p.service_id ?? null,
+        source: "catalog" as const,
+      }));
+    }, [effectiveQuote, job?.pricedPartsSnapshot]);
+    // Walk-in bookings have no customer-approved quote — the mechanic gives a
+    // verbal quote and manages parts directly. Billing is never "locked" for
+    // them; the post-job parts step stays editable and shows no catalog
+    // pre-fill (handled server-side in getPrefillData). Customer/self-serve
+    // bookings keep the locked confirmation flow.
+    const isWalkIn =
+      (job as any)?.source === "mechanic_walk_in" ||
+      (job as any)?.source === "mechanic_backfill";
+    const postjobReport = useQuery(
+      api.job_actuals.getPostjobReportForBooking,
+      job ? { bookingId: job._id } : "skip"
+    );
+    const activityLog = useQuery(
+      (api as any).booking_activity.getBookingActivityLog,
+      job ? { bookingId: job._id } : "skip"
+    ) as ActivityEvent[] | undefined;
+    // Pre-flight check for the start-job flow: if the mechanic already has
+    // another booking in_progress, we route through EndCurrentJobConfirmDialog
+    // instead of opening the prejob survey directly.
+    const activeJobConflict = useQuery(
+      api.bookings.getActiveJobConflictForBooking,
+      job && job.mechanicId && job.status === "vehicle_at_shop"
+        ? { bookingId: job._id }
+        : "skip"
+    );
+    // Race-path fallback: when the server throws MECHANIC_HAS_ACTIVE_JOB:<id>
+    // we know the conflicting id immediately. Fetch its summary directly so
+    // the dialog renders accurate copy without waiting for the reactive
+    // `activeJobConflict` query to catch up.
+    const raceConflictSummary = useQuery(
+      api.bookings.getActiveJobSummaryById,
+      raceConflictBookingId ? { bookingId: raceConflictBookingId } : "skip"
+    );
+
+    const selectedMechanicId = useMemo(
+      () =>
+        mechanics.find((m) => String(m._id) === assigningMechanicId)?._id,
+      [assigningMechanicId, mechanics],
+    );
+    const canAssignMechanic =
+      !!job &&
+      (job.status === "pending" ||
+        job.status === "pending_shop_acceptance" ||
+        job.status === "confirmed" ||
+        job.status === "vehicle_at_shop");
+    const currentMechanicId = job?.mechanicId ? String(job.mechanicId) : "";
+    // Reflect whoever is actually assigned. The customer's original
+    // "any vs specific" preference is a historical artifact — once a
+    // mechanic is on the booking, the dropdown should show them. When
+    // mechanic_id is null, the Select's `|| "any"` fallback below
+    // renders "Any mechanic".
+    const currentAssignmentKey = currentMechanicId;
+    const hasMechanicSelectionChange =
+      assigningMechanicId !== currentAssignmentKey;
+    const canSubmitMechanicChange =
+      canAssignMechanic &&
+      hasMechanicSelectionChange;
+    const jobId = job?._id;
+    const completedColors = BOOKING_STATUS_VISUALS.completed.calendarColors;
+    const cancelReasonOptions = getCancelReasons(job?.status);
+    const showAssignMechanicError = actionError.startsWith(
+      "Cannot assign this mechanic"
+    );
+    const isForcedDelayPending =
+      job?.status === "pending_customer_acceptance" &&
+      job.scheduleChangeMode === "forced_delay";
+    const canRestoreOriginalReschedule =
+      job?.status === "pending_customer_acceptance" &&
+      !isForcedDelayPending &&
+      job.customerCanRestoreOriginal !== false;
+
+    // Auto-resolve new_booking / new_quote_request notifications when panel opens
+    useEffect(() => {
+      if (!jobId) return;
+      markNotificationsRead({ bookingId: jobId }).catch(() => {});
+    }, [jobId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Sync assign dropdown with job's current mechanic
+    useEffect(() => {
+      if (!jobId) return;
+      setActionError("");
+      setShowPrejobDialog(false);
+      setShowPostjobDialog(false);
+      setShowEarlyArrivalDialog(false);
+      setShowEndCurrentJobDialog(false);
+      setRaceConflictBookingId(null);
+      setAssigningMechanicId(currentAssignmentKey);
+      setIsEditingActuals(false);
+      setCopiedField(null);
+      if (copyEmailTimeoutRef.current !== null) {
+        window.clearTimeout(copyEmailTimeoutRef.current);
+        copyEmailTimeoutRef.current = null;
+      }
+    }, [jobId, currentAssignmentKey]);
+
+    // Reset decline modal state when it closes
+    useEffect(() => {
+      if (!showDeclineModal) {
+        setDeclineReason(DECLINE_REASONS[0]);
+        setDeclineOtherText("");
+      }
+    }, [showDeclineModal]);
+
+    useEffect(() => {
+      if (!showCancelConfirm) {
+        setCancelReason(CANCEL_REASONS[0]);
+        setCancelOtherText("");
+      }
+    }, [showCancelConfirm]);
+
+    // Auto-focus the "Other" textarea
+    useEffect(() => {
+      if (showDeclineModal && declineReason === "Other") {
+        declineTextareaRef.current?.focus();
+      }
+    }, [showDeclineModal, declineReason]);
+
+    useEffect(() => {
+      if (showCancelConfirm && cancelReason === "Other") {
+        cancelTextareaRef.current?.focus();
+      }
+    }, [showCancelConfirm, cancelReason]);
+
+    useEffect(() => {
+      return () => {
+        if (copyEmailTimeoutRef.current !== null) {
+          window.clearTimeout(copyEmailTimeoutRef.current);
+        }
+      };
+    }, []);
+
+    /* ---- Handlers ---- */
+
+    async function handleStatusAction(action: "accept") {
+      if (!job?._id) return;
+      if ((job as any).paymentApprovalState === "pre_job_pending") {
+        setActionError(
+          "Your quote is awaiting the customer's approval. You can accept once they approve or decline it.",
+        );
+        return;
+      }
+      setActionError("");
+      setIsActioning(true);
+      try {
+        if (action === "accept") {
+          await acceptJob({ bookingId: job._id });
+          onSuccess?.("Booking accepted");
+        }
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not update status.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleDecline() {
+      if (!job?._id) return;
+      setActionError("");
+      const reason =
+        declineReason === "Other"
+          ? declineOtherText.trim() || "Other"
+          : declineReason;
+      setIsActioning(true);
+      try {
+        await cancelJob({ bookingId: job._id, reason });
+        setShowDeclineModal(false);
+        setDeclineReason(DECLINE_REASONS[0]);
+        setDeclineOtherText("");
+        onSuccess?.("Booking declined");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not decline booking.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleCancelJob() {
+      if (!job?._id) return;
+      setActionError("");
+      const reason =
+        cancelReason === "Other"
+          ? cancelOtherText.trim() || "Other"
+          : cancelReason;
+      // "Customer no-show" is a distinct terminal state (orange), not a
+      // cancellation (red) — route it to the no_show transition so history,
+      // colors, and side-effects reflect a no-show rather than a cancel.
+      const isNoShow = cancelReason === "Customer no-show";
+      setIsActioning(true);
+      try {
+        if (isNoShow) {
+          await markNoShow({ bookingId: job._id, reason });
+        } else {
+          await cancelJob({
+            bookingId: job._id,
+            reason,
+          });
+        }
+        setShowCancelConfirm(false);
+        const shouldOpenNew = createNewAfterCancel;
+        setCreateNewAfterCancel(false);
+        onSuccess?.(isNoShow ? "Booking marked no-show" : "Booking cancelled");
+        if (shouldOpenNew && onRequestNewBookingAfterCancel) {
+          onRequestNewBookingAfterCancel({
+            mechanicId: job.mechanicId ?? null,
+            scheduledDate: job.scheduledDate,
+          });
+        }
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error
+            ? err.message
+            : isNoShow
+              ? "Could not mark no-show."
+              : "Could not cancel booking.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleCancelReschedule() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await shopCancelReschedule({ bookingId: job._id });
+        setShowCancelRescheduleConfirm(false);
+        onSuccess?.("Reschedule cancelled — original time restored");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not cancel reschedule.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleAssignMechanic() {
+      if (!canSubmitMechanicChange) return;
+      if (!job?._id) return;
+      setActionError("");
+
+      // "Any mechanic" selected → let the operator pick from an availability list
+      // instead of auto-assigning the first-available one server-side.
+      if (!selectedMechanicId) {
+        setShowMechanicPicker(true);
+        return;
+      }
+
+      const assignmentConflict =
+        selectedMechanicId &&
+        scheduleConflicts &&
+        getMechanicAssignmentConflict(
+          {
+            _id: String(job._id),
+            scheduledDate: job.scheduledDate,
+            scheduledTime: job.scheduledTime,
+            estimatedMinutes: job.estimatedLaborMinutes ?? 60,
+          },
+          String(selectedMechanicId),
+          scheduleConflicts.bookings,
+          scheduleConflicts.blockedSlots
+        );
+
+      if (assignmentConflict === "booking") {
+        setActionError(
+          "Cannot assign this mechanic because that time is already booked."
+        );
+        return;
+      }
+
+      if (assignmentConflict === "blocked") {
+        setActionError(
+          "Cannot assign this mechanic because that time is blocked."
+        );
+        return;
+      }
+
+      if (
+        selectedMechanicId &&
+        shouldConfirmMechanicChange(
+          job.mechanicId ? String(job.mechanicId) : undefined,
+          String(selectedMechanicId)
+        ) &&
+        onRequestRescheduleConfirmation
+      ) {
+        const originalMechanicId = job.mechanicId
+          ? String(job.mechanicId)
+          : undefined;
+        const originalMechanicName = originalMechanicId
+          ? mechanics.find((m) => String(m._id) === originalMechanicId)?.name
+          : undefined;
+        const newMechanicId = String(selectedMechanicId);
+        const newMechanicName = mechanics.find(
+          (m) => String(m._id) === newMechanicId
+        )?.name;
+
+        onRequestRescheduleConfirmation({
+          eventId: String(job._id),
+          originalDate: job.scheduledDate,
+          originalTime: job.scheduledTime,
+          originalMechanicId,
+          originalMechanicName,
+          newDate: job.scheduledDate,
+          newTime: job.scheduledTime,
+          newMechanicId,
+          newMechanicName,
+          dateChanged: false,
+          timeChanged: false,
+          mechanicChanged: true,
+        });
+        setAssigningMechanicId(originalMechanicId ?? "");
+        return;
+      }
+
+      setIsActioning(true);
+      try {
+        await updateJob({
+          bookingId: job._id,
+          mechanicId: selectedMechanicId
+            ? (selectedMechanicId as Id<"mechanics">)
+            : null,
+          assignmentPreference: selectedMechanicId
+            ? "specific_mechanic"
+            : "any",
+        });
+        setAssigningMechanicId(selectedMechanicId ? String(selectedMechanicId) : "");
+        onSuccess?.(selectedMechanicId ? "Mechanic locked" : "Any mechanic selected");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error
+            ? err.message
+            : "Could not assign mechanic.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleStartJob() {
+      if (!job?._id || !job.mechanicId) return;
+      if (job.status !== "vehicle_at_shop") {
+        setActionError("Mark the vehicle here before starting work.");
+        return;
+      }
+      setActionError("");
+      if (activeJobConflict) {
+        setShowEndCurrentJobDialog(true);
+        return;
+      }
+      setShowPrejobDialog(true);
+    }
+
+    async function handleVehicleAtShop() {
+      if (!job?._id) return;
+      setActionError("");
+      // If the customer is at least EARLY_PUSH_THRESHOLD_MS before the
+      // scheduled start, prompt to push the booking earlier instead of
+      // committing to the original time. The dialog itself runs either
+      // `pushBookingEarlierAndArrive` or falls back to `markVehicleAtShop`.
+      //
+      // Prefer the late monitor's scheduledStartMs when present (always
+      // shop-timezone-aware), and fall back to job.scheduledStartMs — also
+      // computed server-side in `getJobDetail` with the shop's tz. The
+      // monitor row can be absent on bookings created before the late-monitor
+      // wiring, or once it has been resolved, so the fallback keeps the
+      // early-push prompt firing for those.
+      if (job.status === "confirmed" && job.mechanicId) {
+        const scheduledStartMs =
+          job.customerLateMonitor?.scheduledStartMs ?? job.scheduledStartMs;
+        if (
+          scheduledStartMs != null &&
+          Date.now() <= scheduledStartMs - EARLY_PUSH_THRESHOLD_MS
+        ) {
+          setShowEarlyArrivalDialog(true);
+          return;
+        }
+      }
+      setIsActioning(true);
+      try {
+        await markVehicleAtShop({ bookingId: job._id });
+        onSuccess?.("Vehicle marked here");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not mark vehicle here.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handlePostThresholdNoShow() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await markPostThresholdNoShow({ bookingId: job._id });
+        onSuccess?.("Booking marked no-show");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not mark no-show.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleStartWithPrejob(
+      payload: PreJobSurveyPayload,
+      inspection: InspectionInputPayload,
+      action: "close" | "start"
+    ) {
+      if (!job?._id) return;
+      setActionError("");
+      setIsSubmittingPrejob(true);
+      // Pre-Job Approval flow: new-cycle bookings require an estimate before
+      // the booking can move to in_progress. Park at inspection_complete and
+      // chain to the estimate dialog instead of jumping to in_progress.
+      const isNewCycle = (job as any).hasDisclosedRange === true;
+      try {
+        if (action === "close") {
+          await savePrejob({
+            bookingId: job._id,
+            prejob: payload,
+            inspection,
+          });
+          setShowPrejobDialog(false);
+          onSuccess?.("Pre-job inspection saved");
+        } else if (isNewCycle) {
+          await commitInspectionAndAwaitEstimate({
+            bookingId: job._id,
+            prejob: payload,
+            inspection,
+          });
+          setShowPrejobDialog(false);
+          setShowPrejobEstimateDialog(true);
+        } else {
+          await startWithPrejob({
+            bookingId: job._id,
+            prejob: payload,
+            inspection,
+          });
+          setShowPrejobDialog(false);
+          onSuccess?.("Booking started");
+        }
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "";
+        if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+          // Race: another booking became in_progress for this mechanic
+          // between when we opened the prejob and when we hit submit. Route
+          // back through the confirm dialog so the user can complete the
+          // active job first. Parse the conflicting id so the dialog can
+          // render the right summary without waiting on reactive refresh.
+          const parsedId = message.split(":", 2)[1] as Id<"bookings"> | undefined;
+          if (parsedId) setRaceConflictBookingId(parsedId);
+          setShowPrejobDialog(false);
+          setShowEndCurrentJobDialog(true);
+          setActionError("");
+        } else {
+          setActionError(
+            message ||
+              (action === "close"
+                ? "Could not save the pre-job vehicle check."
+                : "Could not start booking."),
+          );
+          throw err;
+        }
+      } finally {
+        setIsSubmittingPrejob(false);
+      }
+    }
+
+    // Persist the inspection without closing the dialog — used by the
+    // "Download inspection sheet" flow, which must save before the PDF action
+    // can read the vehicle_inspections row.
+    async function handleSaveInspectionDraft(
+      payload: PreJobSurveyPayload,
+      inspection: InspectionInputPayload
+    ) {
+      if (!job?._id) return;
+      await savePrejob({ bookingId: job._id, prejob: payload, inspection });
+    }
+
+    function openActualsEditor() {
+      setActionError("");
+      setIsEditingActuals(true);
+    }
+
+    function openPostjobDialog() {
+      setActionError("");
+      if (job?.diagnosticSystem) {
+        setShowDiagnosticDialog(true);
+      } else {
+        setShowPostjobDialog(true);
+      }
+    }
+
+    async function handleCompleteWithPostjob(payload: PostJobSurveyPayload) {
+      if (!job?._id) return;
+      setActionError("");
+      setIsSubmittingPostjob(true);
+      try {
+        await completeWithPostjob({
+          bookingId: job._id,
+          postjob: payload,
+        });
+        setShowPostjobDialog(false);
+        onSuccess?.("Booking completed");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not complete booking.",
+        );
+        throw err;
+      } finally {
+        setIsSubmittingPostjob(false);
+      }
+    }
+
+    async function handleSaveActualsDraft(payload: JobActualsPayload) {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await saveActualsDraft({
+          bookingId: job._id,
+          actuals: payload,
+        });
+        setIsEditingActuals(false);
+        onSuccess?.("Actuals draft saved");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not save actuals draft.",
+        );
+        throw err;
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleFinalizeActuals(payload: JobActualsPayload) {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await finalizeActuals({
+          bookingId: job._id,
+          actuals: payload,
+        });
+        setIsEditingActuals(false);
+        onSuccess?.("Actuals finalized");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not finalize actuals.",
+        );
+        throw err;
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    async function handleReopenActuals() {
+      if (!job?._id) return;
+      setActionError("");
+      setIsActioning(true);
+      try {
+        await reopenActuals({ bookingId: job._id });
+        setIsEditingActuals(true);
+        onSuccess?.("Actuals reopened for editing");
+      } catch (err: unknown) {
+        setActionError(
+          err instanceof Error ? err.message : "Could not reopen actuals.",
+        );
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
+    function handleResetMechanicSelection() {
+      setActionError("");
+      setAssigningMechanicId(currentAssignmentKey);
+      requestAnimationFrame(() => {
+        wrapperRef.current?.focus();
+      });
+    }
+
+    /* ---- Imperative handle ---- */
+
+    useImperativeHandle(ref, () => ({
+      accept: () => {
+        handleStatusAction("accept");
+      },
+      showDecline: () => setShowDeclineModal(true),
+      startJob: () => {
+        handleStartJob();
+      },
+      showMarkCompleted: () => openPostjobDialog(),
+      showCancelJob: () => setShowCancelConfirm(true),
+      showCancelReschedule: () => {
+        if (!canRestoreOriginalReschedule) return;
+        setShowCancelRescheduleConfirm(true);
+      },
+      openAssignDropdown: () => {
+        if (!canAssignMechanic) return;
+        assignTriggerRef.current
+          ?.querySelector<HTMLButtonElement>("button")
+          ?.click();
+      },
+      assignMechanic: () => {
+        if (!canSubmitMechanicChange) return;
+        handleAssignMechanic();
+      },
+      hasOpenModal: () =>
+        showDeclineModal ||
+        showPrejobDialog ||
+        showPostjobDialog ||
+        showCancelConfirm ||
+        showCancelRescheduleConfirm ||
+        showEarlyArrivalDialog ||
+        showEndCurrentJobDialog,
+      handleEscape: (): boolean => {
+        if (showDeclineModal) {
+          setShowDeclineModal(false);
+          return true;
+        }
+        if (showEarlyArrivalDialog) {
+          setShowEarlyArrivalDialog(false);
+          return true;
+        }
+        if (showEndCurrentJobDialog) {
+          setShowEndCurrentJobDialog(false);
+          return true;
+        }
+        if (showPrejobDialog) {
+          setShowPrejobDialog(false);
+          return true;
+        }
+        if (showPostjobDialog) {
+          setShowPostjobDialog(false);
+          return true;
+        }
+        if (isEditingActuals) {
+          setIsEditingActuals(false);
+          return true;
+        }
+        if (showCancelConfirm) {
+          setShowCancelConfirm(false);
+          return true;
+        }
+        if (showCancelRescheduleConfirm) {
+          setShowCancelRescheduleConfirm(false);
+          return true;
+        }
+        return false;
+      },
+      handleKeyDown: (e: KeyboardEvent): boolean => {
+        if (showDeclineModal) {
+          if (e.key === "ArrowDown") {
+            setDeclineReason((prev) => {
+              const idx = DECLINE_REASONS.indexOf(prev);
+              return DECLINE_REASONS[
+                Math.min(idx + 1, DECLINE_REASONS.length - 1)
+              ];
+            });
+            return true;
+          }
+          if (e.key === "ArrowUp") {
+            setDeclineReason((prev) => {
+              const idx = DECLINE_REASONS.indexOf(prev);
+              return DECLINE_REASONS[Math.max(idx - 1, 0)];
+            });
+            return true;
+          }
+          if (e.key === "d" || e.key === "Enter") {
+            handleDecline();
+            return true;
+          }
+          if (e.key === "c") {
+            setShowDeclineModal(false);
+            return true;
+          }
+          return true;
+        }
+        if (showPrejobDialog || showPostjobDialog) {
+          return true;
+        }
+        if (isEditingActuals) {
+          return true;
+        }
+        if (showCancelConfirm) {
+          if (e.key === "ArrowDown") {
+            setCancelReason((prev) => {
+              const idx = cancelReasonOptions.indexOf(prev);
+              return cancelReasonOptions[
+                Math.min(idx + 1, cancelReasonOptions.length - 1)
+              ];
+            });
+            return true;
+          }
+          if (e.key === "ArrowUp") {
+            setCancelReason((prev) => {
+              const idx = cancelReasonOptions.indexOf(prev);
+              return cancelReasonOptions[Math.max(idx - 1, 0)];
+            });
+            return true;
+          }
+          if (e.key === "c" || e.key === "Enter") {
+            handleCancelJob();
+            return true;
+          }
+          if (e.key === "e") {
+            setShowCancelConfirm(false);
+            return true;
+          }
+          return true;
+        }
+        if (showCancelRescheduleConfirm) {
+          if (e.key === "r") {
+            handleCancelReschedule();
+            return true;
+          }
+          if (e.key === "c") {
+            setShowCancelRescheduleConfirm(false);
+            return true;
+          }
+          return true;
+        }
+        if (
+          canRestoreOriginalReschedule &&
+          (e.key === "c" || e.key === "C")
+        ) {
+          setShowCancelRescheduleConfirm(true);
+          return true;
+        }
+        if ((e.key === "v" || e.key === "V") && job?.status === "confirmed") {
+          handleVehicleAtShop();
+          return true;
+        }
+        if ((e.key === "t" || e.key === "T") && job?.status === "vehicle_at_shop") {
+          handleStartJob();
+          return true;
+        }
+        if (
+          (e.key === "r" || e.key === "R") &&
+          job?.status === "in_progress" &&
+          !hasMechanicSelectionChange
+        ) {
+          openPostjobDialog();
+          return true;
+        }
+        if (e.key === "r" && canSubmitMechanicChange) {
+          handleAssignMechanic();
+          return true;
+        }
+        if (e.key === "e" && hasMechanicSelectionChange) {
+          handleResetMechanicSelection();
+          return true;
+        }
+        return false;
+      },
+    }));
+
+    /* ---- Render ---- */
+
+    const title = job
+      ? `${job.serviceNames.join(", ")} — ${job.customerName}`
+      : "Booking Detail";
+
+    // Step actions (Accept / Decline / Vehicle here / Reschedule / …) are
+    // hoisted to render at the top of the body, directly under the stepper.
+    const actionBar = job
+      ? (() => {
+                  const s = job.status;
+                  // A pre-job quote is sitting with the customer. The booking
+                  // status is still pending_shop_acceptance, but the shop's
+                  // turn is over until the customer approves or declines —
+                  // block the response actions in the meantime.
+                  const quoteAwaitingCustomer =
+                    (job as any).paymentApprovalState === "pre_job_pending";
+                  const isPendingIncoming =
+                    s === "pending" || s === "pending_shop_acceptance";
+                  const canAccept = isPendingIncoming && !quoteAwaitingCustomer;
+                  const canAdjustQuote = isPendingIncoming;
+                  const canComplete = s === "in_progress";
+                  const canMarkVehicleHere = s === "confirmed";
+                  const canStartJob = s === "vehicle_at_shop";
+                  const canMarkNoShow = s === "confirmed";
+                  const canDecline = isPendingIncoming && !quoteAwaitingCustomer;
+                  const canCancel =
+                    s === "confirmed" ||
+                    s === "vehicle_at_shop" ||
+                    s === "in_progress";
+                  const canReschedule =
+                    !!onRequestReschedule &&
+                    !quoteAwaitingCustomer &&
+                    (s === "pending" ||
+                      s === "pending_shop_acceptance" ||
+                      s === "confirmed" ||
+                      s === "vehicle_at_shop");
+                  const canAdjustMidJob =
+                    s === "in_progress" &&
+                    (job as any).hasDisclosedRange &&
+                    ((job as any).paymentApprovalState === "in_range" ||
+                      (job as any).paymentApprovalState === "pre_job_approved" ||
+                      (job as any).paymentApprovalState === "mid_job_approved" ||
+                      (job as any).paymentApprovalState === "captured");
+
+                  if (
+                    !canAccept &&
+                    !canAdjustQuote &&
+                    !canMarkVehicleHere &&
+                    !canComplete &&
+                    !canDecline &&
+                    !canCancel &&
+                    !canMarkNoShow &&
+                    !canReschedule &&
+                    !canAdjustMidJob
+                  )
+                    return null;
+
+                  return (
+                    <div className="space-y-2">
+                      {job.isFixedPrice && (canAdjustQuote || canAdjustMidJob) ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                          <span className="font-semibold">Fixed price service.</span>{" "}
+                          Updating parts or time won&apos;t change the price — edits are logged but
+                          will not affect this job. To change what the customer pays, update the
+                          fixed price in the shop&apos;s service catalog.
+                        </div>
+                      ) : null}
+                      {quoteAwaitingCustomer ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                          <span className="font-semibold">
+                            Waiting on the customer.
+                          </span>{" "}
+                          Your quote was sent for approval. You can&apos;t
+                          accept, decline, or reschedule this booking until the
+                          customer approves or declines it.
+                        </div>
+                      ) : null}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {canAccept && (
+                          <button
+                            onClick={() =>
+                              handleStatusAction("accept")
+                            }
+                            disabled={isActioning}
+                            className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                          >
+                            {isActioning && (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            )}
+                            {isActioning ? (
+                              "Accepting..."
+                            ) : (
+                              <span>
+                                <span
+                                  style={{
+                                    textDecorationLine: "underline",
+                                  }}
+                                >
+                                  A
+                                </span>
+                                ccept booking
+                              </span>
+                            )}
+                          </button>
+                        )}
+                        {canStartJob && (
+                          <button
+                            onClick={handleStartJob}
+                            disabled={!job.mechanicId || isActioning}
+                            title={
+                              !job.mechanicId
+                                ? "Assign a mechanic first"
+                                : undefined
+                            }
+                            className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                          >
+                            Open vehicle check
+                          </button>
+                        )}
+                        {canMarkVehicleHere && (
+                          <button
+                            onClick={handleVehicleAtShop}
+                            disabled={isActioning}
+                            className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                          >
+                            {isActioning ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : null}
+                            Vehicle here
+                          </button>
+                        )}
+                        {job.status === "in_progress" &&
+                          (job as any).hasDisclosedRange &&
+                          ((job as any).paymentApprovalState === "in_range" ||
+                            (job as any).paymentApprovalState === "pre_job_approved" ||
+                            (job as any).paymentApprovalState === "mid_job_approved" ||
+                            (job as any).paymentApprovalState === "captured") && (
+                            <button
+                              type="button"
+                              onClick={() => setShowMidJobDialog(true)}
+                              disabled={isActioning}
+                              className={drawerSecondaryButtonClassName}
+                              title="Found extra work mid-job? Send the new price to the customer for confirmation."
+                            >
+                              Add unforeseen scope
+                            </button>
+                          )}
+                        {(job as any).hasDisclosedRange &&
+                          ((job as any).paymentApprovalState === "pre_job_pending" ||
+                            (job as any).paymentApprovalState === "mid_job_pending" ||
+                            (job as any).paymentApprovalState === "post_job_pending" ||
+                            (job as any).paymentApprovalState === "pre_job_declined" ||
+                            (job as any).paymentApprovalState === "sla_expired") && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                (job as any).paymentApprovalState === "mid_job_pending"
+                                  ? setShowMidJobDialog(true)
+                                  : setShowPrejobEstimateDialog(true)
+                              }
+                              disabled={isActioning}
+                              className={drawerSecondaryButtonClassName}
+                              title="View pending customer confirmation"
+                            >
+                              {(job as any).paymentApprovalState === "post_job_pending"
+                                ? "Customer reviewing final billing"
+                                : (job as any).paymentApprovalState === "mid_job_pending"
+                                  ? "Mid-job pending confirmation"
+                                  : "Open pending estimate"}
+                            </button>
+                          )}
+                        {canComplete && job.status === "in_progress" && (
+                          // TODO: Fix --success usage
+                          <button
+                            onClick={() => openPostjobDialog()}
+                            disabled={isActioning}
+                            className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                            style={
+                              job.diagnosticSystem
+                                ? { backgroundColor: "#b45309", color: "#fff" }
+                                : job.status === "in_progress"
+                                  ? undefined
+                                  : {
+                                      backgroundColor: completedColors.text,
+                                      color: "#fff",
+                                    }
+                            }
+                          >
+                            {job.diagnosticSystem ? (
+                              <span>Run diagnostic checklist</span>
+                            ) : (
+                              <span>
+                                Ma
+                                <span
+                                  style={{
+                                    textDecorationLine: "underline",
+                                  }}
+                                >
+                                  r
+                                </span>
+                                k completed
+                              </span>
+                            )}
+                          </button>
+                        )}
+                        {canReschedule && (
+                          <button
+                            onClick={() => onRequestReschedule?.()}
+                            disabled={isActioning}
+                            className={drawerSecondaryButtonClassName}
+                            title="Switch to the day-lane to drag this booking to a new time"
+                          >
+                            Reschedule
+                          </button>
+                        )}
+                        {canDecline && (
+                          <button
+                            onClick={() =>
+                              setShowDeclineModal(true)
+                            }
+                            disabled={isActioning}
+                            className={drawerDestructiveButtonClassName}
+                          >
+                            <span>
+                              <span
+                                style={{
+                                  textDecorationLine: "underline",
+                                }}
+                              >
+                                D
+                              </span>
+                              ecline
+                            </span>
+                          </button>
+                        )}
+                        {(() => {
+                          // Secondary / destructive / rare actions collapse into
+                          // a single ⋯ menu so the row stays to one or two
+                          // prominent buttons.
+                          const overflow: Array<{
+                            key: string;
+                            label: string;
+                            onSelect: () => void;
+                            destructive?: boolean;
+                          }> = [];
+                          if (
+                            canAdjustQuote &&
+                            (job as any).paymentApprovalState !== "pre_job_pending"
+                          ) {
+                            overflow.push({
+                              key: "adjust-quote",
+                              label: "Adjust quote",
+                              onSelect: () => setShowPrejobEstimateDialog(true),
+                            });
+                          }
+                          if (canComplete && job.status === "confirmed") {
+                            overflow.push({
+                              key: "mark-completed",
+                              label: "Mark completed",
+                              onSelect: () => openPostjobDialog(),
+                            });
+                          }
+                          if (canMarkNoShow) {
+                            overflow.push({
+                              key: "no-show",
+                              label: "Mark no-show",
+                              onSelect: () => handlePostThresholdNoShow(),
+                              destructive: true,
+                            });
+                          }
+                          if (canCancel) {
+                            overflow.push({
+                              key: "cancel",
+                              label: "Cancel booking",
+                              onSelect: () => setShowCancelConfirm(true),
+                              destructive: true,
+                            });
+                          }
+                          if (overflow.length === 0) return null;
+                          return (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  disabled={isActioning}
+                                  aria-label="More booking actions"
+                                  className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                                >
+                                  <Ellipsis className="h-4 w-4" aria-hidden="true" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                {overflow.map((item) => (
+                                  <DropdownMenuItem
+                                    key={item.key}
+                                    onSelect={item.onSelect}
+                                    className={
+                                      item.destructive
+                                        ? "text-destructive focus:text-destructive"
+                                        : undefined
+                                    }
+                                  >
+                                    {item.label}
+                                  </DropdownMenuItem>
+                                ))}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  );
+        })()
+      : null;
+
+    return (
+      <>
+        <div
+          ref={wrapperRef}
+          tabIndex={-1}
+          className="flex flex-col flex-1 min-h-0 focus:outline-none"
+        >
+          {/* Sticky top region — header, stepper, and primary actions stay visible */}
+          <div className="shrink-0 border-b border-border">
+            <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
+            <div className="min-w-0 flex-1">
+              {job ? (
+                <>
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <h2 className="truncate text-base font-semibold text-foreground">
+                      {job.vehicle || "Booking Detail"}
+                    </h2>
+                    <StatusPill status={job.status} />
+                    <PaymentApprovalBadge
+                      state={(job as any).paymentApprovalState}
+                      settlementState={(job as any).settlementState}
+                    />
+                  </div>
+                  <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                    {job.serviceNames.join(", ")}
+                    {job.customerName ? ` · ${job.customerName}` : ""}
+                  </p>
+                  {(() => {
+                    const subtext = getStatusSubtext(job.status);
+                    const clock =
+                      isIncomingStatus &&
+                      (job as any).paymentApprovalState !== "pre_job_pending"
+                        ? pendingCountdownClock(job._creationTime, nowMs)
+                        : null;
+                    const rescheduleCd =
+                      job.status === "pending_customer_acceptance" &&
+                      job.rescheduleProposedAt
+                        ? pendingCountdown(job.rescheduleProposedAt)
+                        : null;
+                    if (!subtext && !clock && !rescheduleCd) return null;
+                    return (
+                      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+                        {subtext && (
+                          <span className="text-xs text-muted-foreground">
+                            {subtext}
+                          </span>
+                        )}
+                        {clock && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-amber-700">
+                            <Clock className="h-3 w-3" aria-hidden="true" />
+                            Auto-declines in {clock}
+                          </span>
+                        )}
+                        {rescheduleCd && (
+                          <span className="text-xs font-medium text-purple-600">
+                            {rescheduleCd}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </>
+              ) : (
+                <h2 className="truncate text-base font-semibold text-foreground">
+                  {title}
+                </h2>
+              )}
+            </div>
+            <button
+              onClick={onClose}
+              className="-mt-0.5 p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            </div>
+            {job ? (
+              <div className="space-y-3 px-5 pb-4">
+                <JobStepIndicator
+                  currentStep={getJobStep(job.status)}
+                  status={job.status}
+                  compact={isStepIndicatorCompact}
+                  className="border-0 bg-transparent px-0 py-0"
+                />
+                {actionBar}
+              </div>
+            ) : null}
+          </div>
+
+          {/* Body */}
+          <div
+            ref={scrollContainerRef}
+            className="flex-1 overflow-y-auto px-5 pb-5 pt-5"
+          >
+            {job === undefined ? (
+              <div className="space-y-3">
+                {Array.from({ length: 8 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-4 bg-muted rounded animate-pulse"
+                    style={{ width: `${55 + (i % 4) * 12}%` }}
+                  />
+                ))}
+              </div>
+            ) : !job ? (
+              <p className="text-sm text-muted-foreground">
+                Booking not found.
+              </p>
+            ) : (
+              <div className="divide-y divide-border">
+                <VehiclePassportCard
+                  job={job}
+                  passport={vehiclePassport ?? null}
+                  customerName={job.customerName}
+                  customerEmail={job.customerEmail}
+                  scheduleLabel={
+                    <>
+                      {formatBookingDate(job.scheduledDate, job.scheduledTime)}
+                      {job.estimatedLaborMinutes != null &&
+                      job.estimatedLaborMinutes > 0 ? (
+                        <span className="text-muted-foreground">
+                          {" · est. "}
+                          {formatDurationMinutes(job.estimatedLaborMinutes)}
+                        </span>
+                      ) : null}
+                      {job.diagnosticSystem ? (
+                        <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                          Diagnostic ·{" "}
+                          {DIAGNOSTIC_SYSTEM_LABELS[job.diagnosticSystem]}
+                        </span>
+                      ) : null}
+                    </>
+                  }
+                />
+
+                {job.status === "in_progress" && (
+                  <OverrunExtendCard
+                    bookingId={job._id as Id<"bookings">}
+                    onFinishEarly={openPostjobDialog}
+                    onToast={(msg) => onSuccess?.(msg)}
+                    variant="orange"
+                  />
+                )}
+
+                <InvoiceNumberField
+                  bookingId={job._id as Id<"bookings">}
+                  initialValue={(job as any).invoiceNumber ?? null}
+                />
+
+                {job.recommendationState &&
+                  job.recommendationState !== "none" &&
+                  job.recommendationState !== "out_of_scope" && (
+                    <RecommendedServiceCard job={job} />
+                  )}
+
+                {job.recommendationState === "out_of_scope" && (
+                  <OutOfScopeCard job={job} />
+                )}
+
+                {job.customerNotes && job.customerNotes.trim().length > 0 && (
+                  <div className="py-3.5">
+                    <div className="mb-2 flex items-center gap-2.5">
+                      <MessageSquare className="h-4 w-4 text-primary" aria-hidden="true" />
+                      <span className="text-sm font-semibold text-foreground">
+                        Customer states
+                      </span>
+                    </div>
+                    <p className="whitespace-pre-wrap rounded-lg bg-sky-50 px-3 py-2 text-sm leading-relaxed text-sky-900">
+                      {job.customerNotes}
+                    </p>
+                  </div>
+                )}
+
+                {/* Assign mechanic */}
+                <div className="py-3.5">
+                  <div className="mb-3 flex items-center gap-2.5">
+                    <User className="h-4 w-4 text-primary" aria-hidden="true" />
+                    <span className="text-sm font-semibold text-foreground">
+                      Assignment
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <div ref={assignTriggerRef}>
+                      <Select
+                        isDisabled={!canAssignMechanic || isActioning}
+                        selectedKey={
+                          assigningMechanicId || "any"
+                        }
+                        onOpenChange={(isOpen) => {
+                          if (!isOpen) {
+                            requestAnimationFrame(() => {
+                              wrapperRef.current?.focus();
+                              assignTriggerRef.current
+                                ?.querySelector<HTMLButtonElement>(
+                                  "button",
+                                )
+                                ?.blur();
+                            });
+                          }
+                        }}
+                        onSelectionChange={(key) => {
+                          setActionError("");
+                          setAssigningMechanicId(
+                            key === "any" ? "" : String(key),
+                          );
+                          requestAnimationFrame(() => {
+                            wrapperRef.current?.focus();
+                            assignTriggerRef.current
+                              ?.querySelector<HTMLButtonElement>(
+                                "button",
+                              )
+                              ?.blur();
+                          });
+                        }}
+                      >
+                        <SelectTrigger
+                          className={`min-w-48 ${drawerSelectTriggerClassName}`}
+                          data-assign-dropdown
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectPopover
+                          placement="bottom start"
+                          data-assign-dropdown
+                        >
+                          <SelectListBox shouldFocusWrap>
+                            <SelectItem id="any" textValue={entityLabel.anyLabel}>
+                              <span className="text-muted-foreground">
+                                {entityLabel.anyLabel}
+                              </span>
+                            </SelectItem>
+                            {mechanics.map((m) => (
+                              <SelectItem
+                                key={String(m._id)}
+                                id={String(m._id)}
+                                textValue={m.name}
+                              >
+                                {m.name}
+                              </SelectItem>
+                            ))}
+                          </SelectListBox>
+                        </SelectPopover>
+                      </Select>
+                    </div>
+                    <button
+                      onClick={handleAssignMechanic}
+                      disabled={!canSubmitMechanicChange || isActioning}
+                      className={drawerSecondaryButtonClassName}
+                    >
+                      {isActioning && (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      )}
+                      <ShortcutLabel text="Reassign" shortcutKey="r" />
+                    </button>
+                    <button
+                      onClick={handleResetMechanicSelection}
+                      disabled={!hasMechanicSelectionChange || isActioning}
+                      className={drawerSecondaryButtonClassName}
+                    >
+                      <ShortcutLabel text="Cancel" shortcutKey="e" />
+                    </button>
+                  </div>
+                  {showAssignMechanicError && (
+                    <p className="mt-2 text-xs text-destructive">
+                      {actionError}
+                    </p>
+                  )}
+                </div>
+
+                {/* Pending customer acceptance actions */}
+                {job.status === "pending_customer_acceptance" && (
+                  <div className="py-3.5">
+                    <DrawerFieldLabel className="mb-2">
+                      Actions
+                    </DrawerFieldLabel>
+                    <p className="mb-3 text-sm text-muted-foreground italic">
+                      {isForcedDelayPending
+                        ? "Automatic late-start delay pending customer response"
+                        : "Awaiting customer approval"}
+                    </p>
+                    {isForcedDelayPending ? (
+                      <p className="text-sm text-muted-foreground">
+                        The original slot cannot be restored from this flow. The customer can
+                        accept the delayed time, pick another time, or cancel the booking in-app.
+                      </p>
+                    ) : (
+                      <button
+                        onClick={() => setShowCancelRescheduleConfirm(true)}
+                        disabled={isActioning}
+                        className={drawerSecondaryButtonClassName}
+                      >
+                        <span>
+                          <span style={{ textDecorationLine: "underline" }}>
+                            C
+                          </span>
+                          ancel reschedule
+                        </span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Customer late monitor banner */}
+                {job.customerLateMonitor && !job.vehicleArrivedAtMs ? (
+                  job.customerLateMonitor.customerAcknowledgedAtMs ? (
+                    <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-emerald-800">Customer says they&apos;re on their way</p>
+                          <p className="mt-1 text-xs text-emerald-700">
+                            Acknowledged {Math.round((Date.now() - job.customerLateMonitor.customerAcknowledgedAtMs) / 60_000)}m ago
+                            {" · "}{Math.max(0, Math.floor((Date.now() - job.customerLateMonitor.scheduledStartMs) / 60_000))}m late overall
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (job.customerLateMonitor.pushEnqueuedAtMs || job.customerLateMonitor.smsEnqueuedAtMs || job.customerLateMonitor.frontdeskEnqueuedAtMs) ? (
+                    <div className="rounded-2xl border border-yellow-200 bg-yellow-50 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-yellow-800">Late notification sent to customer</p>
+                          <p className="mt-1 text-xs text-yellow-700">
+                            {Math.max(0, Math.floor((Date.now() - job.customerLateMonitor.scheduledStartMs) / 60_000))}m late · Awaiting response
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null
+                ) : null}
+
+                {job.status === "completed" && job._id ? (
+                  <PostjobPhotoStrip bookingId={job._id} />
+                ) : null}
+
+                {job.status === "completed" && job._id ? (
+                  <SendReceiptCard bookingId={job._id} />
+                ) : null}
+
+                {job.status === "completed" && (
+                  <PostjobReportSection
+                    report={postjobReport?.postjobReport ?? null}
+                    submittedAt={postjobReport?.submittedAt ?? null}
+                    jobStatus={job.status}
+                    jobActuals={job.jobActuals ?? null}
+                    estimatedLaborMinutes={job.estimatedLaborMinutes ?? null}
+                    suggestedParts={actualsPrefill?.suggestedParts ?? []}
+                    canEdit
+                    isFinalized={job.jobActuals?.status === "finalized"}
+                    isReopening={isActioning}
+                    isEditing={isEditingActuals}
+                    onRequestEdit={openActualsEditor}
+                    onRequestReopen={() => void handleReopenActuals()}
+                    onCancelEdit={() => setIsEditingActuals(false)}
+                    onSaveDraft={handleSaveActualsDraft}
+                    onFinalize={handleFinalizeActuals}
+                  />
+                )}
+
+                {/* Timeline footer — opens the full status + activity timeline */}
+                <div className="flex items-center justify-between gap-3 py-3.5">
+                  <p className="min-w-0 truncate text-xs text-muted-foreground">
+                    {getTimelineFooterVerb(job.status)}
+                    {(() => {
+                      const lastAt = job.history.reduce(
+                        (mx, h) => Math.max(mx, h.changed_at),
+                        job._creationTime ?? 0,
+                      );
+                      return lastAt ? ` \u00b7 ${formatActivityTimestamp(lastAt)}` : "";
+                    })()}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setShowTimelineModal(true)}
+                    className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-primary transition-opacity hover:opacity-80"
+                  >
+                    Full timeline
+                    <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+                  </button>
+                </div>
+
+                {/* Customer arrival tracking */}
+                {job.customerLateMonitor && (() => {
+                  const m = job.customerLateMonitor!;
+                  const events: Array<{ icon: "bell" | "car"; label: string; sub: string; atMs: number }> = [];
+                  const firstNotifMs = m.pushEnqueuedAtMs ?? m.smsEnqueuedAtMs ?? m.frontdeskEnqueuedAtMs;
+                  if (firstNotifMs) {
+                    const channel = m.pushEnqueuedAtMs ? "push" : m.smsEnqueuedAtMs ? "SMS" : "front desk";
+                    events.push({
+                      icon: "bell",
+                      label: "Late notification sent",
+                      sub: `Sent via ${channel}`,
+                      atMs: firstNotifMs,
+                    });
+                  }
+                  if (m.customerAcknowledgedAtMs) {
+                    events.push({
+                      icon: "car",
+                      label: "Customer said \"on my way\"",
+                      sub: "Acknowledged in app",
+                      atMs: m.customerAcknowledgedAtMs,
+                    });
+                  }
+                  if (events.length === 0) return null;
+                  return (
+                    <div className="rounded-2xl bg-muted/20 p-4">
+                      <div className="mb-3 flex items-center gap-1.5">
+                        <Car className="w-3.5 h-3.5 text-muted-foreground" />
+                        <DrawerFieldLabel className="mb-0">Arrival Tracking</DrawerFieldLabel>
+                      </div>
+                      <div className="rounded-xl bg-background px-3 py-2">
+                        {events.map((ev, i) => (
+                          <div key={i} className="relative flex gap-3 pb-4 last:pb-0">
+                            {i < events.length - 1 && (
+                              <div className="absolute left-[11px] top-6 bottom-0 w-px bg-border" />
+                            )}
+                            <div className="relative z-10 shrink-0">
+                              {ev.icon === "bell" ? (
+                                <div className="w-6 h-6 rounded-full border-2 border-yellow-400 bg-card flex items-center justify-center">
+                                  <Bell className="w-3 h-3 text-yellow-500" strokeWidth={2.5} />
+                                </div>
+                              ) : (
+                                <div className="w-6 h-6 rounded-full border-2 border-emerald-500 bg-card flex items-center justify-center">
+                                  <Car className="w-3 h-3 text-emerald-600" strokeWidth={2.5} />
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex justify-between items-center gap-2">
+                                <span className={`text-xs font-semibold leading-6 ${ev.icon === "car" ? "text-emerald-700" : "text-yellow-700"}`}>
+                                  {ev.label}
+                                </span>
+                                <span className="text-[10px] text-muted-foreground shrink-0 leading-6">
+                                  {new Date(ev.atMs).toLocaleString("en-US", {
+                                    month: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true,
+                                  })}
+                                </span>
+                              </div>
+                              <p className="text-xs text-muted-foreground -mt-1">{ev.sub}</p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+            
+
+                {actionError && !showAssignMechanicError && (
+                  <p className="text-xs text-destructive">
+                    {actionError}
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {job ? (
+          <EarlyArrivalConfirmDialog
+            open={showEarlyArrivalDialog}
+            bookingId={job._id}
+            mechanicId={job.mechanicId ?? null}
+            mechanicName={(job as any).mechanicName ?? null}
+            scheduledDate={job.scheduledDate}
+            scheduledTime={job.scheduledTime}
+            estimatedLaborMinutes={job.estimatedLaborMinutes ?? null}
+            dayBookings={scheduleConflicts?.bookings ?? []}
+            onClose={() => setShowEarlyArrivalDialog(false)}
+            onPushed={() => onSuccess?.("Booking pushed earlier · vehicle here")}
+          />
+        ) : null}
+
+        <EndCurrentJobConfirmDialog
+          open={showEndCurrentJobDialog}
+          activeJob={activeJobConflict ?? raceConflictSummary ?? null}
+          primaryLabel={onSwitchToBooking ? "Open current job" : "Got it"}
+          showPrimaryAction={!!onSwitchToBooking}
+          onClose={() => {
+            setShowEndCurrentJobDialog(false);
+            setRaceConflictBookingId(null);
+          }}
+          onCompleteCurrent={
+            onSwitchToBooking
+              ? () => {
+                  const target =
+                    activeJobConflict?.bookingId ??
+                    raceConflictSummary?.bookingId;
+                  setShowEndCurrentJobDialog(false);
+                  setRaceConflictBookingId(null);
+                  if (target) onSwitchToBooking(target);
+                }
+              : undefined
+          }
+        />
+
+        <MultiPointInspectionDialog
+          open={showPrejobDialog}
+          bookingId={job?._id ?? null}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          bookingServices={job?.serviceNames ?? []}
+          tireReplacementPositions={job?.tireSpecs?.positions ?? []}
+          passportData={vehiclePassport ?? null}
+          prefillData={job?.jobActuals?.prejobReport ?? null}
+          isSubmitting={isSubmittingPrejob}
+          onClose={() => setShowPrejobDialog(false)}
+          onSubmit={handleStartWithPrejob}
+          onSaveDraft={handleSaveInspectionDraft}
+        />
+
+        <DiagnosticChecklistDialog
+          open={showDiagnosticDialog}
+          bookingId={job?._id ?? null}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          system={(job?.diagnosticSystem ?? "not_sure") as any}
+          checklist={
+            job?.diagnosticChecklist && job.diagnosticChecklist.length > 0
+              ? job.diagnosticChecklist
+              : job?.diagnosticSystem
+                ? templateForSystem(job.diagnosticSystem as any)
+                : []
+          }
+          customerNotes={job?.customerNotes ?? null}
+          findingsNote={(job as any)?.diagnosticFindingsNote ?? null}
+          recommendationState={job?.recommendationState ?? null}
+          recommendedServiceName={job?.recommendedServiceName ?? null}
+          recommendedServiceNote={job?.recommendedServiceNote ?? null}
+          followupState={job?.diagnosticFollowupState ?? null}
+          awaitingInfoNote={job?.awaitingInfoNote ?? null}
+          onClose={() => setShowDiagnosticDialog(false)}
+          onCompleted={() => {
+            setShowDiagnosticDialog(false);
+            onSuccess?.("Diagnostic completed");
+          }}
+          onError={(msg) => setActionError(msg)}
+          onOpenScheduler={(ctx) => {
+            if (!job) return;
+            setShowDiagnosticDialog(false);
+            setRecommendDrawerCtx({
+              diagnosticBookingId: job._id,
+              customerName: job.customerName,
+              vehicleDisplay: job.vehicle,
+              serviceId: ctx.serviceId as Id<"services">,
+              serviceName: ctx.serviceName,
+              mechanicNote: ctx.mechanicNote,
+              defaultDate: job.scheduledDate,
+              defaultTime: job.scheduledTime,
+              defaultMechanicName: (job as any).mechanicName ?? null,
+              defaultDurationMinutes: ctx.defaultDurationMinutes,
+            });
+          }}
+        />
+
+        <RecommendServiceDrawer
+          open={recommendDrawerCtx !== null}
+          context={recommendDrawerCtx}
+          onClose={() => setRecommendDrawerCtx(null)}
+          onSent={() => {
+            setRecommendDrawerCtx(null);
+            onSuccess?.("Recommendation sent to customer");
+          }}
+          onError={(msg) => setActionError(msg)}
+        />
+
+        <PostJobSurveyDialog
+          open={showPostjobDialog}
+          bookingId={job ? String(job._id) : null}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          passportData={vehiclePassport ?? null}
+          estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          prefillData={actualsPrefill ?? null}
+          isSubmitting={isSubmittingPostjob}
+          onClose={() => setShowPostjobDialog(false)}
+          onSubmit={handleCompleteWithPostjob}
+          lockBilling={!isWalkIn}
+          quotedParts={lockedQuoteParts}
+          lockedQuote={lockedQuote}
+          isFixedPrice={job?.isFixedPrice}
+        />
+
+        {/* Pre-Job Approval — auto-chained from the inspection dialog. */}
+        <PostJobSurveyDialog
+          open={showPrejobEstimateDialog}
+          bookingId={job ? String(job._id) : null}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          passportData={vehiclePassport ?? null}
+          estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          prefillData={actualsPrefill ?? null}
+          isSubmitting={false}
+          onClose={() => setShowPrejobEstimateDialog(false)}
+          onSubmit={async () => {
+            /* cycle path handles submit internally */
+          }}
+          cycle="pre_job"
+          onApprovalSubmitted={() =>
+            onSuccess?.("Estimate sent for confirmation")
+          }
+          laborRateCents={(job as any)?.shopLaborRateCents ?? null}
+          laborCostDollars={(job as any)?.laborCost ?? null}
+          shopState={(job as any)?.shopState ?? null}
+          shopZip={(job as any)?.shopZip ?? null}
+          quotedParts={scopedQuotedParts}
+          isFixedPrice={job?.isFixedPrice}
+        />
+
+        {/* Mid-Job Approval — "Add unforeseen scope" while in_progress. */}
+        <PostJobSurveyDialog
+          open={showMidJobDialog}
+          bookingId={job ? String(job._id) : null}
+          bookingLabel={job?.vehicle ?? "Vehicle"}
+          bookingSubLabel={
+            job
+              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+                  job.scheduledDate,
+                  job.scheduledTime,
+                )}`
+              : ""
+          }
+          passportData={vehiclePassport ?? null}
+          estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          prefillData={actualsPrefill ?? null}
+          isSubmitting={false}
+          onClose={() => setShowMidJobDialog(false)}
+          onSubmit={async () => {
+            /* cycle path handles submit internally */
+          }}
+          cycle="mid_job"
+          onApprovalSubmitted={() =>
+            onSuccess?.("Added scope sent for confirmation")
+          }
+          laborRateCents={(job as any)?.shopLaborRateCents ?? null}
+          laborCostDollars={(job as any)?.laborCost ?? null}
+          shopState={(job as any)?.shopState ?? null}
+          shopZip={(job as any)?.shopZip ?? null}
+          isFixedPrice={job?.isFixedPrice}
+        />
+
+        <ConfirmationDialog
+          open={showDeclineModal}
+          title="Decline this booking?"
+          description="Select a reason for declining:"
+          onClose={() => setShowDeclineModal(false)}
+          enableShortcuts={false}
+          secondaryAction={{
+            label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
+            onAction: () => setShowDeclineModal(false),
+            disabled: isActioning,
+          }}
+          primaryAction={{
+            label: isActioning ? "Declining..." : <ShortcutLabel text="Confirm decline" shortcutKey="d" />,
+            onAction: handleDecline,
+            disabled: isActioning,
+            variant: "destructive",
+            leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
+          }}
+        >
+          <div className="space-y-2.5 mb-4">
+            {DECLINE_REASONS.map((r) => (
+              <label
+                key={r}
+                className="flex items-center gap-2.5 cursor-pointer"
+              >
+                <input
+                  type="radio"
+                  name="declineReason"
+                  value={r}
+                  checked={declineReason === r}
+                  onChange={() => setDeclineReason(r)}
+                  className="accent-primary"
+                />
+                <span className="text-sm text-foreground">{r}</span>
+              </label>
+            ))}
+          </div>
+          {declineReason === "Other" && (
+            <textarea
+              ref={declineTextareaRef}
+              value={declineOtherText}
+              onChange={(e) => setDeclineOtherText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
+                }
+              }}
+              placeholder="Please describe the reason..."
+              rows={2}
+              className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+            />
+          )}
+        </ConfirmationDialog>
+
+        <ConfirmationDialog
+          open={showCancelConfirm}
+          title="Cancel this booking?"
+          description="Select a reason for cancelling. The customer will be notified of the cancellation."
+          onClose={() => setShowCancelConfirm(false)}
+          enableShortcuts={false}
+          secondaryAction={{
+            label: <ShortcutLabel text="Keep booking" shortcutKey="e" />,
+            onAction: () => setShowCancelConfirm(false),
+            disabled: isActioning,
+          }}
+          primaryAction={{
+            label: isActioning ? "Cancelling..." : <ShortcutLabel text="Cancel job" shortcutKey="c" />,
+            onAction: handleCancelJob,
+            disabled: isActioning,
+            variant: "destructive",
+            leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
+          }}
+        >
+          {onRequestReschedule &&
+            job?.status !== "in_progress" &&
+            job?.status !== "vehicle_at_shop" ? (
+            <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <p className="text-xs text-muted-foreground">
+                Could this booking be moved instead? Rescheduling keeps the customer and revenue.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCancelConfirm(false);
+                  onRequestReschedule();
+                }}
+                disabled={isActioning}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-primary bg-card px-3 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/10 disabled:opacity-50"
+              >
+                Reschedule instead
+              </button>
+            </div>
+          ) : null}
+
+          {(job?.status === "in_progress" || job?.status === "vehicle_at_shop") ? (
+            <div className="mb-4 rounded-lg border border-amber-300 bg-amber-50 p-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+                Work has already started
+              </p>
+              <p className="mt-1 text-xs text-amber-900">
+                This booking can't be rescheduled — cancelling it ends the current job. If the customer wants to return, book a new appointment.
+              </p>
+              {onRequestNewBookingAfterCancel ? (
+                <label className="mt-2 flex items-start gap-2 text-xs text-amber-900 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={createNewAfterCancel}
+                    onChange={(e) => setCreateNewAfterCancel(e.target.checked)}
+                    className="mt-0.5 accent-amber-700"
+                  />
+                  <span>Open a new booking for this customer after cancelling.</span>
+                </label>
+              ) : null}
+            </div>
+          ) : null}
+          <div className="space-y-2.5 mb-4">
+            {cancelReasonOptions.map((r) => (
+              <label
+                key={r}
+                className="flex items-center gap-2.5 cursor-pointer"
+              >
+                <input
+                  type="radio"
+                  name="cancelReason"
+                  value={r}
+                  checked={cancelReason === r}
+                  onChange={() => setCancelReason(r)}
+                  className="accent-primary"
+                />
+                <span className="text-sm text-foreground">{r}</span>
+              </label>
+            ))}
+          </div>
+          {cancelReason === "Other" && (
+            <textarea
+              ref={cancelTextareaRef}
+              value={cancelOtherText}
+              onChange={(e) => setCancelOtherText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  e.currentTarget.blur();
+                }
+              }}
+              placeholder="Please describe the reason..."
+              rows={2}
+              className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+            />
+          )}
+        </ConfirmationDialog>
+
+        {!isForcedDelayPending ? (
+          <ConfirmationDialog
+            open={showCancelRescheduleConfirm}
+            title="Cancel the proposed reschedule?"
+            description="The booking will revert to its original time and mechanic."
+            onClose={() => setShowCancelRescheduleConfirm(false)}
+            enableShortcuts={false}
+            secondaryAction={{
+              label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
+              onAction: () => setShowCancelRescheduleConfirm(false),
+              disabled: isActioning,
+            }}
+            primaryAction={{
+              label: isActioning ? "Reverting..." : <ShortcutLabel text="Revert to original" shortcutKey="r" />,
+              onAction: handleCancelReschedule,
+              disabled: isActioning,
+              variant: "primary",
+              leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
+            }}
+          />
+        ) : null}
+
+        {showMechanicPicker && job ? (
+          <MechanicAvailabilityPicker
+            bookingDate={job.scheduledDate}
+            mechanics={mechanics}
+            onClose={() => setShowMechanicPicker(false)}
+            onSelect={async ({ mechanicId, slot }) => {
+              setIsActioning(true);
+              setActionError("");
+              try {
+                await updateJob({
+                  bookingId: job._id,
+                  mechanicId: mechanicId as Id<"mechanics">,
+                  scheduledDate: slot.date,
+                  scheduledTime: slot.start_time,
+                  assignmentPreference: "specific_mechanic",
+                });
+                setAssigningMechanicId(String(mechanicId));
+                setShowMechanicPicker(false);
+                const name = mechanics.find((m) => String(m._id) === String(mechanicId))?.name ?? "Mechanic";
+                onSuccess?.(`Assigned to ${name}`);
+              } catch (err: unknown) {
+                setActionError(
+                  err instanceof Error ? err.message : "Could not assign mechanic.",
+                );
+              } finally {
+                setIsActioning(false);
+              }
+            }}
+          />
+        ) : null}
+
+        {job ? (
+          <BookingTimelineModal
+            open={showTimelineModal}
+            onClose={() => setShowTimelineModal(false)}
+            history={job.history}
+            activityLog={activityLog}
+            hideDisclosedRange={hideDisclosedRange}
+          />
+        ) : null}
+      </>
+    );
+  },
+);
+
+export default JobDetailPanel;
+
+type AvailabilitySlot = {
+  _id: string;
+  date: string;
+  start_time: string;
+  end_time: string;
+  is_available: boolean;
+};
+
+function formatSlotTime(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const hour = h % 12 || 12;
+  return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function formatPickerDate(iso: string): string {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+function MechanicAvailabilityPicker({
+  bookingDate,
+  mechanics,
+  onSelect,
+  onClose,
+}: {
+  bookingDate: string;
+  mechanics: Array<{ _id: string; name: string }>;
+  onSelect: (choice: { mechanicId: string; slot: AvailabilitySlot }) => void | Promise<void>;
+  onClose: () => void;
+}) {
+  const context = useQuery(api.bookings.getMyShopJobContext);
+  const shopId = (context as { shopId?: Id<"shops"> } | null | undefined)?.shopId;
+
+  const availability = useQuery(
+    api.time_slots.getNextAvailableByShopPerMechanic,
+    shopId ? { shopId } : "skip",
+  ) as Array<{ mechanicId: Id<"mechanics">; slots: AvailabilitySlot[] }> | undefined;
+
+  const [selected, setSelected] = useState<{ mechanicId: string; slot: AvailabilitySlot } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const mechanicNameById = useMemo(
+    () => new Map(mechanics.map((m) => [String(m._id), m.name])),
+    [mechanics],
+  );
+
+  const byMechanicForDate = useMemo(() => {
+    if (!availability) return null;
+    return availability.map((row) => ({
+      mechanicId: String(row.mechanicId),
+      name: mechanicNameById.get(String(row.mechanicId)) ?? "Mechanic",
+      slots: row.slots.filter((s) => s.date === bookingDate && s.is_available),
+    }));
+  }, [availability, mechanicNameById, bookingDate]);
+
+  const handleConfirm = async () => {
+    if (!selected || submitting) return;
+    setSubmitting(true);
+    try {
+      await onSelect(selected);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <ConfirmationDialog
+      open
+      title="Pick a mechanic and time"
+      description={`Available slots on ${formatPickerDate(bookingDate)}`}
+      onClose={onClose}
+      secondaryAction={{
+        label: "Cancel",
+        onAction: onClose,
+        disabled: submitting,
+      }}
+      primaryAction={{
+        label: submitting ? "Assigning…" : "Assign",
+        onAction: handleConfirm,
+        disabled: !selected || submitting,
+        variant: "primary",
+      }}
+      maxWidthClassName="max-w-2xl"
+    >
+      <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+        {byMechanicForDate === null ? (
+          <div className="text-center text-sm text-muted-foreground py-8">Loading availability…</div>
+        ) : byMechanicForDate.length === 0 ? (
+          <div className="text-center text-sm text-muted-foreground py-8">
+            No mechanics at this shop.
+          </div>
+        ) : (
+          byMechanicForDate.map((row) => (
+            <div key={row.mechanicId} className="rounded-lg border border-border p-3">
+              <div className="text-sm font-medium text-foreground mb-2">{row.name}</div>
+              {row.slots.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No availability on this date.</p>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  {row.slots.map((slot) => {
+                    const isSelected =
+                      selected?.mechanicId === row.mechanicId &&
+                      String(selected.slot._id) === String(slot._id);
+                    return (
+                      <button
+                        key={String(slot._id)}
+                        type="button"
+                        onClick={() => setSelected({ mechanicId: row.mechanicId, slot })}
+                        className={`inline-flex items-center rounded-md px-3 py-1.5 text-xs font-medium border transition-colors ${
+                          isSelected
+                            ? "bg-primary text-primary-foreground border-primary"
+                            : "bg-background text-foreground border-border hover:bg-muted"
+                        }`}
+                      >
+                        {formatSlotTime(slot.start_time)}–{formatSlotTime(slot.end_time)}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+    </ConfirmationDialog>
+  );
+}
+
+function PostjobPhotoStrip({ bookingId }: { bookingId: Id<"bookings"> }) {
+  const photos = useQuery(api.bookings.getPostjobPhotoUrls, { bookingId });
+  if (!photos || photos.length === 0) return null;
+  return (
+    <div className="rounded-2xl bg-muted/20 p-4">
+      <DrawerFieldLabel className="mb-2">Service photos</DrawerFieldLabel>
+      <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+        {photos.map((photo) => (
+          <a
+            key={photo.storage_id}
+            href={photo.url ?? "#"}
+            target="_blank"
+            rel="noreferrer"
+            className="group block overflow-hidden rounded-lg border border-primary/10 bg-background"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={photo.url ?? ""}
+              alt={photo.caption ?? ""}
+              className="aspect-square w-full object-cover transition-transform group-hover:scale-[1.02]"
+            />
+            {photo.caption ? (
+              <p className="truncate border-t border-primary/10 px-2 py-1 text-[10px] text-muted-foreground">
+                {photo.caption}
+              </p>
+            ) : null}
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+

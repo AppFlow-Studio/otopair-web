@@ -1,44 +1,25 @@
 import type { Metadata } from "next";
 import { Inter, Lora, Roboto_Slab, Balthazar, Jersey_20 } from "next/font/google";
 import "./globals.css";
-import Navbar from "@/components/navbar";
-import FooterImage from "@/components/footerimage";
-import Footer from "@/components/footer";
-import ReactLenis from "lenis/react";
-// app/layout.tsx (or pages/_app.js)
-import Okta from 'next/font/local';
+import { ClerkProvider } from "@clerk/nextjs";
+import ConvexClientProvider from "@/components/providers/convex-client-provider";
+import Okta from "next/font/local";
 
-// app/layout.tsx (or pages/_app.js)
 const OktaRegular = Okta({
-  src: '../public/fonts/OktaItalic.otf', // Adjust path as needed
-  variable: '--font-Okta', // Optional: for CSS variables
-  // You can add more font variations if needed:
-  // src: [
-  //   {
-  //     path: '../public/fonts/MyFont-Regular.otf',
-  //     weight: '400',
-  //     style: 'normal',
-  //   },
-  //   {
-  //     path: '../public/fonts/MyFont-Bold.otf',
-  //     weight: '700',
-  //     style: 'normal',
-  //   },
-  // ],
+  src: "../public/fonts/OktaItalic.otf",
+  variable: "--font-Okta",
 });
 
 const Inters = Inter({
   variable: "--font-inter",
   subsets: ["latin"],
   display: "swap",
-
 });
 
 const Loras = Lora({
   variable: "--font-Lora",
   subsets: ["latin"],
   display: "swap",
-
 });
 
 const Robotoslab = Roboto_Slab({
@@ -47,7 +28,6 @@ const Robotoslab = Roboto_Slab({
   style: "normal",
   subsets: ["latin"],
   display: "swap",
-
 });
 
 const Balthazars = Balthazar({
@@ -56,7 +36,14 @@ const Balthazars = Balthazar({
   style: "normal",
   subsets: ["latin"],
   display: "swap",
+});
 
+const Jersey20s = Jersey_20({
+  variable: "--font-Jersey_20",
+  weight: ["400"],
+  style: "normal",
+  subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
@@ -74,29 +61,20 @@ export const metadata: Metadata = {
   },
 };
 
-const Jersey20s = Jersey_20({
-  variable: "--font-Jersey_20",
-  weight: ["400"],
-  style: "normal",
-  subsets: ["latin"],
-  display: "swap",
-});
-
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body
-        className={`${Inters.variable} ${Loras.variable} ${Robotoslab.variable} ${Balthazars.variable} ${OktaRegular.variable} ${Jersey20s.variable} antialiased overscroll-none`}
-      >
-        <Navbar />
-        <ReactLenis root>{children}</ReactLenis>
-        <Footer />
-        <FooterImage />
-      </body>
-    </html>
+    <ClerkProvider afterSignOutUrl="/">
+      <html lang="en" suppressHydrationWarning>
+        <body
+          className={`${Inters.variable} ${Loras.variable} ${Robotoslab.variable} ${Balthazars.variable} ${OktaRegular.variable} ${Jersey20s.variable} antialiased overscroll-none`}
+        >
+          <ConvexClientProvider>{children}</ConvexClientProvider>
+        </body>
+      </html>
+    </ClerkProvider>
   );
 }

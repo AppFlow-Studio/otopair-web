@@ -1,0 +1,857 @@
+{
+  "claim_ledger": {
+    "adapters_seen": [
+      "pipeline_extraction",
+      "sylvania_bulbs",
+      "trico_wipers"
+    ],
+    "claim_rows": 22,
+    "families_seen": [
+      "aftermarket_catalog",
+      "web_search"
+    ],
+    "fields_conflict_tie": 0,
+    "fields_contested": 1,
+    "fields_multi_family_agreement": 1,
+    "fields_single_source": 17,
+    "fields_with_claims": 18
+  },
+  "external_joins": {
+    "complaint_signal": {
+      "top": "EXTERIOR LIGHTING",
+      "total": 743
+    },
+    "epa": {
+      "co2": 426,
+      "fuel_cost_yr": 2950,
+      "mpg": [
+        19,
+        24,
+        21
+      ]
+    },
+    "manual": {
+      "file_id": null,
+      "kind": "maintenance_schedule",
+      "oem": true,
+      "pages": 6,
+      "url": "https://www.kia.com/content/dam/kwcms/kme/uk/en/assets/static/owners/service-maintenance/Kia_Dashboard_Warning_Lights.pdf"
+    },
+    "recalls_open": 7
+  },
+  "fluids_and_capacities": {
+    "brake_fluid_capacity_oz": null,
+    "brake_fluid_type": "DOT 4",
+    "coolant_capacity_qts": 12.9,
+    "coolant_type": "Phosphate-based OAT (pink/red ethylene glycol)",
+    "oil_capacity_qts": 6.9,
+    "oil_viscosity": "5W-30",
+    "ps_fluid_capacity_oz": null,
+    "ps_fluid_type": null,
+    "trans_fluid_capacity_qts": 4
+  },
+  "headline": {
+    "epa_joined": true,
+    "field_corroboration": "6%",
+    "fields_with_claims": 18,
+    "fitment_multi_source": "0%",
+    "has_manual": false,
+    "months_fill": "46%",
+    "parts_quotable": "9/10",
+    "rotor_minimums": 0,
+    "status": "complete"
+  },
+  "identity_coherence": {
+    "aspiration": "natural",
+    "cylinders": 6,
+    "displacement_l": 3.8,
+    "engine_code": "G6DN",
+    "epa_says": {
+      "cylinders": 6,
+      "displacement_l": 3.8,
+      "fuel": "Regular Gasoline",
+      "mismatch": null,
+      "turbo": false
+    },
+    "fuel_type": "Gasoline",
+    "plugs_match_cylinders": true,
+    "spark_plug_quantity": 6,
+    "timing_system": "chain",
+    "trans_fluid_type": "ATF SP-IV",
+    "transmission_type": "automatic"
+  },
+  "intervals": {
+    "by_provenance": {
+      "adversarial_corrected": 1,
+      "default_fallback": 9,
+      "deterministic": 8,
+      "enriched": 7,
+      "vdb_schedule": 3
+    },
+    "months_fill": "46%",
+    "rows": [
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "ac_recharge",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 48,
+        "provenance": "default_fallback",
+        "service": "battery_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "battery_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": 24,
+        "provenance": "enriched",
+        "service": "brake_fluid_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "enriched",
+        "service": "brake_pad_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "check_engine_light",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 60,
+        "provenance": "adversarial_corrected",
+        "service": "coolant_flush",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "diagnostic_scan",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 75000,
+        "months": 60,
+        "provenance": "enriched",
+        "service": "differential_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "emissions_test",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "engine_intake_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 15000,
+        "months": 12,
+        "provenance": "vdb_schedule",
+        "service": "filter_replacement",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": 60000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "fuel_system_cleaning",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "multi_point_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 7500,
+        "months": 12,
+        "provenance": "vdb_schedule",
+        "service": "oil_change",
+        "status": "active"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "pre_purchase_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 70000,
+        "months": 72,
+        "provenance": "default_fallback",
+        "service": "rotor_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": 60000,
+        "months": 72,
+        "provenance": "enriched",
+        "service": "serpentine_belt",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 97500,
+        "months": 60,
+        "provenance": "enriched",
+        "service": "spark_plugs",
+        "status": "scheduled"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "state_inspection",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "tire_balance",
+        "status": "on_demand"
+      },
+      {
+        "bookable": true,
+        "miles": 50000,
+        "months": 60,
+        "provenance": "default_fallback",
+        "service": "tire_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 7500,
+        "months": 12,
+        "provenance": "vdb_schedule",
+        "service": "tire_rotation",
+        "status": "active"
+      },
+      {
+        "bookable": false,
+        "miles": 75000,
+        "months": null,
+        "provenance": "enriched",
+        "service": "transfer_case_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": 30000,
+        "months": 36,
+        "provenance": "enriched",
+        "service": "transmission_service",
+        "status": "estimated"
+      },
+      {
+        "bookable": true,
+        "miles": null,
+        "months": null,
+        "provenance": "deterministic",
+        "service": "wheel_alignment",
+        "status": "on_demand"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wheel_bearing_replacement",
+        "status": "estimated"
+      },
+      {
+        "bookable": false,
+        "miles": null,
+        "months": null,
+        "provenance": "default_fallback",
+        "service": "wiper_blade_replacement",
+        "status": "estimated"
+      }
+    ],
+    "total": 28,
+    "with_miles": 13,
+    "with_months": 13
+  },
+  "labor": {
+    "by_source": {
+      "aggregated": 8,
+      "default_fallback": 20
+    },
+    "rows": [
+      {
+        "hours": 0.4,
+        "service": "oil_change",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.3,
+        "service": "tire_rotation",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.2,
+        "service": "filter_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.3,
+        "service": "battery_replacement",
+        "source": "aggregated"
+      },
+      {
+        "hours": 0.8,
+        "service": "brake_fluid_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "coolant_flush",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1.5,
+        "service": "transmission_service",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "wheel_alignment",
+        "source": "aggregated"
+      },
+      {
+        "hours": 1,
+        "service": "fuel_system_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "differential_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "battery_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 3,
+        "service": "rotor_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "brake_pad_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.25,
+        "service": "tire_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "tire_balance",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "spark_plugs",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.3,
+        "service": "emissions_test",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "state_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "check_engine_light",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.75,
+        "service": "pre_purchase_inspection",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.5,
+        "service": "diagnostic_scan",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "serpentine_belt",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.2,
+        "service": "wiper_blade_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "transfer_case_service",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "ac_recharge",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1,
+        "service": "engine_intake_cleaning",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 1.5,
+        "service": "wheel_bearing_replacement",
+        "source": "default_fallback"
+      },
+      {
+        "hours": 0.75,
+        "service": "multi_point_inspection",
+        "source": "default_fallback"
+      }
+    ],
+    "total": 28
+  },
+  "parts": {
+    "corroborated_2plus_sources": 0,
+    "corroboration_rate": "0%",
+    "rows": [
+      {
+        "best_price": 16.88,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "28113-F2000",
+        "price_domains": [
+          "kiapartsnow.com",
+          "kia.parts",
+          "kia.oempartsonline.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": true,
+        "role": "air_filter",
+        "scraped_name": "Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "kia.oempartsonline.com"
+        ],
+        "triangle_ok": false,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 11.6,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "28113-A9100",
+        "price_domains": [
+          "kia.oempartsonline.com",
+          "villageofgreenwoodlake.gov",
+          "kia.parts"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "air_filter",
+        "scraped_name": "Engine Air Filter",
+        "service": "filter_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "ebay.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 21.08,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "00232-19057",
+        "price_domains": [
+          "partshyundai.com",
+          "hyundaiparts.checkeredflag.com"
+        ],
+        "price_rows": 2,
+        "refute_flagged": false,
+        "role": "atf_fluid",
+        "scraped_name": "Hyundai/Kia ATF SP-IV Automatic Transmission Fluid",
+        "service": "transmission_service",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "blauparts.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 2
+      },
+      {
+        "best_price": 102.36,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "37110c2802",
+        "price_domains": [
+          "kia.oempartsonline.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "battery",
+        "scraped_name": "Battery",
+        "service": "battery_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "kia.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 105.03,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "58101s9a00",
+        "price_domains": [
+          "kia.oempartsonline.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "front_brake_pad",
+        "scraped_name": "Brake Pads Front",
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "kia.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 102.49,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "51712-S9000",
+        "price_domains": [
+          "kia.oempartsonline.com",
+          "kia.parts",
+          "kiaparts-superstore.ca"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "front_rotor",
+        "scraped_name": "Rotor",
+        "service": "rotor_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "kia.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 9.4,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "26320-3CKB0",
+        "price_domains": [
+          "kiapartsonline.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "oil_filter",
+        "scraped_name": "Oil Filter",
+        "service": "oil_change",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "kia.parts"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      },
+      {
+        "best_price": 101.92,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "58302-S9A35",
+        "price_domains": [
+          "kia.parts",
+          "kiacheapparts.com",
+          "kia.oempartsonline.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "rear_brake_pad",
+        "scraped_name": "Pad Kit Rear Disc Br",
+        "service": "brake_pad_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "kia.parts"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 119.02,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "58411-S2300",
+        "price_domains": [
+          "kia.parts",
+          "kia.oempartsonline.com",
+          "genuinekiapartsandaccessories.com"
+        ],
+        "price_rows": 3,
+        "refute_flagged": false,
+        "role": "rear_rotor",
+        "scraped_name": "Rotor",
+        "service": "rotor_replacement",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "kia.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 3
+      },
+      {
+        "best_price": 17.17,
+        "confidence": 0.7,
+        "data_quality": "scraped",
+        "mechanic_verified": false,
+        "oem": "1884911070",
+        "price_domains": [
+          "kia.oempartsonline.com"
+        ],
+        "price_rows": 1,
+        "refute_flagged": false,
+        "role": "spark_plug",
+        "scraped_name": "Spark Plug",
+        "service": "spark_plugs",
+        "service_role": "core",
+        "source_count": 1,
+        "source_domains": [
+          "kia.oempartsonline.com"
+        ],
+        "triangle_ok": true,
+        "trusted_price_rows": 1
+      }
+    ],
+    "total": 10,
+    "triangle_broken": [
+      {
+        "oem": "28113-F2000",
+        "role": "air_filter",
+        "why": "refute_flagged"
+      }
+    ],
+    "triangle_ok": 9,
+    "with_observed_title": 10
+  },
+  "rotor": {
+    "front_label": null,
+    "front_min_mm": null,
+    "front_nominal_mm": null,
+    "front_quality": null,
+    "rear_label": null,
+    "rear_min_mm": null,
+    "rear_nominal_mm": null,
+    "rear_quality": null,
+    "source_url": null
+  },
+  "run": {
+    "applicable_fill_rate": 45,
+    "duration_min": 14.7,
+    "error_tags": {
+      "applicable_services_empty_fallback_used": 1,
+      "fitment_refute_kept_multisource": 1,
+      "fitment_verify_pass2": 1,
+      "role_resource": 3,
+      "rotor_min": 2,
+      "trans_fluid_suspect": 1
+    },
+    "field_gap_count": 76,
+    "fill_rate": 86,
+    "quotability": {
+      "pct": 0.83,
+      "services": [
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "battery_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "brake_fluid_flush"
+        },
+        {
+          "core_total": 3,
+          "core_with_fitment": 3,
+          "core_with_price": 3,
+          "slug": "brake_pad_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 0,
+          "core_with_price": 0,
+          "missing_roles": [
+            "coolant"
+          ],
+          "slug": "coolant_flush"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "differential_service"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "missing_roles": [
+            "cabin_filter"
+          ],
+          "slug": "filter_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "fuel_system_cleaning"
+        },
+        {
+          "core_total": 4,
+          "core_with_fitment": 4,
+          "core_with_price": 4,
+          "slug": "oil_change"
+        },
+        {
+          "core_total": 5,
+          "core_with_fitment": 5,
+          "core_with_price": 5,
+          "slug": "rotor_replacement"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "spark_plugs"
+        },
+        {
+          "core_total": 1,
+          "core_with_fitment": 1,
+          "core_with_price": 1,
+          "slug": "tire_balance"
+        },
+        {
+          "core_total": 2,
+          "core_with_fitment": 2,
+          "core_with_price": 2,
+          "slug": "transmission_service"
+        }
+      ]
+    },
+    "runId": "tx7c3xw3h565x8yqmxj9gh77nd8bq4ab",
+    "sanity_flag_count": 7,
+    "sanity_flags_by_stage": {
+      "claim_ledger": 2,
+      "completion_gate": 1,
+      "fitment_refute": 2,
+      "interval_provenance": 1,
+      "trans_fluid": 1
+    },
+    "status": "complete",
+    "tokens_in": 22605,
+    "tokens_out": 10493,
+    "trigger": "new_vehicle",
+    "version": "v8",
+    "web_searches": 31
+  },
+  "vehicle": {
+    "chassis_code": "THE",
+    "confidence_avg": 0.8363685344827587,
+    "configId": "w57182e864j4mzf0y7d5wc00hn8bp0br",
+    "config_key": "2020_kia_telluride_ex_g6dn",
+    "drivetrain": "4WD",
+    "enrichment_status": "complete",
+    "fill_rate": 88,
+    "last_enriched_at": 1785690726963,
+    "make": "Kia",
+    "model": "Telluride",
+    "na_role_keys": [],
+    "trim": "EX",
+    "verified_fields": [],
+    "year": 2020
+  }
+}

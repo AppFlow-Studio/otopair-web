@@ -1,0 +1,89 @@
+/* Schedule calendar — react-big-calendar style overrides */
+
+.schedule-calendar .rbc-header {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+  border-color: var(--border);
+  text-transform: none;
+}
+
+.schedule-calendar .rbc-time-gutter .rbc-label {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+
+.schedule-calendar .rbc-day-slot .rbc-time-slot {
+  border-color: var(--border);
+}
+
+.schedule-calendar .rbc-month-view .rbc-month-row {
+  border-color: var(--border);
+}
+
+.schedule-calendar .rbc-date-cell.rbc-now > a,
+.schedule-calendar .rbc-date-cell.rbc-now > button {
+  background-color: var(--primary);
+  color: #fff;
+  border-radius: 9999px;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.schedule-calendar .rbc-month-view .rbc-row-content {
+  pointer-events: none;
+}
+
+.schedule-calendar .rbc-month-view .rbc-row-content .rbc-event,
+.schedule-calendar .rbc-month-view .rbc-row-content .rbc-date-cell,
+.schedule-calendar .rbc-month-view .rbc-row-content .rbc-show-more {
+  pointer-events: auto;
+}
+
+.schedule-calendar .rbc-day-bg:hover {
+  background-color: color-mix(in srgb, var(--primary) 4%, transparent);
+  cursor: pointer;
+}
+
+.schedule-calendar .rbc-event {
+  border: none;
+  padding: 0;
+}
+
+.schedule-calendar .rbc-month-view .rbc-event {
+  padding: 1px 2px;
+  background: transparent;
+  box-shadow: none;
+  width: 100%;
+}
+
+.schedule-calendar .rbc-off-range-bg {
+  background-color: var(--muted);
+}
+
+
+/* Blocked slot diagonal stripe pattern */
+.blocked-slot-pattern {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(239, 68, 68, 0.06),
+    rgba(239, 68, 68, 0.06) 4px,
+    rgba(239, 68, 68, 0.14) 4px,
+    rgba(239, 68, 68, 0.14) 8px
+  );
+  border: 1px dashed rgba(239, 68, 68, 0.35);
+  border-radius: 0.25rem;
+}
+
+.blocked-slot-pattern:hover {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(239, 68, 68, 0.1),
+    rgba(239, 68, 68, 0.1) 4px,
+    rgba(239, 68, 68, 0.2) 4px,
+    rgba(239, 68, 68, 0.2) 8px
+  );
+}

@@ -1,0 +1,61 @@
+{
+  "key": "2024-chevrolet-equinox_premier-spark_plug",
+  "url": "https://g.oempartsonline.com/oem-2024-chevrolet-equinox_premier-spark_plug.html",
+  "legs": [
+    {
+      "via": "firecrawl_std",
+      "ok": true,
+      "status": 200,
+      "ms": 2375,
+      "content_len": 308157,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3465
+    },
+    {
+      "via": "firecrawl_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 5043,
+      "content_len": 291318,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "markdown_len": 3398
+    },
+    {
+      "via": "scrapling_http",
+      "ok": true,
+      "status": 200,
+      "ms": 768,
+      "content_len": 201016,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true
+    },
+    {
+      "via": "scrapling_stealth",
+      "ok": true,
+      "status": 200,
+      "ms": 3583,
+      "content_len": 256161,
+      "title": "Online GM Parts Superstore | OEM Parts Online",
+      "final_url": "https://g.oempartsonline.com/",
+      "class": "redirected_home",
+      "has_price_class": true,
+      "has_jsonld_product": true,
+      "has_fitment_marker": true,
+      "solve_cloudflare": false
+    }
+  ]
+}

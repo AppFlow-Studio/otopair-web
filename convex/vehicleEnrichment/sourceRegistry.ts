@@ -274,6 +274,15 @@ const OEM_PARTS_ONLINE_SUBDOMAINS: Record<string, string> = {
   "Land Rover":    "landrover",
   Jaguar:          "jaguar",
   Mitsubishi:      "mitsubishi",
+  // Aug 11 2026 — probed live. Acura has its own storefront; Lincoln's does
+  // NOT resolve (dead DNS, same as genesis/mercedes) so it rides FORD's,
+  // and the Stellantis siblings ride Mopar's. Without these the make has no
+  // registry entry at all and loses the entire deterministic store lane.
+  Acura:           "acura",
+  Lincoln:         "ford",
+  Fiat:            "mopar",
+  "Alfa Romeo":    "mopar",
+  Scion:           "toyota",
 };
 
 /** Mercedes-Benz — `mercedes.oempartsonline.com` never resolved (dead DNS,
@@ -294,6 +303,23 @@ const MERCEDES_CONFIG: MakeSourceConfig = {
     searchQueries: (year, _mk, model) => [
       `${year} Mercedes-Benz ${model} maintenance schedule oil change intervals miles months`,
       `${year} Mercedes-Benz ${model} oil capacity coolant capacity specifications`,
+    ],
+  },
+};
+
+/** MINI — `mini.oempartsonline.com` does not resolve (probed Aug 11 2026), so
+ *  it rides BMW's storefront and reuses BMW's richer part-slug set ("brake
+ *  disc" rather than "brake rotor"). Same shape as the Genesis → Hyundai and
+ *  Mercedes carve-outs above. */
+const MINI_CONFIG: MakeSourceConfig = {
+  parts: {
+    storeBaseUrl: "https://bmw.oempartsonline.com",
+    partSlugs: BMW_PART_SLUGS,
+  },
+  manual: {
+    searchQueries: (year, _mk, model) => [
+      `${year} MINI ${model} maintenance schedule service intervals miles months`,
+      `${year} MINI ${model} oil change brake fluid coolant flush interval`,
     ],
   },
 };
@@ -390,6 +416,32 @@ export const SOURCE_REGISTRY: Record<string, MakeSourceConfig> = {
   "Land Rover":    oemPartsOnlineConfig("Land Rover"),
   Jaguar:          oemPartsOnlineConfig("Jaguar"),
   Mitsubishi:      oemPartsOnlineConfig("Mitsubishi"),
+
+  // ── Makes that had NO entry at all until Aug 11 2026 ──────────────────
+  // An unregistered make makes getSourceConfig return null, which silently
+  // removes the Tier-1 site-scoped SERP in utils/roleResource and the
+  // vehicle-slug resolution in categoryHarvest — the whole deterministic
+  // storefront lane. Measured cost on the 2021 Lincoln Nautilus: SIX roles
+  // came back `never_found` (battery, coolant, air filter, both rotors,
+  // spark plug), 5 fitments total, quotability 0.50. The 2021 MINI
+  // Countryman was the same story at 6 fitments / 0.45.
+  //
+  // Probed live Aug 11 2026 (403 = alive behind Cloudflare, 000 = dead DNS):
+  //   acura.oempartsonline.com    403 → its own store
+  //   lincoln.oempartsonline.com  000 → falls back to FORD's (same family,
+  //                                     and 3 of the Nautilus's 5 existing
+  //                                     fitments were already Ford-stamped)
+  //   mini.oempartsonline.com     000 → falls back to BMW's, reusing
+  //                                     BMW_PART_SLUGS ("brake disc" wording)
+  // Same precedent as Genesis → Hyundai's storefront above.
+  Acura:           oemPartsOnlineConfig("Acura"),
+  Lincoln:         oemPartsOnlineConfig("Lincoln"),
+  MINI:            MINI_CONFIG,
+  Mini:            MINI_CONFIG,
+  // Stellantis siblings — the Mopar storefront serves the whole family.
+  Fiat:            oemPartsOnlineConfig("Fiat"),
+  "Alfa Romeo":    oemPartsOnlineConfig("Alfa Romeo"),
+  Scion:           oemPartsOnlineConfig("Scion"),
 };
 
 /** Returns true if this make has a source registry entry. */

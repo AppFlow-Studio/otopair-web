@@ -40,6 +40,7 @@ import {
   getDirtyIncompleteZones,
   INSPECTION_NAV_ZONE_IDS,
   deriveTierInspectionScope,
+  isBrakeDetailFieldRelevant,
   isFieldApplicableToZone,
   isFieldRequiredForZone,
   isSpecPrefillField,
@@ -192,16 +193,45 @@ const TRI_PILL_ACTIVE_CLASS: Record<TriValue, string> = {
   r: "border-red-300 bg-red-50 text-red-700",
 };
 
-// Tier 5 identity fields stay on screen every visit — only their required-ness
-// is gated by the Tier 5 trigger (first visit / tread increase). Applicability
-// (isFieldApplicableToZone) still gates payload derivation, so the visibility
+// Fields that stay on screen regardless of the booked service's scope —
+// only their required-ness is gated (isFieldRequiredForZone), not whether
+// they render. Applicability (isFieldApplicableToZone) still gates payload
+// derivation elsewhere in lib/inspection-template.ts, so the visibility
 // override lives here, at the render layer, rather than in that function.
+// Tire 5 identity fields (first visit / tread increase) started this
+// pattern; wheel-off brake/rotor fields (aside from the ones below, which
+// still depend on another field in the same corner rather than scope) and
+// steering/suspension play join it so a missing axle-scope selection on the
+// booking no longer hides the entire brake section — a mechanic can still
+// record what they see even when the service hasn't specified which axle
+// it covers yet.
 const ALWAYS_VISIBLE_FIELDS = new Set([
   "tire_brand",
   "tire_model",
   "tire_size",
   "dot_code",
   "run_flat",
+  "pad_inner",
+  "pad_outer",
+  "rotor_applicable",
+  "caliper",
+  "brake_hose",
+  "pad_brand",
+  "steering_play",
+  "ball_joint_play",
+  "wheel_bearing_play",
+]);
+
+// Wheel-off fields that also stay visible regardless of scope, but that
+// still depend on another answer in the same corner — no rotor detail once
+// "no rotor / drum brake" is selected, no measurement-method field until
+// something's actually been measured. See isBrakeDetailFieldRelevant.
+const SCOPE_INDEPENDENT_BRAKE_DETAIL_FIELDS = new Set([
+  "rotor",
+  "rotor_stamp",
+  "desc",
+  "pad_method",
+  "rotor_tool",
 ]);
 
 // "Applicable rotor present" gates whether these fields are grayed out —
@@ -1709,11 +1739,13 @@ function ZonePanel({
   const tireReplacementScheduled =
     (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
     completionContext.tireReplacementPositions?.includes(zoneId);
-  const applicableFields = zone.fields.filter(
-    (field) =>
-      ALWAYS_VISIBLE_FIELDS.has(field.key) ||
-      isFieldApplicableToZone(zoneId, field.key, completionContext),
-  );
+  const applicableFields = zone.fields.filter((field) => {
+    if (ALWAYS_VISIBLE_FIELDS.has(field.key)) return true;
+    if (SCOPE_INDEPENDENT_BRAKE_DETAIL_FIELDS.has(field.key)) {
+      return isBrakeDetailFieldRelevant(field.key, zs);
+    }
+    return isFieldApplicableToZone(zoneId, field.key, completionContext);
+  });
   const rotorPhotoRequired =
     (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
     !!completionContext.inspectionState &&

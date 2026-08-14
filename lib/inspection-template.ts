@@ -722,6 +722,34 @@ export function normalizeTireSize(value: string): string {
   return value.trim().toUpperCase().replace(/\s+/g, "");
 }
 
+/**
+ * Same-corner relevance for wheel-off brake detail fields, independent of
+ * the booked service's axle scope — no rotor-detail fields once "no rotor /
+ * drum brake" is selected, no measurement-method field until something's
+ * actually been measured. Shared by isFieldRequiredForZone (which
+ * additionally requires wheel-off scope before a field can be required) and
+ * the dialog's render layer (which shows these fields regardless of scope,
+ * but still respects this same-corner logic).
+ */
+export function isBrakeDetailFieldRelevant(
+  fieldKey: string,
+  zoneState: ZoneState | undefined,
+): boolean {
+  const wasMeasured = (key: string) =>
+    !zoneState?.statuses[key] && !!(zoneState?.measures[key] ?? "").trim();
+  if (fieldKey === "pad_method") {
+    return wasMeasured("pad_inner") || wasMeasured("pad_outer");
+  }
+  if (fieldKey === "rotor_tool") {
+    if (zoneState?.select.rotor_applicable === "no") return false;
+    return wasMeasured("rotor");
+  }
+  if (["rotor", "rotor_stamp", "desc"].includes(fieldKey)) {
+    return zoneState?.select.rotor_applicable === "yes";
+  }
+  return true;
+}
+
 export function isFieldRequiredForZone(
   zoneId: ZoneId,
   fieldKey: string,
@@ -741,16 +769,9 @@ export function isFieldRequiredForZone(
     }
     const scope = deriveTierInspectionScope(context);
     const zoneState = context.inspectionState?.zones[zoneId];
-    const wasMeasured = (key: string) =>
-      !zoneState?.statuses[key] && !!(zoneState?.measures[key] ?? "").trim();
-    if (fieldKey === "pad_method") {
+    if (fieldKey === "pad_method" || fieldKey === "rotor_tool") {
       if (!scope.tier2Corners.includes(zoneId as CornerZoneId)) return false;
-      return wasMeasured("pad_inner") || wasMeasured("pad_outer");
-    }
-    if (fieldKey === "rotor_tool") {
-      if (!scope.tier2Corners.includes(zoneId as CornerZoneId)) return false;
-      if (zoneState?.select.rotor_applicable === "no") return false;
-      return wasMeasured("rotor");
+      return isBrakeDetailFieldRelevant(fieldKey, zoneState);
     }
     if (
       [
@@ -767,10 +788,7 @@ export function isFieldRequiredForZone(
     ) {
       const wheelOff = scope.tier2Corners.includes(zoneId as CornerZoneId);
       if (!wheelOff) return false;
-      if (["rotor", "rotor_stamp", "desc"].includes(fieldKey)) {
-        return zoneState?.select.rotor_applicable === "yes";
-      }
-      return true;
+      return isBrakeDetailFieldRelevant(fieldKey, zoneState);
     }
     if (["steering_play", "ball_joint_play", "wheel_bearing_play"].includes(fieldKey)) {
       return scope.tier3BCorners.includes(zoneId as CornerZoneId);

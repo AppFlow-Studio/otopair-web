@@ -53,6 +53,11 @@ import { v } from "convex/values";
 import type { Doc } from "../_generated/dataModel";
 import { queryMoat } from "./queryMoat";
 
+// recordVehicleFact's canonical-key dedupe over-fetches by this much so that
+// retracted rows sharing the key don't crowd out a live one. A point read on
+// an indexed sha256 key stays cheap; in practice the depth is 1-2.
+const DEDUPE_SCAN_LIMIT = 10;
+
 // -----------------------------------------------------------------------------
 // Shared validators — mirror the schema unions so a typo here surfaces at
 // codegen rather than at runtime.
@@ -171,9 +176,17 @@ export const recordVehicleFact = internalMutation({
           .withIndex("by_canonical_question", (q2) =>
             q2.eq("canonical_question_key", args.canonical_question_key),
           )
-          .take(1),
+          .take(DEDUPE_SCAN_LIMIT),
     );
-    const existing = existingRows[0] ?? null;
+    // A retracted row must NOT satisfy the dedupe. Retracted means the answer
+    // was withdrawn; counting it as "already recorded" telemetry-patches a dead
+    // row and silently drops the incoming fact, so a question that was ever
+    // retracted could never be answered again. Over-fetch and skip them —
+    // same attrition-absorbing read as vehicleFactsKB's canonical-hash lookup.
+    const existing =
+      existingRows.find(
+        (r) => (r.verification_status ?? "unverified") !== "retracted",
+      ) ?? null;
 
     const now = Date.now();
 

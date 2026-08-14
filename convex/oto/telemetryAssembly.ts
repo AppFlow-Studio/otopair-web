@@ -26,7 +26,14 @@ export type TurnSample = {
   latency_ms: number;
   /** Tool names in dispatch order: data, state, terminal. */
   tool_names: string[];
-  branch: "terminal" | "text_only" | "data_continue" | "forced_final";
+  branch:
+    | "terminal"
+    | "text_only"
+    | "data_continue"
+    | "forced_final"
+    // v0.23 state-contract retry: a repair turn that re-issued
+    // update_conversation_state with forced tool_choice (chat.ts).
+    | "state_repair";
 };
 
 /** The conversation-state writeback tool (Locked Principle: every

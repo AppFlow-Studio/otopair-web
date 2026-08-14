@@ -99,6 +99,13 @@ const serviceClaimsValidator = v.optional(
       service_mileage: v.optional(v.number()),
       service_age_days: v.optional(v.number()),
       service_date: v.optional(v.number()),
+      // W4.3 (QA K3) — how sure the user sounded about THIS claim. "hedged"
+      // ("I think…", "pretty sure…", "like 6 months ago?") must not carry the
+      // same weight as a plain assertion. Absent = "certain" (old payloads
+      // keep their exact prior behavior).
+      stated_confidence: v.optional(
+        v.union(v.literal("certain"), v.literal("hedged")),
+      ),
     }),
   ),
 );
@@ -112,6 +119,7 @@ type VehicleTruthInputs = {
     service_mileage?: number;
     service_age_days?: number;
     service_date?: number;
+    stated_confidence?: "certain" | "hedged";
   }>;
   fault_lights?: string[];
   // Set true ONLY after the user explicitly reconfirms a large-but-real forward
@@ -189,16 +197,22 @@ async function applyVehicleTruthImpl(
   // inversion bug — it flagged a just-finished service and DROPPED the score.
   const servicesFlagged: string[] = [];
   const servicesCompleted: string[] = [];
+  // W4.3 (QA K3) — subset of servicesCompleted the user HEDGED ("I think…",
+  // "pretty sure…"). Their records get confidence: "self_reported_hedged"
+  // below, and the list is returned so the confirm card can say the log was
+  // noted as unsure.
+  const servicesCompletedHedged: string[] = [];
   const codesToAdd: string[] = [];
   const codesToClear: string[] = [];
   // recordType → the past anchor (mileage/date) the user reported for it. A
   // completed claim with no past values resolves to undefined → today/current.
   const completedRecordAnchors = new Map<
     string,
-    { mileage?: number; date?: number }
+    { mileage?: number; date?: number; hedged?: boolean }
   >();
   for (const claim of args.service_claims ?? []) {
     if (claim.kind === "completed") {
+      const hedged = claim.stated_confidence === "hedged";
       const code = symptomForServiceSlug(claim.service_slug);
       if (code) codesToClear.push(code);
       const recordType = recordTypeForServiceSlug(claim.service_slug);
@@ -206,9 +220,11 @@ async function applyVehicleTruthImpl(
         completedRecordAnchors.set(recordType, {
           mileage: resolveServiceMileage(claim.service_mileage, owner.mileage ?? null),
           date: resolveServiceDate(claim.service_date, claim.service_age_days, now),
+          hedged,
         });
       }
       servicesCompleted.push(claim.service_slug);
+      if (hedged) servicesCompletedHedged.push(claim.service_slug);
     } else {
       const code = symptomForServiceSlug(claim.service_slug);
       if (code) { codesToAdd.push(code); servicesFlagged.push(claim.service_slug); }
@@ -262,6 +278,17 @@ async function applyVehicleTruthImpl(
   for (const [recordType, anchor] of completedRecordAnchors) {
     const recordMileage = anchor.mileage ?? currentOdometerFallback;
     const recordDate = anchor.date ?? now;
+    // W4.3 (QA K3) — a HEDGED claim must not write with the weight of a
+    // confident self-report. The record's weight mechanism is the categorical
+    // `confidence` label (schema.ts maintenance_records; vehicleHealth.ts
+    // derives record_provenance from it — anything ≠ "verified" reads as
+    // self_reported, so "self_reported_hedged" stays in the soft bucket for
+    // every existing reader while persisting the hedge). serviceSource is the
+    // audit-trail companion (writer convention per maintenance.upsertRecord).
+    // Certain claims stamp NOTHING — byte-identical to pre-W4.3 behavior.
+    const hedgedStamp = anchor.hedged
+      ? { serviceSource: "oto_chat", confidence: "self_reported_hedged" }
+      : {};
     const existing = await ctx.db
       .query("maintenance_records")
       .withIndex("by_vehicle_and_type", (q: any) =>
@@ -272,6 +299,7 @@ async function applyVehicleTruthImpl(
         lastServiceDate: recordDate,
         lastServiceMileage: recordMileage,
         customInputs: undefined,
+        ...hedgedStamp,
         updatedAt: now,
       } as any);
     } else {
@@ -280,6 +308,7 @@ async function applyVehicleTruthImpl(
         type: recordType,
         lastServiceDate: recordDate,
         lastServiceMileage: recordMileage,
+        ...hedgedStamp,
         createdAt: now,
         updatedAt: now,
       } as any);
@@ -294,7 +323,16 @@ async function applyVehicleTruthImpl(
     });
   }
 
-  return { ok: true, mileageUpdated, servicesFlagged, servicesCompleted, faultLightsAdded };
+  return {
+    ok: true,
+    mileageUpdated,
+    servicesFlagged,
+    servicesCompleted,
+    // Subset of servicesCompleted whose claims were hedged — the confirm card
+    // uses this to note the log was recorded as unsure.
+    servicesCompletedHedged,
+    faultLightsAdded,
+  };
 }
 
 export const applyVehicleTruth = mutation({

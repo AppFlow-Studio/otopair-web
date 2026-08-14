@@ -3520,6 +3520,32 @@ export default defineSchema({
     last_user_intent: v.optional(v.string()),
     state_updated_at: v.optional(v.number()),
     // -----------------------------------------------------------------------
+    // W3.2 (2026-08-13) — typed open-symptom ledger (D-43, D-15).
+    // An unresolved safety-relevant symptom used to live only in the free-text
+    // arc_summary / established_facts, so a subject change dropped it — the
+    // report's "user mentioned a soft brake pedal, then asked about oil, and
+    // the brake thread was never picked back up." Rows are appended
+    // DETERMINISTICALLY by chat.ts when the Wave 2 safety classifier fires
+    // (never by the model), deduped by `category` among open rows, and marked
+    // addressed when a booking that bundles them fires (W3.3).
+    // -----------------------------------------------------------------------
+    open_symptoms: v.optional(
+      v.array(
+        v.object({
+          text: v.string(), // user's own words, truncated
+          category: v.string(), // hazard category / matched light — the dedupe key
+          safety_relevant: v.boolean(),
+          status: v.union(
+            v.literal("open"),
+            v.literal("addressed"),
+            v.literal("dismissed"),
+          ),
+          opened_at: v.number(),
+          addressed_at: v.optional(v.number()),
+        }),
+      ),
+    ),
+    // -----------------------------------------------------------------------
     // [RESTORED post-merge — Sprint 2 polite-exit counter]
     // Tracks how many turns of symptom-narrowing have happened without
     // converging on a diagnostic form or direct service. chat.ts increments

@@ -1610,6 +1610,20 @@ export const _writeManualIntervals = internalMutation({
   args: {
     vehicleConfigId: v.id("vehicle_configs"),
     source_url: v.optional(v.string()),
+    /**
+     * Provenance for these rows. UNSET means the PDF pipeline — `oem_manual`
+     * at 0.95, which is what this mutation always wrote and what every existing
+     * caller still gets byte for byte.
+     *
+     * Supplied by the website-route pipeline (routeSources/), which reads the
+     * same manuals as HTML and must NOT be able to claim the PDF path's
+     * authority: `oem_manual` is in PROTECTED_DATA_QUALITY, so a route row
+     * stamped with it would permanently refuse the real manual's extraction.
+     * See routeSources/provenance.ts.
+     */
+    provenance: v.optional(
+      v.object({ data_quality: v.string(), confidence: v.float64() }),
+    ),
     rows: v.array(
       v.object({
         service_slug: v.string(),
@@ -1625,6 +1639,28 @@ export const _writeManualIntervals = internalMutation({
     let skipped = 0;
     let unseeded = 0;
     const decisions: string[] = [];
+
+    // An EXPLICIT provenance may never be a protected one. The protected set is
+    // what lets a row refuse later writes, and the only writer entitled to it is
+    // the default path below — a caller that names its own quality is by
+    // definition not the factory-PDF extraction. Refused rather than thrown so a
+    // bad caller cannot take the pipeline down, and logged as an error because
+    // it is a bug, not a runtime condition.
+    if (
+      args.provenance &&
+      (PROTECTED_DATA_QUALITY as readonly string[]).includes(
+        args.provenance.data_quality.trim().toLowerCase(),
+      )
+    ) {
+      console.error(
+        `[manual-library] REFUSED interval write: caller supplied protected data_quality ` +
+          `"${args.provenance.data_quality}" (config ${args.vehicleConfigId})`,
+      );
+      return { written: 0, skipped: args.rows.length, unseeded: 0, refused: true };
+    }
+
+    const quality = args.provenance?.data_quality ?? "oem_manual";
+    const confidence = args.provenance?.confidence ?? 0.95;
 
     for (const row of args.rows) {
       const svc = await ctx.db
@@ -1660,11 +1696,11 @@ export const _writeManualIntervals = internalMutation({
         interval_months: row.interval_months ?? undefined,
         status: "scheduled",
         display_string: row.display_string ?? undefined,
-        confidence: 0.95,
-        data_quality: "oem_manual",
+        confidence,
+        data_quality: quality,
         // Clear the months-provenance override when this write lands a REAL
-        // months from the manual: the row's own data_quality ("oem_manual") is
-        // then the truth for both numbers. Leaving a stale
+        // months from the manual: the row's own data_quality (`quality`, above)
+        // is then the truth for both numbers. Leaving a stale
         // interval_months_source="default_fallback" here would under-report
         // genuine OEM data, which is its own kind of wrong.
         //
@@ -1691,10 +1727,11 @@ export const _writeManualIntervals = internalMutation({
 
     console.log(
       `[manual-library] intervals written=${written} skipped=${skipped} unseeded=${unseeded}` +
+        ` quality=${quality}` +
         (args.source_url ? ` src=${args.source_url}` : "") +
         ` [${decisions.join(", ")}]`,
     );
-    return { written, skipped, unseeded };
+    return { written, skipped, unseeded, refused: false };
   },
 });
 

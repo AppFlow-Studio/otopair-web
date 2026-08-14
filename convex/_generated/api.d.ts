@@ -75,6 +75,7 @@ import type * as devOnly_fluidPackAudit from "../devOnly/fluidPackAudit.js";
 import type * as devOnly_gateResweep from "../devOnly/gateResweep.js";
 import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
 import type * as devOnly_laborWebSpread from "../devOnly/laborWebSpread.js";
+import type * as devOnly_makeCoverageAudit from "../devOnly/makeCoverageAudit.js";
 import type * as devOnly_oilCoverage from "../devOnly/oilCoverage.js";
 import type * as devOnly_olpProbe from "../devOnly/olpProbe.js";
 import type * as devOnly_partResurrectSweep from "../devOnly/partResurrectSweep.js";
@@ -83,6 +84,7 @@ import type * as devOnly_purgeEstimatorObs from "../devOnly/purgeEstimatorObs.js
 import type * as devOnly_reassignShopLogins from "../devOnly/reassignShopLogins.js";
 import type * as devOnly_repriceJsonProbe from "../devOnly/repriceJsonProbe.js";
 import type * as devOnly_seedChelalaCopy from "../devOnly/seedChelalaCopy.js";
+import type * as devOnly_urlProbe from "../devOnly/urlProbe.js";
 import type * as devOnly_validateQuoteEngine from "../devOnly/validateQuoteEngine.js";
 import type * as devOnly_vdbProbe from "../devOnly/vdbProbe.js";
 import type * as devOnly_verifyLabor from "../devOnly/verifyLabor.js";
@@ -409,6 +411,7 @@ import type * as vehicleEnrichment_cylindersRepair from "../vehicleEnrichment/cy
 import type * as vehicleEnrichment_determinismGate from "../vehicleEnrichment/determinismGate.js";
 import type * as vehicleEnrichment_determinismProbe from "../vehicleEnrichment/determinismProbe.js";
 import type * as vehicleEnrichment_drivetrainReconcile from "../vehicleEnrichment/drivetrainReconcile.js";
+import type * as vehicleEnrichment_egressProxy from "../vehicleEnrichment/egressProxy.js";
 import type * as vehicleEnrichment_endpointPartPriceMutations from "../vehicleEnrichment/endpointPartPriceMutations.js";
 import type * as vehicleEnrichment_endpointPartPriceProjection from "../vehicleEnrichment/endpointPartPriceProjection.js";
 import type * as vehicleEnrichment_epaFuelEconomy from "../vehicleEnrichment/epaFuelEconomy.js";
@@ -434,6 +437,7 @@ import type * as vehicleEnrichment_laborSibling from "../vehicleEnrichment/labor
 import type * as vehicleEnrichment_laborWebSearch from "../vehicleEnrichment/laborWebSearch.js";
 import type * as vehicleEnrichment_lemonLabor from "../vehicleEnrichment/lemonLabor.js";
 import type * as vehicleEnrichment_lemonManuals from "../vehicleEnrichment/lemonManuals.js";
+import type * as vehicleEnrichment_makeCoverage from "../vehicleEnrichment/makeCoverage.js";
 import type * as vehicleEnrichment_manualDirectSources from "../vehicleEnrichment/manualDirectSources.js";
 import type * as vehicleEnrichment_manualLibrary from "../vehicleEnrichment/manualLibrary.js";
 import type * as vehicleEnrichment_manualReducto from "../vehicleEnrichment/manualReducto.js";
@@ -467,6 +471,15 @@ import type * as vehicleEnrichment_reverseFitment from "../vehicleEnrichment/rev
 import type * as vehicleEnrichment_roleIdentity from "../vehicleEnrichment/roleIdentity.js";
 import type * as vehicleEnrichment_roleIdentityAudit from "../vehicleEnrichment/roleIdentityAudit.js";
 import type * as vehicleEnrichment_rotorThickness from "../vehicleEnrichment/rotorThickness.js";
+import type * as vehicleEnrichment_routeIngest from "../vehicleEnrichment/routeIngest.js";
+import type * as vehicleEnrichment_routeSources_assemble from "../vehicleEnrichment/routeSources/assemble.js";
+import type * as vehicleEnrichment_routeSources_cache from "../vehicleEnrichment/routeSources/cache.js";
+import type * as vehicleEnrichment_routeSources_ingest from "../vehicleEnrichment/routeSources/ingest.js";
+import type * as vehicleEnrichment_routeSources_intervals from "../vehicleEnrichment/routeSources/intervals.js";
+import type * as vehicleEnrichment_routeSources_manifest from "../vehicleEnrichment/routeSources/manifest.js";
+import type * as vehicleEnrichment_routeSources_provenance from "../vehicleEnrichment/routeSources/provenance.js";
+import type * as vehicleEnrichment_routeSources_types from "../vehicleEnrichment/routeSources/types.js";
+import type * as vehicleEnrichment_routeSources_walk from "../vehicleEnrichment/routeSources/walk.js";
 import type * as vehicleEnrichment_rpCatalog from "../vehicleEnrichment/rpCatalog.js";
 import type * as vehicleEnrichment_runFence from "../vehicleEnrichment/runFence.js";
 import type * as vehicleEnrichment_runHeadless from "../vehicleEnrichment/runHeadless.js";
@@ -483,6 +496,7 @@ import type * as vehicleEnrichment_sourceAdapters_http from "../vehicleEnrichmen
 import type * as vehicleEnrichment_sourceAdapters_myCarUserManual from "../vehicleEnrichment/sourceAdapters/myCarUserManual.js";
 import type * as vehicleEnrichment_sourceAdapters_registry from "../vehicleEnrichment/sourceAdapters/registry.js";
 import type * as vehicleEnrichment_sourceAdapters_rockauto from "../vehicleEnrichment/sourceAdapters/rockauto.js";
+import type * as vehicleEnrichment_sourceAdapters_routeIngestor from "../vehicleEnrichment/sourceAdapters/routeIngestor.js";
 import type * as vehicleEnrichment_sourceAdapters_summitCentric from "../vehicleEnrichment/sourceAdapters/summitCentric.js";
 import type * as vehicleEnrichment_sourceAdapters_sylvaniaBulbs from "../vehicleEnrichment/sourceAdapters/sylvaniaBulbs.js";
 import type * as vehicleEnrichment_sourceAdapters_tricoWipers from "../vehicleEnrichment/sourceAdapters/tricoWipers.js";
@@ -603,6 +617,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/gateResweep": typeof devOnly_gateResweep;
   "devOnly/laborValidation": typeof devOnly_laborValidation;
   "devOnly/laborWebSpread": typeof devOnly_laborWebSpread;
+  "devOnly/makeCoverageAudit": typeof devOnly_makeCoverageAudit;
   "devOnly/oilCoverage": typeof devOnly_oilCoverage;
   "devOnly/olpProbe": typeof devOnly_olpProbe;
   "devOnly/partResurrectSweep": typeof devOnly_partResurrectSweep;
@@ -611,6 +626,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/reassignShopLogins": typeof devOnly_reassignShopLogins;
   "devOnly/repriceJsonProbe": typeof devOnly_repriceJsonProbe;
   "devOnly/seedChelalaCopy": typeof devOnly_seedChelalaCopy;
+  "devOnly/urlProbe": typeof devOnly_urlProbe;
   "devOnly/validateQuoteEngine": typeof devOnly_validateQuoteEngine;
   "devOnly/vdbProbe": typeof devOnly_vdbProbe;
   "devOnly/verifyLabor": typeof devOnly_verifyLabor;
@@ -937,6 +953,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/determinismGate": typeof vehicleEnrichment_determinismGate;
   "vehicleEnrichment/determinismProbe": typeof vehicleEnrichment_determinismProbe;
   "vehicleEnrichment/drivetrainReconcile": typeof vehicleEnrichment_drivetrainReconcile;
+  "vehicleEnrichment/egressProxy": typeof vehicleEnrichment_egressProxy;
   "vehicleEnrichment/endpointPartPriceMutations": typeof vehicleEnrichment_endpointPartPriceMutations;
   "vehicleEnrichment/endpointPartPriceProjection": typeof vehicleEnrichment_endpointPartPriceProjection;
   "vehicleEnrichment/epaFuelEconomy": typeof vehicleEnrichment_epaFuelEconomy;
@@ -962,6 +979,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/laborWebSearch": typeof vehicleEnrichment_laborWebSearch;
   "vehicleEnrichment/lemonLabor": typeof vehicleEnrichment_lemonLabor;
   "vehicleEnrichment/lemonManuals": typeof vehicleEnrichment_lemonManuals;
+  "vehicleEnrichment/makeCoverage": typeof vehicleEnrichment_makeCoverage;
   "vehicleEnrichment/manualDirectSources": typeof vehicleEnrichment_manualDirectSources;
   "vehicleEnrichment/manualLibrary": typeof vehicleEnrichment_manualLibrary;
   "vehicleEnrichment/manualReducto": typeof vehicleEnrichment_manualReducto;
@@ -995,6 +1013,15 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/roleIdentity": typeof vehicleEnrichment_roleIdentity;
   "vehicleEnrichment/roleIdentityAudit": typeof vehicleEnrichment_roleIdentityAudit;
   "vehicleEnrichment/rotorThickness": typeof vehicleEnrichment_rotorThickness;
+  "vehicleEnrichment/routeIngest": typeof vehicleEnrichment_routeIngest;
+  "vehicleEnrichment/routeSources/assemble": typeof vehicleEnrichment_routeSources_assemble;
+  "vehicleEnrichment/routeSources/cache": typeof vehicleEnrichment_routeSources_cache;
+  "vehicleEnrichment/routeSources/ingest": typeof vehicleEnrichment_routeSources_ingest;
+  "vehicleEnrichment/routeSources/intervals": typeof vehicleEnrichment_routeSources_intervals;
+  "vehicleEnrichment/routeSources/manifest": typeof vehicleEnrichment_routeSources_manifest;
+  "vehicleEnrichment/routeSources/provenance": typeof vehicleEnrichment_routeSources_provenance;
+  "vehicleEnrichment/routeSources/types": typeof vehicleEnrichment_routeSources_types;
+  "vehicleEnrichment/routeSources/walk": typeof vehicleEnrichment_routeSources_walk;
   "vehicleEnrichment/rpCatalog": typeof vehicleEnrichment_rpCatalog;
   "vehicleEnrichment/runFence": typeof vehicleEnrichment_runFence;
   "vehicleEnrichment/runHeadless": typeof vehicleEnrichment_runHeadless;
@@ -1011,6 +1038,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/sourceAdapters/myCarUserManual": typeof vehicleEnrichment_sourceAdapters_myCarUserManual;
   "vehicleEnrichment/sourceAdapters/registry": typeof vehicleEnrichment_sourceAdapters_registry;
   "vehicleEnrichment/sourceAdapters/rockauto": typeof vehicleEnrichment_sourceAdapters_rockauto;
+  "vehicleEnrichment/sourceAdapters/routeIngestor": typeof vehicleEnrichment_sourceAdapters_routeIngestor;
   "vehicleEnrichment/sourceAdapters/summitCentric": typeof vehicleEnrichment_sourceAdapters_summitCentric;
   "vehicleEnrichment/sourceAdapters/sylvaniaBulbs": typeof vehicleEnrichment_sourceAdapters_sylvaniaBulbs;
   "vehicleEnrichment/sourceAdapters/tricoWipers": typeof vehicleEnrichment_sourceAdapters_tricoWipers;

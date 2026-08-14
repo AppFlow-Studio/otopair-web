@@ -5783,6 +5783,55 @@ export default defineSchema({
     .index("by_ymm", ["make", "model", "year"])
     .index("by_fetched_at", ["fetched_at"]),
 
+  /**
+   * Walk ledger for the WEBSITE-ROUTE pipeline (convex/vehicleEnrichment/
+   * routeSources/). One row per (source, vehicle) — deliberately NOT a row in
+   * `vehicle_manuals`.
+   *
+   * Keeping the two caches apart is the whole safety property. `vehicle_manuals`
+   * is one row per YMM and `shouldSkipManualLookup` reads `file_id`/`storage_id`
+   * on it as "this vehicle is resolved", skipping PDF discovery for
+   * MANUAL_REFRESH_DAYS. A route walk that recorded itself there would suppress
+   * the PDF pipeline for 180 days on every vehicle it touched — the same class
+   * of failure the `rejected_urls` field exists to prevent, and just as silent.
+   *
+   * The grain differs too: one vehicle can be walked by several route sources,
+   * where it has at most one manual PDF.
+   */
+  vehicle_route_docs: defineTable({
+    /** RouteSource.id from the manifest. */
+    source_id: v.string(),
+    make: v.string(), // lowercase canonical
+    model: v.string(), // lowercase canonical
+    year: v.number(),
+    /**
+     * "ok"   — content pages were read.
+     * "gap"  — the site genuinely does not carry this vehicle. Long TTL.
+     * "fail" — the site broke, blocked us, or changed shape. Short TTL.
+     *
+     * Collapsing gap into fail (or the reverse) is how a walker either retries
+     * forever on vehicles a site will never have, or caches a redesign as "this
+     * vehicle does not exist". See routeSources/types.ts.
+     */
+    outcome: v.string(),
+    reason: v.optional(v.string()),
+    /** Every URL fetched on the last walk, in order — the audit trail. */
+    visited: v.optional(v.array(v.string())),
+    /** Content pages that yielded usable text. */
+    content_urls: v.optional(v.array(v.string())),
+    sections: v.optional(v.number()),
+    /** Rows accepted by _writeManualIntervals on the last run. */
+    intervals_written: v.optional(v.number()),
+    /** The extraction named a different vehicle and was discarded whole. */
+    identity_rejected: v.optional(v.boolean()),
+    /** Refused by an anti-bot wall or a failed looksLikeContent assertion. */
+    blocked: v.optional(v.boolean()),
+    attempts: v.optional(v.number()),
+    walked_at: v.number(),
+  })
+    .index("by_source_ymm", ["source_id", "make", "model", "year"])
+    .index("by_walked_at", ["walked_at"]),
+
   // ── Part-number existence oracle ──────────────────────────────────────────
   // Catalog sitemaps enumerate every part number a storefront sells, with the
   // number encoded in the URL — so "does this part number exist for this make"

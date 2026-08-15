@@ -1639,6 +1639,12 @@ function CarDiagram({
   return (
     <svg width="300" height="232" viewBox="0 0 300 232" role="group" aria-label="Vehicle inspection map">
       <rect x="92" y="20" width="116" height="192" rx="32" className="fill-primary/[0.04] stroke-primary/15" strokeWidth="1.4" />
+      <path
+        d="M110 72 Q150 60 190 72 L184 106 L116 106 Z"
+        className="fill-primary/10 stroke-primary/15"
+        strokeWidth="1"
+      />
+      <rect x="120" y="150" width="60" height="30" rx="8" className="fill-primary/[0.06] stroke-primary/15" strokeWidth="1" />
       {(Object.keys(DIAGRAM_RECTS) as Array<Exclude<ZoneId, "OWNER">>).map((id) => {
         const r = DIAGRAM_RECTS[id];
         const done = isDone(id);

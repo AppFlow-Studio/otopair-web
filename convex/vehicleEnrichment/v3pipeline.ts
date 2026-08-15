@@ -89,6 +89,7 @@ import { validateChassisCodeYear, validateEngineCodeYear } from "./generationGat
 import { hasOemCatalogDomain } from "../partSelector";
 import { backfillKilledRoles } from "./utils/roleBackfill";
 import { resolveEngineCode, isNhtsaDescriptor, verifyEngineCode } from "./utils/engineCodeLookup";
+import { contradictsDecodedEngine, lookupKnownEngineCode } from "./utils/engineLookup";
 import { verifyPartFitments, VERIFY_ROLE_KEYS, VERIFY_MAX_PARTS } from "./utils/partFitmentVerifier";
 import { checkRoleIdentity } from "./roleIdentity";
 import { verifyTransFluid, decideTransFluidAction } from "./utils/transFluidVerifier";
@@ -2428,7 +2429,43 @@ export const enrichVehicleBatchV3 = internalAction({
       return null;
     };
 
-    if (isNhtsaDescriptor(args.engineCode)) {
+    // Round 3 (Aug 2026, Macan EA839): a code can be a REAL OEM code, in real
+    // OEM format, long enough to skip the short-RPO branch below — and still
+    // be the wrong engine in the same lineup (EA839 is the Macan S/GTS 2.9 V6;
+    // this VIN decodes a 2.0 four). Such a code reached the config key with no
+    // check at all. Its displacement/cylinders are static facts, so settle it
+    // before the branches below and force re-resolution on a contradiction.
+    const specGate = contradictsDecodedEngine(args.engineCode, {
+      displacementL: args.displacement,
+      cylinders: vPicData?.cylinders ?? null,
+    });
+    if (specGate.known && specGate.contradicts) {
+      console.warn(`[v8] ENGINE SPEC GATE — ${specGate.reason}; re-resolving`);
+      const known = lookupKnownEngineCode(args.make, args.model, args.year, {
+        displacementL: args.displacement,
+        cylinders: vPicData?.cylinders ?? null,
+      });
+      const replacement = known
+        ? { engineCode: known.code, source: "verified" as const }
+        : await resolveEngineCode(
+            args.year, args.make, args.model, args.trim,
+            args.displacement, vPicData?.cylinders ?? 4,
+            vPicData?.fuel_type ?? "Gasoline", args.engineCode,
+            { forceResolve: true },
+          );
+      if (replacement.source === "verified" && !isNhtsaDescriptor(replacement.engineCode)) {
+        console.log(`[v8] Engine code corrected: "${args.engineCode}" → "${replacement.engineCode}"`);
+        const cacheHitId = await adoptVerifiedEngineCode(replacement.engineCode);
+        if (cacheHitId) return { status: "cache_hit" as const, configId: cacheHitId };
+      } else {
+        // Never keep a code the facts contradict: fall back to the honest
+        // displacement descriptor, which downstream already knows how to
+        // treat as "unresolved" rather than trusting as an engine identity.
+        const placeholder = `${args.displacement}l_${vPicData?.cylinders ?? "unknown"}cyl`.toLowerCase();
+        console.warn(`[v8] No verified replacement for "${args.engineCode}" — falling back to "${placeholder}"`);
+        await adoptVerifiedEngineCode(placeholder);
+      }
+    } else if (isNhtsaDescriptor(args.engineCode)) {
       console.log(`[v8] Engine code "${args.engineCode}" is a placeholder — resolving real OEM code`);
       const resolved = await resolveEngineCode(
         args.year, args.make, args.model, args.trim,

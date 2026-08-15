@@ -11,6 +11,7 @@ import {
   Download,
   EyeOff,
   Loader2,
+  Plus,
   Trash2,
 } from "lucide-react";
 import { useMutation, useQuery, useAction } from "convex/react";
@@ -57,12 +58,15 @@ import {
   TRI_LABELS,
   triLabelFor,
   validateZoneForCompletion,
+  WARNING_LIGHT_PICKER_OPTIONS,
   type BrakeAxleScope,
   type FieldUnavailableStatus,
   type InspectionField,
   type InspectionState,
   type SpecPrefillEntry,
   type TriValue,
+  type WarningLightEntry,
+  type WarningLightSelection,
   type ZoneCompletionContext,
   type ZoneId,
   type ZoneState,
@@ -126,6 +130,13 @@ export type InspectionInputPayload = {
     methods?: Record<string, string>;
     photo_ids?: Id<"_storage">[];
     photo_tags?: Record<string, "general" | "rotor_stamp">;
+    lights?: Record<
+      string,
+      Array<{
+        light: Exclude<WarningLightSelection, "" | "not_sure_which">;
+        other_text?: string;
+      }>
+    >;
   }>;
   odometer?: number;
   lift_status?: "yes" | "no";
@@ -137,7 +148,7 @@ type ResolvedSuggestion = {
   key: string;
   label: string;
   urgency: "soon" | "within_3_months" | "next_visit";
-  reason: string;
+  reasons: string[];
   serviceId: Id<"services"> | null;
   serviceName: string | null;
 };
@@ -825,6 +836,22 @@ function MultiPointInspectionDialogBody({
         methods: zs!.methods,
         photo_ids: zs!.photoIds as Id<"_storage">[],
         photo_tags: zs!.photoTags,
+        lights: Object.fromEntries(
+          Object.entries(zs!.lights)
+            .map(([key, entries]) => [
+              key,
+              entries
+                .filter((e) => !!e.light)
+                .map((e) => ({
+                  light: e.light as Exclude<
+                    WarningLightSelection,
+                    "" | "not_sure_which"
+                  >,
+                  other_text: e.otherText,
+                })),
+            ])
+            .filter(([, entries]) => (entries as unknown[]).length > 0),
+        ),
       })),
       odometer: mileage.trim() ? Number(mileage) : undefined,
       lift_status: liftStatus || undefined,
@@ -1107,7 +1134,7 @@ function MultiPointInspectionDialogBody({
         recommended_service_id: s.serviceId,
         freeform_service_name: s.serviceId ? null : s.label,
         urgency: s.urgency,
-        reason: s.reason,
+        reason: s.reasons.join("; "),
         visible_to_driver: true,
       }));
       await submitInspectionRecs({
@@ -2169,6 +2196,108 @@ function FieldRow({
               </button>
             );
           })}
+        </div>
+        {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+      </div>
+    );
+  }
+
+  if (field.type === "lights") {
+    const entries: WarningLightEntry[] =
+      zs.lights[field.key] && zs.lights[field.key].length > 0
+        ? zs.lights[field.key]
+        : [{ light: "" }];
+    const hasNone = entries.some((e) => e.light === "none");
+    const lightOptions: InspectionOption[] = [
+      ...WARNING_LIGHT_PICKER_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
+      { value: "other", label: "Other" },
+      { value: "none", label: "None" },
+    ];
+    const setEntries = (next: WarningLightEntry[]) =>
+      onPatch({
+        lights: { ...zs.lights, [field.key]: next },
+        statuses: clearUnavailable(),
+      });
+    return (
+      <div
+        className={cn(
+          "border-b border-primary/10 py-2",
+          required && "border-l-2 border-l-red-400 pl-2",
+        )}
+      >
+        <div
+          className={cn(
+            "mb-1.5 text-[13px] text-foreground",
+            required && "font-medium",
+          )}
+        >
+          {field.label}
+          {required ? (
+            <span className="ml-1 text-red-500" title="Required">
+              *
+            </span>
+          ) : null}
+        </div>
+        <div className="space-y-2">
+          {entries.map((entry, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <CompactSelect
+                id={index === 0 ? `inspection-${zoneId}-${field.key}` : undefined}
+                ariaLabel={field.label}
+                value={entry.light}
+                options={lightOptions}
+                className="flex-1"
+                isDisabled={rotorNotConfirmed}
+                onChange={(next) => {
+                  const light = next as WarningLightSelection;
+                  if (light === "none") {
+                    setEntries([{ light: "none" }]);
+                    return;
+                  }
+                  setEntries(
+                    entries.map((e, i) =>
+                      i === index
+                        ? { light, otherText: light === "other" ? e.otherText : undefined }
+                        : e,
+                    ),
+                  );
+                }}
+              />
+              {entry.light === "other" ? (
+                <input
+                  value={entry.otherText ?? ""}
+                  onChange={(e) =>
+                    setEntries(
+                      entries.map((row, i) =>
+                        i === index ? { ...row, otherText: e.target.value } : row,
+                      ),
+                    )
+                  }
+                  placeholder="Which light?"
+                  className="w-32 rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+                />
+              ) : null}
+              {index > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setEntries(entries.filter((_, i) => i !== index))}
+                  className="rounded-lg p-1.5 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                  aria-label="Remove light"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
+          ))}
+          <button
+            type="button"
+            disabled={hasNone || !entries[entries.length - 1]?.light}
+            onClick={() => setEntries([...entries, { light: "" }])}
+            className="inline-flex items-center gap-1 rounded-lg border border-dashed border-primary/30 px-2.5 py-1 text-[12px] font-medium text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add light
+          </button>
         </div>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
       </div>
@@ -3452,7 +3581,7 @@ function ResultsScreen({
                         </span>
                       ) : null}
                       <span className="block text-[11px] text-muted-foreground">
-                        {s.reason} · {URGENCY_LABEL[s.urgency]}
+                        {s.reasons.join(" · ")} · {URGENCY_LABEL[s.urgency]}
                       </span>
                     </span>
                   </label>

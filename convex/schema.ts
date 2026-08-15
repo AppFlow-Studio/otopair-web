@@ -1566,6 +1566,11 @@ export default defineSchema({
     // separate so the maintenance pipeline stays auditable.
     health_score_rec_penalty: v.optional(v.number()),
     health_score_rec_penalty_updated_at: v.optional(v.number()),
+    // Set when a booking's deferred inspection-health write is scheduled
+    // (now + 2h); cleared once that scheduled job actually lands. The
+    // mobile client shows a "processing" state for the score while this is
+    // in the future. See "Deferred writes at job completion."
+    health_score_pending_until: v.optional(v.number()),
     ownership_plan: v.optional(v.string()),
     lease_ending_soon: v.optional(v.boolean()),
     lease_mileage_pace: v.optional(v.string()),
@@ -1722,6 +1727,32 @@ export default defineSchema({
             v.union(v.literal("general"), v.literal("rotor_stamp")),
           ),
         ),
+        // Repeatable warning-light picker entries (currently only field key
+        // "warning_lights") — see "Dashboard warning lights." Only answered
+        // entries are ever persisted (the client omits blanks), so "light"
+        // is a closed union of real picker choices, no "" sentinel needed.
+        lights: v.optional(
+          v.record(
+            v.string(),
+            v.array(
+              v.object({
+                light: v.union(
+                  v.literal("oil_pressure"),
+                  v.literal("battery_charging"),
+                  v.literal("temperature"),
+                  v.literal("abs"),
+                  v.literal("tpms"),
+                  v.literal("airbag_srs"),
+                  v.literal("transmission"),
+                  v.literal("check_engine"),
+                  v.literal("other"),
+                  v.literal("none"),
+                ),
+                other_text: v.optional(v.string()),
+              }),
+            ),
+          ),
+        ),
       }),
     ),
     findings_attention: v.array(
@@ -1780,6 +1811,36 @@ export default defineSchema({
     hcm_weight: v.optional(v.number()),
     is_fixed: v.optional(v.boolean()),
   }).index("by_category", ["category_name"]),
+
+  // Director-adjustable outer health-score weights — a single, platform-wide
+  // row (not per-shop, not per-vehicle; the score formula is a global
+  // constant). Mirrors the composite_modifier_weights precedent above.
+  // Absent/no-row means "use the hardcoded 85/15/15 defaults" — see
+  // utils/healthScore.ts's HealthScoreWeights. A bigger blast radius than
+  // per-item severity tuning (inspection_health_config below), so writes to
+  // this table are expected to also record an audit_log entry.
+  health_score_weights: defineTable({
+    upkeep_weight: v.number(),
+    open_issue_penalty_max: v.number(),
+    updated_at: v.number(),
+    updated_by: v.optional(v.id("director_users")),
+  }),
+
+  // Per-inspection-field director tuning: which core type a field maps to,
+  // how severe a yellow/red reads, and (for minor items) the recommendation
+  // urgency/copy. Row per inspection field key. Absent row for a field means
+  // "use the hardcoded default" — see convex/lib/inspectionHealth.ts.
+  inspection_health_config: defineTable({
+    field_key: v.string(),
+    maps_to: v.optional(v.string()),
+    yellow_status: v.optional(v.string()),
+    red_status: v.optional(v.string()),
+    rec_service_slug: v.optional(v.string()),
+    rec_urgency: v.optional(v.string()),
+    rec_copy: v.optional(v.string()),
+    updated_at: v.optional(v.number()),
+    updated_by: v.optional(v.id("director_users")),
+  }).index("by_field_key", ["field_key"]),
 
   // [U-A] Quarterly check-in data
   vehicle_checkins: defineTable({

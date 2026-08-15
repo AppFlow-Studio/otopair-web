@@ -32,6 +32,7 @@ import {
   type TireTreadReading,
 } from "./inspection-measurements";
 import { OTHER_INSPECTION_OPTION } from "./inspection-options";
+import { CANONICAL_WARNING_LIGHTS, type CanonicalWarningLight } from "./warningLightVocab";
 
 export const INSPECTION_TEMPLATE_VERSION = "mpi-v2-tiered";
 
@@ -93,9 +94,51 @@ export type InspectionField =
       options: SelectOption[];
       default?: string;
       section?: string;
+    }
+  | {
+      /** Repeatable "which light is on" picker — see "Dashboard warning
+       *  lights." Minimum one entry; not a tri, since a single color can't
+       *  represent which of several lights is lit. */
+      type: "lights";
+      key: string;
+      label: string;
+      section?: string;
     };
 
 export type TriValue = "g" | "y" | "r";
+
+/** One row in a repeatable warning-light picker. `""` means "not yet
+ *  answered" (same absence-means-unreviewed convention as every other
+ *  field in this template) — not a selectable value itself. `"none"` is a
+ *  deliberate "nothing is lit" statement; `"other"` pairs with `otherText`
+ *  for a light that isn't one of the 8 named ones. */
+export type WarningLightSelection = CanonicalWarningLight | "other" | "none" | "";
+export type WarningLightEntry = { light: WarningLightSelection; otherText?: string };
+
+/** The 8 named dashboard lights offered in the picker — the same canonical
+ *  vocabulary and labels the driver-facing side already uses (see
+ *  lib/warningLightVocab.ts, lib/warningLightItems.ts). "Other" and "None"
+ *  are picker-specific, added by the UI, not part of this list. */
+export const WARNING_LIGHT_PICKER_OPTIONS: ReadonlyArray<{
+  value: CanonicalWarningLight;
+  label: string;
+}> = [
+  { value: "oil_pressure", label: "Oil pressure" },
+  { value: "battery_charging", label: "Battery / charging" },
+  { value: "temperature", label: "Temperature" },
+  { value: "abs", label: "ABS / brake" },
+  { value: "tpms", label: "Tire pressure" },
+  { value: "airbag_srs", label: "Airbag" },
+  { value: "transmission", label: "Transmission" },
+  { value: "check_engine", label: "Check engine" },
+];
+
+/** Every canonical light the picker's "None" clears from `knownIssues` —
+ *  deliberately the full 9 (not the driver check-in's narrower 7-item
+ *  list), since "None" here is a deliberate, authoritative statement from
+ *  a mechanic doing a real visual check. See "Dashboard warning lights." */
+export const WARNING_LIGHT_CLEAR_SET: readonly CanonicalWarningLight[] =
+  CANONICAL_WARNING_LIGHTS;
 export type FieldUnavailableStatus =
   | "not_inspected"
   | "not_visible"
@@ -136,13 +179,33 @@ export const TRI_LABELS: Record<TriValue, string> = {
 // Some tri fields read more honestly under different words than the generic
 // OK/Monitor/Attention scale, even though they store the same g/y/r value
 // and are graded identically everywhere else (findings, urgency, PDFs).
-const TRI_LABEL_OVERRIDES: Partial<Record<string, Record<TriValue, string>>> = {
-  bf: { g: "Full", y: "Mid", r: "Low" },
-};
+// (Brake fluid level used to live here as a relabeled tri — it's now its
+// own 5-level `select`, BF_LEVEL_OPTIONS below, so there's nothing left to
+// override.)
+const TRI_LABEL_OVERRIDES: Partial<Record<string, Record<TriValue, string>>> = {};
 
 export function triLabelFor(fieldKey: string, value: TriValue): string {
   return TRI_LABEL_OVERRIDES[fieldKey]?.[value] ?? TRI_LABELS[value];
 }
+
+/** Brake fluid level — 5 ordered reservoir levels (see "Brake fluid level
+ *  as a brake-wear signal"). A `select`, not a `tri`: too many buckets to
+ *  fit green/yellow/red. Rank is used to detect a *decline* since the
+ *  previous inspection for the same VIN (Max(4) → Min(0)). */
+export const BF_LEVEL_OPTIONS: SelectOption[] = [
+  { value: "max", label: "Max" },
+  { value: "high", label: "High" },
+  { value: "mid", label: "Mid" },
+  { value: "low", label: "Low" },
+  { value: "min", label: "Min" },
+];
+export const BF_LEVEL_RANK: Record<string, number> = {
+  max: 4,
+  high: 3,
+  mid: 2,
+  low: 1,
+  min: 0,
+};
 
 // ---------------------------------------------------------------------------
 // Classification — ported verbatim from the prototype `classify()`.
@@ -444,11 +507,24 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     label: "Engine bay",
     short: "Engine",
     fields: [
-      { type: "tri", key: "warning_lights", label: "Dashboard warning lights", default: "g", section: "Every-visit checks" },
-      { type: "tri", key: "oil", label: "Engine oil level / condition", default: "g", section: "Every-visit checks" },
-      { type: "tri", key: "cool", label: "Coolant level / condition", default: "g", section: "Every-visit checks" },
+      { type: "lights", key: "warning_lights", label: "Dashboard warning lights", section: "Every-visit checks" },
+      { type: "tri", key: "oil_condition", label: "Engine oil condition", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "oil_level", label: "Engine oil level", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "cool_condition", label: "Coolant condition", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "cool_level", label: "Coolant level", default: "g", section: "Every-visit checks" },
       { type: "tri", key: "washer", label: "Washer-fluid level", default: "g", section: "Every-visit checks" },
-      { type: "tri", key: "bf", label: "Brake fluid level / condition", default: "g", section: "Every-visit checks" },
+      { type: "select", key: "bf_level", label: "Brake fluid level", options: BF_LEVEL_OPTIONS, section: "Every-visit checks" },
+      {
+        type: "select",
+        key: "bf_leak",
+        label: "Any brake fluid leaks?",
+        options: [
+          { value: "no", label: "No" },
+          { value: "yes", label: "Yes" },
+        ],
+        section: "Every-visit checks",
+      },
+      { type: "tri", key: "bf_condition", label: "Brake fluid condition", default: "g", section: "Every-visit checks" },
       { type: "tri", key: "trans", label: "Transmission fluid", default: "g", section: "Fluid & filter eye-check" },
       { type: "tri", key: "ps", label: "Power steering fluid", default: "g", section: "Fluid & filter eye-check" },
       { type: "tri", key: "af", label: "Engine air filter", default: "g", section: "Fluid & filter eye-check" },
@@ -531,6 +607,9 @@ export type ZoneState = {
   methods: Record<string, string>;
   photoIds: string[];
   photoTags: Record<string, InspectionPhotoTag>;
+  /** Repeatable warning-light picker entries, keyed by field key
+   *  (currently only `warning_lights`). */
+  lights: Record<string, WarningLightEntry[]>;
 };
 
 export function toggleInspectionTreadMode(zone: ZoneState): Partial<ZoneState> {
@@ -570,6 +649,7 @@ export function emptyZoneState(): ZoneState {
     methods: {},
     photoIds: [],
     photoTags: {},
+    lights: {},
   };
 }
 
@@ -586,6 +666,10 @@ export function defaultZoneState(zone: InspectionZone): ZoneState {
       } else {
         state.select[field.key] = field.default ?? "";
       }
+    } else if (field.type === "lights") {
+      // One blank row minimum — the picker's own required-field validation
+      // (not a default answer) is what forces a deliberate choice.
+      state.lights[field.key] = [{ light: "" }];
     }
   }
   return state;
@@ -798,9 +882,11 @@ export function isFieldRequiredForZone(
   if (zoneId === "ENG") {
     const flags = getBookingServiceFlags(context.serviceNames);
     if (fieldKey === "term") return true;
-    if (fieldKey === "oil") return !flags.hasOilChange;
-    if (fieldKey === "cool") return !flags.hasCoolantFlush;
-    if (fieldKey === "bf") return !flags.hasBrakeFluidFlush;
+    if (fieldKey === "oil_condition" || fieldKey === "oil_level") return !flags.hasOilChange;
+    if (fieldKey === "cool_condition" || fieldKey === "cool_level") return !flags.hasCoolantFlush;
+    if (fieldKey === "bf_level" || fieldKey === "bf_leak" || fieldKey === "bf_condition") {
+      return !flags.hasBrakeFluidFlush;
+    }
     if (fieldKey === "washer" || fieldKey === "warning_lights") return true;
     if (flags.hasBatteryTest && fieldKey === "batt") return true;
     if (flags.hasOilChange && (fieldKey === "oil_viscosity" || fieldKey === "oil_type")) {
@@ -1072,6 +1158,21 @@ export function validateZoneForCompletion(
         return fail(field.key, `${field.label} contains an invalid selection.`);
       }
       if (required && selected.length === 0) {
+        return fail(field.key, `${field.label} is required.`);
+      }
+    } else if (field.type === "lights") {
+      const entries = zs.lights[field.key] ?? [];
+      const hasNone = entries.some((e) => e.light === "none");
+      if (hasNone && entries.length > 1) {
+        return fail(field.key, `${field.label}: "None" can't be combined with other lights.`);
+      }
+      for (const entry of entries) {
+        if (entry.light === "other" && !(entry.otherText ?? "").trim()) {
+          return fail(field.key, `Enter the light's name for "Other."`);
+        }
+      }
+      const answered = entries.some((e) => !!e.light);
+      if (required && !answered) {
         return fail(field.key, `${field.label} is required.`);
       }
     }
@@ -1453,12 +1554,19 @@ export type SuggestedRecommendation = {
   /** Display + freeform fallback name — kept identical to the catalog name. */
   label: string;
   urgency: SuggestedRecUrgency;
-  reason: string;
+  /** One entry per contributing finding — see "Suggested follow-ups —
+   *  universal generation rule": when multiple fields resolve to the same
+   *  service (e.g. a low pad measurement and a leak-free brake-fluid
+   *  decline both pointing at Brake Pad Replacement), they consolidate
+   *  into one candidate with every reason listed here, not separate rows.
+   *  Urgency is the worst among all contributors. */
+  reasons: string[];
 };
 
 // Canonical live service slugs (from the services catalog) so suggestions map
 // to real bookable services. Keep this in sync with convex `services`.
 export const SERVICE_SLUGS = {
+  oil: "oil_change",
   brakePads: "brake_pad_replacement",
   rotors: "rotor_replacement",
   tires: "tire_replacement",
@@ -1507,21 +1615,55 @@ function measuresAcrossCorners(
   return { values, worst, min };
 }
 
+/** One un-consolidated finding, before grouping by resolved service. See
+ *  "Suggested follow-ups — universal generation rule." */
+type RawSuggestion = {
+  /** Groups candidates targeting the same resolution together — the
+   *  catalog slug for a real service, or the field's own key for a
+   *  freeform finding (so distinct freeform fields never merge with each
+   *  other, only with themselves). */
+  groupKey: string;
+  match: string[];
+  label: string;
+  urgency: SuggestedRecUrgency;
+  reason: string;
+};
+
+const URGENCY_RANK: Record<SuggestedRecUrgency, number> = {
+  next_visit: 0,
+  within_3_months: 1,
+  soon: 2,
+};
+
+/**
+ * Every field in the inspection capable of a yellow/red-equivalent reading
+ * — every `tri`, every classified `measure`, and the rotor `desc`
+ * descriptor set — produces exactly one candidate when flagged, resolved
+ * to a real catalog service where one exists, freeform otherwise. This
+ * replaced a hand-picked, field-by-field list (see "Suggested follow-ups
+ * — universal generation rule" for the gap that prompted it — engine oil
+ * condition and brake visual state, among others, previously produced no
+ * suggestion at all despite already moving the score). Multiple findings
+ * resolving to the same service (e.g. a low pad measurement and a
+ * leak-free brake-fluid decline, both pointing at Brake Pad Replacement)
+ * consolidate into one candidate with every reason listed, not separate
+ * rows — the candidate's urgency is the worst among its contributors.
+ */
 export function deriveSuggestedRecommendations(
   state: InspectionState,
   opts?: { onlyCompletedZones?: boolean },
 ): SuggestedRecommendation[] {
-  const out: SuggestedRecommendation[] = [];
+  const raw: RawSuggestion[] = [];
   const onlyDone = !!opts?.onlyCompletedZones;
   const gradeUrgency = (lvl: GradeLevel): SuggestedRecUrgency | null =>
     lvl === "bad" ? "soon" : lvl === "warn" ? "within_3_months" : null;
   const triUrgency = (v: TriValue | undefined): SuggestedRecUrgency | null =>
     v === "r" ? "soon" : v === "y" ? "within_3_months" : null;
+  const gradeRank: Record<GradeLevel, number> = { none: 0, ok: 1, warn: 2, bad: 3 };
 
-  // --- Measure-based (exact measurements) ---
+  // --- Corner measurements (worst of all 4 corners) ---
   const padInner = measuresAcrossCorners(state, "pad_inner", onlyDone);
   const padOuter = measuresAcrossCorners(state, "pad_outer", onlyDone);
-  const gradeRank: Record<GradeLevel, number> = { none: 0, ok: 1, warn: 2, bad: 3 };
   const pad = {
     worst:
       gradeRank[padInner.worst] >= gradeRank[padOuter.worst]
@@ -1531,8 +1673,8 @@ export function deriveSuggestedRecommendations(
   };
   const padUrg = gradeUrgency(pad.worst);
   if (padUrg) {
-    out.push({
-      key: "brake_pads",
+    raw.push({
+      groupKey: SERVICE_SLUGS.brakePads,
       match: [SERVICE_SLUGS.brakePads],
       label: "Brake Pad Replacement",
       urgency: padUrg,
@@ -1544,8 +1686,8 @@ export function deriveSuggestedRecommendations(
   const rotor = measuresAcrossCorners(state, "rotor", onlyDone);
   const rotorUrg = gradeUrgency(rotor.worst);
   if (rotorUrg) {
-    out.push({
-      key: "rotors",
+    raw.push({
+      groupKey: SERVICE_SLUGS.rotors,
       match: [SERVICE_SLUGS.rotors],
       label: "Rotor Replacement",
       urgency: rotorUrg,
@@ -1559,8 +1701,8 @@ export function deriveSuggestedRecommendations(
   const tread = measuresAcrossCorners(state, "tread", onlyDone);
   const treadUrg = gradeUrgency(tread.worst);
   if (treadUrg) {
-    out.push({
-      key: "tires",
+    raw.push({
+      groupKey: SERVICE_SLUGS.tires,
       match: [SERVICE_SLUGS.tires],
       label: "Tire Replacement",
       urgency: treadUrg,
@@ -1568,7 +1710,102 @@ export function deriveSuggestedRecommendations(
     });
   }
 
-  // --- Engine-bay measurements + eye-level (R/Y/G) checks ---
+  // --- Corner tri fields, worst-of across FL/FR/RL/RR ---
+  const cornerTriFinding = (
+    fieldKey: string,
+  ): { urgency: SuggestedRecUrgency | null; count: number } => {
+    const corners: CornerZoneId[] = ["FL", "FR", "RL", "RR"];
+    const rank: Record<TriValue, number> = { g: 0, y: 1, r: 2 };
+    let worst: TriValue | undefined;
+    let count = 0;
+    for (const id of corners) {
+      const zs = state.zones[id];
+      if (!zs) continue;
+      if (onlyDone && !zs.done) continue;
+      if (zs.statuses[fieldKey]) continue;
+      const v = zs.tri[fieldKey];
+      if (!v) continue;
+      if (v !== "g") count += 1;
+      if (!worst || rank[v] > rank[worst]) worst = v;
+    }
+    return { urgency: triUrgency(worst), count };
+  };
+
+  // Rotor surface descriptors, worst-of across corners — same priority as
+  // deriveRotorCondition (scored/pitted/grooved/warped; "rusted" excluded).
+  const cornerDescFinding = (): { urgency: SuggestedRecUrgency | null; count: number } => {
+    const corners: CornerZoneId[] = ["FL", "FR", "RL", "RR"];
+    let bad = false;
+    let count = 0;
+    for (const id of corners) {
+      const zs = state.zones[id];
+      if (!zs) continue;
+      if (onlyDone && !zs.done) continue;
+      if (zs.statuses.desc) continue;
+      const descs = zs.descriptors.desc ?? [];
+      if (descs.some((d) => ["scored", "pitted", "grooved", "warped"].includes(d))) {
+        bad = true;
+        count += 1;
+      }
+    }
+    return { urgency: bad ? "within_3_months" : null, count };
+  };
+
+  const brakeVisual = cornerTriFinding("brake_visual");
+  if (brakeVisual.urgency) {
+    raw.push({
+      groupKey: SERVICE_SLUGS.brakePads,
+      match: [SERVICE_SLUGS.brakePads],
+      label: "Brake Pad Replacement",
+      urgency: brakeVisual.urgency,
+      reason: `Brake visual state flagged on ${brakeVisual.count} corner${brakeVisual.count === 1 ? "" : "s"}`,
+    });
+  }
+
+  const rotorDesc = cornerDescFinding();
+  if (rotorDesc.urgency) {
+    raw.push({
+      groupKey: SERVICE_SLUGS.rotors,
+      match: [SERVICE_SLUGS.rotors],
+      label: "Rotor Replacement",
+      urgency: rotorDesc.urgency,
+      reason: `Rotor surface issue flagged on ${rotorDesc.count} corner${rotorDesc.count === 1 ? "" : "s"}`,
+    });
+  }
+
+  const tireWear = cornerTriFinding("wear");
+  if (tireWear.urgency) {
+    raw.push({
+      groupKey: SERVICE_SLUGS.tires,
+      match: [SERVICE_SLUGS.tires],
+      label: "Tire Replacement",
+      urgency: tireWear.urgency,
+      reason: `Uneven tire wear flagged on ${tireWear.count} corner${tireWear.count === 1 ? "" : "s"}`,
+    });
+  }
+
+  // Corner fields with no catalog match — each stays its own freeform group.
+  const freeformCornerFields: ReadonlyArray<{ key: string; label: string }> = [
+    { key: "caliper", label: "Caliper slides / boots" },
+    { key: "brake_hose", label: "Brake hose condition" },
+    { key: "steering_play", label: "Steering-linkage play" },
+    { key: "ball_joint_play", label: "Ball-joint play" },
+    { key: "wheel_bearing_play", label: "Wheel-bearing play" },
+  ];
+  for (const f of freeformCornerFields) {
+    const { urgency, count } = cornerTriFinding(f.key);
+    if (urgency) {
+      raw.push({
+        groupKey: f.key,
+        match: [],
+        label: f.label,
+        urgency,
+        reason: `${f.label} flagged on ${count} corner${count === 1 ? "" : "s"}`,
+      });
+    }
+  }
+
+  // --- ENG zone: measurements + eye-level (R/Y/G) checks ---
   const eng = state.zones.ENG;
   if (eng && (!onlyDone || eng.done)) {
     const battField = INSPECTION_ZONES_BY_ID.ENG.fields.find(
@@ -1579,8 +1816,8 @@ export function deriveSuggestedRecommendations(
       const battUrg: SuggestedRecUrgency | null =
         res.lvl === "bad" ? "soon" : res.lvl === "warn" ? "next_visit" : null;
       if (battUrg) {
-        out.push({
-          key: "battery",
+        raw.push({
+          groupKey: SERVICE_SLUGS.battery,
           match: [SERVICE_SLUGS.battery],
           label: "Battery Replacement",
           urgency: battUrg,
@@ -1589,28 +1826,28 @@ export function deriveSuggestedRecommendations(
       }
     }
 
-    // Eye-level fluid/filter flags → matching flush/replacement services.
-    const triRec = (
-      key: string,
-      triKey: string,
-      slug: string,
-      label: string,
-    ) => {
-      const urg = eng.statuses[triKey] ? null : triUrgency(eng.tri[triKey]);
-      if (urg) {
-        out.push({
-          key,
-          match: [slug],
-          label,
-          urgency: urg,
-          reason: `${label} flagged on eye-check (${triLabelFor(triKey, eng.tri[triKey]!).toLowerCase()})`,
-        });
-      }
+    // Eye-level tri flags → matching service (or freeform when slug is null).
+    const engTriRec = (fieldKey: string, slug: string | null, label: string) => {
+      const urg = eng.statuses[fieldKey] ? null : triUrgency(eng.tri[fieldKey]);
+      if (!urg) return;
+      raw.push({
+        groupKey: slug ?? fieldKey,
+        match: slug ? [slug] : [],
+        label,
+        urgency: urg,
+        reason: `${label} flagged on eye-check (${triLabelFor(fieldKey, eng.tri[fieldKey]!).toLowerCase()})`,
+      });
     };
-    triRec("brake_fluid", "bf", SERVICE_SLUGS.brakeFluid, "Brake Fluid Flush");
-    triRec("coolant", "cool", SERVICE_SLUGS.coolant, "Coolant Flush");
-    triRec("transmission", "trans", SERVICE_SLUGS.transmission, "Transmission Service");
-    triRec("power_steering", "ps", SERVICE_SLUGS.powerSteering, "Power Steering Flush");
+    engTriRec("oil_condition", SERVICE_SLUGS.oil, "Oil Change");
+    engTriRec("oil_level", null, "Oil Top-Off");
+    engTriRec("cool_condition", SERVICE_SLUGS.coolant, "Coolant Flush");
+    engTriRec("cool_level", null, "Coolant Top-Off");
+    engTriRec("washer", null, "Washer Fluid Top-Off");
+    engTriRec("trans", SERVICE_SLUGS.transmission, "Transmission Service");
+    engTriRec("ps", SERVICE_SLUGS.powerSteering, "Power Steering Flush");
+    engTriRec("term", null, "Battery Terminal Service");
+    engTriRec("hose", null, "Engine Hose Repair");
+    engTriRec("belt", null, "Drive Belt Replacement");
 
     // Air + cabin filters share one service — collapse to the worst of the two.
     const airFilterUrgency = eng.statuses.af ? null : triUrgency(eng.tri.af);
@@ -1620,17 +1857,105 @@ export function deriveSuggestedRecommendations(
         ? "soon"
         : airFilterUrgency ?? cabinFilterUrgency;
     if (filterUrg) {
-      out.push({
-        key: "filter",
+      raw.push({
+        groupKey: SERVICE_SLUGS.filter,
         match: [SERVICE_SLUGS.filter],
         label: "Filter Replacement",
         urgency: filterUrg,
         reason: "Air / cabin filter flagged on eye-check",
       });
     }
+
+    // Brake fluid: level (leak-gated, absolute — not the decline-based
+    // score signal) and condition (independent, restores the flush
+    // suggestion the level redirect no longer produces). Mutually
+    // exclusive with the leak candidate — a confirmed leak always wins,
+    // matching the score-side rule that a leak suppresses wear inference.
+    const BF_LEVEL_URGENCY: Partial<Record<string, SuggestedRecUrgency>> = {
+      mid: "within_3_months",
+      low: "soon",
+      min: "soon",
+    };
+    const bfLevel = eng.statuses.bf_level ? "" : eng.select.bf_level ?? "";
+    const bfLeak = eng.statuses.bf_leak ? "" : eng.select.bf_leak ?? "";
+    if (bfLeak === "yes") {
+      raw.push({
+        groupKey: "bf_leak",
+        match: [],
+        label: "Brake Fluid Leak",
+        urgency: "soon",
+        reason: "Brake fluid leak reported",
+      });
+    } else if (bfLevel) {
+      const levelUrg = BF_LEVEL_URGENCY[bfLevel];
+      if (levelUrg) {
+        raw.push({
+          groupKey: SERVICE_SLUGS.brakePads,
+          match: [SERVICE_SLUGS.brakePads],
+          label: "Brake Pad Replacement",
+          urgency: levelUrg,
+          reason: `Brake fluid level at ${bfLevel} — possible pad-wear signal`,
+        });
+      }
+    }
+    engTriRec("bf_condition", SERVICE_SLUGS.brakeFluid, "Brake Fluid Flush");
   }
 
-  return out;
+  // --- UND zone: no catalog match for any of these ---
+  const und = state.zones.UND;
+  if (und && (!onlyDone || und.done)) {
+    const undFields: ReadonlyArray<{ key: string; label: string }> = [
+      { key: "leaks", label: "Fluid Leak Repair" },
+      { key: "cv", label: "CV Boot Replacement" },
+      { key: "strut", label: "Strut Replacement" },
+      { key: "exh", label: "Exhaust Repair" },
+      { key: "damage", label: "Undercarriage Damage Repair" },
+    ];
+    for (const f of undFields) {
+      const urg = und.statuses[f.key] ? null : triUrgency(und.tri[f.key]);
+      if (urg) {
+        raw.push({ groupKey: f.key, match: [], label: f.label, urgency: urg, reason: `${f.label} flagged on eye-check` });
+      }
+    }
+  }
+
+  // --- FRT zone: no catalog match for any of these ---
+  const frt = state.zones.FRT;
+  if (frt && (!onlyDone || frt.done)) {
+    const frtFields: ReadonlyArray<{ key: string; label: string }> = [
+      { key: "lamp", label: "Headlight / Hazard / Tail Light Repair" },
+      { key: "glass", label: "Windshield Repair" },
+      { key: "wipe", label: "Wiper Blade Replacement" },
+      { key: "horn", label: "Horn Repair" },
+    ];
+    for (const f of frtFields) {
+      const urg = frt.statuses[f.key] ? null : triUrgency(frt.tri[f.key]);
+      if (urg) {
+        raw.push({ groupKey: f.key, match: [], label: f.label, urgency: urg, reason: `${f.label} flagged on eye-check` });
+      }
+    }
+  }
+
+  // --- Consolidate by resolved service (or freeform field key) ---
+  const groups = new Map<string, SuggestedRecommendation>();
+  for (const c of raw) {
+    const existing = groups.get(c.groupKey);
+    if (!existing) {
+      groups.set(c.groupKey, {
+        key: c.groupKey,
+        match: c.match,
+        label: c.label,
+        urgency: c.urgency,
+        reasons: [c.reason],
+      });
+    } else {
+      existing.reasons.push(c.reason);
+      if (URGENCY_RANK[c.urgency] > URGENCY_RANK[existing.urgency]) {
+        existing.urgency = c.urgency;
+      }
+    }
+  }
+  return [...groups.values()];
 }
 
 // ---------------------------------------------------------------------------
@@ -1652,9 +1977,21 @@ type StoredZone = {
   select?: Record<string, string | number> | null;
   statuses?: Record<string, FieldUnavailableStatus> | null;
   methods?: Record<string, string> | null;
+  lights?: Record<string, WarningLightEntry[]> | null;
 };
 
 const TRI_GRADE: Record<TriValue, GradeLevel> = { g: "ok", y: "warn", r: "bad" };
+
+const LIGHT_PICKER_LABELS: Record<CanonicalWarningLight, string> = Object.fromEntries(
+  WARNING_LIGHT_PICKER_OPTIONS.map((o) => [o.value, o.label]),
+) as Record<CanonicalWarningLight, string>;
+
+function formatLightEntry(entry: WarningLightEntry): string {
+  if (entry.light === "none") return "None";
+  if (entry.light === "other") return `Other: ${(entry.otherText ?? "").trim() || "unspecified"}`;
+  if (!entry.light) return "";
+  return LIGHT_PICKER_LABELS[entry.light] ?? entry.light;
+}
 
 // ---------------------------------------------------------------------------
 // Safeguard — detect zones the mechanic typed into but never tapped "Mark zone
@@ -1678,6 +2015,8 @@ export function zoneHasInput(zoneId: ZoneId, zs: ZoneState): boolean {
       if ((zs.text[field.key] ?? "").trim() !== "") return true;
     } else if (field.type === "select") {
       if ((zs.select[field.key] ?? "").trim() !== "") return true;
+    } else if (field.type === "lights") {
+      if ((zs.lights[field.key] ?? []).some((e) => !!e.light)) return true;
     }
   }
   return (
@@ -1836,6 +2175,15 @@ export function formatZonesForPdf(storedZones: StoredZone[]): PdfZone[] {
         const v = stored.text?.[field.key];
         if (!v || !v.trim()) continue;
         rows.push({ label: field.label, value: v, grade: "none" });
+      } else if (field.type === "lights") {
+        const entries = (stored.lights?.[field.key] ?? []).filter((e) => !!e.light);
+        if (!entries.length) continue;
+        const isNone = entries.length === 1 && entries[0].light === "none";
+        rows.push({
+          label: field.label,
+          value: entries.map(formatLightEntry).join(", "),
+          grade: isNone ? "ok" : "bad",
+        });
       }
     }
 

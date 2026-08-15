@@ -275,8 +275,8 @@ describe("multi-point inspection requirements", () => {
     });
     expect(
       deriveSuggestedRecommendations(state, { onlyCompletedZones: true }).find(
-        (recommendation) => recommendation.key === "rotors",
-      )?.reason,
+        (recommendation) => recommendation.key === "rotor_replacement",
+      )?.reasons.join(" "),
     ).toContain("23.01mm");
   });
 
@@ -329,7 +329,18 @@ describe("multi-point inspection requirements", () => {
     expect(isFieldRequiredForZone("ENG", "batt", context)).toBe(true);
     expect(isFieldRequiredForZone("ENG", "term", context)).toBe(true);
     const state = createInspectionState();
-    for (const key of ["oil", "cool", "bf", "washer", "warning_lights", "term"]) {
+    for (const key of [
+      "oil_condition",
+      "oil_level",
+      "cool_condition",
+      "cool_level",
+      "bf_level",
+      "bf_leak",
+      "bf_condition",
+      "washer",
+      "warning_lights",
+      "term",
+    ]) {
       state.zones.ENG!.statuses[key] = "not_inspected";
     }
     expect(validateZoneForCompletion(state, "ENG", context)).toEqual({
@@ -513,7 +524,18 @@ describe("multi-point inspection requirements", () => {
     });
 
     state.zones.ENG!.measures.batt = "-1";
-    for (const key of ["oil", "cool", "bf", "washer", "warning_lights", "term"]) {
+    for (const key of [
+      "oil_condition",
+      "oil_level",
+      "cool_condition",
+      "cool_level",
+      "bf_level",
+      "bf_leak",
+      "bf_condition",
+      "washer",
+      "warning_lights",
+      "term",
+    ]) {
       state.zones.ENG!.statuses[key] = "not_inspected";
     }
     expect(validateZoneForCompletion(state, "ENG", context)).toEqual({

@@ -38,6 +38,7 @@ import type { Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { getStripe } from "../lib/stripe";
 import { isTerminal, validateTransition } from "./booking_status_history";
+import { scheduleDeferredInspectionHealth } from "./inspectionHealthDeferred";
 import {
   resolvePolicy,
   computeCancellationFee,
@@ -129,8 +130,6 @@ import {
 } from "./lib/vehicle_passports";
 import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
 import {
-  createInspectionState,
-  defaultZoneState,
   derivePrejobFromInspection,
   deriveTierInspectionScope,
   gatherFindings,
@@ -140,7 +139,6 @@ import {
   rotorEvidenceCornersFromSubmission,
   validateZoneForCompletion,
   type CornerZoneId,
-  type InspectionState,
 } from "../lib/inspection-template";
 import {
   areTireReplacementPositionsValid,
@@ -5441,30 +5439,12 @@ function getTireReplacementPositions(booking: {
     .filter((position: TirePosition | undefined): position is TirePosition => !!position);
 }
 
-function hydrateTieredInspectionState(inspection: any): InspectionState {
-  const state = createInspectionState();
-  for (const input of inspection?.zones ?? []) {
-    const zoneId = input.zone_id as keyof typeof INSPECTION_ZONES_BY_ID;
-    const zone = INSPECTION_ZONES_BY_ID[zoneId];
-    if (!zone || zoneId === "OWNER") continue;
-    const base = defaultZoneState(zone);
-    state.zones[zoneId] = {
-      ...base,
-      done: !!input.done,
-      dirty: false,
-      measures: { ...base.measures, ...(input.measures ?? {}) },
-      tri: { ...base.tri, ...(input.tri ?? {}) },
-      descriptors: { ...base.descriptors, ...(input.descriptors ?? {}) },
-      text: { ...base.text, ...(input.text ?? {}) },
-      select: { ...base.select, ...(input.select ?? {}) },
-      statuses: { ...base.statuses, ...(input.statuses ?? {}) },
-      methods: { ...base.methods, ...(input.methods ?? {}) },
-      photoIds: [...(input.photo_ids ?? [])].map(String),
-      photoTags: { ...base.photoTags, ...(input.photo_tags ?? {}) },
-    };
-  }
-  return state;
-}
+// Moved to convex/lib/hydrateInspectionState.ts so
+// convex/inspectionHealthDeferred.ts can reuse it without a circular
+// import back into this file; re-imported here since this file's own
+// callers (grantRotorPhotoEvidence etc.) still reference it by this name.
+import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
+export { hydrateTieredInspectionState };
 
 async function validateTieredInspectionInput({
   ctx,
@@ -5843,43 +5823,12 @@ async function grantRotorPhotoEvidence(
   }
 }
 
-async function addBrakeFluidDeclineFinding(
-  ctx: any,
-  booking: any,
-  inspection: any,
-) {
-  if (!inspection) return inspection;
-  const currentZone = inspection.zones?.find(
-    (zone: any) => zone.zone_id === "ENG" && zone.done,
-  );
-  if (currentZone?.statuses?.bf) return inspection;
-  const current = currentZone?.tri?.bf;
-  if (!current) return inspection;
-  const previous = (await ctx.db
-    .query("vehicle_inspections")
-    .withIndex("by_vin", (q: any) => q.eq("vin", toCanonicalVin(booking.vin)))
-    .collect())
-    .filter((row: any) => row.booking_id !== booking._id && row.submitted_at)
-    .sort((a: any, b: any) => (b.submitted_at ?? 0) - (a.submitted_at ?? 0))[0];
-  const priorZone = previous?.zones?.find(
-    (zone: any) => zone.zone_id === "ENG" && zone.done,
-  );
-  if (priorZone?.statuses?.bf) return inspection;
-  const prior = priorZone?.tri?.bf;
-  const rank: Record<string, number> = { g: 0, y: 1, r: 2 };
-  if (rank[current] == null || rank[prior] == null || rank[current] <= rank[prior]) {
-    return inspection;
-  }
-  const finding = {
-    label: "Brake fluid level declined since the latest completed inspection",
-    zone: "Engine bay",
-  };
-  const key = current === "r" ? "findings_attention" : "findings_monitor";
-  const existing = inspection[key] ?? [];
-  return existing.some((item: any) => item.label === finding.label)
-    ? inspection
-    : { ...inspection, [key]: [...existing, finding] };
-}
+// The old addBrakeFluidDeclineFinding (a findings_attention/findings_monitor
+// text-note heuristic keyed on the single `bf` tri field) is superseded —
+// `bf` split into `bf_level`/`bf_condition`/`bf_leak`, and brake-fluid
+// decline detection now happens for real inside deriveCoreGrades (see
+// convex/lib/inspectionHealth.ts and convex/inspectionHealthDeferred.ts),
+// producing an actual score signal instead of a PDF-only note.
 
 async function persistPrejobSurvey(
   ctx: any,
@@ -5918,9 +5867,7 @@ async function persistPrejobSurvey(
 
   await ctx.db.patch(jobActual._id, jobActualPatch);
 
-  const persistedInspection = finalizeInspection
-    ? await addBrakeFluidDeclineFinding(ctx, booking, inspection)
-    : inspection;
+  const persistedInspection = inspection;
   const inspectionId = await upsertInspectionRecord(ctx, {
     booking,
     jobActualId: jobActual._id,
@@ -8642,6 +8589,16 @@ export async function applyBookingStatusTransition(
 
   if (newStatus === "completed") {
     await runCompletionSideEffects(ctx, booking);
+  }
+
+  // Deferred inspection-health writes (score + recommendation reveal) —
+  // scheduled 2 hours out the moment the booking is genuinely no longer
+  // open. isTerminal covers completed/cancelled/no_show/declined (verified
+  // against the real TERMINAL_STATES in convex/booking_status_history.ts —
+  // a broader, more accurate set than "completed" alone). See "Deferred
+  // writes at job completion."
+  if (isTerminal(newStatus)) {
+    await scheduleDeferredInspectionHealth(ctx, booking._id, booking.vin, booking.user_id);
   }
 
   // Walk-in client status-driven updates. The helper guards source +

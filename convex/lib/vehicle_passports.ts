@@ -268,6 +268,30 @@ export const inspectionZoneStateValidator = v.object({
       v.union(v.literal("general"), v.literal("rotor_stamp")),
     ),
   ),
+  // Repeatable warning-light picker entries. Only answered entries are ever
+  // sent (the client omits blanks) — see "Dashboard warning lights."
+  lights: v.optional(
+    v.record(
+      v.string(),
+      v.array(
+        v.object({
+          light: v.union(
+            v.literal("oil_pressure"),
+            v.literal("battery_charging"),
+            v.literal("temperature"),
+            v.literal("abs"),
+            v.literal("tpms"),
+            v.literal("airbag_srs"),
+            v.literal("transmission"),
+            v.literal("check_engine"),
+            v.literal("other"),
+            v.literal("none"),
+          ),
+          other_text: v.optional(v.string()),
+        }),
+      ),
+    ),
+  ),
 });
 
 export const inspectionInputValidator = v.object({

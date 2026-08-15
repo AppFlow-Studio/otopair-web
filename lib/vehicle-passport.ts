@@ -54,6 +54,17 @@ export type VehiclePassportTires = {
   size_front?: string | null;
   size_rear?: string | null;
   run_flat?: boolean | null;
+  identities?: Partial<
+    Record<
+      "front_left" | "front_right" | "rear_left" | "rear_right",
+      {
+        brand?: string | null;
+        model?: string | null;
+        dot_code?: string | null;
+        run_flat?: boolean | null;
+      }
+    >
+  > | null;
   overall_condition?: TireCondition | null;
   front_condition?: TireCondition | null;
   rear_condition?: TireCondition | null;
@@ -68,6 +79,7 @@ export type VehiclePassportFluids = {
   coolant_type?: string | null;
   brake_fluid_type?: string | null;
   transmission_fluid_type?: string | null;
+  power_steering_fluid_type?: string | null;
   confirmation_status?: string | null;
 };
 
@@ -137,6 +149,8 @@ export type VehiclePassportData = {
   // post-job dialog so multi-service jobs can attribute parts correctly.
   parts_required_services?: Array<{ _id: string; name: string }>;
   is_complete: boolean;
+  is_first_shop_visit?: boolean;
+  rotor_photo_evidence?: Partial<Record<"FL" | "FR" | "RL" | "RR", boolean>>;
   completion_percent: number;
   missing_fields: string[];
   passport: VehiclePassportSnapshot;
@@ -212,7 +226,12 @@ export type PreJobSurveyPayload = {
   tire_details?: Partial<
     Record<
       "front_left" | "front_right" | "rear_left" | "rear_right",
-      { brand?: string | null; model?: string | null }
+      {
+        brand?: string | null;
+        model?: string | null;
+        dot_code?: string | null;
+        run_flat?: boolean | null;
+      }
     >
   > | null;
   // Legacy vehicle-passport fields. New multi-point inspections use

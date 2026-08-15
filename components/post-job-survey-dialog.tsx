@@ -137,6 +137,22 @@ type PriorOpenRecommendation = {
   created_at: number;
 };
 
+// A recommendation the mechanic already confirmed at pre-job, from this
+// same visit's inspection — shown read-only, since it's already created.
+type ConfirmedThisVisitRecommendation = PriorOpenRecommendation;
+
+// A candidate the mechanic saw on the pre-job "Suggested follow-ups" screen
+// but didn't check — offered again here as a second chance. Mirrors
+// ResolvedSuggestion in multi-point-inspection-dialog.tsx.
+type SuggestedFromInspection = {
+  key: string;
+  label: string;
+  urgency: RecommendationUrgency;
+  reasons: string[];
+  serviceId: string | null;
+  serviceName: string | null;
+};
+
 type PostJobPrefillData = {
   vehicleLabel: string;
   serviceName: string;
@@ -151,6 +167,8 @@ type PostJobPrefillData = {
   trimLabel?: string | null;
   oemRecommendations?: OemRecommendation[];
   priorOpenRecommendations?: PriorOpenRecommendation[];
+  confirmedThisVisit?: ConfirmedThisVisitRecommendation[];
+  suggestedFromInspection?: SuggestedFromInspection[];
 } | null;
 
 type RecRowState = {
@@ -1722,6 +1740,8 @@ function PostJobSurveyDialogBody({
             priorOpenRecommendations={
               prefillData?.priorOpenRecommendations ?? []
             }
+            confirmedThisVisit={prefillData?.confirmedThisVisit ?? []}
+            suggestedFromInspection={prefillData?.suggestedFromInspection ?? []}
             actualPartsCost={actualPartsCost}
             setActualPartsCost={setActualPartsCost}
             partsCostSum={sumJobActualParts(normalizeParts())}
@@ -1938,6 +1958,8 @@ function StepContent(props: {
   setRecommendations: React.Dispatch<React.SetStateAction<RecRowState[]>>;
   engineId: string | null;
   priorOpenRecommendations: PriorOpenRecommendation[];
+  confirmedThisVisit: ConfirmedThisVisitRecommendation[];
+  suggestedFromInspection: SuggestedFromInspection[];
   actualPartsCost: string;
   setActualPartsCost: (value: string) => void;
   partsCostSum: number;
@@ -2300,6 +2322,8 @@ function StepContent(props: {
           setRecommendations={props.setRecommendations}
           engineId={props.engineId}
           priorOpenRecommendations={props.priorOpenRecommendations}
+          confirmedThisVisit={props.confirmedThisVisit}
+          suggestedFromInspection={props.suggestedFromInspection}
           additionalObservations={props.additionalObservations}
           setAdditionalObservations={props.setAdditionalObservations}
           completionMileage={props.completionMileage}
@@ -3561,6 +3585,8 @@ function RecommendationsStep({
   setRecommendations,
   engineId,
   priorOpenRecommendations,
+  confirmedThisVisit,
+  suggestedFromInspection,
   additionalObservations,
   setAdditionalObservations,
   completionMileage,
@@ -3569,6 +3595,8 @@ function RecommendationsStep({
   setRecommendations: React.Dispatch<React.SetStateAction<RecRowState[]>>;
   engineId: string | null;
   priorOpenRecommendations: PriorOpenRecommendation[];
+  confirmedThisVisit: ConfirmedThisVisitRecommendation[];
+  suggestedFromInspection: SuggestedFromInspection[];
   additionalObservations: string;
   setAdditionalObservations: (value: string) => void;
   completionMileage: string;
@@ -3616,6 +3644,43 @@ function RecommendationsStep({
     setRecommendations((current) => current.filter((_, idx) => idx !== index));
   }
 
+  // Gap 2 — a suggestion the mechanic saw at pre-job but didn't check gets a
+  // second chance here. Checking it appends a real row to `recommendations`
+  // (tagged by a stable `sugg_<key>` id so the checkbox state round-trips);
+  // unchecking removes that same row. Submits through the same
+  // submitRecommendationsForBooking path as every other row on this screen.
+  function suggestionRowId(key: string) {
+    return `sugg_${key}`;
+  }
+  function toggleSuggestion(s: SuggestedFromInspection) {
+    const id = suggestionRowId(s.key);
+    setRecommendations((current) => {
+      if (current.some((r) => r.id === id)) {
+        return current.filter((r) => r.id !== id);
+      }
+      return [
+        ...current,
+        {
+          id,
+          recommended_service_id: s.serviceId,
+          service_label: s.serviceName ?? s.label,
+          service_slug: null,
+          service_has_options: false,
+          freeform_service_name: s.serviceId ? "" : s.label,
+          urgency: s.urgency,
+          reason: s.reasons.join("; "),
+          visible_to_driver: true,
+          target_mileage: "",
+          scheduled_at: null,
+          scheduled_mechanic_id: null,
+          scheduled_mechanic_name: null,
+          selected_service_option: null,
+          tire_specs: null,
+        },
+      ];
+    });
+  }
+
   return (
     <QuestionScreen
       eyebrow="Looking ahead"
@@ -3649,6 +3714,80 @@ function RecommendationsStep({
           </ul>
           <p className="mt-2 text-[10px] text-muted-foreground">
             You'll confirm these on the next pre-job survey.
+          </p>
+        </div>
+      ) : null}
+
+      {confirmedThisVisit.length > 0 ? (
+        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700">
+            From today's inspection
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {confirmedThisVisit.map((rec) => (
+              <li
+                key={rec._id}
+                className="flex items-start gap-2 text-[12px] text-foreground/80"
+              >
+                <Check className="mt-0.5 h-3 w-3 flex-shrink-0 text-emerald-600" />
+                <span className="min-w-0 flex-1">
+                  <span className="font-medium">{rec.service_name}</span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · {urgencyLabel(rec.urgency)}
+                  </span>
+                  {rec.reason ? (
+                    <span className="text-muted-foreground"> — {rec.reason}</span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            Already confirmed at pre-job — no action needed.
+          </p>
+        </div>
+      ) : null}
+
+      {suggestedFromInspection.length > 0 ? (
+        <div className="mb-4 rounded-xl border border-primary/10 bg-muted/30 px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            Also flagged during today's inspection
+          </p>
+          <ul className="mt-1.5 space-y-1.5">
+            {suggestedFromInspection.map((s) => {
+              const checked = recommendations.some(
+                (r) => r.id === suggestionRowId(s.key),
+              );
+              return (
+                <li key={s.key}>
+                  <label className="flex cursor-pointer items-start gap-2 text-[12px]">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleSuggestion(s)}
+                      className="mt-0.5 h-3.5 w-3.5 accent-[var(--primary)]"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="font-medium text-foreground">
+                        {s.serviceName ?? s.label}
+                      </span>
+                      {!s.serviceId ? (
+                        <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                          not in catalog
+                        </span>
+                      ) : null}
+                      <span className="block text-muted-foreground">
+                        {s.reasons.join(" · ")} · {urgencyLabel(s.urgency)}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            Skipped at pre-job — check any you still want to recommend.
           </p>
         </div>
       ) : null}

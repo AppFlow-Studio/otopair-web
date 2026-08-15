@@ -16149,7 +16149,14 @@ export const getReceipt = query({
         plate: (vehicleOwner as any)?.license_plate ?? null,
         vin_last4: booking.vin ? booking.vin.slice(-4).toUpperCase() : null,
         image_url: vehicleRow?.image_url ?? null,
-        odometer_in: jobActual?.odometer_in ?? null,
+        // `job_actuals.odometer_in` is declared in the schema but no mutation
+        // in either repo ever writes it, so it is always null. The reading the
+        // mechanic actually enters is the pre-job mileage — required by
+        // validatePrejobReport and persisted on the same job_actuals row — so
+        // fall back to it. Without this the receipt can only ever show an
+        // "after" and the before/after pair never renders.
+        odometer_in:
+          jobActual?.odometer_in ?? jobActual?.prejob_report?.mileage ?? null,
         odometer_out: jobActual?.completion_mileage ?? null,
       },
       service_notes: {

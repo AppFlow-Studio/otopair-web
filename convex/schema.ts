@@ -1990,6 +1990,11 @@ export default defineSchema({
     // SetupIntent succeeds or a PaymentMethod attaches; cleared if the
     // user removes their last card.
     has_saved_payment_method: v.optional(v.boolean()),
+    // Set when the user taps the × on the home "Finish setup" card. The
+    // card only offers the × once all four steps are complete, so this is
+    // an acknowledgement of a finished checklist, not a way to skip it.
+    // Mirrors `vehicle_owners.setupCardDismissed`.
+    setupCardDismissed: v.optional(v.boolean()),
     // Expo push token registered by mobile on app open / after onboarding.
     // Consumed by convex/lib/push_dispatcher.ts. Cleared on
     // `DeviceNotRegistered` from Expo Push API.

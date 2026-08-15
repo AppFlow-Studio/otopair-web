@@ -667,6 +667,24 @@ export const listPaymentMethods = action({
     const defaultPmId =
       typeof defaultPm === "string" ? defaultPm : (defaultPm as any)?.id ?? null;
 
+    // Reconcile `users.has_saved_payment_method` against what Stripe just
+    // told us. The webhook (setup_intent.succeeded / payment_method.detached)
+    // is still the fast path, but it silently no-ops whenever the endpoint
+    // isn't reachable — which is every local dev session without `stripe
+    // listen` forwarding, leaving accounts with a real card stuck showing
+    // the "Payment Method" tile as incomplete. This runs on every home
+    // visit (StripePaymentMethodsSync is mounted at the root), so a missed
+    // webhook self-heals on the next app open instead of needing a manual
+    // DB patch. The internal mutation early-returns when the value already
+    // matches, so the steady state is a read, not a write.
+    const cardCount = list.data.filter((pm) => pm.card).length;
+    if (user.has_saved_payment_method !== (cardCount > 0)) {
+      await ctx.runMutation(
+        internal.payments_stripe._setUserHasSavedPaymentMethodByCustomerId,
+        { stripeCustomerId: user.stripe_customer_id, value: cardCount > 0 },
+      );
+    }
+
     return list.data
       .filter((pm) => pm.card)
       .map((pm) => ({

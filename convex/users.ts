@@ -260,6 +260,31 @@ export const requestAccountDeletion = mutation({
 });
 
 /**
+ * MUTATION: dismissSetupCard
+ * Permanently hides the home "Finish setup" card for the signed-in user.
+ * The × that calls this is only rendered once all four steps are complete,
+ * so this acknowledges a finished checklist rather than skipping it.
+ */
+export const dismissSetupCard = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+
+    if (!user) throw new Error("User not found");
+    if (user.setupCardDismissed === true) return user._id;
+
+    await ctx.db.patch(user._id, { setupCardDismissed: true });
+    return user._id;
+  },
+});
+
+/**
  * MUTATION: reactivateAccount
  * Cancels a pending account deletion.
  */

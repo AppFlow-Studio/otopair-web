@@ -87,6 +87,8 @@ import type * as devOnly_purgeEstimatorObs from "../devOnly/purgeEstimatorObs.js
 import type * as devOnly_reassignShopLogins from "../devOnly/reassignShopLogins.js";
 import type * as devOnly_repriceJsonProbe from "../devOnly/repriceJsonProbe.js";
 import type * as devOnly_resetEvalFixture from "../devOnly/resetEvalFixture.js";
+import type * as devOnly_round3IdentityProbe from "../devOnly/round3IdentityProbe.js";
+import type * as devOnly_round3StoredCheck from "../devOnly/round3StoredCheck.js";
 import type * as devOnly_scanMessageLeaks from "../devOnly/scanMessageLeaks.js";
 import type * as devOnly_seedChelalaCopy from "../devOnly/seedChelalaCopy.js";
 import type * as devOnly_trimGarageToOneCar from "../devOnly/trimGarageToOneCar.js";
@@ -204,6 +206,7 @@ import type * as lib_vehicleDatabases from "../lib/vehicleDatabases.js";
 import type * as lib_vehicleTiers from "../lib/vehicleTiers.js";
 import type * as lib_vehicle_image from "../lib/vehicle_image.js";
 import type * as lib_vehicle_passports from "../lib/vehicle_passports.js";
+import type * as lib_vinIdentity from "../lib/vinIdentity.js";
 import type * as lib_walmartTireScraper from "../lib/walmartTireScraper.js";
 import type * as maintenance from "../maintenance.js";
 import type * as maintenance_pipeline from "../maintenance_pipeline.js";
@@ -540,6 +543,7 @@ import type * as vehicleEnrichment_validation_sanityChecks from "../vehicleEnric
 import type * as vehicleEnrichment_validation_sourceAuthority from "../vehicleEnrichment/validation/sourceAuthority.js";
 import type * as vehicleEnrichment_variantDecodeReconcile from "../vehicleEnrichment/variantDecodeReconcile.js";
 import type * as vehicleEnrichment_variantFingerprint from "../vehicleEnrichment/variantFingerprint.js";
+import type * as vehicleEnrichment_ymmtIdentity from "../vehicleEnrichment/ymmtIdentity.js";
 import type * as vehicleTruth from "../vehicleTruth.js";
 import type * as vehicle_history from "../vehicle_history.js";
 import type * as vehicle_mutations from "../vehicle_mutations.js";
@@ -550,6 +554,7 @@ import type * as vehicles from "../vehicles.js";
 import type * as vinQueueQueries from "../vinQueueQueries.js";
 import type * as walkin_claims from "../walkin_claims.js";
 import type * as ymmtCatalog from "../ymmtCatalog.js";
+import type * as ymmtPipeline from "../ymmtPipeline.js";
 
 import type {
   ApiFromModules,
@@ -637,6 +642,8 @@ declare const fullApi: ApiFromModules<{
   "devOnly/reassignShopLogins": typeof devOnly_reassignShopLogins;
   "devOnly/repriceJsonProbe": typeof devOnly_repriceJsonProbe;
   "devOnly/resetEvalFixture": typeof devOnly_resetEvalFixture;
+  "devOnly/round3IdentityProbe": typeof devOnly_round3IdentityProbe;
+  "devOnly/round3StoredCheck": typeof devOnly_round3StoredCheck;
   "devOnly/scanMessageLeaks": typeof devOnly_scanMessageLeaks;
   "devOnly/seedChelalaCopy": typeof devOnly_seedChelalaCopy;
   "devOnly/trimGarageToOneCar": typeof devOnly_trimGarageToOneCar;
@@ -754,6 +761,7 @@ declare const fullApi: ApiFromModules<{
   "lib/vehicleTiers": typeof lib_vehicleTiers;
   "lib/vehicle_image": typeof lib_vehicle_image;
   "lib/vehicle_passports": typeof lib_vehicle_passports;
+  "lib/vinIdentity": typeof lib_vinIdentity;
   "lib/walmartTireScraper": typeof lib_walmartTireScraper;
   maintenance: typeof maintenance;
   maintenance_pipeline: typeof maintenance_pipeline;
@@ -1090,6 +1098,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/validation/sourceAuthority": typeof vehicleEnrichment_validation_sourceAuthority;
   "vehicleEnrichment/variantDecodeReconcile": typeof vehicleEnrichment_variantDecodeReconcile;
   "vehicleEnrichment/variantFingerprint": typeof vehicleEnrichment_variantFingerprint;
+  "vehicleEnrichment/ymmtIdentity": typeof vehicleEnrichment_ymmtIdentity;
   vehicleTruth: typeof vehicleTruth;
   vehicle_history: typeof vehicle_history;
   vehicle_mutations: typeof vehicle_mutations;
@@ -1100,6 +1109,7 @@ declare const fullApi: ApiFromModules<{
   vinQueueQueries: typeof vinQueueQueries;
   walkin_claims: typeof walkin_claims;
   ymmtCatalog: typeof ymmtCatalog;
+  ymmtPipeline: typeof ymmtPipeline;
 }>;
 
 /**

@@ -48,6 +48,8 @@ import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/not
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { metaMakeModel } from "./lib/bookingEnrichment";
+import { isRealVin, isPseudoVin, mintPseudoVin } from "./lib/vinIdentity";
+import { buildYmmtFingerprint } from "./vehicleEnrichment/types";
 import {
   computeDisclosedRange,
   computePricedPartsSnapshot,
@@ -3847,6 +3849,143 @@ function formatTime(hhmm: string) {
 
 function toCanonicalVin(vin: string) {
   return vin.trim().toUpperCase();
+}
+
+/**
+ * Decide which vehicles row a walk-in booking belongs to, minting a placeholder
+ * VIN only when there's genuinely no better answer.
+ *
+ * The drawer used to mint `SHOP${Date.now()}` client-side on every submit. Two
+ * problems with that: `"SHOP"` + a 13-digit epoch is exactly 17 characters, so
+ * downstream `vin.length === 17` gates treated it as a real VIN (lib/vehicle_image
+ * then spent a paid Vehicle Databases lookup on it); and because it was minted
+ * fresh each time, the same customer returning with the same car got a brand-new
+ * vehicles + vehicle_owners row every visit, fragmenting their service history,
+ * mileage and health scoring across N rows for one physical car.
+ *
+ * Resolution order:
+ *   1. A structurally valid VIN wins outright.
+ *   2. Otherwise, reuse a placeholder this customer already has for the same
+ *      YMMT — that's the returning-walk-in case.
+ *   3. Otherwise mint a fresh placeholder.
+ *
+ * Reuse is scoped to the customer ON PURPOSE. A YMMT-global placeholder would
+ * collapse every 2020 CR-V in the system onto one row, and since bookings and
+ * service history are keyed by VIN string that would leak one customer's
+ * service records into another's. Sharing happens at the vehicle_configs level
+ * instead, which is exactly what it's for.
+ */
+async function resolveWalkInVin(
+  ctx: MutationCtx,
+  args: {
+    customerId: Id<"users">;
+    vinRaw: string;
+    year?: number;
+    make?: string;
+    model?: string;
+    trim?: string;
+  },
+): Promise<string> {
+  const typed = toCanonicalVin(args.vinRaw);
+  if (isRealVin(typed)) return typed;
+
+  if (typed && !isRealVin(typed)) {
+    // A partially-typed VIN reaching the server used to be stored verbatim as
+    // the car's permanent identity. Log it and fall through to a placeholder
+    // rather than immortalizing "1HGCV" as a VIN.
+    console.warn(
+      `[walkin] discarding malformed VIN "${typed}" (${typed.length} chars) — using a placeholder`,
+    );
+  }
+
+  const fingerprint =
+    args.year && args.make && args.model
+      ? buildYmmtFingerprint({
+          year: args.year,
+          make: args.make,
+          model: args.model,
+          trim: args.trim,
+        })
+      : null;
+
+  if (fingerprint) {
+    const ownerships = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_user_status", (q) =>
+        q.eq("user_id", args.customerId).eq("status", "active"),
+      )
+      .collect();
+
+    for (const o of ownerships) {
+      if (!isPseudoVin(o.vin)) continue;
+      const veh = await ctx.db
+        .query("vehicles")
+        .withIndex("by_vin", (q) => q.eq("vin", o.vin))
+        .first();
+      if (!veh?.year || !veh.metadata?.make || !veh.metadata?.model) continue;
+      const existing = buildYmmtFingerprint({
+        year: veh.year,
+        make: String(veh.metadata.make),
+        model: String(veh.metadata.model),
+        trim: veh.metadata.trim ? String(veh.metadata.trim) : undefined,
+      });
+      if (existing === fingerprint) {
+        console.log(`[walkin] reusing placeholder ${o.vin} for returning ${fingerprint}`);
+        return o.vin;
+      }
+    }
+  }
+
+  return mintPseudoVin(Date.now(), Math.random().toString(36).slice(2, 10));
+}
+
+/**
+ * Route a vehicle to the right identity-resolution pipeline.
+ *
+ * Previously both walk-in paths scheduled `vehicleEnrichment.runPublic.go`,
+ * which is the ADMIN/TEST wrapper — its own header says so. On a real VIN it
+ * looked up a hardcoded test Clerk account and called `addOwner(..., is_primary:
+ * true)`, attaching `test@otopair.com` as a primary owner of the customer's car
+ * (8 such rows are visible in the dev dataset), then polled in-action for up to
+ * 20 minutes, past the Convex action limit. On a placeholder VIN it just failed
+ * the decode silently and the manually-entered year/make/model was discarded.
+ *
+ *   real VIN  → runHeadless.go (decode; no owner rows, no polling)
+ *   YMMT only → ymmtPipeline.enrichVehicleFromYmmt (research; refuses to guess)
+ *   neither   → nothing to work with; logged, not silently dropped
+ */
+async function scheduleVehicleIdentityResolution(
+  ctx: MutationCtx,
+  args: {
+    vin: string;
+    year?: number;
+    make?: string;
+    model?: string;
+    trim?: string;
+  },
+): Promise<void> {
+  if (isRealVin(args.vin)) {
+    await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.runHeadless.go, {
+      vin: args.vin,
+    });
+    return;
+  }
+
+  if (args.year && args.make && args.model) {
+    await ctx.scheduler.runAfter(0, internal.ymmtPipeline.enrichVehicleFromYmmt, {
+      vin: args.vin,
+      year: args.year,
+      make: args.make,
+      model: args.model,
+      trim: args.trim,
+    });
+    return;
+  }
+
+  console.warn(
+    `[identity] ${args.vin}: no VIN and no year/make/model — cannot enrich. ` +
+      `Booking proceeds; parts-dependent services stay gated.`,
+  );
 }
 
 function getTodayString(timezone?: string | null) {
@@ -10955,7 +11094,9 @@ export const createByShop = mutation({
     await requireShopStaff(ctx, user._id, args.shopId);
 
     const now = Date.now();
-    const canonicalVin = toCanonicalVin(args.vin);
+    // NOTE: the canonical VIN is resolved AFTER the customer row exists —
+    // resolveWalkInVin needs the customer to find a placeholder they already
+    // have for this car. See resolveWalkInVin.
 
     if (!args.customerEmail && !args.customerPhone) {
       throw new Error("Provide a customer email or phone number.");
@@ -11029,6 +11170,15 @@ export const createByShop = mutation({
 
     if (!customer) throw new Error("Could not create customer");
 
+    const canonicalVin = await resolveWalkInVin(ctx, {
+      customerId: customer._id,
+      vinRaw: args.vin,
+      year: args.vehicleYear,
+      make: args.vehicleMake,
+      model: args.vehicleModel,
+      trim: args.vehicleTrim,
+    });
+
     let existingVehicle = await ctx.db
       .query("vehicles")
       .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
@@ -11047,17 +11197,34 @@ export const createByShop = mutation({
         updated_at: now,
       });
       existingVehicle = await ctx.db.get(newVehicleId);
+    } else if (!existingVehicle.year && args.vehicleYear) {
+      // A reused placeholder (or a bare row from the consumer add-car path)
+      // may predate our having any YMMT for it. Fill it in so the identity
+      // resolution below has something to work with.
+      await ctx.db.patch(existingVehicle._id, {
+        year: args.vehicleYear,
+        metadata: {
+          ...(existingVehicle.metadata ?? {}),
+          make: args.vehicleMake,
+          model: args.vehicleModel,
+          trim: args.vehicleTrim,
+        },
+        updated_at: now,
+      });
     }
 
-    // Fire-and-forget enrichment for any VIN whose vehicles row doesn't yet
-    // have a resolved vehicle_config_id. Walk-in events are the freshest VIN
-    // signal we get, so we always want full passport data ready by next visit.
+    // Fire-and-forget identity resolution for any vehicle without a resolved
+    // config. Real VIN → decode; YMMT-only → research. Walk-ins are the
+    // freshest vehicle signal we get, so we want the passport ready by the
+    // next visit either way.
     if (existingVehicle && !existingVehicle.vehicle_config_id) {
-      await ctx.scheduler.runAfter(
-        0,
-        internal.vehicleEnrichment.runPublic.go,
-        { vin: canonicalVin },
-      );
+      await scheduleVehicleIdentityResolution(ctx, {
+        vin: canonicalVin,
+        year: args.vehicleYear,
+        make: args.vehicleMake,
+        model: args.vehicleModel,
+        trim: args.vehicleTrim,
+      });
     }
 
     const ownerLink = await ctx.db
@@ -11550,7 +11717,11 @@ export const backfillCompletedBooking = mutation({
     await requireShopStaff(ctx, user._id, args.shopId);
 
     const now = Date.now();
-    const canonicalVin = toCanonicalVin(args.vin);
+    // Starts as whatever the mechanic typed so the duplicate-booking check
+    // below can compare against existing rows, then is re-resolved once the
+    // customer exists (see resolveWalkInVin). A real VIN resolves to itself,
+    // so the duplicate check is unaffected in the case where it can fire.
+    let canonicalVin = toCanonicalVin(args.vin);
     const timezone = await getShopTimezone(ctx, args.shopId);
     const scheduledStartMs = toBookingDateTimeMs(
       args.scheduledDate,
@@ -11638,6 +11809,15 @@ export const backfillCompletedBooking = mutation({
     }
     if (!customer) throw new Error("Could not create customer");
 
+    canonicalVin = await resolveWalkInVin(ctx, {
+      customerId: customer._id,
+      vinRaw: args.vin,
+      year: args.vehicleYear,
+      make: args.vehicleMake,
+      model: args.vehicleModel,
+      trim: args.vehicleTrim,
+    });
+
     let vehicle = await ctx.db
       .query("vehicles")
       .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
@@ -11655,10 +11835,25 @@ export const backfillCompletedBooking = mutation({
         updated_at: now,
       });
       vehicle = await ctx.db.get(newVehicleId);
+    } else if (!vehicle.year && args.vehicleYear) {
+      await ctx.db.patch(vehicle._id, {
+        year: args.vehicleYear,
+        metadata: {
+          ...(vehicle.metadata ?? {}),
+          make: args.vehicleMake,
+          model: args.vehicleModel,
+          trim: args.vehicleTrim,
+        },
+        updated_at: now,
+      });
     }
     if (vehicle && !vehicle.vehicle_config_id) {
-      await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.runPublic.go, {
+      await scheduleVehicleIdentityResolution(ctx, {
         vin: canonicalVin,
+        year: args.vehicleYear,
+        make: args.vehicleMake,
+        model: args.vehicleModel,
+        trim: args.vehicleTrim,
       });
     }
 

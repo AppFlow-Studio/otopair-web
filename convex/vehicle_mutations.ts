@@ -594,6 +594,109 @@ export const upsertServiceVehicleSpec = internalMutation({
 });
 
 /**
+ * Record the outcome of a YMMT (no-VIN) identity resolution into `vin_queue`.
+ *
+ * WHY A LEDGER AT ALL: before this, a no-VIN car whose enrichment failed left
+ * no trace anywhere. `runPublic.go` returned `{status:"error"}` to a scheduler
+ * that discarded it, nothing was written to enrichment_runs or vin_queue, and
+ * the vehicle simply sat with a null vehicle_config_id forever — invisible to
+ * every director/ops dashboard, which all read vehicle_configs/enrichment_runs.
+ * A vehicle we refused to enrich is a real operational fact and has to be
+ * visible, especially since the honest "we can't tell which engine" outcome is
+ * an EXPECTED result here, not a bug.
+ *
+ * vin_queue is the right home: it already carries vin/year/make/model/trim,
+ * status, skip_reason and error, and dataVehicleResolve.resolve already surfaces
+ * it ("VIN is in the enrichment queue (status: …)").
+ */
+export const recordYmmtOutcome = internalMutation({
+  args: {
+    vin: v.string(),
+    year: v.optional(v.float64()),
+    make: v.optional(v.string()),
+    model: v.optional(v.string()),
+    trim: v.optional(v.string()),
+    status: v.string(), // "enriching" | "complete" | "skipped" | "failed"
+    skip_reason: v.optional(v.string()),
+    error: v.optional(v.string()),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("vin_queue")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin))
+      .first();
+
+    const payload = {
+      vin: args.vin,
+      source: "ymmt_manual_entry",
+      year: args.year,
+      make: args.make,
+      model: args.model,
+      trim: args.trim,
+      status: args.status,
+      skip_reason: args.skip_reason,
+      error: args.error,
+      vehicle_config_id: args.vehicle_config_id,
+      processed_at: now,
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, payload);
+      return existing._id;
+    }
+    return await ctx.db.insert("vin_queue", { ...payload, queued_at: now });
+  },
+});
+
+/**
+ * Attach the resolved FK chain + normalized YMMT to a vehicles row.
+ *
+ * The no-VIN paths create the vehicles row first (inside the booking mutation,
+ * so the booking is transactional) and resolve identity afterwards in an action.
+ * This is how the action hands the result back.
+ *
+ * `metadata` is merged rather than replaced — the consumer app stores a color
+ * there, and the walk-in path stores the mechanic's raw typed make/model, both
+ * of which we keep alongside the normalized values.
+ */
+export const attachResolvedIdentity = internalMutation({
+  args: {
+    vin: v.string(),
+    trim_id: v.id("trims"),
+    engine_id: v.id("engines"),
+    transmission_id: v.optional(v.id("transmissions")),
+    year: v.float64(),
+    make: v.string(),
+    model: v.string(),
+    trim: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin))
+      .first();
+    if (!vehicle) return null;
+
+    await ctx.db.patch(vehicle._id, {
+      trim_id: args.trim_id,
+      engine_id: args.engine_id,
+      ...(args.transmission_id ? { transmission_id: args.transmission_id } : {}),
+      year: args.year,
+      metadata: {
+        ...(vehicle.metadata ?? {}),
+        make: args.make,
+        model: args.model,
+        trim: args.trim,
+      },
+      updated_at: Date.now(),
+    });
+    return vehicle._id;
+  },
+});
+
+/**
  * Log service pricing enrichment to enrichment_runs (replaced deprecated ai_enrichment_logs).
  */
 export const logServiceEnrichment = internalMutation({

@@ -9,6 +9,7 @@ import {
   calculatePrevOwnerAnnualRate,
 } from "./lib/classifier";
 import { resolveTireSizesForVin } from "./lib/vehicle_passports";
+import { isRealVin } from "./lib/vinIdentity";
 
 /**
  * vehicles.ts - Canonical vehicle catalog management
@@ -596,26 +597,81 @@ export const addOwner = mutation({
     nickname: v.optional(v.string()),
     is_primary: v.optional(v.boolean()),
     mileage: v.optional(v.float64()),
+    // Vehicle identity for cars added WITHOUT a VIN (the consumer app's
+    // "enter it manually" flow, which mints a MANUAL-… placeholder client-side).
+    //
+    // These are new and optional so older clients keep working. Before them
+    // this mutation created a vehicles row holding ONLY {vin, created_at,
+    // updated_at} — the year/make/model the owner had just typed was dropped on
+    // the floor, surviving nowhere but the free-text `nickname`. With nothing to
+    // identify the car by, it could never be enriched, so it could never clear
+    // the enrichment gate in bookings.ts and the owner could never book a
+    // parts-dependent service on it.
+    year: v.optional(v.float64()),
+    make: v.optional(v.string()),
+    model: v.optional(v.string()),
+    trim: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const normalizedVin = args.vin.toUpperCase().trim();
-    
+    const hasYmmt = Boolean(args.year && args.make && args.model);
+
     // Ensure vehicle exists (upsert it if not)
     let vehicle = await ctx.db
       .query("vehicles")
       .withIndex("by_vin", (q) => q.eq("vin", normalizedVin))
       .unique();
-    
+
     if (!vehicle) {
       const now = Date.now();
       const vehicleId = await ctx.db.insert("vehicles", {
         vin: normalizedVin,
+        ...(args.year ? { year: args.year } : {}),
+        ...(hasYmmt
+          ? { metadata: { make: args.make, model: args.model, trim: args.trim } }
+          : {}),
         created_at: now,
         updated_at: now,
       });
       vehicle = await ctx.db.get(vehicleId);
+    } else if (hasYmmt && !vehicle.year) {
+      // Backfill identity onto a bare row created by an older client.
+      await ctx.db.patch(vehicle._id, {
+        year: args.year,
+        metadata: {
+          ...(vehicle.metadata ?? {}),
+          make: args.make,
+          model: args.model,
+          trim: args.trim,
+        },
+        updated_at: Date.now(),
+      });
+      vehicle = await ctx.db.get(vehicle._id);
     }
-    
+
+    // Kick off identity resolution for a car nothing has resolved yet.
+    //
+    // `engine_id` is the discriminator, not `vehicle_config_id`: the VIN path
+    // (confirmVehicleForUser, runHeadless) calls upsertVehicle with the decoded
+    // trim/engine BEFORE calling addOwner, so an engine_id here means a decode
+    // already ran and scheduled its own enrichment. Without that check we'd
+    // double-schedule the pipeline on every VIN add.
+    if (vehicle && !vehicle.vehicle_config_id && !vehicle.engine_id) {
+      if (isRealVin(normalizedVin)) {
+        await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.runHeadless.go, {
+          vin: normalizedVin,
+        });
+      } else if (hasYmmt) {
+        await ctx.scheduler.runAfter(0, internal.ymmtPipeline.enrichVehicleFromYmmt, {
+          vin: normalizedVin,
+          year: args.year!,
+          make: args.make!,
+          model: args.model!,
+          trim: args.trim,
+        });
+      }
+    }
+
     // Check for existing ownership
     const existing = await ctx.db
       .query("vehicle_owners")

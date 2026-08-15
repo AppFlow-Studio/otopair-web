@@ -1160,7 +1160,14 @@ export default function CreateBookingDrawer({
       const catalogMinutes = catalogEstimateMinutes || undefined;
       const estMinutes =
         (mechanicEstimateMinutes ?? catalogEstimateMinutes) || undefined;
-      const finalVin = vin.trim() || `SHOP${Date.now()}`;
+      // Send the VIN exactly as typed (possibly empty). The server decides
+      // what the car's canonical identity is — it reuses this customer's
+      // existing placeholder when they return with the same vehicle, and mints
+      // a new one only when it has to. We used to mint `SHOP${Date.now()}`
+      // here, which is exactly 17 characters and so read as a real VIN to
+      // every downstream length check, and which forked a new vehicle row on
+      // every single visit. See convex/lib/vinIdentity.ts.
+      const finalVin = vin.trim();
 
       // The mechanic's declared parts (catalog-prefilled + manually added).
       // When partsDeclaration === "add" the server bills these
@@ -1316,7 +1323,14 @@ export default function CreateBookingDrawer({
     );
     setIsSaving(true);
     try {
-      const finalVin = vin.trim() || `SHOP${Date.now()}`;
+      // Send the VIN exactly as typed (possibly empty). The server decides
+      // what the car's canonical identity is — it reuses this customer's
+      // existing placeholder when they return with the same vehicle, and mints
+      // a new one only when it has to. We used to mint `SHOP${Date.now()}`
+      // here, which is exactly 17 characters and so read as a real VIN to
+      // every downstream length check, and which forked a new vehicle row on
+      // every single visit. See convex/lib/vinIdentity.ts.
+      const finalVin = vin.trim();
       const result = await backfillBooking({
         shopId: shopData.shopId as Id<"shops">,
         customerEmail: email.trim() || undefined,
@@ -1383,6 +1397,19 @@ export default function CreateBookingDrawer({
     if (!firstName.trim() || !shopData?.shopId) return;
     if (!isValidUsPhone(phone)) {
       onToast("Enter a valid 10-digit US phone number.");
+      return;
+    }
+    // A half-typed VIN used to be stored verbatim as the vehicle's permanent
+    // identity — nothing validated it on the way in. Blank is fine (the car is
+    // then identified by year/make/model), but a partial one is a typo we
+    // should catch here rather than immortalize.
+    const typedVin = vin.trim().toUpperCase();
+    if (typedVin && !VIN_REGEX.test(typedVin)) {
+      onToast(
+        typedVin.length === 17
+          ? "That VIN contains invalid characters (VINs never use I, O or Q)."
+          : `A VIN is 17 characters — you entered ${typedVin.length}. Leave it blank to identify the car by year/make/model.`,
+      );
       return;
     }
 

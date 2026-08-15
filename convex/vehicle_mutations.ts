@@ -594,6 +594,43 @@ export const upsertServiceVehicleSpec = internalMutation({
 });
 
 /**
+ * Vehicles that were added without a VIN, still have no config, but DO carry
+ * enough year/make/model to resolve — i.e. the backlog this feature stranded.
+ *
+ * Scans the whole table. `vehicles` is small (hundreds of rows) and this runs
+ * on demand, not on a hot path.
+ */
+export const listUnresolvedYmmtVehicles = internalQuery({
+  args: { limit: v.optional(v.float64()) },
+  handler: async (ctx, args) => {
+    const all = await ctx.db.query("vehicles").collect();
+    const out: Array<{
+      vin: string;
+      year: number;
+      make: string;
+      model: string;
+      trim?: string;
+    }> = [];
+    for (const v of all) {
+      if (v.vehicle_config_id || v.engine_id) continue;
+      const meta = (v.metadata ?? {}) as Record<string, unknown>;
+      const make = meta.make ? String(meta.make) : "";
+      const model = meta.model ? String(meta.model) : "";
+      if (!v.year || !make || !model) continue;
+      out.push({
+        vin: v.vin,
+        year: v.year,
+        make,
+        model,
+        trim: meta.trim ? String(meta.trim) : undefined,
+      });
+      if (args.limit && out.length >= args.limit) break;
+    }
+    return out;
+  },
+});
+
+/**
  * Record the outcome of a YMMT (no-VIN) identity resolution into `vin_queue`.
  *
  * WHY A LEDGER AT ALL: before this, a no-VIN car whose enrichment failed left

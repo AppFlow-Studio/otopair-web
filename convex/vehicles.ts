@@ -614,7 +614,7 @@ export const addOwner = mutation({
   },
   handler: async (ctx, args) => {
     const normalizedVin = args.vin.toUpperCase().trim();
-    const hasYmmt = Boolean(args.year && args.make && args.model);
+    const argsHaveYmmt = Boolean(args.year && args.make && args.model);
 
     // Ensure vehicle exists (upsert it if not)
     let vehicle = await ctx.db
@@ -627,14 +627,14 @@ export const addOwner = mutation({
       const vehicleId = await ctx.db.insert("vehicles", {
         vin: normalizedVin,
         ...(args.year ? { year: args.year } : {}),
-        ...(hasYmmt
+        ...(argsHaveYmmt
           ? { metadata: { make: args.make, model: args.model, trim: args.trim } }
           : {}),
         created_at: now,
         updated_at: now,
       });
       vehicle = await ctx.db.get(vehicleId);
-    } else if (hasYmmt && !vehicle.year) {
+    } else if (argsHaveYmmt && !vehicle.year) {
       // Backfill identity onto a bare row created by an older client.
       await ctx.db.patch(vehicle._id, {
         year: args.year,
@@ -648,6 +648,23 @@ export const addOwner = mutation({
       });
       vehicle = await ctx.db.get(vehicle._id);
     }
+
+    // Resolve the car's identity from the ARGS IF GIVEN, otherwise from what is
+    // already on the vehicles row.
+    //
+    // The row fallback is the one that actually fires in production. The
+    // consumer app's manual-add mints its own `MANUAL-…` VIN and sends the
+    // year/make/model to the vehicle row (via upsertVehicle) — NOT to this
+    // mutation, which it calls with just {vin, userId, nickname, mileage}.
+    // Requiring the args here meant the common path stayed silent and the car
+    // still never enriched. Reading the row covers every client, old or new,
+    // with no mobile release needed.
+    const meta = (vehicle?.metadata ?? {}) as Record<string, unknown>;
+    const ymmtYear = args.year ?? vehicle?.year ?? undefined;
+    const ymmtMake = args.make ?? (meta.make ? String(meta.make) : undefined);
+    const ymmtModel = args.model ?? (meta.model ? String(meta.model) : undefined);
+    const ymmtTrim = args.trim ?? (meta.trim ? String(meta.trim) : undefined);
+    const hasYmmt = Boolean(ymmtYear && ymmtMake && ymmtModel);
 
     // Kick off identity resolution for a car nothing has resolved yet.
     //
@@ -664,11 +681,16 @@ export const addOwner = mutation({
       } else if (hasYmmt) {
         await ctx.scheduler.runAfter(0, internal.ymmtPipeline.enrichVehicleFromYmmt, {
           vin: normalizedVin,
-          year: args.year!,
-          make: args.make!,
-          model: args.model!,
-          trim: args.trim,
+          year: ymmtYear!,
+          make: ymmtMake!,
+          model: ymmtModel!,
+          trim: ymmtTrim,
         });
+      } else {
+        console.warn(
+          `[addOwner] ${normalizedVin}: no VIN and no year/make/model on the ` +
+            `vehicle row — cannot resolve an identity, so this car stays unenriched.`,
+        );
       }
     }
 
@@ -2065,6 +2087,15 @@ export const getEnrichmentDetail = query({
         }
       }
     }
+    // Manual-entry cars carry no catalog trim_id — the manual add flow writes
+    // their YMMT to vehicle.metadata ({ make, model, trim }) instead. Fall back
+    // to it so the pill/sheet surface the real car (and resolve a car image)
+    // rather than collapsing to just the year.
+    const meta = (vehicle.metadata ?? {}) as { make?: string; model?: string; trim?: string };
+    if (!make && meta.make) make = meta.make;
+    if (!model && meta.model) model = meta.model;
+    if (!trimName && meta.trim) trimName = meta.trim;
+
     const year = vehicle.year ?? null;
     const labelParts: string[] = [];
     if (year != null) labelParts.push(String(year));
@@ -2277,6 +2308,12 @@ export const getMyVehiclesEnrichmentStatus = query({
               if (makeRow) make = (makeRow as { name?: string }).name ?? null;
             }
           }
+          // Manual-entry cars have no catalog trim_id; their make/model live
+          // in vehicle.metadata (written by the manual add flow). Fall back so
+          // the pill names the real car instead of just the year.
+          const meta = (vehicle.metadata ?? {}) as { make?: string; model?: string };
+          if (!make && meta.make) make = meta.make;
+          if (!model && meta.model) model = meta.model;
           const parts: string[] = [];
           if (vehicle.year != null) parts.push(String(vehicle.year));
           if (make) parts.push(make);

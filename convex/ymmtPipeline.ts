@@ -477,6 +477,61 @@ export const enrichVehicleFromYmmt = internalAction({
 });
 
 /**
+ * Backfill: resolve every no-VIN vehicle that has YMMT but still has no config.
+ *
+ * These are the cars stranded while the YMMT path didn't exist — the live
+ * `SHOP…` and `MANUAL-…` rows. Runs them through the same resolver a fresh add
+ * uses, so a cache hit attaches instantly and everything else schedules an
+ * enrichment. Serial on purpose: each miss costs a web-search research call, and
+ * this is an operator-triggered sweep, not a hot path.
+ *
+ * Usage:
+ *   npx convex run ymmtPipeline:backfillUnresolvedYmmt '{"limit":5}'
+ *   npx convex run ymmtPipeline:backfillUnresolvedYmmt '{"limit":5,"dryRun":true}'
+ */
+export const backfillUnresolvedYmmt = internalAction({
+  args: { limit: v.optional(v.float64()), dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<any> => {
+    const rows: Array<{
+      vin: string;
+      year: number;
+      make: string;
+      model: string;
+      trim?: string;
+    }> = await ctx.runQuery(internal.vehicle_mutations.listUnresolvedYmmtVehicles, {
+      limit: args.limit,
+    });
+
+    if (args.dryRun) {
+      return {
+        dry_run: true,
+        count: rows.length,
+        vehicles: rows.map((r) => `${r.vin} — ${r.year} ${r.make} ${r.model} ${r.trim ?? ""}`.trim()),
+      };
+    }
+
+    const results: any[] = [];
+    for (const r of rows) {
+      const outcome = await ctx.runAction(
+        internal.ymmtPipeline.enrichVehicleFromYmmt,
+        { vin: r.vin, year: r.year, make: r.make, model: r.model, trim: r.trim },
+      );
+      results.push({ vin: r.vin, vehicle: `${r.year} ${r.make} ${r.model}`, ...outcome });
+      console.log(`[ymmt-backfill] ${r.vin}: ${outcome.status}${outcome.reason ? ` (${outcome.reason})` : ""}`);
+    }
+
+    return {
+      processed: results.length,
+      cache_hit: results.filter((r) => r.status === "cache_hit").length,
+      scheduled: results.filter((r) => r.status === "scheduled").length,
+      skipped: results.filter((r) => r.status === "skipped").length,
+      failed: results.filter((r) => r.status === "failed").length,
+      results,
+    };
+  },
+});
+
+/**
  * Diagnostic: resolve a YMMT identity and report it without touching any
  * vehicles row or scheduling enrichment.
  *

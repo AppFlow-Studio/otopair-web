@@ -51,7 +51,7 @@ function conflictMessage(
   if (conflict === "booking") return "Another booking blocks this slot on the mechanic's lane.";
   if (conflict === "blocked") return "A blocked slot covers this window for the mechanic.";
   if (conflict === "outside_shop_hours") return "The proposed start is outside the shop's hours.";
-  if (conflict === "ends_outside_shop_hours") return "The job will end outside the shop's hours.";
+  if (conflict === "ends_outside_shop_hours") return "The proposed end is outside the shop's hours.";
   return null;
 }
 

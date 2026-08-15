@@ -30,8 +30,12 @@ function stateWithCorners(
     const zone = state.zones[corner];
     if (!zone) continue;
     const v = values[corner];
+    zone.done = true;
     if (v?.tread != null) zone.measures.tread = v.tread;
-    if (v?.pad != null) zone.measures.pad = v.pad;
+    if (v?.pad != null) {
+      zone.measures.pad_inner = v.pad;
+      zone.measures.pad_outer = v.pad;
+    }
     if (v?.rotor != null) zone.measures.rotor = v.rotor;
   }
   return state;
@@ -96,7 +100,7 @@ describe("derivePrejobFromInspection measurement blocks", () => {
     expect(fl?.normalized_um).toBe(26_500);
   });
 
-  it("rounds a fractional tread to whole 32nds rather than blocking the submit", () => {
+  it("rejects fractional tread because inspection readings use whole 32nds", () => {
     const state = stateWithCorners({
       FL: { tread: "7.5", pad: "9", rotor: "26.5" },
       FR: { tread: "7.4", pad: "9", rotor: "26.5" },
@@ -104,15 +108,16 @@ describe("derivePrejobFromInspection measurement blocks", () => {
       RR: { tread: "9", pad: "7", rotor: "11.2" },
     });
     const prejob = derivePrejobFromInspection(state, OPTS);
-    expect(prejob.tire_tread?.front_left?.reported_min_32nds).toBe(8);
-    expect(prejob.tire_tread?.front_right?.reported_min_32nds).toBe(7);
     expect(
       validateInspectionMeasurements({
         tire_tread: prejob.tire_tread,
         brakes: prejob.brakes,
         brake_scope: SCOPE_NONE,
       }),
-    ).toEqual({ valid: true });
+    ).toEqual({
+      valid: false,
+      error: "Front left tread depth must be a whole number from 0 to 32.",
+    });
   });
 
   it("still reports a genuinely missing tread reading", () => {

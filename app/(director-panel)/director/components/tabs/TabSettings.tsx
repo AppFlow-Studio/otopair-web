@@ -479,6 +479,208 @@ const BookingExpirySettings = ({ isSuperadmin, actorName, actorId }: {
   )
 }
 
+// Outer Vehicle Health Score formula (Upkeep vs. Warning Lights, plus the
+// Open-recs cap). Bigger blast radius than every other tunable on this page
+// — it reshapes every vehicle's score the instant it's saved — so it's the
+// one editor here with an explicit confirm step, mirroring
+// convex/healthScoreWeights.ts's own confirmation gate.
+const HealthScoreWeightsSettings = ({ isSuperadmin, actorName, actorId }: {
+  isSuperadmin: boolean; actorName: string; actorId: Id<'director_users'> | undefined
+}) => {
+  const weights   = useQuery(api.healthScoreWeights.getWeights)
+  const setWeights = useMutation(api.healthScoreWeights.setWeights)
+  const [upkeep, setUpkeep]   = useState('')
+  const [openCap, setOpenCap] = useState('')
+  const [loaded, setLoaded]   = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [saving, setSaving]   = useState(false)
+  const [msg, setMsg]         = useState('')
+
+  useEffect(() => {
+    if (weights && !loaded) {
+      setUpkeep(String(weights.upkeepWeight))
+      setOpenCap(String(weights.openIssuePenaltyMax))
+      setLoaded(true)
+    }
+  }, [weights, loaded])
+
+  const upkeepNum = Number(upkeep)
+  const validUpkeep = Number.isFinite(upkeepNum) && upkeepNum >= 0 && upkeepNum <= 100
+
+  const onSave = async () => {
+    if (!isSuperadmin || !validUpkeep) return
+    setSaving(true); setMsg('')
+    try {
+      await setWeights({
+        upkeepWeight: upkeepNum,
+        openIssuePenaltyMax: Number(openCap) || 0,
+        confirmed: true,
+        actorName, actorId,
+      })
+      setMsg('Saved ✓')
+      setConfirming(false)
+    } catch {
+      setMsg('Save failed')
+    }
+    setSaving(false)
+  }
+
+  return (
+    <Card padded={false} style={{ marginBottom: 24 }}>
+      <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--slate-200)' }}>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>Vehicle Health Score weights</div>
+        <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 2 }}>
+          Upkeep vs. Warning Lights split (must sum to 100 — Warning Lights is
+          computed as the remainder) plus the Open-recommendations penalty
+          cap. Applies to every vehicle's score instantly.
+        </div>
+      </div>
+      <div style={{ padding: '16px 18px', display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-end' }}>
+        <NumField label="Upkeep weight" hint={`Warning Lights = ${100 - (validUpkeep ? upkeepNum : weights?.upkeepWeight ?? 85)}`} value={upkeep} onChange={setUpkeep} disabled={!isSuperadmin} />
+        <NumField label="Open-recs penalty cap" hint="max points subtracted" value={openCap} onChange={setOpenCap} disabled={!isSuperadmin} />
+      </div>
+      <div style={{ padding: '0 18px 16px', display: 'flex', alignItems: 'center', gap: 12 }}>
+        {!confirming ? (
+          <Button variant="primary" onClick={() => setConfirming(true)} disabled={!isSuperadmin || !loaded || !validUpkeep}>
+            Change weights
+          </Button>
+        ) : (
+          <>
+            <span style={{ fontSize: 12, color: 'var(--slate-700)' }}>
+              Confirm: apply to every vehicle's score now?
+            </span>
+            <Button size="sm" onClick={() => setConfirming(false)}>Cancel</Button>
+            <Button size="sm" variant="danger" onClick={onSave} disabled={saving}>
+              {saving ? 'Saving…' : 'Confirm & save'}
+            </Button>
+          </>
+        )}
+        {msg && <span style={{ fontSize: 12, color: msg.includes('fail') ? 'var(--red-600)' : 'var(--green-700)' }}>{msg}</span>}
+        {!isSuperadmin && <span style={{ fontSize: 11, color: 'var(--slate-400)' }}>Read-only — superadmin required.</span>}
+      </div>
+    </Card>
+  )
+}
+
+const URGENCY_OPTIONS = [
+  { value: 'soon', label: 'Soon' },
+  { value: 'within_3_months', label: 'Within 3 months' },
+  { value: 'next_visit', label: 'Next visit' },
+]
+
+type InspectionHealthConfigRow = {
+  _id: Id<'inspection_health_config'>
+  field_key: string
+  maps_to?: string
+  rec_service_slug?: string
+  rec_urgency?: string
+  rec_copy?: string
+}
+
+const InspectionHealthConfigEditorRow = ({ row, isSuperadmin, actorName, actorId }: {
+  row: InspectionHealthConfigRow; isSuperadmin: boolean
+  actorName: string; actorId: Id<'director_users'> | undefined
+}) => {
+  const setRow = useMutation(api.inspectionHealthConfig.setRow)
+  const [copy, setCopy]       = useState(row.rec_copy ?? '')
+  const [urgency, setUrgency] = useState(row.rec_urgency ?? 'within_3_months')
+  const [slug, setSlug]       = useState(row.rec_service_slug ?? '')
+  const [dirty, setDirty]     = useState(false)
+  const [saving, setSaving]   = useState(false)
+
+  const onSave = async () => {
+    setSaving(true)
+    try {
+      await setRow({
+        fieldKey: row.field_key,
+        mapsTo: row.maps_to,
+        recServiceSlug: slug || undefined,
+        recUrgency: urgency || undefined,
+        recCopy: copy || undefined,
+        actorName, actorId,
+      })
+      setDirty(false)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 18px', borderBottom: '1px solid var(--slate-100)' }}>
+      <div style={{ width: 140, flexShrink: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--slate-900)' }}>{row.field_key}</div>
+        <Badge tone={row.maps_to === 'freeform' ? 'slate' : row.maps_to === 'minor' ? 'blue' : 'orange'}>
+          {row.maps_to ?? 'unmapped'}
+        </Badge>
+      </div>
+      <Input
+        value={copy}
+        onChange={e => { setCopy(e.target.value); setDirty(true) }}
+        placeholder="Recommendation copy"
+        disabled={!isSuperadmin}
+        style={{ flex: 1, fontSize: 13 }}
+      />
+      <Select
+        value={urgency}
+        onChange={e => { setUrgency(e.target.value); setDirty(true) }}
+        options={URGENCY_OPTIONS}
+        style={{ width: 160 }}
+      />
+      <Input
+        value={slug}
+        onChange={e => { setSlug(e.target.value); setDirty(true) }}
+        placeholder="catalog slug (blank = freeform)"
+        disabled={!isSuperadmin}
+        style={{ width: 200, fontSize: 13 }}
+      />
+      <Button size="sm" variant="primary" onClick={onSave} disabled={!isSuperadmin || !dirty || saving} style={{ flexShrink: 0 }}>
+        {saving ? '…' : 'Save'}
+      </Button>
+    </div>
+  )
+}
+
+// Per-inspection-field severity/recommendation tuning (see
+// convex/seed_inspection_health.ts for the default rows). Lower stakes than
+// the score-weights editor above — only shapes future findings' copy/urgency
+// — so no confirmation gate, just the standard audit-logged save.
+const InspectionHealthConfigSettings = ({ isSuperadmin, actorName, actorId }: {
+  isSuperadmin: boolean; actorName: string; actorId: Id<'director_users'> | undefined
+}) => {
+  const rows = useQuery(api.inspectionHealthConfig.list)
+
+  return (
+    <Card padded={false} style={{ marginBottom: 24 }}>
+      <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--slate-200)' }}>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>Inspection health weights</div>
+        <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 2 }}>
+          Per-field recommendation copy, urgency, and catalog mapping shown
+          when a mechanic's inspection finding is confirmed. Orange = feeds a
+          core score tile, blue = Consolidated minor item, slate = freeform
+          (never scores).
+        </div>
+      </div>
+      {rows === undefined ? (
+        <div style={{ padding: '24px 18px', fontSize: 13, color: 'var(--slate-400)' }}>Loading…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ padding: '24px 18px', fontSize: 13, color: 'var(--slate-400)' }}>
+          No config seeded yet — run seed_inspection_health:seedInspectionHealth.
+        </div>
+      ) : (
+        rows.map((row: InspectionHealthConfigRow) => (
+          <InspectionHealthConfigEditorRow
+            key={String(row._id)}
+            row={row}
+            isSuperadmin={isSuperadmin}
+            actorName={actorName}
+            actorId={actorId}
+          />
+        ))
+      )}
+    </Card>
+  )
+}
+
 export const TabSettings = () => {
   const session   = useContext(DirectorSessionCtx)
   const users     = useQuery(api.director_auth.listUsers)
@@ -519,6 +721,9 @@ export const TabSettings = () => {
       </Card>
 
       <BookingExpirySettings isSuperadmin={isSuperadmin} actorName={actorName} actorId={actorId} />
+
+      <HealthScoreWeightsSettings isSuperadmin={isSuperadmin} actorName={actorName} actorId={actorId} />
+      <InspectionHealthConfigSettings isSuperadmin={isSuperadmin} actorName={actorName} actorId={actorId} />
 
       <Card padded={false} style={{ marginBottom: 24 }}>
         <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--slate-200)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

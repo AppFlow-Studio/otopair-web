@@ -225,6 +225,7 @@ export function buildMaintenanceItems(
       detail: result.detail,
       status: result.status,
       percentUsed: result.percentUsed,
+      rawScore: result.rawScore,
     });
   }
 

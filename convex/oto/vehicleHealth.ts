@@ -42,7 +42,7 @@ import {
   type DriverRecommendationLike,
 } from "../../utils/mergedMaintenance";
 import { resolveSlugMap } from "../service_intervals_queries";
-import { bufferFor } from "../healthPoints";
+import { loadHealthScoreWeights } from "../healthScoreWeights";
 import type { MaintenanceItem, MaintenanceStatus } from "../../components/cars/MaintenanceTracker";
 
 // -----------------------------------------------------------------------------
@@ -243,8 +243,6 @@ interface LoadedContext {
   knownIssues: string[] | undefined;
   /** Open-mechanic-rec penalty (0–15) the ring subtracts — vehicle_owners.health_score_rec_penalty. */
   recPenalty: number | undefined;
-  /** Health-Points buffer (0–3) the ring adds — Rewards Framework v3 §11. */
-  hpBuffer: number;
   /**
    * Provenance keyed by MaintenanceType for items that DO have a record.
    * Items without a record (unknown-* fallbacks) get "inferred" downstream
@@ -379,15 +377,10 @@ async function loadVehicleContextForUser(
       )
     : {};
 
-  // Health-Points buffer (+0–3) and open-mechanic-rec penalty (−0–15) — both feed
-  // the ring's score.
-  const hpRow = await ctx.db
-    .query("vehicle_health_points")
-    .withIndex("by_vin_user", (q: any) =>
-      q.eq("vin", (vehicle.vin ?? "").toUpperCase().trim()).eq("user_id", userId),
-    )
-    .unique();
-  const hpBuffer = bufferFor(hpRow?.points ?? 0);
+  // Open-mechanic-rec penalty (−0–15) feeds the ring's score. Rewards (the
+  // Health-Points buffer) are paused for now — see Rewards removal — so Oto
+  // no longer reads vehicle_health_points here, keeping it in lockstep with
+  // the ring not applying the buffer either.
   const recPenalty = (owner as any).health_score_rec_penalty as number | undefined;
 
   // Normalize raw records into the builder's input shape. lastServiceDate is
@@ -552,6 +545,7 @@ async function loadVehicleContextForUser(
     records: records.map((r) => ({
       type: r.type,
       confirmedHealthyAt: r.confirmedHealthyAt ?? undefined,
+      customInputs: (r.customInputs ?? undefined) as Record<string, unknown> | undefined,
     })),
     knownIssues,
     vehicleYear,
@@ -567,7 +561,6 @@ async function loadVehicleContextForUser(
     odometerMiles,
     knownIssues,
     recPenalty,
-    hpBuffer,
     provenanceByType,
   };
 }
@@ -636,20 +629,21 @@ async function _getVehicleHealthCore(
     odometerMiles,
     knownIssues,
     recPenalty,
-    hpBuffer,
     provenanceByType,
   } = await loadVehicleContextForUser(ctx, userId, args.vehicle_id);
 
-  // Score from the ring-equivalent items + the same penalty/buffer so the number
+  // Score from the ring-equivalent items + the same penalty so the number
   // Oto states matches the Cars page. Items REPORTED to Oto stay the conservative
   // enrichedItems (unchanged).
-  const score = computeVehicleHealthScore({
-    maintenanceItems: scoringItems,
-    odometerMiles,
-    knownIssues,
-    recPenalty,
-    hpBuffer,
-  });
+  const score = computeVehicleHealthScore(
+    {
+      maintenanceItems: scoringItems,
+      odometerMiles,
+      knownIssues,
+      recPenalty,
+    },
+    await loadHealthScoreWeights(ctx),
+  );
 
   // K5: scope declaration first, item list second. Static per response — it
   // describes what this query is capable of knowing, not what this vehicle's
@@ -696,21 +690,21 @@ async function _getProjectedHealthScoreCore(
   userId: Id<"users">,
   args: { vehicle_id: string; item_id: string },
 ): Promise<ProjectedHealthResponse> {
-  const { scoringItems, odometerMiles, knownIssues, recPenalty, hpBuffer } =
+  const { scoringItems, odometerMiles, knownIssues, recPenalty } =
     await loadVehicleContextForUser(ctx, userId, args.vehicle_id);
 
-  // Project from the SAME base as the quoted score (scoringItems + penalty/buffer)
+  // Project from the SAME base as the quoted score (scoringItems + penalty)
   // so the "fixing this adds N pts" delta reconciles with the number Oto states.
   const input = {
     maintenanceItems: scoringItems,
     odometerMiles,
     knownIssues,
     recPenalty,
-    hpBuffer,
   };
+  const weights = await loadHealthScoreWeights(ctx);
 
-  const current = computeVehicleHealthScore(input);
-  const projected = computeProjectedHealthScore(input, args.item_id);
+  const current = computeVehicleHealthScore(input, weights);
+  const projected = computeProjectedHealthScore(input, args.item_id, weights);
   const lift = Math.max(0, projected - current);
 
   return {

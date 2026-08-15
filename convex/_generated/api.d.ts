@@ -91,6 +91,7 @@ import type * as devOnly_round3IdentityProbe from "../devOnly/round3IdentityProb
 import type * as devOnly_round3StoredCheck from "../devOnly/round3StoredCheck.js";
 import type * as devOnly_scanMessageLeaks from "../devOnly/scanMessageLeaks.js";
 import type * as devOnly_seedChelalaCopy from "../devOnly/seedChelalaCopy.js";
+import type * as devOnly_seedTestShops from "../devOnly/seedTestShops.js";
 import type * as devOnly_trimGarageToOneCar from "../devOnly/trimGarageToOneCar.js";
 import type * as devOnly_urlProbe from "../devOnly/urlProbe.js";
 import type * as devOnly_validateQuoteEngine from "../devOnly/validateQuoteEngine.js";
@@ -653,6 +654,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/round3StoredCheck": typeof devOnly_round3StoredCheck;
   "devOnly/scanMessageLeaks": typeof devOnly_scanMessageLeaks;
   "devOnly/seedChelalaCopy": typeof devOnly_seedChelalaCopy;
+  "devOnly/seedTestShops": typeof devOnly_seedTestShops;
   "devOnly/trimGarageToOneCar": typeof devOnly_trimGarageToOneCar;
   "devOnly/urlProbe": typeof devOnly_urlProbe;
   "devOnly/validateQuoteEngine": typeof devOnly_validateQuoteEngine;

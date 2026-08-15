@@ -10,7 +10,7 @@
  * Auth/owner resolve mirrors recordConfirmation.ts:54-79.
  * Pipeline trigger mirrors maintenance.ts:107-114 (preOnboardingComplete gate).
  */
-import { action, internalMutation, mutation } from "./_generated/server";
+import { action, internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { v } from "convex/values";
@@ -334,6 +334,65 @@ async function applyVehicleTruthImpl(
     faultLightsAdded,
   };
 }
+
+// ── D-13/D-15 (QA p.69): per-vehicle card supersession ───────────────────────
+// "One pending vehicle-update card per thread, and none while an emergency is
+// active" — Waleed's ruling 2026-08-16: newest card for a VEHICLE is the only
+// active one, globally across conversations; older cards render expired in
+// place; a vehicle-context switch alone expires nothing.
+
+/** Internal writer — chat.ts stamps the newest card's message id on the owner
+ *  row whenever a render_vehicle_update card persists. */
+export const setActiveUpdateCard = internalMutation({
+  args: {
+    vin: v.string(),
+    user_id: v.id("users"),
+    message_id: v.id("ai_messages"),
+  },
+  handler: async (ctx, args) => {
+    const owner = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin_user", (q: any) =>
+        q.eq("vin", args.vin).eq("user_id", args.user_id),
+      )
+      .unique();
+    if (!owner) return { ok: false as const, reason: "no_owner_row" };
+    await ctx.db.patch(owner._id, {
+      active_update_card_message_id: args.message_id,
+    });
+    return { ok: true as const };
+  },
+});
+
+/** Card-side read — AIVehicleUpdate compares its own message id against this
+ *  pointer; a mismatch means a newer card exists somewhere and this one
+ *  renders expired. */
+export const getActiveUpdateCard = query({
+  args: { vehicle_id: v.string() },
+  handler: async (ctx, args): Promise<string | null> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const user: Doc<"users"> | null = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!user) return null;
+    let vehicle: Doc<"vehicles"> | null = null;
+    try {
+      vehicle = await ctx.db.get(args.vehicle_id as Id<"vehicles">);
+    } catch {
+      return null;
+    }
+    if (!vehicle) return null;
+    const owner = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin_user", (q: any) =>
+        q.eq("vin", vehicle.vin).eq("user_id", user._id),
+      )
+      .unique();
+    return (owner?.active_update_card_message_id as string | undefined) ?? null;
+  },
+});
 
 export const applyVehicleTruth = mutation({
   args: {

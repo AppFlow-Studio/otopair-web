@@ -1531,6 +1531,11 @@ export default defineSchema({
     mileage: v.optional(v.number()),
     mileage_source: v.optional(v.string()),      // e.g. "chat_self_reported" | "onboarding" | "verified"
     mileage_updated_at: v.optional(v.number()),  // ms epoch of the last mileage write
+    // D-13/D-15 (QA p.69): per-vehicle supersession pointer for the
+    // render_vehicle_update Confirm card. Only the ai_messages row this
+    // points at renders an ACTIVE card; older cards for the same vehicle —
+    // in any conversation — render expired. Updated by oto/chat on persist.
+    active_update_card_message_id: v.optional(v.id("ai_messages")),
     added_at: v.optional(v.number()),
     removed_at: v.optional(v.number()),
     ownershipType: v.optional(v.string()),
@@ -3640,6 +3645,14 @@ export default defineSchema({
         }),
       ),
     ),
+    // -----------------------------------------------------------------------
+    // §7b' trust-gate hard floor (2026-08-15). Maintenance types ("brakes",
+    // "battery", …) for which a record-confirmation card has already been
+    // offered in THIS conversation — model-fired or server-forced. The gate
+    // fires at most once per type per conversation; without this the forced
+    // card would re-appear on the post-confirm turn.
+    // -----------------------------------------------------------------------
+    record_confirmations_offered: v.optional(v.array(v.string())),
     // -----------------------------------------------------------------------
     // [RESTORED post-merge — Sprint 2 polite-exit counter]
     // Tracks how many turns of symptom-narrowing have happened without

@@ -52,6 +52,15 @@ import {
   type ResolvedVehicle,
 } from "./envelope";
 import { classifyTurnSafety, renderSafetyOverrideBlock } from "./safety";
+import {
+  classifyTrackedSymptoms,
+  directSlugMaintenanceType,
+  symptomMaintenanceType,
+  symptomServiceTarget,
+  targetAlreadyCovered,
+  trackedSuppressedByHazards,
+  userAskedForDirectService,
+} from "../../lib/symptomTracking";
 import { OTO_TOOL_CATEGORY, OTO_TOOLS, OTOPAIR_SERVICE_SLUGS } from "./tools";
 import {
   executeTool,
@@ -308,6 +317,8 @@ export const sendMessage = action({
   // render tools without churning the validator on every change.
   returns: v.object({
     text: v.string(),
+    // Persisted assistant ai_messages row id (D-13/D-15 supersession check).
+    assistantMessageId: v.optional(v.id("ai_messages")),
     // Render directives — any of these may be present depending on which
     // render tool fired. The mobile app and harness pick the renderer based
     // on which fields are set. All are loose v.any() since their shapes
@@ -357,6 +368,10 @@ export const sendMessage = action({
 // successful turns omit it.
 type SendMessageResult = {
   text: string;
+  // Persisted assistant ai_messages row id (absent on harness/skipPersist
+  // runs). The client threads it into the live ChatMessage so the
+  // vehicle-update card can run the D-13/D-15 supersession check.
+  assistantMessageId?: Id<"ai_messages">;
   quickReplies?: unknown[];
   showRecordConfirmation?: { vehicle_id: string; maintenance_type: string };
   // render_vehicle_update — vehicle-truth confirm card (mileage / service
@@ -858,6 +873,15 @@ export async function sendMessageHandlerCore(
   // convex/oto/safety.ts for the defect inventory this closes.
   const safetyFindings = classifyTurnSafety(message);
   const safetyOverride = renderSafetyOverrideBlock(safetyFindings);
+  // Issue 2 (2026-08-15) — ledger rows appended THIS turn, safety and tracked
+  // alike. The `openSymptomRows` snapshot above is pre-turn, so without this
+  // a booking rendered on the SAME turn the symptoms arrived (the report's
+  // four-symptoms-in-one-message case) would bundle and pre-check nothing.
+  const symptomsAppendedThisTurn: {
+    text: string;
+    category: string;
+    safety_relevant: boolean;
+  }[] = [];
   if (safetyFindings.length > 0) {
     // Log the classification, never the user's message (PII). Category +
     // severity is enough to audit false positives from telemetry.
@@ -888,12 +912,47 @@ export async function sendMessageHandlerCore(
             safety_relevant: true,
           },
         );
+        symptomsAppendedThisTurn.push({
+          text: message.slice(0, 140),
+          category: `${f.category}:${f.matched}`,
+          safety_relevant: true,
+        });
       } catch (e: any) {
         console.error(
           "[oto/chat] open-symptom append failed (swallowed):",
           e?.message,
         );
       }
+    }
+  }
+  // Issue 2 — tracked-symptom appends. The safety ledger only ever carried
+  // hazard-tier findings, so a brake squeak, an AC smell, or a steady
+  // check-engine light was invisible state. Same deterministic posture:
+  // classifier, not model; dedupe by category inside the mutation; a hazard
+  // row appended above suppresses the tracked row for the same subsystem.
+  for (const t of classifyTrackedSymptoms(message)) {
+    if (trackedSuppressedByHazards(t.key, safetyFindings)) continue;
+    const category = `tracked:${t.key}`;
+    try {
+      await ctx.runMutation(
+        internal.ai_conversations.appendOpenSymptomInternal,
+        {
+          id: conversationId,
+          text: t.text,
+          category,
+          safety_relevant: false,
+        },
+      );
+      symptomsAppendedThisTurn.push({
+        text: t.text,
+        category,
+        safety_relevant: false,
+      });
+    } catch (e: any) {
+      console.error(
+        "[oto/chat] tracked-symptom append failed (swallowed):",
+        e?.message,
+      );
     }
   }
 
@@ -1685,6 +1744,203 @@ export async function sendMessageHandlerCore(
       ];
     }
   }
+  // Issue 2 — the pre-turn ledger snapshot PLUS rows appended this turn.
+  // Shared by the §7b' trust-gate floor and the §7c bundler, so the report's
+  // four-symptoms-then-booking-in-one-turn case bundles and pre-checks
+  // everything instead of nothing.
+  const bundlerSymptomRows = [
+    ...openSymptomRows,
+    ...symptomsAppendedThisTurn.filter(
+      (a) => !openSymptomRows.some((s) => s.category === a.category),
+    ),
+  ];
+
+  // ── 7b'. Trust-gate hard floor (2026-08-15) ──────────────────────────
+  // Conditions in code, absolutes in prompts — same doctrine as §7b/§6.9.
+  // The v0.58 chips-default push made Haiku slip the trust gate ~2/6 reps
+  // (rationalizing "serviced 2 months ago, which lines up — Brake Pad
+  // Replacement is the right call" against an on_time self_reported record)
+  // after three prompt layers already carried the rule. This floor makes the
+  // gate deterministic on the turn it matters: mid-symptom-narrowing, the
+  // model just read the health record, an OPEN symptom contests a record
+  // that is on_time + self_reported and hasn't had a confirmation card this
+  // conversation — then the turn belongs to render_record_confirmation, no
+  // matter what the model rendered. The open-symptom ledger (Issue 2) is the
+  // symptom-driven discriminator: an explicit "book me an oil change" has no
+  // open symptom row, so routine bookings can never trip this. Never fires
+  // on an emergency turn (D-13: no cards compete with a stop instruction).
+  // Trigger deliberately does NOT read conversation_state.last_intent — the
+  // tag is model-authored free-form text ("symptom_narrowing_brakes" one rep,
+  // "brake_squeal_triage" the next), and gating a floor on it reintroduces
+  // the probabilism the floor exists to remove. The ledger is per-conversation,
+  // so an open contested symptom already proves this conversation raised it.
+  {
+    // accumulatedToolCalls EXCLUDES data reads by design (audit-row capture),
+    // so the health-read signal must come from turnSamples' tool_names.
+    const healthCalledThisTurn = turnSamples.some((s) =>
+      s.tool_names.includes("get_vehicle_health"),
+    );
+    const emergencyActive = safetyFindings.some(
+      (f) => f.severity === "stop_now" || f.severity === "urgent",
+    );
+    if (
+      renderEnvelope.showRecordConfirmation === undefined &&
+      healthCalledThisTurn &&
+      !emergencyActive &&
+      activeVehicle
+    ) {
+      const offered = ((conversation as any).record_confirmations_offered ??
+        []) as string[];
+      const contested = new Set<string>();
+      for (const s of bundlerSymptomRows) {
+        const t = symptomMaintenanceType(s.category);
+        if (t && !offered.includes(t)) contested.add(t);
+      }
+      if (contested.size > 0) {
+        try {
+          const health = await ctx.runQuery(
+            internal.oto.vehicleHealth.getVehicleHealthForUser,
+            { actingUserId: user._id, vehicle_id: activeVehicle.id },
+          );
+          const flagged = (health.items as {
+            type: string;
+            label: string;
+            detail?: string;
+            status: string;
+            record_provenance: string;
+          }[]).find(
+            (i) =>
+              contested.has(i.type) &&
+              i.status === "on_time" &&
+              i.record_provenance === "self_reported",
+          );
+          if (flagged) {
+            console.warn(
+              `[oto/chat] §7b' trust-gate floor: forcing record confirmation for "${flagged.type}" ` +
+                `(model rendered ${renderEnvelope.bookService !== undefined ? "book_service" : "no card"})`,
+            );
+            delete renderEnvelope.bookService;
+            delete renderEnvelope.quickReplies;
+            quickReplies = undefined;
+            renderEnvelope.showRecordConfirmation = {
+              vehicle_id: activeVehicle.id,
+              maintenance_type: flagged.type,
+            };
+            const detail =
+              typeof flagged.detail === "string" && flagged.detail !== "Not on file"
+                ? ` (${flagged.detail.toLowerCase()})`
+                : "";
+            finalText =
+              `Quick check before we go further: our records show your ${flagged.label.toLowerCase()} ` +
+              `service as up to date${detail}, and that doesn't quite line up with what you're describing. ` +
+              `The record itself might be off — is it still accurate?`;
+          }
+        } catch (e: any) {
+          console.error(
+            "[oto/chat] §7b' trust-gate floor failed (swallowed):",
+            e?.message,
+          );
+        }
+      }
+    }
+  }
+  // §7b' dedupe writeback — any record-confirmation card shown this turn
+  // (model-fired or floor-forced) marks its type offered for this
+  // conversation, so the floor never re-fires on the post-confirm turn.
+  if (renderEnvelope.showRecordConfirmation !== undefined) {
+    const mt = (renderEnvelope.showRecordConfirmation as { maintenance_type?: string })
+      .maintenance_type;
+    if (typeof mt === "string") {
+      try {
+        await ctx.runMutation(
+          internal.ai_conversations.markRecordConfirmationOfferedInternal,
+          { id: conversationId, maintenance_type: mt },
+        );
+      } catch (e: any) {
+        console.error(
+          "[oto/chat] record-confirmation-offered write failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
+  }
+
+  // ── 7b''. Direct-service → diagnostic rewrite (2026-08-15) ───────────
+  // The floor's post-confirm companion: booking a direct WEAR repair (pad
+  // replacement, new battery) for a subsystem whose record is on_time +
+  // self_reported contradicts that record — doubly so once the user has just
+  // CONFIRMED it (fresh pads don't need replacing). The correct route is a
+  // diagnostic scan; a mechanic decides what the noise actually is. Rewrites
+  // the booking's slugs deterministically UNLESS the user named that service
+  // in their own message this turn — an explicit ask always wins. Symptom-
+  // driven only (open-ledger discriminator), same as §7b'.
+  if (renderEnvelope.bookService !== undefined && activeVehicle) {
+    const bs = renderEnvelope.bookService as Record<string, unknown>;
+    const slugs = Array.isArray(bs.service_slugs)
+      ? (bs.service_slugs as string[])
+      : [];
+    const symptomTypes = new Set(
+      bundlerSymptomRows
+        .map((s) => symptomMaintenanceType(s.category))
+        .filter((t): t is string => !!t),
+    );
+    const suspect = slugs.filter((slug) => {
+      const t = directSlugMaintenanceType(slug);
+      return t !== null && symptomTypes.has(t) && !userAskedForDirectService(slug, message);
+    });
+    if (suspect.length > 0) {
+      try {
+        const health = await ctx.runQuery(
+          internal.oto.vehicleHealth.getVehicleHealthForUser,
+          { actingUserId: user._id, vehicle_id: activeVehicle.id },
+        );
+        const items = health.items as {
+          type: string;
+          status: string;
+          record_provenance: string;
+        }[];
+        const toRewrite = suspect.filter((slug) => {
+          const t = directSlugMaintenanceType(slug)!;
+          return items.some(
+            (i) =>
+              i.type === t &&
+              i.status === "on_time" &&
+              i.record_provenance === "self_reported",
+          );
+        });
+        if (toRewrite.length > 0) {
+          const kept = slugs.filter((s) => !toRewrite.includes(s));
+          if (!kept.includes("diagnostic_scan")) kept.push("diagnostic_scan");
+          bs.service_slugs = kept;
+          if (bs.diagnostic_system === undefined) {
+            const t = directSlugMaintenanceType(toRewrite[0]);
+            bs.diagnostic_system =
+              t === "brakes"
+                ? "brakes"
+                : t === "battery"
+                  ? "battery_electrical"
+                  : t === "tires"
+                    ? "tires_wheels"
+                    : "not_sure";
+          }
+          console.warn(
+            `[oto/chat] §7b'' rewrite: ${toRewrite.join(", ")} → diagnostic_scan ` +
+              `(on_time self_reported record contradicts a direct wear repair)`,
+          );
+          finalText =
+            "Since your record checked out, the honest next step is a Diagnostic Scan — " +
+            "a mechanic gets eyes on it and confirms what's actually causing the noise " +
+            "before anything gets replaced. Everything's set up — review and confirm when you're ready.";
+        }
+      } catch (e: any) {
+        console.error(
+          "[oto/chat] §7b'' rewrite failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
+  }
+
   // ── 7c. W3.3 open-symptom booking bundler ────────────────────────────
   // The report's D-43 bundling fix: when a booking fires while earlier
   // safety-relevant symptoms are still open, fold them into the booking's
@@ -1692,11 +1948,11 @@ export async function sendMessageHandlerCore(
   // model's prose forgot them — and mark the ledger rows addressed. Notes
   // that already mention a symptom (Haiku did its job) aren't duplicated:
   // the check is a case-insensitive substring pass per symptom text.
-  if (renderEnvelope.bookService !== undefined && openSymptomRows.length > 0) {
+  if (renderEnvelope.bookService !== undefined && bundlerSymptomRows.length > 0) {
     const bs = renderEnvelope.bookService as Record<string, unknown>;
     const notes = typeof bs.customer_notes === "string" ? bs.customer_notes : "";
     const notesLower = notes.toLowerCase();
-    const toBundle = openSymptomRows.filter(
+    const toBundle = bundlerSymptomRows.filter(
       (s) => !notesLower.includes(s.text.toLowerCase().slice(0, 60)),
     );
     if (toBundle.length > 0) {
@@ -1708,6 +1964,41 @@ export async function sendMessageHandlerCore(
         `[oto/chat] W3.3: bundled ${toBundle.length} open symptom(s) into booking notes`,
       );
     }
+    // Issue 2 — "pre-check every one of them in the service picker": map each
+    // open symptom to its bookable service and merge into service_slugs, so
+    // BookServiceComponent stage 1 renders them already checked. Skips slugs
+    // the booking already covers (a brake-pad job covers a brake-noise scan).
+    // diagnostic_system: the model's own choice wins; otherwise one mapped
+    // system is used as-is and mixed systems degrade to not_sure.
+    const existingSlugs = Array.isArray(bs.service_slugs)
+      ? (bs.service_slugs as string[])
+      : [];
+    const addedSlugs: string[] = [];
+    const addedSystems = new Set<string>();
+    for (const s of bundlerSymptomRows) {
+      const target = symptomServiceTarget(s.category);
+      if (!target) continue;
+      if (
+        targetAlreadyCovered(target, existingSlugs) ||
+        addedSlugs.includes(target.slug)
+      )
+        continue;
+      addedSlugs.push(target.slug);
+      if (target.system) addedSystems.add(target.system);
+    }
+    if (addedSlugs.length > 0) {
+      bs.service_slugs = [...existingSlugs, ...addedSlugs];
+      if (
+        addedSlugs.includes("diagnostic_scan") &&
+        bs.diagnostic_system === undefined
+      ) {
+        bs.diagnostic_system =
+          addedSystems.size === 1 ? [...addedSystems][0] : "not_sure";
+      }
+      console.warn(
+        `[oto/chat] Issue 2: pre-checked ${addedSlugs.length} symptom service(s) into booking: ${addedSlugs.join(", ")}`,
+      );
+    }
     // The booking offer is the addressing event for EVERY open symptom this
     // turn (bundled or already present in the notes) — fire-and-forget.
     try {
@@ -1715,7 +2006,7 @@ export async function sendMessageHandlerCore(
         internal.ai_conversations.markSymptomsAddressedInternal,
         {
           id: conversationId,
-          categories: openSymptomRows.map((s) => s.category),
+          categories: bundlerSymptomRows.map((s) => s.category),
         },
       );
     } catch (e: any) {
@@ -1819,6 +2110,90 @@ export async function sendMessageHandlerCore(
     );
     finalText =
       "I'm having trouble pulling that one together — can you rephrase or break it into a smaller question?";
+  }
+
+  // ── Announcement-terminal retry (2026-08-15) ─────────────────────────
+  // stable's narration rules ban ending a turn on "let me search…", and
+  // lookup_vehicle_spec's description says a catalog miss is not a
+  // terminal — the model still ships the placeholder ~1/3 of the time on
+  // misses ("The M5 lookup came back empty, so let me search for the
+  // current spec:"). Conditions in code, same philosophy as the §6.9
+  // state-contract retry: when the final text is a short announcement of
+  // an action with no render carrying the turn, ONE follow-up call (no
+  // tools — general knowledge, hedged) replaces the placeholder with the
+  // answer. The nudge tells the model to restate its answer if the text
+  // actually contained one, so a false-positive detection costs one small
+  // call and returns an equivalent answer — never a worse one.
+  {
+    const trimmed = finalText.trim();
+    const sentences = trimmed.split(/(?<=[.!?:])\s+/).filter(Boolean);
+    const lastSentence = sentences[sentences.length - 1] ?? "";
+    const ANNOUNCE_RE =
+      /\b(let me|i'?ll|i will|i'?m going to|gonna)\s+(search|look\s*up|pull|grab|fetch|dig|run|check)\b/i;
+    if (
+      !hasAnyRender &&
+      trimmed.length > 0 &&
+      trimmed.length < 280 &&
+      ANNOUNCE_RE.test(lastSentence)
+    ) {
+      try {
+        console.warn(
+          "[oto/chat] announcement-terminal retry: turn ended on an action " +
+            "announcement with no answer — requesting the completion",
+        );
+        const retryResp = await fetchAnthropicWithRetry(
+          ANTHROPIC_URL,
+          {
+            method: "POST",
+            headers: {
+              "x-api-key": apiKey,
+              "anthropic-version": ANTHROPIC_VERSION,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              model: turnModel,
+              max_tokens: 700,
+              system: SYSTEM_PROMPT,
+              messages: [
+                ...messages,
+                {
+                  role: "user",
+                  content:
+                    "[turn repair — not the user speaking] Your turn ended by announcing a search or lookup instead of delivering the answer. Deliver the complete answer NOW in plain prose: use general knowledge hedged as general info where catalog data was missing. Do not mention tools, lookups, or searching; do not announce anything. If your previous text already contained the full answer, restate that answer.",
+                },
+              ],
+            }),
+          },
+          "answer_repair",
+        );
+        if (retryResp.ok) {
+          const retry = (await retryResp.json()) as AnthropicResponse;
+          const text = retry.content
+            .filter((b): b is { type: "text"; text: string } => b.type === "text")
+            .map((b) => b.text)
+            .join("\n")
+            .trim();
+          if (text) {
+            finalText = text;
+            turnSamples.push({
+              usage: retry.usage,
+              latency_ms: 0,
+              tool_names: [],
+              branch: "answer_repair",
+            });
+            if (trace && Array.isArray(trace.iterations) && trace.iterations.length) {
+              trace.iterations[trace.iterations.length - 1].answer_repaired = true;
+            }
+          }
+        }
+      } catch (e: any) {
+        // Best-effort — a failed retry leaves the announcement text as-is.
+        console.error(
+          "[oto/chat] announcement-terminal retry failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
   }
 
   // W3.1 companion fallback — same conditions-in-code/absolutes-in-prompts
@@ -1947,6 +2322,10 @@ export async function sendMessageHandlerCore(
   // Harness runs (debug + debug_skip_persist) skip persistence so iteration
   // doesn't pollute the user's real conversation history.
   const skipPersist = debug === true && debug_skip_persist === true;
+  // Persisted assistant-row id — returned to the client so the LIVE
+  // vehicle-update card can compare itself against the supersession pointer
+  // (history-loaded cards use their own row id). Null on harness runs.
+  let assistantMessageId: Id<"ai_messages"> | null = null;
   if (!skipPersist) {
     // B-P2: lock the conversation's vehicle anchor on first send. setVehicleId
     // had ZERO production call sites, so ai_conversations.vehicle_id stayed
@@ -2009,7 +2388,7 @@ export async function sendMessageHandlerCore(
         };
       }
     }
-    await ctx.runMutation(internal.ai_messages.create, {
+    assistantMessageId = await ctx.runMutation(internal.ai_messages.create, {
       conversation_id: conversationId,
       role: "assistant",
       content: finalText,
@@ -2017,6 +2396,25 @@ export async function sendMessageHandlerCore(
         ? { render: renderToPersist }
         : {}),
     });
+
+    // D-13/D-15 supersession pointer: the just-persisted card becomes the
+    // ONLY active vehicle-update card for this vehicle, across every
+    // conversation — older cards render expired in place client-side.
+    // Failure-isolated: a missed pointer write leaves the old behavior.
+    if (renderToPersist.showVehicleUpdate && activeVehicle?.vin) {
+      try {
+        await ctx.runMutation(internal.vehicleTruth.setActiveUpdateCard, {
+          vin: activeVehicle.vin,
+          user_id: user._id,
+          message_id: assistantMessageId,
+        });
+      } catch (e: any) {
+        console.error(
+          "[oto/chat] setActiveUpdateCard failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
 
     await ctx.runMutation(internal.ai_conversations.incrementMessageCount, {
       id: conversationId,
@@ -2220,6 +2618,9 @@ export async function sendMessageHandlerCore(
     trace.quick_replies = quickReplies ?? null;
     trace.book_service = renderEnvelope.bookService ?? null;
     trace.link_button = renderEnvelope.linkButton ?? null;
+    // §7b' — effect-level mirror: set whether the MODEL called the tool or
+    // the trust-gate floor forced the card server-side (no tool_use).
+    trace.record_confirmation = renderEnvelope.showRecordConfirmation ?? null;
     trace.persisted = !skipPersist;
     trace.usage_total = {
       input_tokens: telemetryRow.input_tokens,
@@ -2407,6 +2808,7 @@ export async function sendMessageHandlerCore(
 
   return {
     text: finalText,
+    ...(assistantMessageId ? { assistantMessageId } : {}),
     ...(quickReplies ? { quickReplies } : {}),
     ...(showRecordConfirmation ? { showRecordConfirmation } : {}),
     ...(showVehicleUpdate !== undefined ? { showVehicleUpdate } : {}),
@@ -2538,6 +2940,10 @@ type GuardCategory =
 const OUTPUT_GUARD_PATTERNS: { category: GuardCategory; re: RegExp }[] = [
   // W1.2 — currency. $N in any form, or spelled-out "N dollars/bucks".
   { category: "currency", re: /\$\s*\d|\b\d[\d,]*(?:\.\d+)?\s*(?:dollars|bucks)\b/i },
+  // D-44 "not even loosely" (2026-08-15): spelled-out loose pricing slips the
+  // digit-anchored row above. Money units required, so "a few hundred miles"
+  // survives.
+  { category: "currency", re: /\b(?:few|couple(?:\s+of)?|several|some)\s+(?:hundred|thousand)\s+(?:dollars|bucks)\b|\b(?:hundreds?|thousands?)\s+of\s+dollars\b|\b\d[\d,]*\s*grand\b/i },
   // W1.4 — warranty-shaped durability promises: "N years ... N miles" either
   // order within one clause (D-19, K5's "10 years / 100,000 miles"). Plain
   // mileage-interval advice ("rotate every 5,000 miles") has no year pair and
@@ -2557,7 +2963,10 @@ const OUTPUT_GUARD_PATTERNS: { category: GuardCategory; re: RegExp }[] = [
   // on_time/due_soon/needs_attention added 2026-08-14: the battery gate probe
   // caught "Your battery is showing on_time with a service record..." live —
   // status-enum values are code identifiers like the rest of this row.
-  { category: "internal_noun", re: /\bself_reported\b|\bconversation_state\b|\brecord_provenance\b|\bestablished_facts\b|\bopen_symptoms\b|\bsafety_override\b|\bcustomer_notes\b|\bservice_claims\b|\bfault_lights\b|\bdiagnostic_scan\b|\bon_time\b|\bdue_soon\b|\bneeds_attention\b/ },
+  // self[- ]reported spellings added 2026-08-15: §7b'/§7b'' eval sweep caught
+  // "I want to double-check that record since it's self-reported from your
+  // onboarding" — the hyphenated form of the same provenance leak.
+  { category: "internal_noun", re: /\bself_reported\b|\bself[- ]reported\b|\bconversation_state\b|\brecord_provenance\b|\bestablished_facts\b|\bopen_symptoms\b|\bsafety_override\b|\bcustomer_notes\b|\bservice_claims\b|\bfault_lights\b|\bdiagnostic_scan\b|\bon_time\b|\bdue_soon\b|\bneeds_attention\b/ },
   // Shareholder vocabulary — team language for features the customer just
   // USES (Waleed, 2026-08-13: "booking flow ... is just internal language
   // between shareholders"). A history scan of 340 assistant messages found
@@ -2580,6 +2989,14 @@ const OUTPUT_GUARD_PATTERNS: { category: GuardCategory; re: RegExp }[] = [
   { category: "labor_time", re: /\b(?:\d+(?:\.\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten|half|couple|few)\s+(?:or\s+\S+\s+)?(?:hours?|hrs?|minutes?|mins?)\s+(?:of\s+)?(?:labor|labour|book\s+time|shop\s+time)\b/i },
   { category: "labor_time", re: /\blabou?r\b(?!\s+day)[^.!?\n]{0,25}\b\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/i },
   { category: "labor_time", re: /\bflat[- ]rate\s+(?:time|hours?)\b/i },
+  // D-41 escalation (2026-08-15): bare durations are labor time in disguise
+  // ("usually pretty quick — under an hour"); the service card owns the
+  // number. Both rows require a service noun in the same sentence so safety
+  // logistics survive ("let the engine cool for 30 minutes" has no service
+  // noun; "your brakes were serviced about 6 months ago" fails the
+  // minutes/hours unit match).
+  { category: "labor_time", re: /\b(?:scan|service|job|repair|appointment|visit|inspection|replacement|rotation|oil change|diagnostic|the work)\b[^.!?\n]{0,60}\b(?:about|around|roughly|under|less than|~)?\s*(?:an?\s+hour|half\s+an?\s+hour|\d+(?:\s*[-–]\s*\d+)?\s*(?:hours?|hrs?|minutes?|mins?))\b/i },
+  { category: "labor_time", re: /\b(?:takes?|taking|done|finished|in\s+and\s+out|turnaround|be\s+ready)\b[^.!?\n]{0,40}\b(?:about|around|roughly|under|less than|~)?\s*(?:an?\s+hour|half\s+an?\s+hour|\d+(?:\s*[-–]\s*\d+)?\s*(?:hours?|hrs?|minutes?|mins?))\b[^.!?\n]{0,60}\b(?:scan|service|job|repair|appointment|visit|inspection|replacement|rotation|oil change|diagnostic)\b/i },
   // Medical treatment phrases (v0.48 hard rule; medical_redirect emitted burn
   // first-aid 5/10 at N=10 even with the prompt rule + these back up the new
   // medical_injury classifier). Deliberately narrow: unambiguous FIRST-AID

@@ -31,9 +31,11 @@ export type TurnSample = {
     | "text_only"
     | "data_continue"
     | "forced_final"
-    // v0.23 state-contract retry: a repair turn that re-issued
-    // update_conversation_state with forced tool_choice (chat.ts).
-    | "state_repair";
+    // Follow-up repair calls (chat.ts §6.9 state-contract retry and the
+    // 2026-08-15 announcement-terminal retry) — real API calls whose usage
+    // must count toward the turn.
+    | "state_repair"
+    | "answer_repair";
 };
 
 /** The conversation-state writeback tool (Locked Principle: every

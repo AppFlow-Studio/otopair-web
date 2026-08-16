@@ -4017,6 +4017,20 @@ function RecommendationsStep({
                     </span>
                   </label>
                 </div>
+
+                {/* Preview gate (Off-Catalog Work spec, §6): the moment a
+                    mechanic makes off-catalog advice driver-visible, show them
+                    exactly how it will be framed — attributed to them, with no
+                    price and no booking. Nobody should find out after the fact
+                    that their recommendation was presented as an opinion. */}
+                {!rec.recommended_service_id &&
+                rec.freeform_service_name.trim() &&
+                rec.visible_to_driver ? (
+                  <AdvisoryPreview
+                    name={rec.freeform_service_name.trim()}
+                    reason={rec.reason}
+                  />
+                ) : null}
               </div>
             );
           })
@@ -4307,6 +4321,61 @@ function ServicePickerModal({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * What the driver actually sees for off-catalog advice (Off-Catalog Work
+ * spec, §6) — rendered back to the mechanic before they commit to it.
+ *
+ * The card is deliberately not a booking card: no price, no Book button. We
+ * can't quote work we don't model, and a disabled button reads as a bug rather
+ * than a boundary. What it does carry is attribution — this is one person's
+ * professional opinion, and saying so is the whole point.
+ *
+ * Kept in sync with jobRecommendations.ADVISORY_DISCLAIMER by hand; if that
+ * string changes, change this one.
+ */
+function AdvisoryPreview({
+  name,
+  reason,
+}: {
+  name: string;
+  reason: string;
+}) {
+  return (
+    <div className="mt-2.5 rounded-xl border border-dashed border-primary/25 bg-muted/20 p-2.5">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        What the driver will see
+      </p>
+      <div className="mt-2 rounded-lg border border-primary/15 bg-background p-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">
+          You at your shop suggest
+        </p>
+        <p className="mt-1 text-[13px] font-semibold text-foreground">{name}</p>
+        {reason.trim() ? (
+          <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+            &ldquo;{reason.trim()}&rdquo;
+          </p>
+        ) : null}
+        <p className="mt-2 rounded-md border border-primary/10 bg-muted/40 px-2 py-1.5 text-[11px] leading-relaxed text-muted-foreground">
+          Otopair doesn&apos;t price or book this service yet — this is the
+          shop&apos;s recommendation, not an Otopair estimate.
+        </p>
+        <div className="mt-2 flex gap-1.5">
+          <span className="rounded-md bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground">
+            Message the shop
+          </span>
+          <span className="rounded-md border border-primary/15 px-2 py-1 text-[10px] font-semibold text-muted-foreground">
+            Not interested
+          </span>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+        No price and no booking — the driver contacts you directly. It won&apos;t
+        affect their vehicle health score.
+      </p>
     </div>
   );
 }

@@ -4298,27 +4298,133 @@ function ServicePickerModal({
                 </ul>
               )}
               {trimmed.length >= 2 ? (
-                <div className="mt-3 border-t border-primary/10 pt-3">
-                  <p className="px-3 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-                    Can't find it?
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => onPick({ kind: "freeform", name: trimmed })}
-                    className="mt-1 flex w-full items-center justify-between gap-2 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-left text-[12px] text-primary transition-colors hover:bg-primary/10"
-                  >
-                    <span>
-                      Submit "<span className="font-semibold">{trimmed}</span>"
-                      for review
-                    </span>
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
+                <CustomNameGate
+                  typed={trimmed}
+                  onPick={onPick}
+                />
               ) : null}
             </>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The custom-job match gate (Off-Catalog Work spec, §2 Leak 2).
+ *
+ * The thing this prevents: a mechanic can't find "Transmission Fluid Exchange"
+ * in the picker, submits it as a freeform name, and the driver never gets
+ * maintenance credit for a service they actually paid for — because off-catalog
+ * work can never write a health-score anchor.
+ *
+ * So before anything freeform is created we check what they typed against the
+ * catalog, its slugs, and the aliases we've linked by hand:
+ *
+ *   exact / high  → lead with the canonical service, custom demoted to an escape
+ *   medium        → ask, offering both
+ *   none          → out of the way; submit as custom exactly as before
+ *
+ * Fails open on purpose. If the query is loading or errors, the custom path
+ * stays available — this gate must never be the reason a mechanic can't finish
+ * a job.
+ */
+function CustomNameGate({
+  typed,
+  onPick,
+}: {
+  typed: string;
+  onPick: (
+    picked:
+      | {
+          kind: "service";
+          id: string;
+          name: string;
+          slug: string | null;
+          has_options: boolean;
+        }
+      | { kind: "freeform"; name: string },
+  ) => void;
+}) {
+  const verdict = useQuery(api.serviceMatch.matchCustomName, {
+    name: typed,
+    limit: 3,
+  });
+
+  const submitCustom = (
+    <button
+      type="button"
+      onClick={() => onPick({ kind: "freeform", name: typed })}
+      className="mt-1 flex w-full items-center justify-between gap-2 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-left text-[12px] text-primary transition-colors hover:bg-primary/10"
+    >
+      <span>
+        Submit "<span className="font-semibold">{typed}</span>" for review
+      </span>
+      <ChevronRight className="h-3.5 w-3.5" />
+    </button>
+  );
+
+  // Loading, or nothing close enough to be worth a question.
+  if (verdict === undefined || verdict.confidence === "none") {
+    return (
+      <div className="mt-3 border-t border-primary/10 pt-3">
+        <p className="px-3 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+          Can't find it?
+        </p>
+        {submitCustom}
+      </div>
+    );
+  }
+
+  const strong = verdict.confidence === "exact" || verdict.confidence === "high";
+  const suggestions = strong
+    ? verdict.candidates.slice(0, 1)
+    : verdict.candidates;
+
+  return (
+    <div className="mt-3 border-t border-primary/10 pt-3">
+      <p className="px-3 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+        {strong ? "We already offer this" : "Did you mean?"}
+      </p>
+      {strong ? (
+        <p className="mt-1 px-3 text-[11px] leading-relaxed text-muted-foreground">
+          Picking the catalog service keeps it on the customer's maintenance
+          record. Custom work doesn't count toward their vehicle health.
+        </p>
+      ) : null}
+      <ul className="mt-1.5 space-y-1">
+        {suggestions.map((c) => (
+          <li key={c.serviceId}>
+            <button
+              type="button"
+              onClick={() =>
+                onPick({
+                  kind: "service",
+                  id: c.serviceId,
+                  name: c.name,
+                  slug: c.slug,
+                  has_options: c.has_options,
+                })
+              }
+              className="flex w-full items-center justify-between gap-2 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-left transition-colors hover:bg-primary/20"
+            >
+              <span className="truncate text-[13px] font-semibold text-foreground">
+                {c.name}
+              </span>
+              <span className="inline-flex shrink-0 items-center rounded-md bg-primary/20 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">
+                {/* An alias hit means somebody already made this call by hand —
+                    say so, rather than showing a bare confidence score. */}
+                {c.via === "alias" ? "Linked before" : "Use this"}
+              </span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2.5 px-3 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+        {strong ? "Not what you meant?" : "Or"}
+      </p>
+      {submitCustom}
     </div>
   );
 }

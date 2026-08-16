@@ -132,6 +132,17 @@ export async function recomputeRecPenaltyForVehicle(
   let total = 0;
   const penalize = (rec: any) => {
     if (!rec.visible_to_driver) return;
+    // ─── CUSTOM JOB INVARIANT — ENFORCEMENT SITE 2 OF 2 ────────────────────
+    // No canonical service → no penalty, ever. A freeform ("advisory")
+    // recommendation is the mechanic's professional opinion about work Otopair
+    // doesn't model; penalising the driver's health score for not doing it
+    // would be scoring them against a standard we can't define, quote or book.
+    //
+    // Do NOT relax this to `if (!rec.recommended_service_id && !rec.freeform_text)`
+    // or similar. Advisories surface to the driver through the advisory card
+    // (jobRecommendations.getDriverVisibleRecsForVehicle) and through reminders
+    // — never through the score.
+    // Guarded by tests/customJobHealthIsolation.test.ts.
     if (!rec.recommended_service_id) return;
     const raw = URGENCY_PENALTY[rec.urgency] ?? 0;
     const ageDays = Math.max(0, (args.now - rec.created_at) / DAY_MS);

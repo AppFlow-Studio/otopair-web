@@ -2774,11 +2774,25 @@ export default defineSchema({
     cancel_requested_at_ms: v.optional(v.number()),
     cancel_request_reason: v.optional(v.string()),
     reschedule_count: v.optional(v.number()),
+    // Off-catalog work on this booking. The mechanic's typed name plus how long
+    // they expect it to take.
+    //
+    // The key is snake_case because that is what every writer and reader in
+    // bookings.ts actually uses (`duration_minutes: c.durationMinutes` when
+    // normalising the camelCase mutation arg, then `c.duration_minutes ?? 0`
+    // when summing minutes). This validator previously declared `durationMinutes`,
+    // which no code path ever wrote.
+    //
+    // That mismatch was an intermittent live failure, not a dead letter: Convex
+    // strips undefined before validating, so a custom service with NO duration
+    // stored fine, while one WITH a duration hit "Unexpected field
+    // `duration_minutes`" and threw the whole booking insert. Adding minutes to
+    // a walk-in was the thing that broke it.
     custom_services: v.optional(
       v.array(
         v.object({
           name: v.string(),
-          durationMinutes: v.optional(v.float64()),
+          duration_minutes: v.optional(v.float64()),
         })
       )
     ),
@@ -4439,6 +4453,32 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_recommended_service_id", ["recommended_service_id"])
     .index("by_vehicle_and_status", ["vehicle_vin", "status"]),
+
+  // Alternate names that resolve to a canonical service. Written by hand from
+  // the director side when somebody recognises a cluster of custom jobs as
+  // work we already offer ("carbon clean" → Fuel System Cleaning).
+  //
+  // This is the ONLY feedback path into the custom-job match gate
+  // (convex/lib/serviceMatch.ts). Every row here means the next mechanic who
+  // types that name lands on the canonical service instead of creating a
+  // custom job — so the gate's accuracy is a direct function of how well this
+  // table is maintained. See the Off-Catalog Work spec, §2 Leak 2 and §8.
+  //
+  // `normalized_alias` holds serviceMatchKey(alias), NOT normalizeServiceName —
+  // the two normalisers are different on purpose (see serviceMatch.ts header).
+  service_aliases: defineTable({
+    alias: v.string(),
+    normalized_alias: v.string(),
+    service_id: v.id("services"),
+    // How the alias came to exist: "director_link" (someone cleared it out of
+    // the review band), "seed" (shipped with the catalog), "merge" (a candidate
+    // cluster folded into an existing service).
+    source: v.string(),
+    created_by_user_id: v.optional(v.id("users")),
+    created_at: v.number(),
+  })
+    .index("by_normalized_alias", ["normalized_alias"])
+    .index("by_service", ["service_id"]),
 
   // Review queue for mechanic-proposed service names that didn't match the
   // canonical services catalog. Mirrors the tire_brands.review_flagged

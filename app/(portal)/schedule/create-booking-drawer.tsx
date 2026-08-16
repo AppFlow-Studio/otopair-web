@@ -1142,6 +1142,20 @@ export default function CreateBookingDrawer({
     });
   };
 
+  /* The services this shop actually offers. The match gate scores against the
+     whole catalog, but suggesting a service that isn't in `categories` would
+     put an id in selectedIds that the duration/price maths can't resolve — so
+     gate suggestions are filtered to this set. */
+  const offeredServiceIds = useMemo(
+    () =>
+      new Set<string>(
+        categories.flatMap((c: any) =>
+          (c.services as any[]).map((s) => String(s._id)),
+        ),
+      ),
+    [categories],
+  );
+
   /* ---- Submit ---- */
   async function submitBooking(
     allowOutsideShopHours = false,
@@ -1912,6 +1926,16 @@ export default function CreateBookingDrawer({
                     </SelectPopover>
                   </Select>
                 </div>
+                <CustomNameGate
+                  typed={customDraftName.trim()}
+                  offeredServiceIds={offeredServiceIds}
+                  onUseService={(id) => {
+                    toggleService(id);
+                    setShowCustomForm(false);
+                    setCustomDraftName("");
+                    setCustomDraftMinutes("");
+                  }}
+                />
                 <div className="flex gap-2 justify-end">
                   <button
                     type="button"
@@ -2743,6 +2767,76 @@ export default function CreateBookingDrawer({
           }
         }}
       />
+    </div>
+  );
+}
+
+/**
+ * Custom-job match gate (Off-Catalog Work spec, §2 Leak 2).
+ *
+ * Custom work can never write a maintenance anchor, so a mechanic who types a
+ * name we already have in the catalog silently costs the driver their health
+ * score credit. This checks what's being typed against service names, slugs and
+ * hand-linked aliases before the custom line is added.
+ *
+ * Suggestions are limited to services this shop offers — the gate scores the
+ * whole catalog, but selecting a service the shop doesn't carry would put an id
+ * into selectedIds that the duration and price maths can't resolve.
+ *
+ * Fails open: while the query is loading, or if it errors, the mechanic just
+ * adds their custom service as before.
+ */
+function CustomNameGate({
+  typed,
+  offeredServiceIds,
+  onUseService,
+}: {
+  typed: string;
+  offeredServiceIds: Set<string>;
+  onUseService: (serviceId: string) => void;
+}) {
+  const verdict = useQuery(
+    api.serviceMatch.matchCustomName,
+    typed.length >= 2 ? { name: typed, limit: 3 } : "skip",
+  );
+
+  const suggestions = useMemo(() => {
+    if (!verdict || verdict.confidence === "none") return [];
+    const offered = verdict.candidates.filter((c: any) =>
+      offeredServiceIds.has(String(c.serviceId)),
+    );
+    const strong =
+      verdict.confidence === "exact" || verdict.confidence === "high";
+    return strong ? offered.slice(0, 1) : offered.slice(0, 3);
+  }, [verdict, offeredServiceIds]);
+
+  if (suggestions.length === 0) return null;
+
+  const strong =
+    verdict?.confidence === "exact" || verdict?.confidence === "high";
+
+  return (
+    <div className="rounded-lg border border-primary/30 bg-primary/5 p-2.5">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">
+        {strong ? "Already in the catalog" : "Did you mean?"}
+      </p>
+      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+        Booking the catalog service keeps it on the customer&apos;s maintenance
+        record. Custom work doesn&apos;t count toward their vehicle health.
+      </p>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {suggestions.map((c: any) => (
+          <button
+            key={c.serviceId}
+            type="button"
+            onClick={() => onUseService(String(c.serviceId))}
+            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+          >
+            <Plus className="h-3 w-3" />
+            {c.name}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

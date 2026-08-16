@@ -8579,6 +8579,21 @@ export async function runCompletionSideEffects(ctx: any, booking: any) {
       )
       .first();
     if (vehicleOwner?.preOnboardingComplete) {
+      // ─── CUSTOM JOB INVARIANT — ENFORCEMENT SITE 1 OF 2 ──────────────────
+      // This loop reads `service_ids` and MUST NOT be widened to include
+      // `booking.custom_services`. A custom job is a billing and data object,
+      // never evidence about maintenance state: it cannot write a
+      // maintenance_records anchor, satisfy an interval, or move the health
+      // score. Custom work has no canonical slug, so recordTypeForServiceSlug
+      // has nothing to resolve and any interval it "reset" would be invented.
+      //
+      // Mileage is the deliberate exception — see runPipeline below. The car
+      // genuinely aged, which is true regardless of what work was done.
+      //
+      // If a mechanic typed a real service as custom, the fix belongs at entry
+      // (convex/serviceMatch.ts, the match gate), not here. Widening this loop
+      // would credit a maintenance anchor for work nobody can identify.
+      // Guarded by tests/customJobHealthIsolation.test.ts.
       const serviceIds = booking.service_ids as string[] | undefined;
       if (serviceIds?.length) {
         const typesUpdated = new Set<string>();

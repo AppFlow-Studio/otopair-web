@@ -24,6 +24,7 @@ import { ensureWalkInCashPayment } from "./bookings";
 import { partFitsConfigMake } from "./partSelector";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
 import { deriveSuggestedRecommendations } from "../lib/inspection-template";
+import { canonicalWarningLights } from "../lib/warningLightVocab";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
@@ -880,6 +881,17 @@ export const getPrefillData = query({
           )
       : [];
 
+    // Dashboard lights currently on file for this vehicle — any source
+    // (driver check-in, Oto, an earlier visit's inspection), not just this
+    // visit. Lets the post-job survey offer a "still on?" clear for
+    // anything already known, not only what this inspection re-flagged.
+    // See "Dashboard warning lights."
+    const owner = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin_user", (q) => q.eq("vin", booking.vin).eq("user_id", booking.user_id))
+      .first();
+    const currentWarningLights = canonicalWarningLights(owner?.knownIssues as string[] | undefined);
+
     return {
       vehicleLabel,
       serviceName: service?.name ?? "",
@@ -894,6 +906,7 @@ export const getPrefillData = query({
       priorOpenRecommendations,
       confirmedThisVisit,
       suggestedFromInspection,
+      currentWarningLights,
     };
   },
 });

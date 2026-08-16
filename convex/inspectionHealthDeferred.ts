@@ -78,6 +78,15 @@ export const applyDeferredInspectionHealth = internalMutation({
       const state = hydrateTieredInspectionState(inspection);
       const result = deriveCoreGrades(state, shopLabel, now, { previousBfLevel });
 
+      // The real finding time — when the mechanic actually made this call,
+      // not when this deferred job happens to run 2 hours later. Feeds both
+      // the "flagged by [shop], [date]" audit copy and the staleness check
+      // in utils/maintenanceStatus.ts's applyMechanicGrade: a grade is only
+      // read as current when it postdates the record's lastServiceDate, so
+      // a same-visit fix (e.g. oil changed after being flagged red) can't
+      // resurrect a stale finding once this job finally applies it.
+      const gradedAt = inspection.submitted_at ?? now;
+
       if (owner) {
         for (const [type, g] of Object.entries(result.core) as Array<[CoreType, typeof result.core[CoreType]]>) {
           if (!g) continue;
@@ -87,7 +96,7 @@ export const applyDeferredInspectionHealth = internalMutation({
             grade: g.grade,
             gradeReason: g.reason,
             gradeSource: shopLabel,
-            gradedAt: now,
+            gradedAt,
             rawScore: g.rawScore,
           });
         }
@@ -99,7 +108,7 @@ export const applyDeferredInspectionHealth = internalMutation({
             grade: g.grade,
             gradeReason: g.reason,
             gradeSource: shopLabel,
-            gradedAt: now,
+            gradedAt,
           });
         }
 
@@ -113,18 +122,19 @@ export const applyDeferredInspectionHealth = internalMutation({
           ? []
           : state.zones.ENG?.lights.warning_lights ?? [];
         const answered = lightEntries.filter((e) => !!e.light);
+        const existingIssues = Array.isArray(owner.knownIssues)
+          ? (owner.knownIssues as string[])
+          : [];
+        let nextIssues = existingIssues;
+
         if (answered.length > 0) {
           const isNoneOnly = answered.length === 1 && answered[0].light === "none";
-          const existingIssues = Array.isArray(owner.knownIssues)
-            ? (owner.knownIssues as string[])
-            : [];
-          let nextIssues: string[];
           if (isNoneOnly) {
-            nextIssues = existingIssues.filter(
+            nextIssues = nextIssues.filter(
               (code) => !WARNING_LIGHT_CLEAR_SET.includes(toCanonicalLight(code) as CanonicalWarningLight),
             );
           } else {
-            const merged = new Set(existingIssues);
+            const merged = new Set(nextIssues);
             for (const entry of answered) {
               if (entry.light === "none") continue;
               const canonical = entry.light === "other" ? "not_sure_which" : entry.light;
@@ -132,12 +142,35 @@ export const applyDeferredInspectionHealth = internalMutation({
             }
             nextIssues = [...merged];
           }
-          if (
-            nextIssues.length !== existingIssues.length ||
-            nextIssues.some((v, i) => v !== existingIssues[i])
-          ) {
-            await ctx.db.patch(owner._id, { knownIssues: nextIssues } as any);
-          }
+        }
+
+        // Post-job "still on the dashboard?" clears — a mechanic confirming
+        // an existing light (from any source, any visit) is now off. Applied
+        // as a targeted removal on top of whatever the pre-job picker above
+        // produced, so a same-visit fix never survives the merge. See the
+        // post-job survey's "cleared_warning_lights" and "Dashboard warning
+        // lights."
+        const latestJobActual = (
+          await ctx.db
+            .query("job_actuals")
+            .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+            .collect()
+        ).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0];
+        const clearedLights = latestJobActual?.postjob_report?.cleared_warning_lights ?? [];
+        if (clearedLights.length > 0) {
+          const clearedCanonical = new Set(
+            clearedLights
+              .map((code) => toCanonicalLight(code))
+              .filter((code): code is CanonicalWarningLight => !!code),
+          );
+          nextIssues = nextIssues.filter((code) => !clearedCanonical.has(toCanonicalLight(code) as CanonicalWarningLight));
+        }
+
+        if (
+          nextIssues.length !== existingIssues.length ||
+          nextIssues.some((v, i) => v !== existingIssues[i])
+        ) {
+          await ctx.db.patch(owner._id, { knownIssues: nextIssues } as any);
         }
       }
     }

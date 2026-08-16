@@ -385,7 +385,27 @@ const INTERVAL_SCORE_EQUIVALENT: Partial<Record<MaintenanceStatus, number>> = {
  * No `confirmedHealthyAt` promotion here — only the driver/Oto check-in
  * paths get to use that rescue.
  */
+/** A mechanic's grade stops being current the moment a real service is
+ *  recorded after it — e.g. oil flagged red pre-job, then actually changed
+ *  during the same visit. `mergeMechanicGradeIntoRecord` (convex/maintenance.ts)
+ *  no longer blocks writing a superseded grade — the deferred job
+ *  (convex/inspectionHealthDeferred.ts) can land up to 2 hours after the
+ *  visit closes, well after any same-visit service write, so a write-time
+ *  guard would race. Reading the two timestamps here instead — the same
+ *  "check a timestamp against now/lastServiceDate" pattern isConfirmedHealthy
+ *  already uses — is order-independent and self-correcting. The grade stays
+ *  in customInputs either way (audit trail), it just stops being applied. */
+function isMechanicGradeStale(record: MaintenanceRecord): boolean {
+  const gradedAt = record.customInputs?.mechanicGradedAt as number | undefined;
+  return (
+    gradedAt != null &&
+    record.lastServiceDate != null &&
+    record.lastServiceDate > gradedAt
+  );
+}
+
 function applyMechanicGrade(result: StatusResult, record: MaintenanceRecord): StatusResult {
+  if (isMechanicGradeStale(record)) return result;
   const grade = record.customInputs?.mechanicGrade as "g" | "y" | "r" | undefined;
   if (!grade || grade === "g") return result;
   const gradeStatus: MaintenanceStatus = grade === "r" ? "overdue" : "needs_attention";
@@ -867,7 +887,7 @@ function computeBrakeStatusCore(
   const graded = applyMechanicGrade(interval, record);
 
   const mechanicRawScore = record.customInputs?.mechanicRawScore as number | undefined;
-  if (typeof mechanicRawScore === "number") {
+  if (typeof mechanicRawScore === "number" && !isMechanicGradeStale(record)) {
     const intervalScoreEquivalent = INTERVAL_SCORE_EQUIVALENT[interval.status];
     graded.rawScore =
       intervalScoreEquivalent != null

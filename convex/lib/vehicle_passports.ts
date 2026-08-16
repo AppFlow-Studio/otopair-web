@@ -459,6 +459,13 @@ export const postjobReportValidator = v.object({
   time_variance_reason: v.optional(v.union(timeVarianceReasonValidator, v.null())),
   time_variance_note: v.optional(nullableStringValidator),
   recommendations: v.optional(v.array(jobRecommendationInputValidator)),
+  // Canonical warning-light codes the mechanic confirmed are no longer lit,
+  // re-checked against the vehicle's current knownIssues at post-job close
+  // (any source — driver check-in, Oto, an earlier visit's inspection, or
+  // this same visit's pre-job picker). Applied as a targeted removal by the
+  // same deferred job that applies everything else from this visit — see
+  // "Dashboard warning lights."
+  cleared_warning_lights: v.optional(v.array(v.string())),
 });
 
 export function hasText(value: unknown): value is string {

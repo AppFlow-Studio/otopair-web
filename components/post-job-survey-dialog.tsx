@@ -75,6 +75,7 @@ import {
   TIRE_SIZE_OPTIONS,
 } from "@/lib/inspection-options";
 import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
+import { LIGHT_LABELS } from "@/lib/warningLightItems";
 
 /** Best-effort axle from a part name ("Front Brake Pads" → "front"). Mirrors
  *  convex/lib/brakeScope.partNameAxle; kept inline so the client bundle
@@ -169,6 +170,10 @@ type PostJobPrefillData = {
   priorOpenRecommendations?: PriorOpenRecommendation[];
   confirmedThisVisit?: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection?: SuggestedFromInspection[];
+  /** Canonical warning-light codes currently on file for this vehicle, any
+   *  source. Offered as a "still on?" clear list — see "Dashboard warning
+   *  lights." */
+  currentWarningLights?: string[];
 } | null;
 
 type RecRowState = {
@@ -1028,6 +1033,9 @@ function PostJobSurveyDialogBody({
   const [partsAccuracyFeedback, setPartsAccuracyFeedback] = useState("");
   const [additionalObservations, setAdditionalObservations] = useState("");
   const [recommendations, setRecommendations] = useState<RecRowState[]>([]);
+  // Canonical light codes the mechanic confirmed are no longer on the
+  // dashboard — see "Dashboard warning lights."
+  const [clearedWarningLights, setClearedWarningLights] = useState<string[]>([]);
   const [photos, setPhotos] = useState<PhotoState[]>(initialPhotos);
   const [error, setError] = useState("");
 
@@ -1448,6 +1456,7 @@ function PostJobSurveyDialogBody({
             tire_specs: r.tire_specs ?? null,
           };
         }),
+      cleared_warning_lights: clearedWarningLights.length > 0 ? clearedWarningLights : undefined,
     });
   }
 
@@ -1742,6 +1751,9 @@ function PostJobSurveyDialogBody({
             }
             confirmedThisVisit={prefillData?.confirmedThisVisit ?? []}
             suggestedFromInspection={prefillData?.suggestedFromInspection ?? []}
+            currentWarningLights={prefillData?.currentWarningLights ?? []}
+            clearedWarningLights={clearedWarningLights}
+            setClearedWarningLights={setClearedWarningLights}
             actualPartsCost={actualPartsCost}
             setActualPartsCost={setActualPartsCost}
             partsCostSum={sumJobActualParts(normalizeParts())}
@@ -1960,6 +1972,9 @@ function StepContent(props: {
   priorOpenRecommendations: PriorOpenRecommendation[];
   confirmedThisVisit: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection: SuggestedFromInspection[];
+  currentWarningLights: string[];
+  clearedWarningLights: string[];
+  setClearedWarningLights: React.Dispatch<React.SetStateAction<string[]>>;
   actualPartsCost: string;
   setActualPartsCost: (value: string) => void;
   partsCostSum: number;
@@ -2324,6 +2339,9 @@ function StepContent(props: {
           priorOpenRecommendations={props.priorOpenRecommendations}
           confirmedThisVisit={props.confirmedThisVisit}
           suggestedFromInspection={props.suggestedFromInspection}
+          currentWarningLights={props.currentWarningLights}
+          clearedWarningLights={props.clearedWarningLights}
+          setClearedWarningLights={props.setClearedWarningLights}
           additionalObservations={props.additionalObservations}
           setAdditionalObservations={props.setAdditionalObservations}
           completionMileage={props.completionMileage}
@@ -3587,6 +3605,9 @@ function RecommendationsStep({
   priorOpenRecommendations,
   confirmedThisVisit,
   suggestedFromInspection,
+  currentWarningLights,
+  clearedWarningLights,
+  setClearedWarningLights,
   additionalObservations,
   setAdditionalObservations,
   completionMileage,
@@ -3597,6 +3618,9 @@ function RecommendationsStep({
   priorOpenRecommendations: PriorOpenRecommendation[];
   confirmedThisVisit: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection: SuggestedFromInspection[];
+  currentWarningLights: string[];
+  clearedWarningLights: string[];
+  setClearedWarningLights: React.Dispatch<React.SetStateAction<string[]>>;
   additionalObservations: string;
   setAdditionalObservations: (value: string) => void;
   completionMileage: string;
@@ -3679,6 +3703,14 @@ function RecommendationsStep({
         },
       ];
     });
+  }
+
+  function toggleClearedLight(code: string) {
+    setClearedWarningLights((current) =>
+      current.includes(code)
+        ? current.filter((c) => c !== code)
+        : [...current, code],
+    );
   }
 
   return (
@@ -3789,6 +3821,51 @@ function RecommendationsStep({
           <p className="mt-2 text-[10px] text-muted-foreground">
             Skipped at pre-job — check any you still want to recommend.
           </p>
+        </div>
+      ) : null}
+
+      {currentWarningLights.length > 0 ? (
+        <div className="mb-4 rounded-xl border border-primary/10 bg-muted/30 px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            Dashboard lights on file for this car
+          </p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Still on? Clear any you resolved this visit.
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {currentWarningLights.map((code) => {
+              const cleared = clearedWarningLights.includes(code);
+              return (
+                <li
+                  key={code}
+                  className="flex items-center justify-between gap-2 py-1"
+                >
+                  <span
+                    className={cn(
+                      "text-[12px]",
+                      cleared
+                        ? "text-muted-foreground line-through"
+                        : "font-medium text-foreground",
+                    )}
+                  >
+                    {LIGHT_LABELS[code as keyof typeof LIGHT_LABELS] ?? code}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleClearedLight(code)}
+                    className={cn(
+                      "flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-colors",
+                      cleared
+                        ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                        : "border-primary/25 bg-card text-muted-foreground hover:bg-primary/5",
+                    )}
+                  >
+                    {cleared ? "✓ Cleared" : "Clear"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       ) : null}
 

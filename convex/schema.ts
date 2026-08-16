@@ -2967,6 +2967,12 @@ export default defineSchema({
         }),
       ),
     ),
+    // Pending 2-hour deferred inspection-health job for this booking (see
+    // convex/inspectionHealthDeferred.ts). Stored so a booking that
+    // re-enters a terminal state (completed → reopened → completed again,
+    // dispute resolution, etc.) cancels its previous job instead of
+    // stacking a second one that could later replay stale picker data.
+    deferred_health_job_id: v.optional(v.id("_scheduled_functions")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])

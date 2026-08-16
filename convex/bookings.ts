@@ -68,7 +68,10 @@ import {
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
-import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
+import {
+  minorRecordTypeForServiceSlug,
+  recordTypeForServiceSlug,
+} from "./lib/serviceRecordType";
 import { symptomForRecordType } from "./lib/serviceSymptoms";
 import { logPrejobMechanicVerification } from "./lib/mechanic_verification_logging";
 import {
@@ -8411,14 +8414,11 @@ export async function runCompletionSideEffects(ctx: any, booking: any) {
         // (mirrors maintenance.upsertRecord / vehicleTruth's add). Patched once
         // after the loop so a multi-service booking clears all of them together.
         const clearedCodes = new Set<string>();
-        for (const serviceId of serviceIds) {
-          const service = await ctx.db.get(serviceId as any);
-          if (!service) continue;
-          // #90: services.slug is snake_case — resolve via the canonical map.
-          const recordType = recordTypeForServiceSlug((service as any).slug);
-          if (!recordType || typesUpdated.has(recordType)) continue;
-          typesUpdated.add(recordType);
 
+        /** Upsert one maintenance_records row, stamping it serviced now.
+         *  Shared by the aggregate write and the Consolidated-model
+         *  minor-item write below — same shape, different `type`. */
+        const markServiced = async (recordType: string) => {
           const existing = await ctx.db
             .query("maintenance_records")
             .withIndex("by_vehicle_and_type", (q: any) =>
@@ -8445,6 +8445,32 @@ export async function runCompletionSideEffects(ctx: any, booking: any) {
               createdAt: now,
             });
           }
+        };
+
+        for (const serviceId of serviceIds) {
+          const service = await ctx.db.get(serviceId as any);
+          if (!service) continue;
+          const slug = (service as any).slug;
+
+          // Consolidated Upkeep model: the per-field `minor_*` row this
+          // service actually resolves. Handled BEFORE the aggregate dedup
+          // below — several distinct minor services collapse onto the same
+          // aggregate type ("fluids"), so dedup'ing on the aggregate would
+          // silently skip the second one's own minor row. Advancing
+          // lastServiceDate here is what lets isMechanicGradeStale
+          // (utils/maintenanceStatus.ts) retire the finding.
+          const minorType = minorRecordTypeForServiceSlug(slug);
+          if (minorType && !typesUpdated.has(minorType)) {
+            typesUpdated.add(minorType);
+            await markServiced(minorType);
+          }
+
+          // #90: services.slug is snake_case — resolve via the canonical map.
+          const recordType = recordTypeForServiceSlug(slug);
+          if (!recordType || typesUpdated.has(recordType)) continue;
+          typesUpdated.add(recordType);
+
+          await markServiced(recordType);
 
           const code = symptomForRecordType(recordType);
           if (code) clearedCodes.add(code);

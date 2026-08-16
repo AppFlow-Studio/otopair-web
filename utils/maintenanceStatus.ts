@@ -394,7 +394,13 @@ const INTERVAL_SCORE_EQUIVALENT: Partial<Record<MaintenanceStatus, number>> = {
  *  guard would race. Reading the two timestamps here instead — the same
  *  "check a timestamp against now/lastServiceDate" pattern isConfirmedHealthy
  *  already uses — is order-independent and self-correcting. The grade stays
- *  in customInputs either way (audit trail), it just stops being applied. */
+ *  in customInputs either way (audit trail), it just stops being applied.
+ *
+ *  KNOWN LIMITATION (accepted): `maintenance_records` stores one row per
+ *  type, with no per-corner granularity, so a front-only brake job retires
+ *  a rear-corner finding too. Left as-is deliberately — the next
+ *  inspection re-grades every corner anyway, and per-corner service
+ *  tracking is a much larger data-model change than the case warrants. */
 function isMechanicGradeStale(record: MaintenanceRecord): boolean {
   const gradedAt = record.customInputs?.mechanicGradedAt as number | undefined;
   return (

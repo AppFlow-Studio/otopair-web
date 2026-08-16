@@ -198,6 +198,7 @@ import type * as lib_vehicleTiers from "../lib/vehicleTiers.js";
 import type * as lib_vehicle_image from "../lib/vehicle_image.js";
 import type * as lib_vehicle_passports from "../lib/vehicle_passports.js";
 import type * as lib_walmartTireScraper from "../lib/walmartTireScraper.js";
+import type * as lib_warningLightsMerge from "../lib/warningLightsMerge.js";
 import type * as maintenance from "../maintenance.js";
 import type * as maintenance_pipeline from "../maintenance_pipeline.js";
 import type * as makes from "../makes.js";
@@ -725,6 +726,7 @@ declare const fullApi: ApiFromModules<{
   "lib/vehicle_image": typeof lib_vehicle_image;
   "lib/vehicle_passports": typeof lib_vehicle_passports;
   "lib/walmartTireScraper": typeof lib_walmartTireScraper;
+  "lib/warningLightsMerge": typeof lib_warningLightsMerge;
   maintenance: typeof maintenance;
   maintenance_pipeline: typeof maintenance_pipeline;
   makes: typeof makes;

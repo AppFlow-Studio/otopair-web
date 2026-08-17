@@ -17,6 +17,7 @@ import {
   Car,
   Check,
   ChevronRight,
+  Copy,
   Info,
   Loader2,
   Lock,
@@ -680,6 +681,52 @@ function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
           : undefined,
     };
   });
+}
+
+/**
+ * Part number rendered as a click-to-copy control. Mechanics read these off to
+ * order/look up parts, so make them one-tap copyable instead of hand-typing.
+ * Falls back to a plain "—" when there's no number. Copy failures (blocked
+ * clipboard / insecure context) degrade silently — the text stays selectable.
+ */
+function CopyableOemNumber({
+  value,
+  className,
+}: {
+  value: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const canCopy = value.trim().length > 0;
+  if (!canCopy) return <span className={className}>—</span>;
+  return (
+    <button
+      type="button"
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1200);
+        } catch {
+          /* clipboard unavailable — leave the text selectable */
+        }
+      }}
+      title={copied ? "Copied!" : "Copy part number"}
+      aria-label={`Copy part number ${value}`}
+      className={cn(
+        "group inline-flex max-w-full items-center gap-1 text-left font-mono tabular-nums transition-colors hover:text-primary",
+        className,
+      )}
+    >
+      <span className="truncate">{value}</span>
+      {copied ? (
+        <Check className="h-3 w-3 shrink-0 text-emerald-600" />
+      ) : (
+        <Copy className="h-3 w-3 shrink-0 text-muted-foreground/50 transition-opacity group-hover:text-primary" />
+      )}
+    </button>
+  );
 }
 
 function makePhotoId() {
@@ -1884,6 +1931,18 @@ function PostJobSurveyDialogBody({
                   partsAccuracyFeedback,
                   requiresParts,
                   filledPartsCount: parts.filter((p) => p.part_name.trim() !== "").length,
+                  // Billing locked → prices aren't editable, so never block on
+                  // them. Otherwise: any named, billable shop part left at $0.
+                  unpricedBlockingCount:
+                    lockBilling && !cycle
+                      ? 0
+                      : parts.filter(
+                          (p) =>
+                            p.supplied_by !== "customer" &&
+                            p.not_used !== true &&
+                            p.part_name.trim() !== "" &&
+                            (Number(p.cost) || 0) <= 0,
+                        ).length,
                   recommendations,
                 })}
                 className={cn(
@@ -1913,6 +1972,10 @@ function canAdvance(
     partsAccuracyFeedback: string;
     requiresParts: boolean;
     filledPartsCount: number;
+    // Billable shop parts left at $0 (excludes customer-supplied and Not-used
+    // rows). Non-zero blocks the parts step. Always 0 when billing is locked,
+    // since prices aren't editable there.
+    unpricedBlockingCount: number;
     recommendations: RecRowState[];
   }
 ) {
@@ -1942,7 +2005,10 @@ function canAdvance(
   if (step === "parts") {
     // If the service is flagged as requiring parts, the mechanic must add at
     // least one part with a non-empty name before moving on.
-    if (state.requiresParts) return state.filledPartsCount > 0;
+    if (state.requiresParts && state.filledPartsCount === 0) return false;
+    // Every billable shop part must carry a price. An unpriced row has to be
+    // priced, swapped, marked Not used, or removed before continuing.
+    if (state.unpricedBlockingCount > 0) return false;
     return true;
   }
   if (step === "parts_accuracy") {
@@ -2702,6 +2768,16 @@ function PartsStep({
   }
 
   const hasFilledPart = parts.some((p) => p.part_name.trim() !== "");
+  // Billable shop parts still sitting at $0 — these block Continue (mirrors the
+  // parent's canAdvance gate). Customer-supplied and Not-used rows are exempt;
+  // the locked/read-only path returns above and never reaches this.
+  const unpricedBlockingCount = parts.filter(
+    (p) =>
+      p.supplied_by !== "customer" &&
+      p.not_used !== true &&
+      p.part_name.trim() !== "" &&
+      (Number(p.cost) || 0) <= 0,
+  ).length;
   const prefilled = suggestedParts.length > 0;
   // Step copy adapts: when the cascade pre-loaded suggestions, the step is
   // "confirm what we expect you to use" — otherwise it's "tell us what
@@ -2805,13 +2881,16 @@ function PartsStep({
                           </span>
                         ) : null}
                       </div>
-                      <p className="mt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
-                        {part.oem_number || "—"}
-                        {qty > 1 ? ` · qty ${qty}` : ""}
-                        {part.supplied_by === "customer"
-                          ? " · customer-supplied"
-                          : ""}
-                      </p>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-1 font-mono text-[11px] tabular-nums text-muted-foreground">
+                        <CopyableOemNumber
+                          value={part.oem_number || ""}
+                          className="text-[11px] text-muted-foreground"
+                        />
+                        {qty > 1 ? <span>· qty {qty}</span> : null}
+                        {part.supplied_by === "customer" ? (
+                          <span>· customer-supplied</span>
+                        ) : null}
+                      </div>
                     </div>
                     <span className="shrink-0 text-[13px] font-medium tabular-nums text-foreground">
                       ${(unit * qty).toFixed(2)}
@@ -2895,6 +2974,14 @@ function PartsStep({
         {requiresParts && !hasFilledPart ? (
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
             This service is flagged as requiring parts. Add at least one part below to continue.
+          </div>
+        ) : null}
+
+        {unpricedBlockingCount > 0 ? (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+            {unpricedBlockingCount === 1
+              ? "1 part is still unpriced. Enter its price — or swap it, mark it Not used, or remove it — to continue."
+              : `${unpricedBlockingCount} parts are still unpriced. Enter each price — or swap, mark Not used, or remove them — to continue.`}
           </div>
         ) : null}
 
@@ -3047,12 +3134,13 @@ function PartsStep({
                           Part number
                         </span>
                         {isCatalogRow ? (
-                          <span
-                            className={`${lockedSmallClasses} mt-0.5 block font-mono tabular-nums`}
-                            title="From catalog — swap the part to change its OEM number."
-                          >
-                            {part.oem_number || "—"}
-                          </span>
+                          <CopyableOemNumber
+                            value={part.oem_number || ""}
+                            className={cn(
+                              lockedSmallClasses,
+                              "mt-0.5 flex w-full items-center justify-between",
+                            )}
+                          />
                         ) : (
                           <input
                             value={part.oem_number}

@@ -956,6 +956,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           part_tier: p.part_tier ?? "oem",
           service_id: p.service_id ?? null,
           source: p.source ?? "catalog",
+          // Preserve the mechanic's prior "Not used" flag so re-opening the
+          // dialog (mid-job "Add unforeseen scope") doesn't revive a dropped
+          // part as an active $0 line.
+          not_used: (p as { not_used?: boolean }).not_used === true ? true : undefined,
         }));
       }
       const snapshot = job?.pricedPartsSnapshot;
@@ -970,6 +974,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         part_tier: p.part_tier ?? "oem",
         service_id: p.service_id ?? null,
         source: "catalog" as const,
+        not_used: (p as { not_used?: boolean }).not_used === true ? true : undefined,
       }));
     }, [effectiveQuote, job?.pricedPartsSnapshot]);
     // Walk-in bookings have no customer-approved quote — the mechanic gives a
@@ -2734,6 +2739,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           laborCostDollars={(job as any)?.laborCost ?? null}
           shopState={(job as any)?.shopState ?? null}
           shopZip={(job as any)?.shopZip ?? null}
+          // Seed from the latest APPROVED quote (mechanic's entered prices, with
+          // removed / not-used rows already excluded) — not the catalog prefill.
+          // Otherwise "Add unforeseen scope" resets every price to $0 and brings
+          // back parts the mechanic dropped.
+          quotedParts={lockedQuoteParts}
           isFixedPrice={job?.isFixedPrice}
         />
 

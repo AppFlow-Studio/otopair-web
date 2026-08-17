@@ -550,6 +550,11 @@ export const getByUserIdWithDetails = query({
           shopLng: shop?.lng,
           tire_specs: booking.tire_specs,
           rotor_specs: booking.rotor_specs,
+          // Pickup-request round trip: whether the customer asked for the car
+          // back and how the shop answered. Drives the status line on the card.
+          pickupRequestedAtMs: booking.cancel_requested_at_ms ?? null,
+          pickupResponse: booking.pickup_response ?? null,
+          pickupRespondedAtMs: booking.pickup_responded_at_ms ?? null,
           // Pre-Job Approval flow — disclosed range + approval state +
           // final captured amount. Optional: omitted on legacy rows.
           disclosed_range_low_cents: booking.disclosed_range_low_cents,
@@ -704,6 +709,12 @@ export const requestCancellationAtShop = mutation({
     await ctx.db.patch(args.bookingId, {
       cancel_requested_at_ms: now,
       cancel_request_reason: args.reason,
+      // Reopen the request: drop any earlier shop response so the live alert
+      // resurfaces and the customer card no longer shows a stale answer.
+      pickup_response: undefined,
+      pickup_responded_at_ms: undefined,
+      pickup_response_by: undefined,
+      pickup_response_note: undefined,
       updated_at: now,
     } as any);
 
@@ -721,6 +732,93 @@ export const requestCancellationAtShop = mutation({
     });
 
     return { requested: true };
+  },
+});
+
+// Customer-facing push copy for each shop response to a pickup request. Kept
+// beside the mutation so the wording is easy to tune next to the state it maps.
+const PICKUP_RESPONSE_PUSH_COPY: Record<
+  "acknowledged" | "bringing_out" | "declined",
+  { title: string; body: string }
+> = {
+  acknowledged: {
+    title: "Pickup request received",
+    body: "The shop got your request and is preparing your vehicle.",
+  },
+  bringing_out: {
+    title: "Your vehicle is on its way out",
+    body: "The shop is bringing your car out now.",
+  },
+  declined: {
+    title: "About your pickup request",
+    body: "The shop can't release your vehicle just yet — please contact them.",
+  },
+};
+
+/**
+ * Shop/mechanic answer to a customer's "request pickup" (the vehicle_at_shop
+ * path above). Records the response on the booking — which the customer's
+ * booking card reads reactively — and pushes the update to the customer.
+ * Does NOT flip booking status: releasing the car / settling any fee still
+ * runs through the shop's existing cancel flow. Visible to the assigned
+ * mechanic and front desk via the live-alert scope.
+ */
+export const respondToPickupRequest = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    response: v.union(
+      v.literal("acknowledged"),
+      v.literal("bringing_out"),
+      v.literal("declined"),
+    ),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ responded: boolean }> => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) {
+      throw new Error("We couldn't find that booking. It may have already been removed.");
+    }
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (booking.status !== "vehicle_at_shop") {
+      throw new Error("This car isn't at the shop, so there's no pickup request to answer.");
+    }
+    if (!booking.cancel_requested_at_ms) {
+      throw new Error("The customer hasn't requested pickup for this booking.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(args.bookingId, {
+      pickup_response: args.response,
+      pickup_responded_at_ms: now,
+      pickup_response_by: user._id,
+      pickup_response_note: args.note,
+      updated_at: now,
+    } as any);
+
+    // Fresh outbox row per distinct response so a follow-up (e.g. "bringing_out"
+    // after "acknowledged") pushes again — the response is baked into the key.
+    const copy = PICKUP_RESPONSE_PUSH_COPY[args.response];
+    await enqueueNotificationOutbox(ctx, {
+      userId: booking.user_id,
+      bookingId: booking._id,
+      shopId: booking.shop_id,
+      channel: "push",
+      category: "pickup_request_response",
+      dedupeKey: `pickup-response:${String(booking._id)}:${args.response}`,
+      payload: {
+        title: copy.title,
+        body: copy.body,
+        response: args.response,
+        note: args.note ?? null,
+        data: {
+          deepLink: `otopair://booking/${String(booking._id)}`,
+          bookingId: String(booking._id),
+        },
+      },
+    });
+
+    return { responded: true };
   },
 });
 
@@ -814,6 +912,8 @@ export const getCustomerBookingActions = query({
       reschedulesUsed,
       maxFreeReschedules: policy.rescheduleMaxFree,
       cancelRequestedAtMs: (booking as any).cancel_requested_at_ms ?? null,
+      pickupResponse: (booking as any).pickup_response ?? null,
+      pickupRespondedAtMs: (booking as any).pickup_responded_at_ms ?? null,
       blockedReason,
       // Post-completion "final breakdown" is a RECEIPT, not a decision: the
       // price was agreed before the job started, so there is no approve/decline
@@ -13628,6 +13728,69 @@ export const getCustomerOnMyWayMonitors = query({
           scheduledTime: booking.scheduled_time,
           minutesLate: Math.max(0, Math.floor((now - row.scheduled_start_ms) / 60_000)),
           acknowledgedAtMs: row.customer_acknowledged_at_ms,
+          vehicle: (await resolveVehicleLabel(ctx, booking.vin)).full,
+          serviceSummary: serviceNames.join(", "),
+        };
+      }),
+    );
+
+    return items.filter(Boolean);
+  },
+});
+
+/**
+ * Open customer "request pickup" signals for the live-alert rail. A booking
+ * qualifies when the car is at the shop, the customer has requested pickup,
+ * and the shop hasn't answered yet (pickup_response unset). Scoped to the
+ * assigned mechanic + front desk via the shared notification scope, mirroring
+ * getCustomerOnMyWayMonitors. Sourced straight off the booking — no separate
+ * monitor table backs the pickup request.
+ */
+export const getOpenPickupRequests = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return [];
+    const scope = await getCurrentNotificationScope(ctx);
+
+    const bookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_shop_and_status", (q: any) =>
+        q.eq("shop_id", primary.shopId).eq("status", "vehicle_at_shop"),
+      )
+      .collect();
+
+    const open = bookings
+      .filter((b: any) => !!b.cancel_requested_at_ms && !b.pickup_response)
+      .sort(
+        (a: any, b: any) =>
+          (a.cancel_requested_at_ms ?? 0) - (b.cancel_requested_at_ms ?? 0),
+      );
+
+    const items = await Promise.all(
+      open.map(async (booking: any) => {
+        if (scope && !bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)) {
+          return null;
+        }
+        const customer = await ctx.db.get(booking.user_id);
+        const mechanic = booking.mechanic_id
+          ? await ctx.db.get(booking.mechanic_id as Id<"mechanics">)
+          : null;
+        const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+        return {
+          _id: booking._id,
+          bookingId: booking._id,
+          customerName: formatCustomerName(customer),
+          mechanicId: booking.mechanic_id ?? null,
+          mechanicName: mechanic
+            ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
+            : null,
+          scheduledDate: booking.scheduled_date,
+          scheduledTime: booking.scheduled_time,
+          requestedAtMs: booking.cancel_requested_at_ms,
+          reason: booking.cancel_request_reason ?? null,
           vehicle: (await resolveVehicleLabel(ctx, booking.vin)).full,
           serviceSummary: serviceNames.join(", "),
         };

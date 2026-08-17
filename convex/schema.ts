@@ -2773,6 +2773,19 @@ export default defineSchema({
     ),
     cancel_requested_at_ms: v.optional(v.number()),
     cancel_request_reason: v.optional(v.string()),
+    // Shop/mechanic response to the customer's "request pickup" above. Written
+    // by respondToPickupRequest; surfaced back to the customer's booking card
+    // and cleared implicitly by the eventual cancel/settlement transition.
+    pickup_response: v.optional(
+      v.union(
+        v.literal("acknowledged"),
+        v.literal("bringing_out"),
+        v.literal("declined"),
+      ),
+    ),
+    pickup_responded_at_ms: v.optional(v.number()),
+    pickup_response_by: v.optional(v.id("users")),
+    pickup_response_note: v.optional(v.string()),
     reschedule_count: v.optional(v.number()),
     // Off-catalog work on this booking. The mechanic's typed name plus how long
     // they expect it to take.

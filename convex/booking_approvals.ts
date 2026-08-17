@@ -377,6 +377,13 @@ async function performSubmission(
     bookingPatch.running_approved_ceiling_cents = priced.total_cents;
     bookingPatch.estimate_approved_at_ms = now;
     bookingPatch.sla_expires_at_ms = undefined;
+    // Auto-approved within range → the re-quote is agreed. Sync the booking's
+    // stored totals so every surface (lists, detail panel, invoices) shows the
+    // agreed amount instead of the original estimate. (Out-of-range stays
+    // pending; totals are synced on customer approval in applyApprovalDecision.)
+    bookingPatch.total_cost = priced.total_cents / 100;
+    bookingPatch.parts_cost = priced.parts_subtotal_cents / 100;
+    bookingPatch.labor_cost = priced.labor_cents / 100;
   } else {
     bookingPatch.sla_expires_at_ms = now + SLA_MS;
   }
@@ -656,6 +663,12 @@ export const applyApprovalDecision = mutation({
         estimate_approved_at_ms: now,
         estimate_decided_by_user_id: user._id,
         sla_expires_at_ms: undefined,
+        // Customer approved the re-quote → it's the agreed price. Sync the
+        // booking's stored totals from the approved breakdown so every surface
+        // shows the agreed amount, not the original estimate.
+        total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
+        parts_cost: (open.parts_subtotal_cents ?? 0) / 100,
+        labor_cost: (open.labor_cents ?? 0) / 100,
         updated_at: now,
       });
       if (ctx.scheduler?.runAfter) {

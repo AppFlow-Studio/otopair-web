@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { effectiveBookingTotalDollars } from "../lib/booking-total";
 import { requireDirector } from "./directorGate";
 import { metaMakeModel } from "./lib/bookingEnrichment";
 
@@ -506,7 +507,9 @@ export const recentBookingsList = query({
         scheduled: b.scheduled_date ?? "—",
         time:      b.scheduled_time ?? "—",
         status:    b.status,
-        total:     b.total_cost ?? 0,
+        // Approved-but-not-captured re-quotes live in mechanic_set_price_cents;
+        // total_cost still holds the original estimate. Show the effective one.
+        total:     effectiveBookingTotalDollars(b) ?? 0,
         fallback: {
           catches,
           corrected,

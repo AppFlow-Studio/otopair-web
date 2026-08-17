@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
+import { jobListTotal } from "@/lib/booking-total";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useEntityLabel } from "@/lib/use-entity-label";
@@ -262,6 +263,10 @@ export default function BookingsPage() {
   // Keyboard navigation
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      // Never hijack browser/OS chords (⌘R reload, ⌘L, ⌃…): with a modifier
+      // held, let the key pass through instead of firing a single-key shortcut
+      // (e.g. ⌘R was triggering "r" = mark-completed, popping a new form).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
         // If focus is inside the assign dropdown, let react-aria close it first
         if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
@@ -723,7 +728,22 @@ export default function BookingsPage() {
                                 {formatJobDate(job.scheduledDate, job.scheduledTime)}
                               </td>
                               <td className="px-3 py-4 text-right pr-5 font-medium text-foreground whitespace-nowrap">
-                                ${job.totalCost.toFixed(2)}
+                                {(() => {
+                                  const shown = jobListTotal(job);
+                                  const reQuoted =
+                                    Math.abs(shown - job.totalCost) > 0.005;
+                                  return (
+                                    <span
+                                      title={
+                                        reQuoted
+                                          ? `Re-quoted · original estimate $${job.totalCost.toFixed(2)}`
+                                          : undefined
+                                      }
+                                    >
+                                      ${shown.toFixed(2)}
+                                    </span>
+                                  );
+                                })()}
                               </td>
                             </tr>
                           );

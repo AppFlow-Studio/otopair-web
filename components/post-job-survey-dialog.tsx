@@ -270,6 +270,7 @@ type StepKey =
   | "vehicle_updates"
   | "photos"
   | "tip"
+  | "found_work"
   | "custom_outcomes"
   | "recommendations"
   | "flag"
@@ -1096,6 +1097,62 @@ function PostJobSurveyDialogBody({
     Record<string, { resolution: string; resolved: boolean | null }>
   >({});
   const [recommendations, setRecommendations] = useState<RecRowState[]>([]);
+
+  /* ── Mid-job flags seed the survey (Flag Issue spec, §4) ────────────────────
+     Anything the mechanic flagged from the active-job overlay is already a
+     job_recommendations row. Asking again at completion would be asking the same
+     question twice and inviting a duplicate, so the survey opens with those rows
+     already filled in — confirm or edit, don't re-enter.
+
+     Seeded once per booking: after that the mechanic owns the list, and
+     re-seeding would clobber their edits on every re-render. */
+  const midJobFlagged = useQuery(
+    api.jobRecommendations.getMidJobFlaggedForBooking,
+    open && bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
+  );
+  const seededRecsForBookingRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open || !bookingId || !midJobFlagged) return;
+    const key = String(bookingId);
+    if (seededRecsForBookingRef.current === key) return;
+    seededRecsForBookingRef.current = key;
+    if (midJobFlagged.length === 0) return;
+
+    setRecommendations((prev) => {
+      const already = new Set(
+        prev.map((r) =>
+          (r.recommended_service_id ?? r.freeform_service_name).toLowerCase(),
+        ),
+      );
+      const seeded: RecRowState[] = midJobFlagged
+        .filter((f) => {
+          const key2 = (
+            f.recommended_service_id ?? f.freeform_service_name
+          ).toLowerCase();
+          return !already.has(key2);
+        })
+        .map((f) => ({
+          id: makeRecId(),
+          recommended_service_id: f.recommended_service_id as string | null,
+          service_label: f.service_label ?? f.freeform_service_name,
+          service_slug: f.service_slug,
+          service_has_options: f.service_has_options,
+          freeform_service_name: f.recommended_service_id
+            ? ""
+            : f.freeform_service_name,
+          urgency: f.urgency as RecommendationUrgency,
+          reason: f.reason,
+          visible_to_driver: f.visible_to_driver,
+          target_mileage: "",
+          scheduled_at: null,
+          scheduled_mechanic_id: null,
+          scheduled_mechanic_name: null,
+          selected_service_option: null,
+          tire_specs: null,
+        }));
+      return seeded.length > 0 ? [...seeded, ...prev] : prev;
+    });
+  }, [open, bookingId, midJobFlagged]);
   const [photos, setPhotos] = useState<PhotoState[]>(initialPhotos);
   const [error, setError] = useState("");
 
@@ -1111,6 +1168,15 @@ function PostJobSurveyDialogBody({
     // reports. Hide every step that describes a *completed* job — mileage,
     // parts_accuracy, vehicle_updates, time variance, difficulty, tip,
     // recommendations. Parts → Labor → Flag (optional) → Photos → Summary.
+    // Flag Issue spec, §3. "Add unforeseen scope" could add money and time but had
+    // no way to say WHAT the work was, so a mechanic who found a whole extra
+    // service either faked it as anonymous parts-and-hours — leaving nothing in
+    // the service history, nothing in the maintenance record and nothing readable
+    // on the receipt — or mentioned it verbally. This step comes first because the
+    // answer changes what the Parts step should even show.
+    if (cycle === "mid_job") {
+      list.push("found_work");
+    }
     if (!isEstimateCycle) {
       list.push("mileage");
     }
@@ -1758,6 +1824,8 @@ function PostJobSurveyDialogBody({
 
           <StepContent
             step={currentStep}
+            bookingId={bookingId}
+            onFoundWorkToast={(m) => setError(m)}
             customJobs={customJobs}
             customJobOutcomes={customJobOutcomes}
             setCustomJobOutcomes={setCustomJobOutcomes}
@@ -2022,6 +2090,8 @@ function canAdvance(
 
 function StepContent(props: {
   step: StepKey;
+  bookingId: string | null;
+  onFoundWorkToast?: (message: string) => void;
   customJobs: CustomJobRow[] | undefined;
   customJobOutcomes: Record<string, { resolution: string; resolved: boolean | null }>;
   setCustomJobOutcomes: (
@@ -2433,6 +2503,14 @@ function StepContent(props: {
             className="min-h-[140px] w-full resize-y rounded-xl border border-primary/15 bg-background px-4 py-3 text-[14px] leading-relaxed outline-none focus:border-primary"
           />
         </QuestionScreen>
+      );
+    case "found_work":
+      return (
+        <FoundWorkStep
+          bookingId={props.bookingId}
+          engineId={props.engineId}
+          onToast={props.onFoundWorkToast}
+        />
       );
     case "custom_outcomes":
       return (
@@ -4520,6 +4598,168 @@ function ServicePickerModal({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Step 0 of "Add unforeseen scope" (Flag Issue spec, §3).
+ *
+ * The three steps that existed — Parts → Labor → Summary — could add money and
+ * time to a job but had no way to say what the work actually WAS. So extra work
+ * became anonymous parts-and-hours: nothing in the service history, nothing in the
+ * maintenance record, nothing readable on the customer's receipt.
+ *
+ * Naming it first also gets the complaint at the only moment the mechanic really
+ * knows it. "Found a split hose while doing the oil change" is a better complaint
+ * than anything reconstructed at 4pm.
+ *
+ * Adding a line here does NOT re-quote. The following Parts and Labor steps and
+ * the existing mid-job approval cycle own the money — this only records what the
+ * work is.
+ */
+function FoundWorkStep({
+  bookingId,
+  engineId,
+  onToast,
+}: {
+  bookingId: string | null;
+  engineId: string | null;
+  onToast?: (message: string) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [complaint, setComplaint] = useState("");
+  const [pending, setPending] = useState<{
+    kind: "service" | "freeform";
+    name: string;
+    id?: string;
+  } | null>(null);
+
+  const addMidJob = useMutation(api.customJobs.addMidJobCustomService);
+  const existing = useQuery(
+    api.customJobs.listForBooking,
+    bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
+  );
+  const midJobLines = (existing ?? []).filter((j) => j.name);
+
+  async function commit() {
+    if (!pending || !bookingId) return;
+    setBusy(true);
+    try {
+      // Catalog picks land on the booking's service_ids through the normal
+      // approval payload; only off-catalog lines need the custom-job record.
+      await addMidJob({
+        bookingId: bookingId as Id<"bookings">,
+        name: pending.name,
+        complaint: complaint.trim() || undefined,
+      });
+      setPending(null);
+      setComplaint("");
+    } catch (err: unknown) {
+      onToast?.(
+        err instanceof Error ? err.message : "Could not add that work.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <QuestionScreen
+      eyebrow="Extra work"
+      question="What did you find?"
+      hint="Naming it keeps it on the customer's service history. Pricing comes next."
+    >
+      <div className="space-y-3">
+        {midJobLines.length > 0 ? (
+          <ul className="space-y-1.5">
+            {midJobLines.map((line) => (
+              <li
+                key={String(line._id)}
+                className="rounded-lg border border-primary/15 bg-primary/5 px-3 py-2"
+              >
+                <p className="text-[13px] font-semibold text-foreground">
+                  {line.name}
+                </p>
+                {line.complaint ? (
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                    {line.complaint}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {pending ? (
+          <div className="rounded-xl border border-primary/20 bg-background p-3">
+            <p className="text-[13px] font-semibold text-foreground">
+              {pending.name}
+            </p>
+            <textarea
+              value={complaint}
+              autoFocus
+              onChange={(event) => setComplaint(event.target.value)}
+              placeholder="What did you see? (optional)"
+              className="mt-2 min-h-[64px] w-full resize-y rounded-lg border border-primary/15 bg-background px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-primary"
+            />
+            <div className="mt-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPending(null);
+                  setComplaint("");
+                }}
+                className="px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={commit}
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground disabled:opacity-40"
+              >
+                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                Add to job
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setPicking(true)}
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {midJobLines.length > 0 ? "Add something else" : "Name the work"}
+          </button>
+        )}
+
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Just more parts or time on the original job? Skip this and carry on.
+        </p>
+      </div>
+
+      {picking ? (
+        // Same picker the recommendations step uses, so the match gate applies
+        // here too — a mechanic typing "oil change" gets caught before it becomes
+        // off-catalog work that earns no maintenance credit.
+        <ServicePickerModal
+          engineId={engineId}
+          initialQuery=""
+          onClose={() => setPicking(false)}
+          onPick={(picked) => {
+            setPicking(false);
+            setPending(
+              picked.kind === "service"
+                ? { kind: "service", name: picked.name, id: picked.id }
+                : { kind: "freeform", name: picked.name },
+            );
+          }}
+        />
+      ) : null}
+    </QuestionScreen>
   );
 }
 

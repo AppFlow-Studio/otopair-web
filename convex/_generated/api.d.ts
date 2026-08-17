@@ -145,6 +145,7 @@ import type * as invitations from "../invitations.js";
 import type * as invoices from "../invoices.js";
 import type * as invoices_template from "../invoices/template.js";
 import type * as invoices_node from "../invoices_node.js";
+import type * as jobBlockers from "../jobBlockers.js";
 import type * as jobRecommendations from "../jobRecommendations.js";
 import type * as job_actuals from "../job_actuals.js";
 import type * as laborTimes from "../laborTimes.js";
@@ -717,6 +718,7 @@ declare const fullApi: ApiFromModules<{
   invoices: typeof invoices;
   "invoices/template": typeof invoices_template;
   invoices_node: typeof invoices_node;
+  jobBlockers: typeof jobBlockers;
   jobRecommendations: typeof jobRecommendations;
   job_actuals: typeof job_actuals;
   laborTimes: typeof laborTimes;

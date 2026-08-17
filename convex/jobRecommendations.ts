@@ -27,6 +27,7 @@ import { jobRecommendationInputValidator } from "./lib/vehicle_passports";
 // work-performed and the same name typed as a recommendation are the same signal,
 // and counting them separately would understate every cluster.
 import { bumpPendingServiceSubmission } from "./customJobs";
+import { ensureJobActualRecord } from "./lib/job_actuals";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -436,6 +437,114 @@ export async function submitRecommendationsForBooking(
 
   return insertedIds;
 }
+
+/**
+ * Flag something for next time, from the active-job overlay (Flag Issue spec, §4).
+ *
+ * Mechanically small — it's one row with `source: "mid_job"`. What makes it worth
+ * building is WHEN: the post-job survey already asks for recommendations, but
+ * noticing at 11am and remembering at 4pm are different accuracies. The mechanic
+ * flags it while looking at the thing.
+ *
+ * This deliberately does NOT duplicate the survey question. The survey seeds
+ * itself from these rows (see getMidJobFlaggedForBooking), so the mechanic sees
+ * what they already flagged and confirms rather than being asked twice.
+ *
+ * Canonical service → a normal bookable recommendation. Freeform → an advisory,
+ * with the attribution-led card and no price. Neither touches today's money and
+ * neither can move the health score.
+ */
+export const flagFromActiveJob = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    recommendedServiceId: v.optional(v.id("services")),
+    freeformName: v.optional(v.string()),
+    urgency: v.union(
+      v.literal("next_visit"),
+      v.literal("within_3_months"),
+      v.literal("soon"),
+    ),
+    reason: v.optional(v.string()),
+    visibleToDriver: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const freeform = (args.freeformName ?? "").trim();
+    if (!args.recommendedServiceId && !freeform) {
+      throw new Error("Pick a service or type what you found.");
+    }
+    if (!booking.mechanic_id) {
+      throw new Error("This job has no assigned mechanic to attribute it to.");
+    }
+
+    // job_recommendations requires a job_actual, and mid-job there may not be one
+    // yet — the mechanic hasn't finished. ensureJobActualRecord is the same helper
+    // the start-job and completion paths use, so this doesn't invent a second
+    // lifecycle for the row.
+    const now = Date.now();
+    const jobActual = await ensureJobActualRecord(ctx, { booking, now });
+
+    const ids = await submitRecommendationsForBooking(ctx, {
+      booking,
+      jobActualId: jobActual._id,
+      mechanicId: booking.mechanic_id,
+      source: "mid_job",
+      recommendations: [
+        {
+          recommended_service_id: args.recommendedServiceId ?? null,
+          freeform_service_name: args.recommendedServiceId ? null : freeform,
+          urgency: args.urgency,
+          reason: args.reason ?? null,
+          visible_to_driver: args.visibleToDriver,
+        },
+      ],
+      now,
+    });
+
+    return { ok: true, recommendationId: ids[0] ?? null };
+  },
+});
+
+/**
+ * What was already flagged mid-job on this booking, so the post-job survey can
+ * seed itself instead of asking again. Shop-scoped by the booking.
+ */
+export const getMidJobFlaggedForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return [];
+    const rows = await ctx.db
+      .query("job_recommendations")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    const midJob = rows.filter((r) => r.source === "mid_job");
+    midJob.sort((a, b) => a.created_at - b.created_at);
+
+    return await Promise.all(
+      midJob.map(async (rec) => {
+        const service = rec.recommended_service_id
+          ? await ctx.db.get(rec.recommended_service_id)
+          : null;
+        return {
+          _id: rec._id,
+          recommended_service_id: rec.recommended_service_id ?? null,
+          service_label: service?.name ?? null,
+          service_slug: (service as any)?.slug ?? null,
+          service_has_options: Boolean((service as any)?.has_options),
+          freeform_service_name: rec.freeform_text ?? "",
+          urgency: rec.urgency,
+          reason: rec.reason ?? "",
+          visible_to_driver: rec.visible_to_driver,
+        };
+      }),
+    );
+  },
+});
 
 /**
  * Open recommendations for a VIN — used by the pre-job survey to surface

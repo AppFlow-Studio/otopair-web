@@ -45,6 +45,7 @@ import {
   evaluateRescheduleLimit,
 } from "./lib/cancellation_policy";
 import { mintClaimToken } from "./walkin_claims";
+import { blockedMinutesForBooking } from "./jobBlockers";
 import {
   recordCustomJobsForBooking,
   completeCustomJobsForBooking,
@@ -8328,8 +8329,30 @@ async function maybePersistEarlyCompletionDuration(ctx: any, booking: any) {
   });
   if (actualMinutes == null) return;
 
+  // ─── BLOCKED TIME IS RECORDED, NOT SUBTRACTED HERE ────────────────────────
+  // `actual_duration_minutes` has exactly one consumer: schedule.ts, which uses
+  // it to SHRINK a completed booking's lane block and free the bay.
+  //
+  // So blocked time must NOT come out of it. A car waiting three hours for a part
+  // is still sitting in the bay — subtracting that would report the job as having
+  // finished early and hand the slot to a new booking while the car is still on
+  // the lift. This field means bay occupancy, and blocked time is occupancy.
+  //
+  // Blocked minutes are stored alongside instead, so anything that wants WORKED
+  // time can derive it (elapsed − blocked) while scheduling keeps the wall clock.
+  // The labour numbers themselves are typed by the mechanic in the post-job
+  // survey, and the protection there is that the overlay's elapsed timer pauses
+  // on a clock-stopping blocker — so what they read, and therefore what they
+  // type, is worked time. See jobBlockers.KIND_POLICY and NowWorkingPane.
+  const blockedMinutes = await blockedMinutesForBooking(
+    ctx,
+    booking._id,
+    endAtMs,
+  );
+
   await ctx.db.patch(booking._id, {
     actual_duration_minutes: actualMinutes,
+    blocked_minutes: blockedMinutes > 0 ? blockedMinutes : undefined,
     updated_at: Date.now(),
   });
 }

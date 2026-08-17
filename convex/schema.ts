@@ -2823,7 +2823,13 @@ export default defineSchema({
     // from the upfront estimates above. `backfilled_at_ms` doubles as both a
     // boolean marker and the audit timestamp of when the backfill was logged.
     backfilled_at_ms: v.optional(v.number()),
+    // WORKED minutes, not elapsed — blocked spans are subtracted (Flag Issue
+    // spec, §5). Every labour estimate we derive reads this, so it must not
+    // include time nobody was working.
     actual_duration_minutes: v.optional(v.number()),
+    // The wall-clock time subtracted, kept so "why was my car there all day" is
+    // still answerable. Absent when the job was never blocked.
+    blocked_minutes: v.optional(v.number()),
     actual_price_charged: v.optional(v.number()),
 
     // ---------------------------------------------------------------------
@@ -4472,6 +4478,64 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_recommended_service_id", ["recommended_service_id"])
     .index("by_vehicle_and_status", ["vehicle_vin", "status"]),
+
+  // A job that cannot proceed as planned (Flag Issue spec, §5).
+  //
+  // Before this table the system had no way to say "stopped, and here's why" —
+  // `live_stage` has only forward-progress values, so a mechanic waiting three
+  // hours for the right part could either leave the job in `service_in_progress`
+  // or mark it complete when it wasn't.
+  //
+  // WHY IT'S A TABLE AND NOT A FLAG: "this job was blocked twice for parts" is
+  // exactly the pattern a shop wants to see, and the open→resolved spans are also
+  // the arithmetic that keeps blocked time out of recorded labour. A boolean on
+  // the booking could do neither.
+  //
+  // THE CLOCK: job_actuals.started_at runs to completion, so without subtracting
+  // these spans, blocked time lands in actual_duration_minutes → then in
+  // labor_quote_snapshots, custom_jobs.actual_minutes, and the shortcut variance
+  // stats — every one of which we use to derive what work *should* take. See
+  // blockedMinutesForBooking and maybePersistEarlyCompletionDuration.
+  job_blockers: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    raised_by_user_id: v.id("users"),
+    mechanic_id: v.optional(v.id("mechanics")),
+
+    kind: v.union(
+      // Work has stopped and is waiting on something external.
+      v.literal("parts_delay"),
+      v.literal("vehicle_condition"),
+      v.literal("needs_specialist"),
+      v.literal("customer_unreachable"),
+      // Work continues — these are escalations, not stoppages. Neither may ever
+      // route into a customer quote: you cannot bill a customer for damage you
+      // caused, and a safety finding reaches the driver whether or not they buy
+      // the fix. See jobBlockers.KIND_POLICY.
+      v.literal("safety_hold"),
+      v.literal("damage"),
+    ),
+    note: v.string(),
+    photos: v.optional(v.array(postjobPhotoValidator)),
+    // When the shop expects to be unblocked. Drives the driver notice, so it's
+    // the difference between "your car is delayed" and "your car is delayed
+    // until tomorrow afternoon".
+    eta_ms: v.optional(v.number()),
+
+    // Denormalised from KIND_POLICY at open time. Stored rather than derived so
+    // a later policy change can't retroactively rewrite what a past job billed.
+    stops_clock: v.boolean(),
+
+    opened_at: v.number(),
+    resolved_at: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    resolution_note: v.optional(v.string()),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_shop", ["shop_id"])
+    .index("by_shop_open", ["shop_id", "resolved_at"])
+    .index("by_kind", ["kind"])
+    .index("by_opened_at", ["opened_at"]),
 
   // Audit trail for pseudo-VIN → real-VIN re-keys (Off-Catalog Work spec, §5).
   //

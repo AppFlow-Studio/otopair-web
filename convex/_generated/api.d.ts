@@ -363,6 +363,7 @@ import type * as services_normalization from "../services/normalization.js";
 import type * as services_sourceScoring from "../services/sourceScoring.js";
 import type * as services_verification from "../services/verification.js";
 import type * as shopApplications from "../shopApplications.js";
+import type * as shopCustomServices from "../shopCustomServices.js";
 import type * as shopCustomers from "../shopCustomers.js";
 import type * as shopDisputes from "../shopDisputes.js";
 import type * as shopInvites from "../shopInvites.js";
@@ -930,6 +931,7 @@ declare const fullApi: ApiFromModules<{
   "services/sourceScoring": typeof services_sourceScoring;
   "services/verification": typeof services_verification;
   shopApplications: typeof shopApplications;
+  shopCustomServices: typeof shopCustomServices;
   shopCustomers: typeof shopCustomers;
   shopDisputes: typeof shopDisputes;
   shopInvites: typeof shopInvites;

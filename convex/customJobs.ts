@@ -26,6 +26,10 @@ import {
   normalizeServiceName,
   serviceMatchKey,
 } from "./lib/serviceMatch";
+import {
+  recordShortcutUse,
+  recordShortcutActual,
+} from "./shopCustomServices";
 
 /**
  * Bump (or open) the cross-shop dedupe ledger row for a proposed service name.
@@ -101,7 +105,8 @@ export type CustomJobInput = {
   complaint?: string | null;
   estimated_minutes?: number | null;
   quoted_price_cents?: number | null;
-  shop_custom_service_id?: string | null;
+  /** Set when the mechanic pressed a shop shortcut instead of typing. */
+  shop_custom_service_id?: Id<"shop_custom_services"> | null;
 };
 
 /**
@@ -193,6 +198,17 @@ export async function recordCustomJobsForBooking(
       created_at: args.now,
     });
     ids.push(id);
+
+    // A pressed shortcut is the whole reason repeats are exactly countable
+    // rather than fuzzy-matched, so the counter has to move in the same
+    // transaction as the job it belongs to.
+    if (input.shop_custom_service_id) {
+      await recordShortcutUse(ctx, {
+        shortcutId: input.shop_custom_service_id,
+        complaint: input.complaint ?? null,
+        now: args.now,
+      });
+    }
   }
   return ids;
 }
@@ -233,10 +249,11 @@ export async function completeCustomJobsForBooking(
   for (const outcome of args.outcomes) {
     const row = byKey.get(serviceMatchKey(outcome.name));
     if (!row) continue;
+    const actualMinutes = outcome.actual_minutes ?? row.actual_minutes;
     await ctx.db.patch(row._id, {
       status: "completed",
       job_actual_id: args.jobActualId ?? row.job_actual_id,
-      actual_minutes: outcome.actual_minutes ?? row.actual_minutes,
+      actual_minutes: actualMinutes,
       charged_price_cents:
         outcome.charged_price_cents ?? row.charged_price_cents,
       resolution: outcome.resolution?.trim() || row.resolution,
@@ -244,6 +261,18 @@ export async function completeCustomJobsForBooking(
         outcome.resolved_complaint ?? row.resolved_complaint,
       updated_at: args.now,
     });
+
+    // Feed the shortcut's labor distribution. This is what makes drift visible:
+    // a button whose actuals keep landing far from its own default is either
+    // covering several different jobs or is genuinely config-dependent, and the
+    // complaint texts are what distinguish those.
+    if (row.shop_custom_service_id && typeof actualMinutes === "number") {
+      await recordShortcutActual(ctx, {
+        shortcutId: row.shop_custom_service_id,
+        actualMinutes,
+        now: args.now,
+      });
+    }
     touched += 1;
   }
 
@@ -263,6 +292,125 @@ export async function completeCustomJobsForBooking(
 
   return touched;
 }
+
+/**
+ * Add off-catalog work to a job that's already underway — the "while I was in
+ * there" case (Off-Catalog Work spec, §4).
+ *
+ * This is the entry point that matters most for a shop running its whole day
+ * through the portal, because it's how this work actually shows up: the customer
+ * approves an extra thing at 11am. Before this, that meant editing the booking.
+ *
+ * Deliberately does NOT re-quote or change any money. It appends the line and
+ * records the structured row; the mechanic then submits the change through the
+ * existing mid-job approval cycle (booking_approvals.submitMidJobChange), which
+ * already owns re-quoting, the customer's approval, and the payment ceiling.
+ * Duplicating any of that here would give us two sources of truth for a total.
+ */
+export const addMidJobCustomService = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    name: v.string(),
+    complaint: v.optional(v.string()),
+    categoryId: v.optional(v.id("service_categories")),
+    estimatedMinutes: v.optional(v.number()),
+    shopCustomServiceId: v.optional(v.id("shop_custom_services")),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q: any) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .unique();
+    if (!user) throw new Error("User not found");
+
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+    if (!booking.shop_id) throw new Error("Booking has no shop");
+
+    const shopUser = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_and_shop", (q: any) =>
+        q.eq("user_id", user._id).eq("shop_id", booking.shop_id),
+      )
+      .first();
+    if (!shopUser?.is_active) {
+      const owned = await ctx.db
+        .query("shops")
+        .withIndex("by_owner_user_id", (q: any) =>
+          q.eq("owner_user_id", user._id),
+        )
+        .filter((q: any) => q.eq(q.field("_id"), booking.shop_id))
+        .first();
+      if (!owned) throw new Error("Not authorized for this shop");
+    }
+
+    // Same gate the mid-job approval cycle enforces — adding work to a job that
+    // isn't running would land money on a booking nobody is standing at.
+    if (booking.status !== "in_progress") {
+      throw new Error(
+        "Work can only be added while the booking is in progress.",
+      );
+    }
+
+    const name = args.name.trim();
+    if (!name) throw new Error("A name is required");
+
+    const now = Date.now();
+    const existingLines = Array.isArray((booking as any).custom_services)
+      ? [...(booking as any).custom_services]
+      : [];
+    const matchKey = serviceMatchKey(name);
+    const alreadyThere = existingLines.some(
+      (c: any) => serviceMatchKey(String(c.name)) === matchKey,
+    );
+
+    if (!alreadyThere) {
+      existingLines.push({
+        name,
+        duration_minutes: args.estimatedMinutes ?? undefined,
+      });
+      await ctx.db.patch(args.bookingId, {
+        custom_services: existingLines,
+        updated_at: now,
+      });
+    }
+
+    // recordCustomJobsForBooking is idempotent per (booking, match_key), so a
+    // double-tap patches the existing row instead of duplicating it.
+    const ids = await recordCustomJobsForBooking(ctx, {
+      booking: {
+        _id: args.bookingId,
+        shop_id: booking.shop_id,
+        vin: booking.vin,
+      },
+      mechanicId: booking.mechanic_id ?? undefined,
+      customJobs: [
+        {
+          name,
+          category_id: args.categoryId ?? null,
+          complaint: args.complaint ?? null,
+          estimated_minutes: args.estimatedMinutes ?? null,
+          shop_custom_service_id: args.shopCustomServiceId ?? null,
+        },
+      ],
+      source: "mid_job",
+      now,
+    });
+
+    return {
+      ok: true,
+      customJobId: ids[0] ?? null,
+      addedLine: !alreadyThere,
+      // The caller still has to send the mid-job change for approval — nothing
+      // about the booking's money has moved yet.
+      requiresApproval: true,
+    };
+  },
+});
 
 /**
  * Mechanic-facing: the custom jobs on a booking, so the post-job survey can ask

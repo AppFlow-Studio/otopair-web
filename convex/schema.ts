@@ -4454,6 +4454,68 @@ export default defineSchema({
     .index("by_recommended_service_id", ["recommended_service_id"])
     .index("by_vehicle_and_status", ["vehicle_vin", "status"]),
 
+  // A shop's own shortcuts for off-catalog work they've done before
+  // (Off-Catalog Work spec, §3).
+  //
+  // This is NOT a catalog and never driver-facing. Custom work is emergent —
+  // it comes up mid-job or gets recommended after — so this is framed to the
+  // mechanic as "things you've typed before", not "your services". It never
+  // appears in search, never renders on a shop profile, and no driver can book
+  // against it.
+  //
+  // WHY IT EARNS A TABLE: pressing a button instead of retyping collapses forty
+  // spellings into one key pressed forty times. Repeat counts become exact and
+  // labor distributions become real distributions, so the director view (§8) only
+  // has to fuzzy-match ACROSS shops and on first-time entries — never within one
+  // shop's own repeats.
+  //
+  // Consequently the match gate runs STRICTER here than on a one-off line: a
+  // mistake in a shortcut is replayed every time the button is pressed, whereas a
+  // mistake in a one-off is a single bad row. See shopCustomServices.create.
+  //
+  // `name` is immutable after creation. Renaming a shortcut with history would
+  // retroactively change what past jobs were called; retire it and make a new one.
+  shop_custom_services: defineTable({
+    shop_id: v.id("shops"),
+    name: v.string(),
+    // normalizeServiceName — the pending_service_submissions ledger key.
+    normalized_name: v.string(),
+    // serviceMatchKey — the cross-shop clustering key.
+    match_key: v.string(),
+    category_id: v.optional(v.id("service_categories")),
+
+    // Prefilled when the shortcut is pressed. Editable, unlike the name.
+    default_minutes: v.optional(v.number()),
+    default_price_cents: v.optional(v.number()),
+    // The complaint text from the last time, offered as a starting point.
+    last_complaint: v.optional(v.string()),
+
+    use_count: v.number(),
+    last_used_at: v.number(),
+
+    // ── Drift detection (§3) ────────────────────────────────────────────────
+    // A mechanic pressing "Brake job — custom" for three different pieces of
+    // work gives one key a bimodal labor distribution that LOOKS trustworthy —
+    // arguably worse than free text. We don't block it, we measure it: running
+    // sums let the director view compute variance without storing every sample,
+    // and deviation_count tracks how often actuals diverged sharply from the
+    // shortcut's own default.
+    minutes_samples: v.optional(v.number()),
+    minutes_sum: v.optional(v.number()),
+    minutes_sum_sq: v.optional(v.number()),
+    deviation_count: v.optional(v.number()),
+
+    // Retired shortcuts leave the picker but keep their key and history, so past
+    // custom_jobs rows still resolve.
+    retired_at: v.optional(v.number()),
+    created_by_mechanic_id: v.optional(v.id("mechanics")),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop", ["shop_id"])
+    .index("by_shop_and_match_key", ["shop_id", "match_key"])
+    .index("by_match_key", ["match_key"]),
+
   // One structured record per piece of off-catalog work (Off-Catalog Work
   // spec, §7). `bookings.custom_services[]` stays as the lightweight display
   // and scheduling copy — this table is the extraction spine.
@@ -4505,9 +4567,9 @@ export default defineSchema({
       v.id("pending_service_submissions"),
     ),
     // The shop shortcut this job came from, when it was pressed rather than
-    // typed. Declared here in Phase 3 so Phase 4 needs no migration; the
-    // shop_custom_services table arrives with that phase.
-    shop_custom_service_id: v.optional(v.string()),
+    // typed. Its presence is what makes a repeat exactly countable instead of
+    // fuzzy-matched.
+    shop_custom_service_id: v.optional(v.id("shop_custom_services")),
 
     // Where it was entered: "booking" (create-booking drawer), "mid_job",
     // "post_job", or "recommendation" (advisory that was later performed).

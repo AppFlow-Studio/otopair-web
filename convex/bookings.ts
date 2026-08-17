@@ -11415,6 +11415,9 @@ export const createByShop = mutation({
           // so the director view can eventually tell what this work actually is.
           complaint: v.optional(v.string()),
           categoryId: v.optional(v.id("service_categories")),
+          // Set when the mechanic pressed a shop shortcut rather than typing.
+          // This is what makes a repeat exactly countable instead of fuzzy-matched.
+          shopCustomServiceId: v.optional(v.id("shop_custom_services")),
         })
       )
     ),
@@ -11809,6 +11812,7 @@ export const createByShop = mutation({
           category_id: c.categoryId ?? null,
           complaint: c.complaint ?? null,
           estimated_minutes: c.durationMinutes ?? null,
+          shop_custom_service_id: c.shopCustomServiceId ?? null,
         })),
         source: "booking",
         now,
@@ -12103,6 +12107,7 @@ export const backfillCompletedBooking = mutation({
           // See the note on createWalkinBooking's copy of this validator.
           complaint: v.optional(v.string()),
           categoryId: v.optional(v.id("service_categories")),
+          shopCustomServiceId: v.optional(v.id("shop_custom_services")),
         }),
       ),
     ),
@@ -12414,6 +12419,7 @@ export const backfillCompletedBooking = mutation({
         category_id: c.categoryId ?? null,
         complaint: c.complaint ?? null,
         estimated_minutes: c.durationMinutes ?? null,
+        shop_custom_service_id: c.shopCustomServiceId ?? null,
       }));
       await recordCustomJobsForBooking(ctx, {
         booking: { _id: bookingId, shop_id: args.shopId, vin: canonicalVin },

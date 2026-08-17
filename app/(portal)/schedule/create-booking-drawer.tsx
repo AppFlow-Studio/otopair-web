@@ -388,6 +388,7 @@ export default function CreateBookingDrawer({
       durationMinutes?: number;
       complaint?: string;
       categoryId?: string;
+      shopCustomServiceId?: string;
     }>
   >([]);
   const [showCustomForm, setShowCustomForm] = useState(false);
@@ -395,6 +396,19 @@ export default function CreateBookingDrawer({
   const [customDraftMinutes, setCustomDraftMinutes] = useState("");
   const [customDraftComplaint, setCustomDraftComplaint] = useState("");
   const [customDraftCategoryId, setCustomDraftCategoryId] = useState("");
+  /* Set when the form was opened by pressing an existing shortcut. Carrying it
+     through is what makes a repeat exactly countable rather than fuzzy-matched
+     back together later (Off-Catalog Work spec, §3). */
+  const [customDraftShortcutId, setCustomDraftShortcutId] = useState("");
+  const [customDraftSaveShortcut, setCustomDraftSaveShortcut] = useState(false);
+  /* Set when the strict creation gate refused a shortcut because the name is
+     really a catalog service. Blocking (rather than advising) is deliberate: a
+     mistake baked into a shortcut is replayed on every press, whereas a mistake
+     on a one-off line is a single bad row. */
+  const [shortcutBlock, setShortcutBlock] = useState<{
+    name: string;
+    serviceId: string;
+  } | null>(null);
 
   /* ---- Customer states / notes ---- */
   const [customerNotes, setCustomerNotes] = useState("");
@@ -1159,7 +1173,39 @@ export default function CreateBookingDrawer({
     setCustomDraftMinutes("");
     setCustomDraftComplaint("");
     setCustomDraftCategoryId("");
+    setCustomDraftShortcutId("");
+    setCustomDraftSaveShortcut(false);
   };
+
+  /* Pressing a shortcut opens the form prefilled rather than adding the line
+     blind. The mechanic saves the retyping, and the complaint — the one field
+     worth having and the one that's genuinely per-job — is what they land on. */
+  const openShortcut = (shortcut: {
+    _id: string;
+    name: string;
+    default_minutes: number | null;
+    category_id: string | null;
+  }) => {
+    setCustomDraftName(shortcut.name);
+    setCustomDraftMinutes(
+      shortcut.default_minutes ? String(shortcut.default_minutes) : "",
+    );
+    setCustomDraftCategoryId(shortcut.category_id ?? "");
+    setCustomDraftComplaint("");
+    setCustomDraftShortcutId(shortcut._id);
+    setCustomDraftSaveShortcut(false);
+    setShowCustomForm(true);
+  };
+
+  /* The shop's own shortcuts for off-catalog work (Off-Catalog Work spec, §3).
+     Not a catalog and never driver-facing — "things you've typed before". */
+  const shopShortcuts = useQuery(
+    api.shopCustomServices.listForShop,
+    shopData?.shopId
+      ? { shopId: shopData.shopId as Id<"shops">, limit: 8 }
+      : "skip",
+  );
+  const saveShortcut = useMutation(api.shopCustomServices.create);
 
   /* The services this shop actually offers. The match gate scores against the
      whole catalog, but suggesting a service that isn't in `categories` would
@@ -1260,6 +1306,9 @@ export default function CreateBookingDrawer({
                 durationMinutes: c.durationMinutes,
                 complaint: c.complaint,
                 categoryId: c.categoryId as Id<"service_categories"> | undefined,
+                shopCustomServiceId: c.shopCustomServiceId as
+                  | Id<"shop_custom_services">
+                  | undefined,
               })) as never)
             : undefined,
         customerNotes: customerNotes.trim() || undefined,
@@ -1393,6 +1442,9 @@ export default function CreateBookingDrawer({
                 durationMinutes: c.durationMinutes,
                 complaint: c.complaint,
                 categoryId: c.categoryId as Id<"service_categories"> | undefined,
+                shopCustomServiceId: c.shopCustomServiceId as
+                  | Id<"shop_custom_services">
+                  | undefined,
               })) as never)
             : undefined,
         customerNotes: customerNotes.trim() || undefined,
@@ -2002,6 +2054,32 @@ export default function CreateBookingDrawer({
                     </SelectListBox>
                   </SelectPopover>
                 </Select>
+                {/* Only offered when this isn't already a shortcut. Ticking it
+                    is what turns forty spellings into one key pressed forty
+                    times, so the data is worth the one extra tap. */}
+                {shortcutBlock && shortcutBlock.name === customDraftName.trim() ? (
+                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5">
+                    <p className="text-[11px] leading-relaxed text-foreground">
+                      That&apos;s already a service we offer. Booking the catalog
+                      service keeps it on the customer&apos;s maintenance record —
+                      pick it above instead. Tap Add again to save it as custom
+                      anyway.
+                    </p>
+                  </div>
+                ) : null}
+                {!customDraftShortcutId ? (
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={customDraftSaveShortcut}
+                      onChange={(e) => setCustomDraftSaveShortcut(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded border-border text-primary accent-primary"
+                    />
+                    <span className="text-[11px] text-muted-foreground">
+                      Save for next time
+                    </span>
+                  </label>
+                ) : null}
                 <div className="flex gap-2 justify-end">
                   <button
                     type="button"
@@ -2013,19 +2091,54 @@ export default function CreateBookingDrawer({
                   <button
                     type="button"
                     disabled={!customDraftName.trim()}
-                    onClick={() => {
+                    onClick={async () => {
                       const name = customDraftName.trim();
                       if (!name) return;
                       const mins = customDraftMinutes ? Number(customDraftMinutes) : NaN;
+                      const minutes =
+                        Number.isFinite(mins) && mins > 0 ? mins : undefined;
+
+                      // Saving a shortcut runs the strict gate server-side. If it
+                      // refuses, surface the canonical service and add nothing —
+                      // the mechanic picks the real service or explicitly insists.
+                      let shortcutId = customDraftShortcutId;
+                      if (customDraftSaveShortcut && shopData?.shopId) {
+                        try {
+                          const res: any = await saveShortcut({
+                            shopId: shopData.shopId as Id<"shops">,
+                            name,
+                            categoryId:
+                              (customDraftCategoryId as Id<"service_categories">) ||
+                              undefined,
+                            defaultMinutes: minutes,
+                            lastComplaint: customDraftComplaint.trim() || undefined,
+                            confirmedCustom: shortcutBlock?.name === name,
+                          });
+                          if (res?.ok === false) {
+                            setShortcutBlock({
+                              name,
+                              serviceId: String(res.suggestion?.serviceId ?? ""),
+                            });
+                            return;
+                          }
+                          shortcutId = String(res.id);
+                        } catch {
+                          // A failed shortcut save must not cost the mechanic the
+                          // line they're adding — carry on without the shortcut.
+                        }
+                      }
+
                       setCustomServices((prev) => [
                         ...prev,
                         {
                           name,
-                          durationMinutes: Number.isFinite(mins) && mins > 0 ? mins : undefined,
+                          durationMinutes: minutes,
                           complaint: customDraftComplaint.trim() || undefined,
                           categoryId: customDraftCategoryId || undefined,
+                          shopCustomServiceId: shortcutId || undefined,
                         },
                       ]);
+                      setShortcutBlock(null);
                       resetCustomDraft();
                     }}
                     className="px-3 py-1.5 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
@@ -2035,14 +2148,40 @@ export default function CreateBookingDrawer({
                 </div>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => setShowCustomForm(true)}
-                className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Add custom service
-              </button>
+              <div className="space-y-2">
+                {shopShortcuts && shopShortcuts.length > 0 ? (
+                  <div>
+                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                      Done here before
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {shopShortcuts.map((sc: any) => (
+                        <button
+                          key={String(sc._id)}
+                          type="button"
+                          onClick={() => openShortcut(sc)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/30 px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5"
+                        >
+                          {sc.name}
+                          {sc.default_minutes ? (
+                            <span className="text-[10px] tabular-nums text-muted-foreground">
+                              {sc.default_minutes}m
+                            </span>
+                          ) : null}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => setShowCustomForm(true)}
+                  className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  Add custom service
+                </button>
+              </div>
             )}
           </div>
         </CollapsibleSection>

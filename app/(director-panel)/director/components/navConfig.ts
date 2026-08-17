@@ -55,6 +55,7 @@ export const NAV_GROUPS: NavGroup[] = [
   ] },
   { section:'Insight', items: [
     { id:'analytics',    label:'Analytics',    Icon:IconBolt,     keywords:['metrics','charts','reports','insights'] },
+    { id:'customJobs',   label:'Custom jobs',  Icon:IconCar,      keywords:['custom jobs','off catalog','off-catalog','clusters','what to build','aliases','gaps'] },
     { id:'systemHealth', label:'System health', Icon:IconRefresh, badge:'systemHealth', keywords:['health','status','monitoring','uptime'] },
   ] },
   { section:'Signals', items: [

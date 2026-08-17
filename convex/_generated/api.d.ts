@@ -94,6 +94,7 @@ import type * as devOnly_round3StoredCheck from "../devOnly/round3StoredCheck.js
 import type * as devOnly_scanMessageLeaks from "../devOnly/scanMessageLeaks.js";
 import type * as devOnly_seedChelalaCopy from "../devOnly/seedChelalaCopy.js";
 import type * as devOnly_seedTestShops from "../devOnly/seedTestShops.js";
+import type * as devOnly_sparkPlugQtyBackfill from "../devOnly/sparkPlugQtyBackfill.js";
 import type * as devOnly_trimGarageToOneCar from "../devOnly/trimGarageToOneCar.js";
 import type * as devOnly_urlProbe from "../devOnly/urlProbe.js";
 import type * as devOnly_validateQuoteEngine from "../devOnly/validateQuoteEngine.js";
@@ -107,6 +108,7 @@ import type * as director from "../director.js";
 import type * as directorCars from "../directorCars.js";
 import type * as directorConfigActions from "../directorConfigActions.js";
 import type * as directorConfigBackfills from "../directorConfigBackfills.js";
+import type * as directorCustomJobs from "../directorCustomJobs.js";
 import type * as directorData from "../directorData.js";
 import type * as directorEnrichment from "../directorEnrichment.js";
 import type * as directorEstimator from "../directorEstimator.js";
@@ -203,6 +205,7 @@ import type * as lib_shopAuth from "../lib/shopAuth.js";
 import type * as lib_simpleTireScraper from "../lib/simpleTireScraper.js";
 import type * as lib_sms_provider from "../lib/sms_provider.js";
 import type * as lib_sourceNames from "../lib/sourceNames.js";
+import type * as lib_sparkPlugs from "../lib/sparkPlugs.js";
 import type * as lib_stripeTax from "../lib/stripeTax.js";
 import type * as lib_stripe_void from "../lib/stripe_void.js";
 import type * as lib_telnyx_webhook from "../lib/telnyx_webhook.js";
@@ -662,6 +665,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/scanMessageLeaks": typeof devOnly_scanMessageLeaks;
   "devOnly/seedChelalaCopy": typeof devOnly_seedChelalaCopy;
   "devOnly/seedTestShops": typeof devOnly_seedTestShops;
+  "devOnly/sparkPlugQtyBackfill": typeof devOnly_sparkPlugQtyBackfill;
   "devOnly/trimGarageToOneCar": typeof devOnly_trimGarageToOneCar;
   "devOnly/urlProbe": typeof devOnly_urlProbe;
   "devOnly/validateQuoteEngine": typeof devOnly_validateQuoteEngine;
@@ -675,6 +679,7 @@ declare const fullApi: ApiFromModules<{
   directorCars: typeof directorCars;
   directorConfigActions: typeof directorConfigActions;
   directorConfigBackfills: typeof directorConfigBackfills;
+  directorCustomJobs: typeof directorCustomJobs;
   directorData: typeof directorData;
   directorEnrichment: typeof directorEnrichment;
   directorEstimator: typeof directorEstimator;
@@ -771,6 +776,7 @@ declare const fullApi: ApiFromModules<{
   "lib/simpleTireScraper": typeof lib_simpleTireScraper;
   "lib/sms_provider": typeof lib_sms_provider;
   "lib/sourceNames": typeof lib_sourceNames;
+  "lib/sparkPlugs": typeof lib_sparkPlugs;
   "lib/stripeTax": typeof lib_stripeTax;
   "lib/stripe_void": typeof lib_stripe_void;
   "lib/telnyx_webhook": typeof lib_telnyx_webhook;

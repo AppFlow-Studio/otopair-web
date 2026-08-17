@@ -4005,6 +4005,12 @@ export default defineSchema({
       v.literal("correction"),
       v.literal("report"),
       v.literal("survey"),
+      // Off-catalog names that look like a service we already offer
+      // (Off-Catalog Work spec, §8). Each row is one cluster waiting to be
+      // aliased away. Unlike the other four streams this one is load-bearing for
+      // correctness, not just data quality: while a cluster sits here unresolved,
+      // every driver whose custom job it covers is losing maintenance credit.
+      v.literal("alias"),
     ),
     // _id of the source document (enrichment_run, mechanic_verification, …)
     source_id: v.string(),

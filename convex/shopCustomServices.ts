@@ -159,14 +159,48 @@ export const create = mutation({
 
     // Strict gate. Only exact/high confidence blocks — "medium" is a guess, and
     // blocking on a guess would train mechanics to click through it.
-    if (!args.confirmedCustom) {
-      const verdict = matchServiceName(name, await loadCatalog(ctx));
-      if (verdict.confidence === "exact" || verdict.confidence === "high") {
-        return {
-          ok: false as const,
-          blocked: "canonical_match" as const,
-          suggestion: verdict.best,
-        };
+    const verdict = matchServiceName(name, await loadCatalog(ctx));
+    const looksCanonical =
+      verdict.confidence === "exact" || verdict.confidence === "high";
+
+    if (!args.confirmedCustom && looksCanonical) {
+      return {
+        ok: false as const,
+        blocked: "canonical_match" as const,
+        suggestion: verdict.best,
+      };
+    }
+
+    // The mechanic saw the suggestion and made the button anyway. That is the
+    // one case worth an immediate alert rather than the daily digest: unlike a
+    // one-off mislabelled line, this button will be pressed again tomorrow, and
+    // every press costs another driver their maintenance credit.
+    //
+    // Deduped per (shop, match key) so a shop re-confirming the same shortcut
+    // doesn't page anyone twice. Routed through the existing notification_outbox
+    // slack path, same shape as portalStats' SLO breaches.
+    if (args.confirmedCustom && looksCanonical) {
+      const dedupe_key = `custom_shortcut_override:${String(args.shopId)}:${serviceMatchKey(name)}`;
+      const dup = await ctx.db
+        .query("notification_outbox")
+        .withIndex("by_dedupe_key", (q: any) => q.eq("dedupe_key", dedupe_key))
+        .first();
+      if (!dup) {
+        await ctx.db.insert("notification_outbox", {
+          shop_id: args.shopId,
+          mechanic_id: args.mechanicId,
+          channel: "slack",
+          category: "custom_shortcut_override",
+          status: "pending",
+          dedupe_key,
+          payload: {
+            shortcut_name: name,
+            looks_like: verdict.best?.name ?? null,
+            service_id: verdict.best?.serviceId ?? null,
+            confidence: verdict.confidence,
+          },
+          created_at: Date.now(),
+        });
       }
     }
 

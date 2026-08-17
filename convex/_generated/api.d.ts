@@ -568,6 +568,7 @@ import type * as vehicle_pipeline from "../vehicle_pipeline.js";
 import type * as vehicle_specs from "../vehicle_specs.js";
 import type * as vehicles from "../vehicles.js";
 import type * as vinQueueQueries from "../vinQueueQueries.js";
+import type * as walkinVinRepair from "../walkinVinRepair.js";
 import type * as walkin_claims from "../walkin_claims.js";
 import type * as ymmtCatalog from "../ymmtCatalog.js";
 import type * as ymmtPipeline from "../ymmtPipeline.js";
@@ -1139,6 +1140,7 @@ declare const fullApi: ApiFromModules<{
   vehicle_specs: typeof vehicle_specs;
   vehicles: typeof vehicles;
   vinQueueQueries: typeof vinQueueQueries;
+  walkinVinRepair: typeof walkinVinRepair;
   walkin_claims: typeof walkin_claims;
   ymmtCatalog: typeof ymmtCatalog;
   ymmtPipeline: typeof ymmtPipeline;

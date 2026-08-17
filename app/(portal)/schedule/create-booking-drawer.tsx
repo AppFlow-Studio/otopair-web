@@ -1765,7 +1765,7 @@ export default function CreateBookingDrawer({
         >
           <div className="space-y-3">
             <div>
-              <DrawerFieldLabel>VIN <span className="normal-case tracking-normal font-normal text-muted-foreground/60">(Optional)</span></DrawerFieldLabel>
+              <DrawerFieldLabel>VIN <span className="normal-case tracking-normal font-normal text-muted-foreground/60">(Recommended)</span></DrawerFieldLabel>
               <div className="relative">
                 <input
                   type="text"
@@ -1782,6 +1782,19 @@ export default function CreateBookingDrawer({
               {vinLookupState === "error" && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   Couldn&apos;t decode VIN. Enter make/model manually.
+                </p>
+              )}
+              {/* Off-Catalog Work spec, §5. Without a VIN the car gets a
+                  placeholder identity: no decoded engine or options, no parts
+                  fitment, and if the customer later adds the same car properly
+                  it becomes a SECOND car with a separate history — this visit
+                  stranded on the placeholder. The mechanic at the windscreen is
+                  the only person who can prevent that, so tell them why. */}
+              {vin.trim().length === 0 && (
+                <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                  Worth the 20 seconds: without it we can&apos;t pull exact parts
+                  for this car, and if the customer adds it to their own account
+                  later it won&apos;t connect to today&apos;s work.
                 </p>
               )}
               {vinLookupState === "idle" &&

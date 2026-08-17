@@ -20,6 +20,7 @@ import InvoiceNumberField from "@/components/invoice-number-field";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import PostjobReportSection from "@/components/booking/postjob-report-section";
 import SendReceiptCard from "@/components/booking/send-receipt-card";
+import VinRepairPrompt from "@/components/booking/vin-repair-prompt";
 import type { JobActualsPayload } from "@/lib/job-actuals";
 import VehiclePassportCard from "@/components/vehicle-passport-card";
 import JobStepIndicator from "@/components/job-step-indicator";
@@ -2086,6 +2087,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     {job.serviceNames.join(", ")}
                     {job.customerName ? ` · ${job.customerName}` : ""}
                   </p>
+                  {/* Renders only when this booking's car is on a placeholder
+                      VIN (Off-Catalog Work spec, §5). The mechanic has the car;
+                      nobody else can fix it this cheaply. */}
+                  <div className="mt-2">
+                    <VinRepairPrompt
+                      bookingId={String(job._id)}
+                      onDone={(msg) => onSuccess?.(msg)}
+                    />
+                  </div>
                   {(() => {
                     const subtext = getStatusSubtext(job.status);
                     const clock =

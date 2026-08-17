@@ -15,6 +15,7 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
+import { isPseudoVin } from "./lib/vinIdentity";
 
 const CLAIM_TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
@@ -116,6 +117,16 @@ export const resolveClaimToken = query({
       lastName: (user as any).last_name ?? null,
       shopName,
       vehicleSummary,
+      // True when the shop entered this car without a valid VIN, so it's living
+      // on a placeholder identity (Off-Catalog Work spec, §5). The claim page can
+      // set the expectation before sign-up; the actual repair happens afterwards
+      // through walkinVinRepair.submitVinForMyVehicle, which needs an
+      // authenticated owner to authorise it.
+      //
+      // Deliberately not a blocker on claiming — a driver who skips it still gets
+      // their account and their history. The car just stays on a placeholder
+      // until someone supplies the VIN.
+      vehicleNeedsVin: walkin?.vin ? isPseudoVin(walkin.vin) : false,
     };
   },
 });

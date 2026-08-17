@@ -4460,6 +4460,33 @@ export default defineSchema({
     .index("by_recommended_service_id", ["recommended_service_id"])
     .index("by_vehicle_and_status", ["vehicle_vin", "status"]),
 
+  // Audit trail for pseudo-VIN → real-VIN re-keys (Off-Catalog Work spec, §5).
+  //
+  // A walk-in entered without a valid VIN gets a placeholder, and every row about
+  // that car is keyed on it. When the real VIN finally arrives we move all of them
+  // at once — a partial move is worse than none, because it forks one car into two
+  // identities with two service histories.
+  //
+  // `moved` records the per-table counts so the operation is auditable, and
+  // `batch` is the handle a revert would key on. Same shape as the merge ledgers
+  // (make_merge_log, configsMerge) that already exist for this class of
+  // whole-identity rewrite.
+  vin_repair_log: defineTable({
+    from_vin: v.string(),
+    to_vin: v.string(),
+    // Who authorised it: the driver claiming their account, shop staff correcting
+    // a booking, or a director running a repair.
+    trigger: v.string(),
+    actor_user_id: v.optional(v.id("users")),
+    moved: v.any(),
+    skipped: v.optional(v.any()),
+    batch: v.string(),
+    created_at: v.number(),
+  })
+    .index("by_from_vin", ["from_vin"])
+    .index("by_to_vin", ["to_vin"])
+    .index("by_batch", ["batch"]),
+
   // A shop's own shortcuts for off-catalog work they've done before
   // (Off-Catalog Work spec, §3).
   //

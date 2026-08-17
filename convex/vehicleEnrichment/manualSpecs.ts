@@ -133,7 +133,7 @@ const EXTRACTION_TOOL_NAME = "record_vehicle_specifications";
 // Field contract
 // ============================================================================
 
-export type SpecUnit = "qts" | "oz" | "psi" | "ft_lbs" | "text" | "inches";
+export type SpecUnit = "qts" | "oz" | "psi" | "ft_lbs" | "text" | "inches" | "count";
 
 export type SpecFieldDef = {
   /** V4_FIELD_KEYS name — the ledger keys on this. */
@@ -250,6 +250,21 @@ export const SPEC_FIELDS: readonly SpecFieldDef[] = [
     engineSensitive: true,
   },
   {
+    // Added Aug 17 2026. The gap was asked for and the COUNT was not, so a
+    // 2022 Maverick came back with spark_plug_gap_mm = 1.27 and
+    // spark_plug_quantity = null — "how did we find the gap but not the qty"
+    // has a boring answer: nobody asked. The count is what the booking bills
+    // (spark_plugs is a per_cylinder service), so it is the more valuable of
+    // the two, and the manual is the authoritative source for it: it settles
+    // twin-plug engines, which a cylinder-count derivation can only guess at.
+    key: "spark_plug_quantity",
+    unit: "count",
+    hint:
+      "total number of spark plugs the engine takes (NOT the cylinder count — " +
+      "twin-plug engines such as the HEMI take two per cylinder)",
+    engineSensitive: true,
+  },
+  {
     key: "front_wiper_size",
     unit: "inches",
     hint: "front wiper blade length(s) in inches; if driver and passenger differ, report the DRIVER side",
@@ -320,6 +335,7 @@ export function normalizeSpecValue(fieldKey: string, raw: unknown): string | nul
     case "psi":
     case "ft_lbs":
     case "inches":
+    case "count":
       return numStr(raw);
     case "text":
       return textStr(raw);

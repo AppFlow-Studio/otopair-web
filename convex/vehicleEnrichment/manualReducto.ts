@@ -397,12 +397,21 @@ export const extractIntervalsViaReducto = internalAction({
     ctx,
     args,
   ): Promise<{ status: "ok" | "skipped" | "failed"; written: number; skipped: number; reason: string }> => {
-    const none = (status: "skipped" | "failed", reason: string) => ({
-      status,
-      written: 0,
-      skipped: 0,
-      reason,
-    });
+    // A `failed` here used to return its reason to a caller that discarded it,
+    // so the whole rung was invisible: the four Aug-14 proxied manuals all
+    // routed to Reducto, all got `reducto_401: Invalid access token`, and the
+    // runs simply recorded zero intervals. The read looked like "these manuals
+    // had no schedule" when the truth was an expired credential. A dead
+    // fallback that says nothing is worse than no fallback at all — it costs
+    // the round trip AND hides the reason.
+    const none = (status: "skipped" | "failed", reason: string) => {
+      if (status === "failed") {
+        console.error(`[manual-reducto] FAILED: ${reason.slice(0, 300)}`);
+      } else {
+        console.warn(`[manual-reducto] skipped: ${reason.slice(0, 200)}`);
+      }
+      return { status, written: 0, skipped: 0, reason };
+    };
 
     try {
       const apiKey = process.env.REDUCTO_API_KEY;

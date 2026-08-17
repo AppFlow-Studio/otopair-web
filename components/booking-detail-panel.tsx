@@ -70,6 +70,7 @@ import {
 import type {
   JobActualPartPayload,
   PostJobSurveyPayload,
+  CustomJobOutcome,
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
 
@@ -1471,7 +1472,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
     }
 
-    async function handleCompleteWithPostjob(payload: PostJobSurveyPayload) {
+    async function handleCompleteWithPostjob(
+      payload: PostJobSurveyPayload,
+      customJobOutcomes?: CustomJobOutcome[],
+    ) {
       if (!job?._id) return;
       setActionError("");
       setIsSubmittingPostjob(true);
@@ -1479,6 +1483,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         await completeWithPostjob({
           bookingId: job._id,
           postjob: payload,
+          customJobOutcomes:
+            customJobOutcomes && customJobOutcomes.length > 0
+              ? customJobOutcomes
+              : undefined,
         });
         setShowPostjobDialog(false);
         onSuccess?.("Booking completed");

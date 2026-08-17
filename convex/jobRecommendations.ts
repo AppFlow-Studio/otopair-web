@@ -23,6 +23,10 @@ import {
 } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { jobRecommendationInputValidator } from "./lib/vehicle_passports";
+// One ledger for catalog gaps, shared with the custom-job path: a name typed as
+// work-performed and the same name typed as a recommendation are the same signal,
+// and counting them separately would understate every cluster.
+import { bumpPendingServiceSubmission } from "./customJobs";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -74,10 +78,6 @@ function isAdvisory(rec: { recommended_service_id?: unknown }): boolean {
  *  reads the same sentence on the card, in the reminder and in history. */
 export const ADVISORY_DISCLAIMER =
   "Otopair doesn't price or book this service yet — this is the shop's recommendation, not an Otopair estimate.";
-
-function normalizeServiceName(name: string) {
-  return name.trim().toLowerCase().replace(/\s+/g, " ");
-}
 
 async function getCurrentUser(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
@@ -349,33 +349,14 @@ export async function submitRecommendationsForBooking(
     let pendingId: Id<"pending_service_submissions"> | undefined;
     let freeformText: string | undefined;
     if (!hasService) {
-      const normalized = normalizeServiceName(freeform);
-      const existing = await ctx.db
-        .query("pending_service_submissions")
-        .withIndex("by_normalized_name", (q: any) =>
-          q.eq("normalized_name", normalized),
-        )
-        .first();
-      if (existing) {
-        await ctx.db.patch(existing._id, {
-          appearance_count: (existing.appearance_count ?? 0) + 1,
-          last_seen_at: now,
-        });
-        pendingId = existing._id;
-      } else {
-        pendingId = await ctx.db.insert("pending_service_submissions", {
-          proposed_name: freeform,
-          normalized_name: normalized,
-          proposed_reason: rec.reason?.trim() || undefined,
-          submitted_by_mechanic_id: mechanicId,
-          submitted_via_booking_id: booking._id,
-          vehicle_vin: booking.vin,
-          appearance_count: 1,
-          status: "pending",
-          created_at: now,
-          last_seen_at: now,
-        });
-      }
+      pendingId = await bumpPendingServiceSubmission(ctx, {
+        name: freeform,
+        reason: rec.reason ?? null,
+        mechanicId,
+        bookingId: booking._id,
+        vin: booking.vin,
+        now,
+      });
       freeformText = freeform;
     }
 

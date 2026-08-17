@@ -378,12 +378,23 @@ export default function CreateBookingDrawer({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
+  /* Off-catalog lines. `complaint` and `categoryId` don't affect the booking —
+     they populate the custom_jobs row (Off-Catalog Work spec, §7). The complaint
+     is the one field nothing else in the system captures, and it's what lets the
+     director view tell what a cluster of names actually is. */
   const [customServices, setCustomServices] = useState<
-    Array<{ name: string; durationMinutes?: number }>
+    Array<{
+      name: string;
+      durationMinutes?: number;
+      complaint?: string;
+      categoryId?: string;
+    }>
   >([]);
   const [showCustomForm, setShowCustomForm] = useState(false);
   const [customDraftName, setCustomDraftName] = useState("");
   const [customDraftMinutes, setCustomDraftMinutes] = useState("");
+  const [customDraftComplaint, setCustomDraftComplaint] = useState("");
+  const [customDraftCategoryId, setCustomDraftCategoryId] = useState("");
 
   /* ---- Customer states / notes ---- */
   const [customerNotes, setCustomerNotes] = useState("");
@@ -1142,6 +1153,14 @@ export default function CreateBookingDrawer({
     });
   };
 
+  const resetCustomDraft = () => {
+    setShowCustomForm(false);
+    setCustomDraftName("");
+    setCustomDraftMinutes("");
+    setCustomDraftComplaint("");
+    setCustomDraftCategoryId("");
+  };
+
   /* The services this shop actually offers. The match gate scores against the
      whole catalog, but suggesting a service that isn't in `categories` would
      put an id in selectedIds that the duration/price maths can't resolve — so
@@ -1234,7 +1253,15 @@ export default function CreateBookingDrawer({
         scheduledDate: date,
         scheduledTime: time,
         serviceIds: Array.from(selectedIds) as Id<"services">[],
-        customServices: customServices.length > 0 ? customServices : undefined,
+        customServices:
+          customServices.length > 0
+            ? (customServices.map((c) => ({
+                name: c.name,
+                durationMinutes: c.durationMinutes,
+                complaint: c.complaint,
+                categoryId: c.categoryId as Id<"service_categories"> | undefined,
+              })) as never)
+            : undefined,
         customerNotes: customerNotes.trim() || undefined,
         diagnosticSystem: isDiagnostic && diagnosticSystem ? diagnosticSystem : undefined,
         mechanicId: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
@@ -1359,7 +1386,15 @@ export default function CreateBookingDrawer({
         scheduledDate: date,
         scheduledTime: time,
         serviceIds: Array.from(selectedIds) as Id<"services">[],
-        customServices: customServices.length > 0 ? customServices : undefined,
+        customServices:
+          customServices.length > 0
+            ? (customServices.map((c) => ({
+                name: c.name,
+                durationMinutes: c.durationMinutes,
+                complaint: c.complaint,
+                categoryId: c.categoryId as Id<"service_categories"> | undefined,
+              })) as never)
+            : undefined,
         customerNotes: customerNotes.trim() || undefined,
         diagnosticSystem:
           isDiagnostic && diagnosticSystem ? diagnosticSystem : undefined,
@@ -1931,19 +1966,46 @@ export default function CreateBookingDrawer({
                   offeredServiceIds={offeredServiceIds}
                   onUseService={(id) => {
                     toggleService(id);
-                    setShowCustomForm(false);
-                    setCustomDraftName("");
-                    setCustomDraftMinutes("");
+                    resetCustomDraft();
                   }}
                 />
+                {/* Why the work is happening. Optional, but it's the field that
+                    turns "walnut blast" from a string into something we can
+                    understand well enough to decide whether to build it. */}
+                <textarea
+                  value={customDraftComplaint}
+                  onChange={(e) => setCustomDraftComplaint(e.target.value)}
+                  placeholder="What did the customer report, or what did you see? (optional)"
+                  className="w-full min-h-[52px] resize-y rounded-lg border border-border bg-background px-2.5 py-2 text-xs leading-relaxed outline-none focus:border-primary"
+                />
+                <Select
+                  selectedKey={customDraftCategoryId || null}
+                  onSelectionChange={(key) =>
+                    setCustomDraftCategoryId(key == null ? "" : String(key))
+                  }
+                  placeholder="Category (optional)"
+                >
+                  <SelectTrigger className={drawerSelectTriggerClassName}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopover placement="bottom start">
+                    <SelectListBox shouldFocusWrap>
+                      {categories.map((c: any) => (
+                        <SelectItem
+                          key={String(c._id)}
+                          id={String(c._id)}
+                          textValue={c.name}
+                        >
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectListBox>
+                  </SelectPopover>
+                </Select>
                 <div className="flex gap-2 justify-end">
                   <button
                     type="button"
-                    onClick={() => {
-                      setShowCustomForm(false);
-                      setCustomDraftName("");
-                      setCustomDraftMinutes("");
-                    }}
+                    onClick={resetCustomDraft}
                     className="px-3 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
                   >
                     Cancel
@@ -1957,11 +2019,14 @@ export default function CreateBookingDrawer({
                       const mins = customDraftMinutes ? Number(customDraftMinutes) : NaN;
                       setCustomServices((prev) => [
                         ...prev,
-                        { name, durationMinutes: Number.isFinite(mins) && mins > 0 ? mins : undefined },
+                        {
+                          name,
+                          durationMinutes: Number.isFinite(mins) && mins > 0 ? mins : undefined,
+                          complaint: customDraftComplaint.trim() || undefined,
+                          categoryId: customDraftCategoryId || undefined,
+                        },
                       ]);
-                      setShowCustomForm(false);
-                      setCustomDraftName("");
-                      setCustomDraftMinutes("");
+                      resetCustomDraft();
                     }}
                     className="px-3 py-1.5 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
                   >

@@ -45,6 +45,10 @@ import {
   evaluateRescheduleLimit,
 } from "./lib/cancellation_policy";
 import { mintClaimToken } from "./walkin_claims";
+import {
+  recordCustomJobsForBooking,
+  completeCustomJobsForBooking,
+} from "./customJobs";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
@@ -10620,6 +10624,25 @@ export const completeWithPostjob = mutation({
   args: {
     bookingId: v.id("bookings"),
     postjob: postjobReportValidator,
+    // Outcome per off-catalog line (Off-Catalog Work spec, §7). A separate arg
+    // rather than a field inside postjobReportValidator: that validator is
+    // shared with the draft/save path and the receipt builders, and widening it
+    // would ripple through all of them for data none of them consume.
+    //
+    // Optional and matched by name, so a client that doesn't send outcomes still
+    // completes normally — the jobs just close with no outcome recorded, which
+    // the director view reports as exactly that.
+    customJobOutcomes: v.optional(
+      v.array(
+        v.object({
+          name: v.string(),
+          actual_minutes: v.optional(v.number()),
+          charged_price_cents: v.optional(v.number()),
+          resolution: v.optional(v.string()),
+          resolved_complaint: v.optional(v.boolean()),
+        }),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -10715,6 +10738,17 @@ export const completeWithPostjob = mutation({
         now,
       });
     }
+
+    // Close out this booking's off-catalog work. Runs unconditionally so that a
+    // booking with custom lines but no reported outcomes still leaves them
+    // "completed with nothing recorded" rather than stuck at "planned" forever —
+    // the two mean different things to the director view.
+    await completeCustomJobsForBooking(ctx, {
+      bookingId: booking._id,
+      jobActualId: jobActual._id,
+      outcomes: args.customJobOutcomes ?? [],
+      now,
+    });
 
     if (booking.status !== "completed") {
       await applyBookingStatusTransition(ctx, {
@@ -11376,6 +11410,11 @@ export const createByShop = mutation({
         v.object({
           name: v.string(),
           durationMinutes: v.optional(v.float64()),
+          // Off-catalog extraction fields (Off-Catalog Work spec, §7). These
+          // don't affect the booking itself — they populate the custom_jobs row
+          // so the director view can eventually tell what this work actually is.
+          complaint: v.optional(v.string()),
+          categoryId: v.optional(v.id("service_categories")),
         })
       )
     ),
@@ -11758,6 +11797,24 @@ export const createByShop = mutation({
     // Atomic with the insert above: free the hold now that the booking owns it.
     await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
+    // Structured record for each off-catalog line (Off-Catalog Work spec, §7).
+    // Same transaction as the booking insert — a custom_jobs row without its
+    // booking, or a booking whose custom work left no record, is a reporting lie.
+    if (args.customServices?.length) {
+      await recordCustomJobsForBooking(ctx, {
+        booking: { _id: bookingId, shop_id: args.shopId, vin: canonicalVin },
+        mechanicId: resolvedMechanicId ?? args.mechanicId,
+        customJobs: args.customServices.map((c: any) => ({
+          name: String(c.name),
+          category_id: c.categoryId ?? null,
+          complaint: c.complaint ?? null,
+          estimated_minutes: c.durationMinutes ?? null,
+        })),
+        source: "booking",
+        now,
+      });
+    }
+
     // Per-service labor quote snapshots support analytics without joining
     // bookings through vehicles and vehicle configs on every query.
     if (existingVehicle) {
@@ -12043,6 +12100,9 @@ export const backfillCompletedBooking = mutation({
         v.object({
           name: v.string(),
           durationMinutes: v.optional(v.float64()),
+          // See the note on createWalkinBooking's copy of this validator.
+          complaint: v.optional(v.string()),
+          categoryId: v.optional(v.id("service_categories")),
         }),
       ),
     ),
@@ -12342,6 +12402,35 @@ export const backfillCompletedBooking = mutation({
       mechanic_quoted_price: args.mechanicQuotedPrice,
       catalog_quoted_price: args.catalogQuotedPrice,
     });
+
+    // Off-catalog records for a backfill. This path logs work that already
+    // happened, so the rows are created AND closed here — there's no future
+    // post-job survey to collect an outcome from. `actual_minutes` is the
+    // mechanic's reported duration, which on a backfill is the truth rather
+    // than an estimate.
+    if (args.customServices?.length) {
+      const customJobInputs = args.customServices.map((c: any) => ({
+        name: String(c.name),
+        category_id: c.categoryId ?? null,
+        complaint: c.complaint ?? null,
+        estimated_minutes: c.durationMinutes ?? null,
+      }));
+      await recordCustomJobsForBooking(ctx, {
+        booking: { _id: bookingId, shop_id: args.shopId, vin: canonicalVin },
+        mechanicId: args.mechanicId,
+        customJobs: customJobInputs,
+        source: "backfill",
+        now,
+      });
+      await completeCustomJobsForBooking(ctx, {
+        bookingId,
+        outcomes: customJobInputs.map((c) => ({
+          name: c.name,
+          actual_minutes: c.estimated_minutes,
+        })),
+        now,
+      });
+    }
 
     // ── Per-service labor_quote_snapshots — denormalized aggregation rows
     //    so analytics can ask "for service X at shop Y on engine Z, what's

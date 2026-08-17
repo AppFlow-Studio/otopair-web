@@ -17,6 +17,7 @@ import ConfirmationDialog from "@/components/confirmation-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
 import type {
   PostJobSurveyPayload,
+  CustomJobOutcome,
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
 import {
@@ -309,7 +310,10 @@ export default function MechanicDashboard() {
     }
   }
 
-  async function handleCompleteAction(payload: PostJobSurveyPayload) {
+  async function handleCompleteAction(
+    payload: PostJobSurveyPayload,
+    customJobOutcomes?: CustomJobOutcome[],
+  ) {
     if (!workflowBookingId) return;
 
     setBusyAction(`complete:${String(workflowBookingId)}`);
@@ -317,6 +321,10 @@ export default function MechanicDashboard() {
       await completeWithPostjob({
         bookingId: workflowBookingId,
         postjob: payload,
+        customJobOutcomes:
+          customJobOutcomes && customJobOutcomes.length > 0
+            ? customJobOutcomes
+            : undefined,
       });
       setToast("Booking completed");
       closeWorkflowDialog();

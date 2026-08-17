@@ -341,6 +341,29 @@ export type PostJobSurveyPayload = {
   recommendations?: JobRecommendationInput[];
 };
 
+/**
+ * Outcome for one off-catalog line on a booking (Off-Catalog Work spec, §7).
+ *
+ * Travels as a SEPARATE argument to completeWithPostjob rather than a field on
+ * PostJobSurveyPayload: that payload maps 1:1 onto postjobReportValidator, which
+ * is shared with the draft-save path and the receipt builders, and Convex would
+ * reject an unexpected field there.
+ *
+ * Matched to its custom_jobs row by name (via the same normalisation the match
+ * gate uses), not by array index — the mechanic may have added or removed lines
+ * between booking and completion, and index-matching would write one job's
+ * outcome onto another.
+ */
+export type CustomJobOutcome = {
+  name: string;
+  actual_minutes?: number;
+  charged_price_cents?: number;
+  /** What was actually done. */
+  resolution?: string;
+  /** Did it fix the complaint? Closes the symptom → action → outcome triple. */
+  resolved_complaint?: boolean;
+};
+
 type VehicleUpdatePrompt = {
   key: keyof VehicleUpdateValues;
   label: string;

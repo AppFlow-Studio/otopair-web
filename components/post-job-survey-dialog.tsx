@@ -60,6 +60,7 @@ import {
   type PartsAccuracyStatus,
   type PostjobPhotoInput,
   type PostJobSurveyPayload,
+  type CustomJobOutcome,
   type RecommendationUrgency,
   type TimeVariance,
   type TimeVarianceReason,
@@ -268,6 +269,7 @@ type StepKey =
   | "vehicle_updates"
   | "photos"
   | "tip"
+  | "custom_outcomes"
   | "recommendations"
   | "flag"
   | "summary";
@@ -729,7 +731,10 @@ export default function PostJobSurveyDialog({
   prefillData: PostJobPrefillData;
   isSubmitting: boolean;
   onClose: () => void;
-  onSubmit: (payload: PostJobSurveyPayload) => Promise<void>;
+  onSubmit: (
+    payload: PostJobSurveyPayload,
+    customJobOutcomes?: CustomJobOutcome[],
+  ) => Promise<void>;
   initialTechnicianNotes?: string;
   initialPhotos?: PhotoState[];
   cycle?: PostJobSurveyCycle;
@@ -832,7 +837,10 @@ function PostJobSurveyDialogBody({
   prefillData: PostJobPrefillData;
   isSubmitting: boolean;
   onClose: () => void;
-  onSubmit: (payload: PostJobSurveyPayload) => Promise<void>;
+  onSubmit: (
+    payload: PostJobSurveyPayload,
+    customJobOutcomes?: CustomJobOutcome[],
+  ) => Promise<void>;
   initialTechnicianNotes: string;
   initialPhotos: PhotoState[];
   cycle?: PostJobSurveyCycle;
@@ -1027,6 +1035,19 @@ function PostJobSurveyDialogBody({
     useState<PartsAccuracyStatus | null>(null);
   const [partsAccuracyFeedback, setPartsAccuracyFeedback] = useState("");
   const [additionalObservations, setAdditionalObservations] = useState("");
+
+  /* ── Off-catalog outcomes (Off-Catalog Work spec, §7) ───────────────────────
+     The custom lines on this booking, and what the mechanic reports about each.
+     `resolution` + `resolved_complaint` close the triple that the complaint
+     opened at booking time: symptom → what we did → whether it worked. That's
+     the whole reason to capture any of this. */
+  const customJobs = useQuery(
+    api.customJobs.listForBooking,
+    open && bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
+  );
+  const [customJobOutcomes, setCustomJobOutcomes] = useState<
+    Record<string, { resolution: string; resolved: boolean | null }>
+  >({});
   const [recommendations, setRecommendations] = useState<RecRowState[]>([]);
   const [photos, setPhotos] = useState<PhotoState[]>(initialPhotos);
   const [error, setError] = useState("");
@@ -1060,6 +1081,10 @@ function PostJobSurveyDialogBody({
     // recommendations, time/difficulty). The 3-step "Adjust quote" flow is:
     // Parts → Labor → Summary (which doubles as the reasoning + send screen).
     if (!isEstimateCycle) {
+      // Off-catalog outcomes (Off-Catalog Work spec, §7). Only shown when the
+      // booking actually carries custom lines, so the survey doesn't grow a
+      // dead step for the overwhelming majority of bookings.
+      if ((customJobs?.length ?? 0) > 0) list.push("custom_outcomes");
       list.push("flag");
       list.push("time_check");
       if (timeVariance && timeVariance !== "on_time") list.push("time_reason");
@@ -1076,6 +1101,9 @@ function PostJobSurveyDialogBody({
     requiresParts,
     prefillData?.suggestedParts?.length,
     updatePrompts.length,
+    // The custom-outcomes step appears only for bookings with off-catalog lines,
+    // and this query resolves after first render.
+    customJobs?.length,
   ]);
 
   // ─── Estimate-cycle running total ──────────────────────────────────────
@@ -1448,7 +1476,24 @@ function PostJobSurveyDialogBody({
             tire_specs: r.tire_specs ?? null,
           };
         }),
-    });
+      },
+      // Only send lines the mechanic actually reported on. An untouched line
+      // still closes server-side, but as "completed, no outcome recorded" —
+      // which the director view reports honestly rather than inventing a result.
+      (customJobs ?? []).flatMap<CustomJobOutcome>((job) => {
+        const entry = customJobOutcomes[job._id];
+        if (!entry) return [];
+        if (!entry.resolution.trim() && entry.resolved === null) return [];
+        return [
+          {
+            name: job.name,
+            resolution: entry.resolution.trim() || undefined,
+            resolved_complaint:
+              entry.resolved === null ? undefined : entry.resolved,
+          },
+        ];
+      }),
+    );
   }
 
   async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
@@ -1666,6 +1711,9 @@ function PostJobSurveyDialogBody({
 
           <StepContent
             step={currentStep}
+            customJobs={customJobs}
+            customJobOutcomes={customJobOutcomes}
+            setCustomJobOutcomes={setCustomJobOutcomes}
             readOnlyBilling={lockBilling && !cycle}
             lockedQuote={lockedQuote}
             bookingLabel={bookingLabel}
@@ -1908,6 +1956,11 @@ function canAdvance(
 
 function StepContent(props: {
   step: StepKey;
+  customJobs: CustomJobRow[] | undefined;
+  customJobOutcomes: Record<string, { resolution: string; resolved: boolean | null }>;
+  setCustomJobOutcomes: (
+    next: Record<string, { resolution: string; resolved: boolean | null }>,
+  ) => void;
   readOnlyBilling: boolean;
   lockedQuote: LockedQuote | null;
   bookingLabel: string;
@@ -2314,6 +2367,14 @@ function StepContent(props: {
             className="min-h-[140px] w-full resize-y rounded-xl border border-primary/15 bg-background px-4 py-3 text-[14px] leading-relaxed outline-none focus:border-primary"
           />
         </QuestionScreen>
+      );
+    case "custom_outcomes":
+      return (
+        <CustomOutcomesStep
+          jobs={props.customJobs ?? []}
+          outcomes={props.customJobOutcomes}
+          setOutcomes={props.setCustomJobOutcomes}
+        />
       );
     case "recommendations":
       return (
@@ -2853,6 +2914,13 @@ function PartsStep({
             const sourcesUsed = oemRec?.price_sources_used ?? 0;
             const avgPrice = oemRec?.average_price ?? 0;
             const medianPrice = oemRec?.median_price ?? 0;
+            // A shop-supplied row that resolved to $0 — the catalog had no
+            // trustworthy price for this part (e.g. every source was
+            // discount-typed and got filtered out of the aggregate). Surface it
+            // as "unpriced" and prompt the mechanic to set the real price,
+            // rather than letting the line silently bill $0.
+            const costNum = Number(part.cost) || 0;
+            const isUnpriced = !isCustomer && costNum <= 0;
             // Identity (name / brand / OEM number) is locked when the row was
             // seeded from the catalog. Mechanic-added "manual" rows stay fully
             // editable. Falls back to isOemRecommended for legacy rows that
@@ -3000,43 +3068,85 @@ function PartsStep({
                     {/* Otopair price line / cost editor — suppressed when the
                         mechanic flagged the row Not used; price doesn't apply
                         when the part didn't go in. */}
-                    {!isNotUsed && (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
-                      <span className="text-muted-foreground">
-                        {isCustomer ? "Customer-supplied:" : "Price per unit: "}
-                      </span>
-                      {isCustomer ? (
-                        <span className="font-medium text-muted-foreground">$0</span>
-                      ) : (
-                        <div className="flex items-center gap-1">
-                          <span className="text-muted-foreground">$</span>
-                          <FixedCentCurrencyInput
-                            value={part.cost}
-                            onValueChange={(value) =>
-                              updatePart(index, {
-                                cost: value,
-                              })
-                            }
-                            placeholder={
-                              medianPrice > 0
-                                ? medianPrice.toFixed(2)
-                                : avgPrice > 0
-                                  ? avgPrice.toFixed(2)
-                                  : "0.00"
-                            }
-                            title={
-                              isOemRecommended && sourcesUsed > 0 && medianPrice > 0
-                                ? `Otopair median $${medianPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
-                                : isOemRecommended && sourcesUsed > 0 && avgPrice > 0
-                                  ? `Otopair average $${avgPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
-                                  : undefined
-                            }
-                            className="h-6 w-20 rounded-md border border-primary/10 bg-background px-1.5 text-[12px] font-medium tabular-nums outline-none focus:border-primary/30"
-                          />
+                    {!isNotUsed &&
+                      (isCustomer ? (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
+                          <span className="text-muted-foreground">
+                            Customer-supplied:
+                          </span>
+                          <span className="font-medium text-muted-foreground">$0</span>
                         </div>
-                      )}
-                    </div>
-                    )}
+                      ) : (
+                        // Keep the price input mounted in a fixed position across
+                        // the unpriced→priced transition — the fixed-cent input
+                        // flips cost > 0 on the first digit, so remounting it
+                        // would steal focus mid-type. Only the warning banner and
+                        // styling toggle on `isUnpriced`.
+                        <div className="mt-2 space-y-1.5">
+                          {isUnpriced ? (
+                            <div className="flex items-start gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5">
+                              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                              <div className="min-w-0">
+                                <span className="text-[12px] font-semibold text-amber-800">
+                                  This part is unpriced
+                                </span>
+                                <p className="text-[11px] leading-snug text-amber-700">
+                                  Otopair doesn&apos;t have a price on file — enter the
+                                  price per unit you&apos;re charging.
+                                </p>
+                              </div>
+                            </div>
+                          ) : null}
+                          <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                            <span
+                              className={
+                                isUnpriced
+                                  ? "font-medium text-amber-800"
+                                  : "text-muted-foreground"
+                              }
+                            >
+                              Price per unit:
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <span
+                                className={
+                                  isUnpriced ? "text-amber-800" : "text-muted-foreground"
+                                }
+                              >
+                                $
+                              </span>
+                              <FixedCentCurrencyInput
+                                value={part.cost}
+                                onValueChange={(value) =>
+                                  updatePart(index, {
+                                    cost: value,
+                                  })
+                                }
+                                placeholder={
+                                  medianPrice > 0
+                                    ? medianPrice.toFixed(2)
+                                    : avgPrice > 0
+                                      ? avgPrice.toFixed(2)
+                                      : "0.00"
+                                }
+                                title={
+                                  isOemRecommended && sourcesUsed > 0 && medianPrice > 0
+                                    ? `Otopair median $${medianPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
+                                    : isOemRecommended && sourcesUsed > 0 && avgPrice > 0
+                                      ? `Otopair average $${avgPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
+                                      : undefined
+                                }
+                                className={cn(
+                                  "h-6 rounded-md border bg-background px-1.5 text-[12px] font-medium tabular-nums outline-none",
+                                  isUnpriced
+                                    ? "w-24 border-amber-400 text-amber-900 focus:border-amber-500"
+                                    : "w-20 border-primary/10 focus:border-primary/30",
+                                )}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                   </div>
                   {/* Quantity stepper — hidden alongside the price input when
                       the row is flagged Not used. */}
@@ -4322,6 +4432,119 @@ function ServicePickerModal({
         </div>
       </div>
     </div>
+  );
+}
+
+type CustomJobRow = {
+  _id: string;
+  name: string;
+  complaint: string | null;
+  resolution: string | null;
+  resolved_complaint: boolean | null;
+};
+
+/**
+ * Outcome capture for off-catalog work (Off-Catalog Work spec, §7).
+ *
+ * The complaint was recorded when the line was added. This closes the triple:
+ * symptom → what we did → whether it worked. Those three together are a labelled
+ * training example for symptom→service, produced as a by-product of a mechanic
+ * finishing a job, and nothing else in the schema captures them.
+ *
+ * Everything here is optional. A skipped line still closes server-side as
+ * "completed, no outcome recorded", which the director view reports as exactly
+ * that rather than guessing.
+ */
+function CustomOutcomesStep({
+  jobs,
+  outcomes,
+  setOutcomes,
+}: {
+  jobs: CustomJobRow[];
+  outcomes: Record<string, { resolution: string; resolved: boolean | null }>;
+  setOutcomes: (
+    next: Record<string, { resolution: string; resolved: boolean | null }>,
+  ) => void;
+}) {
+  const entryFor = (id: string) =>
+    outcomes[id] ?? { resolution: "", resolved: null };
+
+  const update = (
+    id: string,
+    patch: Partial<{ resolution: string; resolved: boolean | null }>,
+  ) => setOutcomes({ ...outcomes, [id]: { ...entryFor(id), ...patch } });
+
+  return (
+    <QuestionScreen
+      eyebrow="Custom work"
+      question={
+        jobs.length === 1
+          ? "How did the custom work go?"
+          : "How did the custom work go?"
+      }
+      hint="Off-catalog work doesn't affect the customer's vehicle health score — this is for our records."
+    >
+      <div className="space-y-3">
+        {jobs.map((job) => {
+          const entry = entryFor(job._id);
+          return (
+            <div
+              key={job._id}
+              className="rounded-xl border border-primary/15 bg-background p-3"
+            >
+              <p className="text-[13px] font-semibold text-foreground">
+                {job.name}
+              </p>
+              {job.complaint ? (
+                <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  Reported: {job.complaint}
+                </p>
+              ) : null}
+
+              <textarea
+                value={entry.resolution}
+                onChange={(event) =>
+                  update(job._id, { resolution: event.target.value })
+                }
+                placeholder="What did you actually do? (optional)"
+                className="mt-2 min-h-[64px] w-full resize-y rounded-lg border border-primary/15 bg-background px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-primary"
+              />
+
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-[11px] text-muted-foreground">
+                  Did it fix the problem?
+                </span>
+                {[
+                  { label: "Yes", value: true },
+                  { label: "No", value: false },
+                ].map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    onClick={() =>
+                      update(job._id, {
+                        // Tapping the active answer clears it — the mechanic can
+                        // get back to "not answered" without reopening the dialog.
+                        resolved:
+                          entry.resolved === option.value ? null : option.value,
+                      })
+                    }
+                    className={cn(
+                      "rounded-md border px-2.5 py-1 text-[11px] font-semibold transition-colors",
+                      entry.resolved === option.value
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-primary/20 text-muted-foreground hover:bg-primary/5",
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </QuestionScreen>
   );
 }
 

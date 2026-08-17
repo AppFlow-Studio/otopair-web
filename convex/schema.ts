@@ -4454,6 +4454,79 @@ export default defineSchema({
     .index("by_recommended_service_id", ["recommended_service_id"])
     .index("by_vehicle_and_status", ["vehicle_vin", "status"]),
 
+  // One structured record per piece of off-catalog work (Off-Catalog Work
+  // spec, §7). `bookings.custom_services[]` stays as the lightweight display
+  // and scheduling copy — this table is the extraction spine.
+  //
+  // The two fields that don't exist anywhere else in the schema are `complaint`
+  // and `resolution`. Together with `resolved_complaint` they bracket the work
+  // into a symptom → action → outcome triple, produced as a by-product of a
+  // mechanic doing their job. Everything else here (labor, price, parts) is
+  // already captured in the *_quote_snapshots tables; the reasoning is not.
+  //
+  // NOTHING in this table may influence the Vehicle Health Score. See the
+  // CUSTOM JOB INVARIANT comments in bookings.ts and jobRecommendations.ts.
+  custom_jobs: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    mechanic_id: v.optional(v.id("mechanics")),
+    vehicle_vin: v.string(),
+    // Scopes labor/price evidence to a real engine + chassis. Null on
+    // pseudo-VIN walk-ins, which is exactly why VIN capture matters — unscoped,
+    // the numbers here are anecdotes.
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+
+    // What the mechanic typed, plus both normalised forms:
+    //   normalized_name — normalizeServiceName, the pending_service_submissions key
+    //   match_key       — serviceMatchKey, the clustering key (order-insensitive)
+    // Two keys because the two normalisers are deliberately different; see
+    // convex/lib/serviceMatch.ts.
+    name: v.string(),
+    normalized_name: v.string(),
+    match_key: v.string(),
+    category_id: v.optional(v.id("service_categories")),
+
+    // The reasoning. `complaint` is why the work happened, `resolution` is what
+    // was actually done, `resolved_complaint` is whether it worked.
+    complaint: v.optional(v.string()),
+    resolution: v.optional(v.string()),
+    resolved_complaint: v.optional(v.boolean()),
+
+    estimated_minutes: v.optional(v.number()),
+    actual_minutes: v.optional(v.number()),
+    quoted_price_cents: v.optional(v.number()),
+    charged_price_cents: v.optional(v.number()),
+
+    // Set once the job completes and the post-job report lands.
+    job_actual_id: v.optional(v.id("job_actuals")),
+    // The dedupe ledger row this name bumped, so the director view can join
+    // cluster counts to individual jobs.
+    pending_service_submission_id: v.optional(
+      v.id("pending_service_submissions"),
+    ),
+    // The shop shortcut this job came from, when it was pressed rather than
+    // typed. Declared here in Phase 3 so Phase 4 needs no migration; the
+    // shop_custom_services table arrives with that phase.
+    shop_custom_service_id: v.optional(v.string()),
+
+    // Where it was entered: "booking" (create-booking drawer), "mid_job",
+    // "post_job", or "recommendation" (advisory that was later performed).
+    source: v.string(),
+    status: v.union(
+      v.literal("planned"),
+      v.literal("completed"),
+      v.literal("cancelled"),
+    ),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_shop", ["shop_id"])
+    .index("by_vehicle_vin", ["vehicle_vin"])
+    .index("by_match_key", ["match_key"])
+    .index("by_status", ["status"])
+    .index("by_created_at", ["created_at"]),
+
   // Alternate names that resolve to a canonical service. Written by hand from
   // the director side when somebody recognises a cluster of custom jobs as
   // work we already offer ("carbon clean" → Fuel System Cleaning).

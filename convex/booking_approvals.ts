@@ -776,6 +776,35 @@ export const getOpenApprovalForBooking = query({
  * the numbers reconcile. Returns null when no adjustment was approved (the
  * caller then falls back to the booking's original quote).
  */
+/**
+ * Approval rows, genuinely newest-first.
+ *
+ * ─── WHY THIS EXISTS ────────────────────────────────────────────────────────
+ * `.order("desc")` on `by_booking_and_cycle` does NOT give you this. That index
+ * is ["booking_id", "cycle"], so descending sorts by the CYCLE STRING:
+ *
+ *     "pre_job"  >  "post_job"  >  "mid_job"
+ *
+ * So "the first row" was always the pre-job one, whatever had happened since.
+ * Three separate reads took that first row as "latest" — including the
+ * customer-facing receipt — which meant a mid-job change the customer had
+ * approved and paid for was invisible downstream: the post-job confirmation
+ * showed the original parts list and the original total, short by exactly the
+ * work that had just been added.
+ *
+ * Sort by when the customer actually answered. `_creationTime` covers rows
+ * written before `decided_at_ms` existed.
+ */
+function approvalsNewestFirst<T extends { decided_at_ms?: number; _creationTime?: number }>(
+  rows: T[],
+): T[] {
+  return [...rows].sort(
+    (a, b) =>
+      (b.decided_at_ms ?? b._creationTime ?? 0) -
+      (a.decided_at_ms ?? a._creationTime ?? 0),
+  );
+}
+
 export const getEffectiveQuoteForBooking = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -817,8 +846,20 @@ export const getEffectiveQuoteForBooking = query({
       "approved",
       "auto_approved_within_range",
     ]);
-    // Latest approved row wins (rows are newest-first).
-    const eff = rows.find(
+    // ─── ORDER BY TIME, NOT BY INDEX ──────────────────────────────────────
+    // `by_booking_and_cycle` is ["booking_id", "cycle"], so `.order("desc")`
+    // sorts by the CYCLE STRING — not by recency, whatever the previous
+    // comment here claimed. Descending that reads
+    // "pre_job" > "post_job" > "mid_job", so the first approved row found was
+    // always the PRE-JOB one.
+    //
+    // The effect: every mid-job change the customer approved was invisible to
+    // the post-job confirmation. The mechanic confirmed against the original
+    // quote — the extra work missing from the parts list and the total short
+    // by whatever had been added — while the booking itself carried the
+    // correct, higher figure. Two numbers for one job, and the wrong one in
+    // front of the person signing it off.
+    const eff = approvalsNewestFirst(rows as any[]).find(
       (r: any) =>
         APPROVED.has(r.decision ?? "") &&
         r.parts_subtotal_cents != null &&
@@ -901,7 +942,10 @@ export const getReauthBreakdownForBooking = query({
       .order("desc")
       .collect();
     const APPROVED = new Set(["approved", "auto_approved_within_range"]);
-    const eff = rows.find(
+    // Newest by decision time — see approvalsNewestFirst. This one is the
+    // customer's own view, so picking the pre-job row showed them a receipt
+    // for work they'd already agreed to change.
+    const eff = approvalsNewestFirst(rows as any[]).find(
       (r: any) =>
         APPROVED.has(r.decision ?? "") &&
         r.parts_subtotal_cents != null &&
@@ -1147,8 +1191,9 @@ export const getBookingApprovalState = query({
       )
       .order("desc")
       .collect();
-    const latest = rows[0] ?? null;
-    const open = rows.find((r: any) => r.decision == null) ?? null;
+    const byTime = approvalsNewestFirst(rows as any[]);
+    const latest = byTime[0] ?? null;
+    const open = byTime.find((r: any) => r.decision == null) ?? null;
 
     return {
       booking_status: (booking as any).status as string,

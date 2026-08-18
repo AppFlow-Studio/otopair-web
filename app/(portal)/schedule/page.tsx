@@ -33,6 +33,7 @@ import {
   type BookingStatus,
 } from "@/lib/booking-status";
 import { usePortalSidebar } from "../portal-context";
+import OpenBlockersBar from "@/components/mechanic/open-blockers-bar";
 import {
   statusColors,
   dateToString,
@@ -1593,6 +1594,11 @@ export default function SchedulePage() {
       </div>
 
       {/* Toolbar: nav + view switcher + mechanic filter */}
+      {/* Stopped jobs, above the board. A blocker rendered only inside its own
+          job's overlay ages silently — nobody opens the overlay of a car they've
+          stopped thinking about (Flag Issue spec, §5). */}
+      <OpenBlockersBar onOpenBooking={(id) => setSelectedBookingId(id)} />
+
       <div className="bg-card border border-border rounded-xl p-4">
         <div className="flex items-center justify-between flex-wrap gap-3">
           {/* Left: navigation */}

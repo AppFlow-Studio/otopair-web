@@ -327,6 +327,13 @@ describe("opening and resolving", () => {
 
   it("refuses a damage report with no photo", async () => {
     // A damage report without a photo is an assertion, not a record.
+    //
+    // REGRESSION: the flag sheet used to say "we'll attach the most recent ones"
+    // and then send nothing, so this throw fired on every real damage report —
+    // the copy promised a behaviour that didn't exist. The sheet now makes the
+    // mechanic pick which of the job's photos show it, and disables the button
+    // until they have. Both halves have to hold: the server refuses, and the UI
+    // must never claim otherwise.
     const t = makeT();
     const base = await seed(t);
     await expect(
@@ -336,6 +343,28 @@ describe("opening and resolving", () => {
         note: "Scuffed the arch",
       }),
     ).rejects.toThrow(/photo is required/i);
+  });
+
+  it("accepts a damage report with photos attached", async () => {
+    const t = makeT();
+    const base = await seed(t);
+    const storageId = await t.run(async (ctx: any) =>
+      ctx.storage.store(new Blob(["photo"])),
+    );
+    const res: any = await t
+      .withIdentity(identityFor(STAFF))
+      .mutation(api.jobBlockers.openBlocker, {
+        bookingId: base.bookingId,
+        kind: "damage",
+        note: "Scuffed the rear arch on the lift",
+        photos: [{ storage_id: storageId, taken_at: Date.now() }],
+      });
+    expect(res.ok).toBe(true);
+
+    const rows = await t.run(async (ctx: any) =>
+      ctx.db.query("job_blockers").collect(),
+    );
+    expect(rows[0].photos).toHaveLength(1);
   });
 
   it("refuses an empty note — the note is what routes it", async () => {

@@ -106,9 +106,18 @@ export default function FlagIssueSheet({
   onClose,
   onAddScope,
   onToast,
+  jobPhotos = [],
 }: {
   bookingId: Id<"bookings">;
   onClose: () => void;
+  /** The job's in-progress photos, passed down rather than re-queried — the
+   *  overlay already has them, and a damage report has to attach real ones. */
+  jobPhotos?: Array<{
+    storageId: string;
+    caption: string | null;
+    takenAt: number;
+    url: string | null;
+  }>;
   /** Hands off to the existing mid-job approval dialog — the one path that may
    *  change a total. Nothing in this sheet re-quotes anything itself. */
   onAddScope: () => void;
@@ -137,6 +146,10 @@ export default function FlagIssueSheet({
   );
 
   const [vin, setVin] = useState("");
+  /* Which of the job's photos evidence the damage. Required by the server for
+     kind="damage" — a damage report without a photo is an assertion, not a
+     record — so the sheet has to actually collect them rather than promise to. */
+  const [damagePhotoIds, setDamagePhotoIds] = useState<string[]>([]);
 
   const vinStatus = useQuery(api.walkinVinRepair.bookingNeedsVin, { bookingId });
   const submitVin = useMutation(api.walkinVinRepair.submitVinForBooking);
@@ -151,6 +164,7 @@ export default function FlagIssueSheet({
     setLaterReason("");
     setPickedService(null);
     setVin("");
+    setDamagePhotoIds([]);
     setError("");
   };
 
@@ -159,7 +173,21 @@ export default function FlagIssueSheet({
     setBusy(true);
     setError("");
     try {
-      await openBlocker({ bookingId, kind, note: note.trim() });
+      await openBlocker({
+        bookingId,
+        kind,
+        note: note.trim(),
+        photos:
+          kind === "damage"
+            ? jobPhotos
+                .filter((p) => damagePhotoIds.includes(p.storageId))
+                .map((p) => ({
+                  storage_id: p.storageId as Id<"_storage">,
+                  caption: p.caption ?? undefined,
+                  taken_at: p.takenAt,
+                }))
+            : undefined,
+      });
       onToast?.(
         kind === "damage"
           ? "Reported to the shop owner"
@@ -464,10 +492,54 @@ export default function FlagIssueSheet({
               ) : null}
 
               {kind === "damage" ? (
-                <p className="text-[12px] leading-relaxed text-amber-400">
-                  A photo is required. Add it from the job photos above, then flag
-                  this — we&apos;ll attach the most recent ones.
-                </p>
+                jobPhotos.length === 0 ? (
+                  <p className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-[12px] leading-relaxed text-amber-200">
+                    A photo is required. Close this, take one with the camera on
+                    the job, then come back — the report needs evidence attached,
+                    not a description of it.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
+                      Tap the photos that show it
+                    </p>
+                    <div className="grid grid-cols-4 gap-2">
+                      {jobPhotos.map((photo) => {
+                        const picked = damagePhotoIds.includes(photo.storageId);
+                        return (
+                          <button
+                            key={photo.storageId}
+                            type="button"
+                            onClick={() =>
+                              setDamagePhotoIds((prev) =>
+                                prev.includes(photo.storageId)
+                                  ? prev.filter((id) => id !== photo.storageId)
+                                  : [...prev, photo.storageId],
+                              )
+                            }
+                            className={`relative overflow-hidden rounded-lg border-2 transition-colors ${
+                              picked
+                                ? "border-emerald-400"
+                                : "border-white/10 hover:border-white/30"
+                            }`}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={photo.url ?? ""}
+                              alt=""
+                              className="aspect-square w-full object-cover"
+                            />
+                            {picked ? (
+                              <span className="absolute inset-0 flex items-center justify-center bg-emerald-400/25 text-[11px] font-bold text-emerald-50">
+                                ✓
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )
               ) : null}
             </div>
           ) : null}
@@ -519,7 +591,11 @@ export default function FlagIssueSheet({
                     // Same structural test the server applies, so the button
                     // can't be enabled for something the mutation will reject.
                     ? !/^[A-HJ-NPR-Z0-9]{17}$/.test(vin.trim().toUpperCase())
-                    : !kind || note.trim().length === 0)
+                    : !kind ||
+                      note.trim().length === 0 ||
+                      // Server-enforced too; disabling here means the mechanic
+                      // finds out before they tap, not after.
+                      (kind === "damage" && damagePhotoIds.length === 0))
               }
               onClick={
                 lane === "later"

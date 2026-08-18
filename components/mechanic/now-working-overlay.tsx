@@ -635,6 +635,9 @@ export function NowWorkingPane({
           onClose={() => setFlagOpen(false)}
           onAddScope={() => setScopeOpen(true)}
           onToast={onToast}
+          // A damage report has to attach real evidence, and these are the
+          // photos the mechanic already took on this job.
+          jobPhotos={serverPhotos}
         />
       ) : null}
 

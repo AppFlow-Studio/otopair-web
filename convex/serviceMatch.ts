@@ -2,11 +2,14 @@
  * serviceMatch.ts — the custom-job match gate (Off-Catalog Work spec, §2 Leak 2).
  *
  * Every place a mechanic can type a service name that ISN'T picked from the
- * canonical catalog runs through `matchCustomName` first. If what they typed is
- * really a service we already offer, we say so before a custom job or freeform
- * recommendation exists — because once one exists it can never write a
- * maintenance anchor, and the driver's health score starts decaying for work
- * they actually had done.
+ * canonical catalog scores it here, and matching services surface as options
+ * under the field (ServiceSuggestions). It never asks and never blocks — what
+ * they typed is always a valid answer.
+ *
+ * The reason it exists at all: once a custom job or freeform rec is created it
+ * can never write a maintenance anchor, so a mechanic who types a name we already
+ * carry silently costs the driver credit for work they actually had done. The
+ * protection is the canonical option being visible and one tap away.
  *
  * The scoring itself lives in convex/lib/serviceMatch.ts as pure functions so
  * it can be unit-tested without a database (tests/serviceMatchGate.test.ts).
@@ -172,24 +175,5 @@ export const linkAlias = mutation({
       detail: `"${alias}" → ${service.name}`,
     });
     return { ok: true, aliasId, created: true };
-  },
-});
-
-/** Aliases currently pointing at a service — for the director detail view. */
-export const listAliasesForService = query({
-  args: { token: v.string(), serviceId: v.id("services") },
-  handler: async (ctx, args) => {
-    await requireDirector(ctx, args.token);
-    const rows = await ctx.db
-      .query("service_aliases")
-      .withIndex("by_service", (q) => q.eq("service_id", args.serviceId))
-      .collect();
-    rows.sort((a, b) => b.created_at - a.created_at);
-    return rows.map((r) => ({
-      _id: r._id,
-      alias: r.alias,
-      source: r.source,
-      created_at: r.created_at,
-    }));
   },
 });

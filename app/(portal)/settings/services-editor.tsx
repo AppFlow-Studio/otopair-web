@@ -15,6 +15,7 @@ import FixedPriceTierStrip, {
 } from "@/components/shop/fixed-price-tier-strip";
 import Tooltip from "@/components/ui/tooltip";
 import { useRegisterSaveable } from "@/components/settings/save-manager";
+import ShopShortcutsManager from "@/components/settings/shop-shortcuts-manager";
 
 export default function ServicesEditor() {
   const data = useQuery(api.shops.getMyOnboardingData);
@@ -348,6 +349,11 @@ export default function ServicesEditor() {
           })
         )}
       </div>
+
+      {/* Off-catalog shortcuts the shop reuses (Off-Catalog Work spec, §3).
+          Creatable from the booking drawer; this is the only place they can be
+          edited or retired. */}
+      <ShopShortcutsManager shopId={shopId} />
     </div>
   );
 }

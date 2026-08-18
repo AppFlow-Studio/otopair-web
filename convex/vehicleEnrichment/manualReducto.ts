@@ -555,12 +555,18 @@ export const extractSpecsViaReducto = internalAction({
     ctx,
     args,
   ): Promise<{ status: "ok" | "skipped" | "failed"; claims: number; dropped: number; reason: string }> => {
-    const none = (status: "skipped" | "failed", reason: string) => ({
-      status,
-      claims: 0,
-      dropped: 0,
-      reason,
-    });
+    // Logged for the same reason the interval side is: a reason returned to a
+    // caller that discards it is a rung that fails in total silence. This path
+    // now carries all 18 spec fields for every oversize manual, so a quiet
+    // failure here loses more than the interval one did.
+    const none = (status: "skipped" | "failed", reason: string) => {
+      if (status === "failed") {
+        console.error(`[manual-reducto] specs FAILED: ${reason.slice(0, 300)}`);
+      } else {
+        console.warn(`[manual-reducto] specs skipped: ${reason.slice(0, 200)}`);
+      }
+      return { status, claims: 0, dropped: 0, reason };
+    };
 
     try {
       const apiKey = process.env.REDUCTO_API_KEY;

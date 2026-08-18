@@ -83,7 +83,7 @@ import { internalAction, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { resolveExtractionModel } from "./utils/enrichmentFlags";
-import { isOemDomain, normalizeMakeKey } from "./manualLibrary";
+import { isFilesApiSizeLimit, isOemDomain, normalizeMakeKey } from "./manualLibrary";
 
 /** Codegen has not seen this module yet — same selfApi() idiom manualLibrary
  *  and nhtsaOdi use. Tighten after `npx convex dev` regenerates the API. */
@@ -888,6 +888,32 @@ export const extractSpecsFromManual = internalAction({
         });
         if (!res.ok) {
           const detail = (await res.text().catch(() => "")).slice(0, 300);
+          // Files-API hard limits — >600 PDF pages or >1M prompt tokens — are a
+          // ROUTING verdict, not a failure. The document is real and readable,
+          // just not by this extractor.
+          //
+          // The oversize route above only fires when the row was PRE-LABELLED
+          // `reducto`, which extractorForBytes decides from byte count alone.
+          // A manual can sit under the byte cap and still blow the PAGE cap:
+          // all four of the Aug-14 proxied manuals did (the GMC Acadia is
+          // 6.4 MB across 395 pages). Those landed here, returned a raw
+          // `messages_400`, and lost all 18 spec fields with no second attempt
+          // — while the interval pass, which has this same catch, at least
+          // reached Reducto. Same limit, same document, two different
+          // behaviours depending on which pass hit it first. Mirrored.
+          if (isFilesApiSizeLimit(res.status, detail)) {
+            console.log(
+              `[manual-specs] ${label}: Files-API size limit (${detail.slice(0, 80)}…) — falling back to Reducto`,
+            );
+            try {
+              return await ctx.runAction(
+                (internal as any).vehicleEnrichment.manualReducto.extractSpecsViaReducto,
+                { vehicleConfigId: args.vehicleConfigId, runId: args.runId },
+              );
+            } catch (e) {
+              return none("failed", `reducto_fallback_error:${String(e).slice(0, 160)}`);
+            }
+          }
           return none("failed", `messages_${res.status}:${detail}`);
         }
         json = await res.json();

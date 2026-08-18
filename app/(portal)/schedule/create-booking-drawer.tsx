@@ -31,6 +31,7 @@ import { getBookingEndTime } from "@/lib/schedule-overlap";
 import VehicleYMMTPicker from "./vehicle-ymmt-picker";
 import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
 import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
+import ServiceSuggestions from "@/components/booking/service-suggestions";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -401,14 +402,6 @@ export default function CreateBookingDrawer({
      back together later (Off-Catalog Work spec, §3). */
   const [customDraftShortcutId, setCustomDraftShortcutId] = useState("");
   const [customDraftSaveShortcut, setCustomDraftSaveShortcut] = useState(false);
-  /* Set when the strict creation gate refused a shortcut because the name is
-     really a catalog service. Blocking (rather than advising) is deliberate: a
-     mistake baked into a shortcut is replayed on every press, whereas a mistake
-     on a one-off line is a single bad row. */
-  const [shortcutBlock, setShortcutBlock] = useState<{
-    name: string;
-    serviceId: string;
-  } | null>(null);
 
   /* ---- Customer states / notes ---- */
   const [customerNotes, setCustomerNotes] = useState("");
@@ -2070,16 +2063,6 @@ export default function CreateBookingDrawer({
                 {/* Only offered when this isn't already a shortcut. Ticking it
                     is what turns forty spellings into one key pressed forty
                     times, so the data is worth the one extra tap. */}
-                {shortcutBlock && shortcutBlock.name === customDraftName.trim() ? (
-                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2.5">
-                    <p className="text-[11px] leading-relaxed text-foreground">
-                      That&apos;s already a service we offer. Booking the catalog
-                      service keeps it on the customer&apos;s maintenance record —
-                      pick it above instead. Tap Add again to save it as custom
-                      anyway.
-                    </p>
-                  </div>
-                ) : null}
                 {!customDraftShortcutId ? (
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
@@ -2125,15 +2108,7 @@ export default function CreateBookingDrawer({
                               undefined,
                             defaultMinutes: minutes,
                             lastComplaint: customDraftComplaint.trim() || undefined,
-                            confirmedCustom: shortcutBlock?.name === name,
                           });
-                          if (res?.ok === false) {
-                            setShortcutBlock({
-                              name,
-                              serviceId: String(res.suggestion?.serviceId ?? ""),
-                            });
-                            return;
-                          }
                           shortcutId = String(res.id);
                         } catch {
                           // A failed shortcut save must not cost the mechanic the
@@ -2151,7 +2126,6 @@ export default function CreateBookingDrawer({
                           shopCustomServiceId: shortcutId || undefined,
                         },
                       ]);
-                      setShortcutBlock(null);
                       resetCustomDraft();
                     }}
                     className="px-3 py-1.5 text-xs font-semibold rounded-md bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
@@ -2989,19 +2963,12 @@ export default function CreateBookingDrawer({
 }
 
 /**
- * Custom-job match gate (Off-Catalog Work spec, §2 Leak 2).
+ * Matching catalog services, surfaced under the name field as you type.
  *
- * Custom work can never write a maintenance anchor, so a mechanic who types a
- * name we already have in the catalog silently costs the driver their health
- * score credit. This checks what's being typed against service names, slugs and
- * hand-linked aliases before the custom line is added.
- *
- * Suggestions are limited to services this shop offers — the gate scores the
- * whole catalog, but selecting a service the shop doesn't carry would put an id
- * into selectedIds that the duration and price maths can't resolve.
- *
- * Fails open: while the query is loading, or if it errors, the mechanic just
- * adds their custom service as before.
+ * Suggestions only — whatever the mechanic typed stays the default, and picking
+ * one is an option rather than an answer to a question. Limited to services this
+ * shop actually offers: selecting one it doesn't carry would put an id in
+ * selectedIds that the duration and price maths can't resolve.
  */
 function CustomNameGate({
   typed,
@@ -3012,48 +2979,11 @@ function CustomNameGate({
   offeredServiceIds: Set<string>;
   onUseService: (serviceId: string) => void;
 }) {
-  const verdict = useQuery(
-    api.serviceMatch.matchCustomName,
-    typed.length >= 2 ? { name: typed, limit: 3 } : "skip",
-  );
-
-  const suggestions = useMemo(() => {
-    if (!verdict || verdict.confidence === "none") return [];
-    const offered = verdict.candidates.filter((c: any) =>
-      offeredServiceIds.has(String(c.serviceId)),
-    );
-    const strong =
-      verdict.confidence === "exact" || verdict.confidence === "high";
-    return strong ? offered.slice(0, 1) : offered.slice(0, 3);
-  }, [verdict, offeredServiceIds]);
-
-  if (suggestions.length === 0) return null;
-
-  const strong =
-    verdict?.confidence === "exact" || verdict?.confidence === "high";
-
   return (
-    <div className="rounded-lg border border-primary/30 bg-primary/5 p-2.5">
-      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">
-        {strong ? "Already in the catalog" : "Did you mean?"}
-      </p>
-      <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-        Booking the catalog service keeps it on the customer&apos;s maintenance
-        record. Custom work doesn&apos;t count toward their vehicle health.
-      </p>
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        {suggestions.map((c: any) => (
-          <button
-            key={c.serviceId}
-            type="button"
-            onClick={() => onUseService(String(c.serviceId))}
-            className="inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[11px] font-semibold text-primary-foreground transition-opacity hover:opacity-90"
-          >
-            <Plus className="h-3 w-3" />
-            {c.name}
-          </button>
-        ))}
-      </div>
-    </div>
+    <ServiceSuggestions
+      typed={typed}
+      offeredServiceIds={offeredServiceIds}
+      onPick={(s) => onUseService(String(s.serviceId))}
+    />
   );
 }

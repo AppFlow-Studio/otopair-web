@@ -6,9 +6,11 @@
  * key pressed forty times, which is what makes repeat counts exact and labor
  * distributions real.
  *
- * Two things therefore need protecting, and they pull in opposite directions:
- *   - a shortcut must never quietly encode a canonical service, because that
- *     mistake is replayed on every press (hence the STRICT blocking gate)
+ * Two things therefore need protecting:
+ *   - a shortcut that quietly encodes a canonical service repeats that mistake on
+ *     every press, so creating one raises an alert. It does NOT block: matching
+ *     services are shown live under the name field, and interrupting a mechanic
+ *     mid-job to argue about their typing was never where the protection came from
  *   - a shortcut must never silently split its own history (hence idempotency,
  *     revive-on-recreate, and the refusal to support rename)
  */
@@ -49,34 +51,18 @@ async function seedShop(t: ReturnType<typeof makeT>) {
   });
 }
 
-describe("the strict creation gate", () => {
-  it("refuses a shortcut whose name is really a catalog service", async () => {
-    const t = makeT();
-    const { shopId } = await seedShop(t);
-    const serviceId = await t.run(async (ctx: any) =>
-      ctx.db.insert("services", { name: "Oil Change", slug: "oil_change" }),
-    );
-
-    const res: any = await t
-      .withIdentity(identityFor(OWNER_CLERK))
-      .mutation(api.shopCustomServices.create, {
-        shopId,
-        name: "Change the oil",
-      });
-
-    // Blocking, not advising: this button would otherwise deny maintenance
-    // credit every single time it was pressed.
-    expect(res.ok).toBe(false);
-    expect(res.blocked).toBe("canonical_match");
-    expect(res.suggestion?.serviceId).toBe(String(serviceId));
-
-    const rows = await t.run(async (ctx: any) =>
-      ctx.db.query("shop_custom_services").collect(),
-    );
-    expect(rows).toHaveLength(0);
-  });
-
-  it("lets the mechanic insist once they've seen the suggestion", async () => {
+describe("creating a shortcut never blocks", () => {
+  /**
+   * An earlier version refused to create a shortcut whose name looked canonical
+   * until the mechanic re-confirmed. That put a question in front of someone
+   * mid-job about their own typing. Matching services are shown live under the
+   * name field instead, so the canonical option is visible and one tap away —
+   * which is where the protection always came from.
+   *
+   * The signal survives: creating one still alerts the director side, because a
+   * shortcut mistake is replayed on every press.
+   */
+  it("creates it, and raises an alert when the name looks canonical", async () => {
     const t = makeT();
     const { shopId } = await seedShop(t);
     await t.run(async (ctx: any) =>
@@ -88,14 +74,25 @@ describe("the strict creation gate", () => {
       .mutation(api.shopCustomServices.create, {
         shopId,
         name: "Change the oil",
-        confirmedCustom: true,
       });
+
     expect(res.ok).toBe(true);
+    const rows = await t.run(async (ctx: any) =>
+      ctx.db.query("shop_custom_services").collect(),
+    );
+    expect(rows).toHaveLength(1);
+
+    // Nobody was interrupted, but somebody gets told.
+    const outbox = await t.run(async (ctx: any) =>
+      ctx.db.query("notification_outbox").collect(),
+    );
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0].category).toBe("custom_shortcut_override");
   });
 
-  it("does not block on a merely plausible match", async () => {
-    // "medium" confidence is a guess. Blocking on guesses trains mechanics to
-    // click straight through the warning, which costs us the real ones.
+  it("stays quiet for genuinely off-catalog work", async () => {
+    // A "medium" match is a guess. Alerting on guesses trains whoever reads the
+    // queue to ignore it, which costs us the real ones.
     const t = makeT();
     const { shopId } = await seedShop(t);
     await t.run(async (ctx: any) =>
@@ -112,6 +109,11 @@ describe("the strict creation gate", () => {
         name: "Carbon cleaning (walnut blast)",
       });
     expect(res.ok).toBe(true);
+
+    const outbox = await t.run(async (ctx: any) =>
+      ctx.db.query("notification_outbox").collect(),
+    );
+    expect(outbox).toHaveLength(0);
   });
 
   it("requires shop authorisation", async () => {

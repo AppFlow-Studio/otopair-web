@@ -13,9 +13,11 @@
  * across shops instead of within each shop's own repeats.
  *
  * Two consequences that shape the code below:
- *   1. The match gate runs STRICTER at creation than on a one-off line, because
- *      a mistake here is replayed on every press (see `create`).
- *   2. Shortcut drift is measured, not prevented (see `recordShortcutUse`).
+ *   1. Creating a shortcut whose name looks canonical raises an immediate alert
+ *      rather than blocking — a mistake here is replayed on every press, so it's
+ *      worth telling someone now, but not worth interrupting a mechanic mid-job
+ *      to argue about their typing (see `create`).
+ *   2. Shortcut drift is measured, not prevented (see `recordShortcutActual`).
  */
 
 import { v } from "convex/values";
@@ -126,11 +128,13 @@ export const listForShop = query({
 /**
  * Create a shortcut.
  *
- * The match gate is deliberately BLOCKING here, unlike the advisory gate on a
- * one-off line. A shortcut that's really a catalog service will silently deny
- * maintenance credit every single time it's pressed, so the mechanic has to
- * acknowledge the suggestion before we'll make the button. `confirmedCustom`
- * is how the UI says "shown and dismissed".
+ * Never blocks. Matching catalog services are shown live under the name field
+ * (ServiceSuggestions) so the canonical option is visible and one tap away, and
+ * what the mechanic typed is always a valid answer.
+ *
+ * A shortcut that's really a catalog service denies maintenance credit every time
+ * it's pressed, so creating one still fires an immediate alert to the director
+ * side — the signal survives, the interruption doesn't.
  *
  * Idempotent per (shop, match_key): re-creating an existing shortcut returns it
  * rather than making a duplicate, and revives it if it had been retired.
@@ -144,7 +148,8 @@ export const create = mutation({
     defaultPriceCents: v.optional(v.number()),
     lastComplaint: v.optional(v.string()),
     mechanicId: v.optional(v.id("mechanics")),
-    /** Set once the mechanic has seen and rejected the canonical suggestion. */
+    /** Accepted and ignored. Kept so existing callers don't break; nothing
+     *  blocks on it any more. */
     confirmedCustom: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -157,29 +162,26 @@ export const create = mutation({
     const matchKey = serviceMatchKey(name);
     if (!matchKey) throw new Error("That name normalises to nothing");
 
-    // Strict gate. Only exact/high confidence blocks — "medium" is a guess, and
-    // blocking on a guess would train mechanics to click through it.
+    // NOT a block. An earlier version refused to create a shortcut whose name
+    // looked canonical until the mechanic re-confirmed, which meant interrupting
+    // someone mid-job to answer a question about their own typing. Suggestions
+    // are shown live under the name field instead (ServiceSuggestions), so the
+    // canonical option is visible and one tap away — which is where the
+    // protection actually came from.
+    //
+    // The signal is kept: creating a shortcut whose name looks like a service we
+    // already carry still raises an immediate alert. Unlike a one-off mislabelled
+    // line, this button will be pressed again tomorrow, and every press costs
+    // another driver their maintenance credit — so it's worth telling someone
+    // now rather than waiting for the daily digest.
+    //
+    // Deduped per (shop, match key) so re-creating the same shortcut doesn't page
+    // anyone twice. Routed through the existing notification_outbox slack path.
     const verdict = matchServiceName(name, await loadCatalog(ctx));
     const looksCanonical =
       verdict.confidence === "exact" || verdict.confidence === "high";
 
-    if (!args.confirmedCustom && looksCanonical) {
-      return {
-        ok: false as const,
-        blocked: "canonical_match" as const,
-        suggestion: verdict.best,
-      };
-    }
-
-    // The mechanic saw the suggestion and made the button anyway. That is the
-    // one case worth an immediate alert rather than the daily digest: unlike a
-    // one-off mislabelled line, this button will be pressed again tomorrow, and
-    // every press costs another driver their maintenance credit.
-    //
-    // Deduped per (shop, match key) so a shop re-confirming the same shortcut
-    // doesn't page anyone twice. Routed through the existing notification_outbox
-    // slack path, same shape as portalStats' SLO breaches.
-    if (args.confirmedCustom && looksCanonical) {
+    if (looksCanonical) {
       const dedupe_key = `custom_shortcut_override:${String(args.shopId)}:${serviceMatchKey(name)}`;
       const dup = await ctx.db
         .query("notification_outbox")

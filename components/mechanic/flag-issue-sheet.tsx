@@ -24,6 +24,9 @@ import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import ServiceSuggestions, {
+  type SuggestedService,
+} from "@/components/booking/service-suggestions";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -126,6 +129,12 @@ export default function FlagIssueSheet({
     "next_visit" | "within_3_months" | "soon"
   >("next_visit");
   const [laterVisible, setLaterVisible] = useState(true);
+  /* Set only when the mechanic actively picks a catalog match. Left null, the
+     typed text is filed as an advisory — the typed text is always a valid
+     answer, never something to be talked out of. */
+  const [pickedService, setPickedService] = useState<SuggestedService | null>(
+    null,
+  );
 
   const [vin, setVin] = useState("");
 
@@ -133,10 +142,6 @@ export default function FlagIssueSheet({
   const submitVin = useMutation(api.walkinVinRepair.submitVinForBooking);
   const openBlocker = useMutation(api.jobBlockers.openBlocker);
   const flagLater = useMutation(api.jobRecommendations.flagFromActiveJob);
-  const match = useQuery(
-    api.serviceMatch.matchCustomName,
-    laterName.trim().length >= 2 ? { name: laterName.trim(), limit: 2 } : "skip",
-  );
 
   const reset = () => {
     setLane(null);
@@ -144,6 +149,7 @@ export default function FlagIssueSheet({
     setNote("");
     setLaterName("");
     setLaterReason("");
+    setPickedService(null);
     setVin("");
     setError("");
   };
@@ -198,16 +204,15 @@ export default function FlagIssueSheet({
     setBusy(true);
     setError("");
     try {
-      // If the gate is confident this is a catalog service, file it as one —
-      // otherwise it becomes an advisory the driver can't book.
-      const strong =
-        match?.confidence === "exact" || match?.confidence === "high";
+      // Filed as a catalog service only if the mechanic actually picked one.
+      // Inferring it from match confidence would silently overrule someone who
+      // meant the thing they typed.
       await flagLater({
         bookingId,
-        recommendedServiceId: strong
-          ? (match!.best!.serviceId as Id<"services">)
+        recommendedServiceId: pickedService
+          ? (pickedService.serviceId as Id<"services">)
           : undefined,
-        freeformName: strong ? undefined : name,
+        freeformName: pickedService ? undefined : name,
         urgency: laterUrgency,
         reason: laterReason.trim() || undefined,
         visibleToDriver: laterVisible,
@@ -340,18 +345,35 @@ export default function FlagIssueSheet({
                 type="text"
                 autoFocus
                 value={laterName}
-                onChange={(e) => setLaterName(e.target.value)}
+                onChange={(e) => {
+                  setLaterName(e.target.value);
+                  // A stale pick would silently file work the mechanic has
+                  // since retyped.
+                  setPickedService(null);
+                }}
                 placeholder="What needs doing? e.g. Serpentine belt"
                 className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-[13px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-white/30"
               />
-              {match?.confidence === "exact" || match?.confidence === "high" ? (
-                <p className="text-[12px] leading-relaxed text-emerald-400">
-                  Filing as {match.best?.name} — the customer can book it directly.
-                </p>
-              ) : laterName.trim().length >= 2 ? (
-                <p className="text-[12px] leading-relaxed text-amber-400">
-                  We don&apos;t offer this yet, so it goes to the customer as your
-                  recommendation with no price.
+              {/* Matches appear as options; what they typed stays the default.
+                  Picking one makes it a service the customer can book directly,
+                  otherwise it goes over as the mechanic's own recommendation. */}
+              <ServiceSuggestions
+                typed={laterName}
+                dark
+                onPick={(svc) => setPickedService(svc)}
+              />
+              {pickedService ? (
+                <p className="flex items-center justify-between gap-2 rounded-lg border border-emerald-400/40 bg-emerald-400/10 px-3 py-2 text-[12px] text-emerald-200">
+                  <span>
+                    Filing as <strong>{pickedService.name}</strong> — bookable
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setPickedService(null)}
+                    className="shrink-0 text-[11px] text-emerald-300/80 underline underline-offset-2 hover:text-emerald-100"
+                  >
+                    undo
+                  </button>
                 </p>
               ) : null}
 

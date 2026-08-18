@@ -670,6 +670,9 @@ export const getSpecExtractionContext = internalQuery({
             doc_kind: manual.doc_kind,
             /** Drive the cheap-refresh and oversize branches in the action. */
             storage_id: (manual as any).storage_id ?? null,
+            // Cost figure, not metadata: Reducto bills per page, so the
+            // oversize route gates on this before spending.
+            page_count: (manual as any).page_count ?? null,
             extractor: (manual as any).extractor ?? null,
             /**
              * Signed URL for the stored bytes, minted per call.
@@ -903,7 +906,7 @@ export const extractSpecsFromManual = internalAction({
           // behaviours depending on which pass hit it first. Mirrored.
           if (isFilesApiSizeLimit(res.status, detail)) {
             console.log(
-              `[manual-specs] ${label}: Files-API size limit (${detail.slice(0, 80)}…) — falling back to Reducto`,
+              `[manual-specs] ${label}: Files-API size limit (${detail.slice(0, 240)}…) — falling back to Reducto`,
             );
             try {
               return await ctx.runAction(

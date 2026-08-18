@@ -17,7 +17,10 @@ describe("isFilesApiSizeLimit", () => {
   });
 
   it("recognises the token-cap rejection — the one our manuals actually hit", () => {
-    // Verbatim shape from the Aug 14 runs (Maverick, Acadia, Sportage, Legacy).
+    // The message SHAPE Anthropic returns. The exact token figures below are
+    // illustrative: our own log line truncates the body at 80 chars, so the
+    // real counts from the Aug 14 runs were never captured. What is confirmed
+    // is that all four manuals failed on this message, not the page cap.
     expect(
       isFilesApiSizeLimit(
         400,

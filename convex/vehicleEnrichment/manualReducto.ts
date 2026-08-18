@@ -84,6 +84,37 @@ const specsApi = () => (internal as any).vehicleEnrichment.manualSpecs;
 const claimApi = () => (internal as any).vehicleEnrichment.claimGathering;
 
 const REDUCTO_BASE = "https://platform.reducto.ai";
+
+/**
+ * COST CONTROL. Reducto bills per PAGE, and `settings.page_range` defaults to
+ * the ENTIRE document — so every oversize manual we hand it is a 400-page
+ * charge to recover about ten interval rows and eighteen specs that live on a
+ * handful of pages. Measured Aug 18 2026: three manuals cost roughly $50, i.e.
+ * ~$16.67 each, ~$0.042/page against the 395-page Acadia. At that rate a
+ * thousand vehicles is ~$17k, which is not a pipeline, it is a bill.
+ *
+ * Two bounds until page-range selection lands:
+ *   PARTS_REDUCTO=off      hard kill switch, no calls at all.
+ *   REDUCTO_MAX_PAGES      refuse a document larger than this (default 250).
+ *                          A refusal is an honest gap; a silent $16 charge for
+ *                          a document we may not even be able to use is not.
+ */
+export function reductoEnabled(): boolean {
+  return process.env.PARTS_REDUCTO !== "off";
+}
+
+/** Page ceiling above which a document is too expensive to send whole. */
+export function reductoMaxPages(): number {
+  const n = parseInt(process.env.REDUCTO_MAX_PAGES ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : 250;
+}
+
+/** Is this document within the page budget? Unknown page count passes — the
+ *  ceiling exists to stop known-huge documents, not to block on missing data. */
+export function withinReductoPageBudget(pageCount: number | null | undefined): boolean {
+  if (typeof pageCount !== "number" || !Number.isFinite(pageCount) || pageCount <= 0) return true;
+  return pageCount <= reductoMaxPages();
+}
 /** A 600-page manual takes Reducto meaningfully longer than a receipt. */
 const REDUCTO_TIMEOUT_MS = 300_000;
 
@@ -372,6 +403,10 @@ export const getReductoContext = internalQuery({
       source_url: manual.source_url,
       doc_kind: manual.doc_kind,
       file_bytes: manual.file_bytes ?? null,
+      // Reducto bills per page, so the page count is a COST figure, not
+      // metadata. Carried here so the budget gate can refuse a 395-page
+      // document before it becomes a ~$16 charge.
+      page_count: (manual as any).page_count ?? null,
       // A signed, unguessable URL Reducto can fetch — or, for reference-only
       // rows, the public source PDF itself.
       url: storageUrl ?? directPdfUrl,
@@ -414,6 +449,7 @@ export const extractIntervalsViaReducto = internalAction({
     };
 
     try {
+      if (!reductoEnabled()) return none("skipped", "reducto_disabled");
       const apiKey = process.env.REDUCTO_API_KEY;
       if (!apiKey) return none("failed", "no_reducto_api_key");
 
@@ -421,6 +457,14 @@ export const extractIntervalsViaReducto = internalAction({
         vehicleConfigId: args.vehicleConfigId,
       });
       if (!context) return none("skipped", "no_stored_manual");
+      if (!withinReductoPageBudget(context.page_count)) {
+        // Refusing is the honest answer: this document costs real money per
+        // page and we would be paying for ~395 of them to read about ten.
+        return none(
+          "skipped",
+          `page_budget_exceeded:${context.page_count}>${reductoMaxPages()}`,
+        );
+      }
       if (!context.url) return none("failed", "storage_url_unavailable");
 
       const label = `${context.year} ${context.make} ${context.model}`;
@@ -569,6 +613,7 @@ export const extractSpecsViaReducto = internalAction({
     };
 
     try {
+      if (!reductoEnabled()) return none("skipped", "reducto_disabled");
       const apiKey = process.env.REDUCTO_API_KEY;
       if (!apiKey) return none("failed", "no_reducto_api_key");
 
@@ -581,6 +626,12 @@ export const extractSpecsViaReducto = internalAction({
       if (!context) return none("skipped", "config_not_resolvable");
       if (!context.manual?.storage_id) return none("skipped", "no_stored_manual");
       if (!context.manual?.url) return none("failed", "storage_url_unavailable");
+      if (!withinReductoPageBudget((context.manual as any)?.page_count)) {
+        return none(
+          "skipped",
+          `page_budget_exceeded:${(context.manual as any)?.page_count}>${reductoMaxPages()}`,
+        );
+      }
 
       const label = `${context.year} ${context.make} ${context.model}`;
 

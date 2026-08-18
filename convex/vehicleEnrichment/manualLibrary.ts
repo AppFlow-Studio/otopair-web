@@ -2525,7 +2525,7 @@ export const extractIntervalsFromManual = internalAction({
           // same Reducto path oversize-by-bytes manuals already use.
           if (isFilesApiSizeLimit(res.status, detail)) {
             console.log(
-              `[manual-library] ${label}: Files-API size limit (${detail.slice(0, 80)}…) — falling back to Reducto`,
+              `[manual-library] ${label}: Files-API size limit (${detail.slice(0, 240)}…) — falling back to Reducto`,
             );
             try {
               return await ctx.runAction(

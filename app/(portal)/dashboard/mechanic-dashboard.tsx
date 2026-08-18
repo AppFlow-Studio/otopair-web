@@ -12,6 +12,7 @@ import MultiPointInspectionDialog, {
   type InspectionInputPayload,
 } from "@/components/multi-point-inspection-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import { useLockedQuote } from "@/lib/use-locked-quote";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
@@ -150,6 +151,12 @@ export default function MechanicDashboard() {
     api.job_actuals.getPrefillData,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"
   );
+  // Customer-approved quote for the post-job "Confirm parts to use" step. Same
+  // hook the owner's booking-detail-panel uses, so the mechanic's completion
+  // dialog shows the AGREED parts + total (e.g. battery $350, oil filter $35,
+  // not-used rows dropped, $726.69 total) instead of falling back to the
+  // pre-approval snapshot (stale $0 parts, $103 total).
+  const workflowLockedQuote = useLockedQuote(selectedWorkflowBooking);
   const selectedBooking = useQuery(
     api.bookings.getJobDetail,
     actualsBookingId ? { bookingId: actualsBookingId } : "skip"
@@ -798,7 +805,10 @@ export default function MechanicDashboard() {
             }),
           )
         }
-        lockBilling
+        lockBilling={!workflowLockedQuote.isWalkIn}
+        quotedParts={workflowLockedQuote.lockedQuoteParts}
+        lockedQuote={workflowLockedQuote.lockedQuote}
+        isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
       />
 
       {/* Pre-Job Approval — auto-chained from the inspection dialog. Same

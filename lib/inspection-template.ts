@@ -2065,11 +2065,15 @@ export const SPEC_PREFILL_FIELDS: ReadonlyArray<{
   { zones: ["FL", "FR"], fieldKey: "tire_size", bucket: "text", read: (p) => p.tires.size_front, sourceKey: "tires.size_front" },
   { zones: ["RL", "RR"], fieldKey: "tire_size", bucket: "text", read: (p) => p.tires.size_rear, sourceKey: "tires.size_rear" },
   { zones: ["FL", "FR", "RL", "RR"], fieldKey: "pad_brand", bucket: "text", read: (p) => p.brakes.pad_brand, sourceKey: null },
-  { zones: ["ENG"], fieldKey: "oil_viscosity", bucket: "select", read: (p) => p.fluids.oil_viscosity, sourceKey: "fluids.oil_viscosity" },
-  { zones: ["ENG"], fieldKey: "oil_type", bucket: "select", read: (p) => p.fluids.oil_type, sourceKey: "fluids.oil_type" },
-  { zones: ["ENG"], fieldKey: "coolant_type", bucket: "select", read: (p) => p.fluids.coolant_type, sourceKey: "fluids.coolant_type" },
-  { zones: ["ENG"], fieldKey: "brake_fluid_type", bucket: "select", read: (p) => p.fluids.brake_fluid_type, sourceKey: "fluids.brake_fluid_type" },
-  { zones: ["ENG"], fieldKey: "transmission_fluid_type", bucket: "select", read: (p) => p.fluids.transmission_fluid_type, sourceKey: "fluids.transmission_fluid_type" },
+  // These render as `type: "text"` combobox fields (INSPECTION_ZONES ENG), so
+  // their seeded value must land in the `text` bucket — a "select" bucket here
+  // wrote to zs.select while the field read zs.text, silently blanking every
+  // enriched fluid spec on a first visit.
+  { zones: ["ENG"], fieldKey: "oil_viscosity", bucket: "text", read: (p) => p.fluids.oil_viscosity, sourceKey: "fluids.oil_viscosity" },
+  { zones: ["ENG"], fieldKey: "oil_type", bucket: "text", read: (p) => p.fluids.oil_type, sourceKey: "fluids.oil_type" },
+  { zones: ["ENG"], fieldKey: "coolant_type", bucket: "text", read: (p) => p.fluids.coolant_type, sourceKey: "fluids.coolant_type" },
+  { zones: ["ENG"], fieldKey: "brake_fluid_type", bucket: "text", read: (p) => p.fluids.brake_fluid_type, sourceKey: "fluids.brake_fluid_type" },
+  { zones: ["ENG"], fieldKey: "transmission_fluid_type", bucket: "text", read: (p) => p.fluids.transmission_fluid_type, sourceKey: "fluids.transmission_fluid_type" },
 ];
 
 export type SpecPrefillEntry = {

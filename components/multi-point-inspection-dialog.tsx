@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  FluidCatalogSelectField,
+  FLUID_KIND_BY_KEY,
+} from "@/components/fluid-catalog-select-field";
+import {
   Camera,
   Check,
   ChevronDown,
@@ -1721,6 +1725,7 @@ function MultiPointInspectionDialogBody({
               <ZonePanel
                 zoneId={activeZone}
                 zs={zoneState(activeZone)}
+                vin={passportData?.vin ?? null}
                 isFirstVisit={isFirstVisit}
                 isRequired={requiredSet.has(activeZone)}
                 tireSizeOptions={tireSizeOptionsFromList(
@@ -2014,6 +2019,7 @@ function CarDiagram({
 function ZonePanel({
   zoneId,
   zs,
+  vin,
   isFirstVisit,
   isRequired,
   tireSizeOptions,
@@ -2039,6 +2045,8 @@ function ZonePanel({
 }: {
   zoneId: ZoneId;
   zs: ZoneState;
+  /** Vehicle VIN — feeds the fluid catalog picker (make-pinned OEM options). */
+  vin: string | null;
   isFirstVisit: boolean;
   isRequired: boolean;
   /** Axle-resolved tire-size options (vehicle's OEM fitments, generic fallback). */
@@ -2176,6 +2184,7 @@ function ZonePanel({
               zoneId={zoneId}
               field={field}
               zs={zs}
+              vin={vin}
               isFirstVisit={isFirstVisit}
               tireSizeOptions={tireSizeOptions}
               required={isFieldRequiredForZone(
@@ -2324,6 +2333,7 @@ function FieldRow({
   zoneId,
   field,
   zs,
+  vin,
   isFirstVisit,
   tireSizeOptions,
   required,
@@ -2337,6 +2347,8 @@ function FieldRow({
   zoneId: ZoneId;
   field: InspectionField;
   zs: ZoneState;
+  /** Vehicle VIN — feeds the fluid catalog picker. */
+  vin: string | null;
   isFirstVisit: boolean;
   /** Axle-resolved tire-size options for this zone (OEM fitments + fallback). */
   tireSizeOptions: InspectionOption[];
@@ -2678,6 +2690,47 @@ function FieldRow({
           {isMeasurementMethod || field.key === "rotor_applicable"
             ? null
             : unavailableControl}
+        </Row>
+        {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+      </div>
+    );
+  }
+
+  // Fluid PRODUCT fields (coolant / ATF / brake / power-steering) use the same
+  // OEM + scraped catalog picker as the post-job survey instead of the generic
+  // combobox. Value lives in the text bucket, where the passport prefill seeds
+  // it and job_actuals reads it. Oil viscosity/type keep the generic picker —
+  // oil is chosen by grade+type, not a single SKU.
+  if (field.type === "text" && FLUID_KIND_BY_KEY[field.key]) {
+    const fluidValue = zs.text[field.key] ?? "";
+    const showFluidPrefillTag = !!prefill && fluidValue === prefill.value;
+    return (
+      <div className="border-b border-primary/10">
+        <Row
+          label={field.label}
+          required={required}
+          badge={field.firstVisitOnly && isFirstVisit ? "1ST" : undefined}
+          saveState={saveState}
+        >
+          <div className="w-64 space-y-1.5">
+            <FluidCatalogSelectField
+              value={fluidValue}
+              onChange={(next) => {
+                if (prefill) onSpecEdited?.();
+                onSharedText(field.key, next);
+              }}
+              fluidKind={FLUID_KIND_BY_KEY[field.key]}
+              vin={vin}
+              placeholder="Search or select"
+              otherPlaceholder={`Enter ${field.label.toLowerCase()}`}
+            />
+            {showFluidPrefillTag ? (
+              <div className="flex justify-end">
+                <SpecSourceTag source={prefill!.source} />
+              </div>
+            ) : null}
+          </div>
+          {unavailableControl}
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
       </div>

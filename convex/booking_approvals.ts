@@ -783,14 +783,26 @@ export const getEffectiveQuoteForBooking = query({
     if (!user) return null;
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return null;
-    // Soft shop-staff check — mirror getActiveJobConflict's read-only style.
+    // Soft shop-staff check. Must authorize the same viewers as requireShopStaff
+    // (which gates the panel): shop_users members AND the shop OWNER. The owner
+    // often has no shop_users row, so a shop_users-only check would return null
+    // for them and the read-only post-job dialog would silently fall back to the
+    // pre-approval snapshot (stale $0 parts) instead of the agreed quote.
+    // (The assigned mechanic is covered by the shop_users branch: their
+    // membership row is what links user → mechanics roster in the first place.)
     const membership = await ctx.db
       .query("shop_users")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
       .collect();
-    const inShop = membership.some(
+    let inShop = membership.some(
       (m: any) => String(m.shop_id) === String((booking as any).shop_id),
     );
+    if (!inShop) {
+      const shop = await ctx.db.get((booking as any).shop_id);
+      if (shop && String((shop as any).owner_user_id) === String(user._id)) {
+        inShop = true;
+      }
+    }
     if (!inShop) return null;
 
     const rows = await ctx.db

@@ -17,6 +17,7 @@ import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import {
+  BRAKE_PICK_OPTIONS,
   detectScheduleDeferral,
   PAGE_INDEX_VERSION,
   pageCountOf,
@@ -50,6 +51,7 @@ export const indexManualPages = internalAction({
     selected_pages?: number;
     intervals?: number;
     specs?: number;
+    brakes?: number;
     defers_to?: string[];
   }> => {
     const label = `${args.year} ${args.make} ${args.model}`;
@@ -79,6 +81,11 @@ export const indexManualPages = internalAction({
       const scores = scoreManualPages(text as string[]);
       const intervals = pickPageRanges(scores, "interval");
       const specs = pickPageRanges(scores, "spec");
+      // Rotor discard minimums. Scored and stored separately from `specs` —
+      // see BRAKE SIGNALS in manualPageIndex.ts — and unioned with them only
+      // at extraction time, so a manual that carries brake limits but no
+      // capacities table still gets its brake pages sent.
+      const brakes = pickPageRanges(scores, "brakes", BRAKE_PICK_OPTIONS);
       // Free — the page text is already in hand. A manual that names another
       // document is the difference between "extraction failed" and "the answer
       // is in a booklet we have not fetched".
@@ -96,10 +103,15 @@ export const indexManualPages = internalAction({
       // these zero pages" would extract nothing from a document we already paid
       // to fetch. Report it and leave the row unindexed so the caller falls
       // back to whole-document behaviour (and its page budget).
-      if (intervals.length === 0 && specs.length === 0 && defersTo.length === 0) {
+      if (
+        intervals.length === 0 &&
+        specs.length === 0 &&
+        brakes.length === 0 &&
+        defersTo.length === 0
+      ) {
         console.warn(
-          `[page-index] ${label}: no maintenance or specification pages scored above threshold ` +
-            `across ${totalPages} pages — leaving unindexed`,
+          `[page-index] ${label}: no maintenance, specification or brake pages scored above ` +
+            `threshold across ${totalPages} pages — leaving unindexed`,
         );
         return { status: "skipped", reason: "no_pages_matched", total_pages: totalPages };
       }
@@ -109,6 +121,7 @@ export const indexManualPages = internalAction({
         total_pages: totalPages,
         intervals,
         specs,
+        brakes,
         computed_at: Date.now(),
         ...(defersTo.length > 0 ? { defers_to: defersTo } : {}),
       };
@@ -119,12 +132,13 @@ export const indexManualPages = internalAction({
         page_index: index,
       });
 
-      const selected = pageCountOf([...intervals, ...specs]);
+      const selected = pageCountOf([...intervals, ...specs, ...brakes]);
       console.log(
         `[page-index] ${label}: ${selected}/${totalPages} pages ` +
           `(${((100 * selected) / Math.max(totalPages, 1)).toFixed(1)}%) — ` +
           `intervals ${intervals.map((r) => `${r.start}-${r.end}`).join(",") || "none"} | ` +
-          `specs ${specs.map((r) => `${r.start}-${r.end}`).join(",") || "none"}`,
+          `specs ${specs.map((r) => `${r.start}-${r.end}`).join(",") || "none"} | ` +
+          `brakes ${brakes.map((r) => `${r.start}-${r.end}`).join(",") || "none"}`,
       );
       return {
         status: "ok",
@@ -133,6 +147,7 @@ export const indexManualPages = internalAction({
         selected_pages: selected,
         intervals: intervals.length,
         specs: specs.length,
+        brakes: brakes.length,
         defers_to: defersTo.map((d) => d.title),
       };
     } catch (e) {

@@ -71,14 +71,17 @@ import {
   parseManualIntervals,
 } from "./manualLibrary";
 import {
+  billedPageCount,
   pageCountOf,
   pageIndexIsFresh,
+  specsPageRanges,
   toReductoPageRange,
   type ManualPageIndex,
 } from "./manualPageIndex";
 import {
   familyForManual,
   parseSpecPayload,
+  ROTOR_QUOTE_RULE,
   SPECS_ADAPTER_REDUCTO,
   SPEC_FIELDS,
   SPEC_FIELD_KEYS,
@@ -309,6 +312,7 @@ export function buildReductoSpecsInstructions(vehicle: {
     "Engine oil capacity means DRAIN AND REFILL WITH FILTER CHANGE — not the dry-fill total and not the without-filter figure. Transmission fluid means the drain-and-fill service quantity, not the total.",
     "If a value is split by engine or trim, report the row for the engine named above and copy that row's label verbatim into engine_qualifier; if you cannot tell which row applies, omit that field entirely.",
     "Omit anything the vehicle does not have. Every reported value needs a verbatim quoted_text.",
+    ROTOR_QUOTE_RULE,
   ].join(" ");
 }
 
@@ -501,8 +505,11 @@ export const extractIntervalsViaReducto = internalAction({
       // Budget judges the BILLED pages, and it must run AFTER indexing: gating
       // on the raw document size first would refuse the 395-page manuals this
       // narrowing exists for, before they ever got narrowed.
+      // billedPageCount, not pageCountOf: a fresh index with NO interval pages
+      // narrows nothing and therefore bills the whole document — see its
+      // header. Passing the empty list's 0 here approved exactly that.
       const ivBilled = pageIndexIsFresh(ivIndex)
-        ? pageCountOf(ivIndex!.intervals)
+        ? billedPageCount(ivIndex!.intervals, context.page_count)
         : context.page_count;
       if (!withinReductoPageBudget(ivBilled)) {
         return none("skipped", `page_budget_exceeded:${ivBilled}>${reductoMaxPages()}`);
@@ -714,18 +721,24 @@ export const extractSpecsViaReducto = internalAction({
         }
       }
       const spIndex = spIdxLive;
+      // Capacities AND brake limits — this pass asks for rotor minimums, so it
+      // has to be sent the brake pages too. `specsPageRanges` merges the two
+      // lists so an overlap is billed once. See BRAKE SIGNALS in
+      // manualPageIndex.ts.
+      const spRanges = pageIndexIsFresh(spIndex) ? specsPageRanges(spIndex) : [];
       const spBilled = pageIndexIsFresh(spIndex)
-        ? pageCountOf(spIndex!.specs)
+        ? billedPageCount(spRanges, (context.manual as any)?.page_count)
         : (context.manual as any)?.page_count;
       if (!withinReductoPageBudget(spBilled)) {
         return none("skipped", `page_budget_exceeded:${spBilled}>${reductoMaxPages()}`);
       }
-      const spPageRange = pageIndexIsFresh(spIndex) ? toReductoPageRange(spIndex!.specs) : null;
+      const spPageRange = pageIndexIsFresh(spIndex) ? toReductoPageRange(spRanges) : null;
       if (spPageRange) {
         console.log(
           `[manual-reducto] ${label}: specs narrowed to ` +
-            `${pageCountOf(spIndex!.specs)}/${spIndex!.total_pages} pages ` +
-            `(${spIndex!.specs.map((r) => `${r.start}-${r.end}`).join(",")})`,
+            `${pageCountOf(spRanges)}/${spIndex!.total_pages} pages ` +
+            `(${spRanges.map((r) => `${r.start}-${r.end}`).join(",")}) ` +
+            `[specs ${spIndex!.specs.length} + brakes ${spIndex!.brakes?.length ?? 0} ranges]`,
         );
       }
 

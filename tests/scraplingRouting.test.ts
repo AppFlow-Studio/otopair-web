@@ -260,3 +260,46 @@ describe("adapterFetch", () => {
     await expect(adapterFetch(TARGET, { throwOnError: true })).rejects.toThrow();
   });
 });
+
+describe("looksBlockedBody — Imperva Advanced Bot Protection", () => {
+  // Captured live Aug 2026 from summitracing.com, which answered the bare
+  // fetch, Scrapling `http` and Scrapling `auto` with this same wall. Before
+  // these signatures every tier reported SUCCESS and the caller kept a
+  // challenge page — the failure mode is not the block, it is a block that
+  // does not look like one, because that is what skips the fallback tier.
+  const IMPERVA_ABP =
+    '<html><head><noscript> <title>Pardon Our Interruption</title></noscript>' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+    '<meta name="robots" content="noindex, nofollow">' +
+    '<style> .container { max-width: 800px; margin: auto; } </style></head>' +
+    '<body><h1>Pardon Our Interruption</h1><p>As you were browsing something ' +
+    'about your browser made us think you were a bot.</p>' +
+    '<script src="/Pardon-Our-Interruption/reese84/interrogation"></script></body></html>';
+
+  it("detects the challenge the old signature list missed", () => {
+    expect(looksBlockedBody(IMPERVA_ABP)).toBe(true);
+  });
+
+  it("detects a reese84 token script on its own", () => {
+    expect(looksBlockedBody('<html><script src="/x/reese84/interrogation"></script></html>')).toBe(
+      true,
+    );
+  });
+
+  it("does not fire on a real parts page that merely mentions interruption", () => {
+    expect(
+      looksBlockedBody(
+        "<html><body><h1>Centric Brake Rotor</h1><p>Discard Thickness (mm): 26.0</p>" +
+          "<p>Installation may cause a brief interruption of service.</p></body></html>",
+      ),
+    ).toBe(false);
+  });
+
+  it("still passes a normal spec page", () => {
+    expect(
+      looksBlockedBody(
+        "<html><body>Nominal Thickness (mm): 28.0 Discard Thickness (mm): 26.0</body></html>",
+      ),
+    ).toBe(false);
+  });
+});

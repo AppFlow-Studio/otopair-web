@@ -41,6 +41,39 @@
  *      and shipped only the Severe schedule — half the answer, and the half we
  *      do not primarily quote from.
  *
+ * BRAKE SIGNALS (added v2, Aug 2026)
+ * ----------------------------------
+ * A third category, `brakes`, hunts the ROTOR DISCARD MINIMUM — the
+ * replace-at number cast on the rotor hat. It is scored separately rather than
+ * folded into `spec` because the two live in different chapters: capacities sit
+ * in "Technical Data", brake limits sit in the brake service section, and a
+ * single range list would have to bridge a hundred pages to hold both.
+ *
+ * The label vocabulary is IMPORTED from rotorThickness.ts rather than restated
+ * here. That module is the authority on what a thickness label looks like, and
+ * it is the thing that will later parse whatever page this scorer selects — so
+ * a label it cannot classify is a page billed for nothing, and a label it knows
+ * but this scorer ignores is a page never sent at all. One vocabulary, both
+ * ends.
+ *
+ * TWO PRECISION GUARDS, and both are required — this category needs BOTH a
+ * subject and a measurement vocabulary before it will select anything:
+ *
+ *   no SUBJECT ⇒ 0. `classifyThicknessLabel`'s catch-all matches a bare
+ *     "Thickness", which appears on glass, paint and trim pages too.
+ *   no LABEL ⇒ 0. This one was learned the expensive way. Scoring
+ *     `subject*2 + labels + dims` let a page dense in the WORD "brake" clear
+ *     the floor on subject alone: the 2021 GMC Acadia owner's manual selected
+ *     p287, a prose page about brake wear warnings and fluid checks, carrying
+ *     zero thickness labels and zero measurements — the parser extracts
+ *     nothing from it, and we would have billed for it. That is exactly the
+ *     "DENSITY, NOT PRESENCE" lesson above, re-learned in a third category.
+ *     The word "brake" appears on thirty pages; a brake LIMITS table is the
+ *     only place a thickness label appears next to it.
+ *
+ * Subject is therefore a gate with a CAPPED contribution, and the score itself
+ * is driven by labels and measurements.
+ *
  * RECALL OVER THRIFT. The thresholds are deliberately loose enough to admit some
  * neighbouring pages. Over-including a few costs cents; missing the schedule
  * costs the extraction, and we already paid to fetch the document. Measured on
@@ -48,8 +81,11 @@
  * 20x cost reduction while still containing every section verified by hand.
  */
 
-/** Bump when the scoring changes, so stale indexes can be recomputed. */
-export const PAGE_INDEX_VERSION = 1;
+import { ROTOR_THICKNESS_LABEL_PATTERNS } from "./rotorThickness";
+
+/** Bump when the scoring changes, so stale indexes can be recomputed.
+ *  v2 (Aug 2026): added the `brakes` category — see BRAKE SIGNALS below. */
+export const PAGE_INDEX_VERSION = 2;
 
 export type PageRange = { start: number; end: number };
 
@@ -58,6 +94,8 @@ export type PageScore = {
   isNav: boolean;
   interval: number;
   spec: number;
+  /** Brake specification table — rotor discard minimums. See BRAKE SIGNALS. */
+  brakes: number;
 };
 
 export type ManualPageIndex = {
@@ -65,6 +103,9 @@ export type ManualPageIndex = {
   total_pages: number;
   intervals: PageRange[];
   specs: PageRange[];
+  /** Brake-specification pages. OPTIONAL because a v1 index predates the
+   *  category — read it as `?? []`, never assume it is present. */
+  brakes?: PageRange[];
   computed_at: number;
   /** Documents this manual defers its schedule to. See detectScheduleDeferral. */
   defers_to?: DeferralTarget[];
@@ -83,6 +124,22 @@ const SPECWORD =
 /** ". . . ." — the dotted leader that marks a contents or index line. */
 const DOT_LEADER = /\.\s?\.\s?\.\s?\./g;
 
+/** What the table is ABOUT. No subject on the page ⇒ not a brake page, whatever
+ *  else it says. See PRECISION GUARD in the header. */
+const BRAKE_SUBJECT =
+  /\b(brake\s*(?:disc|disk|rotor|pad|lining)s?|disc\s*brake|rotor|caliper)\b/gi;
+
+/** The same label vocabulary rotorThickness.ts parses with, global-ified for
+ *  counting. Built once — `RegExp.lastIndex` on a shared /g regex is stateful,
+ *  and `String.match` resets it, so these are only ever used via countOf. */
+const ROTOR_LABELS: readonly RegExp[] = ROTOR_THICKNESS_LABEL_PATTERNS.map(
+  (re) => new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g"),
+);
+
+/** "22.0 mm" / "0.945 in" — brake limits are printed to a decimal place, which
+ *  is what separates a spec table from prose that merely mentions thickness. */
+const BRAKE_DIM = /\b\d{1,2}\.\d{1,2}\s*mm\b|\b\d?\.\d{2,3}\s*(?:in\b|inch)/gi;
+
 const countOf = (s: string, re: RegExp): number => (s.match(re) || []).length;
 
 /**
@@ -100,10 +157,25 @@ export function scoreManualPages(pages: readonly (string | null | undefined)[]):
     // Both an absolute count and a density, because an index page is long and
     // dot-heavy while a short section-contents page is only dot-dense.
     const isNav = dots >= 12 || (dots >= 6 && dots / (len / 1000) > 8);
+    // Subject and label are both GATES. A page that never names a brake part is
+    // not a brake page however often it says "thickness"; a page that names
+    // brakes constantly but carries no thickness label is prose, and the parser
+    // can read nothing off it. Requiring both is what keeps this category
+    // pointed at limits TABLES.
+    const subject = countOf(t, BRAKE_SUBJECT);
+    const labels = ROTOR_LABELS.reduce((n, re) => n + countOf(t, re), 0);
+    const brakes =
+      isNav || subject === 0 || labels === 0
+        ? 0
+        : // Labels and measurements carry the score; the subject only proves
+          // what the table is about, so its contribution is capped and cannot
+          // outvote the evidence that a number is actually present.
+          labels * 3 + countOf(t, BRAKE_DIM) + Math.min(subject, 4);
     return {
       isNav,
       interval: isNav ? 0 : countOf(t, MILEAGE) * 3 + countOf(t, SERVICE),
       spec: isNav ? 0 : countOf(t, CAPACITY) * 3 + countOf(t, SPECWORD),
+      brakes,
     };
   });
 }
@@ -127,7 +199,7 @@ export type PickOptions = {
  */
 export function pickPageRanges(
   scores: readonly PageScore[],
-  key: "interval" | "spec",
+  key: "interval" | "spec" | "brakes",
   opts: PickOptions = {},
 ): PageRange[] {
   const minAbs = opts.minAbs ?? 8;
@@ -170,9 +242,68 @@ export function pickPageRanges(
   return out.sort((a, b) => a.start - b.start);
 }
 
+/**
+ * Pick options for the `brakes` category.
+ *
+ * Tighter than the defaults on both axes. A brake limits table is COMPACT —
+ * one or two pages, not the dozen a maintenance grid spans — so the budget is
+ * small; and because the subject gate already removes most of the document, a
+ * page that clears it with only a couple of hits is prose about brake wear
+ * indicators rather than a table of numbers, so the floor is higher.
+ */
+export const BRAKE_PICK_OPTIONS: PickOptions = { minAbs: 10, budget: 8 };
+
 /** Total pages covered by a range list — the figure that is actually billed. */
 export function pageCountOf(ranges: readonly PageRange[]): number {
   return ranges.reduce((n, r) => n + (r.end - r.start + 1), 0);
+}
+
+/**
+ * Union of several range lists, sorted and coalesced.
+ *
+ * The specs extraction asks for capacities AND rotor minimums in one call, so
+ * it must send `specs ∪ brakes`. Concatenating the two lists raw would double-
+ * bill any page both categories picked and could hand Reducto overlapping
+ * ranges; merging first makes `pageCountOf` on the result the true bill.
+ */
+export function mergePageRanges(
+  ...lists: ReadonlyArray<readonly PageRange[] | undefined | null>
+): PageRange[] {
+  const all = lists
+    .flatMap((l) => (l ?? []) as readonly PageRange[])
+    .filter((r) => Number.isFinite(r?.start) && Number.isFinite(r?.end) && r.end >= r.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const out: PageRange[] = [];
+  for (const r of all) {
+    const last = out[out.length - 1];
+    // `<= last.end + 1` coalesces adjacency too: 10-12 and 13-14 are one 10-14
+    // range, which is the same pages at less structure.
+    if (last && r.start <= last.end + 1) last.end = Math.max(last.end, r.end);
+    else out.push({ start: r.start, end: r.end });
+  }
+  return out;
+}
+
+/**
+ * Pages this extraction will actually be BILLED for.
+ *
+ * An EMPTY range list out of a fresh index does not mean "zero pages". It means
+ * the scorer found nothing of this kind, and `toReductoPageRange([])` returns
+ * `null`, which sends the WHOLE DOCUMENT. Feeding that empty list straight to
+ * the budget check produced a count of 0 — and `withinReductoPageBudget`
+ * approves 0 — so an oversize manual could clear a budget gate on a zero and
+ * then bill for all 395 pages. That is precisely the failure the page index was
+ * built to prevent, arriving through the index itself.
+ *
+ * So: narrowed ⇒ the narrowed count; not narrowed ⇒ the whole document's count,
+ * which is what will really be billed. Fail-open is preserved (a small document
+ * still goes through whole), it just stops being invisible to the budget.
+ */
+export function billedPageCount(
+  ranges: readonly PageRange[],
+  wholeDocumentPages: number | null | undefined,
+): number | null | undefined {
+  return ranges.length > 0 ? pageCountOf(ranges) : wholeDocumentPages;
 }
 
 /**
@@ -191,7 +322,24 @@ export function toReductoPageRange(
 
 /** Is a stored index still usable for the current scoring rules? */
 export function pageIndexIsFresh(idx: ManualPageIndex | null | undefined): boolean {
-  return !!idx && idx.version === PAGE_INDEX_VERSION && (idx.intervals.length > 0 || idx.specs.length > 0);
+  return (
+    !!idx &&
+    idx.version === PAGE_INDEX_VERSION &&
+    (idx.intervals.length > 0 || idx.specs.length > 0 || (idx.brakes?.length ?? 0) > 0)
+  );
+}
+
+/**
+ * Pages to send for the SPECS extraction pass: capacities plus brake limits.
+ *
+ * One accessor rather than a `[...specs, ...brakes]` at each call site, because
+ * both extractors (Anthropic and Reducto) compute this and a copy that forgot
+ * `brakes` would silently stop asking for rotor minimums while still reporting
+ * a narrowed page count.
+ */
+export function specsPageRanges(idx: ManualPageIndex | null | undefined): PageRange[] {
+  if (!idx) return [];
+  return mergePageRanges(idx.specs, idx.brakes);
 }
 
 // ─── Deferral detection ──────────────────────────────────────────
@@ -346,6 +494,7 @@ export const _storePageIndex = internalMutation({
       total_pages: v.float64(),
       intervals: v.array(v.object({ start: v.float64(), end: v.float64() })),
       specs: v.array(v.object({ start: v.float64(), end: v.float64() })),
+      brakes: v.optional(v.array(v.object({ start: v.float64(), end: v.float64() }))),
       computed_at: v.float64(),
       defers_to: v.optional(
         v.array(

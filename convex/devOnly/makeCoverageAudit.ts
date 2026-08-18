@@ -17,7 +17,11 @@
  */
 import { internalQuery } from "../_generated/server";
 import { v } from "convex/values";
-import { auditMakeCoverage, type MakeCoverageRow } from "../vehicleEnrichment/makeCoverage";
+import {
+  auditMakeCoverage,
+  auditOperatorDiversity,
+  type MakeCoverageRow,
+} from "../vehicleEnrichment/makeCoverage";
 
 export const audit = internalQuery({
   args: {
@@ -57,11 +61,34 @@ export const audit = internalQuery({
       console.warn(`[make-coverage] ALARM ${a.name} (${a.configCount} configs): ${a.note}`);
     }
 
+    // Coverage answers "does this make have a storefront". Diversity answers
+    // the question that one cannot: whether all those storefronts are the same
+    // business. A registry can be 100% covered and still have exactly one
+    // point of failure, which is the state it is in today.
+    const diversity = auditOperatorDiversity();
+    if (diversity.severity !== "ok") {
+      console.warn(
+        `[make-coverage] OPERATOR ${diversity.severity.toUpperCase()}: ${diversity.message}`,
+      );
+    }
+
     return {
       summary: report.summary,
       totalConfigs: configs.length,
       orphanConfigs,
       alarms: report.alarms,
+      operatorDiversity: {
+        severity: diversity.severity,
+        message: diversity.message,
+        operatorCount: diversity.operatorCount,
+        // The work queue that would close the alarm: stores already probed and
+        // recorded, waiting on a detail-page walk before they can be promoted.
+        pendingAlternates: diversity.pendingAlternates,
+        byOperator: diversity.byOperator.map((o) => ({
+          operator: o.operator,
+          makes: o.makes.length,
+        })),
+      },
       findings: args.alarmsOnly ? undefined : report.findings,
     };
   },

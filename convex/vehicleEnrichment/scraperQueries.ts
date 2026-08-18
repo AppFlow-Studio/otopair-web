@@ -103,6 +103,90 @@ export const getCachedScrape = internalQuery({
   },
 });
 
+/**
+ * EVERY non-expired cached page for one vehicle, newest first.
+ *
+ * WHY THIS EXISTS. The rotor resolver used to read exactly one row —
+ * `getCachedScrape(..., "parts_catalog")` — and try to parse a discard minimum
+ * out of it. That is a single retail listing, and a retail listing publishes
+ * `330x22mm` (a NOMINAL) and essentially never a discard limit, so the
+ * `sourced_markdown` tier almost never fired and the resolver fell through to
+ * `nominal_only` or `never_found`. The other cached pages for the same vehicle
+ * — the pricing fetches, the owner-manual page, whatever the category harvest
+ * left behind — were sitting in the same table, unread.
+ *
+ * Reading them costs nothing: these are rows we already paid to fetch, the
+ * parse is a local regex, and the label cross-check in `parseRotorThickness`
+ * means a page with no discard-supporting label contributes nothing rather than
+ * contributing a wrong number.
+ *
+ * BOUNDED ON PURPOSE. `markdown` rows run to tens of thousands of characters
+ * and Convex caps a query response at 16 MiB, so this takes a small number of
+ * rows and truncates each one. A `.collect()` here would work in dev and fail
+ * on the first vehicle with a rich cache.
+ */
+export const getCachedScrapesForVehicle = internalQuery({
+  args: {
+    vehicleMake: v.string(),
+    vehicleModel: v.string(),
+    vehicleYear: v.float64(),
+    vehicleTrim: v.string(),
+    /** Rows to return, newest first. Small by design — see BOUNDED ON PURPOSE. */
+    limit: v.optional(v.float64()),
+    /** Per-row markdown cap, characters. */
+    maxCharsPerRow: v.optional(v.float64()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const limit = Math.max(1, Math.trunc(args.limit ?? 6));
+    const cap = Math.max(1_000, Math.trunc(args.maxCharsPerRow ?? 60_000));
+
+    const sourceTypes = ["parts_catalog", "pricing", "owner_manual"] as const;
+    const rows: Array<{
+      url: string;
+      domain: string;
+      source_type: string;
+      scraped_at: number;
+      markdown: string;
+      truncated: boolean;
+    }> = [];
+
+    // Keyed lookup per source type rather than a scan: the cache key is
+    // (make, model, year, trim, source_type), so there is at most one live row
+    // per type and the by_cache_key index reaches each in one read.
+    for (const st of sourceTypes) {
+      const cacheKey = buildCacheKey(
+        args.vehicleMake,
+        args.vehicleModel,
+        args.vehicleYear,
+        st,
+        args.vehicleTrim,
+      );
+      const row = await ctx.db
+        .query("scrape_cache")
+        .withIndex("by_cache_key", (q) => q.eq("cache_key", cacheKey))
+        .first();
+      if (!row) continue;
+      if ((row.expires_at ?? 0) < now) continue;
+      const md = String(row.markdown ?? "");
+      // Every one of these columns is optional on the row. Defaulting rather
+      // than asserting keeps a half-written cache row readable — the markdown
+      // is the only field the rotor parse actually needs, and the rest are
+      // provenance for the log line.
+      rows.push({
+        url: row.url ?? "",
+        domain: row.domain ?? "unknown",
+        source_type: row.source_type ?? "unknown",
+        scraped_at: row.scraped_at ?? 0,
+        markdown: md.slice(0, cap),
+        truncated: md.length > cap,
+      });
+    }
+
+    return rows.sort((a, b) => b.scraped_at - a.scraped_at).slice(0, limit);
+  },
+});
+
 /** [TEST] Delete all scrape cache entries for a vehicle. Internal (was a
  *  public mutation — same lockdown rationale as the Jun-9 security sweep). */
 export const debugClearVehicleCache = internalMutation({

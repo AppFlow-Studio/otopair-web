@@ -84,6 +84,12 @@ import { internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { resolveExtractionModel } from "./utils/enrichmentFlags";
 import { isFilesApiSizeLimit, isOemDomain, normalizeMakeKey } from "./manualLibrary";
+import {
+  parseRotorThickness,
+  ROTOR_MIN_BANDS,
+  ROTOR_THICKNESS_VALID_MM,
+  type RotorThicknessKind,
+} from "./rotorThickness";
 
 /** Codegen has not seen this module yet — same selfApi() idiom manualLibrary
  *  and nhtsaOdi use. Tighten after `npx convex dev` regenerates the API. */
@@ -133,7 +139,7 @@ const EXTRACTION_TOOL_NAME = "record_vehicle_specifications";
 // Field contract
 // ============================================================================
 
-export type SpecUnit = "qts" | "oz" | "psi" | "ft_lbs" | "text" | "inches" | "count";
+export type SpecUnit = "qts" | "oz" | "psi" | "ft_lbs" | "text" | "inches" | "count" | "mm";
 
 export type SpecFieldDef = {
   /** V4_FIELD_KEYS name — the ledger keys on this. */
@@ -143,6 +149,23 @@ export type SpecFieldDef = {
   hint: string;
   /** True when the spec differs per engine and an unmatched qualifier is fatal. */
   engineSensitive: boolean;
+  /**
+   * Set on the rotor-thickness fields ONLY.
+   *
+   * Presence routes the value through `rotorClaimSurvives`, which re-reads the
+   * model's own quote with the deterministic parser and refuses the claim
+   * unless the quoted LABEL supports this exact kind. The model is allowed to
+   * find the number; it is not allowed to say what the number means.
+   *
+   * That asymmetry is the whole guard. "Thickness" and "Minimum Machining
+   * Thickness" and "Discard Thickness" are three different numbers printed
+   * within centimetres of each other, and a confident model that returns the
+   * first under the third's field key produces a minimum that is 1-3 mm too
+   * HIGH or too LOW. Too low is the dangerous direction: it passes worn rotors.
+   */
+  rotorKind?: RotorThicknessKind;
+  /** Axle for the plausibility band. Set with `rotorKind`. */
+  rotorAxle?: "front" | "rear";
 };
 
 /**
@@ -282,6 +305,68 @@ export const SPEC_FIELDS: readonly SpecFieldDef[] = [
     hint: "battery group size / type designation, e.g. 35, H6, 24F",
     engineSensitive: false,
   },
+
+  // ── Rotor thickness ────────────────────────────────────────────
+  //
+  // These four are the ONLY fields here that are not V4_FIELD_KEYS. Their
+  // consumer is utils/rotorSpecResource.ts, which reads them back off the
+  // claim ledger under exactly these keys — the same keys sourceAdapters/
+  // brembo.ts and summitCentric.ts emit, so a manual claim and an aftermarket
+  // catalogue claim land in one cluster and reconcileClaims weighs them
+  // (owners_manual 3 vs aftermarket_catalog 2) instead of racing.
+  //
+  // WHY THIS IS WORTH ASKING FOR. Before this, the discard minimum had two
+  // possible sources: a deterministic parse of a retail parts page — which
+  // prints `330x22mm` NOMINAL and essentially never a discard limit — and
+  // those two aftermarket catalogues, whose number is for THEIR disc and is
+  // therefore stamped `oem_spec_flagged` and warn-capped. The manufacturer's
+  // own brake specification table is the authoritative source and was never
+  // being read, on documents already in storage.
+  //
+  // Every one of these is `engineSensitive: false` on purpose: rotor sizing
+  // splits by BRAKE PACKAGE and axle, never by engine, so an engine qualifier
+  // would reject correct rows. The axle is carried by the field key itself.
+  {
+    key: "rotor_front_min_thickness_mm",
+    unit: "mm",
+    hint:
+      "FRONT brake disc/rotor MINIMUM (discard / wear-limit / service-limit) thickness — " +
+      "the replace-at figure. NOT the new/nominal thickness and NOT the minimum " +
+      "MACHINING/refinishing thickness, which are different, larger numbers",
+    engineSensitive: false,
+    rotorKind: "discard_min",
+    rotorAxle: "front",
+  },
+  {
+    key: "rotor_rear_min_thickness_mm",
+    unit: "mm",
+    hint:
+      "REAR brake disc/rotor MINIMUM (discard / wear-limit / service-limit) thickness — " +
+      "the replace-at figure. NOT the new/nominal thickness and NOT the minimum " +
+      "MACHINING/refinishing thickness",
+    engineSensitive: false,
+    rotorKind: "discard_min",
+    rotorAxle: "rear",
+  },
+  {
+    key: "rotor_front_nominal_thickness_mm",
+    unit: "mm",
+    hint:
+      "FRONT brake disc/rotor NEW (nominal/standard) thickness as manufactured — " +
+      "the thickness of an unworn disc",
+    engineSensitive: false,
+    rotorKind: "nominal",
+    rotorAxle: "front",
+  },
+  {
+    key: "rotor_rear_nominal_thickness_mm",
+    unit: "mm",
+    hint:
+      "REAR brake disc/rotor NEW (nominal/standard) thickness as manufactured",
+    engineSensitive: false,
+    rotorKind: "nominal",
+    rotorAxle: "rear",
+  },
 ];
 
 const SPEC_FIELD_BY_KEY: ReadonlyMap<string, SpecFieldDef> = new Map(
@@ -336,6 +421,7 @@ export function normalizeSpecValue(fieldKey: string, raw: unknown): string | nul
     case "ft_lbs":
     case "inches":
     case "count":
+    case "mm":
       return numStr(raw);
     case "text":
       return textStr(raw);
@@ -382,6 +468,99 @@ export function engineQualifierMatches(
   }
 
   return false;
+}
+
+/**
+ * How far the model's reported number may sit from the one the deterministic
+ * parser reads out of its own quote, in mm.
+ *
+ * Not a fudge factor for disagreement — a unit-conversion allowance. A manual
+ * that prints "0.945 in (24.0 mm)" gives the parser 24.003 and 24.0 from one
+ * line, and a model reporting either is right. Anything beyond this is the
+ * model and its own quote disagreeing about the value, which is not a rounding
+ * problem.
+ */
+export const ROTOR_QUOTE_TOLERANCE_MM = 0.25;
+
+/**
+ * The one instruction the rotor fields cannot work without, shared verbatim by
+ * both prompt builders (Anthropic here, Reducto in manualReducto.ts).
+ *
+ * `rotorClaimSurvives` classifies the number by reading the LABEL out of the
+ * model's quote. A quote of just "24.0 mm" carries no label, so the parser
+ * refuses it and a perfectly correct extraction is dropped. The quote has to
+ * start at the row heading. This is stated once, in one place, because the two
+ * prompts drifting apart would silently disable the guard on one extractor.
+ */
+export const ROTOR_QUOTE_RULE =
+  "For the rotor thickness fields, `quoted_text` MUST include the row's LABEL as " +
+  "well as the number — quote \"Minimum thickness ... 24.0 mm\", never just " +
+  "\"24.0 mm\". The label is what distinguishes a discard minimum from a new " +
+  "thickness from a machining limit, and a value quoted without it is discarded. " +
+  "Report rotor thicknesses in MILLIMETRES; if the manual prints only inches, " +
+  "quote the inch text verbatim and give the mm value.";
+
+export type RotorClaimVerdict = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Decide whether a rotor thickness claim may be filed.
+ *
+ * TWO INDEPENDENT GATES, both of which must pass:
+ *
+ *   1. PLAUSIBILITY. The value has to be a thickness a rotor could actually
+ *      have, and — for a minimum — inside the axle's band. A rear discard
+ *      minimum of 26 mm is a front figure read off the wrong row.
+ *
+ *   2. THE QUOTE MUST SAY SO. `parseRotorThickness` re-reads the model's own
+ *      `quoted_text` and must independently produce a reading of the SAME kind
+ *      at the SAME value. This is the load-bearing gate. The model chooses
+ *      where to look; the deterministic label classifier decides what it
+ *      found. A model that quotes "Thickness ... 24.0 mm" and files it as a
+ *      discard minimum is refused, because the parser classifies that label as
+ *      `nominal` — and a nominal filed as a minimum condemns every healthy
+ *      rotor on the vehicle.
+ *
+ * A rejection names what the parser DID see, so the drop is diagnosable from
+ * the log line without re-opening the PDF.
+ */
+export function rotorClaimSurvives(
+  def: SpecFieldDef,
+  valueMm: number,
+  quotedText: string,
+): RotorClaimVerdict {
+  const kind = def.rotorKind;
+  const axle = def.rotorAxle;
+  if (!kind || !axle) return { ok: true }; // not a rotor field — nothing to check
+
+  if (!Number.isFinite(valueMm)) return { ok: false, reason: "rotor_value_not_finite" };
+  if (valueMm < ROTOR_THICKNESS_VALID_MM.min || valueMm > ROTOR_THICKNESS_VALID_MM.max) {
+    return { ok: false, reason: `rotor_out_of_physical_range:${valueMm}` };
+  }
+  if (kind === "discard_min") {
+    const band = ROTOR_MIN_BANDS[axle];
+    if (valueMm < band.validLow || valueMm > band.validHigh) {
+      return {
+        ok: false,
+        reason: `rotor_min_out_of_${axle}_band:${valueMm}∉[${band.validLow},${band.validHigh}]`,
+      };
+    }
+  }
+
+  const readings = parseRotorThickness(quotedText);
+  if (readings.length === 0) {
+    return { ok: false, reason: "rotor_quote_unparseable" };
+  }
+  const supporting = readings.find(
+    (r) => r.kind === kind && Math.abs(r.valueMm - valueMm) <= ROTOR_QUOTE_TOLERANCE_MM,
+  );
+  if (!supporting) {
+    const saw = readings
+      .map((r) => `${r.kind}=${r.valueMm}("${r.observedLabel}")`)
+      .join(", ")
+      .slice(0, 200);
+    return { ok: false, reason: `rotor_quote_does_not_support_${kind}:saw[${saw}]` };
+  }
+  return { ok: true };
 }
 
 // ============================================================================
@@ -462,6 +641,7 @@ export function buildSpecExtractionPrompt(vehicle: {
     "4. For engine oil capacity report the DRAIN AND REFILL WITH FILTER CHANGE figure — not the dry-fill/total figure, and not the without-filter figure. Same principle for transmission fluid: the drain-and-fill service quantity, not the total.",
     "5. If a spec is split by engine, trim, or drivetrain, report the row for the engine named above and copy that row's label verbatim into `engine_qualifier`. If you cannot tell which row applies, omit the field entirely.",
     "6. Omit anything the vehicle does not have (no rear wiper, no transfer case). An absent field is a correct answer; a zero is not.",
+    `7. ${ROTOR_QUOTE_RULE}`,
     "",
     `Call the ${EXTRACTION_TOOL_NAME} tool exactly once with your findings.`,
   ].join("\n");
@@ -552,6 +732,16 @@ export function parseSpecPayload(
     if (def.engineSensitive && !engineQualifierMatches(qualifier, engine)) {
       dropped.push({ field_key: key, reason: `engine_mismatch:${qualifier ?? ""}` });
       continue;
+    }
+
+    // Rotor fields only: the deterministic parser re-reads the model's own
+    // quote and decides what the number is. See rotorClaimSurvives.
+    if (def.rotorKind) {
+      const verdict = rotorClaimSurvives(def, Number(value), quoted);
+      if (!verdict.ok) {
+        dropped.push({ field_key: key, reason: verdict.reason });
+        continue;
+      }
     }
 
     const printed =

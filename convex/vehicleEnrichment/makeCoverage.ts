@@ -44,9 +44,10 @@
  * a written reason why not. There is no third state.
  */
 
-import { SOURCE_REGISTRY, hasSources } from "./sourceRegistry";
+import { getAlternateStores, SOURCE_REGISTRY, hasSources } from "./sourceRegistry";
 import { hasOemPartPattern } from "./contentSanitization";
 import { makeKeyOf } from "../lib/makeKey";
+import { resolveOperator } from "./sourceAdapters/claimLedger";
 
 /**
  * What we have decided to do about a make.
@@ -253,4 +254,135 @@ export function contradictoryPolicyEntries(): string[] {
   return Object.keys(MAKE_COVERAGE_POLICY).filter(
     (key) => MAKE_COVERAGE_POLICY[key].disposition !== "supported" && registryHasKey(key),
   );
+}
+
+
+// ─── Operator diversity ─────────────────────────────────────────────────────
+//
+// WHY THIS EXISTS. `hasSources` asks whether a make has A storefront. It does
+// not ask whether that storefront is the SAME BUSINESS as every other make's,
+// and on this registry it is: every entry resolves to a RevolutionParts
+// storefront, either `{make}.oempartsonline.com` or a carve-out
+// (classicparts.mbusa.com, MINI→BMW's, Lincoln→Ford's) that is still RP.
+//
+// sourceAdapters/types.ts already states the doctrine this rests on: "two OEM
+// dealer storefronts agreeing is weaker evidence than one storefront + one
+// aftermarket catalog, because storefronts share an upstream", and the ledger
+// dedups on OPERATOR, not hostname, because "a hostname is a brand, and one
+// operator sells under many". The parts LANE never had the corresponding
+// check, so a single-operator dependency reads as full coverage.
+//
+// The cost is not hypothetical. When RP's catalogue is thin for a year/model,
+// every deterministic rung fails together and the run falls to the open-web
+// path — which is what a batch of domestic misses (Acadia 9/13, Tacoma 12/16)
+// looks like from the outside. This surfaces that as a WARNING rather than
+// leaving it to be re-derived from the next bad batch.
+
+/** A make's parts lane, reduced to the operator behind it. */
+export type OperatorRow = {
+  make: string;
+  storeHost: string;
+  operator: string;
+};
+
+/** Every registry make's storefront, resolved to its operator. */
+export function registryOperators(): OperatorRow[] {
+  const out: OperatorRow[] = [];
+  for (const [make, cfg] of Object.entries(SOURCE_REGISTRY)) {
+    let host = "";
+    try {
+      host = new URL(cfg.parts.storeBaseUrl).hostname.replace(/^www\./, "");
+    } catch {
+      host = cfg.parts.storeBaseUrl;
+    }
+    out.push({ make, storeHost: host, operator: resolveOperator(host) });
+  }
+  return out;
+}
+
+export type PendingAlternate = {
+  make: string;
+  baseUrl: string;
+  operator: string;
+  note: string;
+};
+
+export type OperatorDiversityFinding = {
+  /** Distinct operators across the whole registry. */
+  operatorCount: number;
+  /** Second-voice candidates recorded but NOT yet validated — the work queue
+   *  that closes this alarm. Surfaced here so a probed-but-unpromoted store is
+   *  visible in the audit rather than buried in a const nobody re-reads. */
+  pendingAlternates: PendingAlternate[];
+  /** Makes per operator, largest first. */
+  byOperator: Array<{ operator: string; makes: string[] }>;
+  /** Share of makes riding the single largest operator, 0..1. */
+  dominantShare: number;
+  severity: "ok" | "warn" | "alarm";
+  message: string;
+};
+
+/**
+ * Is the parts lane a monoculture?
+ *
+ * `alarm` when EVERY make rides one operator — there is no second voice
+ * anywhere and one vendor outage or catalogue gap is a fleet-wide outage.
+ * `warn` when one operator carries more than 80% of makes. `ok` otherwise.
+ *
+ * Deliberately reports rather than throws: this is a standing property of the
+ * registry today, so failing a build on it would just get suppressed. It
+ * belongs in the audit output next to the coverage findings, where the
+ * remediation (add a genuinely different backend for the biggest families) is
+ * a piece of work someone schedules.
+ */
+export function auditOperatorDiversity(
+  rows: readonly OperatorRow[] = registryOperators(),
+): OperatorDiversityFinding {
+  const byOp = new Map<string, string[]>();
+  for (const r of rows) {
+    const list = byOp.get(r.operator) ?? [];
+    list.push(r.make);
+    byOp.set(r.operator, list);
+  }
+  const byOperator = [...byOp.entries()]
+    .map(([operator, makes]) => ({ operator, makes: makes.sort() }))
+    .sort((a, b) => b.makes.length - a.makes.length || a.operator.localeCompare(b.operator));
+
+  const total = rows.length;
+  const dominant = byOperator[0]?.makes.length ?? 0;
+  const dominantShare = total > 0 ? dominant / total : 0;
+  const operatorCount = byOperator.length;
+
+  const severity: OperatorDiversityFinding["severity"] =
+    operatorCount <= 1 ? "alarm" : dominantShare > 0.8 ? "warn" : "ok";
+
+  const message =
+    severity === "alarm"
+      ? `all ${total} registry makes resolve to ONE operator (${byOperator[0]?.operator}) — ` +
+        `a catalogue gap at that operator leaves every make with no STOREFRONT ` +
+        `lane at once. The vehicle-keyed RockAuto rung is the only non-${byOperator[0]?.operator} ` +
+        `parts source, and it is a heal rung, not a storefront`
+      : severity === "warn"
+        ? `${byOperator[0]?.operator} carries ${dominant}/${total} makes ` +
+          `(${Math.round(dominantShare * 100)}%) — single point of failure for most of the fleet`
+        : `${operatorCount} operators across ${total} makes`;
+
+  const pendingAlternates: PendingAlternate[] = [];
+  const seenAlt = new Set<string>();
+  for (const r of rows) {
+    for (const alt of getAlternateStores(r.make)) {
+      if (alt.validated) continue;
+      const key = `${alt.operator}`;
+      if (seenAlt.has(key)) continue;
+      seenAlt.add(key);
+      pendingAlternates.push({
+        make: r.make,
+        baseUrl: alt.baseUrl,
+        operator: alt.operator,
+        note: alt.note,
+      });
+    }
+  }
+
+  return { operatorCount, byOperator, dominantShare, severity, message, pendingAlternates };
 }

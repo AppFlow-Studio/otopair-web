@@ -1,10 +1,16 @@
 // =============================================================================
 // sourceAdapters/rockauto.ts — RockAuto part-number attestation.
 //
-// Family: aftermarket_catalog. UNLIKE every other adapter here, this one is
-// keyed by PART NUMBER, not by vehicle: RockAuto cannot answer "what pad fits a
-// 2016 CR-V" through a stable server-fetchable path, but it answers "is
-// 45022-T0A-A01 a real part, and what kind" exactly and deterministically.
+// Family: aftermarket_catalog. This adapter is keyed by PART NUMBER: it answers
+// "is 45022-T0A-A01 a real part, and what kind" exactly and deterministically.
+//
+// It used to say RockAuto "cannot answer 'what pad fits a 2016 CR-V' through a
+// stable server-fetchable path". RE-PROBED LIVE Aug 2026, that is no longer
+// true — the catalogue walks server-side through plain URLs, all levels 200 and
+// unblocked. That walk lives in rockautoCatalog.ts and is wired as rung 3 of
+// categoryHarvest; this file stays part-keyed on purpose, because confirming a
+// number we hold and proposing one from a vehicle are different jobs with
+// different evidence standards. Both are real, and neither replaces the other.
 // It therefore consumes `AdapterVehicle.known_parts` and emits nothing without
 // them — it corroborates numbers the pipeline already has, and never proposes
 // new ones.

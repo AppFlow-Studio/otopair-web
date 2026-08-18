@@ -1,6 +1,6 @@
 // =============================================================================
-// vehicleEnrichment/categoryHarvest.ts — two heal rungs that close core-role
-// gaps from CATALOG STRUCTURE instead of open-web research (Aug 2026).
+// vehicleEnrichment/categoryHarvest.ts — heal rungs that close core-role gaps
+// from CATALOG STRUCTURE instead of open-web research (Aug 2026).
 //
 // RUNG 1 — vehicle-scoped CATEGORY pages. RevolutionParts stores publish
 // `/v-{vehicle-slug}/{category}` pages whose URL *is* the fitment statement:
@@ -27,21 +27,60 @@
 //
 // Both rungs are wired into resourceRoles.healAfterRun between the
 // refute-harvest and the research repair, self-noop when nothing is missing,
-// and die per-rung without breaking the heal. Kill: PARTS_CATEGORY_HARVEST=off
-// / PARTS_INTERCHANGE_BACKTRACK=off.
+// and die per-rung without breaking the heal. Rung 1 additionally runs IN-RUN
+// (during Batch-2 polling) scoped to EARLY_ROLE_KEYS, so those roles are born
+// catalog-attested rather than extracted-then-refuted.
+// Kill: PARTS_CATEGORY_HARVEST=off / PARTS_CATEGORY_HARVEST_EARLY=off /
+// PARTS_INTERCHANGE_BACKTRACK=off.
+//
+// NOT A RUNG, AND WHY (probed live Aug 2026). An "assembly siblings" rung was
+// built on the premise that a `/oem-parts/` DETAIL page renders the exploded
+// assembly and links its callout parts — so one fetch of the front-pad page
+// would also yield the rotor. It does not. Fetched live,
+// g.oempartsonline.com/oem-parts/gm-air-filter-23321606 returns 482 KB of HTML
+// containing exactly ONE `/oem-parts/` link (its own canonical URL) and 22
+// `cdn-illustrations.revolutionparts.io` IMAGES: the diagram is raster, and
+// its callouts are not links. A detail page is a leaf, not a hub.
+//
+// The capability that premise was reaching for already exists here: on this
+// platform the CATEGORY page is the many-parts page, which is what rung 1
+// fetches. Anyone revisiting this should start from the illustration hash in
+// those image URLs (`/strapr1/{hash}/{hash}.png`) and find whether a
+// diagram-scoped PAGE exists behind it — that, not the detail page, would be
+// the hub.
 // =============================================================================
 
 import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { attestParts } from "./sourceAdapters/rockauto";
+import { attestParts, parseInterchangeNumbers } from "./sourceAdapters/rockauto";
+import { adapterFetch } from "./sourceAdapters/http";
+import {
+  buildCatalogPath,
+  MIN_BRAND_CORROBORATION,
+  parseCatalogNodes,
+  parsePositionedListings,
+  pickEngineNode,
+  pickNodeByPatterns,
+  positionOfRoleKey,
+  rankInterchangeCandidates,
+  ROCKAUTO_ROLE_LOCATION,
+  type CatalogNode,
+  type InterchangeSet,
+} from "./sourceAdapters/rockautoCatalog";
 import { getSourceConfig } from "./sourceRegistry";
 import { fetchUrlWithHtml, searchAndFetch } from "./firecrawl";
 import { parsePartPrices, normalizeOemNumber } from "./priceParser";
 import { checkRoleIdentity } from "./roleIdentity";
 import { sanitizePartNumber } from "./contentSanitization";
 import { verifyPartFitments } from "./utils/partFitmentVerifier";
-import { missingCoreRoles } from "./quotability";
+import {
+  EARLY_ROLE_KEYS,
+  EARLY_SERVICE_SLUGS,
+  earlyHarvestScope,
+  missingCoreRoles,
+} from "./quotability";
+import { classifyFuelClass } from "./variantFingerprint";
 import { PART_FIELD_MAP } from "./v3pipeline";
 
 // ─── Pure helpers (unit-tested in tests/categoryHarvest.test.ts) ────────────
@@ -525,40 +564,77 @@ async function writeCandidate(
  *  budget is, what it drops is now logged rather than swallowed. */
 const CATEGORY_PAGE_BUDGET = 6;
 
-/** Universal brake services — assumable on a first run before quotability
- *  exists (every car has brakes; drum-rear vehicles are handled by
- *  na_role_keys, which loadMissingContext already applies on top). */
-const BRAKE_SERVICE_SLUGS = ["brake_pad_replacement", "rotor_replacement"] as const;
-export const BRAKE_ROLE_KEYS = [
-  "front_brake_pad",
-  "rear_brake_pad",
-  "front_rotor",
-  "rear_rotor",
-] as const;
+/** The powertrain-independent role/service sets the in-run harvest is allowed
+ *  to assume. Declared in quotability.ts — the module that owns role semantics
+ *  and, unlike this one, is not part of the v3pipeline import loop. Re-exported
+ *  here because this is where callers look for them. */
+export { EARLY_ROLE_KEYS, EARLY_SERVICE_SLUGS } from "./quotability";
+
 
 export const harvestVehicleCategories = internalAction({
   args: {
     vehicleConfigId: v.id("vehicle_configs"),
-    /** Wave 3 in-run mode: restrict the harvest to these roleKeys (the
-     *  pipeline passes the brake roles between Batch 1 and Batch 2, so
-     *  rotors/pads are born catalog-attested instead of
-     *  extract-then-refute). Unset = heal-time behavior, all missing roles. */
+    /** Restrict the harvest to these roleKeys. Unset = heal-time behaviour,
+     *  all missing roles against REAL applicability. */
     roleFilter: v.optional(v.array(v.string())),
+    /**
+     * In-run mode: the harvest picks its own role scope from the decoded
+     * POWERTRAIN and assumes the matching services.
+     *
+     * The pipeline passes this instead of a roleFilter deliberately. Both
+     * sides could compute `earlyHarvestScope` — the pipeline has the fuel type
+     * in hand at that point too — but then a disagreement between them would
+     * silently produce `withinScope: false` and a harvest that no-ops while
+     * still logging as if it ran. One owner, no drift.
+     */
+    inRunScope: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     if (process.env.PARTS_CATEGORY_HARVEST === "off") return { status: "disabled" as const };
-    const cx = await loadMissingContext(
-      ctx,
-      args.vehicleConfigId,
-      // Only the brake-scoped in-run call may assume slugs, and only the
-      // universal brake services — never guess broader applicability.
-      args.roleFilter?.every((r) => (BRAKE_ROLE_KEYS as readonly string[]).includes(r))
-        ? BRAKE_SERVICE_SLUGS
-        : undefined,
-    );
+    // How wide the in-run assumption may go is decided by the POWERTRAIN, which
+    // Batch 1 has already decoded by the time this runs. A caller whose
+    // roleFilter stays inside that scope gets the matching service assumption;
+    // anything outside it gets none, and therefore no harvest until
+    // applicability is real. See earlyHarvestScope for the reasoning per class.
+    // In-run mode reads the POWERTRAIN and widens as far as it allows. An
+    // explicit roleFilter is honoured only while it stays inside that scope;
+    // outside it, no services are assumed and the harvest waits for real
+    // applicability — never guess broader applicability.
+    let scope: ReturnType<typeof earlyHarvestScope> | null = null;
+    if (args.inRunScope || args.roleFilter) {
+      let fuelType: string | null = null;
+      try {
+        const r: any = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.resolveConfigForBackfill,
+          { vehicleConfigId: args.vehicleConfigId },
+        );
+        fuelType = r?.fuelType ?? null;
+      } catch {
+        // Fail open to the narrow set — a decode miss costs coverage, never
+        // correctness.
+      }
+      scope = earlyHarvestScope(classifyFuelClass(fuelType));
+    }
+    const assumeSlugs = (() => {
+      if (!scope) return undefined;
+      if (args.inRunScope) return scope.serviceSlugs;
+      return args.roleFilter!.every((r) => scope!.roleKeys.includes(r))
+        ? scope.serviceSlugs
+        : undefined;
+    })();
+    if (scope) {
+      console.log(
+        `[category-harvest] in-run scope ${scope.basis} — ` +
+          `${scope.roleKeys.length} roles allowed, assume=${assumeSlugs ? "yes" : "no"}`,
+      );
+    }
+    const cx = await loadMissingContext(ctx, args.vehicleConfigId, assumeSlugs);
     if (!cx) return { status: "no_config" as const };
-    const missing = args.roleFilter
-      ? cx.missing.filter((m) => args.roleFilter!.includes(m.roleKey))
+    // Scope the work: an explicit filter when given, else the powertrain scope
+    // in in-run mode, else everything (heal-time, real applicability).
+    const allowed = args.roleFilter ?? (args.inRunScope ? scope!.roleKeys : null);
+    const missing = allowed
+      ? cx.missing.filter((m) => allowed.includes(m.roleKey))
       : cx.missing;
     if (missing.length === 0) return { status: "nothing_missing" as const };
     const { resolved } = cx;
@@ -777,6 +853,232 @@ export const harvestVehicleCategories = internalAction({
       written,
     };
     console.log("[category-harvest]", JSON.stringify(summary));
+    return summary;
+  },
+});
+
+// ─── Rung 3: RockAuto VEHICLE-KEYED walk ────────────────────────────────────
+//
+// The second operator. Every other parts rung — every one — resolves to
+// RevolutionParts (makeCoverage.auditOperatorDiversity: 36/36 makes, severity
+// `alarm`), so when RP's catalogue is thin for a year/model the whole
+// deterministic lane fails together and the run drops to open-web search. That
+// is what the domestic misses in the Aug 2026 batch looked like from outside.
+//
+// RockAuto is an independent catalogue and, re-probed live Aug 2026, its tree
+// walks server-side end to end. See rockautoCatalog.ts for the walk, the
+// position handling and — the crux — why interchange numbers reached BY THE
+// VEHICLE can be ranked by brand corroboration without violating THE LAW.
+//
+// Ranked AFTER rung 2 because it is the most expensive rung here: 2 catalogue
+// fetches per role plus one moreinfo fetch per listing inspected. It runs only
+// on roles everything cheaper has already failed to fill.
+//
+// Kill: PARTS_ROCKAUTO_VEHICLE=off.
+
+/** Roles attempted per invocation. Each costs ~2 + MOREINFO_BUDGET fetches. */
+const ROCKAUTO_ROLE_BUDGET = 3;
+/** Listings whose interchange set is read, per role. */
+const MOREINFO_BUDGET = 6;
+/** Candidates handed to the fitment verifier, per role, best-corroborated first. */
+const ROCKAUTO_VERIFY_BUDGET = 3;
+
+export const harvestRockAutoVehicle = internalAction({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    if (process.env.PARTS_ROCKAUTO_VEHICLE === "off") return { status: "disabled" as const };
+    const cx = await loadMissingContext(ctx, args.vehicleConfigId);
+    if (!cx) return { status: "no_config" as const };
+    if (cx.missing.length === 0) return { status: "nothing_missing" as const };
+    const { resolved } = cx;
+
+    // Only roles this adapter knows where to find. A role with no location is
+    // skipped in silence otherwise, which reads downstream as "RockAuto had
+    // nothing" when the truth is "we never looked".
+    const targets = [...new Set(cx.missing.map((m: any) => m.roleKey))]
+      .filter((r) => ROCKAUTO_ROLE_LOCATION[r] != null)
+      .slice(0, ROCKAUTO_ROLE_BUDGET);
+    if (targets.length === 0) {
+      return {
+        status: "no_locatable_roles" as const,
+        missing: [...new Set(cx.missing.map((m: any) => m.roleKey))],
+      };
+    }
+
+    const displacementL = (() => {
+      const n = parseFloat(String(resolved.displacement ?? "").replace(/[^0-9.]/g, ""));
+      return Number.isFinite(n) && n > 0 ? n : null;
+    })();
+    if (displacementL == null) return { status: "no_displacement" as const };
+
+    const fetchPath = async (path: string) => {
+      const r = await adapterFetch(`https://www.rockauto.com${path}`, { timeoutMs: 25_000 });
+      await new Promise((x) => setTimeout(x, 300));
+      return r;
+    };
+
+    // ── Walk once to the ENGINE, then reuse it for every role ──────────────
+    const modelPath = buildCatalogPath([resolved.make, resolved.year, resolved.model]);
+    let engine: CatalogNode | null = null;
+    try {
+      const modelRes = await fetchPath(modelPath);
+      engine = pickEngineNode(parseCatalogNodes(modelRes.body, modelPath), {
+        displacementL,
+        cylinders: null,
+      });
+    } catch (e) {
+      console.warn("[rockauto-vehicle] model fetch failed (non-fatal):", e);
+    }
+    // A null engine is a REAL answer — RockAuto lists every engine offered that
+    // year, and walking the wrong one harvests another powertrain's parts.
+    if (!engine) return { status: "no_engine_match" as const, modelPath };
+
+    // Categories are shared across roles; fetch once.
+    let categories: CatalogNode[] = [];
+    try {
+      const catRes = await fetchPath(engine.path);
+      categories = parseCatalogNodes(catRes.body, engine.path);
+    } catch (e) {
+      console.warn("[rockauto-vehicle] category fetch failed (non-fatal):", e);
+    }
+    if (categories.length === 0) return { status: "no_categories" as const, engine: engine.path };
+
+    const outcomes: string[] = [];
+    const written: string[] = [];
+    const partTypeCache = new Map<string, CatalogNode[]>();
+
+    for (const roleKey of targets) {
+      const loc = ROCKAUTO_ROLE_LOCATION[roleKey];
+      const category = pickNodeByPatterns(categories, loc.category);
+      if (!category) {
+        outcomes.push(`${roleKey}:no_category`);
+        continue;
+      }
+      try {
+        let partTypes = partTypeCache.get(category.path);
+        if (!partTypes) {
+          const ptRes = await fetchPath(category.path);
+          partTypes = parseCatalogNodes(ptRes.body, category.path);
+          partTypeCache.set(category.path, partTypes);
+        }
+        const partType = pickNodeByPatterns(partTypes, loc.partType);
+        if (!partType) {
+          outcomes.push(`${roleKey}:no_part_type`);
+          continue;
+        }
+
+        const listRes = await fetchPath(partType.path);
+        const all = parsePositionedListings(listRes.body);
+        const wantPos = positionOfRoleKey(roleKey);
+        // A position-bearing role takes ONLY listings under its own side.
+        // RockAuto puts front and rear on one page, so an unpositioned listing
+        // is unusable here — never "either side".
+        const listings = wantPos ? all.filter((l) => l.position === wantPos) : all;
+        if (listings.length === 0) {
+          outcomes.push(`${roleKey}:no_listings(total=${all.length},want=${wantPos})`);
+          continue;
+        }
+
+        const sets: InterchangeSet[] = [];
+        for (const l of listings.slice(0, MOREINFO_BUDGET)) {
+          try {
+            const r = await adapterFetch(l.moreInfoUrl, { timeoutMs: 25_000 });
+            sets.push({ brand: l.manufacturer, numbers: parseInterchangeNumbers(r.body) });
+            await new Promise((x) => setTimeout(x, 300));
+          } catch {
+            /* fail open per listing */
+          }
+        }
+
+        // Brand corroboration, then the SAME gates every other rung applies:
+        // make format, refute blocklist, then the adversarial verifier.
+        const ranked = rankInterchangeCandidates(sets)
+          .filter((c) => c.brandCount >= MIN_BRAND_CORROBORATION)
+          .map((c) => ({ ...c, sanitized: sanitizePartNumber(c.oem, resolved.make) }))
+          .filter((c) => c.sanitized != null)
+          .filter((c) => !cx.blocked.has(normalizeOemNumber(c.sanitized!)))
+          .slice(0, ROCKAUTO_VERIFY_BUDGET);
+        if (ranked.length === 0) {
+          outcomes.push(`${roleKey}:no_corroborated_candidates(sets=${sets.length})`);
+          continue;
+        }
+
+        const meta = cx.metaBySubcategory[roleKey];
+        if (!meta) {
+          outcomes.push(`${roleKey}:no_meta`);
+          continue;
+        }
+        const verdicts = await verifyPartFitments(
+          {
+            year: resolved.year,
+            make: resolved.make,
+            model: resolved.model,
+            trim: resolved.trim ?? "",
+            engineCode: resolved.engineCode ?? undefined,
+            displacement: resolved.displacement ?? undefined,
+          },
+          ranked.map((c) => ({
+            roleKey,
+            oem: c.sanitized!,
+            name: meta.name ?? roleKey,
+            quantity: null,
+            // No listing TITLE backs an interchange number — it is a number the
+            // catalogue says this part replaces, not a product we read. Passing
+            // a fabricated title would feed the role-identity check something
+            // no page ever said.
+            observedTitle: null,
+          })),
+        );
+
+        let filled = false;
+        for (const c of ranked) {
+          if (filled) break;
+          const vd = verdicts.find(
+            (x) => normalizeOemNumber(x.oem) === normalizeOemNumber(c.sanitized!),
+          );
+          const verdict = vd?.verdict ?? "uncertain";
+          outcomes.push(`${roleKey}:${c.sanitized}:x${c.brandCount}:${verdict}`);
+          // CONFIRMED ONLY. Rung 1 may write on "uncertain" because the store's
+          // vehicle-scoped URL is itself the fitment statement; here the
+          // evidence is an aftermarket cross-reference, which THE LAW says is
+          // never fitment-equivalent. Same standard as rung 2.
+          if (verdict !== "confirmed") continue;
+          const ok = await writeCandidate(
+            ctx,
+            args.vehicleConfigId,
+            meta,
+            resolved.makeId,
+            {
+              roleKey,
+              oem: c.sanitized!,
+              title: null,
+              price: null,
+              sourceUrl: `https://www.rockauto.com${partType.path}`,
+            },
+            0.7,
+          );
+          if (ok) {
+            filled = true;
+            written.push(`${roleKey}:${c.sanitized}`);
+          } else {
+            outcomes.push(`${roleKey}:${c.sanitized}:write_rejected`);
+          }
+        }
+      } catch (e) {
+        outcomes.push(`${roleKey}:error`);
+        console.warn(`[rockauto-vehicle] ${roleKey} failed (non-fatal):`, e);
+      }
+    }
+
+    const summary = {
+      status: "done" as const,
+      engine: engine.segment,
+      carcode: engine.id,
+      targets,
+      outcomes,
+      written,
+    };
+    console.log("[rockauto-vehicle]", JSON.stringify(summary));
     return summary;
   },
 });

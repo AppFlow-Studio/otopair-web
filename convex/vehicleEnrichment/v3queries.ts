@@ -371,6 +371,11 @@ export const resolveConfigForBackfill = internalQuery({
       model: (model as any)?.name ?? "",
       trim: (cfg.trim_name as string) ?? "",
       engineCode: (engine as any)?.engine_code ?? "",
+      /** vPIC-verbatim fuel string, e.g. "Gasoline", "Electric / Gasoline".
+       *  Consumers classify it with variantFingerprint.classifyFuelClass
+       *  rather than string-matching — "Electric / Gasoline" is a HYBRID and
+       *  reads as electric to a naive `includes("Electric")`. */
+      fuelType: ((engine as any)?.fuel_type ?? null) as string | null,
       displacement,
       drivetrain: (cfg.drivetrain as string) ?? undefined,
       makeId: cfg.make_id ?? null,

@@ -3670,14 +3670,25 @@ async function runPollBatch1Body(
       },
     );
 
-    // Wave 3 (Aug 2026): catalog-attested-first BRAKES. Rotors/pads were the
-    // most cross-generation-contaminated class when born from LLM extraction
-    // (wrong on all 3 vehicles that had them in the batch-3 audit) — so
-    // harvest the storefront's own vehicle-scoped brake category pages NOW,
-    // while Batch 2 polls, in a separate action budget. Roles Batch 1A
-    // already filled are skipped inside the action (empty-fill only); the
-    // URL itself is the fitment statement, and the usual verifier still
-    // cross-examines at finalize. Kill: PARTS_CATEGORY_HARVEST_EARLY=off.
+    // Wave 3 (Aug 2026): CATALOG-ATTESTED-FIRST for the roles we can name
+    // before applicability is known. Rotors/pads were the most
+    // cross-generation-contaminated class when born from LLM extraction (wrong
+    // on all 3 vehicles that had them in the batch-3 audit) — so harvest the
+    // storefront's own vehicle-scoped category pages NOW, while Batch 2 polls,
+    // in a separate action budget. Roles Batch 1A already filled are skipped
+    // inside the action (empty-fill only); the URL itself is the fitment
+    // statement, and the usual verifier still cross-examines at finalize.
+    //
+    // The role set is chosen BY THE HARVEST from the decoded powertrain
+    // (`inRunScope`), not fixed here. Batch 1 has already written
+    // engines.fuel_type — populated on 100% of rows — so by now we know
+    // whether this vehicle burns anything, and that is exactly the fact that
+    // decides whether oil filter, air filter, coolant and spark plugs exist.
+    // A gasoline car therefore gets ALL core roles catalog-attested up front;
+    // a BEV gets only the powertrain-independent ones. Widened from brakes to
+    // battery+cabin (Aug 2026, both `never_found` on the Nautilus and the
+    // Countryman), then to the full powertrain-aware set.
+    // Kill: PARTS_CATEGORY_HARVEST_EARLY=off.
     if (process.env.PARTS_CATEGORY_HARVEST_EARLY !== "off") {
       try {
         await ctx.scheduler.runAfter(
@@ -3685,11 +3696,15 @@ async function runPollBatch1Body(
           internal.vehicleEnrichment.categoryHarvest.harvestVehicleCategories,
           {
             vehicleConfigId: args.vehicleConfigId,
-            roleFilter: ["front_brake_pad", "rear_brake_pad", "front_rotor", "rear_rotor"],
+            // The harvest picks its own scope from the decoded powertrain —
+            // see `inRunScope`. On a gasoline car that is every core role
+            // including oil, filters and plugs; on a BEV it stays at the
+            // powertrain-independent set.
+            inRunScope: true,
           },
         );
       } catch (e) {
-        console.warn("[v8] early brake harvest scheduling failed (non-fatal):", e);
+        console.warn("[v8] early category harvest scheduling failed (non-fatal):", e);
       }
     }
 }
@@ -6349,20 +6364,37 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       }
     }
 
-    /** Reconciled catalogue minimum for one axle, or undefined when the ledger
+    /** Reconciled ledger minimum for one axle, or undefined when the ledger
      *  reached no consensus. A conflict_tie yields `value: null` and is
-     *  therefore correctly absent — a tie must contribute nothing. */
+     *  therefore correctly absent — a tie must contribute nothing.
+     *
+     *  `provenance` is what decides the STORED QUALITY downstream. The claim
+     *  keys are shared by three producers — manualSpecs (the manufacturer's own
+     *  documentation, family `owners_manual`) and the Brembo/Centric adapters
+     *  (family `aftermarket_catalog`) — and reconcileClaims already weighs them
+     *  (3 vs 2) to pick the winner. What it does not do is tell the resolver
+     *  WHO won, and the resolver needs that: an OEM figure is graded `oem_spec`
+     *  and may drive a replace recommendation, while a third-party disc figure
+     *  is `oem_spec_flagged` and is warn-capped. Reading it off the winner's
+     *  own `families` keeps the two facts from ever disagreeing. */
     const catalogRotorClaim = (axle: "front" | "rear") => {
       const pick = (key: string) =>
         claimConsensus.find((c) => c.field_key === key && c.value != null);
       const min = pick(`rotor_${axle}_min_thickness_mm`);
       const nominal = pick(`rotor_${axle}_nominal_thickness_mm`);
       if (!min && !nominal) return undefined;
+      // Provenance follows the MINIMUM's backing when there is one — the
+      // minimum is the value whose grade matters. Falling back to the
+      // nominal's families would let an OEM-sourced nominal launder a
+      // catalogue minimum into `oem_spec`.
+      const backing = min ?? nominal;
+      const fromManual = (backing?.families ?? []).includes("owners_manual");
       return {
         minMm: min?.value != null ? Number(min.value) : null,
         nominalMm: nominal?.value != null ? Number(nominal.value) : null,
         observedLabel: null,
         sourceUrl: min?.source_urls?.[0] ?? nominal?.source_urls?.[0] ?? null,
+        provenance: (fromManual ? "manual" : "catalog") as "manual" | "catalog",
       };
     };
 
@@ -6373,19 +6405,40 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         internal.vehicleEnrichment.v3queries.getVehicleConfigById,
         { vehicleConfigId: args.vehicleConfigId },
       );
+      // EVERY cached page for this vehicle, not just the parts_catalog row.
+      //
+      // The single-row read this replaces gave the resolver one retail listing
+      // to work with, and a retail listing prints `330x22mm` — a NOMINAL — and
+      // essentially never a discard limit, so `sourced_markdown` almost never
+      // fired. The pricing and owner-manual rows were already in the same
+      // table, already paid for, and never looked at.
+      //
+      // Concatenation is safe here because `parseRotorThickness` requires a
+      // discard-SUPPORTING label within 64 characters of the number: text from
+      // an unrelated page contributes nothing rather than contributing noise,
+      // and the `pickRotorThickness` tie-break takes the SMALLEST minimum, so
+      // if two pages disagree the resolver lands on the conservative one. The
+      // separator keeps a label on one page from reaching a number on the next.
       let rotorMarkdown: string | null = null;
       try {
-        const cachedForRotor = await ctx.runQuery(
-          internal.vehicleEnrichment.scraperQueries.getCachedScrape,
+        const cachedPages = await ctx.runQuery(
+          internal.vehicleEnrichment.scraperQueries.getCachedScrapesForVehicle,
           {
             vehicleMake: args.make,
             vehicleModel: args.model,
             vehicleYear: args.year,
             vehicleTrim: args.trim ?? "",
-            sourceType: "parts_catalog",
           },
         );
-        rotorMarkdown = cachedForRotor?.markdown ?? null;
+        if (Array.isArray(cachedPages) && cachedPages.length > 0) {
+          rotorMarkdown = cachedPages
+            .map((p: any) => String(p?.markdown ?? ""))
+            .filter((md: string) => md.length > 0)
+            .join("\n\n|\n\n");
+          rotorResolverEvents.push(
+            `rotor_markdown:${cachedPages.length}_pages:${rotorMarkdown.length}_chars`,
+          );
+        }
       } catch {
         // fail open — resolver degrades to classification-only
       }
@@ -6881,7 +6934,13 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // evidence domain; upsertPartPrice registers price domains), so the
     // speculative web-search finder here only burned Firecrawl+Haiku to
     // discover sources the run itself would have recorded for free.
-    // Re-enable with ENRICHMENT_SOURCE_DISCOVERY=on if ever needed.
+    // Re-enable with ENRICHMENT_SOURCE_DISCOVERY=on if ever needed — but note
+    // what changed Aug 2026: the registry can now express SECOND-VOICE stores
+    // (sourceRegistry.AlternateStore), and pending candidates surface through
+    // makeCoverage.auditOperatorDiversity().pendingAlternates. So a discovery
+    // run finally has somewhere to land. Promotion still requires the
+    // RevolutionParts skin check plus a detail-page walk — see the header of
+    // sourceDiscovery.ts for why that is refused rather than automated.
     try {
       const existingSources =
         process.env.ENRICHMENT_SOURCE_DISCOVERY === "on"

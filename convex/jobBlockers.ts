@@ -253,6 +253,13 @@ export const openBlocker = mutation({
       return { ok: true, blockerId: openSameKind._id, created: false, policy };
     }
 
+    // Resolved once, ahead of the insert, because both the blocker row's
+    // notifications need it and a second lookup inside the loop would repeat
+    // per target.
+    const shopName = booking.shop_id
+      ? ((await ctx.db.get(booking.shop_id)) as any)?.name ?? null
+      : null;
+
     const blockerId = await ctx.db.insert("job_blockers", {
       booking_id: args.bookingId,
       shop_id: booking.shop_id,
@@ -288,7 +295,12 @@ export const openBlocker = mutation({
         shop_id: booking.shop_id,
         booking_id: args.bookingId,
         user_id: t.audience === "driver" ? booking.user_id : undefined,
-        channel: t.audience === "driver" ? "sms" : "slack",
+        // "in_app", not "slack": no Slack dispatcher exists, and labelling the
+        // row for a transport nobody drains is how these sat pending forever.
+        // The shop's own notification feed reads notification_outbox directly,
+        // so this row is delivered by being written. None of the sms/email/push
+        // crons claim it.
+        channel: t.audience === "driver" ? "sms" : "in_app",
         category: t.category,
         status: "pending",
         dedupe_key,
@@ -298,6 +310,9 @@ export const openBlocker = mutation({
           note,
           eta_ms: args.etaMs ?? null,
           vin: booking.vin,
+          // Needed by the driver SMS templates — without it every message had
+          // to say "your shop".
+          shopName: shopName ?? null,
         },
         created_at: now,
       });

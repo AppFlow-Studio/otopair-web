@@ -301,7 +301,11 @@ describe("opening and resolving", () => {
     // Owner and driver both hear about a delay — their pickup time moved.
     expect(outbox).toHaveLength(2);
     const audiences = outbox.map((o: any) => o.channel).sort();
-    expect(audiences).toEqual(["slack", "sms"]);
+    // The owner row is "in_app", not "slack". No Slack dispatcher exists in
+    // this codebase, so labelling it for a transport nobody drains is how
+    // these sat pending forever; the shop's notification feed reads the
+    // outbox directly, so the row is delivered by being written.
+    expect(audiences).toEqual(["in_app", "sms"]);
   });
 
   it("damage notifies the owner only", async () => {
@@ -321,7 +325,9 @@ describe("opening and resolving", () => {
       ctx.db.query("notification_outbox").collect(),
     );
     expect(outbox).toHaveLength(1);
-    expect(outbox[0].channel).toBe("slack");
+    expect(outbox[0].channel).toBe("in_app");
+    // The load-bearing assertion: no user_id means this can never reach the
+    // driver through the outbox. A shop tells a customer they damaged the car.
     expect(outbox[0].user_id).toBeUndefined();
   });
 

@@ -24,6 +24,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
 import ServiceSuggestions, {
   type SuggestedService,
 } from "@/components/booking/service-suggestions";
@@ -389,6 +390,20 @@ export default function FlagIssueSheet({
                 typed={laterName}
                 dark
                 onPick={(svc) => setPickedService(svc)}
+              />
+              {/* And what other shops call it, when the catalog has nothing.
+                  Same band as the booking drawer and the mid-job picker — a
+                  name typed forty ways is forty clusters, and this lane is
+                  where the most off-catalog names get invented. */}
+              <KnownNameSuggestions
+                typed={laterName}
+                onPick={(s) => {
+                  setLaterName(s.name);
+                  // Still not a catalog service, so it files as the mechanic's
+                  // own recommendation — it just files under the name the
+                  // cluster already uses.
+                  setPickedService(null);
+                }}
               />
               {pickedService ? (
                 <p className="flex items-center justify-between gap-2 rounded-lg border border-emerald-400/40 bg-emerald-400/10 px-3 py-2 text-[12px] text-emerald-200">

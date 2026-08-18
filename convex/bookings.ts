@@ -4865,6 +4865,7 @@ function normalizePartsUsed(parts: Array<{
   supplied_by?: string | null;
   part_tier?: string | null;
   service_id?: Id<"services"> | null;
+  custom_service_name?: string | null;
   source?: "catalog" | "manual" | null;
   swap_from_oem_number?: string | null;
   not_used?: boolean | null;
@@ -4886,6 +4887,9 @@ function normalizePartsUsed(parts: Array<{
         part_name: part.part_name.trim(),
         brand: hasText(part.brand) ? (part.brand as string).trim() : null,
         oem_number: part.oem_number.trim(),
+        custom_service_name: hasText(part.custom_service_name)
+          ? (part.custom_service_name as string).trim()
+          : null,
         cost,
         quantity,
         supplied_by: suppliedBy,
@@ -10941,6 +10945,11 @@ export const completeWithPostjob = mutation({
     await completeCustomJobsForBooking(ctx, {
       bookingId: booking._id,
       jobActualId: jobActual._id,
+      // The mechanic's confirmed parts, so a line added mid-job through Flag
+      // Issue records what actually went into it. Before this it closed with an
+      // outcome and no parts at all, even when a named part had been fitted
+      // and billed — the money was right, the record wasn't.
+      partsUsed: normalizedParts,
       outcomes: args.customJobOutcomes ?? [],
       now,
     });
@@ -16395,6 +16404,29 @@ export const getReceipt = query({
         rawServices.push({ name: svc.name ?? "Service", hours });
       }
     }
+    // Off-catalog lines join the SAME list, before the split below, so labor is
+    // apportioned across everything the customer is paying for.
+    //
+    // They used to be appended after the split with labor_cost: null, which put
+    // a $0 line on the receipt next to labor that appeared from nowhere in the
+    // totals — and on a custom-only job the split had nothing to divide across
+    // at all, so every line read $0 against a real charge.
+    //
+    // A custom line has no catalog default_labor_hours; the mechanic's own
+    // estimate is the honest stand-in.
+    if (Array.isArray((booking as any).custom_services)) {
+      for (const c of (booking as any).custom_services) {
+        const name = typeof c?.name === "string" ? c.name.trim() : "";
+        if (!name) continue;
+        const mins =
+          typeof c?.duration_minutes === "number" && c.duration_minutes > 0
+            ? c.duration_minutes
+            : null;
+        const hours = mins != null ? mins / 60 : null;
+        if (hours != null) totalHours += hours;
+        rawServices.push({ name, hours });
+      }
+    }
     // Labor to split across service lines — the agreed approval labor when
     // present, else the booking's labor_cost. Keeps each service row's labor
     // consistent with the Labor row in the totals stack below.
@@ -16420,19 +16452,6 @@ export const getReceipt = query({
         labor_hours: s.hours,
         labor_cost: lineCost,
       });
-    }
-    // Custom one-off services (e.g. diagnostic items added at create time).
-    if (Array.isArray((booking as any).custom_services)) {
-      for (const c of (booking as any).custom_services) {
-        if (c?.name) {
-          serviceLines.push({
-            type: "service",
-            name: c.name,
-            labor_hours: null,
-            labor_cost: null,
-          });
-        }
-      }
     }
 
     // Parts line items — prefer the approved pre-job estimate snapshot, which

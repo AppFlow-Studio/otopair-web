@@ -312,11 +312,61 @@ export async function recordCustomJobsForBooking(
  * removed lines between booking and completion, and index-matching would silently
  * write one job's outcome onto another.
  */
+/**
+ * Group the mechanic's post-job parts by the custom line they were fitted to.
+ *
+ * This is the ACTUALS counterpart to customPartsFromSnapshot, which reads what
+ * was quoted at booking time. Work added mid-job never went through that path —
+ * Flag Issue writes the custom_jobs row and the money rides the mid-job
+ * approval, so the row closed with an outcome and no parts at all, even when a
+ * named part had been fitted and billed.
+ *
+ * "Not used" rows are dropped: the mechanic is telling us the part didn't go in.
+ */
+function actualPartsByMatchKey(parts: unknown): Map<
+  string,
+  { parts: any[]; totalCents: number }
+> {
+  const out = new Map<string, { parts: any[]; totalCents: number }>();
+  if (!Array.isArray(parts)) return out;
+  for (const part of parts) {
+    const name = part?.custom_service_name;
+    if (typeof name !== "string" || !name.trim()) continue;
+    if (part?.not_used === true) continue;
+    const key = serviceMatchKey(name);
+    if (!key) continue;
+    let bucket = out.get(key);
+    if (!bucket) {
+      bucket = { parts: [], totalCents: 0 };
+      out.set(key, bucket);
+    }
+    const quantity =
+      typeof part.quantity === "number" && part.quantity > 0
+        ? Math.round(part.quantity)
+        : 1;
+    const unitCents = Math.round(Number(part.cost ?? 0) * 100);
+    const lineCents = unitCents * quantity;
+    bucket.parts.push({
+      part_name: String(part.part_name ?? "").trim() || "Part",
+      oem_number: part.oem_number ? String(part.oem_number) : undefined,
+      brand: part.brand ? String(part.brand) : undefined,
+      quantity,
+      unit_price_cents: unitCents || undefined,
+      line_total_cents: lineCents || undefined,
+    });
+    bucket.totalCents += lineCents;
+  }
+  return out;
+}
+
 export async function completeCustomJobsForBooking(
   ctx: any,
   args: {
     bookingId: Id<"bookings">;
     jobActualId?: Id<"job_actuals">;
+    /** The mechanic's confirmed post-job parts, so a line added mid-job ends
+     *  up recording what actually went into it. */
+    partsUsed?: unknown;
     outcomes: Array<{
       name: string;
       actual_minutes?: number | null;
@@ -336,17 +386,25 @@ export async function completeCustomJobsForBooking(
   const byKey = new Map<string, any>();
   for (const row of rows) byKey.set(row.match_key, row);
 
+  // Actuals beat the quote. A line quoted with one part and finished with
+  // another should record the one that went in.
+  const actualParts = actualPartsByMatchKey(args.partsUsed);
+
   let touched = 0;
   for (const outcome of args.outcomes) {
     const row = byKey.get(serviceMatchKey(outcome.name));
     if (!row) continue;
     const actualMinutes = outcome.actual_minutes ?? row.actual_minutes;
+    const fitted = actualParts.get(row.match_key);
     await ctx.db.patch(row._id, {
       status: "completed",
+      parts: fitted && fitted.parts.length > 0 ? fitted.parts : row.parts,
+      charged_price_cents:
+        outcome.charged_price_cents ??
+        (fitted ? fitted.totalCents : undefined) ??
+        row.charged_price_cents,
       job_actual_id: args.jobActualId ?? row.job_actual_id,
       actual_minutes: actualMinutes,
-      charged_price_cents:
-        outcome.charged_price_cents ?? row.charged_price_cents,
       resolution: outcome.resolution?.trim() || row.resolution,
       resolved_complaint:
         outcome.resolved_complaint ?? row.resolved_complaint,
@@ -374,9 +432,17 @@ export async function completeCustomJobsForBooking(
   for (const row of rows) {
     if (row.status !== "planned") continue;
     if (row.updated_at === args.now) continue;
+    // No outcome reported, but parts may still have been fitted — record them
+    // rather than closing the row emptier than the evidence allows.
+    const fitted = actualParts.get(row.match_key);
     await ctx.db.patch(row._id, {
       status: "completed",
       job_actual_id: args.jobActualId ?? row.job_actual_id,
+      parts: fitted && fitted.parts.length > 0 ? fitted.parts : row.parts,
+      charged_price_cents:
+        fitted && fitted.totalCents > 0
+          ? fitted.totalCents
+          : row.charged_price_cents,
       updated_at: args.now,
     });
   }
@@ -697,3 +763,69 @@ function dominantName(jobs: Array<{ name: string }>): string | null {
   }
   return best;
 }
+
+/**
+ * What the mechanic added to this job after work started, for the customer's
+ * mid-job approval screen.
+ *
+ * ─── WHY ────────────────────────────────────────────────────────────────────
+ * The approval screen showed a price and a delta — "$472.84", "$220.08 above
+ * your estimate" — and then jumped straight to inspection findings. It never
+ * said what the extra money was FOR. A customer was being asked to approve a
+ * number on trust, which is the exact moment trust is most expensive: they're
+ * not at the shop, the car is on a lift, and declining is awkward.
+ *
+ * `source: "mid_job"` is what makes this answerable. Work added while the job
+ * was running is stamped with it at write time, so this is a read of what
+ * actually happened rather than a diff of two snapshots that may not exist.
+ *
+ * Returns the off-catalog additions only. A catalog service added mid-job
+ * lands on `booking.service_ids` and already renders by name through the
+ * receipt's service lines; it's this half that had no route to the customer.
+ */
+export const listMidJobAdditionsForCustomer = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q: any) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .unique();
+    if (!user) return [];
+
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return [];
+    // Strictly the booking's own customer. Shop staff have the mechanic-facing
+    // read (listForBooking); this one exists to be shown to the person paying.
+    if (booking.user_id !== user._id) return [];
+
+    const rows = await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+      .collect();
+
+    return rows
+      .filter((r: any) => r.source === "mid_job" && r.status !== "cancelled")
+      .sort((a: any, b: any) => a.created_at - b.created_at)
+      .map((r: any) => ({
+        _id: r._id,
+        name: r.name,
+        // The mechanic's own words for what they found. This is the sentence
+        // that makes the number make sense, so it leads on the card.
+        complaint: r.complaint ?? null,
+        system_tags: (r.system_tags ?? []) as string[],
+        work_type: (r.work_type ?? null) as string | null,
+        estimated_minutes: r.estimated_minutes ?? null,
+        // Named parts do more to justify a figure than any summary line.
+        parts: ((r.parts ?? []) as any[]).map((p) => ({
+          part_name: p.part_name,
+          oem_number: p.oem_number ?? null,
+          quantity: p.quantity,
+        })),
+        quoted_parts_cents: r.quoted_parts_cents ?? null,
+      }));
+  },
+});

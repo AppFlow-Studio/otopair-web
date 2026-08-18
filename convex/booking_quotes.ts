@@ -384,7 +384,10 @@ async function resolvePartsBandForService(
 // ─────────────────────────────────────────────────────────────────────────
 
 export type PricedPartSnapshotRow = {
-  service_id: Id<"services">;
+  /** Absent on parts attached to a custom (off-catalog) line. */
+  service_id?: Id<"services">;
+  /** Set instead of service_id when this part belongs to a custom line. */
+  custom_service_name?: string;
   part_id?: Id<"oem_parts">;
   oem_number: string;
   part_name: string;

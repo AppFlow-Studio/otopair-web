@@ -22,6 +22,11 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Loader2 } from "lucide-react";
+import {
+  CustomJobTaxonomyPicker,
+  isCustomJobTaxonomyComplete,
+} from "@/components/custom-job-taxonomy-picker";
+import { describeCustomJobTaxonomy } from "@/lib/custom-job-taxonomy";
 
 export default function ShopShortcutsManager({
   shopId,
@@ -37,6 +42,8 @@ export default function ShopShortcutsManager({
 
   const [editing, setEditing] = useState<string | null>(null);
   const [minutes, setMinutes] = useState("");
+  const [systemTags, setSystemTags] = useState<string[]>([]);
+  const [workType, setWorkType] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   if (!shopId) return null;
@@ -50,7 +57,9 @@ export default function ShopShortcutsManager({
         Saved from the booking screen when you tick &ldquo;Save for next
         time&rdquo;. These aren&apos;t bookable services — customers never see
         them. Names can&apos;t be changed because past jobs are recorded under
-        them; retire one and make a new one instead.
+        them; retire one and make a new one instead. What the work IS — system
+        and kind — can be corrected here, because that&apos;s a description
+        rather than an identity.
       </p>
 
       {!shortcuts ? (
@@ -70,6 +79,7 @@ export default function ShopShortcutsManager({
                       {s.name}
                     </p>
                     <p className="mt-0.5 text-[11px] text-muted-foreground">
+                      {describeCustomJobTaxonomy(s.system_tags, s.work_type)} ·
                       used {s.use_count}×
                       {s.default_minutes ? ` · ${s.default_minutes}m default` : ""}
                     </p>
@@ -84,10 +94,12 @@ export default function ShopShortcutsManager({
                             setMinutes(
                               s.default_minutes ? String(s.default_minutes) : "",
                             );
+                            setSystemTags(s.system_tags ?? []);
+                            setWorkType(s.work_type ?? null);
                           }}
                           className="rounded-md border border-border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
                         >
-                          Edit time
+                          Edit
                         </button>
                         <button
                           type="button"
@@ -110,7 +122,15 @@ export default function ShopShortcutsManager({
                 </div>
 
                 {isEditing ? (
-                  <div className="mt-2 flex items-center gap-2">
+                  <div className="mt-2 space-y-2.5">
+                    <CustomJobTaxonomyPicker
+                      dense
+                      systemTags={systemTags}
+                      workType={workType}
+                      onSystemTagsChange={setSystemTags}
+                      onWorkTypeChange={setWorkType}
+                    />
+                    <div className="flex items-center gap-2">
                     <input
                       type="number"
                       min={0}
@@ -122,7 +142,9 @@ export default function ShopShortcutsManager({
                     />
                     <button
                       type="button"
-                      disabled={busy}
+                      disabled={
+                        busy || !isCustomJobTaxonomyComplete(systemTags, workType)
+                      }
                       onClick={async () => {
                         setBusy(true);
                         try {
@@ -131,6 +153,8 @@ export default function ShopShortcutsManager({
                             id: s._id,
                             defaultMinutes:
                               Number.isFinite(n) && n > 0 ? n : undefined,
+                            systemTags,
+                            workType: workType ?? undefined,
                           });
                           setEditing(null);
                         } finally {
@@ -148,6 +172,7 @@ export default function ShopShortcutsManager({
                     >
                       Cancel
                     </button>
+                    </div>
                   </div>
                 ) : null}
               </li>

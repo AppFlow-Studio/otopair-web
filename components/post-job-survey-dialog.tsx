@@ -48,6 +48,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  FluidCatalogSelectField,
+  FLUID_KIND_BY_KEY,
+} from "@/components/fluid-catalog-select-field";
+import {
   drawerPrimaryButtonClassName,
   drawerSecondaryButtonClassName,
 } from "@/components/drawer-panel-styles";
@@ -78,6 +82,12 @@ import {
   TIRE_SIZE_OPTIONS,
 } from "@/lib/inspection-options";
 import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
+import {
+  CustomJobTaxonomyPicker,
+  isCustomJobTaxonomyComplete,
+} from "@/components/custom-job-taxonomy-picker";
+import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
+import { describeCustomJobTaxonomy } from "@/lib/custom-job-taxonomy";
 
 /** Best-effort axle from a part name ("Front Brake Pads" → "front"). Mirrors
  *  convex/lib/brakeScope.partNameAxle; kept inline so the client bundle
@@ -423,6 +433,15 @@ const FLUID_PLACEHOLDERS: Record<string, { placeholder: string; otherPlaceholder
 
 const OTHER_OPTION_ID = "__other__";
 
+// Post-job additionally routes oil TYPE through the OEM catalog picker (as
+// engine-oil products), on top of the four product fluids the shared map
+// already covers. Kept local so the pre-job inspection — which deliberately
+// keeps oil on its generic grade/type combobox — is unaffected.
+const POSTJOB_FLUID_KIND_BY_KEY: Record<string, string> = {
+  ...FLUID_KIND_BY_KEY,
+  oil_type: "engine_oil",
+};
+
 function resolveFluidOption(
   value: string | null | undefined,
   options: FluidOption[]
@@ -584,6 +603,7 @@ function FluidSelectField({
     </div>
   );
 }
+
 
 function parseOilFilterValue(value: string): { brand: string; code: string } {
   const trimmed = (value ?? "").trim();
@@ -1044,6 +1064,31 @@ function PostJobSurveyDialogBody({
       }),
     );
   }, [brakeScope]);
+  // Re-seed the parts list when the dialog actually OPENS. `quotedParts` (the
+  // customer-approved snapshot for locked / mid-job flows) resolves a tick after
+  // this component first mounts, so the useState initializer above can capture
+  // the pre-approval fallback (the booking's original priced snapshot) instead
+  // of the agreed prices + Not-used flags. This corrects that:
+  //   - Locked review (post-job): no edits to preserve, so mirror the freshest
+  //     quote reactively.
+  //   - Editable cycles (pre/mid-job): seed once per open so a later quote
+  //     refresh can't clobber the mechanic's in-progress edits.
+  const readOnlyBillingMode = lockBilling && !cycle;
+  const seededPartsForOpenRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      seededPartsForOpenRef.current = false;
+      return;
+    }
+    if (!quotedParts || quotedParts.length === 0) return;
+    if (readOnlyBillingMode) {
+      setParts(buildPartRows(quotedParts));
+      return;
+    }
+    if (seededPartsForOpenRef.current) return;
+    seededPartsForOpenRef.current = true;
+    setParts(buildPartRows(quotedParts));
+  }, [open, quotedParts, readOnlyBillingMode, lockBilling, cycle]);
   // Scope the catalog's OEM recommendations to the booked axle too, so the
   // "N of M confirmed" counter and the swap/suggestion rows only count what
   // was actually quoted (rear-only → 1 of 1, never 1 of 2).
@@ -1144,7 +1189,7 @@ function PostJobSurveyDialogBody({
           urgency: f.urgency as RecommendationUrgency,
           reason: f.reason,
           visible_to_driver: f.visible_to_driver,
-          target_mileage: "",
+          target_mileage: defaultTriggerMileage(Number(completionMileage)),
           scheduled_at: null,
           scheduled_mechanic_id: null,
           scheduled_mechanic_name: null,
@@ -1826,6 +1871,7 @@ function PostJobSurveyDialogBody({
           <StepContent
             step={currentStep}
             bookingId={bookingId}
+            vin={passportData?.vin ?? null}
             onFoundWorkToast={(m) => setError(m)}
             customJobs={customJobs}
             customJobOutcomes={customJobOutcomes}
@@ -2092,6 +2138,9 @@ function canAdvance(
 function StepContent(props: {
   step: StepKey;
   bookingId: string | null;
+  /** VIN of the booking's vehicle — resolves the make for the fluid catalog
+   *  picker so this vehicle's own products pin to the top. */
+  vin: string | null;
   onFoundWorkToast?: (message: string) => void;
   customJobs: CustomJobRow[] | undefined;
   customJobOutcomes: Record<string, { resolution: string; resolved: boolean | null }>;
@@ -2452,6 +2501,26 @@ function StepContent(props: {
                           ...current,
                           [prompt.key]: next,
                         }))
+                      }
+                    />
+                  ) : POSTJOB_FLUID_KIND_BY_KEY[prompt.key as string] ? (
+                    <FluidCatalogSelectField
+                      value={String(props.vehicleUpdates[prompt.key] ?? "")}
+                      onChange={(next) =>
+                        props.setVehicleUpdates((current) => ({
+                          ...current,
+                          [prompt.key]: next,
+                        }))
+                      }
+                      fluidKind={POSTJOB_FLUID_KIND_BY_KEY[prompt.key as string]}
+                      vin={props.vin}
+                      placeholder={
+                        FLUID_PLACEHOLDERS[prompt.key as string]?.placeholder ??
+                        "Select…"
+                      }
+                      otherPlaceholder={
+                        FLUID_PLACEHOLDERS[prompt.key as string]
+                          ?.otherPlaceholder ?? "Other"
                       }
                     />
                   ) : (
@@ -3850,6 +3919,179 @@ function PhotosStep({
   );
 }
 
+// Common "next interval" jumps for a follow-up's mileage trigger. Added onto
+// the car's current odometer so the mechanic never does the arithmetic.
+const MILEAGE_INCREMENTS = [3000, 5000, 10000] as const;
+
+/**
+ * A follow-up's default mileage trigger: the car's current odometer plus one
+ * service interval (+5k). Never below the current reading, and the +5k is
+ * already done so the mechanic doesn't have to. Empty when the odometer is
+ * unknown (walk-ins / missing passport) — the field then falls back to exact
+ * entry with no default.
+ */
+function defaultTriggerMileage(
+  currentOdometer: number | null | undefined,
+): string {
+  if (
+    currentOdometer == null ||
+    !Number.isFinite(currentOdometer) ||
+    currentOdometer <= 0
+  ) {
+    return "";
+  }
+  return String(Math.round(currentOdometer) + 5000);
+}
+
+/**
+ * Trigger-at-mileage picker for a follow-up recommendation. Two ways to land on
+ * the same absolute odometer target:
+ *   • "At mileage" — type the exact reading it's due at.
+ *   • "+ Miles"    — pick how far ahead (e.g. +5,000); we add it to the car's
+ *                    current odometer so the mechanic never does the math.
+ * The current odometer is the floor — a follow-up can't come due before now — so
+ * exact entries clamp up to it on blur and relative jumps add on top of it.
+ * `value` is the absolute mileage stored on the row; this only offers two ways
+ * to arrive at it. When the odometer is unknown, relative mode is hidden.
+ */
+function MileageTriggerField({
+  value,
+  onChange,
+  currentOdometer,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  currentOdometer: number | null;
+}) {
+  const floor =
+    currentOdometer != null &&
+    Number.isFinite(currentOdometer) &&
+    currentOdometer > 0
+      ? Math.round(currentOdometer)
+      : null;
+  const absolute = Number(value);
+  const hasAbsolute =
+    value.trim() !== "" && Number.isFinite(absolute) && absolute > 0;
+  const activeDelta =
+    floor != null && hasAbsolute && absolute > floor ? absolute - floor : null;
+  const belowFloor = floor != null && hasAbsolute && absolute < floor;
+  const canUseRelative = floor != null;
+
+  // A follow-up defaulted to current + 5k opens in "+ Miles" so the jump the
+  // mechanic will most often reach for is already in front of them.
+  const [mode, setMode] = useState<"exact" | "relative">(
+    canUseRelative && (activeDelta != null || !hasAbsolute) ? "relative" : "exact",
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Trigger at mileage
+        </label>
+        {canUseRelative ? (
+          <div className="inline-flex rounded-md border border-primary/15 p-0.5">
+            {(
+              [
+                ["relative", "+ Miles"],
+                ["exact", "Exact"],
+              ] as const
+            ).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors",
+                  mode === m
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      {mode === "relative" && floor != null ? (
+        <div className="mt-1 space-y-1.5">
+          <div className="flex flex-wrap gap-1.5">
+            {MILEAGE_INCREMENTS.map((inc) => {
+              const active = activeDelta === inc;
+              return (
+                <button
+                  key={inc}
+                  type="button"
+                  onClick={() => onChange(String(floor + inc))}
+                  className={cn(
+                    "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all",
+                    active
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-primary/15 bg-background text-foreground hover:bg-primary/5",
+                  )}
+                >
+                  +{inc.toLocaleString()}
+                </button>
+              );
+            })}
+            {value.trim() ? (
+              <button
+                type="button"
+                onClick={() => onChange("")}
+                className="inline-flex items-center rounded-full border border-primary/15 bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-all hover:bg-primary/5"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {hasAbsolute && absolute > floor
+              ? `Due at ${absolute.toLocaleString()} mi — ${floor.toLocaleString()} + ${(activeDelta ?? absolute - floor).toLocaleString()}`
+              : `Adds onto the current ${floor.toLocaleString()} mi`}
+          </p>
+        </div>
+      ) : (
+        <>
+          <div
+            className={cn(
+              "mt-1 flex items-center gap-1.5 rounded-lg border bg-background px-2.5",
+              belowFloor ? "border-destructive/50" : "border-primary/15",
+            )}
+          >
+            <Gauge
+              className="h-3.5 w-3.5 text-muted-foreground"
+              aria-hidden
+            />
+            <input
+              type="number"
+              inputMode="numeric"
+              min={floor ?? 0}
+              step={1000}
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              onBlur={() => {
+                // Odometers don't run backward — clamp a below-floor entry up to
+                // the current reading rather than silently rejecting it.
+                if (belowFloor && floor != null) onChange(String(floor));
+              }}
+              placeholder={floor != null ? floor.toLocaleString() : "e.g. 170000"}
+              className="h-9 w-full bg-transparent text-[12px] outline-none"
+            />
+            <span className="text-[11px] text-muted-foreground">mi</span>
+          </div>
+          {belowFloor && floor != null ? (
+            <p className="mt-1 text-[10px] text-destructive">
+              Can&apos;t be below the current {floor.toLocaleString()} mi.
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 /**
  * Replaces the old "Anything else to note?" textarea with structured
  * recommendations. Each row captures {service, urgency, reason, visible}
@@ -3883,10 +4125,6 @@ function RecommendationsStep({
   const [optionPickerIndex, setOptionPickerIndex] = useState<number | null>(null);
   const [tirePickerIndex, setTirePickerIndex] = useState<number | null>(null);
   const currentMileage = Number(completionMileage);
-  const mileageHint =
-    Number.isFinite(currentMileage) && currentMileage > 0
-      ? Math.round((currentMileage + 5000) / 1000) * 1000
-      : null;
 
   function updateRec(index: number, patch: Partial<RecRowState>) {
     setRecommendations((current) =>
@@ -3907,7 +4145,7 @@ function RecommendationsStep({
         urgency: "within_3_months",
         reason: "",
         visible_to_driver: true,
-        target_mileage: "",
+        target_mileage: defaultTriggerMileage(currentMileage),
         scheduled_at: null,
         scheduled_mechanic_id: null,
         scheduled_mechanic_name: null,
@@ -3947,7 +4185,7 @@ function RecommendationsStep({
           urgency: s.urgency,
           reason: s.reasons.join("; "),
           visible_to_driver: true,
-          target_mileage: "",
+          target_mileage: defaultTriggerMileage(currentMileage),
           scheduled_at: null,
           scheduled_mechanic_id: null,
           scheduled_mechanic_name: null,
@@ -4176,34 +4414,17 @@ function RecommendationsStep({
                 />
 
                 <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
-                  <div>
-                    <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Trigger at mileage
-                    </label>
-                    <div className="mt-1 flex items-center gap-1.5 rounded-lg border border-primary/15 bg-background px-2.5">
-                      <Gauge
-                        className="h-3.5 w-3.5 text-muted-foreground"
-                        aria-hidden
-                      />
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min={0}
-                        step={1000}
-                        value={rec.target_mileage}
-                        onChange={(event) =>
-                          updateRec(index, {
-                            target_mileage: event.target.value,
-                          })
-                        }
-                        placeholder={
-                          mileageHint ? mileageHint.toLocaleString() : "e.g. 170000"
-                        }
-                        className="h-9 w-full bg-transparent text-[12px] outline-none"
-                      />
-                      <span className="text-[11px] text-muted-foreground">mi</span>
-                    </div>
-                  </div>
+                  <MileageTriggerField
+                    value={rec.target_mileage}
+                    onChange={(next) =>
+                      updateRec(index, { target_mileage: next })
+                    }
+                    currentOdometer={
+                      Number.isFinite(currentMileage) && currentMileage > 0
+                        ? currentMileage
+                        : null
+                    }
+                  />
                   <div>
                     <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                       Schedule a specific time
@@ -4493,7 +4714,15 @@ function ServicePickerModal({
           slug: string | null;
           has_options: boolean;
         }
-      | { kind: "freeform"; name: string },
+      | {
+          kind: "freeform";
+          name: string;
+          /** Present when the name came from another shop's cluster — their
+           *  tagging carries across so this mechanic isn't re-answering a
+           *  question the cluster already settled. */
+          system_tags?: string[];
+          work_type?: string | null;
+        },
   ) => void;
 }) {
   const [query, setQuery] = useState(initialQuery);
@@ -4589,10 +4818,26 @@ function ServicePickerModal({
                 </ul>
               )}
               {trimmed.length >= 2 ? (
-                <CustomNameGate
-                  typed={trimmed}
-                  onPick={onPick}
-                />
+                <div className="space-y-2 px-1">
+                  <CustomNameGate
+                    typed={trimmed}
+                    onPick={onPick}
+                  />
+                  {/* Work that isn't in the catalog but that other shops have
+                      already named. Picking one keeps the cluster together
+                      rather than opening a fortieth spelling of it. */}
+                  <KnownNameSuggestions
+                    typed={trimmed}
+                    onPick={(s) =>
+                      onPick({
+                        kind: "freeform",
+                        name: s.name,
+                        system_tags: s.system_tags,
+                        work_type: s.work_type,
+                      })
+                    }
+                  />
+                </div>
               ) : null}
             </>
           )}
@@ -4630,6 +4875,8 @@ function FoundWorkStep({
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [complaint, setComplaint] = useState("");
+  const [systemTags, setSystemTags] = useState<string[]>([]);
+  const [workType, setWorkType] = useState<string | null>(null);
   const [pending, setPending] = useState<{
     kind: "service" | "freeform";
     name: string;
@@ -4653,9 +4900,13 @@ function FoundWorkStep({
         bookingId: bookingId as Id<"bookings">,
         name: pending.name,
         complaint: complaint.trim() || undefined,
+        systemTags,
+        workType: workType ?? undefined,
       });
       setPending(null);
       setComplaint("");
+      setSystemTags([]);
+      setWorkType(null);
     } catch (err: unknown) {
       onToast?.(
         err instanceof Error ? err.message : "Could not add that work.",
@@ -4682,6 +4933,9 @@ function FoundWorkStep({
                 <p className="text-[13px] font-semibold text-foreground">
                   {line.name}
                 </p>
+                <p className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.06em] text-primary/70">
+                  {describeCustomJobTaxonomy(line.system_tags, line.work_type)}
+                </p>
                 {line.complaint ? (
                   <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
                     {line.complaint}
@@ -4704,12 +4958,27 @@ function FoundWorkStep({
               placeholder="What did you see? (optional)"
               className="mt-2 min-h-[64px] w-full resize-y rounded-lg border border-primary/15 bg-background px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-primary"
             />
+            {/* Same two mandatory axes as the booking drawer. Work found
+                mid-job is the most valuable row in the table — it's the case
+                nobody planned for — so it's the last place worth letting the
+                taxonomy be optional. */}
+            <div className="mt-2.5">
+              <CustomJobTaxonomyPicker
+                dense
+                systemTags={systemTags}
+                workType={workType}
+                onSystemTagsChange={setSystemTags}
+                onWorkTypeChange={setWorkType}
+              />
+            </div>
             <div className="mt-2 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => {
                   setPending(null);
                   setComplaint("");
+                  setSystemTags([]);
+                  setWorkType(null);
                 }}
                 className="px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
               >
@@ -4717,7 +4986,9 @@ function FoundWorkStep({
               </button>
               <button
                 type="button"
-                disabled={busy}
+                disabled={
+                  busy || !isCustomJobTaxonomyComplete(systemTags, workType)
+                }
                 onClick={commit}
                 className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground disabled:opacity-40"
               >
@@ -4752,6 +5023,10 @@ function FoundWorkStep({
           onClose={() => setPicking(false)}
           onPick={(picked) => {
             setPicking(false);
+            if (picked.kind === "freeform") {
+              if (picked.system_tags?.length) setSystemTags(picked.system_tags);
+              if (picked.work_type) setWorkType(picked.work_type);
+            }
             setPending(
               picked.kind === "service"
                 ? { kind: "service", name: picked.name, id: picked.id }
@@ -4767,6 +5042,15 @@ function FoundWorkStep({
 type CustomJobRow = {
   _id: string;
   name: string;
+  system_tags?: string[];
+  work_type?: string | null;
+  parts?: Array<{
+    part_name: string;
+    oem_number?: string;
+    quantity: number;
+    line_total_cents?: number;
+  }>;
+  quoted_parts_cents?: number | null;
   complaint: string | null;
   resolution: string | null;
   resolved_complaint: boolean | null;
@@ -4824,10 +5108,33 @@ function CustomOutcomesStep({
               <p className="text-[13px] font-semibold text-foreground">
                 {job.name}
               </p>
+              <p className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.06em] text-primary/70">
+                {describeCustomJobTaxonomy(job.system_tags, job.work_type)}
+              </p>
               {job.complaint ? (
                 <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
                   Reported: {job.complaint}
                 </p>
+              ) : null}
+              {/* What was quoted against this line at booking time. Shown so
+                  the resolution can be written against the actual parts rather
+                  than from memory — and so a part quoted but never fitted is
+                  visible while the mechanic can still say so. */}
+              {job.parts && job.parts.length > 0 ? (
+                <ul className="mt-1.5 space-y-0.5">
+                  {job.parts.map((part, i) => (
+                    <li
+                      key={`${part.part_name}-${i}`}
+                      className="text-[11px] leading-relaxed text-muted-foreground"
+                    >
+                      {part.part_name}
+                      {part.quantity > 1 ? ` ×${part.quantity}` : ""}
+                      {part.oem_number ? (
+                        <span className="font-mono"> {part.oem_number}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
               ) : null}
 
               <textarea

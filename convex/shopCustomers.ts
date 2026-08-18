@@ -18,6 +18,7 @@
 import { query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
+import { customServiceNames } from "./lib/customServiceNames";
 
 /* ------------------------------------------------------------------ */
 /*  Local helpers (duplicated from bookings.ts — see note above)       */
@@ -64,13 +65,16 @@ async function resolveServiceLabels(
   selectedOptions:
     | Array<{ service_id: any; option_label?: string }>
     | undefined,
+  /** booking.custom_services — see resolveServiceNames. */
+  customServices?: unknown,
 ): Promise<string[]> {
-  if (!serviceIds || serviceIds.length === 0) return [];
+  const custom = customServiceNames(customServices);
+  if (!serviceIds || serviceIds.length === 0) return custom;
   const byServiceId = new Map<string, string>();
   for (const opt of selectedOptions ?? []) {
     if (opt.option_label) byServiceId.set(String(opt.service_id), opt.option_label);
   }
-  return await Promise.all(
+  const labelled = await Promise.all(
     serviceIds.map(async (serviceId: any) => {
       const service = await ctx.db.get(serviceId);
       const name = service?.name ?? "Unknown Service";
@@ -78,6 +82,7 @@ async function resolveServiceLabels(
       return label ? `${name} — ${label}` : name;
     }),
   );
+  return [...labelled, ...custom];
 }
 
 /**
@@ -382,6 +387,7 @@ export const getShopCustomerDetail = query({
             ctx,
             b.service_ids,
             b.selected_service_options as any,
+            b.custom_services,
           );
           const mechanic = b.mechanic_id ? await ctx.db.get(b.mechanic_id) : null;
           const veh = b.vin ? await resolveVehicleSummary(ctx, b.vin) : null;
@@ -466,6 +472,7 @@ export const getShopVehicleDetail = query({
             ctx,
             b.service_ids,
             b.selected_service_options as any,
+            b.custom_services,
           );
           const mechanic = b.mechanic_id ? await ctx.db.get(b.mechanic_id) : null;
           const bookingUser = await ctx.db.get(b.user_id);

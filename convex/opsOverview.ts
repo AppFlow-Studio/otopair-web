@@ -104,7 +104,7 @@ export const activityFeed = query({
         const [userName, vehicle, serviceNames, shop] = await Promise.all([
           nameOf(b.user_id),
           resolveVehicleDisplay(ctx, b.vin),
-          resolveServiceNames(ctx, b.service_ids),
+          resolveServiceNames(ctx, b.service_ids, b.custom_services),
           b.shop_id ? ctx.db.get(b.shop_id) : null,
         ]);
         return {
@@ -130,7 +130,7 @@ export const activityFeed = query({
         const [userName, vehicle, serviceNames, shop] = await Promise.all([
           nameOf(p.user_id),
           booking ? resolveVehicleDisplay(ctx, booking.vin) : Promise.resolve(null),
-          booking ? resolveServiceNames(ctx, booking.service_ids) : Promise.resolve([]),
+          booking ? resolveServiceNames(ctx, booking.service_ids, booking.custom_services) : Promise.resolve([]),
           p.shop_id ? ctx.db.get(p.shop_id) : null,
         ]);
         return {

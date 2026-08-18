@@ -48,8 +48,10 @@ import { mintClaimToken } from "./walkin_claims";
 import { blockedMinutesForBooking } from "./jobBlockers";
 import {
   recordCustomJobsForBooking,
+  customPartsFromSnapshot,
   completeCustomJobsForBooking,
 } from "./customJobs";
+import { serviceMatchKey } from "./lib/serviceMatch";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
@@ -2744,7 +2746,7 @@ async function buildActiveJobSummary(
 ) {
   const customer = active.user_id ? await ctx.db.get(active.user_id) : null;
   const vehicle = active.vin ? await resolveVehicleLabel(ctx, active.vin) : null;
-  const serviceNames = await resolveServiceNames(ctx, active.service_ids);
+  const serviceNames = await resolveServiceNames(ctx, active.service_ids, active.custom_services);
   const mechanic = await ctx.db.get(mechanicId);
   return {
     bookingId: active._id,
@@ -2815,7 +2817,7 @@ export const getActiveJobsForHeader = query({
       if (!active) return { kind: "mechanic" as const, job: null };
       const jobActual = await getLatestJobActualForBooking(ctx, active._id);
       const vehicle = active.vin ? await resolveVehicleLabel(ctx, active.vin) : null;
-      const serviceNames = await resolveServiceNames(ctx, active.service_ids);
+      const serviceNames = await resolveServiceNames(ctx, active.service_ids, active.custom_services);
       return {
         kind: "mechanic" as const,
         job: {
@@ -4758,15 +4760,22 @@ async function resolveVehicleLabel(
   return { full, short, spec_label, chassis_label };
 }
 
-async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
-  if (!serviceIds || serviceIds.length === 0) return [] as string[];
+async function resolveServiceNames(
+  ctx: any,
+  serviceIds?: Array<any>,
+  /** booking.custom_services — off-catalog lines, appended after the catalog
+   *  ones. Without this a custom-only booking renders blank everywhere. */
+  customServices?: unknown,
+) {
+  const custom = customServiceNames(customServices);
+  if (!serviceIds || serviceIds.length === 0) return custom;
   const names = await Promise.all(
     serviceIds.map(async (serviceId) => {
       const service = await ctx.db.get(serviceId);
       return service?.name ?? "Unknown Service";
     })
   );
-  return names;
+  return [...names, ...custom];
 }
 
 /** Appends the selected option_label (e.g. "Front and rear", "AGM") onto
@@ -4777,13 +4786,16 @@ async function resolveServiceLabels(
   selectedOptions:
     | Array<{ service_id: any; option_label?: string }>
     | undefined,
+  /** booking.custom_services — see resolveServiceNames. */
+  customServices?: unknown,
 ): Promise<string[]> {
-  if (!serviceIds || serviceIds.length === 0) return [];
+  const custom = customServiceNames(customServices);
+  if (!serviceIds || serviceIds.length === 0) return custom;
   const byServiceId = new Map<string, string>();
   for (const opt of selectedOptions ?? []) {
     if (opt.option_label) byServiceId.set(String(opt.service_id), opt.option_label);
   }
-  return await Promise.all(
+  const labelled = await Promise.all(
     serviceIds.map(async (serviceId: any) => {
       const service = await ctx.db.get(serviceId);
       const name = service?.name ?? "Unknown Service";
@@ -4791,6 +4803,7 @@ async function resolveServiceLabels(
       return label ? `${name} — ${label}` : name;
     }),
   );
+  return [...labelled, ...custom];
 }
 
 function firstDefinedNumber(...values: unknown[]) {
@@ -5552,7 +5565,7 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
 
   const recent_services = await Promise.all(
     completedVehicleBookings.map(async (row: any) => {
-      const service_names = await resolveServiceNames(ctx, row.service_ids);
+      const service_names = await resolveServiceNames(ctx, row.service_ids, row.custom_services);
       return {
         date_label: formatShortDateLabel(row.scheduled_date, row.updated_at),
         service_name: service_names.join(", "),
@@ -5604,7 +5617,7 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
     vehicle_short_label: vehicleLabels.short,
     vehicle_spec_label: vehicleLabels.spec_label,
     chassis_label: vehicleLabels.chassis_label,
-    service_name: service?.name ?? (await resolveServiceNames(ctx, booking.service_ids)).join(", "),
+    service_name: service?.name ?? (await resolveServiceNames(ctx, booking.service_ids, booking.custom_services)).join(", "),
     service_slug: service?.slug ?? null,
     requires_parts: serviceRequiresParts(service),
     // Per-service variant for the post-job dialog so it can render one parts
@@ -5724,6 +5737,7 @@ function getTireReplacementPositions(booking: {
 // import back into this file; re-imported here since this file's own
 // callers (grantRotorPhotoEvidence etc.) still reference it by this name.
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
+import { customServiceNames } from "./lib/customServiceNames";
 export { hydrateTieredInspectionState };
 
 async function validateTieredInspectionInput({
@@ -6052,7 +6066,7 @@ async function grantRotorPhotoEvidence(
 ) {
   if (!inspectionId || !inspection) return;
   await ctx.db.patch(inspectionId, { submitted_at: now, updated_at: now });
-  const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+  const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
   const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
   const context = {
     serviceNames,
@@ -9045,6 +9059,7 @@ async function mapBookingListItem(ctx: any, booking: any) {
     ctx,
     booking.service_ids,
     booking.selected_service_options,
+    booking.custom_services,
   );
   const mechanic = booking.mechanic_id
     ? await ctx.db.get(booking.mechanic_id)
@@ -9083,6 +9098,7 @@ async function mapMechanicDashboardJob(ctx: any, booking: any) {
     ctx,
     booking.service_ids,
     booking.selected_service_options,
+    booking.custom_services,
   );
   const vehiclePassportComplete = await hasCompleteVehiclePassportForBooking(
     ctx,
@@ -10125,7 +10141,7 @@ export const getJobDetail = query({
 
     const customer = await ctx.db.get(booking.user_id);
     const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
-    const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
     const mechanic = booking.mechanic_id
       ? await ctx.db.get(booking.mechanic_id)
       : null;
@@ -10191,6 +10207,62 @@ export const getJobDetail = query({
         previousMechanicName = `${previousMechanic.first_name} ${previousMechanic.last_name}`.trim();
       }
     }
+
+    // Effective parts snapshot for the panel + locked post-job dialog. When the
+    // mechanic re-quoted (Adjust quote / Add unforeseen scope) and it was agreed,
+    // booking.priced_parts_snapshot still holds the ORIGINAL estimate; the agreed
+    // parts (confirmed prices + Not-used flags) live on the last approved
+    // approval row. Map them into the snapshot shape the frontend already reads
+    // so the dialog shows agreed prices without depending on the separate
+    // effective-quote query resolving first. Same source getReceipt bills from.
+    const jobDetailApprovals = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", booking._id),
+      )
+      .collect();
+    const AGREED_DECISIONS = new Set(["approved", "auto_approved_within_range"]);
+    const AGREED_CYCLE_RANK: Record<string, number> = {
+      pre_job: 1,
+      mid_job: 2,
+      post_job: 3,
+    };
+    const agreedApproval: any = jobDetailApprovals
+      .filter(
+        (a: any) =>
+          AGREED_DECISIONS.has(a.decision ?? "") &&
+          a.parts_subtotal_cents != null &&
+          Array.isArray(a.parts_snapshot),
+      )
+      .sort((a: any, b: any) => {
+        const byCycle =
+          (AGREED_CYCLE_RANK[a.cycle] ?? 0) - (AGREED_CYCLE_RANK[b.cycle] ?? 0);
+        if (byCycle !== 0) return byCycle;
+        return (
+          (a.submitted_at_ms ?? a._creationTime) -
+          (b.submitted_at_ms ?? b._creationTime)
+        );
+      })
+      .at(-1);
+    const effectivePricedPartsSnapshot: any =
+      agreedApproval != null
+        ? (agreedApproval.parts_snapshot as any[]).map((p: any) => {
+            const qty = Math.max(1, Number(p.quantity ?? 1));
+            const unitCents = Math.round((Number(p.cost) || 0) * 100);
+            return {
+              part_name: p.part_name ?? "Part",
+              oem_number: p.oem_number ?? "",
+              brand: p.brand ?? undefined,
+              part_tier: p.part_tier ?? undefined,
+              quantity: qty,
+              unit_price_cents: unitCents,
+              line_total_cents: unitCents * qty,
+              service_id: p.service_id ?? undefined,
+              supplied_by: p.supplied_by ?? undefined,
+              not_used: p.not_used === true ? true : undefined,
+            };
+          })
+        : ((booking as any).priced_parts_snapshot ?? null);
 
     return {
       _id: booking._id,
@@ -10304,7 +10376,7 @@ export const getJobDetail = query({
           ? (booking as any).quoted_set_price_cents / 100
           : null,
       quotedBreakdown: (booking as any).quoted_breakdown ?? null,
-      pricedPartsSnapshot: (booking as any).priced_parts_snapshot ?? null,
+      pricedPartsSnapshot: effectivePricedPartsSnapshot,
       // Booking origin — lets the detail panel detect mechanic walk-ins and
       // unlock billing / suppress catalog parts for them.
       source: (booking as any).source ?? null,
@@ -10441,7 +10513,7 @@ export const startWithPrejob = mutation({
     }
 
     const passportView = await buildVehiclePassportForBooking(ctx, booking);
-    const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
     const serviceFlags = getBookingServiceFlags(serviceNames);
     const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
     const canonical = await validateTieredInspectionInput({
@@ -10488,7 +10560,7 @@ export const startWithPrejob = mutation({
     {
       const resolvedSystem = resolveDiagnosticSystem(
         booking,
-        await resolveServiceNames(ctx, booking.service_ids),
+        await resolveServiceNames(ctx, booking.service_ids, booking.custom_services),
       );
       if (
         resolvedSystem &&
@@ -10559,7 +10631,7 @@ export const commitInspectionAndAwaitEstimate = mutation({
     }
 
     const passportView = await buildVehiclePassportForBooking(ctx, booking);
-    const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
     const serviceFlags = getBookingServiceFlags(serviceNames);
     const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
     const canonical = await validateTieredInspectionInput({
@@ -10598,7 +10670,7 @@ export const commitInspectionAndAwaitEstimate = mutation({
     {
       const resolvedSystem = resolveDiagnosticSystem(
         booking,
-        await resolveServiceNames(ctx, booking.service_ids),
+        await resolveServiceNames(ctx, booking.service_ids, booking.custom_services),
       );
       if (
         resolvedSystem &&
@@ -10646,7 +10718,7 @@ export const savePrejob = mutation({
     }
 
     const passportView = await buildVehiclePassportForBooking(ctx, booking);
-    const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
     const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
     const canonical = args.inspection
       ? await validateTieredInspectionInput({
@@ -10948,7 +11020,7 @@ export const updateDiagnosticChecklistItem = mutation({
     if (checklist.length === 0) {
       const resolvedSystem = resolveDiagnosticSystem(
         booking,
-        await resolveServiceNames(ctx, booking.service_ids),
+        await resolveServiceNames(ctx, booking.service_ids, booking.custom_services),
       );
       if (resolvedSystem) {
         checklist = templateForSystem(resolvedSystem);
@@ -11016,7 +11088,7 @@ export const completeDiagnosticBooking = mutation({
 
     const resolvedSystem = resolveDiagnosticSystem(
       booking,
-      await resolveServiceNames(ctx, booking.service_ids),
+      await resolveServiceNames(ctx, booking.service_ids, booking.custom_services),
     );
     if (!resolvedSystem) {
       throw new Error("Not a diagnostic booking");
@@ -11121,7 +11193,7 @@ export const getDiagnosticsNeedingFollowUp = query({
       filtered.map(async (booking: any) => {
         const customer: any = await ctx.db.get(booking.user_id);
         const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
-        const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+        const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
         return {
           _id: booking._id,
           scheduledDate: booking.scheduled_date,
@@ -11537,7 +11609,11 @@ export const createByShop = mutation({
           // don't affect the booking itself — they populate the custom_jobs row
           // so the director view can eventually tell what this work actually is.
           complaint: v.optional(v.string()),
-          categoryId: v.optional(v.id("service_categories")),
+          // The descriptive taxonomy (lib/custom-job-taxonomy.ts). Required —
+          // recordCustomJobsForBooking rejects a line without both. Plain
+          // strings so the taxonomy can gain a slug without a schema migration.
+          systemTags: v.optional(v.array(v.string())),
+          workType: v.optional(v.string()),
           // Set when the mechanic pressed a shop shortcut rather than typing.
           // This is what makes a repeat exactly countable instead of fuzzy-matched.
           shopCustomServiceId: v.optional(v.id("shop_custom_services")),
@@ -11612,7 +11688,11 @@ export const createByShop = mutation({
     mechanicPartEntries: v.optional(
       v.array(
         v.object({
-          service_id: v.id("services"),
+          // Exactly one of these. Custom lines have no services row, so parts
+          // attached to off-catalog work identify their line by name — the
+          // same key custom_jobs matches on.
+          service_id: v.optional(v.id("services")),
+          custom_service_name: v.optional(v.string()),
           key: v.string(),
           part_name: v.string(),
           oem_number: v.string(),
@@ -11854,6 +11934,7 @@ export const createByShop = mutation({
         declaredPartsCents += line;
         rows.push({
           service_id: m.service_id,
+          custom_service_name: m.custom_service_name?.trim() || undefined,
           part_id: m.part_id,
           oem_number: m.oem_number.trim().toUpperCase(),
           part_name: m.part_name.trim(),
@@ -11927,16 +12008,27 @@ export const createByShop = mutation({
     // Same transaction as the booking insert — a custom_jobs row without its
     // booking, or a booking whose custom work left no record, is a reporting lie.
     if (args.customServices?.length) {
+      // Parts the mechanic itemised against a custom line ride along onto the
+      // custom_jobs row. Without this the parts exist only on the booking's
+      // snapshot, and the extraction reads — which scan custom_jobs and never
+      // load the booking — can say what work was done but not what it took.
+      const customParts = customPartsFromSnapshot(pricedSnapshot);
       await recordCustomJobsForBooking(ctx, {
         booking: { _id: bookingId, shop_id: args.shopId, vin: canonicalVin },
         mechanicId: resolvedMechanicId ?? args.mechanicId,
-        customJobs: args.customServices.map((c: any) => ({
-          name: String(c.name),
-          category_id: c.categoryId ?? null,
-          complaint: c.complaint ?? null,
-          estimated_minutes: c.durationMinutes ?? null,
-          shop_custom_service_id: c.shopCustomServiceId ?? null,
-        })),
+        customJobs: args.customServices.map((c: any) => {
+          const bucket = customParts.get(serviceMatchKey(String(c.name)));
+          return {
+            name: String(c.name),
+            system_tags: c.systemTags ?? null,
+            work_type: c.workType ?? null,
+            complaint: c.complaint ?? null,
+            estimated_minutes: c.durationMinutes ?? null,
+            parts: bucket?.parts ?? null,
+            quoted_parts_cents: bucket ? bucket.totalCents : null,
+            shop_custom_service_id: c.shopCustomServiceId ?? null,
+          };
+        }),
         source: "booking",
         now,
       });
@@ -12051,6 +12143,7 @@ export const createByShop = mutation({
           NonNullable<typeof args.mechanicPartEntries>[number]
         >();
         for (const m of args.mechanicPartEntries ?? []) {
+          if (!m.service_id) continue;
           mechByKey.set(pairKey(String(m.service_id), m.key), m);
         }
         const seen = new Set<string>();
@@ -12087,6 +12180,11 @@ export const createByShop = mutation({
 
         // Parts the catalog missed entirely — mechanic-added rows, no catalog match.
         for (const m of args.mechanicPartEntries ?? []) {
+          // parts_quote_snapshots measures catalog accuracy — mechanic edit vs
+          // what the catalog predicted. A custom line has nothing to compare
+          // against, so it stays out rather than landing here with a borrowed
+          // service_id that would pollute the accuracy numbers.
+          if (!m.service_id) continue;
           const composite = pairKey(String(m.service_id), m.key);
           if (seen.has(composite)) continue;
           await ctx.db.insert("parts_quote_snapshots", {
@@ -12229,7 +12327,8 @@ export const backfillCompletedBooking = mutation({
           durationMinutes: v.optional(v.float64()),
           // See the note on createWalkinBooking's copy of this validator.
           complaint: v.optional(v.string()),
-          categoryId: v.optional(v.id("service_categories")),
+          systemTags: v.optional(v.array(v.string())),
+          workType: v.optional(v.string()),
           shopCustomServiceId: v.optional(v.id("shop_custom_services")),
         }),
       ),
@@ -12539,7 +12638,8 @@ export const backfillCompletedBooking = mutation({
     if (args.customServices?.length) {
       const customJobInputs = args.customServices.map((c: any) => ({
         name: String(c.name),
-        category_id: c.categoryId ?? null,
+        system_tags: c.systemTags ?? null,
+        work_type: c.workType ?? null,
         complaint: c.complaint ?? null,
         estimated_minutes: c.durationMinutes ?? null,
         shop_custom_service_id: c.shopCustomServiceId ?? null,
@@ -13634,7 +13734,7 @@ export const getOpenCustomerLateAlerts = query({
         const mechanic = booking.mechanic_id
           ? await ctx.db.get(booking.mechanic_id)
           : null;
-        const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+        const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
         return {
           _id: row._id,
           bookingId: booking._id,
@@ -13692,7 +13792,7 @@ export const getCustomerLateNotificationSentMonitors = query({
         if (scope && !bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
-        const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+        const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
         return {
           _id: row._id,
           bookingId: booking._id,
@@ -13740,7 +13840,7 @@ export const getCustomerOnMyWayMonitors = query({
         if (scope && !bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
-        const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+        const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
         return {
           _id: row._id,
           bookingId: booking._id,
@@ -13801,7 +13901,7 @@ export const getOpenPickupRequests = query({
         const mechanic = booking.mechanic_id
           ? await ctx.db.get(booking.mechanic_id as Id<"mechanics">)
           : null;
-        const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+        const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
         return {
           _id: booking._id,
           bookingId: booking._id,
@@ -13853,7 +13953,7 @@ export const getOpenFrontDeskOverrunAlerts = query({
         const mechanic = booking.mechanic_id
           ? await ctx.db.get(booking.mechanic_id)
           : null;
-        const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+        const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
         return {
           _id: row._id,
           bookingId: booking._id,
@@ -14108,7 +14208,7 @@ export const getOpenLateStartReviews = query({
           ? await ctx.db.get(upstreamBooking.mechanic_id)
           : null;
         const upstreamServices = upstreamBooking
-          ? await resolveServiceNames(ctx, upstreamBooking.service_ids)
+          ? await resolveServiceNames(ctx, upstreamBooking.service_ids, upstreamBooking.custom_services)
           : [];
 
         const proposals = await Promise.all(
@@ -14122,7 +14222,7 @@ export const getOpenLateStartReviews = query({
               ? await ctx.db.get(proposal.proposed_mechanic_id as Id<"mechanics">)
               : null;
             const serviceNames = booking
-              ? await resolveServiceNames(ctx, booking.service_ids)
+              ? await resolveServiceNames(ctx, booking.service_ids, booking.custom_services)
               : [];
 
             return {
@@ -16107,7 +16207,7 @@ export const getBookingByIdForCustomer = query({
       ? await ctx.db.get(booking.previous_mechanic_id)
       : null;
 
-    const serviceNames = await resolveServiceNames(ctx, booking.service_ids);
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
 
     const vehicle = booking.vin
       ? await ctx.db

@@ -2871,7 +2871,13 @@ export default defineSchema({
     priced_parts_snapshot: v.optional(
       v.array(
         v.object({
-          service_id: v.id("services"),
+          // Optional since off-catalog work landed: a part can now belong to a
+          // custom line, which has no services row. Exactly one of
+          // service_id / custom_service_name is set on every row.
+          service_id: v.optional(v.id("services")),
+          /** Set on parts attached to a custom_services line, matched by name
+           *  (the same key custom_jobs uses). */
+          custom_service_name: v.optional(v.string()),
           part_id: v.optional(v.id("oem_parts")),
           oem_number: v.string(),
           part_name: v.string(),
@@ -4175,6 +4181,42 @@ export default defineSchema({
     updated_by_user_id: v.optional(v.id("director_users")),
   }).index("by_key", ["key"]),
 
+  // Director-managed catalog of the third-party services the company pays for
+  // (Convex, Slack, Firecrawl, Anthropic, Fly.io, Reducto, Stripe, the app
+  // stores, …). Purely an internal bookkeeping surface — a place to paste a
+  // dashboard link, stash the login/account it's under, and track roughly what
+  // it costs per month. The favicon is derived client-side from `url`; store an
+  // explicit `logo_url` only to override it. See app/(director-panel)/…/
+  // TabIntegrations.tsx and convex/directorIntegrations.ts.
+  director_integrations: defineTable({
+    name: v.string(),
+    // Where to go to manage the service (the dashboard/console URL). Clicking a
+    // card opens this in a new tab.
+    url: v.string(),
+    // Optional logo override. Absent → favicon derived from `url`'s hostname.
+    logo_url: v.optional(v.string()),
+    // Free-text grouping shown as a chip (Backend, AI, Payments, Infra, …).
+    category: v.optional(v.string()),
+    // Which login / org / email the account sits under, plus any freeform notes
+    // (where the API key lives, plan name, seat count, …).
+    account: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    // How we're billed. `monthly_cost` is the recurring monthly figure for a
+    // subscription, or a rough monthly estimate for pay-as-you-go usage; unset
+    // for free / one-time tools.
+    billing_type: v.union(
+      v.literal("subscription"),
+      v.literal("pay_as_you_go"),
+      v.literal("free"),
+    ),
+    monthly_cost: v.optional(v.number()),
+    sort_order: v.optional(v.number()),
+    archived: v.optional(v.boolean()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+    updated_by_user_id: v.optional(v.id("director_users")),
+  }).index("by_created_at", ["created_at"]),
+
   // ==========================================================================
   // Scheduling-overhaul tables — late-start monitoring, no-show monitoring,
   // overrun check-ins, and the notification outbox queue. Backed by
@@ -4592,6 +4634,11 @@ export default defineSchema({
     normalized_name: v.string(),
     // serviceMatchKey — the cross-shop clustering key.
     match_key: v.string(),
+    // Defaults carried onto every job the shortcut creates, so a press is one
+    // tap rather than three. See lib/custom-job-taxonomy.ts.
+    system_tags: v.optional(v.array(v.string())),
+    work_type: v.optional(v.string()),
+    // Legacy — see the note on custom_jobs.category_id.
     category_id: v.optional(v.id("service_categories")),
 
     // Prefilled when the shortcut is pressed. Editable, unlike the name.
@@ -4656,6 +4703,22 @@ export default defineSchema({
     name: v.string(),
     normalized_name: v.string(),
     match_key: v.string(),
+
+    // ── Descriptive taxonomy (lib/custom-job-taxonomy.ts) ──────────────────
+    // Two stacked axes: where on the car, and what was done to it. Both are
+    // MANDATORY on every write path — requireCustomJobTaxonomy is the single
+    // enforcement point. They're optional in the validator only so rows written
+    // before this shipped still pass schema validation on deploy; nothing may
+    // write a NEW row without them.
+    //
+    // system_tags is ordered: [0] is the primary system, and the coarse
+    // gap-clustering read groups on that rather than on the whole set.
+    system_tags: v.optional(v.array(v.string())),
+    work_type: v.optional(v.string()),
+    // Legacy. Was the catalog's merchandising taxonomy, which describes what a
+    // driver can BOOK and therefore could never describe off-catalog work —
+    // this is the field that filed a window-switch replacement under
+    // "Inspections". No longer collected; kept so historical rows resolve.
     category_id: v.optional(v.id("service_categories")),
 
     // The reasoning. `complaint` is why the work happened, `resolution` is what
@@ -4668,6 +4731,29 @@ export default defineSchema({
     actual_minutes: v.optional(v.number()),
     quoted_price_cents: v.optional(v.number()),
     charged_price_cents: v.optional(v.number()),
+
+    // ── Parts quoted against this line ────────────────────────────────────
+    // Denormalised from the booking's priced_parts_snapshot at write time.
+    // The snapshot is the billing record and stays authoritative for money;
+    // this copy is what makes a custom job self-describing for the extraction
+    // reads, which scan custom_jobs and never load the booking. Without it
+    // "what does this work actually involve" is unanswerable at scale — the
+    // single most useful thing to know before deciding to build a service.
+    parts: v.optional(
+      v.array(
+        v.object({
+          part_name: v.string(),
+          oem_number: v.optional(v.string()),
+          brand: v.optional(v.string()),
+          quantity: v.number(),
+          unit_price_cents: v.optional(v.number()),
+          line_total_cents: v.optional(v.number()),
+        }),
+      ),
+    ),
+    /** Sum of the parts above at quote time. Frozen — a later price edit must
+     *  not silently rewrite what this job was quoted at. */
+    quoted_parts_cents: v.optional(v.number()),
 
     // Set once the job completes and the post-job report lands.
     job_actual_id: v.optional(v.id("job_actuals")),
@@ -6197,6 +6283,13 @@ export default defineSchema({
         total_pages: v.number(),
         intervals: v.array(v.object({ start: v.number(), end: v.number() })),
         specs: v.array(v.object({ start: v.number(), end: v.number() })),
+        /**
+         * Brake-specification pages — where the rotor DISCARD MINIMUM lives.
+         * Scored separately from `specs` because capacities and brake limits
+         * sit in different chapters; the specs extraction sends the union.
+         * Optional: v1 indexes predate the category.
+         */
+        brakes: v.optional(v.array(v.object({ start: v.number(), end: v.number() }))),
         computed_at: v.number(),
         /**
          * Documents this manual says hold the schedule instead of itself.

@@ -32,6 +32,11 @@ import VehicleYMMTPicker from "./vehicle-ymmt-picker";
 import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
 import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
 import ServiceSuggestions from "@/components/booking/service-suggestions";
+import {
+  CustomJobTaxonomyPicker,
+  isCustomJobTaxonomyComplete,
+} from "@/components/custom-job-taxonomy-picker";
+import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -188,6 +193,12 @@ function CollapsibleSection({
 /* ------------------------------------------------------------------ */
 /*  Component                                                           */
 /* ------------------------------------------------------------------ */
+
+/** Bucket key for parts attached to an off-catalog line. Not an id — custom
+ *  lines have none — so it's the line's name behind a prefix no Convex id can
+ *  collide with. The submit mapper splits it back out into
+ *  `custom_service_name` on the wire. */
+const CUSTOM_BUCKET_PREFIX = "custom::";
 
 export default function CreateBookingDrawer({
   date,
@@ -379,16 +390,18 @@ export default function CreateBookingDrawer({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
-  /* Off-catalog lines. `complaint` and `categoryId` don't affect the booking —
+  /* Off-catalog lines. `complaint` and the taxonomy don't affect the booking —
      they populate the custom_jobs row (Off-Catalog Work spec, §7). The complaint
-     is the one field nothing else in the system captures, and it's what lets the
-     director view tell what a cluster of names actually is. */
+     is the one field nothing else in the system captures, and the taxonomy is
+     what lets a cluster of names aggregate into "engine · service" rather than
+     staying three unrelated strings. */
   const [customServices, setCustomServices] = useState<
     Array<{
       name: string;
       durationMinutes?: number;
       complaint?: string;
-      categoryId?: string;
+      systemTags: string[];
+      workType: string;
       shopCustomServiceId?: string;
     }>
   >([]);
@@ -396,7 +409,12 @@ export default function CreateBookingDrawer({
   const [customDraftName, setCustomDraftName] = useState("");
   const [customDraftMinutes, setCustomDraftMinutes] = useState("");
   const [customDraftComplaint, setCustomDraftComplaint] = useState("");
-  const [customDraftCategoryId, setCustomDraftCategoryId] = useState("");
+  const [customDraftSystemTags, setCustomDraftSystemTags] = useState<string[]>(
+    [],
+  );
+  const [customDraftWorkType, setCustomDraftWorkType] = useState<string | null>(
+    null,
+  );
   /* Set when the form was opened by pressing an existing shortcut. Carrying it
      through is what makes a repeat exactly countable rather than fuzzy-matched
      back together later (Off-Catalog Work spec, §3). */
@@ -638,7 +656,14 @@ export default function CreateBookingDrawer({
       }
     }
     setCatalogPartEdits((prev) => {
+      // Custom-line buckets survive verbatim. This rebuild is driven by the
+      // CATALOG preview and keys off selectedIds, so anything off-catalog would
+      // otherwise be dropped every time the preview re-resolved — silently
+      // deleting parts the mechanic had already typed.
       const next: Record<string, MechanicPartEdit[]> = {};
+      for (const [bucket, rows] of Object.entries(prev)) {
+        if (bucket.startsWith(CUSTOM_BUCKET_PREFIX)) next[bucket] = rows;
+      }
       for (const sid of Array.from(selectedIds).map(String)) {
         const existing = prev[sid] ?? [];
         const svc = previewBySvc.get(sid);
@@ -675,10 +700,15 @@ export default function CreateBookingDrawer({
     });
   }, [catalogPartsPreview, selectedIds]);
 
-  // Reset the parts declaration when the service selection is cleared.
+  // Reset the parts declaration when the booking has no work on it at all.
+  // Custom lines count: a booking whose only line is off-catalog still has
+  // parts to declare, and clearing the answer under the mechanic would re-arm
+  // the submit gate they already satisfied.
   useEffect(() => {
-    if (selectedIds.size === 0) setPartsDeclaration(null);
-  }, [selectedIds]);
+    if (selectedIds.size === 0 && customServices.length === 0) {
+      setPartsDeclaration(null);
+    }
+  }, [selectedIds, customServices.length]);
 
   const setCatalogPartField = (
     sid: string,
@@ -728,24 +758,48 @@ export default function CreateBookingDrawer({
       return { ...prev, [sid]: rows.filter((_, i) => i !== idx) };
     });
 
-  // Selected standard services (with names) for the catalog-parts section.
+  /* Every line on this booking that can carry parts — catalog services first,
+     then the off-catalog ones.
+
+     Custom lines were previously absent, so a mechanic who added "Power window
+     switch replacement" and fitted an $78 switch had nowhere to record it: the
+     parts editor only ever bucketed by service_id, and a custom line has none.
+     The part then existed only as prose in the post-job resolution text, which
+     no total, receipt or catalog-gap read can see.
+
+     They're keyed CUSTOM_BUCKET_PREFIX + name rather than an id, and the submit
+     mapper turns that back into `custom_service_name` on the wire. */
   const catalogPartServices = useMemo(() => {
     const all = categories.flatMap((c: any) => c.services as any[]);
-    return Array.from(selectedIds)
+    const catalog = Array.from(selectedIds)
       .map((sid) => {
         const svc = all.find((s: any) => s._id === sid);
         return svc
-          ? { service_id: String(sid), name: svc.name as string }
+          ? { service_id: String(sid), name: svc.name as string, custom: false }
           : null;
       })
-      .filter(Boolean) as Array<{ service_id: string; name: string }>;
-  }, [categories, selectedIds]);
+      .filter(Boolean) as Array<{
+      service_id: string;
+      name: string;
+      custom: boolean;
+    }>;
+    const custom = customServices.map((c) => ({
+      service_id: `${CUSTOM_BUCKET_PREFIX}${c.name}`,
+      name: c.name,
+      custom: true,
+    }));
+    return [...catalog, ...custom];
+  }, [categories, selectedIds, customServices]);
 
   // Sum of declared part line totals (dollars) for selected services — drives
   // the "parts exceed quote" warning. Only meaningful when declaration === "add".
   const declaredPartsTotal = useMemo(() => {
     let sum = 0;
-    for (const sid of Array.from(selectedIds).map(String)) {
+    const buckets = [
+      ...Array.from(selectedIds).map(String),
+      ...customServices.map((c) => `${CUSTOM_BUCKET_PREFIX}${c.name}`),
+    ];
+    for (const sid of buckets) {
       for (const r of catalogPartEdits[sid] ?? []) {
         const qty = Number(r.quantity);
         const price = Number(r.unit_price);
@@ -760,7 +814,7 @@ export default function CreateBookingDrawer({
       }
     }
     return sum;
-  }, [catalogPartEdits, selectedIds]);
+  }, [catalogPartEdits, selectedIds, customServices]);
 
   const isDiagnostic = useMemo(() => {
     const matchesDiagnostic = (text: string | undefined | null) =>
@@ -1165,7 +1219,8 @@ export default function CreateBookingDrawer({
     setCustomDraftName("");
     setCustomDraftMinutes("");
     setCustomDraftComplaint("");
-    setCustomDraftCategoryId("");
+    setCustomDraftSystemTags([]);
+    setCustomDraftWorkType(null);
     setCustomDraftShortcutId("");
     setCustomDraftSaveShortcut(false);
   };
@@ -1177,13 +1232,17 @@ export default function CreateBookingDrawer({
     _id: string;
     name: string;
     default_minutes: number | null;
-    category_id: string | null;
+    system_tags?: string[] | null;
+    work_type?: string | null;
   }) => {
     setCustomDraftName(shortcut.name);
     setCustomDraftMinutes(
       shortcut.default_minutes ? String(shortcut.default_minutes) : "",
     );
-    setCustomDraftCategoryId(shortcut.category_id ?? "");
+    // The shortcut carries its taxonomy, so a press stays one tap — the
+    // mechanic only re-answers if this instance was genuinely different work.
+    setCustomDraftSystemTags(shortcut.system_tags ?? []);
+    setCustomDraftWorkType(shortcut.work_type ?? null);
     setCustomDraftComplaint("");
     setCustomDraftShortcutId(shortcut._id);
     setCustomDraftSaveShortcut(false);
@@ -1249,17 +1308,29 @@ export default function CreateBookingDrawer({
         const n = Number(s);
         return s.trim() !== "" && Number.isFinite(n) ? n : undefined;
       };
+      const customBucketNames = new Set(
+        customServices.map((c) => `${CUSTOM_BUCKET_PREFIX}${c.name}`),
+      );
       const mechanicPartEntries = Object.values(catalogPartEdits)
         .flat()
         .filter(
           (r) =>
-            selectedIds.has(r.service_id) &&
+            (selectedIds.has(r.service_id) ||
+              customBucketNames.has(r.service_id)) &&
             (r.part_name.trim() !== "" || r.oem_number.trim() !== ""),
         )
         .map((r) => {
           const priceDollars = toPartNum(r.unit_price);
+          const isCustom = r.service_id.startsWith(CUSTOM_BUCKET_PREFIX);
           return {
-            service_id: r.service_id as Id<"services">,
+            // Exactly one of the two — the server rejects neither-nor and the
+            // snapshot row keeps whichever identifies the line.
+            service_id: isCustom
+              ? undefined
+              : (r.service_id as Id<"services">),
+            custom_service_name: isCustom
+              ? r.service_id.slice(CUSTOM_BUCKET_PREFIX.length)
+              : undefined,
             key: r.key,
             part_name: r.part_name.trim(),
             oem_number: r.oem_number.trim().toUpperCase(),
@@ -1270,11 +1341,13 @@ export default function CreateBookingDrawer({
             catalog_origin: r.catalog_origin,
             // Catalog identity (kept catalog rows only) so the bill snapshot
             // carries part_id/role_key for pre/post-job seeding + preferences.
-            part_id: r.catalog_origin
-              ? (r.part_id as Id<"oem_parts"> | undefined)
-              : undefined,
-            role_key: r.catalog_origin ? r.role_key : undefined,
-            quantity_basis: r.catalog_origin ? r.quantity_basis : undefined,
+            part_id:
+              r.catalog_origin && !isCustom
+                ? (r.part_id as Id<"oem_parts"> | undefined)
+                : undefined,
+            role_key: r.catalog_origin && !isCustom ? r.role_key : undefined,
+            quantity_basis:
+              r.catalog_origin && !isCustom ? r.quantity_basis : undefined,
           };
         });
 
@@ -1298,7 +1371,8 @@ export default function CreateBookingDrawer({
                 name: c.name,
                 durationMinutes: c.durationMinutes,
                 complaint: c.complaint,
-                categoryId: c.categoryId as Id<"service_categories"> | undefined,
+                systemTags: c.systemTags,
+                workType: c.workType,
                 shopCustomServiceId: c.shopCustomServiceId as
                   | Id<"shop_custom_services">
                   | undefined,
@@ -1434,7 +1508,8 @@ export default function CreateBookingDrawer({
                 name: c.name,
                 durationMinutes: c.durationMinutes,
                 complaint: c.complaint,
-                categoryId: c.categoryId as Id<"service_categories"> | undefined,
+                systemTags: c.systemTags,
+                workType: c.workType,
                 shopCustomServiceId: c.shopCustomServiceId as
                   | Id<"shop_custom_services">
                   | undefined,
@@ -1555,7 +1630,10 @@ export default function CreateBookingDrawer({
       return;
     }
 
-    if (selectedIds.size > 0 && partsDeclaration === null) {
+    if (
+      (selectedIds.size > 0 || customServices.length > 0) &&
+      partsDeclaration === null
+    ) {
       openSection("catalog_parts");
       onToast("Choose how to handle parts (No parts / Add parts / Skip).");
       return;
@@ -2027,6 +2105,22 @@ export default function CreateBookingDrawer({
                     resetCustomDraft();
                   }}
                 />
+                {/* Second band: not a catalog service, but work other shops
+                    have already named. Taking one converges the cluster
+                    instead of forking it — see the component header. */}
+                <KnownNameSuggestions
+                  typed={customDraftName}
+                  shopId={shopData?.shopId ? String(shopData.shopId) : undefined}
+                  onPick={(s) => {
+                    setCustomDraftName(s.name);
+                    // The shops that already did this work have effectively
+                    // voted on what it is; don't make this one re-answer.
+                    if (s.system_tags.length > 0) {
+                      setCustomDraftSystemTags(s.system_tags);
+                    }
+                    if (s.work_type) setCustomDraftWorkType(s.work_type);
+                  }}
+                />
                 {/* Why the work is happening. Optional, but it's the field that
                     turns "walnut blast" from a string into something we can
                     understand well enough to decide whether to build it. */}
@@ -2036,30 +2130,18 @@ export default function CreateBookingDrawer({
                   placeholder="What did the customer report, or what did you see? (optional)"
                   className="w-full min-h-[52px] resize-y rounded-lg border border-border bg-background px-2.5 py-2 text-xs leading-relaxed outline-none focus:border-primary"
                 />
-                <Select
-                  selectedKey={customDraftCategoryId || null}
-                  onSelectionChange={(key) =>
-                    setCustomDraftCategoryId(key == null ? "" : String(key))
-                  }
-                  placeholder="Category (optional)"
-                >
-                  <SelectTrigger className={drawerSelectTriggerClassName}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectPopover placement="bottom start">
-                    <SelectListBox shouldFocusWrap>
-                      {categories.map((c: any) => (
-                        <SelectItem
-                          key={String(c._id)}
-                          id={String(c._id)}
-                          textValue={c.name}
-                        >
-                          {c.name}
-                        </SelectItem>
-                      ))}
-                    </SelectListBox>
-                  </SelectPopover>
-                </Select>
+                {/* Two mandatory axes, replacing the old "Category (optional)"
+                    dropdown. That dropdown read service_categories — the
+                    catalog's merchandising taxonomy, which describes what a
+                    driver can BOOK. Off-catalog work is by definition work that
+                    taxonomy can't name, which is how a power-window switch ended
+                    up filed under "Inspections". */}
+                <CustomJobTaxonomyPicker
+                  systemTags={customDraftSystemTags}
+                  workType={customDraftWorkType}
+                  onSystemTagsChange={setCustomDraftSystemTags}
+                  onWorkTypeChange={setCustomDraftWorkType}
+                />
                 {/* Only offered when this isn't already a shortcut. Ticking it
                     is what turns forty spellings into one key pressed forty
                     times, so the data is worth the one extra tap. */}
@@ -2086,10 +2168,24 @@ export default function CreateBookingDrawer({
                   </button>
                   <button
                     type="button"
-                    disabled={!customDraftName.trim()}
+                    disabled={
+                      !customDraftName.trim() ||
+                      !isCustomJobTaxonomyComplete(
+                        customDraftSystemTags,
+                        customDraftWorkType,
+                      )
+                    }
                     onClick={async () => {
                       const name = customDraftName.trim();
                       if (!name) return;
+                      if (
+                        !isCustomJobTaxonomyComplete(
+                          customDraftSystemTags,
+                          customDraftWorkType,
+                        )
+                      ) {
+                        return;
+                      }
                       const mins = customDraftMinutes ? Number(customDraftMinutes) : NaN;
                       const minutes =
                         Number.isFinite(mins) && mins > 0 ? mins : undefined;
@@ -2103,9 +2199,8 @@ export default function CreateBookingDrawer({
                           const res: any = await saveShortcut({
                             shopId: shopData.shopId as Id<"shops">,
                             name,
-                            categoryId:
-                              (customDraftCategoryId as Id<"service_categories">) ||
-                              undefined,
+                            systemTags: customDraftSystemTags,
+                            workType: customDraftWorkType,
                             defaultMinutes: minutes,
                             lastComplaint: customDraftComplaint.trim() || undefined,
                           });
@@ -2122,7 +2217,8 @@ export default function CreateBookingDrawer({
                           name,
                           durationMinutes: minutes,
                           complaint: customDraftComplaint.trim() || undefined,
-                          categoryId: customDraftCategoryId || undefined,
+                          systemTags: customDraftSystemTags,
+                          workType: customDraftWorkType,
                           shopCustomServiceId: shortcutId || undefined,
                         },
                       ]);
@@ -2466,7 +2562,7 @@ export default function CreateBookingDrawer({
             "Add parts" itemizes the parts on this bill (prefilled from the OEM
             catalog, fully editable). They become priced_parts_snapshot +
             parts_cost and feed the job scope, pre-job and post-job. */}
-        {!isBackfill && selectedIds.size > 0 && (
+        {!isBackfill && (selectedIds.size > 0 || customServices.length > 0) && (
           <CollapsibleSection
             sectionKey="catalog_parts"
             icon={Package}
@@ -2538,18 +2634,27 @@ export default function CreateBookingDrawer({
                       {`Parts ($${declaredPartsTotal.toFixed(2)}) exceed the quoted price ($${mechanicQuotedPrice.toFixed(2)}) — labor will show as $0.`}
                     </p>
                   )}
-                {catalogPartServices.map(({ service_id: sid, name }) => {
+                {catalogPartServices.map(({ service_id: sid, name, custom }) => {
                   const rows = catalogPartEdits[sid] ?? [];
                   return (
                     <div
                       key={sid}
                       className="rounded-lg border border-border bg-background/40 p-3"
                     >
-                      <DrawerFieldLabel>{name} — parts</DrawerFieldLabel>
+                      <DrawerFieldLabel>
+                        {name} — parts
+                        {custom ? (
+                          <span className="ml-1.5 rounded border border-primary/30 bg-primary/5 px-1 py-px text-[9px] font-semibold uppercase tracking-[0.06em] text-primary">
+                            custom
+                          </span>
+                        ) : null}
+                      </DrawerFieldLabel>
                       <div className="space-y-3">
                         {rows.length === 0 && (
                           <p className="text-xs text-muted-foreground">
-                            No catalog parts for this service — add one below.
+                            {custom
+                              ? "Off-catalog work — we have nothing to prefill. Add what you fitted."
+                              : "No catalog parts for this service — add one below."}
                           </p>
                         )}
                         {rows.map((p, idx) => (

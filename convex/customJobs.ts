@@ -26,6 +26,8 @@ import {
   normalizeServiceName,
   serviceMatchKey,
 } from "./lib/serviceMatch";
+import { requireCustomJobTaxonomy } from "../lib/custom-job-taxonomy";
+import { fuzzyNameSimilarity } from "./lib/fuzzyServiceName";
 import {
   recordShortcutUse,
   recordShortcutActual,
@@ -101,6 +103,22 @@ async function resolveVehicleConfigId(
 
 export type CustomJobInput = {
   name: string;
+  /** Where on the car. Ordered — [0] is the primary system. Required. */
+  system_tags?: string[] | null;
+  /** What was done to it. Required. */
+  work_type?: string | null;
+  /** Parts quoted against this line, denormalised from the booking's
+   *  priced_parts_snapshot. See the schema note on custom_jobs.parts. */
+  parts?: Array<{
+    part_name: string;
+    oem_number?: string;
+    brand?: string;
+    quantity: number;
+    unit_price_cents?: number;
+    line_total_cents?: number;
+  }> | null;
+  quoted_parts_cents?: number | null;
+  /** Legacy catalog category. No longer collected; see schema.ts. */
   category_id?: Id<"service_categories"> | null;
   complaint?: string | null;
   estimated_minutes?: number | null;
@@ -119,6 +137,60 @@ export type CustomJobInput = {
  * so a booking edit that re-sends the same custom line doesn't double-count the
  * cluster.
  */
+/**
+ * Group a booking's priced_parts_snapshot rows onto the custom lines they
+ * belong to, keyed by serviceMatchKey so a line renamed between the parts
+ * editor and the service list still finds its parts.
+ *
+ * The snapshot stays the billing record. This is the denormalised copy that
+ * lands on custom_jobs — see the schema note there for why the duplication is
+ * deliberate.
+ */
+export function customPartsFromSnapshot(snapshot: unknown): Map<
+  string,
+  {
+    parts: Array<{
+      part_name: string;
+      oem_number?: string;
+      brand?: string;
+      quantity: number;
+      unit_price_cents?: number;
+      line_total_cents?: number;
+    }>;
+    totalCents: number;
+  }
+> {
+  const out = new Map<string, { parts: any[]; totalCents: number }>();
+  if (!Array.isArray(snapshot)) return out;
+  for (const row of snapshot) {
+    const name = row?.custom_service_name;
+    if (typeof name !== "string" || !name.trim()) continue;
+    const key = serviceMatchKey(name);
+    if (!key) continue;
+    let bucket = out.get(key);
+    if (!bucket) {
+      bucket = { parts: [], totalCents: 0 };
+      out.set(key, bucket);
+    }
+    const quantity = typeof row.quantity === "number" ? row.quantity : 1;
+    const line =
+      typeof row.line_total_cents === "number" ? row.line_total_cents : 0;
+    bucket.parts.push({
+      part_name: String(row.part_name ?? "").trim() || "Part",
+      oem_number: row.oem_number ? String(row.oem_number) : undefined,
+      brand: row.brand ? String(row.brand) : undefined,
+      quantity,
+      unit_price_cents:
+        typeof row.unit_price_cents === "number"
+          ? row.unit_price_cents
+          : undefined,
+      line_total_cents: line || undefined,
+    });
+    bucket.totalCents += line;
+  }
+  return out;
+}
+
 export async function recordCustomJobsForBooking(
   ctx: any,
   args: {
@@ -148,10 +220,25 @@ export async function recordCustomJobsForBooking(
     if (!name) continue;
     const matchKey = serviceMatchKey(name);
 
+    // The single enforcement point for the taxonomy. Deliberately here rather
+    // than in each mutation's arg validator: the guarantee we want is "no
+    // custom_jobs row exists without a system and a work type", and per-entry-
+    // point checks are exactly how a fourth entry point later ships without one.
+    const taxonomy = requireCustomJobTaxonomy({
+      system_tags: input.system_tags,
+      work_type: input.work_type,
+      jobName: name,
+    });
+
     const prior = existing.find((r: any) => r.match_key === matchKey);
     if (prior) {
       await ctx.db.patch(prior._id, {
         name,
+        system_tags: taxonomy.system_tags,
+        work_type: taxonomy.work_type,
+        parts: input.parts ?? prior.parts,
+        quoted_parts_cents:
+          input.quoted_parts_cents ?? prior.quoted_parts_cents,
         category_id: input.category_id ?? prior.category_id,
         complaint: input.complaint?.trim() || prior.complaint,
         estimated_minutes:
@@ -187,6 +274,10 @@ export async function recordCustomJobsForBooking(
       name,
       normalized_name: normalizeServiceName(name),
       match_key: matchKey,
+      system_tags: taxonomy.system_tags,
+      work_type: taxonomy.work_type,
+      parts: input.parts && input.parts.length > 0 ? input.parts : undefined,
+      quoted_parts_cents: input.quoted_parts_cents ?? undefined,
       category_id: input.category_id ?? undefined,
       complaint: input.complaint?.trim() || undefined,
       estimated_minutes: input.estimated_minutes ?? undefined,
@@ -312,7 +403,11 @@ export const addMidJobCustomService = mutation({
     bookingId: v.id("bookings"),
     name: v.string(),
     complaint: v.optional(v.string()),
-    categoryId: v.optional(v.id("service_categories")),
+    // Required in practice — recordCustomJobsForBooking throws without them.
+    // Left as plain strings here so the taxonomy can gain a slug without a
+    // schema migration; the shared validator is the source of truth.
+    systemTags: v.optional(v.array(v.string())),
+    workType: v.optional(v.string()),
     estimatedMinutes: v.optional(v.number()),
     shopCustomServiceId: v.optional(v.id("shop_custom_services")),
   },
@@ -391,7 +486,8 @@ export const addMidJobCustomService = mutation({
       customJobs: [
         {
           name,
-          category_id: args.categoryId ?? null,
+          system_tags: args.systemTags ?? null,
+          work_type: args.workType ?? null,
           complaint: args.complaint ?? null,
           estimated_minutes: args.estimatedMinutes ?? null,
           shop_custom_service_id: args.shopCustomServiceId ?? null,
@@ -427,6 +523,17 @@ export const listForBooking = query({
     return rows.map((r) => ({
       _id: r._id,
       name: r.name,
+      system_tags: (r.system_tags ?? []) as string[],
+      work_type: (r.work_type ?? null) as string | null,
+      parts: (r.parts ?? []) as Array<{
+        part_name: string;
+        oem_number?: string;
+        brand?: string;
+        quantity: number;
+        unit_price_cents?: number;
+        line_total_cents?: number;
+      }>,
+      quoted_parts_cents: (r.quoted_parts_cents ?? null) as number | null,
       category_id: r.category_id ?? null,
       complaint: r.complaint ?? null,
       resolution: r.resolution ?? null,
@@ -437,3 +544,156 @@ export const listForBooking = query({
     }));
   },
 });
+
+/**
+ * What other shops already call this work.
+ *
+ * ─── WHY ────────────────────────────────────────────────────────────────────
+ * Clustering is only as good as the names. "Carbon cleaning", "walnut blast",
+ * "intake decarbon" and "carbon clean service" are one job and four clusters,
+ * and no amount of matching after the fact recovers what convergence at the
+ * keyboard would have given for free. The catalog we're trying to build is
+ * mostly a naming problem.
+ *
+ * So this is the second band under the name field. The first
+ * (serviceMatch.matchCustomName) says "we already sell this" — take it and the
+ * driver keeps their maintenance credit. This one says "other shops call it
+ * X" — take it and the cluster grows instead of forking.
+ *
+ * ─── WHAT IT DELIBERATELY DOESN'T RETURN ────────────────────────────────────
+ * No shop names, no ids, no prices, no vehicles. A shop learns that four OTHER
+ * shops do this work and what they call it — nothing about who they are or what
+ * they charge. The naming signal is what's useful here; the rest is somebody
+ * else's business.
+ *
+ * ─── COST ───────────────────────────────────────────────────────────────────
+ * Scans pending_service_submissions, which holds ONE row per distinct name
+ * ever typed — the small table, not custom_jobs. Only the handful that survive
+ * scoring then hit custom_jobs, and they go through the by_match_key index.
+ */
+export const suggestKnownNames = query({
+  args: {
+    name: v.string(),
+    shopId: v.optional(v.id("shops")),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    // Cross-shop data, however coarse, is not public. The band is only ever
+    // rendered inside an authenticated shop surface, so requiring an identity
+    // costs the feature nothing and keeps the whole naming ledger off an
+    // unauthenticated endpoint.
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+
+    const typed = args.name.trim();
+    if (typed.length < 3) return [];
+
+    const submissions = await ctx.db
+      .query("pending_service_submissions")
+      .withIndex("by_status", (q: any) => q.eq("status", "pending"))
+      .collect();
+
+    const typedKey = serviceMatchKey(typed);
+    const scored: Array<{ name: string; score: number }> = [];
+    for (const row of submissions) {
+      const candidate = String(row.proposed_name ?? "").trim();
+      if (!candidate) continue;
+      // What they've typed so far, exactly. Suggesting it back is noise.
+      if (normalizeServiceName(candidate) === normalizeServiceName(typed)) {
+        continue;
+      }
+      const score = fuzzyNameSimilarity(typed, candidate);
+      // 0.5 keeps a half-typed name useful ("carbon" → "Carbon cleaning")
+      // without letting one shared noun drag in unrelated work.
+      if (score < 0.5) continue;
+      scored.push({ name: candidate, score });
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+
+    const out: Array<{
+      name: string;
+      shops: number;
+      jobs: number;
+      system_tags: string[];
+      work_type: string | null;
+      /** True when this shop has already used the name — it isn't news, and the
+       *  UI drops it rather than telling them what they already know. */
+      used_here: boolean;
+    }> = [];
+
+    const seenKeys = new Set<string>([typedKey]);
+    for (const candidate of scored) {
+      if (out.length >= (args.limit ?? 4)) break;
+      const key = serviceMatchKey(candidate.name);
+      if (!key || seenKeys.has(key)) continue;
+      seenKeys.add(key);
+
+      const jobs = await ctx.db
+        .query("custom_jobs")
+        .withIndex("by_match_key", (q: any) => q.eq("match_key", key))
+        .collect();
+      if (jobs.length === 0) continue;
+
+      const shops = new Set<string>();
+      const systemCounts = new Map<string, number>();
+      const workTypeCounts = new Map<string, number>();
+      let usedHere = false;
+      for (const job of jobs) {
+        shops.add(String(job.shop_id));
+        if (args.shopId && String(job.shop_id) === String(args.shopId)) {
+          usedHere = true;
+        }
+        for (const tag of (job.system_tags ?? []) as string[]) {
+          systemCounts.set(tag, (systemCounts.get(tag) ?? 0) + 1);
+        }
+        if (job.work_type) {
+          workTypeCounts.set(
+            job.work_type,
+            (workTypeCounts.get(job.work_type) ?? 0) + 1,
+          );
+        }
+      }
+
+      // Already in this shop's own "Done here before" chips — showing it again
+      // under a heading about other shops would be a lie.
+      if (usedHere && shops.size === 1) continue;
+
+      out.push({
+        // The spelling the cluster is keyed on wins, not the mechanic's
+        // half-typed one — converging on ONE string is the entire point.
+        name: dominantName(jobs) ?? candidate.name,
+        shops: shops.size,
+        jobs: jobs.length,
+        system_tags: [...systemCounts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([tag]) => tag),
+        work_type:
+          [...workTypeCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ??
+          null,
+        used_here: usedHere,
+      });
+    }
+
+    return out;
+  },
+});
+
+/** The most common spelling inside a cluster — what everyone should converge on. */
+function dominantName(jobs: Array<{ name: string }>): string | null {
+  const counts = new Map<string, number>();
+  for (const job of jobs) {
+    const name = String(job.name ?? "").trim();
+    if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  let best: string | null = null;
+  let bestN = 0;
+  for (const [name, n] of counts) {
+    if (n > bestN) {
+      best = name;
+      bestN = n;
+    }
+  }
+  return best;
+}

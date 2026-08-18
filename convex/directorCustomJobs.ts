@@ -46,6 +46,10 @@ import {
   type MatchCandidateInput,
 } from "./lib/serviceMatch";
 import { shortcutMinutesStats } from "./shopCustomServices";
+import {
+  customJobTaxonomyKey,
+  describeCustomJobTaxonomy,
+} from "../lib/custom-job-taxonomy";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const TREND_WINDOW_DAYS = 90;
@@ -103,6 +107,10 @@ type ClusterAccumulator = {
   shops: Set<string>;
   vins: Set<string>;
   configs: Set<string>;
+  /** "primary_system:work_type" counts. The coarse axis beside match_key. */
+  taxonomies: Map<string, number>;
+  /** Every system touched by any job in the cluster, for the drawer. */
+  systems: Map<string, number>;
   categories: Map<string, number>;
   occurrences: number;
   recent: number;
@@ -114,6 +122,10 @@ type ClusterAccumulator = {
   resolvedKnown: number;
   lastSeenAt: number;
   fromShortcut: number;
+  /** How many jobs in this cluster consumed parts, and which ones. */
+  withParts: number;
+  partNames: Map<string, number>;
+  partsCents: number[];
 };
 
 function dominant(counts: Map<string, number>): string | null {
@@ -152,6 +164,8 @@ async function buildClusters(ctx: any, now: number) {
         shops: new Set(),
         vins: new Set(),
         configs: new Set(),
+        taxonomies: new Map(),
+        systems: new Map(),
         categories: new Map(),
         occurrences: 0,
         recent: 0,
@@ -163,6 +177,9 @@ async function buildClusters(ctx: any, now: number) {
         resolvedKnown: 0,
         lastSeenAt: 0,
         fromShortcut: 0,
+        withParts: 0,
+        partNames: new Map(),
+        partsCents: [],
       };
       acc.set(key, c);
     }
@@ -172,11 +189,29 @@ async function buildClusters(ctx: any, now: number) {
     c.shops.add(String(job.shop_id));
     if (job.vehicle_vin) c.vins.add(job.vehicle_vin);
     if (job.vehicle_config_id) c.configs.add(String(job.vehicle_config_id));
+    // The descriptive taxonomy. Grouping on the PRIMARY system only (see
+    // customJobTaxonomyKey) is what lets "walnut blast" and "intake decarbon"
+    // read as one engine-service gap even though their match_keys never meet.
+    const taxKey = customJobTaxonomyKey(job.system_tags, job.work_type);
+    if (taxKey) c.taxonomies.set(taxKey, (c.taxonomies.get(taxKey) ?? 0) + 1);
+    for (const sys of (job.system_tags ?? []) as string[]) {
+      c.systems.set(sys, (c.systems.get(sys) ?? 0) + 1);
+    }
     if (job.category_id) {
       const cat = String(job.category_id);
       c.categories.set(cat, (c.categories.get(cat) ?? 0) + 1);
     }
     if (job.shop_custom_service_id) c.fromShortcut += 1;
+    if (Array.isArray(job.parts) && job.parts.length > 0) {
+      c.withParts += 1;
+      for (const part of job.parts) {
+        const label = String(part?.part_name ?? "").trim();
+        if (label) c.partNames.set(label, (c.partNames.get(label) ?? 0) + 1);
+      }
+    }
+    if (typeof job.quoted_parts_cents === "number") {
+      c.partsCents.push(job.quoted_parts_cents);
+    }
 
     const age = now - job.created_at;
     if (age <= TREND_WINDOW_DAYS * DAY_MS) c.recent += 1;
@@ -211,6 +246,14 @@ export type DirectorCluster = {
   distinct_shops: number;
   distinct_vehicles: number;
   distinct_configs: number;
+  /** Dominant "primary_system:work_type" across the cluster, or null on
+   *  clusters made entirely of rows written before the taxonomy shipped. */
+  taxonomy_key: string | null;
+  /** Human form of the above — "Engine · Service". */
+  taxonomy_label: string | null;
+  /** Every system any job in the cluster touched, most common first. */
+  systems: string[];
+  /** Legacy catalog category, kept for historical rows. */
   category_id: string | null;
   /** recent-window count minus prior-window count. Positive = growing. */
   trend: number;
@@ -227,6 +270,11 @@ export type DirectorCluster = {
   resolution_rate: number | null;
   outcomes_recorded: number;
   from_shortcut: number;
+  /** Jobs in this cluster that consumed parts, and the parts most often used.
+   *  A cluster that always needs the same part is a service we can price. */
+  jobs_with_parts: number;
+  common_parts: string[];
+  median_parts_cents: number | null;
   last_seen_at: number;
   /** Set when this cluster looks like an existing service. */
   canonical_suggestion: {
@@ -283,6 +331,16 @@ export const patternView = query({
         distinct_shops: c.shops.size,
         distinct_vehicles: c.vins.size,
         distinct_configs: c.configs.size,
+        taxonomy_key: dominant(c.taxonomies),
+        taxonomy_label: (() => {
+          const key = dominant(c.taxonomies);
+          if (!key) return null;
+          const [system, workType] = key.split(":");
+          return describeCustomJobTaxonomy([system], workType);
+        })(),
+        systems: [...c.systems.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([slug]) => slug),
         category_id: dominant(c.categories),
         trend: c.recent - c.prior,
         recent_count: c.recent,
@@ -302,6 +360,12 @@ export const patternView = query({
           c.resolvedKnown > 0 ? c.resolvedYes / c.resolvedKnown : null,
         outcomes_recorded: c.resolvedKnown,
         from_shortcut: c.fromShortcut,
+        jobs_with_parts: c.withParts,
+        common_parts: [...c.partNames.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([name]) => name),
+        median_parts_cents: median(c.partsCents),
         last_seen_at: c.lastSeenAt,
         canonical_suggestion: suggestion,
       });
@@ -471,6 +535,18 @@ export const clusterDetail = query({
           // Null here means the row came from a pseudo-VIN walk-in, so its
           // labor and price numbers aren't scoped to a real car.
           config_key: (config as any)?.config_key ?? null,
+          system_tags: (job.system_tags ?? []) as string[],
+          work_type: (job.work_type ?? null) as string | null,
+          // What the work actually took. Reading a cluster without this means
+          // guessing whether "carbon cleaning" is a labour job or a parts job —
+          // which is most of the decision about whether to build the service.
+          parts: (job.parts ?? []) as Array<{
+            part_name: string;
+            oem_number?: string;
+            quantity: number;
+            line_total_cents?: number;
+          }>,
+          quoted_parts_cents: job.quoted_parts_cents ?? null,
           complaint: job.complaint ?? null,
           resolution: job.resolution ?? null,
           resolved_complaint: job.resolved_complaint ?? null,

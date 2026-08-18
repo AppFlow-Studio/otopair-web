@@ -29,6 +29,10 @@ import {
   matchServiceName,
   type MatchCandidateInput,
 } from "./lib/serviceMatch";
+import {
+  requireCustomJobTaxonomy,
+  normalizeCustomJobSystems,
+} from "../lib/custom-job-taxonomy";
 
 /**
  * How far actual minutes must diverge from a shortcut's own default before it
@@ -115,7 +119,8 @@ export const listForShop = query({
     return active.slice(0, args.limit ?? 12).map((r) => ({
       _id: r._id,
       name: r.name,
-      category_id: r.category_id ?? null,
+      system_tags: (r.system_tags ?? []) as string[],
+      work_type: (r.work_type ?? null) as string | null,
       default_minutes: r.default_minutes ?? null,
       default_price_cents: r.default_price_cents ?? null,
       last_complaint: r.last_complaint ?? null,
@@ -143,7 +148,11 @@ export const create = mutation({
   args: {
     shopId: v.id("shops"),
     name: v.string(),
-    categoryId: v.optional(v.id("service_categories")),
+    // Carried onto every job the shortcut creates. Required, for the same
+    // reason it's required on a one-off: a shortcut pressed forty times with no
+    // taxonomy is forty untyped rows, not one.
+    systemTags: v.optional(v.array(v.string())),
+    workType: v.optional(v.string()),
     defaultMinutes: v.optional(v.number()),
     defaultPriceCents: v.optional(v.number()),
     lastComplaint: v.optional(v.string()),
@@ -161,6 +170,12 @@ export const create = mutation({
 
     const matchKey = serviceMatchKey(name);
     if (!matchKey) throw new Error("That name normalises to nothing");
+
+    const taxonomy = requireCustomJobTaxonomy({
+      system_tags: args.systemTags,
+      work_type: args.workType,
+      jobName: name,
+    });
 
     // NOT a block. An earlier version refused to create a shortcut whose name
     // looked canonical until the mechanic re-confirmed, which meant interrupting
@@ -219,7 +234,8 @@ export const create = mutation({
         // Revive a retired shortcut rather than creating a second key for the
         // same work, which would split its history.
         retired_at: undefined,
-        category_id: args.categoryId ?? existing.category_id,
+        system_tags: taxonomy.system_tags,
+        work_type: taxonomy.work_type,
         default_minutes: args.defaultMinutes ?? existing.default_minutes,
         default_price_cents:
           args.defaultPriceCents ?? existing.default_price_cents,
@@ -233,7 +249,8 @@ export const create = mutation({
       name,
       normalized_name: normalizeServiceName(name),
       match_key: matchKey,
-      category_id: args.categoryId,
+      system_tags: taxonomy.system_tags,
+      work_type: taxonomy.work_type,
       default_minutes: args.defaultMinutes,
       default_price_cents: args.defaultPriceCents,
       last_complaint: args.lastComplaint?.trim() || undefined,
@@ -254,7 +271,8 @@ export const create = mutation({
 export const updateDefaults = mutation({
   args: {
     id: v.id("shop_custom_services"),
-    categoryId: v.optional(v.id("service_categories")),
+    systemTags: v.optional(v.array(v.string())),
+    workType: v.optional(v.string()),
     defaultMinutes: v.optional(v.number()),
     defaultPriceCents: v.optional(v.number()),
   },
@@ -265,7 +283,10 @@ export const updateDefaults = mutation({
     await requireShopStaff(ctx, user._id, row.shop_id);
 
     await ctx.db.patch(args.id, {
-      category_id: args.categoryId ?? row.category_id,
+      system_tags: args.systemTags
+        ? normalizeCustomJobSystems(args.systemTags)
+        : row.system_tags,
+      work_type: args.workType ?? row.work_type,
       default_minutes: args.defaultMinutes ?? row.default_minutes,
       default_price_cents: args.defaultPriceCents ?? row.default_price_cents,
       updated_at: Date.now(),

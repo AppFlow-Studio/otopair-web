@@ -72,6 +72,8 @@ describe("creating a shortcut never blocks", () => {
     const res: any = await t
       .withIdentity(identityFor(OWNER_CLERK))
       .mutation(api.shopCustomServices.create, {
+        systemTags: ["engine"],
+        workType: "repair",
         shopId,
         name: "Change the oil",
       });
@@ -105,6 +107,8 @@ describe("creating a shortcut never blocks", () => {
     const res: any = await t
       .withIdentity(identityFor(OWNER_CLERK))
       .mutation(api.shopCustomServices.create, {
+        systemTags: ["engine"],
+        workType: "repair",
         shopId,
         name: "Carbon cleaning (walnut blast)",
       });
@@ -131,6 +135,8 @@ describe("creating a shortcut never blocks", () => {
       t
         .withIdentity(identityFor("clerk_outsider"))
         .mutation(api.shopCustomServices.create, {
+          systemTags: ["engine"],
+          workType: "repair",
           shopId,
           name: "Ceramic coating",
         }),
@@ -145,12 +151,16 @@ describe("a shortcut never splits its own history", () => {
     const asOwner = t.withIdentity(identityFor(OWNER_CLERK));
 
     const first: any = await asOwner.mutation(api.shopCustomServices.create, {
+      systemTags: ["engine"],
+      workType: "repair",
       shopId,
       name: "Carbon cleaning",
       defaultMinutes: 180,
     });
     // Re-phrased, but the same work — the match key is order-insensitive.
     const second: any = await asOwner.mutation(api.shopCustomServices.create, {
+      systemTags: ["engine"],
+      workType: "repair",
       shopId,
       name: "cleaning carbon",
       defaultMinutes: 200,
@@ -174,11 +184,15 @@ describe("a shortcut never splits its own history", () => {
     const asOwner = t.withIdentity(identityFor(OWNER_CLERK));
 
     const created: any = await asOwner.mutation(api.shopCustomServices.create, {
+      systemTags: ["engine"],
+      workType: "repair",
       shopId,
       name: "Ceramic coating",
     });
     await asOwner.mutation(api.shopCustomServices.retire, { id: created.id });
     const again: any = await asOwner.mutation(api.shopCustomServices.create, {
+      systemTags: ["engine"],
+      workType: "repair",
       shopId,
       name: "Ceramic coating",
     });
@@ -197,6 +211,8 @@ describe("a shortcut never splits its own history", () => {
     const asOwner = t.withIdentity(identityFor(OWNER_CLERK));
 
     const created: any = await asOwner.mutation(api.shopCustomServices.create, {
+      systemTags: ["engine"],
+      workType: "repair",
       shopId,
       name: "Underbody rustproofing",
     });
@@ -219,6 +235,8 @@ describe("a shortcut never splits its own history", () => {
     const { shopId } = await seedShop(t);
     const asOwner = t.withIdentity(identityFor(OWNER_CLERK));
     const created: any = await asOwner.mutation(api.shopCustomServices.create, {
+      systemTags: ["engine"],
+      workType: "repair",
       shopId,
       name: "Roll fenders",
       defaultMinutes: 90,
@@ -240,10 +258,14 @@ describe("a shortcut never splits its own history", () => {
     const { shopId } = await seedShop(t);
     const asOwner = t.withIdentity(identityFor(OWNER_CLERK));
     const rare: any = await asOwner.mutation(api.shopCustomServices.create, {
+      systemTags: ["engine"],
+      workType: "repair",
       shopId,
       name: "Roll fenders",
     });
     const common: any = await asOwner.mutation(api.shopCustomServices.create, {
+      systemTags: ["engine"],
+      workType: "repair",
       shopId,
       name: "Carbon cleaning",
     });
@@ -273,6 +295,8 @@ describe("drift is measured, not prevented", () => {
     const created: any = await t
       .withIdentity(identityFor(OWNER_CLERK))
       .mutation(api.shopCustomServices.create, {
+        systemTags: ["engine"],
+        workType: "repair",
         shopId,
         name: "Carbon cleaning",
         defaultMinutes: 180,
@@ -307,6 +331,8 @@ describe("drift is measured, not prevented", () => {
     const created: any = await t
       .withIdentity(identityFor(OWNER_CLERK))
       .mutation(api.shopCustomServices.create, {
+        systemTags: ["engine"],
+        workType: "repair",
         shopId,
         name: "Brake job custom",
         defaultMinutes: 60,
@@ -334,6 +360,8 @@ describe("drift is measured, not prevented", () => {
     const created: any = await t
       .withIdentity(identityFor(OWNER_CLERK))
       .mutation(api.shopCustomServices.create, {
+        systemTags: ["engine"],
+        workType: "repair",
         shopId,
         name: "Ceramic coating",
       });
@@ -358,6 +386,8 @@ describe("shortcut ↔ custom job wiring", () => {
     const created: any = await t
       .withIdentity(identityFor(OWNER_CLERK))
       .mutation(api.shopCustomServices.create, {
+        systemTags: ["engine"],
+        workType: "repair",
         shopId,
         name: "Carbon cleaning",
         defaultMinutes: 180,
@@ -384,6 +414,8 @@ describe("shortcut ↔ custom job wiring", () => {
         mechanicId,
         customJobs: [
           {
+            system_tags: ["engine"],
+            work_type: "repair",
             name: "Carbon cleaning",
             complaint: "Rough idle",
             shop_custom_service_id: created.id,
@@ -448,6 +480,8 @@ describe("mid-job add", () => {
     const res: any = await t
       .withIdentity(identityFor(OWNER_CLERK))
       .mutation(api.customJobs.addMidJobCustomService, {
+        systemTags: ["engine"],
+        workType: "repair",
         bookingId,
         name: "Replace cracked intake hose",
         complaint: "Found split hose while doing the oil change",
@@ -478,13 +512,15 @@ describe("mid-job add", () => {
     const asOwner = t.withIdentity(identityFor(OWNER_CLERK));
 
     await asOwner.mutation(api.customJobs.addMidJobCustomService, {
+      systemTags: ["engine"],
+      workType: "repair",
       bookingId,
       name: "Roll fenders",
       estimatedMinutes: 90,
     });
     const second: any = await asOwner.mutation(
       api.customJobs.addMidJobCustomService,
-      { bookingId, name: "roll fender", estimatedMinutes: 90 },
+      { systemTags: ["engine"], workType: "repair", bookingId, name: "roll fender", estimatedMinutes: 90 },
     );
 
     expect(second.addedLine).toBe(false);
@@ -505,6 +541,8 @@ describe("mid-job add", () => {
       t
         .withIdentity(identityFor(OWNER_CLERK))
         .mutation(api.customJobs.addMidJobCustomService, {
+          systemTags: ["engine"],
+          workType: "repair",
           bookingId,
           name: "Roll fenders",
         }),
@@ -526,6 +564,8 @@ describe("mid-job add", () => {
       t
         .withIdentity(identityFor("clerk_outsider_mid"))
         .mutation(api.customJobs.addMidJobCustomService, {
+          systemTags: ["engine"],
+          workType: "repair",
           bookingId,
           name: "Roll fenders",
         }),

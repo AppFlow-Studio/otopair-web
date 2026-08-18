@@ -71,6 +71,9 @@ type Cluster = {
   distinct_shops: number
   distinct_vehicles: number
   distinct_configs: number
+  taxonomy_key: string | null
+  taxonomy_label: string | null
+  systems: string[]
   trend: number
   recent_count: number
   median_charged_cents: number | null
@@ -84,6 +87,9 @@ type Cluster = {
   resolution_rate: number | null
   outcomes_recorded: number
   from_shortcut: number
+  jobs_with_parts: number
+  common_parts: string[]
+  median_parts_cents: number | null
   last_seen_at: number
   canonical_suggestion: {
     service_id: string
@@ -233,6 +239,11 @@ export const TabCustomJobs = () => {
                       >
                         {c.name}
                       </button>
+                      {c.taxonomy_label ? (
+                        <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--slate-500)', marginTop: 3 }}>
+                          {c.taxonomy_label}
+                        </div>
+                      ) : null}
                     </td>
                     <td style={tableStyles.td}>
                       {c.canonical_suggestion?.service_name}{' '}
@@ -338,6 +349,23 @@ export const TabCustomJobs = () => {
                       >
                         {c.name}
                       </button>
+                      {c.taxonomy_label ? (
+                        <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--slate-500)', marginTop: 3 }}>
+                          {c.taxonomy_label}
+                          {c.jobs_with_parts > 0 ? (
+                            <span style={{ color: 'var(--slate-400)' }}>
+                              {' · '}{c.jobs_with_parts}/{c.occurrences} w/ parts
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {/* The parts a cluster keeps reaching for are the strongest
+                          signal that it's a service we could actually price. */}
+                      {c.common_parts.length > 0 ? (
+                        <div style={{ fontSize: 11, color: 'var(--slate-500)', marginTop: 2, maxWidth: '38ch', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {c.common_parts.join(' · ')}
+                        </div>
+                      ) : null}
                       {c.sample_complaints[0] ? (
                         <div style={{ fontSize: 11, color: 'var(--slate-500)', marginTop: 3, maxWidth: '38ch', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {c.sample_complaints[0]}
@@ -438,6 +466,7 @@ export const TabCustomJobs = () => {
                     <th style={tableStyles.th}>Shop</th>
                     <th style={tableStyles.th}>Vehicle</th>
                     <th style={tableStyles.th}>Complaint</th>
+                    <th style={tableStyles.th}>Parts</th>
                     <th style={tableStyles.th}>Resolution</th>
                     <th style={tableStyles.th}>Min</th>
                     <th style={tableStyles.th}>When</th>
@@ -455,6 +484,30 @@ export const TabCustomJobs = () => {
                         )}
                       </td>
                       <td style={{ ...tableStyles.td, maxWidth: 220 }}>{row.complaint ?? '—'}</td>
+                      <td style={{ ...tableStyles.td, maxWidth: 200 }}>
+                        {row.parts && row.parts.length > 0 ? (
+                          <div>
+                            {row.parts.map((part: any, i: number) => (
+                              <div key={i} style={{ fontSize: 12 }}>
+                                {part.part_name}
+                                {part.quantity > 1 ? ` ×${part.quantity}` : ''}
+                                {part.oem_number ? (
+                                  <span style={{ color: 'var(--slate-500)', fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>
+                                    {' '}{part.oem_number}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ))}
+                            {row.quoted_parts_cents ? (
+                              <div style={{ fontSize: 11, color: 'var(--slate-500)', marginTop: 2 }}>
+                                {fmtMoney(row.quoted_parts_cents)}
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <span style={{ color: 'var(--slate-400)' }}>none</span>
+                        )}
+                      </td>
                       <td style={{ ...tableStyles.td, maxWidth: 220 }}>
                         {row.resolution ?? <span style={{ color: 'var(--slate-400)' }}>none recorded</span>}
                         {row.resolved_complaint === true ? ' ✓' : null}

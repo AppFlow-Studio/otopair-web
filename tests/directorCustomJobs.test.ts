@@ -79,7 +79,7 @@ async function addJob(
     await recordCustomJobsForBooking(ctx, {
       booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
       mechanicId: base.mechanicId,
-      customJobs: [{ name: job.name, complaint: job.complaint ?? null }],
+      customJobs: [{ system_tags: ["engine"], work_type: "repair", name: job.name, complaint: job.complaint ?? null }],
       source: "booking",
       now: Date.now(),
     });
@@ -367,6 +367,8 @@ describe("the immediate shortcut override alert", () => {
     await t
       .withIdentity(identityFor("clerk_override_owner"))
       .mutation(api.shopCustomServices.create, {
+        systemTags: ["engine"],
+        workType: "repair",
         shopId,
         name: "Change the oil",
         confirmedCustom: true,
@@ -404,6 +406,8 @@ describe("the immediate shortcut override alert", () => {
     await t
       .withIdentity(identityFor("clerk_clean_owner"))
       .mutation(api.shopCustomServices.create, {
+        systemTags: ["engine"],
+        workType: "repair",
         shopId,
         name: "Underbody rustproofing",
       });
@@ -436,11 +440,15 @@ describe("the immediate shortcut override alert", () => {
     const asOwner = t.withIdentity(identityFor("clerk_dupe_owner"));
 
     await asOwner.mutation(api.shopCustomServices.create, {
+      systemTags: ["engine"],
+      workType: "repair",
       shopId,
       name: "Change the oil",
       confirmedCustom: true,
     });
     await asOwner.mutation(api.shopCustomServices.create, {
+      systemTags: ["engine"],
+      workType: "repair",
       shopId,
       name: "Change the oil",
       confirmedCustom: true,

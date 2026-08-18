@@ -12,6 +12,7 @@
 import { describe, it, expect } from "vitest";
 import { makeT } from "./helpers";
 import {
+  customPartsFromSnapshot,
   recordCustomJobsForBooking,
   completeCustomJobsForBooking,
   bumpPendingServiceSubmission,
@@ -52,6 +53,8 @@ describe("recording off-catalog work", () => {
         mechanicId: base.mechanicId,
         customJobs: [
           {
+            system_tags: ["engine"],
+            work_type: "repair",
             name: "Carbon cleaning (walnut blast)",
             complaint: "Rough idle, intake valves coked at 78k",
             estimated_minutes: 180,
@@ -92,7 +95,7 @@ describe("recording off-catalog work", () => {
       recordCustomJobsForBooking(ctx, {
         booking,
         mechanicId: base.mechanicId,
-        customJobs: [{ name: "Roll fenders", estimated_minutes: 90 }],
+        customJobs: [{ system_tags: ["engine"], work_type: "repair", name: "Roll fenders", estimated_minutes: 90 }],
         source: "booking",
         now: Date.now(),
       }),
@@ -102,7 +105,7 @@ describe("recording off-catalog work", () => {
         booking,
         mechanicId: base.mechanicId,
         customJobs: [
-          { name: "Roll fenders", estimated_minutes: 120, complaint: "Tyre rub" },
+          { system_tags: ["engine"], work_type: "repair", name: "Roll fenders", estimated_minutes: 120, complaint: "Tyre rub" },
         ],
         source: "booking",
         now: Date.now(),
@@ -147,7 +150,7 @@ describe("recording off-catalog work", () => {
       recordCustomJobsForBooking(ctx, {
         booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
         mechanicId: base.mechanicId,
-        customJobs: [{ name: "Carbon cleaning" }],
+        customJobs: [{ system_tags: ["engine"], work_type: "repair", name: "Carbon cleaning" }],
         source: "booking",
         now: Date.now(),
       }),
@@ -167,7 +170,7 @@ describe("recording off-catalog work", () => {
       recordCustomJobsForBooking(ctx, {
         booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
         mechanicId: base.mechanicId,
-        customJobs: [{ name: "Ceramic coating" }],
+        customJobs: [{ system_tags: ["engine"], work_type: "repair", name: "Ceramic coating" }],
         source: "booking",
         now: Date.now(),
       }),
@@ -192,8 +195,8 @@ describe("closing off-catalog work", () => {
         booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
         mechanicId: base.mechanicId,
         customJobs: [
-          { name: "Carbon cleaning", complaint: "Rough idle" },
-          { name: "Roll fenders", complaint: "Tyre rub" },
+          { system_tags: ["engine"], work_type: "repair", name: "Carbon cleaning", complaint: "Rough idle" },
+          { system_tags: ["engine"], work_type: "repair", name: "Roll fenders", complaint: "Tyre rub" },
         ],
         source: "booking",
         now: Date.now(),
@@ -233,7 +236,7 @@ describe("closing off-catalog work", () => {
       recordCustomJobsForBooking(ctx, {
         booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
         mechanicId: base.mechanicId,
-        customJobs: [{ name: "Roll Fenders" }],
+        customJobs: [{ system_tags: ["engine"], work_type: "repair", name: "Roll Fenders" }],
         source: "booking",
         now: Date.now(),
       }),
@@ -257,7 +260,7 @@ describe("closing off-catalog work", () => {
       recordCustomJobsForBooking(ctx, {
         booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
         mechanicId: base.mechanicId,
-        customJobs: [{ name: "Ceramic coating" }, { name: "Roll fenders" }],
+        customJobs: [{ system_tags: ["engine"], work_type: "repair", name: "Ceramic coating" }, { system_tags: ["engine"], work_type: "repair", name: "Roll fenders" }],
         source: "booking",
         now: Date.now(),
       }),
@@ -287,7 +290,7 @@ describe("closing off-catalog work", () => {
       recordCustomJobsForBooking(ctx, {
         booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
         mechanicId: base.mechanicId,
-        customJobs: [{ name: "Ceramic coating" }],
+        customJobs: [{ system_tags: ["engine"], work_type: "repair", name: "Ceramic coating" }],
         source: "booking",
         now: Date.now(),
       }),
@@ -333,5 +336,295 @@ describe("the catalog-gap ledger is shared", () => {
     );
     expect(ledger).toHaveLength(1);
     expect(ledger[0].appearance_count).toBe(2);
+  });
+});
+
+/**
+ * The descriptive taxonomy (lib/custom-job-taxonomy.ts).
+ *
+ * The old `category_id` field pointed at service_categories — the catalog's
+ * merchandising taxonomy, which describes what a driver can BOOK. Off-catalog
+ * work is by definition work that taxonomy can't name, which is how a
+ * power-window switch replacement ended up filed under "Inspections".
+ *
+ * These tests protect the two properties that make the replacement worth
+ * having: it cannot be skipped, and it cannot be filled with junk. A field
+ * that's mandatory but accepts anything is a slower way to store nothing.
+ */
+describe("custom job taxonomy", () => {
+  it("refuses a line with no system", async () => {
+    const t = makeT();
+    const base = await seedBooking(t, "VINCJTAX1", "tax_nosys");
+
+    await expect(
+      t.run(async (ctx: any) =>
+        recordCustomJobsForBooking(ctx, {
+          booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
+          mechanicId: base.mechanicId,
+          customJobs: [{ name: "Roll fenders", work_type: "repair" }],
+          source: "booking",
+          now: Date.now(),
+        }),
+      ),
+    ).rejects.toThrow(/at least one system/i);
+  });
+
+  it("refuses a line with no work type", async () => {
+    const t = makeT();
+    const base = await seedBooking(t, "VINCJTAX2", "tax_nowt");
+
+    await expect(
+      t.run(async (ctx: any) =>
+        recordCustomJobsForBooking(ctx, {
+          booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
+          mechanicId: base.mechanicId,
+          customJobs: [{ name: "Roll fenders", system_tags: ["body_interior"] }],
+          source: "booking",
+          now: Date.now(),
+        }),
+      ),
+    ).rejects.toThrow(/kind of work/i);
+  });
+
+  it("names the offending line, so a multi-line submit is actionable", async () => {
+    const t = makeT();
+    const base = await seedBooking(t, "VINCJTAX3", "tax_which");
+
+    await expect(
+      t.run(async (ctx: any) =>
+        recordCustomJobsForBooking(ctx, {
+          booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
+          mechanicId: base.mechanicId,
+          customJobs: [
+            {
+              name: "Ceramic coating",
+              system_tags: ["body_interior"],
+              work_type: "service",
+            },
+            { name: "Roll fenders", system_tags: ["body_interior"] },
+          ],
+          source: "booking",
+          now: Date.now(),
+        }),
+      ),
+    ).rejects.toThrow(/Roll fenders/);
+  });
+
+  it("drops junk slugs rather than storing them", async () => {
+    const t = makeT();
+    const base = await seedBooking(t, "VINCJTAX4", "tax_junk");
+
+    await t.run(async (ctx: any) =>
+      recordCustomJobsForBooking(ctx, {
+        booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
+        mechanicId: base.mechanicId,
+        customJobs: [
+          {
+            name: "Roll fenders",
+            // "suspension" is not a slug — "suspension_steering" is. An unknown
+            // value must not survive into the column, or the aggregate reads
+            // silently grow a category nothing can render.
+            system_tags: ["suspension", "body_interior"],
+            work_type: "repair",
+          },
+        ],
+        source: "booking",
+        now: Date.now(),
+      }),
+    );
+
+    const row = await t.run(async (ctx: any) => {
+      const rows = await ctx.db.query("custom_jobs").collect();
+      return rows[0];
+    });
+    expect(row.system_tags).toEqual(["body_interior"]);
+    expect(row.work_type).toBe("repair");
+  });
+
+  it("caps the stack at three and keeps the first pick primary", async () => {
+    const t = makeT();
+    const base = await seedBooking(t, "VINCJTAX5", "tax_cap");
+
+    await t.run(async (ctx: any) =>
+      recordCustomJobsForBooking(ctx, {
+        booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
+        mechanicId: base.mechanicId,
+        customJobs: [
+          {
+            name: "Heater core replacement",
+            system_tags: [
+              "climate",
+              "engine",
+              "electrical",
+              "body_interior",
+              "climate",
+            ],
+            work_type: "replace",
+          },
+        ],
+        source: "booking",
+        now: Date.now(),
+      }),
+    );
+
+    const row = await t.run(async (ctx: any) => {
+      const rows = await ctx.db.query("custom_jobs").collect();
+      return rows[0];
+    });
+    // Deduped, capped, order preserved — the clustering read groups on [0].
+    expect(row.system_tags).toEqual(["climate", "engine", "electrical"]);
+  });
+
+  it("carries the taxonomy through a re-entry patch", async () => {
+    const t = makeT();
+    const base = await seedBooking(t, "VINCJTAX6", "tax_patch");
+
+    const write = (tags: string[], workType: string) =>
+      t.run(async (ctx: any) =>
+        recordCustomJobsForBooking(ctx, {
+          booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
+          mechanicId: base.mechanicId,
+          customJobs: [
+            { name: "Roll fenders", system_tags: tags, work_type: workType },
+          ],
+          source: "booking",
+          now: Date.now(),
+        }),
+      );
+
+    await write(["body_interior"], "repair");
+    // A booking edit that corrects the tagging must move the row, not fork it.
+    await write(["suspension_steering"], "adjust");
+
+    const rows = await t.run(async (ctx: any) =>
+      ctx.db.query("custom_jobs").collect(),
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0].system_tags).toEqual(["suspension_steering"]);
+    expect(rows[0].work_type).toBe("adjust");
+  });
+});
+
+/**
+ * Parts quoted against a custom line.
+ *
+ * Before this, the parts editor bucketed strictly by service_id, so a custom
+ * line had nowhere to put them: an $78 window switch existed only as prose in
+ * the post-job resolution text, invisible to the booking total, the receipt and
+ * every catalog-gap read. Parts now ride the existing priced_parts_snapshot
+ * (which keeps owning the money) and are denormalised onto custom_jobs so the
+ * extraction reads — which never load the booking — can see them.
+ */
+describe("parts on custom jobs", () => {
+  it("groups snapshot rows onto the line they belong to", () => {
+    const grouped = customPartsFromSnapshot([
+      // A catalog part: no custom_service_name, must not be picked up.
+      {
+        service_id: "svc_1",
+        part_name: "Oil filter",
+        quantity: 1,
+        line_total_cents: 1200,
+      },
+      {
+        custom_service_name: "Power window switch replacement",
+        part_name: "Window switch",
+        oem_number: "83071AN00B",
+        quantity: 1,
+        unit_price_cents: 7855,
+        line_total_cents: 7855,
+      },
+      {
+        custom_service_name: "Power Window Switch Replacement",
+        part_name: "Door clip",
+        quantity: 4,
+        unit_price_cents: 150,
+        line_total_cents: 600,
+      },
+    ]);
+
+    expect(grouped.size).toBe(1);
+    // Both rows land on one line despite the casing difference — grouping is by
+    // serviceMatchKey, the same key custom_jobs itself is keyed on.
+    const bucket = [...grouped.values()][0];
+    expect(bucket.parts).toHaveLength(2);
+    expect(bucket.totalCents).toBe(8455);
+  });
+
+  it("attaches them to the row and freezes the quoted total", async () => {
+    const t = makeT();
+    const base = await seedBooking(t, "VINCJPARTS1", "parts_attach");
+
+    await t.run(async (ctx: any) =>
+      recordCustomJobsForBooking(ctx, {
+        booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
+        mechanicId: base.mechanicId,
+        customJobs: [
+          {
+            name: "Power window switch replacement",
+            system_tags: ["electrical"],
+            work_type: "replace",
+            parts: [
+              {
+                part_name: "Window switch",
+                oem_number: "83071AN00B",
+                quantity: 1,
+                unit_price_cents: 7855,
+                line_total_cents: 7855,
+              },
+            ],
+            quoted_parts_cents: 7855,
+          },
+        ],
+        source: "booking",
+        now: Date.now(),
+      }),
+    );
+
+    const row = await t.run(async (ctx: any) => {
+      const rows = await ctx.db.query("custom_jobs").collect();
+      return rows[0];
+    });
+    expect(row.parts).toHaveLength(1);
+    expect(row.parts[0].oem_number).toBe("83071AN00B");
+    expect(row.quoted_parts_cents).toBe(7855);
+  });
+
+  it("keeps the parts when a booking edit re-sends the line without them", async () => {
+    const t = makeT();
+    const base = await seedBooking(t, "VINCJPARTS2", "parts_keep");
+
+    const write = (parts: any[] | null, cents: number | null) =>
+      t.run(async (ctx: any) =>
+        recordCustomJobsForBooking(ctx, {
+          booking: { _id: base.bookingId, shop_id: base.shopId, vin: base.vin },
+          mechanicId: base.mechanicId,
+          customJobs: [
+            {
+              name: "Power window switch replacement",
+              system_tags: ["electrical"],
+              work_type: "replace",
+              parts,
+              quoted_parts_cents: cents,
+            },
+          ],
+          source: "booking",
+          now: Date.now(),
+        }),
+      );
+
+    await write(
+      [{ part_name: "Window switch", quantity: 1, line_total_cents: 7855 }],
+      7855,
+    );
+    // A re-entry that carries no parts (e.g. an edit to the time only) must not
+    // erase what was already quoted — that would silently drop money off the job.
+    await write(null, null);
+
+    const row = await t.run(async (ctx: any) => {
+      const rows = await ctx.db.query("custom_jobs").collect();
+      return rows[0];
+    });
+    expect(row.parts).toHaveLength(1);
+    expect(row.quoted_parts_cents).toBe(7855);
   });
 });

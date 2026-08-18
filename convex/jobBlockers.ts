@@ -284,6 +284,41 @@ export const openBlocker = mutation({
     if (policy.notifyDriver) {
       targets.push({ category: `job_blocked_${args.kind}_driver`, audience: "driver" });
     }
+    /* Push copy, written at insert time because the dispatcher reads
+       payload.title / payload.body and falls back to a bare "Otopair" — a
+       notification that buzzes a phone and says nothing. One line per kind so
+       the driver knows whether this needs them before they open the app. */
+    const PUSH_COPY: Record<string, { title: string; body: string }> = {
+      parts_delay: {
+        title: "Your service is paused",
+        body: `${shopName ?? "Your shop"} is waiting on a part. They'll pick it back up as soon as it arrives.`,
+      },
+      vehicle_condition: {
+        title: "Your mechanic found something",
+        body: `${shopName ?? "Your shop"} hit something that needs sorting before they can finish.`,
+      },
+      needs_specialist: {
+        title: "Your service is paused",
+        body: `${shopName ?? "Your shop"} needs a tool or specialist they don't have on site.`,
+      },
+      customer_unreachable: {
+        title: "Your shop is trying to reach you",
+        body: `${shopName ?? "Your shop"} can't continue until they speak to you. Tap to see the details.`,
+      },
+      safety_hold: {
+        title: "Don't drive your vehicle",
+        body: `${shopName ?? "Your shop"} advises against driving it. Speak to them before collecting.`,
+      },
+    };
+
+    // Push when we can reach the device, SMS when we can't. Push deep-links
+    // straight to the booking; SMS can't, which is why it's the fallback and
+    // not the default.
+    const driver: any = booking.user_id
+      ? await ctx.db.get(booking.user_id)
+      : null;
+    const driverHasPush = typeof driver?.push_token === "string";
+
     for (const t of targets) {
       const dedupe_key = `blocker:${String(args.bookingId)}:${args.kind}:${t.audience}`;
       const dup = await ctx.db
@@ -300,7 +335,12 @@ export const openBlocker = mutation({
         // The shop's own notification feed reads notification_outbox directly,
         // so this row is delivered by being written. None of the sms/email/push
         // crons claim it.
-        channel: t.audience === "driver" ? "sms" : "in_app",
+        channel:
+          t.audience === "driver"
+            ? driverHasPush
+              ? "push"
+              : "sms"
+            : "in_app",
         category: t.category,
         status: "pending",
         dedupe_key,
@@ -313,6 +353,11 @@ export const openBlocker = mutation({
           // Needed by the driver SMS templates — without it every message had
           // to say "your shop".
           shopName: shopName ?? null,
+          // Read by push_dispatcher. Owner rows get none: they render from the
+          // shop's in-app feed, which builds its own copy.
+          ...(t.audience === "driver" && PUSH_COPY[args.kind]
+            ? PUSH_COPY[args.kind]
+            : {}),
         },
         created_at: now,
       });
@@ -407,5 +452,79 @@ export const openForShop = query({
         };
       }),
     );
+  },
+});
+
+/**
+ * The holds on this booking that the driver is meant to know about.
+ *
+ * ─── WHY THIS READS STATE, NOT THE OUTBOX ───────────────────────────────────
+ * The obvious implementation is to filter notification_outbox by category, the
+ * way CustomerLateBanner does. It would be wrong here. That table is a delivery
+ * QUEUE: the dispatch crons flip rows to "dispatching"/"sent" within a minute,
+ * and every driver-facing feed filters on status === "pending". A banner built
+ * on it would therefore appear for up to sixty seconds and then vanish while
+ * the car was still stuck.
+ *
+ * A blocker has its own lifecycle — `resolved_at` — which is the thing the
+ * banner actually wants to track. Reading it directly means the banner is true
+ * for exactly as long as the hold is.
+ *
+ * `notifyDriver` is read from KIND_POLICY rather than re-listed here. Damage is
+ * the one that must never reach the driver, and a second copy of that judgement
+ * is a second place to get it wrong.
+ */
+export const activeForMyBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q: any) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .unique();
+    if (!user) return [];
+
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return [];
+    if (booking.user_id !== user._id) return [];
+
+    const rows = await ctx.db
+      .query("job_blockers")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+      .collect();
+
+    const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+
+    return rows
+      .filter((r: any) => {
+        if (r.resolved_at != null) return false;
+        const policy = (KIND_POLICY as any)[r.kind];
+        return policy?.notifyDriver === true;
+      })
+      .sort((a: any, b: any) => a.opened_at - b.opened_at)
+      .map((r: any) => {
+        const policy = (KIND_POLICY as any)[r.kind];
+        return {
+          _id: r._id,
+          kind: r.kind as string,
+          label: policy?.label ?? "On hold",
+          // The mechanic's note. Shown verbatim — it's the only part of this
+          // that says anything specific about THIS car.
+          note: r.note ?? null,
+          opened_at: r.opened_at as number,
+          eta_ms: r.eta_ms ?? null,
+          shop_name: (shop as any)?.name ?? null,
+          /* The one hold a driver can personally clear. Everything else is the
+             shop's to resolve, and a banner that implies otherwise invites a
+             pointless phone call. */
+          driver_can_act: r.kind === "customer_unreachable",
+          // Work continues on a safety hold — the car is unsafe to DRIVE, not
+          // unsafe to work on — so the banner shouldn't imply the job stopped.
+          work_paused: policy?.stopsClock === true,
+        };
+      });
   },
 });

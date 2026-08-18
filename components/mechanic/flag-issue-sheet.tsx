@@ -25,6 +25,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
+import ServicePickerModal from "@/components/booking/service-picker-modal";
 import ServiceSuggestions, {
   type SuggestedService,
 } from "@/components/booking/service-suggestions";
@@ -142,6 +143,7 @@ export default function FlagIssueSheet({
   /* Set only when the mechanic actively picks a catalog match. Left null, the
      typed text is filed as an advisory — the typed text is always a valid
      answer, never something to be talked out of. */
+  const [browsing, setBrowsing] = useState(false);
   const [pickedService, setPickedService] = useState<SuggestedService | null>(
     null,
   );
@@ -395,6 +397,13 @@ export default function FlagIssueSheet({
                   Same band as the booking drawer and the mid-job picker — a
                   name typed forty ways is forty clusters, and this lane is
                   where the most off-catalog names get invented. */}
+              <button
+                type="button"
+                onClick={() => setBrowsing(true)}
+                className="w-full rounded-lg border border-dashed border-white/20 px-3 py-2 text-[12px] text-slate-300 transition-colors hover:border-white/35 hover:bg-white/5"
+              >
+                Search the service catalog
+              </button>
               <KnownNameSuggestions
                 typed={laterName}
                 onPick={(s) => {
@@ -631,6 +640,36 @@ export default function FlagIssueSheet({
           </div>
         ) : null}
       </div>
+      {browsing ? (
+        /* The same picker the "extra work needed now" flow opens, so the two
+           lanes search one catalog under one set of rules.
+
+           engineId is null: the overlay doesn't carry the vehicle's engine and
+           listForVehicle treats it as optional — search works, the "Fits car"
+           badge just doesn't appear. Worth threading properly if this lane
+           starts being used to book rather than to flag. */
+        <ServicePickerModal
+          engineId={null}
+          initialQuery={laterName}
+          onClose={() => setBrowsing(false)}
+          onPick={(picked) => {
+            setBrowsing(false);
+            setLaterName(picked.name);
+            if (picked.kind === "service") {
+              setPickedService({
+                serviceId: picked.id,
+                name: picked.name,
+                slug: picked.slug,
+                has_options: picked.has_options,
+                via: "name",
+              });
+            } else {
+              setPickedService(null);
+            }
+          }}
+        />
+      ) : null}
     </div>
+
   );
 }

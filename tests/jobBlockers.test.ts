@@ -553,3 +553,112 @@ describe("flagging work for next time from the overlay", () => {
     ).rejects.toThrow(/Pick a service or type/);
   });
 });
+
+/**
+ * The driver-facing read behind the booking-card notice.
+ *
+ * Reads job_blockers directly rather than notification_outbox: that table is a
+ * delivery queue whose rows are flipped to "sent" within a minute, so a notice
+ * built on it would appear briefly and then vanish while the car was still
+ * stuck. A blocker's resolved_at is the lifecycle the notice actually wants.
+ */
+describe("activeForMyBooking", () => {
+  it("shows a driver-facing hold to the booking's own customer", async () => {
+    const t = makeT();
+    const base = await seed(t);
+    await t.withIdentity(identityFor(STAFF)).mutation(api.jobBlockers.openBlocker, {
+      bookingId: base.bookingId,
+      kind: "parts_delay",
+      note: "Waiting on the switch from the dealer",
+    });
+
+    const driverId = await t.run(async (ctx: any) => {
+      const b = await ctx.db.get(base.bookingId);
+      const u = await ctx.db.get(b.user_id);
+      return u.clerkUserId;
+    });
+
+    const out: any[] = await t
+      .withIdentity(identityFor(driverId))
+      .query(api.jobBlockers.activeForMyBooking, { bookingId: base.bookingId });
+
+    expect(out).toHaveLength(1);
+    expect(out[0].kind).toBe("parts_delay");
+    expect(out[0].note).toBe("Waiting on the switch from the dealer");
+    expect(out[0].work_paused).toBe(true);
+    // Nothing the driver can do about a part in transit.
+    expect(out[0].driver_can_act).toBe(false);
+  });
+
+  it("never surfaces damage to the driver", async () => {
+    const t = makeT();
+    const base = await seed(t);
+    const storageId = await t.run(async (ctx: any) =>
+      ctx.storage.store(new Blob(["photo"])),
+    );
+    await t.withIdentity(identityFor(STAFF)).mutation(api.jobBlockers.openBlocker, {
+      bookingId: base.bookingId,
+      kind: "damage",
+      note: "Scuffed the rear arch",
+      photos: [{ storage_id: storageId, taken_at: Date.now() }],
+    });
+
+    const driverId = await t.run(async (ctx: any) => {
+      const b = await ctx.db.get(base.bookingId);
+      return (await ctx.db.get(b.user_id)).clerkUserId;
+    });
+
+    // KIND_POLICY.notifyDriver is the single source of this judgement, and the
+    // query reads it rather than keeping its own list.
+    expect(
+      await t
+        .withIdentity(identityFor(driverId))
+        .query(api.jobBlockers.activeForMyBooking, { bookingId: base.bookingId }),
+    ).toEqual([]);
+  });
+
+  it("clears once the hold is resolved, and hides from everyone else", async () => {
+    const t = makeT();
+    const base = await seed(t);
+    const res: any = await t
+      .withIdentity(identityFor(STAFF))
+      .mutation(api.jobBlockers.openBlocker, {
+        bookingId: base.bookingId,
+        kind: "customer_unreachable",
+        note: "Left two voicemails",
+      });
+
+    const driverId = await t.run(async (ctx: any) => {
+      const b = await ctx.db.get(base.bookingId);
+      return (await ctx.db.get(b.user_id)).clerkUserId;
+    });
+    const asDriver = t.withIdentity(identityFor(driverId));
+
+    const open: any[] = await asDriver.query(api.jobBlockers.activeForMyBooking, {
+      bookingId: base.bookingId,
+    });
+    // The one hold the driver can personally clear.
+    expect(open[0].driver_can_act).toBe(true);
+
+    await t.withIdentity(identityFor(STAFF)).mutation(api.jobBlockers.resolveBlocker, {
+      blockerId: res.blockerId,
+    });
+    expect(
+      await asDriver.query(api.jobBlockers.activeForMyBooking, {
+        bookingId: base.bookingId,
+      }),
+    ).toEqual([]);
+
+    // Somebody else's repair, and anonymous callers.
+    expect(
+      await t
+        .withIdentity(identityFor(STAFF))
+        .query(api.jobBlockers.activeForMyBooking, { bookingId: base.bookingId }),
+    ).toEqual([]);
+    expect(
+      await t.query(api.jobBlockers.activeForMyBooking, {
+        bookingId: base.bookingId,
+      }),
+    ).toEqual([]);
+  });
+});

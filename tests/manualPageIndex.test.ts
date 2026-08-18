@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  companionSearchQueries,
+  detectScheduleDeferral,
   PAGE_INDEX_VERSION,
   pageCountOf,
   pageIndexIsFresh,
@@ -147,5 +149,74 @@ describe("pageCountOf", () => {
     expect(pageCountOf([{ start: 346, end: 350 }])).toBe(5);
     expect(pageCountOf([{ start: 1, end: 1 }, { start: 10, end: 12 }])).toBe(4);
     expect(pageCountOf([])).toBe(0);
+  });
+});
+
+// ── Deferral detection ───────────────────────────────────────────────────────
+// Verbatim from the 2021 Subaru Legacy owner's manual, page 489 (printed 483).
+// This is the page that explains a `schedule_found=false` we had been reading
+// as an extraction failure: the manual is telling us where the schedule lives.
+const SUBARU_P489 =
+  "11-1. Maintenance Schedule U.S. models The scheduled maintenance items re- " +
+  "quired to be serviced at regular intervals are shown in the “Warranty and Mainte- " +
+  "nance Booklet.” For details, read the separate “Warranty and Maintenance Booklet.” " +
+  "Canada models The scheduled maintenance items required to be serviced at regular " +
+  "intervals are shown in the “Warranty and Service Booklet.” For details, read the " +
+  "separate “Warranty and Service Booklet.”";
+
+describe("detectScheduleDeferral", () => {
+  it("finds the document the manual says holds the schedule", () => {
+    const t = detectScheduleDeferral([SUBARU_P489]);
+    expect(t.length).toBeGreaterThan(0);
+    expect(t[0].title).toBe("Warranty and Maintenance Booklet");
+  });
+
+  it("rejoins a word the PDF broke across lines", () => {
+    // Raw text reads "Warranty and Mainte- nance Booklet"; without
+    // de-hyphenation the same document is discovered under two titles.
+    const t = detectScheduleDeferral([SUBARU_P489]);
+    expect(t.some((x) => /Mainte-\s/.test(x.title))).toBe(false);
+  });
+
+  it("prefers the US booklet over the Canadian one on the same page", () => {
+    // Both are named in adjacent columns. Fetching the Canadian booklet would
+    // be a quietly wrong answer, not a partial one.
+    const t = detectScheduleDeferral([SUBARU_P489]);
+    expect(t[0].region).toBe("us");
+    expect(t[0].title).toMatch(/Maintenance Booklet/);
+    const ca = t.find((x) => x.title === "Warranty and Service Booklet");
+    if (ca) expect(ca.region).toBe("ca");
+  });
+
+  it("stays silent on manuals that carry their own schedule", () => {
+    // The GMC Acadia, Ford Maverick and Kia Sportage all reported zero on the
+    // real documents. A false positive here would send us hunting for a
+    // companion that does not exist.
+    expect(detectScheduleDeferral([SCHEDULE_NORMAL, CAPACITIES, PROSE])).toEqual([]);
+  });
+
+  it("does not treat an internal cross-reference as a deferral", () => {
+    // Manuals cross-reference their own chapters constantly.
+    expect(
+      detectScheduleDeferral(["See the separate section on tire pressure for details."]),
+    ).toEqual([]);
+    expect(detectScheduleDeferral(["Refer to the separate chapter 5 for towing."])).toEqual([]);
+  });
+
+  it("records the page and quotable evidence", () => {
+    const t = detectScheduleDeferral([PROSE, SUBARU_P489]);
+    expect(t[0].pages).toContain(2);
+    expect(t[0].evidence).toMatch(/scheduled maintenance items/i);
+  });
+});
+
+describe("companionSearchQueries", () => {
+  it("builds queries aimed at the named document", () => {
+    const [target] = detectScheduleDeferral([SUBARU_P489]);
+    const q = companionSearchQueries({ year: 2021, make: "Subaru", model: "Legacy" }, target);
+    expect(q.length).toBeGreaterThan(0);
+    expect(q[0]).toContain("Warranty and Maintenance Booklet");
+    expect(q[0]).toContain("2021");
+    expect(q.some((x) => x.includes("Legacy"))).toBe(true);
   });
 });

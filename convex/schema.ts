@@ -6198,6 +6198,23 @@ export default defineSchema({
         intervals: v.array(v.object({ start: v.number(), end: v.number() })),
         specs: v.array(v.object({ start: v.number(), end: v.number() })),
         computed_at: v.number(),
+        /**
+         * Documents this manual says hold the schedule instead of itself.
+         * A 2021 Subaru Legacy points at the "Warranty and Maintenance
+         * Booklet" — so `schedule_found=false` there is a CORRECT reading of a
+         * document that defers, not a failed extraction. Present = we know the
+         * exact title to go and find.
+         */
+        defers_to: v.optional(
+          v.array(
+            v.object({
+              title: v.string(),
+              pages: v.array(v.number()),
+              region: v.optional(v.union(v.literal("us"), v.literal("ca"))),
+              evidence: v.string(),
+            }),
+          ),
+        ),
       }),
     ),
     /**

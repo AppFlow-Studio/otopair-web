@@ -17,6 +17,7 @@ import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import {
+  detectScheduleDeferral,
   PAGE_INDEX_VERSION,
   pageCountOf,
   pickPageRanges,
@@ -49,6 +50,7 @@ export const indexManualPages = internalAction({
     selected_pages?: number;
     intervals?: number;
     specs?: number;
+    defers_to?: string[];
   }> => {
     const label = `${args.year} ${args.make} ${args.model}`;
     try {
@@ -77,13 +79,24 @@ export const indexManualPages = internalAction({
       const scores = scoreManualPages(text as string[]);
       const intervals = pickPageRanges(scores, "interval");
       const specs = pickPageRanges(scores, "spec");
+      // Free — the page text is already in hand. A manual that names another
+      // document is the difference between "extraction failed" and "the answer
+      // is in a booklet we have not fetched".
+      const defersTo = detectScheduleDeferral(text as string[]);
+      if (defersTo.length > 0) {
+        console.log(
+          `[page-index] ${label}: DEFERS to ${defersTo
+            .map((d) => `"${d.title}"${d.region ? ` (${d.region})` : ""} p${d.pages[0]}`)
+            .join(", ")}`,
+        );
+      }
 
       // Nothing found is a REAL answer, and it must not be stored as if it were
       // a narrowing — a caller that read `{intervals: [], specs: []}` as "send
       // these zero pages" would extract nothing from a document we already paid
       // to fetch. Report it and leave the row unindexed so the caller falls
       // back to whole-document behaviour (and its page budget).
-      if (intervals.length === 0 && specs.length === 0) {
+      if (intervals.length === 0 && specs.length === 0 && defersTo.length === 0) {
         console.warn(
           `[page-index] ${label}: no maintenance or specification pages scored above threshold ` +
             `across ${totalPages} pages — leaving unindexed`,
@@ -97,6 +110,7 @@ export const indexManualPages = internalAction({
         intervals,
         specs,
         computed_at: Date.now(),
+        ...(defersTo.length > 0 ? { defers_to: defersTo } : {}),
       };
       await ctx.runMutation(idxApi()._storePageIndex, {
         make: args.make,
@@ -119,6 +133,7 @@ export const indexManualPages = internalAction({
         selected_pages: selected,
         intervals: intervals.length,
         specs: specs.length,
+        defers_to: defersTo.map((d) => d.title),
       };
     } catch (e) {
       // Fail open: an unindexed manual still works, it just costs full price.

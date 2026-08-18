@@ -597,6 +597,18 @@ export const extractIntervalsViaReducto = internalAction({
             console.warn(`[manual-reducto] ${label}: could not record rejection:`, e);
           }
         }
+        if (ivIndex?.defers_to?.length) {
+          // NOT a failed extraction. The document told us where the schedule
+          // actually lives, so report the title rather than a generic miss —
+          // one of those is actionable and the other looks like a dead end.
+          const d = ivIndex.defers_to[0];
+          console.warn(
+            `[manual-reducto] ${label}: no schedule here — the manual defers to ` +
+              `"${d.title}"${d.region ? ` (${d.region})` : ""} on p${d.pages[0]}. ` +
+              `Fetch that document; this one will never carry intervals.`,
+          );
+          return none("skipped", `defers_to:${d.title}`);
+        }
         return none("skipped", "no_intervals_extracted");
       }
 

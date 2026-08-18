@@ -66,6 +66,8 @@ export type ManualPageIndex = {
   intervals: PageRange[];
   specs: PageRange[];
   computed_at: number;
+  /** Documents this manual defers its schedule to. See detectScheduleDeferral. */
+  defers_to?: DeferralTarget[];
 };
 
 // ─── Signals ─────────────────────────────────────────────────────
@@ -192,6 +194,138 @@ export function pageIndexIsFresh(idx: ManualPageIndex | null | undefined): boole
   return !!idx && idx.version === PAGE_INDEX_VERSION && (idx.intervals.length > 0 || idx.specs.length > 0);
 }
 
+// ─── Deferral detection ──────────────────────────────────────────
+//
+// Some owner's manuals do not CONTAIN the maintenance schedule — they name the
+// document that does. The 2021 Subaru Legacy is explicit about it on page 489:
+//
+//   "U.S. models — The scheduled maintenance items required to be serviced at
+//    regular intervals are shown in the 'Warranty and Maintenance Booklet.'"
+//
+// Without this, that vehicle produced `schedule_found=false` and looked
+// identical to a failed extraction. It was not a failure: the extractor read
+// the document correctly and the document says the answer is elsewhere. The
+// difference matters because one of those states is actionable — we know the
+// exact title of the document to go and find.
+//
+// Detection is free: it runs over page text the index pass has already
+// extracted, so a deferral is discovered on the same scan that picks pages.
+//
+// Measured across the four reference manuals: Subaru reports 4 targets, and the
+// GMC Acadia, Ford Maverick and Kia Sportage report ZERO — they carry their
+// schedules inline. The signal fires only where the schedule really is absent.
+
+export type DeferralRegion = "us" | "ca" | null;
+
+export type DeferralTarget = {
+  /** Document title as the manual writes it, de-hyphenated and normalized. */
+  title: string;
+  /** 1-indexed pages that named it. */
+  pages: number[];
+  /** Which market this instruction applied to, when the manual splits them. */
+  region: DeferralRegion;
+  /** Surrounding text, so a human can check the finding without the PDF. */
+  evidence: string;
+};
+
+/**
+ * Phrases that name another document as the home of the schedule.
+ *
+ * Anchored on "separate"/"shown in" plus a Title-Case document name, because a
+ * bare mention of a booklet is not a deferral — manuals cross-reference their
+ * own chapters constantly and every one of those would be a false positive.
+ */
+const DEFERRAL_PATTERNS: RegExp[] = [
+  /(?:shown|described|listed|contained|found)\s+in\s+the\s+[“"']?([A-Z][^”"'.]{6,60}?Booklet)[”"']?/g,
+  /refer\s+to\s+the\s+separate\s+[“"']?([A-Z][^”"'.]{6,60})[”"']?/g,
+  /see\s+the\s+separate\s+[“"']?([A-Z][^”"'.]{6,60})[”"']?/g,
+];
+
+/** PDFs break words across lines: "Mainte- nance Booklet". Rejoin before
+ *  matching, or the same document is discovered under two titles. */
+function dehyphenate(t: string): string {
+  return t.replace(/([A-Za-z])-\s+([a-z])/g, "$1$2");
+}
+
+/** Which market the surrounding text was addressing, when it says. */
+function regionNear(text: string, at: number): DeferralRegion {
+  const before = text.slice(Math.max(0, at - 220), at);
+  const us = before.lastIndexOf("U.S. models");
+  const ca = before.lastIndexOf("Canada models");
+  if (us < 0 && ca < 0) return null;
+  return us > ca ? "us" : "ca";
+}
+
+/**
+ * Documents this manual says hold the maintenance schedule.
+ *
+ * Ordered most-cited first, with US-market instructions preferred — the Subaru
+ * page names the "Warranty and Maintenance Booklet" for the US and the
+ * "Warranty and Service Booklet" for Canada in adjacent columns, and fetching
+ * the Canadian one would be a quietly wrong answer.
+ */
+export function detectScheduleDeferral(
+  pages: readonly (string | null | undefined)[],
+): DeferralTarget[] {
+  const found = new Map<string, DeferralTarget>();
+  pages.forEach((raw, i) => {
+    const t = dehyphenate(String(raw ?? "").replace(/\s+/g, " "));
+    for (const re of DEFERRAL_PATTERNS) {
+      re.lastIndex = 0;
+      for (const m of t.matchAll(re)) {
+        const title = (m[1] ?? "").trim().replace(/\s+/g, " ");
+        // A deferral target is a DOCUMENT, so require a document-ish noun.
+        if (!/booklet|guide|supplement|manual/i.test(title)) continue;
+        const key = title.toLowerCase();
+        const existing = found.get(key);
+        if (existing) {
+          existing.pages.push(i + 1);
+          if (existing.region === null) existing.region = regionNear(t, m.index ?? 0);
+          continue;
+        }
+        found.set(key, {
+          title,
+          pages: [i + 1],
+          region: regionNear(t, m.index ?? 0),
+          evidence: t.slice(Math.max(0, (m.index ?? 0) - 80), (m.index ?? 0) + 180).trim(),
+        });
+      }
+    }
+  });
+
+  return [...found.values()].sort((a, b) => {
+    // US instructions first — a Canadian booklet is the wrong answer, not a
+    // partial one.
+    const r = (x: DeferralTarget) => (x.region === "us" ? 0 : x.region === null ? 1 : 2);
+    if (r(a) !== r(b)) return r(a) - r(b);
+    // Then a title that actually mentions maintenance.
+    const m = (x: DeferralTarget) => (/maintenance/i.test(x.title) ? 0 : 1);
+    if (m(a) !== m(b)) return m(a) - m(b);
+    return b.pages.length - a.pages.length;
+  });
+}
+
+/**
+ * Search queries for the companion document.
+ *
+ * Deliberately returns QUERIES rather than fetching: discovery already has a
+ * ranking, probing, download and identity-guard path in manualLibrary, and the
+ * companion document is not a different KIND of document — it is the same hunt
+ * with a different title. Handing over queries reuses all of it.
+ */
+export function companionSearchQueries(
+  vehicle: { year: number; make: string; model: string },
+  target: DeferralTarget,
+): string[] {
+  const { year, make, model } = vehicle;
+  const title = target.title;
+  return [
+    `${year} ${make} "${title}" pdf`,
+    `${make} ${title} ${year} scheduled maintenance intervals pdf`,
+    `${year} ${make} ${model} ${title}`,
+  ];
+}
+
 // ─── Persistence ─────────────────────────────────────────────────
 //
 // Lives here rather than in the `"use node"` module because a Node file may
@@ -213,6 +347,16 @@ export const _storePageIndex = internalMutation({
       intervals: v.array(v.object({ start: v.float64(), end: v.float64() })),
       specs: v.array(v.object({ start: v.float64(), end: v.float64() })),
       computed_at: v.float64(),
+      defers_to: v.optional(
+        v.array(
+          v.object({
+            title: v.string(),
+            pages: v.array(v.float64()),
+            region: v.optional(v.union(v.literal("us"), v.literal("ca"))),
+            evidence: v.string(),
+          }),
+        ),
+      ),
     }),
   },
   handler: async (ctx, args) => {

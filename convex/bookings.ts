@@ -439,12 +439,20 @@ export const getByUserIdWithDetails = query({
         const mechanicImageUrl = (await resolveMechanicPhotoUrl(ctx, mechanic)) ?? undefined;
 
         const serviceIds = booking.service_ids ?? [];
+        // A sixth inline copy of the name resolver, and the one the consumer
+        // app's booking list reads. Off-catalog lines have to be appended here
+        // too — without them a job whose extra work came in through Flag Issue
+        // shows the driver a single service and no "+1 More", so the work they
+        // just approved is invisible on the card announcing it.
         const serviceNames = await Promise.all(
           serviceIds.map(async (id) => {
             const svc = await ctx.db.get(id);
             return svc?.name ?? "";
           })
-        ).then((a) => a.filter(Boolean));
+        ).then((a) => [
+          ...a.filter(Boolean),
+          ...customServiceNames(booking.custom_services),
+        ]);
 
         const vehicle = await ctx.db
           .query("vehicles")

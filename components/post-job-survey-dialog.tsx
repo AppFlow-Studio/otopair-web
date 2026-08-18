@@ -87,6 +87,7 @@ import {
   isCustomJobTaxonomyComplete,
 } from "@/components/custom-job-taxonomy-picker";
 import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
+import ServicePickerModal from "@/components/booking/service-picker-modal";
 import { describeCustomJobTaxonomy } from "@/lib/custom-job-taxonomy";
 
 /** Best-effort axle from a part name ("Front Brake Pads" → "front"). Mirrors
@@ -239,6 +240,11 @@ type PartRowState = {
   // correctly downstream. Legacy rows leave it unset; snapshot path falls
   // back to booking.service_ids[0].
   service_id?: string | null;
+  // Set instead of service_id when the part belongs to an off-catalog line.
+  // Carried verbatim from the locked quote through to the submit payload so
+  // completion can record it against the custom job it was fitted to — a
+  // custom line has no services row for service_id to point at.
+  custom_service_name?: string | null;
   // "catalog" = seeded from the Otopair prefill, identity fields locked.
   // "manual" = mechanic-added row, fully editable. Absent on legacy rows
   // (treated as "manual" so we never accidentally lock a user-typed row).
@@ -692,6 +698,7 @@ function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
       supplied_by: part.supplied_by === "customer" ? "customer" : "shop",
       part_tier: part.part_tier ?? "oem",
       service_id: part.service_id ?? null,
+      custom_service_name: part.custom_service_name ?? null,
       source: resolvedSource,
       not_used: part.not_used === true ? true : undefined,
       learned_from:
@@ -1391,6 +1398,7 @@ function PostJobSurveyDialogBody({
           supplied_by: suppliedBy,
           part_tier: part.part_tier || "oem",
           service_id: part.service_id ?? null,
+          custom_service_name: part.custom_service_name ?? null,
           source: part.source,
           swap_from_oem_number: part.swap_from_oem_number || undefined,
           not_used: notUsed ? true : undefined,
@@ -1525,6 +1533,7 @@ function PostJobSurveyDialogBody({
         supplied_by: p.supplied_by ?? undefined,
         part_tier: p.part_tier ?? undefined,
         service_id: p.service_id ?? undefined,
+        custom_service_name: p.custom_service_name ?? undefined,
         source: p.source ?? undefined,
         swap_from_oem_number: p.swap_from_oem_number ?? undefined,
         not_used: p.not_used ?? undefined,
@@ -4696,156 +4705,8 @@ function RecommendationsStep({
  * mechanic can submit a freeform name (routed to admin review server-side)
  * when nothing in the canonical catalog fits.
  */
-function ServicePickerModal({
-  engineId,
-  initialQuery,
-  onClose,
-  onPick,
-}: {
-  engineId: string | null;
-  initialQuery: string;
-  onClose: () => void;
-  onPick: (
-    picked:
-      | {
-          kind: "service";
-          id: string;
-          name: string;
-          slug: string | null;
-          has_options: boolean;
-        }
-      | {
-          kind: "freeform";
-          name: string;
-          /** Present when the name came from another shop's cluster — their
-           *  tagging carries across so this mechanic isn't re-answering a
-           *  question the cluster already settled. */
-          system_tags?: string[];
-          work_type?: string | null;
-        },
-  ) => void;
-}) {
-  const [query, setQuery] = useState(initialQuery);
-  const results = useQuery(api.services.listForVehicle, {
-    engineId: (engineId ?? undefined) as never,
-    query,
-    limit: 25,
-  });
-  const trimmed = query.trim();
-
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Pick a service"
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-foreground/40 px-3 pb-3 sm:items-center sm:pb-0"
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-primary/10 bg-background shadow-xl"
-      >
-        <div className="flex items-center justify-between border-b border-primary/10 px-4 py-3">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-              Pick a service
-            </p>
-            <p className="text-[13px] font-semibold">
-              Vehicle-matched first
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="border-b border-primary/10 px-4 py-2.5">
-          <div className="flex items-center gap-2 rounded-lg border border-primary/15 bg-background px-2.5 py-2 focus-within:border-primary">
-            <Search className="h-3.5 w-3.5 text-muted-foreground" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search the service catalog…"
-              autoFocus
-              className="flex-1 bg-transparent text-[13px] outline-none"
-            />
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto px-2 py-2">
-          {results === undefined ? (
-            <div className="flex items-center justify-center py-8 text-[12px] text-muted-foreground">
-              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              Searching…
-            </div>
-          ) : (
-            <>
-              {results.length === 0 ? (
-                <div className="py-6 text-center text-[12px] text-muted-foreground">
-                  No matching services.
-                </div>
-              ) : (
-                <ul className="space-y-1">
-                  {results.map((svc) => (
-                    <li key={svc._id}>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onPick({
-                            kind: "service",
-                            id: svc._id,
-                            name: svc.name,
-                            slug: (svc as any).slug ?? null,
-                            has_options: Boolean((svc as any).has_options),
-                          })
-                        }
-                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-primary/15 hover:bg-primary/5"
-                      >
-                        <span className="truncate text-[13px] font-medium text-foreground">
-                          {svc.name}
-                        </span>
-                        {svc.is_vehicle_match ? (
-                          <span className="inline-flex shrink-0 items-center rounded-md bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">
-                            Fits car
-                          </span>
-                        ) : null}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {trimmed.length >= 2 ? (
-                <div className="space-y-2 px-1">
-                  <CustomNameGate
-                    typed={trimmed}
-                    onPick={onPick}
-                  />
-                  {/* Work that isn't in the catalog but that other shops have
-                      already named. Picking one keeps the cluster together
-                      rather than opening a fortieth spelling of it. */}
-                  <KnownNameSuggestions
-                    typed={trimmed}
-                    onPick={(s) =>
-                      onPick({
-                        kind: "freeform",
-                        name: s.name,
-                        system_tags: s.system_tags,
-                        work_type: s.work_type,
-                      })
-                    }
-                  />
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
+// ServicePickerModal now lives in components/booking/service-picker-modal
+// so the Flag Issue sheet uses the same one — see that file's header.
 
 /**
  * Step 0 of "Add unforeseen scope" (Flag Issue spec, §3).

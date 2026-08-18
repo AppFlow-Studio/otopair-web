@@ -204,6 +204,11 @@ export type JobActualPartPayload = {
   // Which booking service this part belongs to. Optional for backward compat
   // with legacy rows; snapshot path falls back to booking.service_ids[0].
   service_id?: string | null;
+  // The CUSTOM line this part belongs to, when there's no catalog service to
+  // point at. Off-catalog work has no services row, so this is the only thing
+  // that survives the quote → survey → completion round trip and lets a part
+  // be recorded against the custom job it was actually fitted to.
+  custom_service_name?: string | null;
   // Provenance — "catalog" rows came from the Otopair prefill and their
   // identity (name/brand/oem) is locked in the UI. "manual" rows were
   // mechanic-added and stay fully editable. Absent on legacy rows.

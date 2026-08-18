@@ -36,6 +36,7 @@ type EffectiveQuote =
         supplied_by?: string;
         part_tier?: string;
         service_id?: string | null;
+        custom_service_name?: string | null;
         source?: "catalog" | "manual";
         not_used?: boolean;
       }>;
@@ -105,6 +106,7 @@ export function useLockedQuote(job: any) {
         supplied_by: "shop" as const,
         part_tier: p.part_tier ?? "oem",
         service_id: p.service_id ?? null,
+        custom_service_name: (p as any).custom_service_name ?? null,
         source: "catalog" as const,
       }));
     return rows.length > 0 ? rows : null;
@@ -206,6 +208,7 @@ export function useLockedQuote(job: any) {
         supplied_by: p.supplied_by === "customer" ? "customer" : "shop",
         part_tier: p.part_tier ?? "oem",
         service_id: p.service_id ?? null,
+        custom_service_name: (p as any).custom_service_name ?? null,
         source: p.source ?? "catalog",
         // Preserve the mechanic's prior "Not used" flag so re-opening the
         // dialog (mid-job "Add unforeseen scope") doesn't revive a dropped
@@ -224,6 +227,7 @@ export function useLockedQuote(job: any) {
       supplied_by: "shop" as const,
       part_tier: p.part_tier ?? "oem",
       service_id: p.service_id ?? null,
+      custom_service_name: (p as any).custom_service_name ?? null,
       source: "catalog" as const,
       not_used: (p as { not_used?: boolean }).not_used === true ? true : undefined,
     }));

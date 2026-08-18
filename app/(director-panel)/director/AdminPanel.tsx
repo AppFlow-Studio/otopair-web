@@ -36,6 +36,7 @@ import { TabSystemHealth }  from './components/tabs/TabSystemHealth'
 import { TabTransactions }  from './components/tabs/TabTransactions'
 import { TabSettlement }    from './components/tabs/TabSettlement'
 import { TabAnalytics }     from './components/tabs/TabAnalytics'
+import { TabIntegrations }  from './components/tabs/TabIntegrations'
 
 const SESSION_KEY = 'otopair_director_token'
 
@@ -67,6 +68,7 @@ const TABS: Record<string, React.ComponentType> = {
   audit:          TabAudit,
   mechanicEdits:  TabMechanicEdits,
   customJobs:     TabCustomJobs,
+  integrations:   TabIntegrations,
   settings:       TabSettings,
 }
 

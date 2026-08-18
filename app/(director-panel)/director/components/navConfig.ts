@@ -4,7 +4,7 @@
 import {
   IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe,
   IconAudit, IconSettings, IconCar, IconBolt, IconTag, IconClock, IconStar,
-  IconCard, IconRefresh,
+  IconCard, IconRefresh, IconPlug,
 } from './Primitives'
 
 export type NavIcon = (p: { size?: number; stroke?: number; style?: React.CSSProperties }) => React.ReactElement
@@ -65,6 +65,9 @@ export const NAV_GROUPS: NavGroup[] = [
   { section:'Governance', items: [
     { id:'audit',         label:'Audit log',      Icon:IconAudit, keywords:['audit','activity','history','logs'] },
     { id:'mechanicEdits', label:'Mechanic Edits', Icon:IconCar,  badge:'mechanicEdits', keywords:['mechanic edits','changes','approvals'] },
+  ] },
+  { section:'Internal', items: [
+    { id:'integrations', label:'Tools & integrations', Icon:IconPlug, keywords:['integrations','services','tools','vendors','subscriptions','saas','convex','slack','stripe','firecrawl','reducto','fly','spend','costs','stack'] },
   ] },
 ]
 

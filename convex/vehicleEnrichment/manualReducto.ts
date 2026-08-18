@@ -71,6 +71,12 @@ import {
   parseManualIntervals,
 } from "./manualLibrary";
 import {
+  pageCountOf,
+  pageIndexIsFresh,
+  toReductoPageRange,
+  type ManualPageIndex,
+} from "./manualPageIndex";
+import {
   familyForManual,
   parseSpecPayload,
   SPECS_ADAPTER_REDUCTO,
@@ -407,6 +413,8 @@ export const getReductoContext = internalQuery({
       // metadata. Carried here so the budget gate can refuse a 395-page
       // document before it becomes a ~$16 charge.
       page_count: (manual as any).page_count ?? null,
+      /** Which pages to actually bill for. See manualPageIndex. */
+      page_index: ((manual as any).page_index ?? null) as ManualPageIndex | null,
       // A signed, unguessable URL Reducto can fetch — or, for reference-only
       // rows, the public source PDF itself.
       url: storageUrl ?? directPdfUrl,
@@ -457,17 +465,58 @@ export const extractIntervalsViaReducto = internalAction({
         vehicleConfigId: args.vehicleConfigId,
       });
       if (!context) return none("skipped", "no_stored_manual");
-      if (!withinReductoPageBudget(context.page_count)) {
-        // Refusing is the honest answer: this document costs real money per
-        // page and we would be paying for ~395 of them to read about ten.
-        return none(
-          "skipped",
-          `page_budget_exceeded:${context.page_count}>${reductoMaxPages()}`,
-        );
-      }
+      // Budget judges the BILLED pages, not the document. A 395-page manual
+      // narrowed to 15 is a 15-page charge and must not be refused; an
+      // unindexed one is still a 395-page charge and must be.
+
       if (!context.url) return none("failed", "storage_url_unavailable");
 
       const label = `${context.year} ${context.make} ${context.model}`;
+
+      // Narrow to the maintenance-schedule pages when the manual has been
+      // indexed. This is what turns a ~$16 call into a ~$0.60 one.
+      //
+      // Index ON DEMAND when it is missing: the scan is local, free and about
+      // 1.5 s, against a per-page bill that is three orders of magnitude
+      // larger. Doing it here rather than at download time means every manual
+      // already in the library gets narrowed on its next extraction instead of
+      // needing a backfill.
+      let ivIdxLive = ((context as any).page_index ?? null) as ManualPageIndex | null;
+      if (!pageIndexIsFresh(ivIdxLive)) {
+        try {
+          await ctx.runAction(
+            (internal as any).vehicleEnrichment.manualPageIndex_node.indexManualPages,
+            { make: context.make, model: context.model, year: context.year },
+          );
+          const re: any = await ctx.runQuery(selfApi().getReductoContext, {
+            vehicleConfigId: args.vehicleConfigId,
+          });
+          ivIdxLive = (re?.page_index ?? null) as ManualPageIndex | null;
+        } catch (e) {
+          // Fail open — an unindexed manual still extracts, at full price.
+          console.warn(`[manual-reducto] ${label}: page indexing failed, sending whole document:`, e);
+        }
+      }
+      const ivIndex = ivIdxLive;
+      // Budget judges the BILLED pages, and it must run AFTER indexing: gating
+      // on the raw document size first would refuse the 395-page manuals this
+      // narrowing exists for, before they ever got narrowed.
+      const ivBilled = pageIndexIsFresh(ivIndex)
+        ? pageCountOf(ivIndex!.intervals)
+        : context.page_count;
+      if (!withinReductoPageBudget(ivBilled)) {
+        return none("skipped", `page_budget_exceeded:${ivBilled}>${reductoMaxPages()}`);
+      }
+      const ivPageRange = pageIndexIsFresh(ivIndex)
+        ? toReductoPageRange(ivIndex!.intervals)
+        : null;
+      if (ivPageRange) {
+        console.log(
+          `[manual-reducto] ${label}: intervals narrowed to ` +
+            `${pageCountOf(ivIndex!.intervals)}/${ivIndex!.total_pages} pages ` +
+            `(${ivIndex!.intervals.map((r) => `${r.start}-${r.end}`).join(",")})`,
+        );
+      }
 
       let body: any;
       try {
@@ -486,7 +535,14 @@ export const extractIntervalsViaReducto = internalAction({
               schema: REDUCTO_INTERVAL_SCHEMA,
               prompt: buildReductoInstructions(context),
             },
-            settings: { citations: { enabled: true } },
+            settings: {
+              citations: { enabled: true },
+              // THE COST LEVER. Omitting this bills the whole document —
+              // ~395 pages to recover ten interval rows. Null when the manual
+              // was never indexed, which restores the previous behaviour
+              // rather than silently narrowing to nothing.
+              ...(ivPageRange ? { page_range: ivPageRange } : {}),
+            },
           }),
           signal: AbortSignal.timeout(REDUCTO_TIMEOUT_MS),
         });
@@ -626,14 +682,40 @@ export const extractSpecsViaReducto = internalAction({
       if (!context) return none("skipped", "config_not_resolvable");
       if (!context.manual?.storage_id) return none("skipped", "no_stored_manual");
       if (!context.manual?.url) return none("failed", "storage_url_unavailable");
-      if (!withinReductoPageBudget((context.manual as any)?.page_count)) {
-        return none(
-          "skipped",
-          `page_budget_exceeded:${(context.manual as any)?.page_count}>${reductoMaxPages()}`,
-        );
-      }
+
 
       const label = `${context.year} ${context.make} ${context.model}`;
+
+      let spIdxLive = ((context.manual as any)?.page_index ?? null) as ManualPageIndex | null;
+      if (!pageIndexIsFresh(spIdxLive)) {
+        try {
+          await ctx.runAction(
+            (internal as any).vehicleEnrichment.manualPageIndex_node.indexManualPages,
+            { make: context.make, model: context.model, year: context.year },
+          );
+          const re: any = await ctx.runQuery(specsApi().getSpecExtractionContext, {
+            vehicleConfigId: args.vehicleConfigId,
+          });
+          spIdxLive = ((re?.manual as any)?.page_index ?? null) as ManualPageIndex | null;
+        } catch (e) {
+          console.warn(`[manual-reducto] ${label}: page indexing failed, sending whole document:`, e);
+        }
+      }
+      const spIndex = spIdxLive;
+      const spBilled = pageIndexIsFresh(spIndex)
+        ? pageCountOf(spIndex!.specs)
+        : (context.manual as any)?.page_count;
+      if (!withinReductoPageBudget(spBilled)) {
+        return none("skipped", `page_budget_exceeded:${spBilled}>${reductoMaxPages()}`);
+      }
+      const spPageRange = pageIndexIsFresh(spIndex) ? toReductoPageRange(spIndex!.specs) : null;
+      if (spPageRange) {
+        console.log(
+          `[manual-reducto] ${label}: specs narrowed to ` +
+            `${pageCountOf(spIndex!.specs)}/${spIndex!.total_pages} pages ` +
+            `(${spIndex!.specs.map((r) => `${r.start}-${r.end}`).join(",")})`,
+        );
+      }
 
       let body: any;
       try {
@@ -648,7 +730,10 @@ export const extractSpecsViaReducto = internalAction({
               schema: REDUCTO_SPECS_SCHEMA,
               prompt: buildReductoSpecsInstructions(context),
             },
-            settings: { citations: { enabled: true } },
+            settings: {
+              citations: { enabled: true },
+              ...(spPageRange ? { page_range: spPageRange } : {}),
+            },
           }),
           signal: AbortSignal.timeout(REDUCTO_TIMEOUT_MS),
         });

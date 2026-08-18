@@ -6183,6 +6183,24 @@ export default defineSchema({
     failure_reason: v.optional(v.string()),
     attempts: v.optional(v.number()),
     /**
+     * Which pages of this manual are worth extracting from.
+     *
+     * Reducto bills per page and defaults to the whole document, so sending a
+     * 395-page manual to recover ~10 intervals cost ~$16.67. Computed once from
+     * the stored bytes (free, ~1.5 s) by manualPageIndex_node; the extractors
+     * pass it as `settings.page_range`. Absent = never indexed, which means
+     * whole-document behaviour and the page budget still apply.
+     */
+    page_index: v.optional(
+      v.object({
+        version: v.number(),
+        total_pages: v.number(),
+        intervals: v.array(v.object({ start: v.number(), end: v.number() })),
+        specs: v.array(v.object({ start: v.number(), end: v.number() })),
+        computed_at: v.number(),
+      }),
+    ),
+    /**
      * URLs already tried and REJECTED for this vehicle, so a retry picks a
      * different candidate instead of re-uploading the same useless PDF.
      *

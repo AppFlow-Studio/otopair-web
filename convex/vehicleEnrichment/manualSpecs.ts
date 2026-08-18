@@ -673,6 +673,8 @@ export const getSpecExtractionContext = internalQuery({
             // Cost figure, not metadata: Reducto bills per page, so the
             // oversize route gates on this before spending.
             page_count: (manual as any).page_count ?? null,
+            /** Page ranges worth billing for — see manualPageIndex. */
+            page_index: (manual as any).page_index ?? null,
             extractor: (manual as any).extractor ?? null,
             /**
              * Signed URL for the stored bytes, minted per call.

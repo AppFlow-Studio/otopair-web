@@ -4864,7 +4864,9 @@ function coerceNumberOrNull(value: unknown) {
   return value;
 }
 
-function normalizePartsUsed(parts: Array<{
+/** Exported for tests/customWorkVisibility — pins that a client-sent null
+ *  never travels onward as one. */
+export function normalizePartsUsed(parts: Array<{
   part_name: string;
   brand?: string | null;
   oem_number: string;
@@ -4895,9 +4897,14 @@ function normalizePartsUsed(parts: Array<{
         part_name: part.part_name.trim(),
         brand: hasText(part.brand) ? (part.brand as string).trim() : null,
         oem_number: part.oem_number.trim(),
+        // undefined, not null, on the way OUT. The inbound validator accepts a
+        // client null (see postjobPartValidator), but several tables this array
+        // feeds declare the column v.optional(v.string()), which rejects null —
+        // so normalising it away here stops the same class of error recurring
+        // one table downstream.
         custom_service_name: hasText(part.custom_service_name)
           ? (part.custom_service_name as string).trim()
-          : null,
+          : undefined,
         cost,
         quantity,
         supplied_by: suppliedBy,

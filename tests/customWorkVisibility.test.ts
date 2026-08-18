@@ -374,3 +374,54 @@ describe("completion records what was actually fitted", () => {
     expect(after.resolved_complaint).toBe(true);
   });
 });
+
+/**
+ * Regression: submitting a post-job report with an ordinary catalog part.
+ *
+ * `custom_service_name` was declared v.optional(v.string()). Convex's optional
+ * accepts undefined and REJECTS null — and the client sends an explicit null
+ * for any part that belongs to a catalog service, exactly as it does for
+ * `brand`. Every post-job submit carrying a catalog part therefore failed
+ * validation at the door:
+ *
+ *   Path: .postjob.parts_used[0].custom_service_name
+ *   Value: null   Validator: v.string()
+ */
+describe("post-job part validator", () => {
+  it("accepts a null custom_service_name on a catalog part", async () => {
+    const { postjobPartValidator } = await import(
+      "../convex/lib/vehicle_passports"
+    );
+    const field = (postjobPartValidator as any).fields.custom_service_name;
+    const json = JSON.stringify(field.json ?? field);
+    // Nullable, matching `brand` in the same validator.
+    expect(json).toContain("null");
+  });
+
+  it("normalises the field to undefined on the way out", async () => {
+    // Several tables this array feeds declare the column
+    // v.optional(v.string()), which rejects null — so a null accepted at the
+    // door must not travel onward as one.
+    const { normalizePartsUsed } = await import("../convex/bookings");
+    const [catalogPart, customPart] = normalizePartsUsed([
+      {
+        part_name: "Oil filter",
+        oem_number: "90915",
+        cost: 12,
+        custom_service_name: null,
+      },
+      {
+        part_name: "Window switch",
+        oem_number: "83071AN00B",
+        cost: 78.55,
+        custom_service_name: "  Power window switch replacement  ",
+      },
+    ] as any);
+
+    expect(catalogPart.custom_service_name).toBeUndefined();
+    // And a real one survives, trimmed — it's the key completion groups on.
+    expect(customPart.custom_service_name).toBe(
+      "Power window switch replacement",
+    );
+  });
+});

@@ -348,7 +348,11 @@ export const postjobPartValidator = v.object({
   // association is lost the moment a quoted part becomes a used part — which
   // is why a switch fitted through Flag Issue billed correctly but left its
   // custom_jobs row reading "no parts".
-  custom_service_name: v.optional(v.string()),
+  // Nullable, not just optional: the client sends an explicit null for a part
+  // that belongs to a catalog service, exactly as `brand` above does.
+  // `v.optional(v.string())` accepts undefined but REJECTS null, which failed
+  // every post-job submit carrying a catalog part.
+  custom_service_name: v.optional(nullableStringValidator),
   // "catalog" rows came from the Otopair prefill (part_fitments); identity
   // fields (part_name/brand/oem_number) are read-only and only price/qty/
   // supplied_by/swap can change. "manual" rows are mechanic-added and stay

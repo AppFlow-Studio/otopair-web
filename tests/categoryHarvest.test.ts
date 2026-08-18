@@ -72,6 +72,80 @@ describe("categoriesForRoles", () => {
     const pages = categoriesForRoles(["rear_rotor"], [links[2]]); // only front-brakes offered
     expect(pages).toEqual([]);
   });
+
+  // ── Multi-`*--filters` stores (ford.oempartsonline.com, live Aug 13 2026) ──
+  //
+  // Ground truth from fetching each of these pages for the 2021 Nautilus:
+  //   air-and-fuel-delivery--filters   48 products, 4 air filters, 0 oil filters
+  //   engine--filters                  60 products, 6 oil filters
+  //   hvac--filters                    43 products, the cabin filter
+  //   maintenance-and-lubrication--filters  48 products, 4 air filters
+  // The bare /filter/ hint used to win for oil and cabin, and it resolved to
+  // whichever `*--filters` category appeared first in the page — the fuel/air
+  // one — so neither role could ever be found on a Ford.
+  describe("a store that publishes several *--filters categories", () => {
+    // Deliberately in the store's real document order: the fuel/air page first,
+    // which is what made this fail. A test that lists them in a helpful order
+    // would pass against the old hints too.
+    const fordLinks = [
+      "air-and-fuel-delivery--filters",
+      "engine--air-intake",
+      "engine--filters",
+      "hvac--filters",
+      "transmission--filters",
+      "ignition--ignition-coil",
+      "ignition--secondary-ignition",
+      "electrical--battery",
+      "cooling-system--cooling-system",
+      "brakes--front-brakes",
+      "brakes--rear-brakes",
+    ].map((slug) => ({ slug, url: `https://ford.oempartsonline.com/v-x/${slug}`, label: null }));
+
+    const routed = (roleKey: string) => {
+      const pages = categoriesForRoles([roleKey], fordLinks, 6);
+      return pages[0]?.slug ?? null;
+    };
+
+    it("sends the oil filter to the engine page, not the fuel/air one", () => {
+      expect(routed("oil_filter")).toBe("engine--filters");
+    });
+
+    it("sends the cabin filter to HVAC, not the fuel/air one", () => {
+      expect(routed("cabin_filter")).toBe("hvac--filters");
+    });
+
+    it("still finds the engine air filter", () => {
+      expect(["air-and-fuel-delivery--filters", "engine--air-intake"]).toContain(
+        routed("air_filter"),
+      );
+    });
+
+    it("prefers secondary ignition over the coil category for spark plugs", () => {
+      expect(routed("spark_plug")).toBe("ignition--secondary-ignition");
+    });
+
+    it("keeps a single-filters-category store working (the Mercedes shape)", () => {
+      // Regression guard on the new negative screens: Mercedes publishes ONE
+      // filters category holding oil, air and cabin filters alike, so all three
+      // roles must still land on it.
+      const mb = [
+        { slug: "maintenance-and-lubrication--filters", url: `${BASE}/maintenance-and-lubrication--filters`, label: "Filters" },
+      ];
+      for (const role of ["oil_filter", "air_filter", "cabin_filter"]) {
+        expect(categoriesForRoles([role], mb, 6)[0]?.slug).toBe(
+          "maintenance-and-lubrication--filters",
+        );
+      }
+    });
+
+    it("covers a full six-role gap set within budget", () => {
+      // The Nautilus arrived with exactly these six missing and the old budget
+      // of 4 discarded the last two without a word.
+      const missing = ["battery", "coolant", "air_filter", "front_rotor", "rear_rotor", "spark_plug"];
+      const covered = categoriesForRoles(missing, fordLinks, 6).flatMap((p) => p.roles);
+      expect(covered.sort()).toEqual(missing.sort());
+    });
+  });
 });
 
 describe("candidatesFromCategoryPage", () => {

@@ -41,6 +41,7 @@ import { getApplicableServices } from "./services/applicability";
 import type { QueryCtx } from "./_generated/server";
 import { action } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { customServiceNames } from "./lib/customServiceNames";
 
 export const API_SCOPES = [
   "maintenance:read",
@@ -593,9 +594,15 @@ async function collectCompletedVisits(
     visits.push({
       booking: b,
       date: b.scheduled_date ?? null,
-      services: (b.service_ids ?? [])
-        .map((id) => serviceById.get(String(id))?.name)
-        .filter((n): n is string => Boolean(n)),
+      // Off-catalog lines belong in history too. A visit that was entirely
+      // custom used to appear as a visit with no work at all, which reads as
+      // data loss rather than as work the catalog can't name.
+      services: [
+        ...(b.service_ids ?? [])
+          .map((id) => serviceById.get(String(id))?.name)
+          .filter((n): n is string => Boolean(n)),
+        ...customServiceNames((b as any).custom_services),
+      ],
       shop,
     });
   }

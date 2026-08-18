@@ -54,6 +54,17 @@ export type VehiclePassportTires = {
   size_front?: string | null;
   size_rear?: string | null;
   run_flat?: boolean | null;
+  identities?: Partial<
+    Record<
+      "front_left" | "front_right" | "rear_left" | "rear_right",
+      {
+        brand?: string | null;
+        model?: string | null;
+        dot_code?: string | null;
+        run_flat?: boolean | null;
+      }
+    >
+  > | null;
   overall_condition?: TireCondition | null;
   front_condition?: TireCondition | null;
   rear_condition?: TireCondition | null;
@@ -68,6 +79,7 @@ export type VehiclePassportFluids = {
   coolant_type?: string | null;
   brake_fluid_type?: string | null;
   transmission_fluid_type?: string | null;
+  power_steering_fluid_type?: string | null;
   confirmation_status?: string | null;
 };
 
@@ -137,6 +149,8 @@ export type VehiclePassportData = {
   // post-job dialog so multi-service jobs can attribute parts correctly.
   parts_required_services?: Array<{ _id: string; name: string }>;
   is_complete: boolean;
+  is_first_shop_visit?: boolean;
+  rotor_photo_evidence?: Partial<Record<"FL" | "FR" | "RL" | "RR", boolean>>;
   completion_percent: number;
   missing_fields: string[];
   passport: VehiclePassportSnapshot;
@@ -190,6 +204,11 @@ export type JobActualPartPayload = {
   // Which booking service this part belongs to. Optional for backward compat
   // with legacy rows; snapshot path falls back to booking.service_ids[0].
   service_id?: string | null;
+  // The CUSTOM line this part belongs to, when there's no catalog service to
+  // point at. Off-catalog work has no services row, so this is the only thing
+  // that survives the quote → survey → completion round trip and lets a part
+  // be recorded against the custom job it was actually fitted to.
+  custom_service_name?: string | null;
   // Provenance — "catalog" rows came from the Otopair prefill and their
   // identity (name/brand/oem) is locked in the UI. "manual" rows were
   // mechanic-added and stay fully editable. Absent on legacy rows.
@@ -212,7 +231,12 @@ export type PreJobSurveyPayload = {
   tire_details?: Partial<
     Record<
       "front_left" | "front_right" | "rear_left" | "rear_right",
-      { brand?: string | null; model?: string | null }
+      {
+        brand?: string | null;
+        model?: string | null;
+        dot_code?: string | null;
+        run_flat?: boolean | null;
+      }
     >
   > | null;
   // Legacy vehicle-passport fields. New multi-point inspections use
@@ -320,6 +344,29 @@ export type PostJobSurveyPayload = {
   time_variance_reason?: TimeVarianceReason | null;
   time_variance_note?: string | null;
   recommendations?: JobRecommendationInput[];
+};
+
+/**
+ * Outcome for one off-catalog line on a booking (Off-Catalog Work spec, §7).
+ *
+ * Travels as a SEPARATE argument to completeWithPostjob rather than a field on
+ * PostJobSurveyPayload: that payload maps 1:1 onto postjobReportValidator, which
+ * is shared with the draft-save path and the receipt builders, and Convex would
+ * reject an unexpected field there.
+ *
+ * Matched to its custom_jobs row by name (via the same normalisation the match
+ * gate uses), not by array index — the mechanic may have added or removed lines
+ * between booking and completion, and index-matching would write one job's
+ * outcome onto another.
+ */
+export type CustomJobOutcome = {
+  name: string;
+  actual_minutes?: number;
+  charged_price_cents?: number;
+  /** What was actually done. */
+  resolution?: string;
+  /** Did it fix the complaint? Closes the symptom → action → outcome triple. */
+  resolved_complaint?: boolean;
 };
 
 type VehicleUpdatePrompt = {

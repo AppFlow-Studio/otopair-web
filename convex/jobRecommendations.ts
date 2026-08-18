@@ -23,6 +23,11 @@ import {
 } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { jobRecommendationInputValidator } from "./lib/vehicle_passports";
+// One ledger for catalog gaps, shared with the custom-job path: a name typed as
+// work-performed and the same name typed as a recommendation are the same signal,
+// and counting them separately would understate every cluster.
+import { bumpPendingServiceSubmission } from "./customJobs";
+import { ensureJobActualRecord } from "./lib/job_actuals";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -44,9 +49,36 @@ const URGENCY_PENALTY: Record<string, number> = {
 const PENALTY_RAMP_DAYS = 30;
 const PENALTY_CAP = 25;
 
-function normalizeServiceName(name: string) {
-  return name.trim().toLowerCase().replace(/\s+/g, " ");
+/**
+ * ADVISORIES (Off-Catalog Work spec, §6).
+ *
+ * A recommendation with no `recommended_service_id` is an *advisory*: the
+ * mechanic's professional opinion about work Otopair doesn't model, price or
+ * book. Until now these were written but never delivered — both driver queries
+ * filtered on `recommended_service_id`, so a mechanic could tick "visible to
+ * driver" and nothing whatsoever happened. The mechanic believed they'd told
+ * the customer; the customer never heard it.
+ *
+ * Advisories now reach the driver, with three differences from a canonical rec:
+ *   - not bookable (`bookable: false`) — we can't quote what we don't model,
+ *     and a disabled Book button reads as a bug
+ *   - no health-score effect, guaranteed upstream in `penalize`
+ *   - they never auto-expire; they AGE instead (see ADVISORY_AGE_MS), dropping
+ *     into a collapsed group rather than being deleted. "Your intake valves are
+ *     coked" doesn't stop being true because a year passed, and silently
+ *     deleting a mechanic's advice is the same failure as never delivering it.
+ */
+const ADVISORY_AGE_MS = 365 * DAY_MS;
+
+/** A rec is an advisory when it names work outside the canonical catalog. */
+function isAdvisory(rec: { recommended_service_id?: unknown }): boolean {
+  return !rec.recommended_service_id;
 }
+
+/** One line of framing, kept identical everywhere it's shown so the driver
+ *  reads the same sentence on the card, in the reminder and in history. */
+export const ADVISORY_DISCLAIMER =
+  "Otopair doesn't price or book this service yet — this is the shop's recommendation, not an Otopair estimate.";
 
 async function getCurrentUser(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
@@ -132,6 +164,17 @@ export async function recomputeRecPenaltyForVehicle(
   let total = 0;
   const penalize = (rec: any) => {
     if (!rec.visible_to_driver) return;
+    // ─── CUSTOM JOB INVARIANT — ENFORCEMENT SITE 2 OF 2 ────────────────────
+    // No canonical service → no penalty, ever. A freeform ("advisory")
+    // recommendation is the mechanic's professional opinion about work Otopair
+    // doesn't model; penalising the driver's health score for not doing it
+    // would be scoring them against a standard we can't define, quote or book.
+    //
+    // Do NOT relax this to `if (!rec.recommended_service_id && !rec.freeform_text)`
+    // or similar. Advisories surface to the driver through the advisory card
+    // (jobRecommendations.getDriverVisibleRecsForVehicle) and through reminders
+    // — never through the score.
+    // Guarded by tests/customJobHealthIsolation.test.ts.
     if (!rec.recommended_service_id) return;
     const raw = URGENCY_PENALTY[rec.urgency] ?? 0;
     const ageDays = Math.max(0, (args.now - rec.created_at) / DAY_MS);
@@ -167,7 +210,10 @@ async function createFollowUpForRecommendation(
   args: {
     recommendationId: Id<"job_recommendations">;
     booking: { _id: Id<"bookings">; vin: string; shop_id?: Id<"shops"> };
-    serviceId: Id<"services">;
+    /** Absent on advisories — the work has no canonical service. */
+    serviceId?: Id<"services">;
+    /** The mechanic's typed name, used for the advisory reminder copy. */
+    freeformName?: string;
     urgency: string;
     now: number;
   },
@@ -181,33 +227,44 @@ async function createFollowUpForRecommendation(
   // Supersede any pending algorithm-generated follow-up for the same service.
   // Algorithm rows have recommendation_id === undefined; we filter in
   // memory rather than maintaining a compound index for a rare scan.
-  const sameService = await ctx.db
-    .query("follow_ups")
-    .withIndex("by_vin_and_service", (q: any) =>
-      q.eq("vin", args.booking.vin).eq("service_id", args.serviceId),
-    )
-    .collect();
-  for (const f of sameService) {
-    if (f.status !== "pending") continue;
-    if (f.recommendation_id != null) continue;
-    await ctx.db.patch(f._id, {
-      status: "dismissed",
-      dismissed_reason: "superseded_by_mechanic_rec",
-    });
+  //
+  // Advisories skip this entirely: with no canonical service there is nothing
+  // the maintenance algorithm could have scheduled that this would replace.
+  if (args.serviceId) {
+    const sameService = await ctx.db
+      .query("follow_ups")
+      .withIndex("by_vin_and_service", (q: any) =>
+        q.eq("vin", args.booking.vin).eq("service_id", args.serviceId),
+      )
+      .collect();
+    for (const f of sameService) {
+      if (f.status !== "pending") continue;
+      if (f.recommendation_id != null) continue;
+      await ctx.db.patch(f._id, {
+        status: "dismissed",
+        dismissed_reason: "superseded_by_mechanic_rec",
+      });
+    }
   }
 
   // Templated message — best-effort lookup; falls back to a generic message
   // if any of the joins miss (e.g., shop hidden).
   const shop = args.booking.shop_id ? await ctx.db.get(args.booking.shop_id) : null;
-  const service = await ctx.db.get(args.serviceId);
+  const service = args.serviceId ? await ctx.db.get(args.serviceId) : null;
   const vehicle = await ctx.db
     .query("vehicles")
     .withIndex("by_vin", (q: any) => q.eq("vin", args.booking.vin))
     .unique();
   const shopName = shop?.name ?? "Your shop";
-  const serviceName = service?.name ?? "a follow-up service";
+  const serviceName =
+    service?.name ?? args.freeformName ?? "a follow-up service";
   const vehicleLabel = vehicle?.year ? `${vehicle.year} vehicle` : "vehicle";
-  const message = `${shopName} recommended ${serviceName} for your ${vehicleLabel}`;
+  // The advisory reminder carries the same framing as the card. A driver who
+  // only ever sees the notification must still learn that this is the shop's
+  // recommendation and not something they can book here.
+  const message = args.serviceId
+    ? `${shopName} recommended ${serviceName} for your ${vehicleLabel}`
+    : `${shopName} suggested ${serviceName} for your ${vehicleLabel}. ${ADVISORY_DISCLAIMER}`;
 
   const id = await ctx.db.insert("follow_ups", {
     user_id: owner.user_id,
@@ -293,33 +350,14 @@ export async function submitRecommendationsForBooking(
     let pendingId: Id<"pending_service_submissions"> | undefined;
     let freeformText: string | undefined;
     if (!hasService) {
-      const normalized = normalizeServiceName(freeform);
-      const existing = await ctx.db
-        .query("pending_service_submissions")
-        .withIndex("by_normalized_name", (q: any) =>
-          q.eq("normalized_name", normalized),
-        )
-        .first();
-      if (existing) {
-        await ctx.db.patch(existing._id, {
-          appearance_count: (existing.appearance_count ?? 0) + 1,
-          last_seen_at: now,
-        });
-        pendingId = existing._id;
-      } else {
-        pendingId = await ctx.db.insert("pending_service_submissions", {
-          proposed_name: freeform,
-          normalized_name: normalized,
-          proposed_reason: rec.reason?.trim() || undefined,
-          submitted_by_mechanic_id: mechanicId,
-          submitted_via_booking_id: booking._id,
-          vehicle_vin: booking.vin,
-          appearance_count: 1,
-          status: "pending",
-          created_at: now,
-          last_seen_at: now,
-        });
-      }
+      pendingId = await bumpPendingServiceSubmission(ctx, {
+        name: freeform,
+        reason: rec.reason ?? null,
+        mechanicId,
+        bookingId: booking._id,
+        vin: booking.vin,
+        now,
+      });
       freeformText = freeform;
     }
 
@@ -374,16 +412,16 @@ export async function submitRecommendationsForBooking(
     });
     insertedIds.push(id);
 
-    // Driver-side wiring: only fire for canonical, visible, fresh-open recs.
-    if (
-      status === "open" &&
-      rec.visible_to_driver &&
-      rec.recommended_service_id
-    ) {
+    // Driver-side wiring for any visible, fresh-open rec — canonical OR
+    // advisory. This used to require `recommended_service_id`, which is why a
+    // mechanic could mark freeform advice driver-visible and have it reach
+    // nobody: no card, no reminder, no trace.
+    if (status === "open" && rec.visible_to_driver) {
       const followUpId = await createFollowUpForRecommendation(ctx, {
         recommendationId: id,
         booking,
-        serviceId: rec.recommended_service_id,
+        serviceId: rec.recommended_service_id ?? undefined,
+        freeformName: freeformText,
         urgency: rec.urgency,
         now,
       });
@@ -399,6 +437,114 @@ export async function submitRecommendationsForBooking(
 
   return insertedIds;
 }
+
+/**
+ * Flag something for next time, from the active-job overlay (Flag Issue spec, §4).
+ *
+ * Mechanically small — it's one row with `source: "mid_job"`. What makes it worth
+ * building is WHEN: the post-job survey already asks for recommendations, but
+ * noticing at 11am and remembering at 4pm are different accuracies. The mechanic
+ * flags it while looking at the thing.
+ *
+ * This deliberately does NOT duplicate the survey question. The survey seeds
+ * itself from these rows (see getMidJobFlaggedForBooking), so the mechanic sees
+ * what they already flagged and confirms rather than being asked twice.
+ *
+ * Canonical service → a normal bookable recommendation. Freeform → an advisory,
+ * with the attribution-led card and no price. Neither touches today's money and
+ * neither can move the health score.
+ */
+export const flagFromActiveJob = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    recommendedServiceId: v.optional(v.id("services")),
+    freeformName: v.optional(v.string()),
+    urgency: v.union(
+      v.literal("next_visit"),
+      v.literal("within_3_months"),
+      v.literal("soon"),
+    ),
+    reason: v.optional(v.string()),
+    visibleToDriver: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const freeform = (args.freeformName ?? "").trim();
+    if (!args.recommendedServiceId && !freeform) {
+      throw new Error("Pick a service or type what you found.");
+    }
+    if (!booking.mechanic_id) {
+      throw new Error("This job has no assigned mechanic to attribute it to.");
+    }
+
+    // job_recommendations requires a job_actual, and mid-job there may not be one
+    // yet — the mechanic hasn't finished. ensureJobActualRecord is the same helper
+    // the start-job and completion paths use, so this doesn't invent a second
+    // lifecycle for the row.
+    const now = Date.now();
+    const jobActual = await ensureJobActualRecord(ctx, { booking, now });
+
+    const ids = await submitRecommendationsForBooking(ctx, {
+      booking,
+      jobActualId: jobActual._id,
+      mechanicId: booking.mechanic_id,
+      source: "mid_job",
+      recommendations: [
+        {
+          recommended_service_id: args.recommendedServiceId ?? null,
+          freeform_service_name: args.recommendedServiceId ? null : freeform,
+          urgency: args.urgency,
+          reason: args.reason ?? null,
+          visible_to_driver: args.visibleToDriver,
+        },
+      ],
+      now,
+    });
+
+    return { ok: true, recommendationId: ids[0] ?? null };
+  },
+});
+
+/**
+ * What was already flagged mid-job on this booking, so the post-job survey can
+ * seed itself instead of asking again. Shop-scoped by the booking.
+ */
+export const getMidJobFlaggedForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return [];
+    const rows = await ctx.db
+      .query("job_recommendations")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    const midJob = rows.filter((r) => r.source === "mid_job");
+    midJob.sort((a, b) => a.created_at - b.created_at);
+
+    return await Promise.all(
+      midJob.map(async (rec) => {
+        const service = rec.recommended_service_id
+          ? await ctx.db.get(rec.recommended_service_id)
+          : null;
+        return {
+          _id: rec._id,
+          recommended_service_id: rec.recommended_service_id ?? null,
+          service_label: service?.name ?? null,
+          service_slug: (service as any)?.slug ?? null,
+          service_has_options: Boolean((service as any)?.has_options),
+          freeform_service_name: rec.freeform_text ?? "",
+          urgency: rec.urgency,
+          reason: rec.reason ?? "",
+          visible_to_driver: rec.visible_to_driver,
+        };
+      }),
+    );
+  },
+});
 
 /**
  * Open recommendations for a VIN — used by the pre-job survey to surface
@@ -464,15 +610,21 @@ export const getDriverVisibleRecsForVehicle = query({
       (r) =>
         (r.status === "open" || r.status === "acknowledged") &&
         r.visible_to_driver &&
-        r.recommended_service_id,
+        // Advisories (freeform_text, no service id) belong here too — see the
+        // ADVISORY block at the top of this file. Requiring
+        // `recommended_service_id` is what made mechanic advice undeliverable.
+        (r.recommended_service_id || r.freeform_text),
     );
     rows.sort((a, b) => b.created_at - a.created_at);
+
+    const now = Date.now();
 
     return await Promise.all(
       rows.map(async (rec) => {
         const service = rec.recommended_service_id
           ? await ctx.db.get(rec.recommended_service_id)
           : null;
+        const advisory = isAdvisory(rec);
         const shop = await ctx.db.get(rec.shop_id);
         const mechanic = await ctx.db.get(rec.mechanic_id);
         const mechanicName = mechanic
@@ -486,8 +638,19 @@ export const getDriverVisibleRecsForVehicle = query({
           : null;
         return {
           _id: rec._id,
+          // "canonical" renders the normal bookable card; "advisory" renders
+          // the attribution-led card with no price and no Book button.
+          kind: (advisory ? "advisory" : "canonical") as
+            | "advisory"
+            | "canonical",
+          bookable: !advisory,
+          disclaimer: advisory ? ADVISORY_DISCLAIMER : null,
+          // Advisories never expire, so the client collapses aged ones into a
+          // secondary group instead of showing them at full weight forever.
+          aged: advisory && now - rec.created_at > ADVISORY_AGE_MS,
           service_id: rec.recommended_service_id ?? null,
-          service_name: service?.name ?? "Unspecified",
+          service_name:
+            service?.name ?? rec.freeform_text ?? "Unspecified",
           urgency: rec.urgency,
           reason: rec.reason ?? null,
           shop_id: rec.shop_id,
@@ -503,13 +666,22 @@ export const getDriverVisibleRecsForVehicle = query({
           tire_specs: rec.tire_specs ?? null,
           source: rec.source ?? "post_job",
           // Attribution line — falls back to a sensible default for legacy rows.
-          author_label:
-            rec.author_label ??
-            (rec.source === "inspection"
-              ? `Based on last inspection @ ${shop?.name ?? "the shop"}`
+          // On an advisory the attribution IS the headline — this is one
+          // person's professional opinion, not an Otopair position, and naming
+          // them is what makes that legible. Lead with the mechanic when we
+          // know who it was, and prefer that over any stored label.
+          author_label: advisory
+            ? mechanicName && shop?.name
+              ? `${mechanicName} at ${shop.name} suggests`
               : shop?.name
-                ? `Recommended by ${shop.name}`
-                : null),
+                ? `${shop.name} suggests`
+                : "Your mechanic suggests"
+            : (rec.author_label ??
+              (rec.source === "inspection"
+                ? `Based on last inspection @ ${shop?.name ?? "the shop"}`
+                : shop?.name
+                  ? `Recommended by ${shop.name}`
+                  : null)),
           provenance: {
             kind: (rec.source === "inspection" ? "inspection" : "mechanic") as
               | "inspection"
@@ -540,7 +712,9 @@ export const getRecHistoryForVehicle = query({
         .query("job_recommendations")
         .withIndex("by_vehicle_vin", (q) => q.eq("vehicle_vin", args.vin))
         .collect()
-    ).filter((r) => r.visible_to_driver && r.recommended_service_id);
+    ).filter(
+      (r) => r.visible_to_driver && (r.recommended_service_id || r.freeform_text),
+    );
     rows.sort(
       (a, b) => (b.updated_at ?? b.created_at) - (a.updated_at ?? a.created_at),
     );
@@ -566,10 +740,16 @@ export const getRecHistoryForVehicle = query({
           const booking = await ctx.db.get(rec.completed_via_booking_id);
           resolvedAt = booking?._creationTime ?? null;
         }
+        const advisory = isAdvisory(rec);
         return {
           _id: rec._id,
+          kind: (advisory ? "advisory" : "canonical") as
+            | "advisory"
+            | "canonical",
+          bookable: !advisory,
+          disclaimer: advisory ? ADVISORY_DISCLAIMER : null,
           service_id: rec.recommended_service_id ?? null,
-          service_name: service?.name ?? "Unspecified",
+          service_name: service?.name ?? rec.freeform_text ?? "Unspecified",
           urgency: rec.urgency,
           reason: rec.reason ?? null,
           shop_id: rec.shop_id,
@@ -577,13 +757,18 @@ export const getRecHistoryForVehicle = query({
           mechanic_id: rec.mechanic_id,
           mechanic_name: mechanicName,
           source: rec.source ?? "post_job",
-          author_label:
-            rec.author_label ??
-            (rec.source === "inspection"
-              ? `Based on last inspection @ ${shop?.name ?? "the shop"}`
+          author_label: advisory
+            ? mechanicName && shop?.name
+              ? `${mechanicName} at ${shop.name} suggests`
               : shop?.name
-                ? `Recommended by ${shop.name}`
-                : null),
+                ? `${shop.name} suggests`
+                : "Your mechanic suggests"
+            : (rec.author_label ??
+              (rec.source === "inspection"
+                ? `Based on last inspection @ ${shop?.name ?? "the shop"}`
+                : shop?.name
+                  ? `Recommended by ${shop.name}`
+                  : null)),
           created_at: rec.created_at,
           updated_at: rec.updated_at ?? rec.created_at,
           status: rec.status,
@@ -906,9 +1091,19 @@ export const expireOlderThan12Months = internalMutation({
       .withIndex("by_status", (q) => q.eq("status", "open"))
       .take(500);
     let expired = 0;
+    let advisoriesSpared = 0;
     const touchedVins = new Set<string>();
     for (const rec of open) {
       if (rec.created_at >= cutoff) continue;
+      // Advisories never auto-expire (see the ADVISORY block at the top of this
+      // file). They age out of the driver's primary list via the `aged` flag on
+      // getDriverVisibleRecsForVehicle instead — visible, attributed, just no
+      // longer competing for attention. Only a driver dismissal or the work
+      // actually getting done closes one.
+      if (isAdvisory(rec)) {
+        advisoriesSpared += 1;
+        continue;
+      }
       await ctx.db.patch(rec._id, { status: "expired", updated_at: now });
       await cancelLinkedFollowUp(ctx, rec.followup_id, "expired");
       touchedVins.add(rec.vehicle_vin);
@@ -917,10 +1112,12 @@ export const expireOlderThan12Months = internalMutation({
     for (const vin of touchedVins) {
       await recomputeRecPenaltyForVehicle(ctx, { vin, now });
     }
-    if (expired > 0) {
-      console.log(`[Cron] Expired ${expired} stale recommendation(s)`);
+    if (expired > 0 || advisoriesSpared > 0) {
+      console.log(
+        `[Cron] Expired ${expired} stale recommendation(s); spared ${advisoriesSpared} advisory(ies)`,
+      );
     }
-    return { expired };
+    return { expired, advisoriesSpared };
   },
 });
 

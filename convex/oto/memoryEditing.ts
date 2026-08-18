@@ -1508,6 +1508,27 @@ export const getCrossConversationMemory = internalQuery({
           if (r.fact_type === "observation" && r.written_by === "chat_agent") {
             continue;
           }
+          // Profiling defang (2026-08-14 — QA p.109 philosophy violation,
+          // REPRODUCED on device the same day): `*_offer` id_reference rows
+          // record what the AI OFFERED (the render_book_service selection-
+          // moment mirror), not anything the user did. Surfacing them across
+          // conversations is what armed "you've been offered oil changes
+          // several times without booking... what's actually going on?" — a
+          // sales objection-handling script on a trust-first product, built
+          // from rows the model then mis-read as user behavior. Offers stay
+          // recorded (Wave-5 replay / forensic substrate); they are not
+          // memory. Genuine user-tap selection rows (entity_type without the
+          // `_offer` suffix) still surface.
+          if (
+            r.fact_type === "id_reference" &&
+            (r.payload as { kind?: string; entity_type?: string })?.kind ===
+              "id_reference" &&
+            typeof (r.payload as { entity_type?: string })?.entity_type ===
+              "string" &&
+            (r.payload as { entity_type: string }).entity_type.endsWith("_offer")
+          ) {
+            continue;
+          }
           candidates.push({
             source: "conversation",
             conversation_id: r.conversation_id,

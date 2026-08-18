@@ -18,6 +18,7 @@ import {
   SERVICE_PARTS_REFERENCE,
   type PartRoleSpec,
 } from "../lib/servicePartsReference";
+import type { FuelClass } from "./variantFingerprint";
 
 /** One fitment row, pre-joined: which service slot it fills and whether at
  *  least one TRUSTED price row exists (poison/non-pooled types excluded —
@@ -39,6 +40,162 @@ export interface QuotabilityResult {
   /** fully-quotable services / applicable parts-bearing services (1 when none). */
   pct: number;
   services: ServiceQuotability[];
+}
+
+/**
+ * Roles a FIRST-RUN, catalog-first harvest may fill before Batch 2 has said
+ * which services this vehicle can be sold.
+ *
+ * Membership bar: present on any road vehicle that reaches this pipeline,
+ * INDEPENDENT OF POWERTRAIN.
+ *
+ *   brakes        every car stops. Drum-rear vehicles are removed by
+ *                 `na_role_keys` before this set is consulted.
+ *   battery       every road vehicle has a 12 V battery, EVs included.
+ *   cabin_filter  every modern vehicle with HVAC has one.
+ *
+ * DELIBERATELY ABSENT: `air_filter`, `oil_filter`, `engine_oil`, `spark_plug`.
+ * A powertrain we have not identified yet removes each of them, and assuming
+ * them would be guessing applicability — the one thing the in-run harvest is
+ * not allowed to do. They keep their heal-time pass, which runs after Batch 2
+ * and knows the answer.
+ *
+ * Lives HERE, in the module that owns role semantics, rather than in
+ * categoryHarvest.ts, because v3pipeline schedules that harvest and
+ * categoryHarvest statically imports v3pipeline — a constant shared between
+ * them has to sit somewhere neither owns, or the import graph closes a loop.
+ */
+export const EARLY_ROLE_KEYS = [
+  "front_brake_pad",
+  "rear_brake_pad",
+  "front_rotor",
+  "rear_rotor",
+  "battery",
+  "cabin_filter",
+] as const;
+
+/**
+ * Services to ASSUME applicable while `EARLY_ROLE_KEYS` is being harvested.
+ *
+ * `filter_replacement` is here even though it bundles the ENGINE air filter,
+ * which an EV lacks — safe only because service and ROLE are separate gates:
+ * assuming the service makes the cabin filter visible to `missingCoreRoles`,
+ * and `EARLY_ROLE_KEYS` is what decides we act on it. Widening this list
+ * without widening the role list is always the safe direction; the reverse is
+ * not.
+ */
+export const EARLY_SERVICE_SLUGS = [
+  "brake_pad_replacement",
+  "rotor_replacement",
+  "battery_replacement",
+  "filter_replacement",
+] as const;
+
+/**
+ * Roles that exist only on a vehicle with an INTERNAL COMBUSTION ENGINE, and
+ * the services that carry them.
+ *
+ * These are the four the powertrain-independent set above deliberately omits.
+ * They are safe to harvest early the moment the powertrain is known to burn
+ * something — which it is: `engines.fuel_type` is populated on 100% of rows
+ * (502/502, measured Aug 2026) from the vPIC decode, and that decode lands
+ * BEFORE the in-run harvest is scheduled.
+ */
+const COMBUSTION_ROLE_KEYS = [
+  "oil_filter",
+  "engine_oil",
+  "air_filter",
+  "drain_plug_gasket",
+  "coolant",
+] as const;
+
+const COMBUSTION_SERVICE_SLUGS = ["oil_change", "coolant_flush"] as const;
+
+/**
+ * Spark plugs are their own tier because they are the one role a DIESEL
+ * removes while keeping everything else in COMBUSTION_ROLE_KEYS.
+ *
+ * fuelTypeResolver.ts exists largely for this split — "fuel_class is the
+ * highest-consequence identity facet: it decides spark-plugs-vs-glow-plugs" —
+ * so honouring it here is not a refinement, it is the whole reason that module
+ * was written.
+ */
+const SPARK_ROLE_KEYS = ["spark_plug"] as const;
+const SPARK_SERVICE_SLUGS = ["spark_plugs"] as const;
+
+/** What the in-run harvest may assume, given the decoded powertrain. */
+export interface EarlyHarvestScope {
+  roleKeys: readonly string[];
+  serviceSlugs: readonly string[];
+  /** For the log line — why this scope and not another. */
+  basis: string;
+}
+
+/**
+ * Widen the in-run, catalog-first harvest as far as the POWERTRAIN allows.
+ *
+ * The harvest runs while Batch 2 is still polling, so the applicable-service
+ * list does not exist yet and something has to stand in for it. The old answer
+ * was a fixed powertrain-independent set, which is correct but narrow: it left
+ * oil filter, air filter, coolant and spark plugs to be extracted-then-refuted
+ * on every gasoline car, which is the majority of the fleet.
+ *
+ * The better answer is that we are not actually ignorant. `fuel_class` is
+ * decoded during Batch 1 and is the exact fact that decides which of those
+ * roles exist:
+ *
+ *   gasoline / flex / hybrid / phev → every role, spark plugs included.
+ *     A hybrid is NOT an exception: it carries a full engine and burns fuel,
+ *     so it takes oil, filters and plugs like any other. `classifyFuelClass`
+ *     reads "Electric / Gasoline" and "Gasoline / Electric" as `hybrid`, which
+ *     is why those 17 rows must not be lumped in with the 45 true BEVs.
+ *   diesel → every role EXCEPT spark plugs (glow plugs, different part).
+ *   bev → the powertrain-independent set only. No oil, no engine air filter,
+ *     no plugs. Assuming them here is precisely the wrong-part write the
+ *     "never guess applicability" rule forbids.
+ *   other (CNG, hydrogen, fuel cell) / unknown → the narrow set. Rare enough
+ *     that being conservative costs almost nothing, and varied enough that a
+ *     guess would be a real guess.
+ *
+ * Pure and total: an unreadable fuel type degrades to the narrow set rather
+ * than throwing, so a decode miss can only ever cost coverage, never
+ * correctness.
+ */
+export function earlyHarvestScope(
+  fuelClass: FuelClass | null | undefined,
+): EarlyHarvestScope {
+  const base = {
+    roleKeys: [...EARLY_ROLE_KEYS] as string[],
+    serviceSlugs: [...EARLY_SERVICE_SLUGS] as string[],
+  };
+  switch (fuelClass) {
+    case "gasoline":
+    case "flex":
+    case "hybrid":
+    case "phev":
+      return {
+        roleKeys: [...base.roleKeys, ...COMBUSTION_ROLE_KEYS, ...SPARK_ROLE_KEYS],
+        serviceSlugs: [
+          ...base.serviceSlugs,
+          ...COMBUSTION_SERVICE_SLUGS,
+          ...SPARK_SERVICE_SLUGS,
+        ],
+        basis: `fuel_class=${fuelClass}:combustion+spark`,
+      };
+    case "diesel":
+      return {
+        roleKeys: [...base.roleKeys, ...COMBUSTION_ROLE_KEYS],
+        serviceSlugs: [...base.serviceSlugs, ...COMBUSTION_SERVICE_SLUGS],
+        basis: "fuel_class=diesel:combustion_no_spark",
+      };
+    case "bev":
+      return { ...base, basis: "fuel_class=bev:powertrain_independent_only" };
+    default:
+      return {
+        ...base,
+        basis: `fuel_class=${fuelClass ?? "unknown"}:powertrain_independent_only`,
+      };
+  }
 }
 
 /** Core roles that BIND a quote. if_found_bad roles are pure discovery items

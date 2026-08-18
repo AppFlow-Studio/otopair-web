@@ -173,8 +173,8 @@ const PHOTO_UPLOAD_USER_KEY = "_inspection_photo_upload_user_id";
 
 function withoutPhotoUploadGrant(
   select: Record<string, unknown> | null | undefined,
-) {
-  const next = { ...(select ?? {}) };
+): Record<string, string | number> {
+  const next = { ...(select ?? {}) } as Record<string, string | number>;
   delete next[PHOTO_UPLOAD_TOKEN_KEY];
   delete next[PHOTO_UPLOAD_STARTED_KEY];
   delete next[PHOTO_UPLOAD_USER_KEY];
@@ -250,7 +250,7 @@ export const prepareInspectionPhotoUpload = mutation({
               ? {
                   ...zone,
                   select: {
-                    ...((zone.select ?? {}) as Record<string, unknown>),
+                    ...((zone.select ?? {}) as Record<string, string | number>),
                     ...grant,
                   },
                 }
@@ -276,6 +276,7 @@ export const attachInspectionPhoto = mutation({
     zoneId: inspectionPhotoZoneValidator,
     storageId: v.id("_storage"),
     uploadToken: v.string(),
+    tag: v.optional(v.union(v.literal("general"), v.literal("rotor_stamp"))),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -323,11 +324,18 @@ export const attachInspectionPhoto = mutation({
             ...item,
             done: false,
             select: withoutPhotoUploadGrant(
-              (item.select ?? {}) as Record<string, unknown>,
+              (item.select ?? {}) as Record<string, string | number>,
             ),
             photo_ids: Array.from(
               new Set([...(item.photo_ids ?? []), args.storageId]),
             ),
+            photo_tags: {
+              ...((item.photo_tags ?? {}) as Record<
+                string,
+                "general" | "rotor_stamp"
+              >),
+              [String(args.storageId)]: args.tag ?? "general",
+            },
           }
         : item,
     );
@@ -391,7 +399,7 @@ export const deleteInspectionPhoto = mutation({
           ? {
               ...zone,
               select: withoutPhotoUploadGrant(
-                (zone.select ?? {}) as Record<string, unknown>,
+                (zone.select ?? {}) as Record<string, string | number>,
               ),
             }
           : zone,
@@ -404,13 +412,23 @@ export const deleteInspectionPhoto = mutation({
       return;
     }
 
-    const zones = inspection.zones.map((zone) => ({
-      ...zone,
-      done: (zone.photo_ids ?? []).includes(args.storageId) ? false : zone.done,
-      photo_ids: (zone.photo_ids ?? []).filter(
-        (storageId) => storageId !== args.storageId,
-      ),
-    }));
+    const zones = inspection.zones.map((zone) => {
+      const photoTags = {
+        ...((zone.photo_tags ?? {}) as Record<
+          string,
+          "general" | "rotor_stamp"
+        >),
+      };
+      delete photoTags[String(args.storageId)];
+      return {
+        ...zone,
+        done: (zone.photo_ids ?? []).includes(args.storageId) ? false : zone.done,
+        photo_ids: (zone.photo_ids ?? []).filter(
+          (storageId) => storageId !== args.storageId,
+        ),
+        photo_tags: photoTags,
+      };
+    });
     await ctx.db.patch(inspection._id, {
       zones,
       updated_at: Date.now(),

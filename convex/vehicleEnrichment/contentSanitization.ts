@@ -256,6 +256,15 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   // Volvo: 7-8 digit modern, 6-digit legacy hardware (977751 drain plug
   // gasket — real ledgered SKU on the 2021 XC90, Aug 9 2026).
   volvo: /^\d{6,8}$/,
+  // Mitsubishi — had NO pattern until Aug 11 2026, so every extracted value
+  // fell through to the permissive GENERAL_PATTERN and nothing filtered
+  // hallucinations (the 2022 Outlander's clean run was unchecked, not
+  // verified). Derived from that car's 12 real fitments: 2-letter + 4-6
+  // digits (MZ094517 battery, MQ718353 oil filter, LM2207 genuine oil,
+  // AX000036 air filter), 4-digit + letter + 3 (4605C324 pads, 7803A165
+  // cabin filter, 2824A029 CVT filter), and S + 7 digits (S0001610 ATF).
+  // Verified: accepts all 12, rejects every foreign-format sample tried.
+  mitsubishi: /^(?:[A-Z]{2}\d{4,6}|\d{4}[A-Z]\d{3}|S\d{7})$/i,
   // Jaguar Land Rover (shared family formats). The old /^LR\d{6}$/ rejected 13
   // of the 2012 Range Rover's real parts (batch-9): JLR uses far more than the
   // modern "LR######" number. Covered here:
@@ -276,6 +285,25 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   // generic fallback; give it Toyota's pattern for parity.
   scion: /^\d{5}(?:-[A-Z0-9]{4,6}(?:-[A-Z0-9]{1,4})?|[A-Z0-9]{5})$/i,
 };
+
+/**
+ * Does this make have a part-number format of its own?
+ *
+ * A make with NO pattern is not "unvalidated" in an obvious way — it silently
+ * falls through to the permissive generic check, so hallucinated and wrong-make
+ * numbers pass and the run looks clean. Mitsubishi sat like that until Aug 2026
+ * and its "clean" Outlander run was unchecked rather than verified. Exported so
+ * makeCoverage.ts can assert every make we claim to support has one, instead of
+ * the gap being noticed a make at a time.
+ */
+export function hasOemPartPattern(makeName: string): boolean {
+  return OEM_PART_PATTERNS[makeKeyOf(makeName)] !== undefined;
+}
+
+/** The make keys with a format of their own. For coverage reporting. */
+export function oemPatternMakeKeys(): string[] {
+  return Object.keys(OEM_PART_PATTERNS);
+}
 
 // ─── Cross-make brand signatures ─────────────────────────────────
 //

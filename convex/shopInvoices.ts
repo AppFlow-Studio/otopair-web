@@ -317,7 +317,7 @@ export const getShopInvoice = query({
       : null;
 
     const services = booking?.service_ids
-      ? await resolveServiceNames(ctx, booking.service_ids)
+      ? await resolveServiceNames(ctx, booking.service_ids, booking.custom_services)
       : [];
     const vehicle = booking?.vin
       ? await resolveVehicleDisplay(ctx, booking.vin)
@@ -330,38 +330,101 @@ export const getShopInvoice = query({
           .first()
       : null;
 
+    // Authoritative agreed breakdown — the frozen parts/labor on the last agreed
+    // booking_approvals row (same row getReceipt bills from). When the mechanic
+    // re-quoted (Adjust quote / Add unforeseen scope), the original estimate in
+    // priced_parts_snapshot + quoted_breakdown is stale; the approval row holds
+    // the customer-approved parts and labor.
+    const finalApproval = booking
+      ? ((
+          await ctx.db
+            .query("booking_approvals")
+            .withIndex("by_booking_and_cycle", (q: any) =>
+              q.eq("booking_id", booking._id),
+            )
+            .collect()
+        )
+          .filter(
+            (a: any) =>
+              a.parts_subtotal_cents != null &&
+              a.labor_cents != null &&
+              a.tax_cents != null &&
+              a.service_fee_cents != null &&
+              a.decision !== "declined" &&
+              a.decision !== "withdrawn",
+          )
+          .sort((a: any, b: any) => {
+            const rank: Record<string, number> = { pre_job: 1, mid_job: 2, post_job: 3 };
+            const byCycle = (rank[a.cycle] ?? 0) - (rank[b.cycle] ?? 0);
+            if (byCycle !== 0) return byCycle;
+            return (
+              (a.submitted_at_ms ?? a._creationTime) -
+              (b.submitted_at_ms ?? b._creationTime)
+            );
+          })
+          .at(-1) ?? null)
+      : null;
+
     /* ---- line items: the work ---- */
     const lineItems: InvoiceLineItem[] = [];
-    const snapshot: any[] = Array.isArray(booking?.priced_parts_snapshot)
-      ? booking!.priced_parts_snapshot
-      : [];
-    for (const p of snapshot) {
-      const qty = Number(p.quantity ?? 1);
-      const unit = Number(p.unit_price_cents ?? 0);
-      const line = Number(p.line_total_cents ?? unit * qty);
-      // A $0 part line on an invoice needs an explanation. price_unknown means
-      // the winner had no trustworthy price at quote time and the line bills 0
-      // pending post-job confirmation; integrity_flag means the frozen row
-      // failed the make guard. Both are things a merchant would otherwise have
-      // to ask about.
-      const notes = [
-        p.brand,
-        p.oem_number,
-        p.price_unknown ? "priced at completion" : null,
-        p.price_stale ? "price estimate" : null,
-        p.integrity_flag ? `flagged: ${p.integrity_flag}` : null,
-      ].filter(Boolean);
-      lineItems.push({
-        kind: "part",
-        name: p.part_name ?? "Part",
-        detail: notes.join(" · ") || null,
-        qty,
-        unitCents: unit,
-        lineCents: line,
-      });
+    // Prefer the approved re-quote's parts (mechanic's confirmed prices, with
+    // Not-used / customer-supplied rows dropped) over the original estimate.
+    // `cost` on the approval snapshot is per-unit dollars.
+    const approvedParts: any[] | null = Array.isArray(
+      (finalApproval as any)?.parts_snapshot,
+    )
+      ? ((finalApproval as any).parts_snapshot as any[])
+      : null;
+    if (approvedParts) {
+      for (const p of approvedParts) {
+        if (p?.not_used === true || p?.supplied_by === "customer") continue;
+        const qty = Math.max(0, Number(p.quantity ?? 1));
+        const unit = Math.round((Number(p.cost) || 0) * 100);
+        const notes = [p.brand, p.oem_number].filter(Boolean);
+        lineItems.push({
+          kind: "part",
+          name: p.part_name ?? "Part",
+          detail: notes.join(" · ") || null,
+          qty,
+          unitCents: unit,
+          lineCents: unit * qty,
+        });
+      }
+    } else {
+      const snapshot: any[] = Array.isArray(booking?.priced_parts_snapshot)
+        ? booking!.priced_parts_snapshot
+        : [];
+      for (const p of snapshot) {
+        const qty = Number(p.quantity ?? 1);
+        const unit = Number(p.unit_price_cents ?? 0);
+        const line = Number(p.line_total_cents ?? unit * qty);
+        // A $0 part line on an invoice needs an explanation. price_unknown means
+        // the winner had no trustworthy price at quote time and the line bills 0
+        // pending post-job confirmation; integrity_flag means the frozen row
+        // failed the make guard. Both are things a merchant would otherwise have
+        // to ask about.
+        const notes = [
+          p.brand,
+          p.oem_number,
+          p.price_unknown ? "priced at completion" : null,
+          p.price_stale ? "price estimate" : null,
+          p.integrity_flag ? `flagged: ${p.integrity_flag}` : null,
+        ].filter(Boolean);
+        lineItems.push({
+          kind: "part",
+          name: p.part_name ?? "Part",
+          detail: notes.join(" · ") || null,
+          qty,
+          unitCents: unit,
+          lineCents: line,
+        });
+      }
     }
 
-    const laborCents = booking?.quoted_breakdown?.labor_cents ?? null;
+    const laborCents =
+      (finalApproval as any)?.labor_cents ??
+      booking?.quoted_breakdown?.labor_cents ??
+      null;
     const laborMinutes =
       jobActual?.actual_labor_minutes ?? booking?.estimated_labor_minutes ?? null;
     if (laborCents != null) {

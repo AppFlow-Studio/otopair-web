@@ -14,7 +14,7 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 
-const SMS_BODY_TEMPLATES: Record<string, (payload: any) => string> = {
+export const SMS_BODY_TEMPLATES: Record<string, (payload: any) => string> = {
   customer_late_sms_reminder: (payload) =>
     `Brooklyn Auto: still coming for your ${payload?.scheduledTime ?? ""} appointment? Reply or tap the Otopair app.`,
 
@@ -46,6 +46,47 @@ const SMS_BODY_TEMPLATES: Record<string, (payload: any) => string> = {
       ? ` Claim your account & full history: ${payload.claimUrl}`
       : "";
     return `Otopair: service complete at ${shop}. ${total}${claim}`.trim();
+  },
+
+  /* ── Blocked jobs (Flag Issue spec, §5) ──────────────────────────────────
+     One entry per driver-facing blocker kind. Without these the cron still
+     sent a message — the generic "Otopair update for your booking" fallback —
+     which is arguably worse than silence: it spends the customer's attention
+     and tells them nothing.
+
+     Each says what is actually true of that kind, because the right reaction
+     differs. Waiting on a part needs no response. Being unreachable needs a
+     call back. A safety hold needs them not to collect the car and drive it.
+
+     `damage` has no entry on purpose: KIND_POLICY sets notifyDriver false, so
+     no driver row is ever written for it. A shop tells a customer they damaged
+     the car; the platform does not do it for them by SMS. */
+
+  job_blocked_parts_delay_driver: (payload) => {
+    const shop = payload?.shopName ?? "your shop";
+    return `Otopair: ${shop} is waiting on a part for your vehicle, so your service is paused. They'll pick it straight back up when it arrives.`;
+  },
+
+  job_blocked_vehicle_condition_driver: (payload) => {
+    const shop = payload?.shopName ?? "your shop";
+    return `Otopair: ${shop} found something on your vehicle that has to be sorted before they can finish. They'll contact you with the details.`;
+  },
+
+  job_blocked_needs_specialist_driver: (payload) => {
+    const shop = payload?.shopName ?? "your shop";
+    return `Otopair: your service is paused — ${shop} needs a tool or specialist they don't have on site. They'll follow up shortly.`;
+  },
+
+  job_blocked_customer_unreachable_driver: (payload) => {
+    const shop = payload?.shopName ?? "your shop";
+    // The only kind the driver can personally clear, so it's the only one that
+    // asks for something.
+    return `Otopair: ${shop} is trying to reach you about your vehicle and can't continue until they do. Please give them a call.`;
+  },
+
+  job_blocked_safety_hold_driver: (payload) => {
+    const shop = payload?.shopName ?? "your shop";
+    return `Otopair: ${shop} advises your vehicle shouldn't be driven right now. Please speak to them before collecting it.`;
   },
 
   appointment_reminder: (payload) => {

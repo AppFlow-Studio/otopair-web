@@ -65,11 +65,55 @@ const PAIRED_LIGHT_BY_TYPE: Partial<Record<MaintenanceType, string>> = {
   tires: "tpms",
 };
 
-/** Minimal record shape the merge reads — type (to match a user item) plus the
- *  confirmed-healthy timestamp (the 90-day on_time override). */
+/** Minimal record shape the merge reads — type (to match a user item), the
+ *  confirmed-healthy timestamp (the 90-day on_time override), and
+ *  customInputs (read only for the minor-item types below — Consolidated
+ *  model). */
 export interface MergeRecordLike {
   type: string;
   confirmedHealthyAt?: number;
+  customInputs?: Record<string, unknown> | null;
+}
+
+/** Consolidated Upkeep scoring model: catalog-matched minor inspection
+ *  fields that score automatically at the flat weight-10 "other" bucket
+ *  when flagged yellow/red — never when green (green produces no entry at
+ *  all, so a fully-green inspection doesn't dilute the weighted average).
+ *  `maintenance_records.type` for these is prefixed "minor_" so they never
+ *  collide with the 5 real MaintenanceType rows, and so
+ *  categoryWeightForItem (utils/healthScore.ts) can't accidentally match
+ *  one to a real category. Written by
+ *  convex/lib/inspectionHealth.ts's deriveCoreGrades via
+ *  convex/maintenance.ts's mergeMechanicGradeIntoRecord. */
+export const MINOR_ITEM_RECORD_TYPES: ReadonlyArray<{ type: string; label: string }> = [
+  { type: "minor_cool_condition", label: "Coolant Condition" },
+  { type: "minor_trans", label: "Transmission Fluid" },
+  { type: "minor_ps", label: "Power Steering Fluid" },
+  { type: "minor_filter", label: "Air / Cabin Filter" },
+  { type: "minor_bf_condition", label: "Brake Fluid Condition" },
+];
+
+/** Build the extra weight-10 minor-item cards from raw records — one per
+ *  flagged (yellow/red) catalog-matched minor field, none for green
+ *  (absent) or unmatched (freeform, never written here at all) findings. */
+function buildMinorItems(records: readonly MergeRecordLike[] | undefined): MaintenanceItem[] {
+  if (!records?.length) return [];
+  const out: MaintenanceItem[] = [];
+  for (const { type, label } of MINOR_ITEM_RECORD_TYPES) {
+    const record = records.find((r) => r.type === type);
+    const grade = record?.customInputs?.mechanicGrade as "g" | "y" | "r" | undefined;
+    if (!grade || grade === "g") continue;
+    const reason = (record?.customInputs?.mechanicGradeReason as string | undefined)
+      ?? `${label} flagged on eye-check`;
+    out.push({
+      id: `user-${type}`,
+      serviceName: label,
+      description: reason,
+      detail: grade === "r" ? "Overdue" : "Needs attention",
+      status: grade === "r" ? "overdue" : "needs_attention",
+    });
+  }
+  return out;
 }
 
 export interface BuildMergedMaintenanceInput {
@@ -190,6 +234,10 @@ export function buildMergedMaintenanceItems(
   // Inspection record (excluded from the default loop).
   const inspectionItem = userItems.get("inspection");
   if (inspectionItem) result.push(inspectionItem);
+
+  // Consolidated model: catalog-matched minor items, weight-10, only when
+  // flagged (see buildMinorItems above).
+  result.push(...buildMinorItems(records));
 
   // Mechanic-submitted job recommendations as urgent cards.
   if (driverRecommendations && driverRecommendations.length > 0) {

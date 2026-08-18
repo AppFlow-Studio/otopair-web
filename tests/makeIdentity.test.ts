@@ -80,3 +80,68 @@ describe("passesI1ReadGuardNamed", () => {
     ).toBe(true);
   });
 });
+
+// ─── Corporate-family read escape (operator decision, Aug 11 2026) ──────────
+//
+// The strict same-make read guard was hiding parts we had already found,
+// verified and priced, because shared corporate storefronts stamp them with a
+// sibling brand. Live counts on third-bird-914: Enclave 4/13 fitments,
+// Pacifica 7/26, QX60 4/16 (engine oil among them), Nautilus 3/5, RDX 2/15.
+describe("corporate-family read escape", () => {
+  const ids = { part: "id_part" as any, config: "id_config" as any };
+
+  const guard = (partMakeName: string, configMakeName: string, oemPartNumber: string) =>
+    passesI1ReadGuardNamed({
+      partMakeId: ids.part,
+      configMakeId: ids.config,
+      partMakeName,
+      configMakeName,
+      oemPartNumber,
+    });
+
+  it("shows the sibling-stamped parts that were hidden from booking", () => {
+    // GM: one storefront serves Chevrolet/GMC/Cadillac/Buick (the Enclave).
+    expect(guard("Chevrolet", "Buick", "88864542")).toBe(true);
+    expect(guard("GMC", "Cadillac", "19432351")).toBe(true);
+    // Mopar: the Pacifica's coolant/filters stamped Dodge or Jeep.
+    expect(guard("Dodge", "Chrysler", "68163848AB")).toBe(true);
+    expect(guard("Jeep", "Ram", "68218890AB")).toBe(true);
+    // Nissan/Infiniti: the QX60's own engine oil.
+    expect(guard("Nissan", "Infiniti", "999PK-000W20N")).toBe(true);
+    // Honda/Acura: the RDX's cabin filter + oil filter.
+    expect(guard("Honda", "Acura", "80292-SDA-407")).toBe(true);
+    // Ford/Lincoln: the Nautilus.
+    expect(guard("Ford", "Lincoln", "FL-820-S")).toBe(true);
+    // VAG: an MQB part genuinely fits both.
+    expect(guard("Audi", "Volkswagen", "5Q0129620I")).toBe(true);
+  });
+
+  it("STILL blocks a genuinely foreign part — the property that must not regress", () => {
+    // The live contamination case: Motorcraft battery scraped onto an Alfa.
+    expect(guard("Ford", "Alfa Romeo", "BXT-94RH7-730")).toBe(false);
+    // Different families, plausible-looking numbers.
+    expect(guard("Audi", "Alfa Romeo", "8R0698151L")).toBe(false);
+    expect(guard("Toyota", "Honda", "90915-YZZF2")).toBe(false);
+    expect(guard("BMW", "Mercedes-Benz", "11428593186")).toBe(false);
+  });
+
+  it("keeps the foreign-SIGNATURE backstop inside a family", () => {
+    // Same family by name, but the number carries another marque's
+    // signature — the escape re-runs the full guard, so it still drops.
+    // A Toyota 5-5 number on a Ford-family config, stamped Lincoln.
+    expect(guard("Lincoln", "Ford", "90915-YZZF2")).toBe(false);
+  });
+
+  it("is reversible with PARTS_I1_FAMILY_READ=off", () => {
+    const prev = process.env.PARTS_I1_FAMILY_READ;
+    process.env.PARTS_I1_FAMILY_READ = "off";
+    try {
+      expect(guard("Chevrolet", "Buick", "88864542")).toBe(false);
+      // Same-make duplicate-row bridging is unaffected by the switch.
+      expect(guard("Buick", "BUICK", "88864542")).toBe(true);
+    } finally {
+      if (prev === undefined) delete process.env.PARTS_I1_FAMILY_READ;
+      else process.env.PARTS_I1_FAMILY_READ = prev;
+    }
+  });
+});

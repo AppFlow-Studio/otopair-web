@@ -45,6 +45,7 @@ interface LiveAlertCardProps {
 export function LiveAlertCard({ alert, onAfterAction }: LiveAlertCardProps) {
   const router = useRouter();
   const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+  const respondToPickupRequest = useMutation(api.bookings.respondToPickupRequest);
   const markNoShow = useMutation(api.bookings.markPostThresholdNoShow);
   const answerOverrunExtension = useMutation(api.bookings.answerOverrunExtension);
   const dismissManualSchedulingAlert = useMutation(
@@ -99,6 +100,11 @@ export function LiveAlertCard({ alert, onAfterAction }: LiveAlertCardProps) {
       {alert.customerName && (
         <p className="mt-1 text-sm font-medium text-gray-900">
           {alert.customerName}
+          {alert.kind === "pickup_request" && (
+            <span className="ml-2 text-xs font-normal text-red-600">
+              · wants their car back
+            </span>
+          )}
           {alert.kind === "on_my_way" && alert.minutesLate != null && (
             <span className="ml-2 text-xs font-normal text-emerald-700">
               · {alert.minutesLate}m late · said &quot;on my way&quot;
@@ -121,15 +127,66 @@ export function LiveAlertCard({ alert, onAfterAction }: LiveAlertCardProps) {
         <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{metaLine}</p>
       )}
 
-      {alert.reason && alert.kind === "manual_scheduling" && (
-        <p className="mt-1 text-xs italic text-gray-500 line-clamp-2">
-          {alert.reason}
-        </p>
-      )}
+      {alert.reason &&
+        (alert.kind === "manual_scheduling" || alert.kind === "pickup_request") && (
+          <p className="mt-1 text-xs italic text-gray-500 line-clamp-2">
+            {alert.reason}
+          </p>
+        )}
 
       {error && <p className="mt-2 text-xs text-red-600">{error}</p>}
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
+        {alert.kind === "pickup_request" && alert.bookingId && (
+          <>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() =>
+                run(() =>
+                  respondToPickupRequest({
+                    bookingId: alert.bookingId as Id<"bookings">,
+                    response: "acknowledged",
+                  }),
+                )
+              }
+              className="inline-flex items-center rounded-md bg-gray-800 px-3 py-1.5 text-xs font-semibold text-white hover:bg-gray-900 disabled:opacity-50"
+            >
+              Acknowledge
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() =>
+                run(() =>
+                  respondToPickupRequest({
+                    bookingId: alert.bookingId as Id<"bookings">,
+                    response: "bringing_out",
+                  }),
+                )
+              }
+              className="inline-flex items-center rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+            >
+              Bringing it out
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() =>
+                run(() =>
+                  respondToPickupRequest({
+                    bookingId: alert.bookingId as Id<"bookings">,
+                    response: "declined",
+                  }),
+                )
+              }
+              className="inline-flex items-center rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+            >
+              Can&apos;t release yet
+            </button>
+          </>
+        )}
+
         {alert.kind === "on_my_way" && alert.bookingId && (
           <button
             type="button"

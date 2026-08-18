@@ -23,6 +23,8 @@ import {
   X,
 } from "lucide-react";
 import ElapsedTimer from "./elapsed-timer";
+import FlagIssueSheet from "./flag-issue-sheet";
+import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import OverrunExtendCard from "./overrun-extend-card";
 
 type DraftPhoto = {
@@ -93,7 +95,17 @@ export function NowWorkingPane({
   const saveDraft = useMutation(api.bookings.saveInProgressDraft);
 
   const [paused, setPaused] = useState(false);
+  const [flagOpen, setFlagOpen] = useState(false);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  /* Open blockers on this job (Flag Issue spec, §5). Rendered as a banner so a
+     stalled job is visibly stalled rather than looking like it's being worked. */
+  const blockers = useQuery(api.jobBlockers.listForBooking, { bookingId });
+  const resolveBlocker = useMutation(api.jobBlockers.resolveBlocker);
+  const clockPausedByBlocker = Boolean(
+    blockers?.blockers.some((b) => b.resolved_at == null && b.stops_clock),
+  );
 
   const serverNotes = job?.jobActuals?.inProgressNotes ?? "";
   const serverPhotos = useMemo(
@@ -319,6 +331,52 @@ export function NowWorkingPane({
         </div>
       </header>
 
+      {/* An open blocker has to be visible on the job itself, or the pane keeps
+          saying "Now working" about a car nobody is touching. Resolving it here
+          is what closes the clock span (Flag Issue spec, §5). */}
+      {blockers && blockers.openCount > 0 ? (
+        <div className="mt-4 space-y-2">
+          {blockers.blockers
+            .filter((b) => b.resolved_at == null)
+            .map((b) => (
+              <div
+                key={String(b._id)}
+                className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-amber-200">
+                    {b.label}
+                    {b.stops_clock ? (
+                      <span className="ml-2 rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-100">
+                        clock paused
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="mt-0.5 text-[13px] leading-relaxed text-amber-100/80">
+                    {b.note}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await resolveBlocker({ blockerId: b._id });
+                      onToast?.("Unblocked — clock running again");
+                    } catch (err: unknown) {
+                      onToast?.(
+                        err instanceof Error ? err.message : "Could not resolve",
+                      );
+                    }
+                  }}
+                  className="shrink-0 rounded-lg border border-amber-300/40 bg-amber-300/10 px-3 py-1.5 text-[13px] font-semibold text-amber-100 transition-colors hover:bg-amber-300/20"
+                >
+                  Unblocked
+                </button>
+              </div>
+            ))}
+        </div>
+      ) : null}
+
       {job === undefined ? (
         <div className="flex flex-1 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
@@ -333,7 +391,9 @@ export function NowWorkingPane({
             <p className="text-sm text-slate-400">Elapsed</p>
             <ElapsedTimer
               startedAtMs={startedAt}
-              paused={paused}
+              // Stop on a clock-stopping blocker too, so the pane doesn't
+              // contradict the worked-minutes figure the server records.
+              paused={paused || clockPausedByBlocker}
               className={elapsedTimerClass}
             />
             <p className="text-sm text-slate-400">
@@ -341,7 +401,11 @@ export function NowWorkingPane({
                 ? `Started ${formatClockTime(startedAt)}`
                 : "Not started yet"}
               {etaMs != null ? ` · ETA ${formatClockTime(etaMs)}` : ""}
-              {paused ? " · Paused" : ""}
+              {clockPausedByBlocker
+                ? " · Paused (blocked)"
+                : paused
+                  ? " · Paused"
+                  : ""}
             </p>
             <p className="mt-2 text-lg font-medium text-slate-100">
               {job.vehicle}
@@ -549,7 +613,7 @@ export function NowWorkingPane({
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 py-5">
             <button
               type="button"
-              onClick={() => onToast?.("Flag issue — coming soon")}
+              onClick={() => setFlagOpen(true)}
               className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3.5 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-white/10"
             >
               <Flag className="h-4 w-4" /> Flag issue
@@ -564,6 +628,31 @@ export function NowWorkingPane({
           </footer>
         </>
       )}
+
+      {flagOpen ? (
+        <FlagIssueSheet
+          bookingId={bookingId}
+          onClose={() => setFlagOpen(false)}
+          onAddScope={() => setScopeOpen(true)}
+          onToast={onToast}
+          // A damage report has to attach real evidence, and these are the
+          // photos the mechanic already took on this job.
+          jobPhotos={serverPhotos}
+        />
+      ) : null}
+
+      {/* The same dialog the booking detail panel opens for "Add unforeseen
+          scope" — one component owns the quote seeding, so the two entry points
+          can't drift (MidJobScopeDialog). */}
+      <MidJobScopeDialog
+        open={scopeOpen}
+        bookingId={bookingId}
+        onClose={() => setScopeOpen(false)}
+        onSubmitted={(msg) => {
+          setScopeOpen(false);
+          onToast?.(msg);
+        }}
+      />
     </div>
   );
 }

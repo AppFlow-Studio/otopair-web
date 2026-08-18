@@ -14,6 +14,7 @@
 // =============================================================================
 import { v } from "convex/values";
 import { query, action, internalQuery, internalMutation } from "./_generated/server";
+import { effectiveBookingTotalDollars } from "../lib/booking-total";
 import { api, internal } from "./_generated/api";
 import { requireDirector } from "./directorGate";
 import {
@@ -527,7 +528,9 @@ export const bookings = query({
           services,
           scheduledDate: b.scheduled_date ?? null,
           created: b.created_at ?? b._creationTime,
-          total: b.total_cost ?? null,
+          // Effective total: surfaces an approved-but-not-captured re-quote,
+          // else the original/reconciled total_cost. See lib/booking-total.
+          total: effectiveBookingTotalDollars(b),
           laborCost: b.labor_cost ?? null,
           partsCost: b.parts_cost ?? null,
         };

@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  FluidCatalogSelectField,
+  FLUID_KIND_BY_KEY,
+} from "@/components/fluid-catalog-select-field";
+import {
   Camera,
   Check,
   ChevronDown,
@@ -9,7 +13,9 @@ import {
   ChevronRight,
   ChevronUp,
   Download,
+  EyeOff,
   Loader2,
+  Plus,
   Trash2,
 } from "lucide-react";
 import { useMutation, useQuery, useAction } from "convex/react";
@@ -38,6 +44,9 @@ import {
   gatherFindings,
   getDirtyIncompleteZones,
   INSPECTION_NAV_ZONE_IDS,
+  deriveTierInspectionScope,
+  isBrakeDetailFieldRelevant,
+  isFieldApplicableToZone,
   isFieldRequiredForZone,
   isSpecPrefillField,
   normalizeTireSize,
@@ -48,26 +57,39 @@ import {
   INSPECTION_ZONES,
   INSPECTION_ZONES_BY_ID,
   requiredZonesForBooking,
+  requiresRotorStampPhoto,
   toggleInspectionTreadMode,
   TRI_LABELS,
+  triLabelFor,
   validateZoneForCompletion,
+  WARNING_LIGHT_PICKER_OPTIONS,
   type BrakeAxleScope,
+  type FieldUnavailableStatus,
   type InspectionField,
   type InspectionState,
   type SpecPrefillEntry,
   type TriValue,
+  type WarningLightEntry,
+  type WarningLightSelection,
+  type ZoneCompletionContext,
   type ZoneId,
   type ZoneState,
 } from "@/lib/inspection-template";
 import {
+  BRAKE_FLUID_OPTIONS,
   BRAKE_PAD_BRAND_OPTIONS,
+  COOLANT_TYPE_OPTIONS,
+  OIL_TYPE_OPTIONS,
+  OIL_VISCOSITY_OPTIONS,
   OTHER_INSPECTION_OPTION,
+  POWER_STEERING_FLUID_OPTIONS,
   resolveInspectionOption,
   TIRE_BRAND_OPTIONS,
   TIRE_MODEL_OPTIONS,
   tireModelOptionsForBrand,
   tireSizeOptionsFromList,
   TIRE_SIZE_OPTIONS,
+  TRANSMISSION_FLUID_OPTIONS,
   type InspectionOption,
 } from "@/lib/inspection-options";
 import {
@@ -108,8 +130,20 @@ export type InspectionInputPayload = {
     descriptors?: Record<string, string[]>;
     text?: Record<string, string>;
     select?: Record<string, string>;
-    photo_ids?: string[];
+    statuses?: Record<string, FieldUnavailableStatus>;
+    methods?: Record<string, string>;
+    photo_ids?: Id<"_storage">[];
+    photo_tags?: Record<string, "general" | "rotor_stamp">;
+    lights?: Record<
+      string,
+      Array<{
+        light: Exclude<WarningLightSelection, "" | "not_sure_which">;
+        other_text?: string;
+      }>
+    >;
   }>;
+  odometer?: number;
+  lift_status?: "yes" | "no";
   findings_attention: Array<{ label: string; zone: string }>;
   findings_monitor: Array<{ label: string; zone: string }>;
 };
@@ -118,7 +152,7 @@ type ResolvedSuggestion = {
   key: string;
   label: string;
   urgency: "soon" | "within_3_months" | "next_visit";
-  reason: string;
+  reasons: string[];
   serviceId: Id<"services"> | null;
   serviceName: string | null;
 };
@@ -166,6 +200,73 @@ const TRI_DOT: Record<TriValue, string> = {
   r: "bg-red-500 border-red-500",
 };
 
+// Matches the green/blue/red answer-choice palette in pre-job-survey-dialog.tsx
+// (ConditionButtons' conditionPalette), used for tri fields rendered as pills.
+const TRI_PILL_ACTIVE_CLASS: Record<TriValue, string> = {
+  g: "border-emerald-300 bg-emerald-50 text-emerald-700",
+  y: "border-sky-300 bg-sky-50 text-sky-700",
+  r: "border-red-300 bg-red-50 text-red-700",
+};
+
+// Fields that stay on screen regardless of the booked service's scope —
+// only their required-ness is gated (isFieldRequiredForZone), not whether
+// they render. Applicability (isFieldApplicableToZone) still gates payload
+// derivation elsewhere in lib/inspection-template.ts, so the visibility
+// override lives here, at the render layer, rather than in that function.
+// Tire 5 identity fields (first visit / tread increase) started this
+// pattern; wheel-off brake/rotor fields (aside from the ones below, which
+// still depend on another field in the same corner rather than scope) and
+// steering/suspension play join it so a missing axle-scope selection on the
+// booking no longer hides the entire brake section — a mechanic can still
+// record what they see even when the service hasn't specified which axle
+// it covers yet.
+const ALWAYS_VISIBLE_FIELDS = new Set([
+  "tire_brand",
+  "tire_model",
+  "tire_size",
+  "dot_code",
+  "run_flat",
+  "pad_inner",
+  "pad_outer",
+  "rotor_applicable",
+  "caliper",
+  "brake_hose",
+  "pad_brand",
+  "steering_play",
+  "ball_joint_play",
+  "wheel_bearing_play",
+]);
+
+// Wheel-off fields that also stay visible regardless of scope, but that
+// still depend on another answer in the same corner — no rotor detail once
+// "no rotor / drum brake" is selected, no measurement-method field until
+// something's actually been measured. See isBrakeDetailFieldRelevant.
+const SCOPE_INDEPENDENT_BRAKE_DETAIL_FIELDS = new Set([
+  "rotor",
+  "rotor_stamp",
+  "desc",
+  "pad_method",
+  "rotor_tool",
+]);
+
+// "Applicable rotor present" gates whether these fields are grayed out —
+// same pattern as pad measurement method being gated by pad_inner/pad_outer
+// actually having a reading — not whether they're shown at all.
+const ROTOR_GATE_FIELDS = new Set(["rotor", "rotor_tool", "rotor_stamp", "desc"]);
+
+// Tier 4 fields record what's being installed, not an observed condition —
+// they get a "Not available" option in the combobox itself (alongside
+// "Other / not listed") rather than a separate unavailable toggle.
+const NOT_AVAILABLE_OPTION = "__not_available__";
+const TIER4_SPEC_FIELDS = new Set([
+  "oil_viscosity",
+  "oil_type",
+  "coolant_type",
+  "brake_fluid_type",
+  "transmission_fluid_type",
+  "power_steering_fluid_type",
+]);
+
 const URGENCY_LABEL: Record<string, string> = {
   soon: "Soon",
   within_3_months: "Within 3 months",
@@ -190,7 +291,7 @@ function userFacingInspectionError(error: unknown, fallback: string): string {
 function serverValidationTarget(
   message: string,
 ): { zoneId: ZoneId; fieldKey: string } | null {
-  const lower = message.toLowerCase();
+  const lower = message.toLowerCase().replace(/[^a-z0-9]+/g, " ");
   const position =
     lower.includes("front left")
       ? "FL"
@@ -210,14 +311,22 @@ function serverValidationTarget(
     return { zoneId: position ?? "FL", fieldKey: "rotor" };
   }
   if (lower.includes("pad thickness")) {
-    return { zoneId: position ?? "FL", fieldKey: "pad" };
+    return { zoneId: position ?? "FL", fieldKey: "pad_inner" };
   }
-  if (lower.includes("tire brand")) return { zoneId: "FL", fieldKey: "tire_brand" };
+  if (lower.includes("tire brand")) {
+    return { zoneId: position ?? "FL", fieldKey: "tire_brand" };
+  }
   if (lower.includes("tire size")) {
     return { zoneId: position === "RL" ? "RL" : "FL", fieldKey: "tire_size" };
   }
   if (lower.includes("tire condition")) {
-    return { zoneId: position === "RL" ? "RL" : "FL", fieldKey: "wear" };
+    return { zoneId: position ?? "FL", fieldKey: "wear" };
+  }
+  if (lower.includes("tire air pressure")) {
+    return { zoneId: position ?? "FL", fieldKey: "psi" };
+  }
+  if (lower.includes("brake visual")) {
+    return { zoneId: position ?? "FL", fieldKey: "brake_visual" };
   }
   if (lower.includes("oil viscosity")) {
     return { zoneId: "ENG", fieldKey: "oil_viscosity" };
@@ -299,7 +408,9 @@ function MultiPointInspectionDialogBody({
   // passport reads "Specs incomplete" instead of a bogus "First visit".
   const specsIncomplete = !!passportData && !passportData.is_complete;
   const hasPriorVisits = (passportData?.recent_services?.length ?? 0) > 0;
-  const isFirstVisit = specsIncomplete && !hasPriorVisits;
+  const isFirstVisit =
+    passportData?.is_first_shop_visit ??
+    (passportData ? specsIncomplete && !hasPriorVisits : true);
 
   const savedInspection = useQuery(
     api.inspections.getByBooking,
@@ -368,6 +479,7 @@ function MultiPointInspectionDialogBody({
     zoneId: Exclude<ZoneId, "OWNER">;
     storageId: string;
     uploadToken: string;
+    tag?: "general" | "rotor_stamp";
   }) => Promise<void>;
   const generateInspectionPdf = useAction(generateInspectionPdfRef) as (args: {
     bookingId: string;
@@ -399,9 +511,39 @@ function MultiPointInspectionDialogBody({
   } | null>(null);
   const photoPreviewsRef = useRef(photoPreviews);
 
+  // ---- autosave ----------------------------------------------------------
+  // Draft persistence as the mechanic fills in fields: a debounced write to
+  // onSaveDraft (savePrejob) fires ~1s after the last change so their input is
+  // registered without hunting for a save button. The header shows a
+  // "Saving… / Saved" indicator. Owner-profile answers keep their own explicit
+  // confirm flow and are intentionally excluded (savePrejob doesn't persist
+  // them).
+  const [saveStatus, setSaveStatus] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const savedSignatureRef = useRef<string | null>(null);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-field autosave state, keyed `${zoneId}::${fieldKey}`. A field flips to
+  // "saving" the instant it's edited, then to "saved"/"error" when the shared
+  // debounced draft write settles — so every answer carries its own proof it's
+  // banked. Held here (not per-zone) so a zone-switch doesn't drop indicators.
+  const [fieldSaveState, setFieldSaveState] = useState<
+    Record<string, FieldSaveState>
+  >({});
+  const markFieldSaving = useCallback((zoneId: ZoneId, fieldKey: string) => {
+    setFieldSaveState((prev) => ({
+      ...prev,
+      [`${zoneId}::${fieldKey}`]: "saving",
+    }));
+  }, []);
+  // The queued draft write, exposed so a close/unmount can flush it immediately
+  // instead of losing the last edit inside the debounce window.
+  const pendingSaveRef = useRef<null | (() => Promise<void>)>(null);
+
   // Global header fields that don't belong to a single wheel.
   const [mileage, setMileage] = useState("");
   const [mileageError, setMileageError] = useState("");
+  const [liftStatus, setLiftStatus] = useState<"yes" | "no" | "">("");
   const [inspectionStatus, setInspectionStatus] = useState<InspectionStatus | "">("");
   const [inspectionExpires, setInspectionExpires] = useState("");
   const [modAftermarket, setModAftermarket] = useState(false);
@@ -440,6 +582,15 @@ function MultiPointInspectionDialogBody({
   const requiredSet = useMemo(() => new Set(requiredZones), [requiredZones]);
   const baselineMileage =
     prefillData?.mileage ?? passportData?.passport.mileage ?? null;
+  // An odometer physically can't run backwards, so a new reading below the
+  // vehicle's stored mileage is always an error — enforced live as the mechanic
+  // types and again as a hard gate on every "continue" path (submit + save).
+  const odometerBelowBaseline = (value: string) =>
+    typeof baselineMileage === "number" &&
+    value.trim() !== "" &&
+    Number(value) < baselineMileage;
+  const odometerTooLowMessage = () =>
+    `Odometer can't be below the current ${(baselineMileage as number).toLocaleString()} mi reading.`;
   const brakeScope = useMemo<BrakeAxleScope>(
     () =>
       savedBrakeScope?.hasBrakeWork
@@ -450,10 +601,10 @@ function MultiPointInspectionDialogBody({
           }
         : {
             hasBrakeWork: bookingServices.some((name) =>
-              /brake|rotor/i.test(name),
+              /brake pad|rotor replacement/i.test(name),
             ),
-            front: true,
-            rear: true,
+            front: false,
+            rear: false,
           },
     [bookingServices, savedBrakeScope],
   );
@@ -462,8 +613,18 @@ function MultiPointInspectionDialogBody({
       serviceNames: bookingServices,
       brakeScope,
       tireReplacementPositions,
+      isFirstShopVisit: isFirstVisit,
+      priorTreadReadings: {
+        FL: passportData?.passport.tires.tread_depths?.front_left?.reported_min_32nds,
+        FR: passportData?.passport.tires.tread_depths?.front_right?.reported_min_32nds,
+        RL: passportData?.passport.tires.tread_depths?.rear_left?.reported_min_32nds,
+        RR: passportData?.passport.tires.tread_depths?.rear_right?.reported_min_32nds,
+      },
+      rotorPhotoEvidence: passportData?.rotor_photo_evidence,
+      inspectionState: state,
+      liftStatus,
     }),
-    [bookingServices, brakeScope, tireReplacementPositions],
+    [bookingServices, brakeScope, tireReplacementPositions, isFirstVisit, passportData, state, liftStatus],
   );
 
   useEffect(() => {
@@ -505,11 +666,22 @@ function MultiPointInspectionDialogBody({
           descriptors: { ...base.descriptors, ...(z.descriptors ?? {}) },
           text: { ...base.text, ...(z.text ?? {}) },
           select: { ...base.select, ...(z.select ?? {}) },
+          statuses: { ...base.statuses, ...(z.statuses ?? {}) },
+          methods: { ...base.methods, ...(z.methods ?? {}) },
           photoIds: Array.isArray(z.photo_ids) ? [...z.photo_ids] : [],
+          photoTags: { ...base.photoTags, ...(z.photo_tags ?? {}) },
+          lights: { ...base.lights, ...(z.lights ?? {}) },
         };
       }
       const pf = prefillData;
-      if (typeof pf?.mileage === "number") setMileage(String(pf.mileage));
+      if (typeof savedInspection.odometer === "number") {
+        setMileage(String(savedInspection.odometer));
+      } else if (typeof pf?.mileage === "number") {
+        setMileage(String(pf.mileage));
+      }
+      if (savedInspection.lift_status === "yes" || savedInspection.lift_status === "no") {
+        setLiftStatus(savedInspection.lift_status);
+      }
       if (pf?.inspection?.status) setInspectionStatus(pf.inspection.status);
       if (pf?.inspection?.expires_at) setInspectionExpires(pf.inspection.expires_at);
       if (pf?.modifications?.has_mods) setModAftermarket(true);
@@ -635,19 +807,6 @@ function MultiPointInspectionDialogBody({
     [requiredZones, state],
   );
 
-  const unresolvedParts = useMemo(
-    () =>
-      (partsToVerify?.items ?? []).filter(
-        (it: PartVerifyItem) => !verifiedKeys.has(`${it.serviceId}:${it.roleKey}`),
-      ),
-    [partsToVerify, verifiedKeys],
-  );
-  const allPartsVerified = unresolvedParts.length === 0;
-  // Parts fill-in is a MANDATORY first step: the mechanic must confirm every
-  // missing/low-confidence OEM part before the inspection UI is available.
-  const mustVerifyPartsFirst =
-    (partsToVerify?.items?.length ?? 0) > 0 && !allPartsVerified;
-
   // Findings + suggestions are evaluated from COMPLETED zones only, so a finding
   // surfaces the moment its zone is marked complete (not after the whole
   // inspection) and never counts un-confirmed scratch input.
@@ -704,6 +863,7 @@ function MultiPointInspectionDialogBody({
           }
         : null,
       nextMechanicTip: nextTip.trim() || null,
+      completionContext,
     });
     const inspection: InspectionInputPayload = {
       template_version: state.template_version,
@@ -715,8 +875,29 @@ function MultiPointInspectionDialogBody({
         descriptors: zs!.descriptors,
         text: zs!.text,
         select: zs!.select,
-        photo_ids: zs!.photoIds,
+        statuses: zs!.statuses,
+        methods: zs!.methods,
+        photo_ids: zs!.photoIds as Id<"_storage">[],
+        photo_tags: zs!.photoTags,
+        lights: Object.fromEntries(
+          Object.entries(zs!.lights)
+            .map(([key, entries]) => [
+              key,
+              entries
+                .filter((e) => !!e.light)
+                .map((e) => ({
+                  light: e.light as Exclude<
+                    WarningLightSelection,
+                    "" | "not_sure_which"
+                  >,
+                  other_text: e.otherText,
+                })),
+            ])
+            .filter(([, entries]) => (entries as unknown[]).length > 0),
+        ),
       })),
+      odometer: mileage.trim() ? Number(mileage) : undefined,
+      lift_status: liftStatus || undefined,
       findings_attention: f.attention,
       findings_monitor: f.monitor,
     };
@@ -730,7 +911,134 @@ function MultiPointInspectionDialogBody({
     modNotes,
     modAffectedSystems,
     nextTip,
+    liftStatus,
+    completionContext,
   ]);
+
+  // Compact signature of everything savePrejob persists — a change here is what
+  // arms the autosave debounce. Owner answers are excluded on purpose (they
+  // have their own confirm flow and savePrejob doesn't store them).
+  const autosaveSignature = useMemo(
+    () =>
+      JSON.stringify({
+        zones: state.zones,
+        mileage,
+        liftStatus,
+        inspectionStatus,
+        inspectionExpires,
+        modAftermarket,
+        modNotes,
+        modAffectedSystems,
+        nextTip,
+      }),
+    [
+      state.zones,
+      mileage,
+      liftStatus,
+      inspectionStatus,
+      inspectionExpires,
+      modAftermarket,
+      modNotes,
+      modAffectedSystems,
+      nextTip,
+    ],
+  );
+
+  useEffect(() => {
+    if (!hydrated || !bookingId || !onSaveDraft) return;
+    // First run after hydration is the baseline — a resumed draft is already
+    // persisted, so don't re-save it (or flash "Saving…") on open.
+    if (savedSignatureRef.current === null) {
+      savedSignatureRef.current = autosaveSignature;
+      return;
+    }
+    if (autosaveSignature === savedSignatureRef.current) return;
+
+    setSaveStatus("saving");
+    const signatureToPersist = autosaveSignature;
+
+    // The actual write, reused by both the debounce timer and an immediate
+    // flush on close/unmount. Marks every in-flight field saved (or failed) so
+    // the per-field checkmarks resolve in lockstep with the draft write.
+    const runSave = async () => {
+      try {
+        const { prejob, inspection } = buildPayloads();
+        await onSaveDraft(prejob, inspection);
+        savedSignatureRef.current = signatureToPersist;
+        setSaveStatus("saved");
+        setFieldSaveState((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const key in next) {
+            if (next[key] === "saving") {
+              next[key] = "saved";
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      } catch {
+        // Non-blocking: the mechanic can still use "Save & close". A soft
+        // "Not saved yet" tells them autosave didn't take (e.g. the booking
+        // scope isn't resolved yet).
+        setSaveStatus("error");
+        setFieldSaveState((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const key in next) {
+            if (next[key] === "saving") {
+              next[key] = "error";
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      } finally {
+        pendingSaveRef.current = null;
+      }
+    };
+    pendingSaveRef.current = runSave;
+
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      autosaveTimerRef.current = null;
+      void runSave();
+    }, 1000);
+
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    };
+  }, [hydrated, bookingId, onSaveDraft, autosaveSignature, buildPayloads]);
+
+  // Flush a queued draft write right now — used when the mechanic closes the
+  // dialog or the tab/app is about to unload, so an edit made inside the 1s
+  // debounce window is still persisted instead of silently dropped.
+  const flushPendingSave = useCallback(() => {
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    const run = pendingSaveRef.current;
+    if (run) void run();
+  }, []);
+
+  // Last-resort safety net: if the tab/app is closed while a save is still
+  // pending, flush it and warn so the mechanic can stay long enough for the
+  // write to land. Only fires when there's genuinely unsaved work.
+  useEffect(() => {
+    const handler = (event: BeforeUnloadEvent) => {
+      if (pendingSaveRef.current || saveStatus === "saving") {
+        flushPendingSave();
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [saveStatus, flushPendingSave]);
+
+  // Flush on unmount too (dialog torn down without an explicit "Save & close").
+  useEffect(() => () => flushPendingSave(), [flushPendingSave]);
 
   const persistOwnerAnswers = useCallback(async () => {
     if (!bookingId || !ownerConfirmed) return;
@@ -770,6 +1078,19 @@ function MultiPointInspectionDialogBody({
       document
         .getElementById("inspection-zone-panel")
         ?.scrollIntoView({ behavior: "auto", block: "start" }),
+    );
+  }
+
+  // User-initiated zone selection (tapping a part on the car diagram, or the
+  // Owner-profile chip): switch zones and smoothly bring the panel into view so
+  // the mechanic sees the section scroll down to them instead of having to hunt
+  // for it below the diagram.
+  function selectZone(zoneId: ZoneId | "PARTS") {
+    setActiveZone(zoneId);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("inspection-zone-panel")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
     );
   }
 
@@ -818,6 +1139,13 @@ function MultiPointInspectionDialogBody({
 
   function validateBeforePersistence(action: SubmitIntent): boolean {
     setError("");
+    const scopeError = deriveTierInspectionScope(completionContext).bookingScopeError;
+    if (scopeError) {
+      setError(scopeError);
+      setShowResults(false);
+      setActiveZone("FL");
+      return false;
+    }
     if (ownerDirty && !ownerConfirmed) {
       setError(
         'Tap "Mark zone complete" in Owner profile before saving these answers.',
@@ -868,12 +1196,18 @@ function MultiPointInspectionDialogBody({
       );
       return false;
     }
-    if (
-      action === "start" &&
-      typeof baselineMileage === "number" &&
-      Number(mileage) < baselineMileage
-    ) {
-      const message = `Odometer cannot be lower than the stored ${baselineMileage.toLocaleString()} mi.`;
+    if (action === "start" && !liftStatus) {
+      setError("Select whether the vehicle is on a lift before submitting.");
+      requestAnimationFrame(() =>
+        document.getElementById("inspection-lift-yes")?.focus(),
+      );
+      return false;
+    }
+    // A backwards odometer is invalid on every continue path — block both
+    // "Submit" and "Save & close" whenever a reading has been entered (an empty
+    // reading is only required for "start", handled above).
+    if (odometerBelowBaseline(mileage)) {
+      const message = odometerTooLowMessage();
       setError(message);
       setMileageError(message);
       requestAnimationFrame(() =>
@@ -886,11 +1220,33 @@ function MultiPointInspectionDialogBody({
   }
 
   async function handleSubmit(action: SubmitIntent) {
+    // Cancel any queued autosave so it doesn't race the explicit submit (and so
+    // the close/unmount flush can't re-fire a stale draft write afterward).
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    pendingSaveRef.current = null;
     if (!validateBeforePersistence(action)) return;
     await persistOwnerAnswers();
     const { prejob, inspection } = buildPayloads();
     try {
       await onSubmit(prejob, inspection, action);
+      // This explicit save persisted everything on screen — resolve any field
+      // still mid-spinner so the mechanic sees each answer landed.
+      savedSignatureRef.current = autosaveSignature;
+      setSaveStatus("saved");
+      setFieldSaveState((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const key in next) {
+          if (next[key] === "saving") {
+            next[key] = "saved";
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     } catch (err) {
       const message = userFacingInspectionError(err, "Could not save inspection.");
       if (message.toLowerCase().includes("mileage")) {
@@ -980,7 +1336,7 @@ function MultiPointInspectionDialogBody({
         recommended_service_id: s.serviceId,
         freeform_service_name: s.serviceId ? null : s.label,
         urgency: s.urgency,
-        reason: s.reason,
+        reason: s.reasons.join("; "),
         visible_to_driver: true,
       }));
       await submitInspectionRecs({
@@ -995,7 +1351,11 @@ function MultiPointInspectionDialogBody({
     }
   }
 
-  async function handlePhotoUpload(id: ZoneId, file: File) {
+  async function handlePhotoUpload(
+    id: ZoneId,
+    file: File,
+    tag: "general" | "rotor_stamp" = "general",
+  ) {
     if (!bookingId || id === "OWNER") return;
     let storageId: string | undefined;
     const uploadToken = crypto.randomUUID();
@@ -1019,6 +1379,7 @@ function MultiPointInspectionDialogBody({
         zoneId: id,
         storageId,
         uploadToken,
+        tag,
       });
       const previewUrl = URL.createObjectURL(file);
       setPhotoPreviews((prev) => ({ ...prev, [storageId!]: previewUrl }));
@@ -1027,6 +1388,7 @@ function MultiPointInspectionDialogBody({
           prev.zones[id] ?? defaultZoneState(INSPECTION_ZONES_BY_ID[id]);
         return patchInspectionZone(prev, id, {
           photoIds: [...current.photoIds, storageId!],
+          photoTags: { ...current.photoTags, [storageId!]: tag },
         });
       });
     } catch {
@@ -1062,6 +1424,9 @@ function MultiPointInspectionDialogBody({
           prev.zones[id] ?? defaultZoneState(INSPECTION_ZONES_BY_ID[id]);
         return patchInspectionZone(prev, id, {
           photoIds: current.photoIds.filter((photoId) => photoId !== storageId),
+          photoTags: Object.fromEntries(
+            Object.entries(current.photoTags).filter(([photoId]) => photoId !== storageId),
+          ),
         });
       });
     } catch (err) {
@@ -1107,7 +1472,12 @@ function MultiPointInspectionDialogBody({
     <>
       <SurveyDialogShell
       open={open}
-      onClose={onClose}
+      onClose={() => {
+        // Bank any edit still sitting in the debounce window before the dialog
+        // tears down, so closing never costs the mechanic their last answer.
+        flushPendingSave();
+        onClose();
+      }}
       title="Multi-point inspection"
       description={bookingSubLabel}
       maxWidthClassName="max-w-2xl"
@@ -1179,8 +1549,14 @@ function MultiPointInspectionDialogBody({
                   inputMode="numeric"
                   value={mileage}
                   onChange={(e) => {
-                    setMileage(e.target.value.replace(/[^0-9]/g, ""));
-                    setMileageError("");
+                    const next = e.target.value.replace(/[^0-9]/g, "");
+                    setMileage(next);
+                    // Flag a backwards odometer the instant it's typed, so the
+                    // mechanic fixes it in place instead of hitting a wall at
+                    // submit time.
+                    setMileageError(
+                      odometerBelowBaseline(next) ? odometerTooLowMessage() : "",
+                    );
                   }}
                   placeholder="—"
                   className="w-24 rounded-lg border border-primary/20 bg-card px-2 py-1 text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none"
@@ -1193,6 +1569,30 @@ function MultiPointInspectionDialogBody({
                 </span>
               ) : null}
             </label>
+            <fieldset>
+              <legend className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Is the vehicle on a lift? <span className="text-red-500">*</span>
+              </legend>
+              <div className="mt-1 flex gap-1.5">
+                {(["yes", "no"] as const).map((value) => (
+                  <button
+                    key={value}
+                    id={value === "yes" ? "inspection-lift-yes" : undefined}
+                    type="button"
+                    aria-pressed={liftStatus === value}
+                    onClick={() => setLiftStatus(value)}
+                    className={cn(
+                      "rounded-lg border px-3 py-1 text-[12px] font-medium capitalize",
+                      liftStatus === value
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-primary/20 text-muted-foreground",
+                    )}
+                  >
+                    {value}
+                  </button>
+                ))}
+              </div>
+            </fieldset>
           </div>
 
           {/* progress ring */}
@@ -1224,6 +1624,10 @@ function MultiPointInspectionDialogBody({
                 Tap a part of the car to inspect it
               </div>
             </div>
+            <SaveStatusIndicator
+              status={saveStatus}
+              enabled={!!bookingId && !!onSaveDraft}
+            />
             <div className="hidden items-center gap-3 sm:flex">
               {(["g", "y", "r"] as TriValue[]).map((c) => (
                 <span key={c} className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -1256,7 +1660,7 @@ function MultiPointInspectionDialogBody({
               activeZone={activeZone === "PARTS" ? null : activeZone}
               isDone={(id) => !!state.zones[id]?.done}
               isRequired={(id) => requiredSet.has(id)}
-              onSelect={setActiveZone}
+              onSelect={selectZone}
             />
           </div>
 
@@ -1264,7 +1668,7 @@ function MultiPointInspectionDialogBody({
           <div className="flex justify-center">
             <button
               type="button"
-              onClick={() => setActiveZone("OWNER")}
+              onClick={() => selectZone("OWNER")}
               className={cn(
                 "inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[12px] font-medium transition-colors",
                 activeZone === "OWNER"
@@ -1321,6 +1725,7 @@ function MultiPointInspectionDialogBody({
               <ZonePanel
                 zoneId={activeZone}
                 zs={zoneState(activeZone)}
+                vin={passportData?.vin ?? null}
                 isFirstVisit={isFirstVisit}
                 isRequired={requiredSet.has(activeZone)}
                 tireSizeOptions={tireSizeOptionsFromList(
@@ -1359,7 +1764,7 @@ function MultiPointInspectionDialogBody({
                 onSharedText={(key, value) =>
                   patchSharedText(activeZone, key, value)
                 }
-                onPhoto={(file) => handlePhotoUpload(activeZone, file)}
+                onPhoto={(file, tag) => handlePhotoUpload(activeZone, file, tag)}
                 onRemovePhoto={(storageId) =>
                   setPhotoToRemove({ zoneId: activeZone, storageId })
                 }
@@ -1376,6 +1781,8 @@ function MultiPointInspectionDialogBody({
                   const index = NAV_ZONE_IDS.indexOf(activeZone);
                   openZoneAtTop(NAV_ZONE_IDS[(index + 1) % NAV_ZONE_IDS.length]);
                 }}
+                fieldSaveState={fieldSaveState}
+                onFieldSaving={(key) => markFieldSaving(activeZone, key)}
               />
             )}
           </div>
@@ -1438,6 +1845,83 @@ function MultiPointInspectionDialogBody({
 // Sub-components
 // ---------------------------------------------------------------------------
 
+// Autosave affordance shown in the progress row: reassures the mechanic their
+// input is registered as they fill in fields, without a manual save step.
+function SaveStatusIndicator({
+  status,
+  enabled,
+}: {
+  status: "idle" | "saving" | "saved" | "error";
+  enabled: boolean;
+}) {
+  if (!enabled) return null;
+  const base =
+    "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors";
+  if (status === "saving") {
+    return (
+      <span className={cn(base, "bg-primary/5 text-muted-foreground")}>
+        <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+      </span>
+    );
+  }
+  if (status === "saved") {
+    return (
+      <span className={cn(base, "bg-emerald-50 text-emerald-700")}>
+        <Check className="h-3 w-3" /> Saved
+      </span>
+    );
+  }
+  if (status === "error") {
+    return (
+      <span className={cn(base, "bg-amber-50 text-amber-700")}>
+        Not saved yet
+      </span>
+    );
+  }
+  // idle: no edits yet — tell the mechanic autosave is on so they trust it.
+  return (
+    <span className={cn(base, "text-muted-foreground")}>
+      Autosaves as you go
+    </span>
+  );
+}
+
+// Per-field save affordance shown right next to the answer the mechanic just
+// entered: a spinner while the debounced draft write is in flight, a green
+// check once the server has it, or an amber "Not saved" if the write failed
+// (autosave keeps retrying on the next edit). This is what lets a mechanic
+// trust that every individual answer is banked before they close the app.
+export type FieldSaveState = "saving" | "saved" | "error";
+
+function FieldSaveBadge({ state }: { state?: FieldSaveState }) {
+  if (!state) return null;
+  if (state === "saving") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+      </span>
+    );
+  }
+  if (state === "saved") {
+    return (
+      <span
+        className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-600"
+        title="Saved — safe to close"
+      >
+        <Check className="h-3 w-3" /> Saved
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-amber-600"
+      title="Not saved yet — this answer will retry on your next edit"
+    >
+      Not saved
+    </span>
+  );
+}
+
 function CarDiagram({
   activeZone,
   isDone,
@@ -1452,6 +1936,12 @@ function CarDiagram({
   return (
     <svg width="300" height="232" viewBox="0 0 300 232" role="group" aria-label="Vehicle inspection map">
       <rect x="92" y="20" width="116" height="192" rx="32" className="fill-primary/[0.04] stroke-primary/15" strokeWidth="1.4" />
+      <path
+        d="M110 72 Q150 60 190 72 L184 106 L116 106 Z"
+        className="fill-primary/10 stroke-primary/15"
+        strokeWidth="1"
+      />
+      <rect x="120" y="150" width="60" height="30" rx="8" className="fill-primary/[0.06] stroke-primary/15" strokeWidth="1" />
       {(Object.keys(DIAGRAM_RECTS) as Array<Exclude<ZoneId, "OWNER">>).map((id) => {
         const r = DIAGRAM_RECTS[id];
         const done = isDone(id);
@@ -1529,6 +2019,7 @@ function CarDiagram({
 function ZonePanel({
   zoneId,
   zs,
+  vin,
   isFirstVisit,
   isRequired,
   tireSizeOptions,
@@ -1549,18 +2040,18 @@ function ZonePanel({
   onToggleDone,
   onPrevious,
   onNext,
+  fieldSaveState,
+  onFieldSaving,
 }: {
   zoneId: ZoneId;
   zs: ZoneState;
+  /** Vehicle VIN — feeds the fluid catalog picker (make-pinned OEM options). */
+  vin: string | null;
   isFirstVisit: boolean;
   isRequired: boolean;
   /** Axle-resolved tire-size options (vehicle's OEM fitments, generic fallback). */
   tireSizeOptions: InspectionOption[];
-  completionContext: {
-    serviceNames: string[];
-    brakeScope: BrakeAxleScope;
-    tireReplacementPositions?: BookedTirePosition[];
-  };
+  completionContext: ZoneCompletionContext;
   fieldError?: { fieldKey: string; message: string };
   canPhoto: boolean;
   photoBusy: string | null;
@@ -1573,16 +2064,31 @@ function ZonePanel({
   extraHeader?: React.ReactNode;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
-  onPhoto: (file: File) => void;
+  onPhoto: (file: File, tag?: "general" | "rotor_stamp") => void;
   onRemovePhoto: (storageId: string) => void;
   onToggleDone: () => void;
   onPrevious: () => void;
   onNext: () => void;
+  /** Per-field autosave state, keyed `${zoneId}::${fieldKey}`. */
+  fieldSaveState: Record<string, FieldSaveState>;
+  /** Flags a field as pending-save the moment the mechanic edits it. */
+  onFieldSaving: (fieldKey: string) => void;
 }) {
   const zone = INSPECTION_ZONES_BY_ID[zoneId];
   const tireReplacementScheduled =
     (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
     completionContext.tireReplacementPositions?.includes(zoneId);
+  const applicableFields = zone.fields.filter((field) => {
+    if (ALWAYS_VISIBLE_FIELDS.has(field.key)) return true;
+    if (SCOPE_INDEPENDENT_BRAKE_DETAIL_FIELDS.has(field.key)) {
+      return isBrakeDetailFieldRelevant(field.key, zs);
+    }
+    return isFieldApplicableToZone(zoneId, field.key, completionContext);
+  });
+  const rotorPhotoRequired =
+    (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
+    !!completionContext.inspectionState &&
+    requiresRotorStampPhoto(completionContext.inspectionState, zoneId, completionContext);
   // Per-field lookup of the seeded value/provenance for this zone.
   const specByKey = new Map(specPrefill.map((s) => [s.fieldKey, s]));
   const hasSpecPrefill = specPrefill.length > 0;
@@ -1635,8 +2141,7 @@ function ZonePanel({
           <span className="font-semibold text-foreground">
             Tire replacement scheduled.
           </span>{" "}
-          Outgoing-tire details are optional. Installed axle size is still
-          required.
+          Outgoing-tire tread, pressure, and condition are optional.
         </p>
       ) : null}
 
@@ -1665,8 +2170,8 @@ function ZonePanel({
         </p>
       ) : null}
 
-      {zone.fields.map((field, i) => {
-        const prevSection = i > 0 ? zone.fields[i - 1].section : undefined;
+      {applicableFields.map((field, i) => {
+        const prevSection = i > 0 ? applicableFields[i - 1].section : undefined;
         const showSection = field.section && field.section !== prevSection;
         return (
           <div key={field.key}>
@@ -1679,6 +2184,7 @@ function ZonePanel({
               zoneId={zoneId}
               field={field}
               zs={zs}
+              vin={vin}
               isFirstVisit={isFirstVisit}
               tireSizeOptions={tireSizeOptions}
               required={isFieldRequiredForZone(
@@ -1695,8 +2201,15 @@ function ZonePanel({
               }
               prefill={specByKey.get(field.key)}
               onSpecEdited={onSpecEdited}
-              onPatch={onPatch}
-              onSharedText={onSharedText}
+              onPatch={(patch) => {
+                onFieldSaving(field.key);
+                onPatch(patch);
+              }}
+              onSharedText={(key, value) => {
+                onFieldSaving(field.key);
+                onSharedText(key, value);
+              }}
+              saveState={fieldSaveState[`${zoneId}::${field.key}`]}
             />
           </div>
         );
@@ -1713,6 +2226,11 @@ function ZonePanel({
                 key={storageId}
                 className="relative overflow-hidden rounded-lg border border-primary/15 bg-muted"
               >
+                  {zs.photoTags[storageId] === "rotor_stamp" ? (
+                    <span className="absolute left-2 top-2 z-10 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-semibold text-white">
+                      Rotor stamp
+                    </span>
+                  ) : null}
                 {src ? (
                   <a
                     href={src}
@@ -1753,6 +2271,9 @@ function ZonePanel({
           })}
         </div>
       ) : null}
+      {fieldError?.fieldKey === "rotor_stamp_photo" ? (
+        <InlineFieldError message={fieldError.message} />
+      ) : null}
 
       {!zs.done && zs.dirty ? (
         <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
@@ -1765,6 +2286,8 @@ function ZonePanel({
       <div className="flex items-center gap-2 pt-3">
         {canPhoto ? (
           <label
+            id={`inspection-${zoneId}-rotor_stamp_photo`}
+            tabIndex={-1}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg border border-primary/20 px-3 py-1.5 text-[12px] text-muted-foreground hover:bg-primary/5",
               photoBusy === zoneId ? "cursor-wait opacity-60" : "cursor-pointer",
@@ -1775,7 +2298,7 @@ function ZonePanel({
             ) : (
               <Camera className="h-3.5 w-3.5" />
             )}
-            Add photo
+            {rotorPhotoRequired ? "Add required rotor-stamp photo" : "Add photo"}
             <input
               type="file"
               accept="image/*"
@@ -1783,7 +2306,7 @@ function ZonePanel({
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
-                if (file) onPhoto(file);
+                if (file) onPhoto(file, rotorPhotoRequired ? "rotor_stamp" : "general");
                 e.target.value = "";
               }}
             />
@@ -1810,6 +2333,7 @@ function FieldRow({
   zoneId,
   field,
   zs,
+  vin,
   isFirstVisit,
   tireSizeOptions,
   required,
@@ -1818,10 +2342,13 @@ function FieldRow({
   onSpecEdited,
   onPatch,
   onSharedText,
+  saveState,
 }: {
   zoneId: ZoneId;
   field: InspectionField;
   zs: ZoneState;
+  /** Vehicle VIN — feeds the fluid catalog picker. */
+  vin: string | null;
   isFirstVisit: boolean;
   /** Axle-resolved tire-size options for this zone (OEM fitments + fallback). */
   tireSizeOptions: InspectionOption[];
@@ -1833,7 +2360,28 @@ function FieldRow({
   onSpecEdited?: () => void;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
+  /** Autosave state for this field's last edit (spinner / check / retry). */
+  saveState?: FieldSaveState;
 }) {
+  const clearUnavailable = () => {
+    const statuses = { ...zs.statuses };
+    delete statuses[field.key];
+    return statuses;
+  };
+  const unavailable = !!zs.statuses[field.key];
+  const unavailableControl = (
+    <UnavailableToggle
+      active={unavailable}
+      onToggle={() => {
+        const statuses = { ...zs.statuses };
+        if (unavailable) delete statuses[field.key];
+        else statuses[field.key] = "not_applicable";
+        onPatch({ statuses });
+      }}
+    />
+  );
+  const rotorNotConfirmed =
+    ROTOR_GATE_FIELDS.has(field.key) && zs.select.rotor_applicable !== "yes";
   if (field.type === "measure") {
     return (
       <MeasureField
@@ -1842,38 +2390,72 @@ function FieldRow({
         zs={zs}
         required={required}
         errorMessage={errorMessage}
+        disabled={rotorNotConfirmed}
         onPatch={onPatch}
+        saveState={saveState}
       />
     );
   }
 
   if (field.type === "tri") {
     const selected = zs.tri[field.key];
+    const hasCustomLabels = (["g", "y", "r"] as TriValue[]).some(
+      (color) => triLabelFor(field.key, color) !== TRI_LABELS[color],
+    );
     return (
       <div className="border-b border-primary/10">
-        <Row label={field.label} required={required}>
-          <div className="flex gap-2">
-            {(["g", "y", "r"] as TriValue[]).map((color) => (
-              <button
-                key={color}
-                id={
-                  color === "g"
-                    ? `inspection-${zoneId}-${field.key}`
-                    : undefined
-                }
-                type="button"
-                aria-label={TRI_LABELS[color]}
-                onClick={() =>
-                  onPatch({ tri: { ...zs.tri, [field.key]: color } })
-                }
-                className={cn(
-                  "h-7 w-7 rounded-full border-2 transition-transform active:scale-90",
-                  selected === color
-                    ? TRI_DOT[color]
-                    : "border-primary/25 bg-transparent",
-                )}
-              />
-            ))}
+        <Row label={field.label} required={required} saveState={saveState}>
+          <div className="flex flex-wrap gap-2">
+            {(["g", "y", "r"] as TriValue[]).map((color) => {
+              const label = triLabelFor(field.key, color);
+              const active = selected === color && !unavailable;
+              const id =
+                color === "g"
+                  ? `inspection-${zoneId}-${field.key}`
+                  : undefined;
+              if (hasCustomLabels) {
+                return (
+                  <button
+                    key={color}
+                    id={id}
+                    type="button"
+                    onClick={() =>
+                      onPatch({
+                        tri: { ...zs.tri, [field.key]: color },
+                        statuses: clearUnavailable(),
+                      })
+                    }
+                    className={cn(
+                      "rounded-lg border px-3 py-1.5 text-[12px] font-medium transition-colors",
+                      active
+                        ? TRI_PILL_ACTIVE_CLASS[color]
+                        : "border-primary/20 bg-card text-muted-foreground hover:bg-primary/5",
+                    )}
+                  >
+                    {label}
+                  </button>
+                );
+              }
+              return (
+                <button
+                  key={color}
+                  id={id}
+                  type="button"
+                  aria-label={label}
+                  onClick={() =>
+                    onPatch({
+                      tri: { ...zs.tri, [field.key]: color },
+                      statuses: clearUnavailable(),
+                    })
+                  }
+                  className={cn(
+                    "h-7 w-7 rounded-full border-2 transition-transform active:scale-90",
+                    active ? TRI_DOT[color] : "border-primary/25 bg-transparent",
+                  )}
+                />
+              );
+            })}
+            {unavailableControl}
           </div>
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
@@ -1884,10 +2466,27 @@ function FieldRow({
   if (field.type === "descriptors") {
     const selected = zs.descriptors[field.key] ?? [];
     return (
-      <div className="border-b border-primary/10 py-2">
-        <div className="mb-1.5 text-[13px] text-foreground">
-          {field.label}
-          {required ? <span className="ml-1 text-red-500">*</span> : null}
+      <div
+        className={cn(
+          "border-b border-primary/10 py-2",
+          required && "border-l-2 border-l-red-400 pl-2",
+        )}
+      >
+        <div
+          className={cn(
+            "mb-1.5 flex items-center gap-2 text-[13px] text-foreground",
+            required && "font-medium",
+          )}
+        >
+          <span className="flex-1">
+            {field.label}
+            {required ? (
+              <span className="ml-1 text-red-500" title="Required">
+                *
+              </span>
+            ) : null}
+          </span>
+          <FieldSaveBadge state={saveState} />
         </div>
         <div className="flex flex-wrap gap-2">
           {field.options.map((option, index) => {
@@ -1901,18 +2500,23 @@ function FieldRow({
                     : undefined
                 }
                 type="button"
-                onClick={() =>
+                disabled={rotorNotConfirmed}
+                onClick={() => {
+                  let next: string[];
+                  if (active) {
+                    next = selected.filter((value) => value !== option);
+                  } else if (option === "none") {
+                    next = ["none"];
+                  } else {
+                    next = [...selected.filter((value) => value !== "none"), option];
+                  }
                   onPatch({
-                    descriptors: {
-                      ...zs.descriptors,
-                      [field.key]: active
-                        ? selected.filter((value) => value !== option)
-                        : [...selected, option],
-                    },
-                  })
-                }
+                    descriptors: { ...zs.descriptors, [field.key]: next },
+                    statuses: clearUnavailable(),
+                  });
+                }}
                 className={cn(
-                  "rounded-lg border px-3 py-1.5 text-[12px] transition-colors",
+                  "rounded-lg border px-3 py-1.5 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-40",
                   active
                     ? "border-amber-400 bg-amber-50 font-semibold text-amber-700"
                     : "border-primary/20 bg-card text-muted-foreground hover:bg-primary/5",
@@ -1928,8 +2532,125 @@ function FieldRow({
     );
   }
 
+  if (field.type === "lights") {
+    const entries: WarningLightEntry[] =
+      zs.lights[field.key] && zs.lights[field.key].length > 0
+        ? zs.lights[field.key]
+        : [{ light: "" }];
+    const hasNone = entries.some((e) => e.light === "none");
+    const lightOptions: InspectionOption[] = [
+      ...WARNING_LIGHT_PICKER_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
+      { value: "other", label: "Other" },
+      { value: "none", label: "None" },
+    ];
+    const setEntries = (next: WarningLightEntry[]) =>
+      onPatch({
+        lights: { ...zs.lights, [field.key]: next },
+        statuses: clearUnavailable(),
+      });
+    return (
+      <div
+        className={cn(
+          "border-b border-primary/10 py-2",
+          required && "border-l-2 border-l-red-400 pl-2",
+        )}
+      >
+        <div
+          className={cn(
+            "mb-1.5 flex items-center gap-2 text-[13px] text-foreground",
+            required && "font-medium",
+          )}
+        >
+          <span className="flex-1">
+            {field.label}
+            {required ? (
+              <span className="ml-1 text-red-500" title="Required">
+                *
+              </span>
+            ) : null}
+          </span>
+          <FieldSaveBadge state={saveState} />
+        </div>
+        <div className="space-y-2">
+          {entries.map((entry, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <CompactSelect
+                id={index === 0 ? `inspection-${zoneId}-${field.key}` : undefined}
+                ariaLabel={field.label}
+                value={entry.light}
+                options={lightOptions}
+                className="flex-1"
+                isDisabled={rotorNotConfirmed}
+                onChange={(next) => {
+                  const light = next as WarningLightSelection;
+                  if (light === "none") {
+                    setEntries([{ light: "none" }]);
+                    return;
+                  }
+                  setEntries(
+                    entries.map((e, i) =>
+                      i === index
+                        ? { light, otherText: light === "other" ? e.otherText : undefined }
+                        : e,
+                    ),
+                  );
+                }}
+              />
+              {entry.light === "other" ? (
+                <input
+                  value={entry.otherText ?? ""}
+                  onChange={(e) =>
+                    setEntries(
+                      entries.map((row, i) =>
+                        i === index ? { ...row, otherText: e.target.value } : row,
+                      ),
+                    )
+                  }
+                  placeholder="Which light?"
+                  className="w-32 rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+                />
+              ) : null}
+              {index > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setEntries(entries.filter((_, i) => i !== index))}
+                  className="rounded-lg p-1.5 text-muted-foreground hover:bg-red-50 hover:text-red-600"
+                  aria-label="Remove light"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              ) : null}
+            </div>
+          ))}
+          <button
+            type="button"
+            disabled={hasNone || !entries[entries.length - 1]?.light}
+            onClick={() => setEntries([...entries, { light: "" }])}
+            className="inline-flex items-center gap-1 rounded-lg border border-dashed border-primary/30 px-2.5 py-1 text-[12px] font-medium text-primary hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add light
+          </button>
+        </div>
+        {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+      </div>
+    );
+  }
+
   if (field.type === "select") {
-    const value = zs.select[field.key] ?? "";
+    const isMeasurementMethod =
+      field.key === "pad_method" || field.key === "rotor_tool";
+    const value = isMeasurementMethod
+      ? zs.methods[field.key] || zs.select[field.key] || ""
+      : zs.select[field.key] ?? "";
+    const wasMeasured = (key: string) =>
+      !zs.statuses[key] && !!(zs.measures[key] ?? "").trim();
+    const measurementNotTaken =
+      field.key === "pad_method"
+        ? !wasMeasured("pad_inner") && !wasMeasured("pad_outer")
+        : field.key === "rotor_tool"
+          ? !wasMeasured("rotor")
+          : false;
     // Verbatim OEM value that maps to no canonical option (odd coolant/trans
     // brand strings, or a pre-filled passport value): inject it so the enriched
     // spec still shows + stays picked.
@@ -1940,7 +2661,7 @@ function FieldRow({
     const showPrefillTag = !!prefill && value === prefill.value;
     return (
       <div className="border-b border-primary/10">
-        <Row label={field.label} required={required}>
+        <Row label={field.label} required={required} saveState={saveState}>
           <div className="flex w-44 flex-col items-end gap-1">
             <CompactSelect
               id={`inspection-${zoneId}-${field.key}`}
@@ -1948,19 +2669,75 @@ function FieldRow({
               value={value}
               options={selectOptions}
               className="w-44"
+              isDisabled={measurementNotTaken}
               onChange={(next) => {
                 if (prefill) onSpecEdited?.();
-                onPatch({ select: { ...zs.select, [field.key]: next } });
+                onPatch(
+                  isMeasurementMethod
+                    ? {
+                        methods: { ...zs.methods, [field.key]: next },
+                        statuses: clearUnavailable(),
+                      }
+                    : {
+                        select: { ...zs.select, [field.key]: next },
+                        statuses: clearUnavailable(),
+                      },
+                );
               }}
             />
             {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
           </div>
+          {isMeasurementMethod || field.key === "rotor_applicable"
+            ? null
+            : unavailableControl}
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
       </div>
     );
   }
 
+  // Fluid PRODUCT fields (coolant / ATF / brake / power-steering) use the same
+  // OEM + scraped catalog picker as the post-job survey instead of the generic
+  // combobox. Value lives in the text bucket, where the passport prefill seeds
+  // it and job_actuals reads it. Oil viscosity/type keep the generic picker —
+  // oil is chosen by grade+type, not a single SKU.
+  if (field.type === "text" && FLUID_KIND_BY_KEY[field.key]) {
+    const fluidValue = zs.text[field.key] ?? "";
+    const showFluidPrefillTag = !!prefill && fluidValue === prefill.value;
+    return (
+      <div className="border-b border-primary/10">
+        <Row
+          label={field.label}
+          required={required}
+          badge={field.firstVisitOnly && isFirstVisit ? "1ST" : undefined}
+          saveState={saveState}
+        >
+          <div className="w-64 space-y-1.5">
+            <FluidCatalogSelectField
+              value={fluidValue}
+              onChange={(next) => {
+                if (prefill) onSpecEdited?.();
+                onSharedText(field.key, next);
+              }}
+              fluidKind={FLUID_KIND_BY_KEY[field.key]}
+              vin={vin}
+              placeholder="Search or select"
+              otherPlaceholder={`Enter ${field.label.toLowerCase()}`}
+            />
+            {showFluidPrefillTag ? (
+              <div className="flex justify-end">
+                <SpecSourceTag source={prefill!.source} />
+              </div>
+            ) : null}
+          </div>
+          {unavailableControl}
+        </Row>
+        {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+      </div>
+    );
+  }
+
+  const isTier4Spec = TIER4_SPEC_FIELDS.has(field.key);
   const value = zs.text[field.key] ?? "";
   const options =
     field.key === "tire_model"
@@ -1969,13 +2746,20 @@ function FieldRow({
         ? tireSizeOptions
         : optionsForInspectionField(field.key);
   const resolved = resolveInspectionOption(value, options);
-  const selected = resolved
-    ? resolved.value
-    : value
-      ? OTHER_INSPECTION_OPTION
-      : "";
+  const selected =
+    isTier4Spec && zs.statuses[field.key]
+      ? NOT_AVAILABLE_OPTION
+      : resolved
+        ? resolved.value
+        : value
+          ? OTHER_INSPECTION_OPTION
+          : "";
   const setText = (next: string) => {
     if (prefill) onSpecEdited?.();
+    if (isTier4Spec && next === NOT_AVAILABLE_OPTION) {
+      onPatch({ statuses: { ...zs.statuses, [field.key]: "not_applicable" } });
+      return;
+    }
     const normalized =
       field.key === "tire_size" && next !== OTHER_INSPECTION_OPTION
         ? normalizeTireSize(next)
@@ -1983,22 +2767,49 @@ function FieldRow({
     if (field.key === "tire_brand") {
       onPatch({
         text: { ...zs.text, tire_brand: normalized, tire_model: "" },
+        statuses: clearUnavailable(),
       });
       return;
     }
     if (field.key === "tire_model") {
-      onPatch({ text: { ...zs.text, [field.key]: normalized } });
+      onPatch({
+        text: { ...zs.text, [field.key]: normalized },
+        statuses: clearUnavailable(),
+      });
       return;
     }
+    onPatch({ statuses: clearUnavailable() });
     onSharedText(field.key, normalized);
   };
   const showPrefillTag = !!prefill && value === prefill.value;
+  if (options.length === 0) {
+    return (
+      <div className="border-b border-primary/10">
+        <Row label={field.label} required={required} saveState={saveState}>
+          <div className="flex w-48 flex-col items-end gap-1">
+            <input
+              id={`inspection-${zoneId}-${field.key}`}
+              aria-invalid={!!errorMessage}
+              value={value}
+              disabled={rotorNotConfirmed}
+              onChange={(event) => setText(event.target.value)}
+              className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
+            />
+            {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
+          </div>
+          {rotorNotConfirmed ? null : unavailableControl}
+        </Row>
+        {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+      </div>
+    );
+  }
   return (
     <div className="border-b border-primary/10">
       <Row
         label={field.label}
         required={required}
         badge={field.firstVisitOnly && isFirstVisit ? "1ST" : undefined}
+        saveState={saveState}
       >
         <div className="w-48 space-y-1.5">
           <Combobox
@@ -2007,6 +2818,9 @@ function FieldRow({
             ariaInvalid={!!errorMessage}
             value={selected}
             options={[
+              ...(isTier4Spec
+                ? [{ value: NOT_AVAILABLE_OPTION, label: "Not available" }]
+                : []),
               { value: OTHER_INSPECTION_OPTION, label: "Other / not listed" },
               ...options,
             ]}
@@ -2041,6 +2855,7 @@ function FieldRow({
             </div>
           ) : null}
         </div>
+        {isTier4Spec ? null : unavailableControl}
       </Row>
       {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
     </div>
@@ -2077,17 +2892,39 @@ function MeasureField({
   zs,
   required,
   errorMessage,
+  disabled,
   onPatch,
+  saveState,
 }: {
   zoneId: ZoneId;
   field: Extract<InspectionField, { type: "measure" }>;
   zs: ZoneState;
   required: boolean;
   errorMessage?: string;
+  disabled?: boolean;
   onPatch: (patch: Partial<ZoneState>) => void;
+  /** Autosave state for this field's last edit (spinner / check / retry). */
+  saveState?: FieldSaveState;
 }) {
   const value = zs.measures[field.key] ?? "";
   const result = classifyInspectionMeasure(field, zs.measures, zs.select);
+  const clearUnavailable = () => {
+    const statuses = { ...zs.statuses };
+    delete statuses[field.key];
+    return statuses;
+  };
+  const unavailable = !!zs.statuses[field.key];
+  const unavailableControl = (
+    <UnavailableToggle
+      active={unavailable}
+      onToggle={() => {
+        const statuses = { ...zs.statuses };
+        if (unavailable) delete statuses[field.key];
+        else statuses[field.key] = "not_applicable";
+        onPatch({ statuses });
+      }}
+    />
+  );
 
   if (field.key === "tread") {
     const detailed = zs.select.tread_mode === "detailed";
@@ -2106,11 +2943,11 @@ function MeasureField({
       };
       const minimum = getTireTreadMinimum(reading);
       measures.tread = minimum == null ? "" : String(minimum);
-      onPatch({ measures });
+      onPatch({ measures, statuses: clearUnavailable() });
     };
     return (
       <div className="border-b border-primary/10 py-2.5">
-        <Row label={field.label} hint={field.hint} required={required}>
+        <Row label={field.label} hint={field.hint} required={required} saveState={saveState}>
           {!detailed ? (
             <>
               <input
@@ -2124,6 +2961,7 @@ function MeasureField({
                       ...zs.measures,
                       [field.key]: event.target.value,
                     },
+                    statuses: clearUnavailable(),
                   })
                 }
                 className="w-16 rounded-lg border border-primary/20 bg-card px-1 py-1.5 text-center text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none"
@@ -2134,6 +2972,7 @@ function MeasureField({
               <GradeTag result={result} />
             </>
           ) : null}
+          {unavailableControl}
         </Row>
         {detailed ? (
           <div className="grid grid-cols-3 gap-2 pt-2">
@@ -2189,22 +3028,24 @@ function MeasureField({
       : field.hint;
   return (
     <div className="border-b border-primary/10">
-      <Row label={field.label} hint={hint} required={required}>
+      <Row label={field.label} hint={hint} required={required} saveState={saveState}>
         <input
           id={`inspection-${zoneId}-${field.key}`}
           aria-invalid={!!errorMessage}
           inputMode="decimal"
           value={value}
+          disabled={disabled}
           onChange={(event) =>
             onPatch({
               measures: {
                 ...zs.measures,
                 [field.key]: event.target.value,
               },
+              statuses: clearUnavailable(),
             })
           }
           className={cn(
-            "rounded-lg border border-primary/20 bg-card px-1 py-1.5 text-center text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none",
+            "rounded-lg border border-primary/20 bg-card px-1 py-1.5 text-center text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
             isRotor ? "w-20" : "w-16",
           )}
         />
@@ -2217,6 +3058,7 @@ function MeasureField({
               { value: "in", label: "in" },
             ]}
             className="w-20"
+            isDisabled={disabled}
             onChange={(next) => {
               const nextUnit: RotorUnit = next === "in" ? "in" : "mm";
               const entered = Number(value);
@@ -2232,6 +3074,7 @@ function MeasureField({
                         )
                       : value,
                 },
+                statuses: clearUnavailable(),
               });
             }}
           />
@@ -2241,9 +3084,36 @@ function MeasureField({
           </span>
         )}
         {field.classify ? <GradeTag result={result} /> : null}
+        {disabled ? null : unavailableControl}
       </Row>
       {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
     </div>
+  );
+}
+
+function UnavailableToggle({
+  active,
+  onToggle,
+}: {
+  active: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={active}
+      aria-label="Not visible or not available"
+      title="Not visible or not available"
+      className={cn(
+        "flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 transition-colors",
+        active
+          ? "border-slate-500 bg-slate-500 text-white"
+          : "border-primary/20 bg-transparent text-muted-foreground/40 hover:border-primary/40 hover:text-muted-foreground",
+      )}
+    >
+      <EyeOff className="h-3.5 w-3.5" />
+    </button>
   );
 }
 
@@ -2277,6 +3147,12 @@ function optionsForInspectionField(fieldKey: string): InspectionOption[] {
   if (fieldKey === "tire_model") return TIRE_MODEL_OPTIONS;
   if (fieldKey === "tire_size") return TIRE_SIZE_OPTIONS;
   if (fieldKey === "pad_brand") return BRAKE_PAD_BRAND_OPTIONS;
+  if (fieldKey === "oil_viscosity") return OIL_VISCOSITY_OPTIONS;
+  if (fieldKey === "oil_type") return OIL_TYPE_OPTIONS;
+  if (fieldKey === "coolant_type") return COOLANT_TYPE_OPTIONS;
+  if (fieldKey === "brake_fluid_type") return BRAKE_FLUID_OPTIONS;
+  if (fieldKey === "transmission_fluid_type") return TRANSMISSION_FLUID_OPTIONS;
+  if (fieldKey === "power_steering_fluid_type") return POWER_STEERING_FLUID_OPTIONS;
   return [];
 }
 
@@ -2286,6 +3162,7 @@ function CompactSelect({
   value,
   options,
   className,
+  isDisabled,
   onChange,
 }: {
   id?: string;
@@ -2293,6 +3170,7 @@ function CompactSelect({
   value: string;
   options: InspectionOption[];
   className?: string;
+  isDisabled?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
@@ -2301,6 +3179,7 @@ function CompactSelect({
       onSelectionChange={(key) => onChange(key == null ? "" : String(key))}
       aria-label={ariaLabel}
       placeholder="—"
+      isDisabled={isDisabled}
       className={className}
     >
       <SelectTrigger id={id} className="h-9 px-2 text-[13px]">
@@ -2328,12 +3207,14 @@ function Row({
   hint,
   required,
   badge,
+  saveState,
   children,
 }: {
   label: string;
   hint?: string;
   required?: boolean;
   badge?: string;
+  saveState?: FieldSaveState;
   children: React.ReactNode;
 }) {
   return (
@@ -2365,6 +3246,7 @@ function Row({
         ) : null}
       </span>
       {children}
+      <FieldSaveBadge state={saveState} />
     </div>
   );
 }
@@ -3080,7 +3962,7 @@ function ResultsScreen({
                         </span>
                       ) : null}
                       <span className="block text-[11px] text-muted-foreground">
-                        {s.reason} · {URGENCY_LABEL[s.urgency]}
+                        {s.reasons.join(" · ")} · {URGENCY_LABEL[s.urgency]}
                       </span>
                     </span>
                   </label>

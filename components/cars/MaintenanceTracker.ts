@@ -51,4 +51,10 @@ export interface MaintenanceItem {
   /** Canonical service id behind the rec — surfaced for the booking flow
    *  pre-fill from the detail screen. */
   serviceId?: string | null;
+  /** Precomputed 0–1 score, bypassing the STATUS_SCORE lookup, when a status
+   *  alone can't capture severity (e.g. brakes' per-corner blend). Only set
+   *  for brakes today; every other item leaves this undefined and scores via
+   *  the normal status lookup, unchanged. Mirror in the mobile repo's
+   *  MaintenanceTracker.tsx to keep this stub in sync. */
+  rawScore?: number;
 }

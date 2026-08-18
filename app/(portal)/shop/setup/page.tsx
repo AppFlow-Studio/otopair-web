@@ -830,6 +830,15 @@ export default function ShopSetupPage() {
     setFixedPricesBaseline(next);
   }, [fixedPricesData]);
 
+  // Each onboarding step is a fresh page; when the user advances (or steps back)
+  // reset the scroll so they land at the top instead of wherever the previous
+  // step's "Continue" button sat.
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.scrollTo({ top: 0, left: 0, behavior: "smooth" });
+    }
+  }, [currentStep]);
+
   useEffect(() => {
     const stripeStatus = searchParams.get("stripe");
     if (!stripeStatus) return;
@@ -2252,8 +2261,9 @@ export default function ShopSetupPage() {
                       <span className="font-medium text-foreground">
                         State Inspection &amp; Emissions Tests
                       </span>{" "}
-                      need a NY DMV inspection station license — add it next, or in
-                      Settings.
+                      require a NY DMV inspection station license, and customers
+                      cannot book them with you until it is uploaded. Add it in the
+                      next step (Licenses &amp; compliance), or later in Settings.
                     </span>
                   </p>
                 )}

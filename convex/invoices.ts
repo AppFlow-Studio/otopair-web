@@ -20,6 +20,7 @@ import {
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
+import { customServiceNames } from "./lib/customServiceNames";
 
 const PLATFORM_FEE_BPS = 700;
 const DEFAULT_LABOR_RATE = 120;
@@ -383,9 +384,16 @@ async function assembleInvoiceData(
         logoUrl: shopLogoUrl,
       },
       mechanicName,
-      services: services
-        .map((s): string | null => (s ? (s as Doc<"services">).name : null))
-        .filter((x): x is string => Boolean(x)),
+      // Catalog services first, then the off-catalog lines. Without the second
+      // half a booking whose only work was custom produced a PDF and a
+      // /receipts/<id> page listing NOTHING against a real charge — the
+      // customer's own proof of what they paid for, blank.
+      services: [
+        ...services
+          .map((s): string | null => (s ? (s as Doc<"services">).name : null))
+          .filter((x): x is string => Boolean(x)),
+        ...customServiceNames((booking as any).custom_services),
+      ],
       parts,
 
       laborMinutes,

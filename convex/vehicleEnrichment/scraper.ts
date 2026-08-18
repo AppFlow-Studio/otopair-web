@@ -37,6 +37,7 @@ import {
   isMarketplaceDomain,
   type MakeSourceConfig,
 } from "./sourceRegistry";
+import { dispositionOf } from "./makeCoverage";
 import { isStorefrontHomepage, detailPageVehicleVerdict, parseDetailTitle } from "./rpCatalog";
 import { parsePartPrices, parseSupersessions, type ParsedPartPrice, type ParsedSupersession } from "./priceParser";
 import { checkRoleIdentity, ROLEKEYS_BY_PART_SLUG } from "./roleIdentity";
@@ -90,6 +91,20 @@ export async function scrapeVehicleSources(
   // The MANUAL / maintenance-schedule scrape stays on the badge — the badge
   // maker publishes the service schedule (Toyota's Yaris schedule is fine).
   const config = getSourceConfig(vehicle.make);
+  // An unregistered make loses the whole deterministic storefront lane and says
+  // nothing about it — the run just comes back thin and the VEHICLE gets blamed
+  // (Lincoln Nautilus: 6 roles never_found, quotability 0.50; MINI Countryman:
+  // 0.45). Both were missing config, not hard cars. Say so at the top of the
+  // run, and only for makes we have not deliberately excluded, so the line means
+  // something when it appears. See makeCoverage.ts.
+  if (!config && dispositionOf(vehicle.make) === "supported") {
+    console.warn(
+      `[scraper] NO SOURCE_REGISTRY ENTRY for make "${vehicle.make}" — no storefront, ` +
+        `no site-scoped SERP, no vehicle-slug resolution. Thin results for this run are a ` +
+        `MISSING CONFIG, not a hard vehicle. Register it in sourceRegistry.ts or give it a ` +
+        `disposition in makeCoverage.ts.`,
+    );
+  }
   const manualQueries = config
     ? getManualSearchQueries(config, vehicle)
     : buildDefaultManualQueries(vehicle);

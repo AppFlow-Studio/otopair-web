@@ -13,12 +13,25 @@
  */
 
 import { query, mutation } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
-import { claimContributionRewardImpl } from "./rewards";
-import { awardPointsImpl } from "./healthPoints";
 import { symptomForRecordType } from "./lib/serviceSymptoms";
 import { toCanonicalLight } from "../lib/warningLightVocab";
+
+// Fields written by the mechanic pre-job grading path (see
+// convex/lib/inspectionHealth.ts) — "until next service" expiry: these
+// persist until a real service of this exact type is recorded (this same
+// write advancing lastServiceDate), at which point they're stripped rather
+// than carried forward.
+const GRADE_FIELDS = [
+  "mechanicGrade",
+  "mechanicGradedAt",
+  "mechanicGradeSource",
+  "mechanicGradeReason",
+  "mechanicRawScore",
+] as const;
 
 /**
  * QUERY: getRecordsByVehicle
@@ -89,8 +102,31 @@ export const upsertRecord = mutation({
       )
       .unique();
 
+    // "Until next service" expiry: a mechanic pre-job grade persists until a
+    // real service of this exact type is actually recorded. This write
+    // advances the record if it provides a lastServiceDate newer than
+    // what's on file — when it does, the grade fields are stripped rather
+    // than carried forward; otherwise they're preserved from the existing
+    // record (merged, not replaced) so a caller that doesn't know about
+    // grades — like this Quick Read path — can't silently clobber one.
+    const existingLastServiceDate =
+      typeof existing?.lastServiceDate === "number" ? existing.lastServiceDate : undefined;
+    const advancesService =
+      args.lastServiceDate != null &&
+      (existingLastServiceDate == null || args.lastServiceDate > existingLastServiceDate);
+    const mergedCustomInputs: Record<string, unknown> = { ...(args.customInputs ?? {}) };
+    if (advancesService) {
+      for (const key of GRADE_FIELDS) delete mergedCustomInputs[key];
+    } else {
+      const existingInputs = (existing?.customInputs ?? {}) as Record<string, unknown>;
+      for (const key of GRADE_FIELDS) {
+        if (mergedCustomInputs[key] === undefined && existingInputs[key] !== undefined) {
+          mergedCustomInputs[key] = existingInputs[key];
+        }
+      }
+    }
+
     let recordId;
-    const isNewRecord = !existing;
     // Only patch the optional trust fields when provided, so a caller that omits
     // them (e.g. the input modal) doesn't clobber a "verified" confidence set by
     // the booking-completion writer.
@@ -103,7 +139,7 @@ export const upsertRecord = mutation({
       await ctx.db.patch(existing._id, {
         lastServiceDate: args.lastServiceDate,
         lastServiceMileage: args.lastServiceMileage,
-        customInputs: args.customInputs,
+        customInputs: mergedCustomInputs,
         ...trustFields,
         updatedAt: now,
       });
@@ -114,7 +150,7 @@ export const upsertRecord = mutation({
         type: args.type,
         lastServiceDate: args.lastServiceDate,
         lastServiceMileage: args.lastServiceMileage,
-        customInputs: args.customInputs,
+        customInputs: mergedCustomInputs,
         ...trustFields,
         createdAt: now,
         updatedAt: now,
@@ -148,28 +184,73 @@ export const upsertRecord = mutation({
       );
     }
 
-    // Award the $10 "upload external service records" contribution
-    // credit per Rewards Framework v3 §8 — only on FIRST insert of a
-    // record for this (vehicle, type) pair. Subsequent edits of the
-    // same record don't re-pay. Silent so a duplicate claim attempt
-    // can never block a record write. Also +3 HP per §11.
-    if (isNewRecord && owner) {
-      await claimContributionRewardImpl(ctx, {
-        userId: owner.user_id,
-        actionType: "upload",
-        referenceId: String(recordId),
-        silent: true,
-      });
-      await awardPointsImpl(ctx, {
-        vin: owner.vin,
-        userId: owner.user_id,
-        delta: 3,
-      });
-    }
+    // Rewards removed for now (team decision; reintroduced later with the
+    // full rewards system) — see "Rewards removal." This upload path
+    // previously granted a $10 contribution credit + 3 HP on first insert;
+    // both calls are gone, matching the document-upload path, which
+    // already granted nothing.
 
     return recordId;
   },
 });
+
+/**
+ * Merge a mechanic's pre-job grade (or a catalog-matched minor-item grade)
+ * into a maintenance_records row's customInputs, without clobbering other
+ * keys already there (tirePressure, etc.) — read → merge → write. Reused
+ * for both the 4 core types (oil/brakes/tires/battery) and the
+ * Consolidated model's minor-item weight-10 bucket (type strings prefixed
+ * "minor_", e.g. "minor_cool_condition" — see utils/mergedMaintenance.ts).
+ * Does not touch lastServiceDate/lastServiceMileage — a grading write isn't
+ * a service-completion event; the "until next service" strip happens in
+ * upsertRecord above, whenever a real service later advances the date.
+ */
+export async function mergeMechanicGradeIntoRecord(
+  ctx: MutationCtx,
+  args: {
+    vehicleOwnerId: Id<"vehicle_owners">;
+    type: string;
+    grade: "g" | "y" | "r";
+    gradeReason: string;
+    gradeSource: string;
+    gradedAt: number;
+    /** Brakes-only per-corner blended float. Cleared when absent so a
+     *  regraded corner set that no longer needs it doesn't leave a stale
+     *  value behind. */
+    rawScore?: number;
+  },
+): Promise<Id<"maintenance_records">> {
+  const existing = await ctx.db
+    .query("maintenance_records")
+    .withIndex("by_vehicle_and_type", (q) =>
+      q.eq("vehicleOwnerId", args.vehicleOwnerId).eq("type", args.type),
+    )
+    .unique();
+  const now = Date.now();
+  const mergedCustomInputs: Record<string, unknown> = {
+    ...(existing?.customInputs ?? {}),
+    mechanicGrade: args.grade,
+    mechanicGradedAt: args.gradedAt,
+    mechanicGradeSource: args.gradeSource,
+    mechanicGradeReason: args.gradeReason,
+  };
+  if (args.rawScore != null) {
+    mergedCustomInputs.mechanicRawScore = args.rawScore;
+  } else {
+    delete mergedCustomInputs.mechanicRawScore;
+  }
+  if (existing) {
+    await ctx.db.patch(existing._id, { customInputs: mergedCustomInputs, updatedAt: now });
+    return existing._id;
+  }
+  return await ctx.db.insert("maintenance_records", {
+    vehicleOwnerId: args.vehicleOwnerId,
+    type: args.type,
+    customInputs: mergedCustomInputs,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
 
 /**
  * MUTATION: deleteRecord

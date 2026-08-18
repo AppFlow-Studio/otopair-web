@@ -15,6 +15,7 @@ import {
   getCurrentNotificationScope,
 } from "./lib/notificationScope";
 import { metaMakeModel } from "./lib/bookingEnrichment";
+import { customServiceNames } from "./lib/customServiceNames";
 
 async function getCurrentUserOrNull(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
@@ -49,15 +50,22 @@ async function getPrimaryAuthorizedShop(ctx: any, userId: any) {
   return null;
 }
 
-async function resolveServiceNames(ctx: any, serviceIds?: Array<any>) {
-  if (!serviceIds || serviceIds.length === 0) return [] as string[];
+async function resolveServiceNames(
+  ctx: any,
+  serviceIds?: Array<any>,
+  /** booking.custom_services — off-catalog lines, appended after the catalog
+   *  ones. Without this a custom-only booking renders blank everywhere. */
+  customServices?: unknown,
+) {
+  const custom = customServiceNames(customServices);
+  if (!serviceIds || serviceIds.length === 0) return custom;
   const names = await Promise.all(
     serviceIds.map(async (serviceId: any) => {
       const service = await ctx.db.get(serviceId);
       return service?.name ?? "Unknown Service";
     })
   );
-  return names;
+  return [...names, ...custom];
 }
 
 /** Like `resolveServiceNames` but appends the per-service option label
@@ -70,13 +78,16 @@ async function resolveServiceLabels(
   selectedOptions:
     | Array<{ service_id: any; option_label?: string }>
     | undefined,
+  /** booking.custom_services — see resolveServiceNames. */
+  customServices?: unknown,
 ): Promise<string[]> {
-  if (!serviceIds || serviceIds.length === 0) return [];
+  const custom = customServiceNames(customServices);
+  if (!serviceIds || serviceIds.length === 0) return custom;
   const byServiceId = new Map<string, string>();
   for (const opt of selectedOptions ?? []) {
     if (opt.option_label) byServiceId.set(String(opt.service_id), opt.option_label);
   }
-  return await Promise.all(
+  const labelled = await Promise.all(
     serviceIds.map(async (serviceId: any) => {
       const service = await ctx.db.get(serviceId);
       const name = service?.name ?? "Unknown Service";
@@ -84,6 +95,7 @@ async function resolveServiceLabels(
       return label ? `${name} — ${label}` : name;
     }),
   );
+  return [...labelled, ...custom];
 }
 
 async function resolveVehicleDisplay(ctx: any, vin?: string | null): Promise<string | null> {
@@ -395,6 +407,7 @@ export const getBookingsForRange = query({
             ctx,
             booking.service_ids,
             booking.selected_service_options,
+            booking.custom_services,
           ),
           vehicleDisplay: await resolveVehicleDisplay(ctx, booking.vin),
           licensePlate: booking.vin ? String(booking.vin).slice(-4) : null,

@@ -18,25 +18,52 @@ type SendTeamInviteArgs =
       origin: string;
     };
 
-export async function sendTeamInvite(args: SendTeamInviteArgs) {
-  const res = await fetch("/api/invite", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      email: args.email,
-      role: args.role,
-      shopId: args.shopId,
-      ...("mechanicId" in args
-        ? { mechanicId: args.mechanicId }
-        : {
-            firstName: args.firstName,
-            lastName: args.lastName,
-            title: args.title,
-          }),
-    }),
-  });
+// Hard ceiling on how long the invite request may run before we give the user
+// back control. The server bounds each of its own hops, so the response should
+// arrive well within this; the client timeout is a backstop so the invite
+// button can never spin forever (e.g. if the network drops mid-request).
+const INVITE_REQUEST_TIMEOUT_MS = 30_000;
 
-  const data = await res.json();
+export async function sendTeamInvite(args: SendTeamInviteArgs) {
+  let res: Response;
+  try {
+    res = await fetch("/api/invite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        email: args.email,
+        role: args.role,
+        shopId: args.shopId,
+        ...("mechanicId" in args
+          ? { mechanicId: args.mechanicId }
+          : {
+              firstName: args.firstName,
+              lastName: args.lastName,
+              title: args.title,
+            }),
+      }),
+      signal: AbortSignal.timeout(INVITE_REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    const timedOut =
+      err instanceof DOMException &&
+      (err.name === "TimeoutError" || err.name === "AbortError");
+    return {
+      ok: false as const,
+      error: timedOut
+        ? "The invitation is taking longer than expected. Please check your connection and try again."
+        : "Couldn't reach the server. Please try again.",
+    };
+  }
+
+  // Guard against non-JSON error responses (e.g. an HTML 500 page) so a bad
+  // body can't throw here and leave the caller without a result.
+  let data: { error?: string; token?: string } = {};
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
+  }
 
   if (!res.ok) {
     return {

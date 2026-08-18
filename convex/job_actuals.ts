@@ -22,6 +22,9 @@ import {
 } from "./lib/brakeScope";
 import { ensureWalkInCashPayment } from "./bookings";
 import { partFitsConfigMake } from "./partSelector";
+import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
+import { resolveSparkPlugQuantity } from "./lib/sparkPlugs";
+import { deriveSuggestedRecommendations } from "../lib/inspection-template";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
@@ -561,7 +564,30 @@ export const getPrefillData = query({
           // Per-unit cost (the dialog multiplies by quantity for the total).
           // Pre-fix bug: previously pushed `cost: 12 * qty` (line total)
           // with no `quantity`, which the dialog then multiplied again.
-          const qty = s.spark_plug_quantity ?? 4;
+          //
+          // The `?? 4` this replaces was a second, quieter bug: a missing
+          // quantity billed FOUR plugs on every engine, so a V6 was under-
+          // quoted by two and a HEMI V8 by twelve — confidently, with nothing
+          // marking it as a guess. `engine` is in scope here, so derive from
+          // its real cylinder count instead (lib/sparkPlugs owns the twin-plug
+          // exceptions). A genuinely unknown count now falls back to 1 rather
+          // than 4: still not the truth, but off by the smallest possible
+          // margin and visible as an obviously-wrong line rather than a
+          // plausible one. The pre-job form is where a mechanic corrects it.
+          const resolved = resolveSparkPlugQuantity({
+            spark_plug_quantity: s.spark_plug_quantity ?? engine.spark_plug_quantity,
+            cylinders: engine.cylinders,
+            make: make?.name,
+            engineCode: engine.engine_code,
+            displacementL: engine.displacement_l,
+          });
+          if (resolved.quantity == null) {
+            console.warn(
+              `[job-actuals] spark plug quantity unknown for engine ${engine._id} ` +
+                `(cylinders=${engine.cylinders ?? "null"}) — quoting 1, needs mechanic input`,
+            );
+          }
+          const qty = resolved.quantity ?? 1;
           suggestedParts.push({
             part_name: "Spark Plug",
             oem_number: s.spark_plug_oem,
@@ -811,6 +837,73 @@ export const getPrefillData = query({
       return nameAxle == null || nameAxle === axle;
     });
 
+    // This visit's inspection recommendations — split into what the mechanic
+    // already confirmed at pre-job (read-only here) and what they saw but
+    // didn't check (a second chance at post-job). See "Post-job survey —
+    // surfacing this visit's inspection recommendations."
+    const thisVisitRecRows = await ctx.db
+      .query("job_recommendations")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    const confirmedThisVisitRows = thisVisitRecRows.filter(
+      (r) => r.source === "inspection",
+    );
+    const confirmedThisVisit = await Promise.all(
+      confirmedThisVisitRows.map(async (rec) => {
+        const svc = rec.recommended_service_id
+          ? await ctx.db.get(rec.recommended_service_id)
+          : null;
+        return {
+          _id: rec._id,
+          service_name: svc?.name ?? rec.freeform_text ?? "Unspecified",
+          is_freeform: !rec.recommended_service_id,
+          urgency: rec.urgency,
+          reason: rec.reason ?? null,
+          created_at: rec.created_at,
+        };
+      }),
+    );
+    const confirmedServiceIds = new Set(
+      confirmedThisVisitRows
+        .map((r) => (r.recommended_service_id ? String(r.recommended_service_id) : null))
+        .filter((id): id is string => !!id),
+    );
+    const confirmedFreeformLabels = new Set(
+      confirmedThisVisitRows
+        .filter((r) => !r.recommended_service_id)
+        .map((r) => (r.freeform_text ?? "").trim().toLowerCase())
+        .filter((label) => label.length > 0),
+    );
+
+    const inspection = await ctx.db
+      .query("vehicle_inspections")
+      .withIndex("by_booking", (q) => q.eq("booking_id", args.bookingId))
+      .first();
+    const allServices = booking.shop_id ? await ctx.db.query("services").collect() : [];
+    const suggestedFromInspection = inspection
+      ? deriveSuggestedRecommendations(hydrateTieredInspectionState(inspection), {
+          onlyCompletedZones: true,
+        })
+          .map((s) => {
+            const found = allServices.find((svc: any) =>
+              svc.slug ? s.match.includes(svc.slug) : false,
+            );
+            return {
+              key: s.key,
+              label: s.label,
+              urgency: s.urgency,
+              reasons: s.reasons,
+              serviceId: found?._id ?? null,
+              serviceName: found?.name ?? null,
+            };
+          })
+          .filter((s) =>
+            s.serviceId
+              ? !confirmedServiceIds.has(String(s.serviceId))
+              : !confirmedFreeformLabels.has(s.label.trim().toLowerCase()),
+          )
+      : [];
+
     return {
       vehicleLabel,
       serviceName: service?.name ?? "",
@@ -823,6 +916,8 @@ export const getPrefillData = query({
       oemRecommendations,
       vehicleConfigId: vehicle.vehicle_config_id ?? null,
       priorOpenRecommendations,
+      confirmedThisVisit,
+      suggestedFromInspection,
     };
   },
 });

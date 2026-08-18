@@ -17,6 +17,7 @@ import {
   Car,
   Check,
   ChevronRight,
+  Copy,
   Info,
   Loader2,
   Lock,
@@ -47,6 +48,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
+  FluidCatalogSelectField,
+  FLUID_KIND_BY_KEY,
+} from "@/components/fluid-catalog-select-field";
+import {
   drawerPrimaryButtonClassName,
   drawerSecondaryButtonClassName,
 } from "@/components/drawer-panel-styles";
@@ -60,12 +65,14 @@ import {
   type PartsAccuracyStatus,
   type PostjobPhotoInput,
   type PostJobSurveyPayload,
+  type CustomJobOutcome,
   type RecommendationUrgency,
   type TimeVariance,
   type TimeVarianceReason,
   type VehiclePassportData,
 } from "@/lib/vehicle-passport";
 import type { Id } from "@/convex/_generated/dataModel";
+import ServiceSuggestions from "@/components/booking/service-suggestions";
 import { cn } from "@/lib/utils";
 import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
 import {
@@ -75,6 +82,13 @@ import {
   TIRE_SIZE_OPTIONS,
 } from "@/lib/inspection-options";
 import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
+import {
+  CustomJobTaxonomyPicker,
+  isCustomJobTaxonomyComplete,
+} from "@/components/custom-job-taxonomy-picker";
+import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
+import ServicePickerModal from "@/components/booking/service-picker-modal";
+import { describeCustomJobTaxonomy } from "@/lib/custom-job-taxonomy";
 
 /** Best-effort axle from a part name ("Front Brake Pads" → "front"). Mirrors
  *  convex/lib/brakeScope.partNameAxle; kept inline so the client bundle
@@ -137,6 +151,22 @@ type PriorOpenRecommendation = {
   created_at: number;
 };
 
+// A recommendation the mechanic already confirmed at pre-job, from this
+// same visit's inspection — shown read-only, since it's already created.
+type ConfirmedThisVisitRecommendation = PriorOpenRecommendation;
+
+// A candidate the mechanic saw on the pre-job "Suggested follow-ups" screen
+// but didn't check — offered again here as a second chance. Mirrors
+// ResolvedSuggestion in multi-point-inspection-dialog.tsx.
+type SuggestedFromInspection = {
+  key: string;
+  label: string;
+  urgency: RecommendationUrgency;
+  reasons: string[];
+  serviceId: string | null;
+  serviceName: string | null;
+};
+
 type PostJobPrefillData = {
   vehicleLabel: string;
   serviceName: string;
@@ -151,6 +181,8 @@ type PostJobPrefillData = {
   trimLabel?: string | null;
   oemRecommendations?: OemRecommendation[];
   priorOpenRecommendations?: PriorOpenRecommendation[];
+  confirmedThisVisit?: ConfirmedThisVisitRecommendation[];
+  suggestedFromInspection?: SuggestedFromInspection[];
 } | null;
 
 type RecRowState = {
@@ -208,6 +240,11 @@ type PartRowState = {
   // correctly downstream. Legacy rows leave it unset; snapshot path falls
   // back to booking.service_ids[0].
   service_id?: string | null;
+  // Set instead of service_id when the part belongs to an off-catalog line.
+  // Carried verbatim from the locked quote through to the submit payload so
+  // completion can record it against the custom job it was fitted to — a
+  // custom line has no services row for service_id to point at.
+  custom_service_name?: string | null;
   // "catalog" = seeded from the Otopair prefill, identity fields locked.
   // "manual" = mechanic-added row, fully editable. Absent on legacy rows
   // (treated as "manual" so we never accidentally lock a user-typed row).
@@ -250,6 +287,8 @@ type StepKey =
   | "vehicle_updates"
   | "photos"
   | "tip"
+  | "found_work"
+  | "custom_outcomes"
   | "recommendations"
   | "flag"
   | "summary";
@@ -399,6 +438,15 @@ const FLUID_PLACEHOLDERS: Record<string, { placeholder: string; otherPlaceholder
 };
 
 const OTHER_OPTION_ID = "__other__";
+
+// Post-job additionally routes oil TYPE through the OEM catalog picker (as
+// engine-oil products), on top of the four product fluids the shared map
+// already covers. Kept local so the pre-job inspection — which deliberately
+// keeps oil on its generic grade/type combobox — is unaffected.
+const POSTJOB_FLUID_KIND_BY_KEY: Record<string, string> = {
+  ...FLUID_KIND_BY_KEY,
+  oil_type: "engine_oil",
+};
 
 function resolveFluidOption(
   value: string | null | undefined,
@@ -562,6 +610,7 @@ function FluidSelectField({
   );
 }
 
+
 function parseOilFilterValue(value: string): { brand: string; code: string } {
   const trimmed = (value ?? "").trim();
   if (!trimmed) return { brand: "", code: "" };
@@ -649,6 +698,7 @@ function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
       supplied_by: part.supplied_by === "customer" ? "customer" : "shop",
       part_tier: part.part_tier ?? "oem",
       service_id: part.service_id ?? null,
+      custom_service_name: part.custom_service_name ?? null,
       source: resolvedSource,
       not_used: part.not_used === true ? true : undefined,
       learned_from:
@@ -660,6 +710,52 @@ function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
           : undefined,
     };
   });
+}
+
+/**
+ * Part number rendered as a click-to-copy control. Mechanics read these off to
+ * order/look up parts, so make them one-tap copyable instead of hand-typing.
+ * Falls back to a plain "—" when there's no number. Copy failures (blocked
+ * clipboard / insecure context) degrade silently — the text stays selectable.
+ */
+function CopyableOemNumber({
+  value,
+  className,
+}: {
+  value: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const canCopy = value.trim().length > 0;
+  if (!canCopy) return <span className={className}>—</span>;
+  return (
+    <button
+      type="button"
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1200);
+        } catch {
+          /* clipboard unavailable — leave the text selectable */
+        }
+      }}
+      title={copied ? "Copied!" : "Copy part number"}
+      aria-label={`Copy part number ${value}`}
+      className={cn(
+        "group inline-flex max-w-full items-center gap-1 text-left font-mono tabular-nums transition-colors hover:text-primary",
+        className,
+      )}
+    >
+      <span className="truncate">{value}</span>
+      {copied ? (
+        <Check className="h-3 w-3 shrink-0 text-emerald-600" />
+      ) : (
+        <Copy className="h-3 w-3 shrink-0 text-muted-foreground/50 transition-opacity group-hover:text-primary" />
+      )}
+    </button>
+  );
 }
 
 function makePhotoId() {
@@ -711,7 +807,10 @@ export default function PostJobSurveyDialog({
   prefillData: PostJobPrefillData;
   isSubmitting: boolean;
   onClose: () => void;
-  onSubmit: (payload: PostJobSurveyPayload) => Promise<void>;
+  onSubmit: (
+    payload: PostJobSurveyPayload,
+    customJobOutcomes?: CustomJobOutcome[],
+  ) => Promise<void>;
   initialTechnicianNotes?: string;
   initialPhotos?: PhotoState[];
   cycle?: PostJobSurveyCycle;
@@ -814,7 +913,10 @@ function PostJobSurveyDialogBody({
   prefillData: PostJobPrefillData;
   isSubmitting: boolean;
   onClose: () => void;
-  onSubmit: (payload: PostJobSurveyPayload) => Promise<void>;
+  onSubmit: (
+    payload: PostJobSurveyPayload,
+    customJobOutcomes?: CustomJobOutcome[],
+  ) => Promise<void>;
   initialTechnicianNotes: string;
   initialPhotos: PhotoState[];
   cycle?: PostJobSurveyCycle;
@@ -969,6 +1071,31 @@ function PostJobSurveyDialogBody({
       }),
     );
   }, [brakeScope]);
+  // Re-seed the parts list when the dialog actually OPENS. `quotedParts` (the
+  // customer-approved snapshot for locked / mid-job flows) resolves a tick after
+  // this component first mounts, so the useState initializer above can capture
+  // the pre-approval fallback (the booking's original priced snapshot) instead
+  // of the agreed prices + Not-used flags. This corrects that:
+  //   - Locked review (post-job): no edits to preserve, so mirror the freshest
+  //     quote reactively.
+  //   - Editable cycles (pre/mid-job): seed once per open so a later quote
+  //     refresh can't clobber the mechanic's in-progress edits.
+  const readOnlyBillingMode = lockBilling && !cycle;
+  const seededPartsForOpenRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      seededPartsForOpenRef.current = false;
+      return;
+    }
+    if (!quotedParts || quotedParts.length === 0) return;
+    if (readOnlyBillingMode) {
+      setParts(buildPartRows(quotedParts));
+      return;
+    }
+    if (seededPartsForOpenRef.current) return;
+    seededPartsForOpenRef.current = true;
+    setParts(buildPartRows(quotedParts));
+  }, [open, quotedParts, readOnlyBillingMode, lockBilling, cycle]);
   // Scope the catalog's OEM recommendations to the booked axle too, so the
   // "N of M confirmed" counter and the swap/suggestion rows only count what
   // was actually quoted (rear-only → 1 of 1, never 1 of 2).
@@ -1009,7 +1136,76 @@ function PostJobSurveyDialogBody({
     useState<PartsAccuracyStatus | null>(null);
   const [partsAccuracyFeedback, setPartsAccuracyFeedback] = useState("");
   const [additionalObservations, setAdditionalObservations] = useState("");
+
+  /* ── Off-catalog outcomes (Off-Catalog Work spec, §7) ───────────────────────
+     The custom lines on this booking, and what the mechanic reports about each.
+     `resolution` + `resolved_complaint` close the triple that the complaint
+     opened at booking time: symptom → what we did → whether it worked. That's
+     the whole reason to capture any of this. */
+  const customJobs = useQuery(
+    api.customJobs.listForBooking,
+    open && bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
+  );
+  const [customJobOutcomes, setCustomJobOutcomes] = useState<
+    Record<string, { resolution: string; resolved: boolean | null }>
+  >({});
   const [recommendations, setRecommendations] = useState<RecRowState[]>([]);
+
+  /* ── Mid-job flags seed the survey (Flag Issue spec, §4) ────────────────────
+     Anything the mechanic flagged from the active-job overlay is already a
+     job_recommendations row. Asking again at completion would be asking the same
+     question twice and inviting a duplicate, so the survey opens with those rows
+     already filled in — confirm or edit, don't re-enter.
+
+     Seeded once per booking: after that the mechanic owns the list, and
+     re-seeding would clobber their edits on every re-render. */
+  const midJobFlagged = useQuery(
+    api.jobRecommendations.getMidJobFlaggedForBooking,
+    open && bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
+  );
+  const seededRecsForBookingRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open || !bookingId || !midJobFlagged) return;
+    const key = String(bookingId);
+    if (seededRecsForBookingRef.current === key) return;
+    seededRecsForBookingRef.current = key;
+    if (midJobFlagged.length === 0) return;
+
+    setRecommendations((prev) => {
+      const already = new Set(
+        prev.map((r) =>
+          (r.recommended_service_id ?? r.freeform_service_name).toLowerCase(),
+        ),
+      );
+      const seeded: RecRowState[] = midJobFlagged
+        .filter((f) => {
+          const key2 = (
+            f.recommended_service_id ?? f.freeform_service_name
+          ).toLowerCase();
+          return !already.has(key2);
+        })
+        .map((f) => ({
+          id: makeRecId(),
+          recommended_service_id: f.recommended_service_id as string | null,
+          service_label: f.service_label ?? f.freeform_service_name,
+          service_slug: f.service_slug,
+          service_has_options: f.service_has_options,
+          freeform_service_name: f.recommended_service_id
+            ? ""
+            : f.freeform_service_name,
+          urgency: f.urgency as RecommendationUrgency,
+          reason: f.reason,
+          visible_to_driver: f.visible_to_driver,
+          target_mileage: defaultTriggerMileage(Number(completionMileage)),
+          scheduled_at: null,
+          scheduled_mechanic_id: null,
+          scheduled_mechanic_name: null,
+          selected_service_option: null,
+          tire_specs: null,
+        }));
+      return seeded.length > 0 ? [...seeded, ...prev] : prev;
+    });
+  }, [open, bookingId, midJobFlagged]);
   const [photos, setPhotos] = useState<PhotoState[]>(initialPhotos);
   const [error, setError] = useState("");
 
@@ -1025,6 +1221,15 @@ function PostJobSurveyDialogBody({
     // reports. Hide every step that describes a *completed* job — mileage,
     // parts_accuracy, vehicle_updates, time variance, difficulty, tip,
     // recommendations. Parts → Labor → Flag (optional) → Photos → Summary.
+    // Flag Issue spec, §3. "Add unforeseen scope" could add money and time but had
+    // no way to say WHAT the work was, so a mechanic who found a whole extra
+    // service either faked it as anonymous parts-and-hours — leaving nothing in
+    // the service history, nothing in the maintenance record and nothing readable
+    // on the receipt — or mentioned it verbally. This step comes first because the
+    // answer changes what the Parts step should even show.
+    if (cycle === "mid_job") {
+      list.push("found_work");
+    }
     if (!isEstimateCycle) {
       list.push("mileage");
     }
@@ -1042,6 +1247,10 @@ function PostJobSurveyDialogBody({
     // recommendations, time/difficulty). The 3-step "Adjust quote" flow is:
     // Parts → Labor → Summary (which doubles as the reasoning + send screen).
     if (!isEstimateCycle) {
+      // Off-catalog outcomes (Off-Catalog Work spec, §7). Only shown when the
+      // booking actually carries custom lines, so the survey doesn't grow a
+      // dead step for the overwhelming majority of bookings.
+      if ((customJobs?.length ?? 0) > 0) list.push("custom_outcomes");
       list.push("flag");
       list.push("time_check");
       if (timeVariance && timeVariance !== "on_time") list.push("time_reason");
@@ -1058,6 +1267,9 @@ function PostJobSurveyDialogBody({
     requiresParts,
     prefillData?.suggestedParts?.length,
     updatePrompts.length,
+    // The custom-outcomes step appears only for bookings with off-catalog lines,
+    // and this query resolves after first render.
+    customJobs?.length,
   ]);
 
   // ─── Estimate-cycle running total ──────────────────────────────────────
@@ -1186,6 +1398,7 @@ function PostJobSurveyDialogBody({
           supplied_by: suppliedBy,
           part_tier: part.part_tier || "oem",
           service_id: part.service_id ?? null,
+          custom_service_name: part.custom_service_name ?? null,
           source: part.source,
           swap_from_oem_number: part.swap_from_oem_number || undefined,
           not_used: notUsed ? true : undefined,
@@ -1320,6 +1533,7 @@ function PostJobSurveyDialogBody({
         supplied_by: p.supplied_by ?? undefined,
         part_tier: p.part_tier ?? undefined,
         service_id: p.service_id ?? undefined,
+        custom_service_name: p.custom_service_name ?? undefined,
         source: p.source ?? undefined,
         swap_from_oem_number: p.swap_from_oem_number ?? undefined,
         not_used: p.not_used ?? undefined,
@@ -1430,7 +1644,24 @@ function PostJobSurveyDialogBody({
             tire_specs: r.tire_specs ?? null,
           };
         }),
-    });
+      },
+      // Only send lines the mechanic actually reported on. An untouched line
+      // still closes server-side, but as "completed, no outcome recorded" —
+      // which the director view reports honestly rather than inventing a result.
+      (customJobs ?? []).flatMap<CustomJobOutcome>((job) => {
+        const entry = customJobOutcomes[job._id];
+        if (!entry) return [];
+        if (!entry.resolution.trim() && entry.resolved === null) return [];
+        return [
+          {
+            name: job.name,
+            resolution: entry.resolution.trim() || undefined,
+            resolved_complaint:
+              entry.resolved === null ? undefined : entry.resolved,
+          },
+        ];
+      }),
+    );
   }
 
   async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {
@@ -1648,6 +1879,12 @@ function PostJobSurveyDialogBody({
 
           <StepContent
             step={currentStep}
+            bookingId={bookingId}
+            vin={passportData?.vin ?? null}
+            onFoundWorkToast={(m) => setError(m)}
+            customJobs={customJobs}
+            customJobOutcomes={customJobOutcomes}
+            setCustomJobOutcomes={setCustomJobOutcomes}
             readOnlyBilling={lockBilling && !cycle}
             lockedQuote={lockedQuote}
             bookingLabel={bookingLabel}
@@ -1679,6 +1916,7 @@ function PostJobSurveyDialogBody({
             setParts={setParts}
             requiresParts={requiresParts}
             partsRequiredServices={passportData?.parts_required_services ?? []}
+            customPartLines={(customJobs ?? []).map((j) => ({ name: j.name }))}
             suggestedParts={prefillData?.suggestedParts ?? []}
             oemRecommendations={scopedOemRecommendations}
             difficultyRating={difficultyRating}
@@ -1722,6 +1960,8 @@ function PostJobSurveyDialogBody({
             priorOpenRecommendations={
               prefillData?.priorOpenRecommendations ?? []
             }
+            confirmedThisVisit={prefillData?.confirmedThisVisit ?? []}
+            suggestedFromInspection={prefillData?.suggestedFromInspection ?? []}
             actualPartsCost={actualPartsCost}
             setActualPartsCost={setActualPartsCost}
             partsCostSum={sumJobActualParts(normalizeParts())}
@@ -1816,6 +2056,18 @@ function PostJobSurveyDialogBody({
                   partsAccuracyFeedback,
                   requiresParts,
                   filledPartsCount: parts.filter((p) => p.part_name.trim() !== "").length,
+                  // Billing locked → prices aren't editable, so never block on
+                  // them. Otherwise: any named, billable shop part left at $0.
+                  unpricedBlockingCount:
+                    lockBilling && !cycle
+                      ? 0
+                      : parts.filter(
+                          (p) =>
+                            p.supplied_by !== "customer" &&
+                            p.not_used !== true &&
+                            p.part_name.trim() !== "" &&
+                            (Number(p.cost) || 0) <= 0,
+                        ).length,
                   recommendations,
                 })}
                 className={cn(
@@ -1845,6 +2097,10 @@ function canAdvance(
     partsAccuracyFeedback: string;
     requiresParts: boolean;
     filledPartsCount: number;
+    // Billable shop parts left at $0 (excludes customer-supplied and Not-used
+    // rows). Non-zero blocks the parts step. Always 0 when billing is locked,
+    // since prices aren't editable there.
+    unpricedBlockingCount: number;
     recommendations: RecRowState[];
   }
 ) {
@@ -1874,7 +2130,10 @@ function canAdvance(
   if (step === "parts") {
     // If the service is flagged as requiring parts, the mechanic must add at
     // least one part with a non-empty name before moving on.
-    if (state.requiresParts) return state.filledPartsCount > 0;
+    if (state.requiresParts && state.filledPartsCount === 0) return false;
+    // Every billable shop part must carry a price. An unpriced row has to be
+    // priced, swapped, marked Not used, or removed before continuing.
+    if (state.unpricedBlockingCount > 0) return false;
     return true;
   }
   if (step === "parts_accuracy") {
@@ -1888,6 +2147,16 @@ function canAdvance(
 
 function StepContent(props: {
   step: StepKey;
+  bookingId: string | null;
+  /** VIN of the booking's vehicle — resolves the make for the fluid catalog
+   *  picker so this vehicle's own products pin to the top. */
+  vin: string | null;
+  onFoundWorkToast?: (message: string) => void;
+  customJobs: CustomJobRow[] | undefined;
+  customJobOutcomes: Record<string, { resolution: string; resolved: boolean | null }>;
+  setCustomJobOutcomes: (
+    next: Record<string, { resolution: string; resolved: boolean | null }>,
+  ) => void;
   readOnlyBilling: boolean;
   lockedQuote: LockedQuote | null;
   bookingLabel: string;
@@ -1913,6 +2182,12 @@ function StepContent(props: {
   // List of services on this booking whose catalog row sets requires_parts.
   // Used by PartsStep to render one parts block per service when length > 1.
   partsRequiredServices: Array<{ _id: string; name: string }>;
+  /** Off-catalog lines on this booking. They get their own add-part buttons:
+   *  a custom line has no services row, so without this a part fitted to one
+   *  was stamped with the first catalog service_id (or nothing) and the
+   *  association was lost — which is why the director's cluster read showed
+   *  "none" against work that plainly consumed a part. */
+  customPartLines?: Array<{ name: string }>;
   suggestedParts: JobActualPartPayload[];
   oemRecommendations: OemRecommendation[];
   difficultyRating: string;
@@ -1938,6 +2213,8 @@ function StepContent(props: {
   setRecommendations: React.Dispatch<React.SetStateAction<RecRowState[]>>;
   engineId: string | null;
   priorOpenRecommendations: PriorOpenRecommendation[];
+  confirmedThisVisit: ConfirmedThisVisitRecommendation[];
+  suggestedFromInspection: SuggestedFromInspection[];
   actualPartsCost: string;
   setActualPartsCost: (value: string) => void;
   partsCostSum: number;
@@ -2110,6 +2387,7 @@ function StepContent(props: {
           setParts={props.setParts}
           requiresParts={props.requiresParts}
           partsRequiredServices={props.partsRequiredServices}
+          customPartLines={props.customPartLines}
           suggestedParts={props.suggestedParts}
           oemRecommendations={props.oemRecommendations}
           actualPartsCost={props.actualPartsCost}
@@ -2242,6 +2520,26 @@ function StepContent(props: {
                         }))
                       }
                     />
+                  ) : POSTJOB_FLUID_KIND_BY_KEY[prompt.key as string] ? (
+                    <FluidCatalogSelectField
+                      value={String(props.vehicleUpdates[prompt.key] ?? "")}
+                      onChange={(next) =>
+                        props.setVehicleUpdates((current) => ({
+                          ...current,
+                          [prompt.key]: next,
+                        }))
+                      }
+                      fluidKind={POSTJOB_FLUID_KIND_BY_KEY[prompt.key as string]}
+                      vin={props.vin}
+                      placeholder={
+                        FLUID_PLACEHOLDERS[prompt.key as string]?.placeholder ??
+                        "Select…"
+                      }
+                      otherPlaceholder={
+                        FLUID_PLACEHOLDERS[prompt.key as string]
+                          ?.otherPlaceholder ?? "Other"
+                      }
+                    />
                   ) : (
                     <FluidSelectField
                       value={String(props.vehicleUpdates[prompt.key] ?? "")}
@@ -2293,6 +2591,22 @@ function StepContent(props: {
           />
         </QuestionScreen>
       );
+    case "found_work":
+      return (
+        <FoundWorkStep
+          bookingId={props.bookingId}
+          engineId={props.engineId}
+          onToast={props.onFoundWorkToast}
+        />
+      );
+    case "custom_outcomes":
+      return (
+        <CustomOutcomesStep
+          jobs={props.customJobs ?? []}
+          outcomes={props.customJobOutcomes}
+          setOutcomes={props.setCustomJobOutcomes}
+        />
+      );
     case "recommendations":
       return (
         <RecommendationsStep
@@ -2300,6 +2614,8 @@ function StepContent(props: {
           setRecommendations={props.setRecommendations}
           engineId={props.engineId}
           priorOpenRecommendations={props.priorOpenRecommendations}
+          confirmedThisVisit={props.confirmedThisVisit}
+          suggestedFromInspection={props.suggestedFromInspection}
           additionalObservations={props.additionalObservations}
           setAdditionalObservations={props.setAdditionalObservations}
           completionMileage={props.completionMileage}
@@ -2497,6 +2813,7 @@ function PartsStep({
   setParts,
   requiresParts,
   partsRequiredServices,
+  customPartLines = [],
   suggestedParts,
   oemRecommendations,
   actualPartsCost,
@@ -2514,6 +2831,12 @@ function PartsStep({
   // List of services on this booking whose catalog row sets requires_parts.
   // Used by PartsStep to render one parts block per service when length > 1.
   partsRequiredServices: Array<{ _id: string; name: string }>;
+  /** Off-catalog lines on this booking. They get their own add-part buttons:
+   *  a custom line has no services row, so without this a part fitted to one
+   *  was stamped with the first catalog service_id (or nothing) and the
+   *  association was lost — which is why the director's cluster read showed
+   *  "none" against work that plainly consumed a part. */
+  customPartLines?: Array<{ name: string }>;
   suggestedParts: JobActualPartPayload[];
   oemRecommendations: OemRecommendation[];
   actualPartsCost: string;
@@ -2617,6 +2940,16 @@ function PartsStep({
   }
 
   const hasFilledPart = parts.some((p) => p.part_name.trim() !== "");
+  // Billable shop parts still sitting at $0 — these block Continue (mirrors the
+  // parent's canAdvance gate). Customer-supplied and Not-used rows are exempt;
+  // the locked/read-only path returns above and never reaches this.
+  const unpricedBlockingCount = parts.filter(
+    (p) =>
+      p.supplied_by !== "customer" &&
+      p.not_used !== true &&
+      p.part_name.trim() !== "" &&
+      (Number(p.cost) || 0) <= 0,
+  ).length;
   const prefilled = suggestedParts.length > 0;
   // Step copy adapts: when the cascade pre-loaded suggestions, the step is
   // "confirm what we expect you to use" — otherwise it's "tell us what
@@ -2720,13 +3053,16 @@ function PartsStep({
                           </span>
                         ) : null}
                       </div>
-                      <p className="mt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
-                        {part.oem_number || "—"}
-                        {qty > 1 ? ` · qty ${qty}` : ""}
-                        {part.supplied_by === "customer"
-                          ? " · customer-supplied"
-                          : ""}
-                      </p>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-1 font-mono text-[11px] tabular-nums text-muted-foreground">
+                        <CopyableOemNumber
+                          value={part.oem_number || ""}
+                          className="text-[11px] text-muted-foreground"
+                        />
+                        {qty > 1 ? <span>· qty {qty}</span> : null}
+                        {part.supplied_by === "customer" ? (
+                          <span>· customer-supplied</span>
+                        ) : null}
+                      </div>
                     </div>
                     <span className="shrink-0 text-[13px] font-medium tabular-nums text-foreground">
                       ${(unit * qty).toFixed(2)}
@@ -2813,6 +3149,14 @@ function PartsStep({
           </div>
         ) : null}
 
+        {unpricedBlockingCount > 0 ? (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+            {unpricedBlockingCount === 1
+              ? "1 part is still unpriced. Enter its price — or swap it, mark it Not used, or remove it — to continue."
+              : `${unpricedBlockingCount} parts are still unpriced. Enter each price — or swap, mark Not used, or remove them — to continue.`}
+          </div>
+        ) : null}
+
         {parts.length === 0 ? (
           <div className="rounded-xl border border-dashed border-primary/20 bg-muted/30 px-4 py-6 text-center text-[12px] text-muted-foreground">
             No parts added yet.
@@ -2829,6 +3173,13 @@ function PartsStep({
             const sourcesUsed = oemRec?.price_sources_used ?? 0;
             const avgPrice = oemRec?.average_price ?? 0;
             const medianPrice = oemRec?.median_price ?? 0;
+            // A shop-supplied row that resolved to $0 — the catalog had no
+            // trustworthy price for this part (e.g. every source was
+            // discount-typed and got filtered out of the aggregate). Surface it
+            // as "unpriced" and prompt the mechanic to set the real price,
+            // rather than letting the line silently bill $0.
+            const costNum = Number(part.cost) || 0;
+            const isUnpriced = !isCustomer && costNum <= 0;
             // Identity (name / brand / OEM number) is locked when the row was
             // seeded from the catalog. Mechanic-added "manual" rows stay fully
             // editable. Falls back to isOemRecommended for legacy rows that
@@ -2955,12 +3306,13 @@ function PartsStep({
                           Part number
                         </span>
                         {isCatalogRow ? (
-                          <span
-                            className={`${lockedSmallClasses} mt-0.5 block font-mono tabular-nums`}
-                            title="From catalog — swap the part to change its OEM number."
-                          >
-                            {part.oem_number || "—"}
-                          </span>
+                          <CopyableOemNumber
+                            value={part.oem_number || ""}
+                            className={cn(
+                              lockedSmallClasses,
+                              "mt-0.5 flex w-full items-center justify-between",
+                            )}
+                          />
                         ) : (
                           <input
                             value={part.oem_number}
@@ -2976,43 +3328,85 @@ function PartsStep({
                     {/* Otopair price line / cost editor — suppressed when the
                         mechanic flagged the row Not used; price doesn't apply
                         when the part didn't go in. */}
-                    {!isNotUsed && (
-                    <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
-                      <span className="text-muted-foreground">
-                        {isCustomer ? "Customer-supplied:" : "Price per unit: "}
-                      </span>
-                      {isCustomer ? (
-                        <span className="font-medium text-muted-foreground">$0</span>
-                      ) : (
-                        <div className="flex items-center gap-1">
-                          <span className="text-muted-foreground">$</span>
-                          <FixedCentCurrencyInput
-                            value={part.cost}
-                            onValueChange={(value) =>
-                              updatePart(index, {
-                                cost: value,
-                              })
-                            }
-                            placeholder={
-                              medianPrice > 0
-                                ? medianPrice.toFixed(2)
-                                : avgPrice > 0
-                                  ? avgPrice.toFixed(2)
-                                  : "0.00"
-                            }
-                            title={
-                              isOemRecommended && sourcesUsed > 0 && medianPrice > 0
-                                ? `Otopair median $${medianPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
-                                : isOemRecommended && sourcesUsed > 0 && avgPrice > 0
-                                  ? `Otopair average $${avgPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
-                                  : undefined
-                            }
-                            className="h-6 w-20 rounded-md border border-primary/10 bg-background px-1.5 text-[12px] font-medium tabular-nums outline-none focus:border-primary/30"
-                          />
+                    {!isNotUsed &&
+                      (isCustomer ? (
+                        <div className="mt-2 flex flex-wrap items-center gap-2 text-[12px]">
+                          <span className="text-muted-foreground">
+                            Customer-supplied:
+                          </span>
+                          <span className="font-medium text-muted-foreground">$0</span>
                         </div>
-                      )}
-                    </div>
-                    )}
+                      ) : (
+                        // Keep the price input mounted in a fixed position across
+                        // the unpriced→priced transition — the fixed-cent input
+                        // flips cost > 0 on the first digit, so remounting it
+                        // would steal focus mid-type. Only the warning banner and
+                        // styling toggle on `isUnpriced`.
+                        <div className="mt-2 space-y-1.5">
+                          {isUnpriced ? (
+                            <div className="flex items-start gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-2.5 py-1.5">
+                              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600" />
+                              <div className="min-w-0">
+                                <span className="text-[12px] font-semibold text-amber-800">
+                                  This part is unpriced
+                                </span>
+                                <p className="text-[11px] leading-snug text-amber-700">
+                                  Otopair doesn&apos;t have a price on file — enter the
+                                  price per unit you&apos;re charging.
+                                </p>
+                              </div>
+                            </div>
+                          ) : null}
+                          <div className="flex flex-wrap items-center gap-2 text-[12px]">
+                            <span
+                              className={
+                                isUnpriced
+                                  ? "font-medium text-amber-800"
+                                  : "text-muted-foreground"
+                              }
+                            >
+                              Price per unit:
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <span
+                                className={
+                                  isUnpriced ? "text-amber-800" : "text-muted-foreground"
+                                }
+                              >
+                                $
+                              </span>
+                              <FixedCentCurrencyInput
+                                value={part.cost}
+                                onValueChange={(value) =>
+                                  updatePart(index, {
+                                    cost: value,
+                                  })
+                                }
+                                placeholder={
+                                  medianPrice > 0
+                                    ? medianPrice.toFixed(2)
+                                    : avgPrice > 0
+                                      ? avgPrice.toFixed(2)
+                                      : "0.00"
+                                }
+                                title={
+                                  isOemRecommended && sourcesUsed > 0 && medianPrice > 0
+                                    ? `Otopair median $${medianPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
+                                    : isOemRecommended && sourcesUsed > 0 && avgPrice > 0
+                                      ? `Otopair average $${avgPrice.toFixed(2)} across ${sourcesUsed} source${sourcesUsed === 1 ? "" : "s"}`
+                                      : undefined
+                                }
+                                className={cn(
+                                  "h-6 rounded-md border bg-background px-1.5 text-[12px] font-medium tabular-nums outline-none",
+                                  isUnpriced
+                                    ? "w-24 border-amber-400 text-amber-900 focus:border-amber-500"
+                                    : "w-20 border-primary/10 focus:border-primary/30",
+                                )}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
                   </div>
                   {/* Quantity stepper — hidden alongside the price input when
                       the row is flagged Not used. */}
@@ -3217,8 +3611,38 @@ function PartsStep({
           service gets its own button so the new row is stamped with the
           right service_id and snapshots attribute correctly downstream.
         */}
-        {partsRequiredServices.length > 1 ? (
+        {partsRequiredServices.length + customPartLines.length > 1 ? (
           <div className="grid gap-2 sm:grid-cols-2">
+            {/* One button per off-catalog line, stamping the line's NAME rather
+                than a service id — that name is the key completion groups parts
+                by when it writes them onto custom_jobs. */}
+            {customPartLines.map((line) => (
+              <button
+                key={`custom-${line.name}`}
+                type="button"
+                onClick={() =>
+                  setParts((current) => [
+                    ...current,
+                    {
+                      part_name: "",
+                      brand: "",
+                      oem_number: "",
+                      cost: "0.00",
+                      quantity: 1,
+                      supplied_by: "shop",
+                      part_tier: "oem",
+                      service_id: null,
+                      custom_service_name: line.name,
+                      source: "manual",
+                    },
+                  ])
+                }
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add part for {line.name}</span>
+              </button>
+            ))}
             {partsRequiredServices.map((svc) => (
               <button
                 key={svc._id}
@@ -3261,6 +3685,13 @@ function PartsStep({
                   supplied_by: "shop",
                   part_tier: "oem",
                   service_id: partsRequiredServices[0]?._id ?? null,
+                  // Sole line is off-catalog — attribute the part to it rather
+                  // than leaving it unattached to anything.
+                  custom_service_name:
+                    partsRequiredServices.length === 0 &&
+                    customPartLines.length === 1
+                      ? customPartLines[0].name
+                      : undefined,
                   source: "manual",
                 },
               ])
@@ -3549,6 +3980,179 @@ function PhotosStep({
   );
 }
 
+// Common "next interval" jumps for a follow-up's mileage trigger. Added onto
+// the car's current odometer so the mechanic never does the arithmetic.
+const MILEAGE_INCREMENTS = [3000, 5000, 10000] as const;
+
+/**
+ * A follow-up's default mileage trigger: the car's current odometer plus one
+ * service interval (+5k). Never below the current reading, and the +5k is
+ * already done so the mechanic doesn't have to. Empty when the odometer is
+ * unknown (walk-ins / missing passport) — the field then falls back to exact
+ * entry with no default.
+ */
+function defaultTriggerMileage(
+  currentOdometer: number | null | undefined,
+): string {
+  if (
+    currentOdometer == null ||
+    !Number.isFinite(currentOdometer) ||
+    currentOdometer <= 0
+  ) {
+    return "";
+  }
+  return String(Math.round(currentOdometer) + 5000);
+}
+
+/**
+ * Trigger-at-mileage picker for a follow-up recommendation. Two ways to land on
+ * the same absolute odometer target:
+ *   • "At mileage" — type the exact reading it's due at.
+ *   • "+ Miles"    — pick how far ahead (e.g. +5,000); we add it to the car's
+ *                    current odometer so the mechanic never does the math.
+ * The current odometer is the floor — a follow-up can't come due before now — so
+ * exact entries clamp up to it on blur and relative jumps add on top of it.
+ * `value` is the absolute mileage stored on the row; this only offers two ways
+ * to arrive at it. When the odometer is unknown, relative mode is hidden.
+ */
+function MileageTriggerField({
+  value,
+  onChange,
+  currentOdometer,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  currentOdometer: number | null;
+}) {
+  const floor =
+    currentOdometer != null &&
+    Number.isFinite(currentOdometer) &&
+    currentOdometer > 0
+      ? Math.round(currentOdometer)
+      : null;
+  const absolute = Number(value);
+  const hasAbsolute =
+    value.trim() !== "" && Number.isFinite(absolute) && absolute > 0;
+  const activeDelta =
+    floor != null && hasAbsolute && absolute > floor ? absolute - floor : null;
+  const belowFloor = floor != null && hasAbsolute && absolute < floor;
+  const canUseRelative = floor != null;
+
+  // A follow-up defaulted to current + 5k opens in "+ Miles" so the jump the
+  // mechanic will most often reach for is already in front of them.
+  const [mode, setMode] = useState<"exact" | "relative">(
+    canUseRelative && (activeDelta != null || !hasAbsolute) ? "relative" : "exact",
+  );
+
+  return (
+    <div>
+      <div className="flex items-center justify-between gap-2">
+        <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          Trigger at mileage
+        </label>
+        {canUseRelative ? (
+          <div className="inline-flex rounded-md border border-primary/15 p-0.5">
+            {(
+              [
+                ["relative", "+ Miles"],
+                ["exact", "Exact"],
+              ] as const
+            ).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={cn(
+                  "rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider transition-colors",
+                  mode === m
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      {mode === "relative" && floor != null ? (
+        <div className="mt-1 space-y-1.5">
+          <div className="flex flex-wrap gap-1.5">
+            {MILEAGE_INCREMENTS.map((inc) => {
+              const active = activeDelta === inc;
+              return (
+                <button
+                  key={inc}
+                  type="button"
+                  onClick={() => onChange(String(floor + inc))}
+                  className={cn(
+                    "inline-flex items-center rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all",
+                    active
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-primary/15 bg-background text-foreground hover:bg-primary/5",
+                  )}
+                >
+                  +{inc.toLocaleString()}
+                </button>
+              );
+            })}
+            {value.trim() ? (
+              <button
+                type="button"
+                onClick={() => onChange("")}
+                className="inline-flex items-center rounded-full border border-primary/15 bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-all hover:bg-primary/5"
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {hasAbsolute && absolute > floor
+              ? `Due at ${absolute.toLocaleString()} mi — ${floor.toLocaleString()} + ${(activeDelta ?? absolute - floor).toLocaleString()}`
+              : `Adds onto the current ${floor.toLocaleString()} mi`}
+          </p>
+        </div>
+      ) : (
+        <>
+          <div
+            className={cn(
+              "mt-1 flex items-center gap-1.5 rounded-lg border bg-background px-2.5",
+              belowFloor ? "border-destructive/50" : "border-primary/15",
+            )}
+          >
+            <Gauge
+              className="h-3.5 w-3.5 text-muted-foreground"
+              aria-hidden
+            />
+            <input
+              type="number"
+              inputMode="numeric"
+              min={floor ?? 0}
+              step={1000}
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              onBlur={() => {
+                // Odometers don't run backward — clamp a below-floor entry up to
+                // the current reading rather than silently rejecting it.
+                if (belowFloor && floor != null) onChange(String(floor));
+              }}
+              placeholder={floor != null ? floor.toLocaleString() : "e.g. 170000"}
+              className="h-9 w-full bg-transparent text-[12px] outline-none"
+            />
+            <span className="text-[11px] text-muted-foreground">mi</span>
+          </div>
+          {belowFloor && floor != null ? (
+            <p className="mt-1 text-[10px] text-destructive">
+              Can&apos;t be below the current {floor.toLocaleString()} mi.
+            </p>
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
 /**
  * Replaces the old "Anything else to note?" textarea with structured
  * recommendations. Each row captures {service, urgency, reason, visible}
@@ -3561,6 +4165,8 @@ function RecommendationsStep({
   setRecommendations,
   engineId,
   priorOpenRecommendations,
+  confirmedThisVisit,
+  suggestedFromInspection,
   additionalObservations,
   setAdditionalObservations,
   completionMileage,
@@ -3569,6 +4175,8 @@ function RecommendationsStep({
   setRecommendations: React.Dispatch<React.SetStateAction<RecRowState[]>>;
   engineId: string | null;
   priorOpenRecommendations: PriorOpenRecommendation[];
+  confirmedThisVisit: ConfirmedThisVisitRecommendation[];
+  suggestedFromInspection: SuggestedFromInspection[];
   additionalObservations: string;
   setAdditionalObservations: (value: string) => void;
   completionMileage: string;
@@ -3578,10 +4186,6 @@ function RecommendationsStep({
   const [optionPickerIndex, setOptionPickerIndex] = useState<number | null>(null);
   const [tirePickerIndex, setTirePickerIndex] = useState<number | null>(null);
   const currentMileage = Number(completionMileage);
-  const mileageHint =
-    Number.isFinite(currentMileage) && currentMileage > 0
-      ? Math.round((currentMileage + 5000) / 1000) * 1000
-      : null;
 
   function updateRec(index: number, patch: Partial<RecRowState>) {
     setRecommendations((current) =>
@@ -3602,7 +4206,7 @@ function RecommendationsStep({
         urgency: "within_3_months",
         reason: "",
         visible_to_driver: true,
-        target_mileage: "",
+        target_mileage: defaultTriggerMileage(currentMileage),
         scheduled_at: null,
         scheduled_mechanic_id: null,
         scheduled_mechanic_name: null,
@@ -3614,6 +4218,43 @@ function RecommendationsStep({
 
   function removeRec(index: number) {
     setRecommendations((current) => current.filter((_, idx) => idx !== index));
+  }
+
+  // Gap 2 — a suggestion the mechanic saw at pre-job but didn't check gets a
+  // second chance here. Checking it appends a real row to `recommendations`
+  // (tagged by a stable `sugg_<key>` id so the checkbox state round-trips);
+  // unchecking removes that same row. Submits through the same
+  // submitRecommendationsForBooking path as every other row on this screen.
+  function suggestionRowId(key: string) {
+    return `sugg_${key}`;
+  }
+  function toggleSuggestion(s: SuggestedFromInspection) {
+    const id = suggestionRowId(s.key);
+    setRecommendations((current) => {
+      if (current.some((r) => r.id === id)) {
+        return current.filter((r) => r.id !== id);
+      }
+      return [
+        ...current,
+        {
+          id,
+          recommended_service_id: s.serviceId,
+          service_label: s.serviceName ?? s.label,
+          service_slug: null,
+          service_has_options: false,
+          freeform_service_name: s.serviceId ? "" : s.label,
+          urgency: s.urgency,
+          reason: s.reasons.join("; "),
+          visible_to_driver: true,
+          target_mileage: defaultTriggerMileage(currentMileage),
+          scheduled_at: null,
+          scheduled_mechanic_id: null,
+          scheduled_mechanic_name: null,
+          selected_service_option: null,
+          tire_specs: null,
+        },
+      ];
+    });
   }
 
   return (
@@ -3649,6 +4290,80 @@ function RecommendationsStep({
           </ul>
           <p className="mt-2 text-[10px] text-muted-foreground">
             You'll confirm these on the next pre-job survey.
+          </p>
+        </div>
+      ) : null}
+
+      {confirmedThisVisit.length > 0 ? (
+        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700">
+            From today's inspection
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {confirmedThisVisit.map((rec) => (
+              <li
+                key={rec._id}
+                className="flex items-start gap-2 text-[12px] text-foreground/80"
+              >
+                <Check className="mt-0.5 h-3 w-3 flex-shrink-0 text-emerald-600" />
+                <span className="min-w-0 flex-1">
+                  <span className="font-medium">{rec.service_name}</span>
+                  <span className="text-muted-foreground">
+                    {" "}
+                    · {urgencyLabel(rec.urgency)}
+                  </span>
+                  {rec.reason ? (
+                    <span className="text-muted-foreground"> — {rec.reason}</span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            Already confirmed at pre-job — no action needed.
+          </p>
+        </div>
+      ) : null}
+
+      {suggestedFromInspection.length > 0 ? (
+        <div className="mb-4 rounded-xl border border-primary/10 bg-muted/30 px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            Also flagged during today's inspection
+          </p>
+          <ul className="mt-1.5 space-y-1.5">
+            {suggestedFromInspection.map((s) => {
+              const checked = recommendations.some(
+                (r) => r.id === suggestionRowId(s.key),
+              );
+              return (
+                <li key={s.key}>
+                  <label className="flex cursor-pointer items-start gap-2 text-[12px]">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleSuggestion(s)}
+                      className="mt-0.5 h-3.5 w-3.5 accent-[var(--primary)]"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="font-medium text-foreground">
+                        {s.serviceName ?? s.label}
+                      </span>
+                      {!s.serviceId ? (
+                        <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                          not in catalog
+                        </span>
+                      ) : null}
+                      <span className="block text-muted-foreground">
+                        {s.reasons.join(" · ")} · {urgencyLabel(s.urgency)}
+                      </span>
+                    </span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            Skipped at pre-job — check any you still want to recommend.
           </p>
         </div>
       ) : null}
@@ -3760,34 +4475,17 @@ function RecommendationsStep({
                 />
 
                 <div className="mt-2.5 grid gap-2 sm:grid-cols-2">
-                  <div>
-                    <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      Trigger at mileage
-                    </label>
-                    <div className="mt-1 flex items-center gap-1.5 rounded-lg border border-primary/15 bg-background px-2.5">
-                      <Gauge
-                        className="h-3.5 w-3.5 text-muted-foreground"
-                        aria-hidden
-                      />
-                      <input
-                        type="number"
-                        inputMode="numeric"
-                        min={0}
-                        step={1000}
-                        value={rec.target_mileage}
-                        onChange={(event) =>
-                          updateRec(index, {
-                            target_mileage: event.target.value,
-                          })
-                        }
-                        placeholder={
-                          mileageHint ? mileageHint.toLocaleString() : "e.g. 170000"
-                        }
-                        className="h-9 w-full bg-transparent text-[12px] outline-none"
-                      />
-                      <span className="text-[11px] text-muted-foreground">mi</span>
-                    </div>
-                  </div>
+                  <MileageTriggerField
+                    value={rec.target_mileage}
+                    onChange={(next) =>
+                      updateRec(index, { target_mileage: next })
+                    }
+                    currentOdometer={
+                      Number.isFinite(currentMileage) && currentMileage > 0
+                        ? currentMileage
+                        : null
+                    }
+                  />
                   <div>
                     <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                       Schedule a specific time
@@ -3878,6 +4576,20 @@ function RecommendationsStep({
                     </span>
                   </label>
                 </div>
+
+                {/* Preview gate (Off-Catalog Work spec, §6): the moment a
+                    mechanic makes off-catalog advice driver-visible, show them
+                    exactly how it will be framed — attributed to them, with no
+                    price and no booking. Nobody should find out after the fact
+                    that their recommendation was presented as an opinion. */}
+                {!rec.recommended_service_id &&
+                rec.freeform_service_name.trim() &&
+                rec.visible_to_driver ? (
+                  <AdvisoryPreview
+                    name={rec.freeform_service_name.trim()}
+                    reason={rec.reason}
+                  />
+                ) : null}
               </div>
             );
           })
@@ -4045,15 +4757,415 @@ function RecommendationsStep({
  * mechanic can submit a freeform name (routed to admin review server-side)
  * when nothing in the canonical catalog fits.
  */
-function ServicePickerModal({
+// ServicePickerModal now lives in components/booking/service-picker-modal
+// so the Flag Issue sheet uses the same one — see that file's header.
+
+/**
+ * Step 0 of "Add unforeseen scope" (Flag Issue spec, §3).
+ *
+ * The three steps that existed — Parts → Labor → Summary — could add money and
+ * time to a job but had no way to say what the work actually WAS. So extra work
+ * became anonymous parts-and-hours: nothing in the service history, nothing in the
+ * maintenance record, nothing readable on the customer's receipt.
+ *
+ * Naming it first also gets the complaint at the only moment the mechanic really
+ * knows it. "Found a split hose while doing the oil change" is a better complaint
+ * than anything reconstructed at 4pm.
+ *
+ * Adding a line here does NOT re-quote. The following Parts and Labor steps and
+ * the existing mid-job approval cycle own the money — this only records what the
+ * work is.
+ */
+function FoundWorkStep({
+  bookingId,
   engineId,
-  initialQuery,
-  onClose,
+  onToast,
+}: {
+  bookingId: string | null;
+  engineId: string | null;
+  onToast?: (message: string) => void;
+}) {
+  const [picking, setPicking] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [complaint, setComplaint] = useState("");
+  const [systemTags, setSystemTags] = useState<string[]>([]);
+  const [workType, setWorkType] = useState<string | null>(null);
+  const [pending, setPending] = useState<{
+    kind: "service" | "freeform";
+    name: string;
+    id?: string;
+  } | null>(null);
+
+  const addMidJob = useMutation(api.customJobs.addMidJobCustomService);
+  const existing = useQuery(
+    api.customJobs.listForBooking,
+    bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
+  );
+  const midJobLines = (existing ?? []).filter((j) => j.name);
+
+  async function commit() {
+    if (!pending || !bookingId) return;
+    setBusy(true);
+    try {
+      // Catalog picks land on the booking's service_ids through the normal
+      // approval payload; only off-catalog lines need the custom-job record.
+      await addMidJob({
+        bookingId: bookingId as Id<"bookings">,
+        name: pending.name,
+        complaint: complaint.trim() || undefined,
+        systemTags,
+        workType: workType ?? undefined,
+      });
+      setPending(null);
+      setComplaint("");
+      setSystemTags([]);
+      setWorkType(null);
+    } catch (err: unknown) {
+      onToast?.(
+        err instanceof Error ? err.message : "Could not add that work.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <QuestionScreen
+      eyebrow="Extra work"
+      question="What did you find?"
+      hint="Naming it keeps it on the customer's service history. Pricing comes next."
+    >
+      <div className="space-y-3">
+        {midJobLines.length > 0 ? (
+          <ul className="space-y-1.5">
+            {midJobLines.map((line) => (
+              <li
+                key={String(line._id)}
+                className="rounded-lg border border-primary/15 bg-primary/5 px-3 py-2"
+              >
+                <p className="text-[13px] font-semibold text-foreground">
+                  {line.name}
+                </p>
+                <p className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.06em] text-primary/70">
+                  {describeCustomJobTaxonomy(line.system_tags, line.work_type)}
+                </p>
+                {line.complaint ? (
+                  <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                    {line.complaint}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {pending ? (
+          <div className="rounded-xl border border-primary/20 bg-background p-3">
+            <p className="text-[13px] font-semibold text-foreground">
+              {pending.name}
+            </p>
+            <textarea
+              value={complaint}
+              autoFocus
+              onChange={(event) => setComplaint(event.target.value)}
+              placeholder="What did you see? (optional)"
+              className="mt-2 min-h-[64px] w-full resize-y rounded-lg border border-primary/15 bg-background px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-primary"
+            />
+            {/* Same two mandatory axes as the booking drawer. Work found
+                mid-job is the most valuable row in the table — it's the case
+                nobody planned for — so it's the last place worth letting the
+                taxonomy be optional. */}
+            <div className="mt-2.5">
+              <CustomJobTaxonomyPicker
+                dense
+                systemTags={systemTags}
+                workType={workType}
+                onSystemTagsChange={setSystemTags}
+                onWorkTypeChange={setWorkType}
+              />
+            </div>
+            <div className="mt-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setPending(null);
+                  setComplaint("");
+                  setSystemTags([]);
+                  setWorkType(null);
+                }}
+                className="px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={
+                  busy || !isCustomJobTaxonomyComplete(systemTags, workType)
+                }
+                onClick={commit}
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground disabled:opacity-40"
+              >
+                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                Add to job
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setPicking(true)}
+            className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {midJobLines.length > 0 ? "Add something else" : "Name the work"}
+          </button>
+        )}
+
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          Just more parts or time on the original job? Skip this and carry on.
+        </p>
+      </div>
+
+      {picking ? (
+        // Same picker the recommendations step uses, so the match gate applies
+        // here too — a mechanic typing "oil change" gets caught before it becomes
+        // off-catalog work that earns no maintenance credit.
+        <ServicePickerModal
+          engineId={engineId}
+          initialQuery=""
+          onClose={() => setPicking(false)}
+          onPick={(picked) => {
+            setPicking(false);
+            if (picked.kind === "freeform") {
+              if (picked.system_tags?.length) setSystemTags(picked.system_tags);
+              if (picked.work_type) setWorkType(picked.work_type);
+            }
+            setPending(
+              picked.kind === "service"
+                ? { kind: "service", name: picked.name, id: picked.id }
+                : { kind: "freeform", name: picked.name },
+            );
+          }}
+        />
+      ) : null}
+    </QuestionScreen>
+  );
+}
+
+type CustomJobRow = {
+  _id: string;
+  name: string;
+  system_tags?: string[];
+  work_type?: string | null;
+  parts?: Array<{
+    part_name: string;
+    oem_number?: string;
+    quantity: number;
+    line_total_cents?: number;
+  }>;
+  quoted_parts_cents?: number | null;
+  complaint: string | null;
+  resolution: string | null;
+  resolved_complaint: boolean | null;
+};
+
+/**
+ * Outcome capture for off-catalog work (Off-Catalog Work spec, §7).
+ *
+ * The complaint was recorded when the line was added. This closes the triple:
+ * symptom → what we did → whether it worked. Those three together are a labelled
+ * training example for symptom→service, produced as a by-product of a mechanic
+ * finishing a job, and nothing else in the schema captures them.
+ *
+ * Everything here is optional. A skipped line still closes server-side as
+ * "completed, no outcome recorded", which the director view reports as exactly
+ * that rather than guessing.
+ */
+function CustomOutcomesStep({
+  jobs,
+  outcomes,
+  setOutcomes,
+}: {
+  jobs: CustomJobRow[];
+  outcomes: Record<string, { resolution: string; resolved: boolean | null }>;
+  setOutcomes: (
+    next: Record<string, { resolution: string; resolved: boolean | null }>,
+  ) => void;
+}) {
+  const entryFor = (id: string) =>
+    outcomes[id] ?? { resolution: "", resolved: null };
+
+  const update = (
+    id: string,
+    patch: Partial<{ resolution: string; resolved: boolean | null }>,
+  ) => setOutcomes({ ...outcomes, [id]: { ...entryFor(id), ...patch } });
+
+  return (
+    <QuestionScreen
+      eyebrow="Custom work"
+      question={
+        jobs.length === 1
+          ? "How did the custom work go?"
+          : "How did the custom work go?"
+      }
+      hint="Off-catalog work doesn't affect the customer's vehicle health score — this is for our records."
+    >
+      <div className="space-y-3">
+        {jobs.map((job) => {
+          const entry = entryFor(job._id);
+          return (
+            <div
+              key={job._id}
+              className="rounded-xl border border-primary/15 bg-background p-3"
+            >
+              <p className="text-[13px] font-semibold text-foreground">
+                {job.name}
+              </p>
+              <p className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.06em] text-primary/70">
+                {describeCustomJobTaxonomy(job.system_tags, job.work_type)}
+              </p>
+              {job.complaint ? (
+                <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                  Reported: {job.complaint}
+                </p>
+              ) : null}
+              {/* What was quoted against this line at booking time. Shown so
+                  the resolution can be written against the actual parts rather
+                  than from memory — and so a part quoted but never fitted is
+                  visible while the mechanic can still say so. */}
+              {job.parts && job.parts.length > 0 ? (
+                <ul className="mt-1.5 space-y-0.5">
+                  {job.parts.map((part, i) => (
+                    <li
+                      key={`${part.part_name}-${i}`}
+                      className="text-[11px] leading-relaxed text-muted-foreground"
+                    >
+                      {part.part_name}
+                      {part.quantity > 1 ? ` ×${part.quantity}` : ""}
+                      {part.oem_number ? (
+                        <span className="font-mono"> {part.oem_number}</span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              <textarea
+                value={entry.resolution}
+                onChange={(event) =>
+                  update(job._id, { resolution: event.target.value })
+                }
+                placeholder="What did you actually do? (optional)"
+                className="mt-2 min-h-[64px] w-full resize-y rounded-lg border border-primary/15 bg-background px-3 py-2 text-[12px] leading-relaxed outline-none focus:border-primary"
+              />
+
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-[11px] text-muted-foreground">
+                  Did it fix the problem?
+                </span>
+                {[
+                  { label: "Yes", value: true },
+                  { label: "No", value: false },
+                ].map((option) => (
+                  <button
+                    key={option.label}
+                    type="button"
+                    onClick={() =>
+                      update(job._id, {
+                        // Tapping the active answer clears it — the mechanic can
+                        // get back to "not answered" without reopening the dialog.
+                        resolved:
+                          entry.resolved === option.value ? null : option.value,
+                      })
+                    }
+                    className={cn(
+                      "rounded-md border px-2.5 py-1 text-[11px] font-semibold transition-colors",
+                      entry.resolved === option.value
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-primary/20 text-muted-foreground hover:bg-primary/5",
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </QuestionScreen>
+  );
+}
+
+/**
+ * What the driver actually sees for off-catalog advice (Off-Catalog Work
+ * spec, §6) — rendered back to the mechanic before they commit to it.
+ *
+ * The card is deliberately not a booking card: no price, no Book button. We
+ * can't quote work we don't model, and a disabled button reads as a bug rather
+ * than a boundary. What it does carry is attribution — this is one person's
+ * professional opinion, and saying so is the whole point.
+ *
+ * Kept in sync with jobRecommendations.ADVISORY_DISCLAIMER by hand; if that
+ * string changes, change this one.
+ */
+function AdvisoryPreview({
+  name,
+  reason,
+}: {
+  name: string;
+  reason: string;
+}) {
+  return (
+    <div className="mt-2.5 rounded-xl border border-dashed border-primary/25 bg-muted/20 p-2.5">
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        What the driver will see
+      </p>
+      <div className="mt-2 rounded-lg border border-primary/15 bg-background p-3">
+        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">
+          You at your shop suggest
+        </p>
+        <p className="mt-1 text-[13px] font-semibold text-foreground">{name}</p>
+        {reason.trim() ? (
+          <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+            &ldquo;{reason.trim()}&rdquo;
+          </p>
+        ) : null}
+        <p className="mt-2 rounded-md border border-primary/10 bg-muted/40 px-2 py-1.5 text-[11px] leading-relaxed text-muted-foreground">
+          Otopair doesn&apos;t price or book this service yet — this is the
+          shop&apos;s recommendation, not an Otopair estimate.
+        </p>
+        <div className="mt-2 flex gap-1.5">
+          <span className="rounded-md bg-primary px-2 py-1 text-[10px] font-semibold text-primary-foreground">
+            Message the shop
+          </span>
+          <span className="rounded-md border border-primary/15 px-2 py-1 text-[10px] font-semibold text-muted-foreground">
+            Not interested
+          </span>
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+        No price and no booking — the driver contacts you directly. It won&apos;t
+        affect their vehicle health score.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * What the mechanic sees under the search box when nothing in the list fits.
+ *
+ * Matching catalog services appear as options; whatever they typed stays the
+ * default. The older version asked "Did you mean?" and made them answer it,
+ * which is the wrong thing to put in front of someone with dirty hands — the
+ * protection was never the question, it was the canonical option being visible
+ * and one tap away.
+ */
+function CustomNameGate({
+  typed,
   onPick,
 }: {
-  engineId: string | null;
-  initialQuery: string;
-  onClose: () => void;
+  typed: string;
   onPick: (
     picked:
       | {
@@ -4066,120 +5178,31 @@ function ServicePickerModal({
       | { kind: "freeform"; name: string },
   ) => void;
 }) {
-  const [query, setQuery] = useState(initialQuery);
-  const results = useQuery(api.services.listForVehicle, {
-    engineId: (engineId ?? undefined) as never,
-    query,
-    limit: 25,
-  });
-  const trimmed = query.trim();
-
   return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Pick a service"
-      className="fixed inset-0 z-[60] flex items-end justify-center bg-foreground/40 px-3 pb-3 sm:items-center sm:pb-0"
-      onClick={onClose}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-primary/10 bg-background shadow-xl"
+    <div className="mt-3 space-y-2 border-t border-primary/10 pt-3">
+      <ServiceSuggestions
+        typed={typed}
+        onPick={(s) =>
+          onPick({
+            kind: "service",
+            id: s.serviceId,
+            name: s.name,
+            slug: s.slug,
+            has_options: s.has_options,
+          })
+        }
+      />
+      <button
+        type="button"
+        onClick={() => onPick({ kind: "freeform", name: typed })}
+        className="flex w-full items-center justify-between gap-2 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-left text-[12px] text-primary transition-colors hover:bg-primary/10"
       >
-        <div className="flex items-center justify-between border-b border-primary/10 px-4 py-3">
-          <div>
-            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-              Pick a service
-            </p>
-            <p className="text-[13px] font-semibold">
-              Vehicle-matched first
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground"
-            aria-label="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-        <div className="border-b border-primary/10 px-4 py-2.5">
-          <div className="flex items-center gap-2 rounded-lg border border-primary/15 bg-background px-2.5 py-2 focus-within:border-primary">
-            <Search className="h-3.5 w-3.5 text-muted-foreground" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search the service catalog…"
-              autoFocus
-              className="flex-1 bg-transparent text-[13px] outline-none"
-            />
-          </div>
-        </div>
-        <div className="flex-1 overflow-y-auto px-2 py-2">
-          {results === undefined ? (
-            <div className="flex items-center justify-center py-8 text-[12px] text-muted-foreground">
-              <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-              Searching…
-            </div>
-          ) : (
-            <>
-              {results.length === 0 ? (
-                <div className="py-6 text-center text-[12px] text-muted-foreground">
-                  No matching services.
-                </div>
-              ) : (
-                <ul className="space-y-1">
-                  {results.map((svc) => (
-                    <li key={svc._id}>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          onPick({
-                            kind: "service",
-                            id: svc._id,
-                            name: svc.name,
-                            slug: (svc as any).slug ?? null,
-                            has_options: Boolean((svc as any).has_options),
-                          })
-                        }
-                        className="flex w-full items-center justify-between gap-2 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-primary/15 hover:bg-primary/5"
-                      >
-                        <span className="truncate text-[13px] font-medium text-foreground">
-                          {svc.name}
-                        </span>
-                        {svc.is_vehicle_match ? (
-                          <span className="inline-flex shrink-0 items-center rounded-md bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">
-                            Fits car
-                          </span>
-                        ) : null}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {trimmed.length >= 2 ? (
-                <div className="mt-3 border-t border-primary/10 pt-3">
-                  <p className="px-3 text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-                    Can't find it?
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => onPick({ kind: "freeform", name: trimmed })}
-                    className="mt-1 flex w-full items-center justify-between gap-2 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 py-2 text-left text-[12px] text-primary transition-colors hover:bg-primary/10"
-                  >
-                    <span>
-                      Submit "<span className="font-semibold">{trimmed}</span>"
-                      for review
-                    </span>
-                    <ChevronRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
-      </div>
+        <span>
+          Add &ldquo;<span className="font-semibold">{typed}</span>&rdquo; as
+          custom work
+        </span>
+        <ChevronRight className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }

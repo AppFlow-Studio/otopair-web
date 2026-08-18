@@ -150,6 +150,31 @@ export const getMyUnreadCount = query({
 // ============================================================================
 
 const STAFF_CATEGORIES = ["new_booking", "new_quote_request", "booking_never_started", "settlement_shortfall", "hold_expiring"] as const;
+
+/**
+ * Alerts that used to be written with `channel: "slack"` and then sat pending
+ * forever, because no Slack dispatcher exists in this codebase — blockers,
+ * damage reports, and a shortcut created for work we already sell.
+ *
+ * They don't need one. This feed already reads notification_outbox by shop, so
+ * the fix is to let these categories through rather than to build an
+ * integration: the people who need to see a stopped job are the people already
+ * looking at this list.
+ *
+ * A prefix test rather than an enum because blocker categories are minted per
+ * kind (`job_blocked_parts_delay`, …) and a fixed list would silently drop the
+ * next kind someone adds to KIND_POLICY.
+ */
+function isStaffCategory(category: unknown): boolean {
+  if (typeof category !== "string") return false;
+  if ((STAFF_CATEGORIES as readonly string[]).includes(category)) return true;
+  // Owner-audience blockers only. The driver-audience twin is suffixed
+  // `_driver` and is not the shop's notification.
+  if (category.startsWith("job_blocked_") && !category.endsWith("_driver")) {
+    return true;
+  }
+  return category === "custom_shortcut_override";
+}
 const MECHANIC_CATEGORIES = ["new_job_assigned"] as const;
 const OWNER_MANAGER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const FRONT_DESK_ROLES = new Set(["front_desk"]);
@@ -201,9 +226,7 @@ export const getShopStaffUnreadCount = query({
       OWNER_MANAGER_ROLES.has(membership.role) ||
       FRONT_DESK_ROLES.has(membership.role)
     ) {
-      return rows.filter((r: any) =>
-        (STAFF_CATEGORIES as readonly string[]).includes(r.category),
-      ).length;
+      return rows.filter((r: any) => isStaffCategory(r.category)).length;
     }
 
     return 0;
@@ -235,9 +258,7 @@ export const getShopStaffNotifications = query({
       OWNER_MANAGER_ROLES.has(membership.role) ||
       FRONT_DESK_ROLES.has(membership.role)
     ) {
-      filtered = rows.filter((r: any) =>
-        (STAFF_CATEGORIES as readonly string[]).includes(r.category),
-      );
+      filtered = rows.filter((r: any) => isStaffCategory(r.category));
     } else {
       return [];
     }

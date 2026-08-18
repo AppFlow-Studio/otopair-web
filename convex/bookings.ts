@@ -10965,6 +10965,7 @@ export const completeWithPostjob = mutation({
       // outcome and no parts at all, even when a named part had been fitted
       // and billed — the money was right, the record wasn't.
       partsUsed: normalizedParts,
+      quotedSnapshot: (booking as any).priced_parts_snapshot,
       outcomes: args.customJobOutcomes ?? [],
       now,
     });

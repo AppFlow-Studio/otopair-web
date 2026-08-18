@@ -1916,6 +1916,7 @@ function PostJobSurveyDialogBody({
             setParts={setParts}
             requiresParts={requiresParts}
             partsRequiredServices={passportData?.parts_required_services ?? []}
+            customPartLines={(customJobs ?? []).map((j) => ({ name: j.name }))}
             suggestedParts={prefillData?.suggestedParts ?? []}
             oemRecommendations={scopedOemRecommendations}
             difficultyRating={difficultyRating}
@@ -2181,6 +2182,12 @@ function StepContent(props: {
   // List of services on this booking whose catalog row sets requires_parts.
   // Used by PartsStep to render one parts block per service when length > 1.
   partsRequiredServices: Array<{ _id: string; name: string }>;
+  /** Off-catalog lines on this booking. They get their own add-part buttons:
+   *  a custom line has no services row, so without this a part fitted to one
+   *  was stamped with the first catalog service_id (or nothing) and the
+   *  association was lost — which is why the director's cluster read showed
+   *  "none" against work that plainly consumed a part. */
+  customPartLines?: Array<{ name: string }>;
   suggestedParts: JobActualPartPayload[];
   oemRecommendations: OemRecommendation[];
   difficultyRating: string;
@@ -2380,6 +2387,7 @@ function StepContent(props: {
           setParts={props.setParts}
           requiresParts={props.requiresParts}
           partsRequiredServices={props.partsRequiredServices}
+          customPartLines={props.customPartLines}
           suggestedParts={props.suggestedParts}
           oemRecommendations={props.oemRecommendations}
           actualPartsCost={props.actualPartsCost}
@@ -2805,6 +2813,7 @@ function PartsStep({
   setParts,
   requiresParts,
   partsRequiredServices,
+  customPartLines = [],
   suggestedParts,
   oemRecommendations,
   actualPartsCost,
@@ -2822,6 +2831,12 @@ function PartsStep({
   // List of services on this booking whose catalog row sets requires_parts.
   // Used by PartsStep to render one parts block per service when length > 1.
   partsRequiredServices: Array<{ _id: string; name: string }>;
+  /** Off-catalog lines on this booking. They get their own add-part buttons:
+   *  a custom line has no services row, so without this a part fitted to one
+   *  was stamped with the first catalog service_id (or nothing) and the
+   *  association was lost — which is why the director's cluster read showed
+   *  "none" against work that plainly consumed a part. */
+  customPartLines?: Array<{ name: string }>;
   suggestedParts: JobActualPartPayload[];
   oemRecommendations: OemRecommendation[];
   actualPartsCost: string;
@@ -3596,8 +3611,38 @@ function PartsStep({
           service gets its own button so the new row is stamped with the
           right service_id and snapshots attribute correctly downstream.
         */}
-        {partsRequiredServices.length > 1 ? (
+        {partsRequiredServices.length + customPartLines.length > 1 ? (
           <div className="grid gap-2 sm:grid-cols-2">
+            {/* One button per off-catalog line, stamping the line's NAME rather
+                than a service id — that name is the key completion groups parts
+                by when it writes them onto custom_jobs. */}
+            {customPartLines.map((line) => (
+              <button
+                key={`custom-${line.name}`}
+                type="button"
+                onClick={() =>
+                  setParts((current) => [
+                    ...current,
+                    {
+                      part_name: "",
+                      brand: "",
+                      oem_number: "",
+                      cost: "0.00",
+                      quantity: 1,
+                      supplied_by: "shop",
+                      part_tier: "oem",
+                      service_id: null,
+                      custom_service_name: line.name,
+                      source: "manual",
+                    },
+                  ])
+                }
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-primary/30 bg-primary/5 px-3 py-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add part for {line.name}</span>
+              </button>
+            ))}
             {partsRequiredServices.map((svc) => (
               <button
                 key={svc._id}
@@ -3640,6 +3685,13 @@ function PartsStep({
                   supplied_by: "shop",
                   part_tier: "oem",
                   service_id: partsRequiredServices[0]?._id ?? null,
+                  // Sole line is off-catalog — attribute the part to it rather
+                  // than leaving it unattached to anything.
+                  custom_service_name:
+                    partsRequiredServices.length === 0 &&
+                    customPartLines.length === 1
+                      ? customPartLines[0].name
+                      : undefined,
                   source: "manual",
                 },
               ])

@@ -425,3 +425,80 @@ describe("post-job part validator", () => {
     );
   });
 });
+
+describe("quoted parts as a fallback at completion", () => {
+  it("records what was quoted when the actuals say nothing about the line", async () => {
+    const { makeT } = await import("./helpers");
+    const {
+      recordCustomJobsForBooking,
+      completeCustomJobsForBooking,
+    } = await import("../convex/customJobs");
+
+    const t = makeT();
+    const base = await t.run(async (ctx: any) => {
+      const shopId = await ctx.db.insert("shops", { name: "Temur Auto" } as any);
+      const bookingId = await ctx.db.insert("bookings", {
+        vin: "VINQUOTED00000001",
+        user_id: await ctx.db.insert("users", {
+          clerkUserId: "clerk_quoted",
+          email: "quoted@test.local",
+          role: "customer",
+          createdAt: Date.now(),
+        }),
+        service_ids: [],
+        status: "in_progress",
+      } as any);
+      return { shopId, bookingId };
+    });
+
+    await t.run(async (ctx: any) =>
+      recordCustomJobsForBooking(ctx, {
+        booking: {
+          _id: base.bookingId,
+          shop_id: base.shopId,
+          vin: "VINQUOTED00000001",
+        },
+        customJobs: [
+          {
+            name: "Power window switch replacement",
+            system_tags: ["electrical"],
+            work_type: "replace",
+          },
+        ],
+        source: "booking",
+        now: Date.now(),
+      }),
+    );
+
+    await t.run(async (ctx: any) =>
+      completeCustomJobsForBooking(ctx, {
+        bookingId: base.bookingId,
+        // The mechanic never used the per-line add button, so nothing in the
+        // actuals names this work.
+        partsUsed: [
+          { part_name: "Oil filter", oem_number: "90915", cost: 12, quantity: 1 },
+        ],
+        quotedSnapshot: [
+          {
+            custom_service_name: "Power window switch replacement",
+            part_name: "Window switch",
+            oem_number: "83071AN00B",
+            quantity: 1,
+            unit_price_cents: 7855,
+            line_total_cents: 7855,
+          },
+        ],
+        outcomes: [],
+        now: Date.now(),
+      }),
+    );
+
+    const row = await t.run(async (ctx: any) =>
+      (await ctx.db.query("custom_jobs").collect())[0],
+    );
+    // Weaker evidence than a fitted part, but it beats recording that a job
+    // which plainly consumed a part consumed none.
+    expect(row.parts).toHaveLength(1);
+    expect(row.parts[0].oem_number).toBe("83071AN00B");
+  });
+});

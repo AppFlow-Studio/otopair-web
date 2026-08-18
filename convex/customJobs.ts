@@ -367,6 +367,11 @@ export async function completeCustomJobsForBooking(
     /** The mechanic's confirmed post-job parts, so a line added mid-job ends
      *  up recording what actually went into it. */
     partsUsed?: unknown;
+    /** The booking's priced_parts_snapshot, used only where the actuals say
+     *  nothing about a line. Quoted parts are weaker evidence than fitted ones
+     *  — but they beat recording that a job which plainly consumed a part
+     *  consumed none. */
+    quotedSnapshot?: unknown;
     outcomes: Array<{
       name: string;
       actual_minutes?: number | null;
@@ -389,13 +394,17 @@ export async function completeCustomJobsForBooking(
   // Actuals beat the quote. A line quoted with one part and finished with
   // another should record the one that went in.
   const actualParts = actualPartsByMatchKey(args.partsUsed);
+  const quotedParts = customPartsFromSnapshot(args.quotedSnapshot);
+  /** Fitted beats quoted; quoted beats nothing. */
+  const partsFor = (matchKey: string) =>
+    actualParts.get(matchKey) ?? quotedParts.get(matchKey);
 
   let touched = 0;
   for (const outcome of args.outcomes) {
     const row = byKey.get(serviceMatchKey(outcome.name));
     if (!row) continue;
     const actualMinutes = outcome.actual_minutes ?? row.actual_minutes;
-    const fitted = actualParts.get(row.match_key);
+    const fitted = partsFor(row.match_key);
     await ctx.db.patch(row._id, {
       status: "completed",
       parts: fitted && fitted.parts.length > 0 ? fitted.parts : row.parts,
@@ -434,7 +443,7 @@ export async function completeCustomJobsForBooking(
     if (row.updated_at === args.now) continue;
     // No outcome reported, but parts may still have been fitted — record them
     // rather than closing the row emptier than the evidence allows.
-    const fitted = actualParts.get(row.match_key);
+    const fitted = partsFor(row.match_key);
     await ctx.db.patch(row._id, {
       status: "completed",
       job_actual_id: args.jobActualId ?? row.job_actual_id,

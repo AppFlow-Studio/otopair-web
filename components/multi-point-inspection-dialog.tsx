@@ -628,6 +628,17 @@ function MultiPointInspectionDialogBody({
           methods: { ...base.methods, ...(z.methods ?? {}) },
           photoIds: Array.isArray(z.photo_ids) ? [...z.photo_ids] : [],
           photoTags: { ...base.photoTags, ...(z.photo_tags ?? {}) },
+          lights: {
+            ...base.lights,
+            ...Object.fromEntries(
+              Object.entries((z.lights ?? {}) as Record<string, any[]>).map(
+                ([key, entries]) => [
+                  key,
+                  entries.map((e) => ({ light: e.light, otherText: e.other_text })),
+                ],
+              ),
+            ),
+          },
         };
       }
       const pf = prefillData;

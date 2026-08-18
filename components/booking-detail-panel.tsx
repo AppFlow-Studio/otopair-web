@@ -21,6 +21,7 @@ import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dia
 import PostjobReportSection from "@/components/booking/postjob-report-section";
 import SendReceiptCard from "@/components/booking/send-receipt-card";
 import VinRepairPrompt from "@/components/booking/vin-repair-prompt";
+import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import type { JobActualsPayload } from "@/lib/job-actuals";
 import VehiclePassportCard from "@/components/vehicle-passport-card";
 import JobStepIndicator from "@/components/job-step-indicator";
@@ -2710,41 +2711,19 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           isFixedPrice={job?.isFixedPrice}
         />
 
-        {/* Mid-Job Approval — "Add unforeseen scope" while in_progress. */}
-        <PostJobSurveyDialog
+        {/* Mid-Job Approval — "Add unforeseen scope" while in_progress.
+            The seeding logic (approved quote over catalog prefill, preserving
+            `not_used`) lives inside MidJobScopeDialog so the mechanic overlay's
+            Flag Issue sheet opens the very same thing rather than a second copy
+            that could drift. */}
+        <MidJobScopeDialog
           open={showMidJobDialog}
-          bookingId={job ? String(job._id) : null}
-          bookingLabel={job?.vehicle ?? "Vehicle"}
-          bookingSubLabel={
-            job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
-                  job.scheduledDate,
-                  job.scheduledTime,
-                )}`
-              : ""
-          }
-          passportData={vehiclePassport ?? null}
-          estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
-          prefillData={actualsPrefill ?? null}
-          isSubmitting={false}
+          bookingId={job ? (job._id as Id<"bookings">) : null}
           onClose={() => setShowMidJobDialog(false)}
-          onSubmit={async () => {
-            /* cycle path handles submit internally */
+          onSubmitted={(msg) => {
+            setShowMidJobDialog(false);
+            onSuccess?.(msg);
           }}
-          cycle="mid_job"
-          onApprovalSubmitted={() =>
-            onSuccess?.("Added scope sent for confirmation")
-          }
-          laborRateCents={(job as any)?.shopLaborRateCents ?? null}
-          laborCostDollars={(job as any)?.laborCost ?? null}
-          shopState={(job as any)?.shopState ?? null}
-          shopZip={(job as any)?.shopZip ?? null}
-          // Seed from the latest APPROVED quote (mechanic's entered prices, with
-          // removed / not-used rows already excluded) — not the catalog prefill.
-          // Otherwise "Add unforeseen scope" resets every price to $0 and brings
-          // back parts the mechanic dropped.
-          quotedParts={lockedQuoteParts}
-          isFixedPrice={job?.isFixedPrice}
         />
 
         <ConfirmationDialog

@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import ElapsedTimer from "./elapsed-timer";
 import FlagIssueSheet from "./flag-issue-sheet";
+import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import OverrunExtendCard from "./overrun-extend-card";
 
 type DraftPhoto = {
@@ -95,6 +96,7 @@ export function NowWorkingPane({
 
   const [paused, setPaused] = useState(false);
   const [flagOpen, setFlagOpen] = useState(false);
+  const [scopeOpen, setScopeOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   /* Open blockers on this job (Flag Issue spec, §5). Rendered as a banner so a
@@ -631,18 +633,23 @@ export function NowWorkingPane({
         <FlagIssueSheet
           bookingId={bookingId}
           onClose={() => setFlagOpen(false)}
-          onAddScope={() => {
-            // The overlay doesn't own the mid-job approval dialog — the booking
-            // detail panel does. Surfacing it here would mean two components
-            // able to re-quote the same job, so we point the mechanic at the one
-            // that owns it rather than duplicating the cycle.
-            onToast?.(
-              "Open the job in Bookings → Add unforeseen scope to re-quote",
-            );
-          }}
+          onAddScope={() => setScopeOpen(true)}
           onToast={onToast}
         />
       ) : null}
+
+      {/* The same dialog the booking detail panel opens for "Add unforeseen
+          scope" — one component owns the quote seeding, so the two entry points
+          can't drift (MidJobScopeDialog). */}
+      <MidJobScopeDialog
+        open={scopeOpen}
+        bookingId={bookingId}
+        onClose={() => setScopeOpen(false)}
+        onSubmitted={(msg) => {
+          setScopeOpen(false);
+          onToast?.(msg);
+        }}
+      />
     </div>
   );
 }

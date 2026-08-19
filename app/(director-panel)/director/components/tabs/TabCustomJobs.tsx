@@ -411,52 +411,139 @@ export const TabCustomJobs = () => {
 
       {/* Detail drawer — the complaints are the point. A name tells a reviewer
           nothing; "rough idle, valves coked at 78k" tells them what to build. */}
+      {/* ── Cluster sheet ──────────────────────────────────────────────────
+          Was an 880px modal whose only real content was a job table. The
+          question a director opens this to answer — "is this a service we
+          should build, and what does it take?" — needs evidence side by side,
+          not stacked in a column narrower than the data.
+
+          Full width, and ordered as the decision is actually made: how much of
+          it is there, what it takes, why it happens, then the individual jobs
+          as the audit trail underneath. */}
       {detailKey ? (
         <Modal
           open
+          width={1240}
           onClose={() => setDetailKey(null)}
+          eyebrow={
+            detailCluster?.taxonomy_label ? (
+              <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--slate-500)' }}>
+                {detailCluster.taxonomy_label}
+              </span>
+            ) : undefined
+          }
+          statusBadge={
+            detailCluster?.canonical_suggestion ? (
+              <Badge tone={detailCluster.canonical_suggestion.confidence === 'exact' ? 'red' : 'yellow'}>
+                looks like {detailCluster.canonical_suggestion.service_name}
+              </Badge>
+            ) : undefined
+          }
           title={detailCluster?.name ?? 'Cluster'}
         >
-          <div style={{ display: 'grid', gap: 16, maxHeight: '70vh', overflowY: 'auto' }}>
-            {detailCluster?.sample_complaints?.length ? (
-              <div>
-                <MicroH>Why it happened</MicroH>
-                <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 13, lineHeight: 1.55, color: 'var(--slate-700)' }}>
-                  {detailCluster.sample_complaints.map((text: string, i: number) => (
-                    <li key={i} style={{ marginBottom: 4 }}>{text}</li>
-                  ))}
-                </ul>
+          <div style={{ display: 'grid', gap: 18, maxHeight: '74vh', overflowY: 'auto' }}>
+
+            {/* Scale first. Breadth is the signal — four shops doing something
+                three times each is a category we're missing; one shop doing it
+                forty times is that shop's speciality. */}
+            {detailCluster ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 1, background: 'var(--slate-200)', border: '1px solid var(--slate-200)', borderRadius: 8, overflow: 'hidden' }}>
+                {[
+                  { k: 'Shops', v: String(detailCluster.distinct_shops), n: 'breadth' },
+                  { k: 'Jobs', v: String(detailCluster.occurrences), n: 'total logged' },
+                  { k: 'Cars', v: String(detailCluster.distinct_vehicles), n: 'distinct VINs' },
+                  { k: 'Median time', v: detailCluster.median_minutes != null ? `${detailCluster.median_minutes}m` : '—', n: 'actual' },
+                  { k: 'Median charged', v: fmtMoney(detailCluster.median_charged_cents), n: 'per job' },
+                  {
+                    k: 'Fixed it',
+                    v: detailCluster.resolution_rate == null ? '—' : `${Math.round(detailCluster.resolution_rate * 100)}%`,
+                    n: `${detailCluster.outcomes_recorded} reported`,
+                  },
+                  {
+                    k: 'Needs parts',
+                    v: `${detailCluster.jobs_with_parts}/${detailCluster.occurrences}`,
+                    n: 'of jobs',
+                  },
+                ].map((cell) => (
+                  <div key={cell.k} style={{ background: '#fff', padding: '10px 12px' }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--slate-400)' }}>{cell.k}</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>{cell.v}</div>
+                    <div style={{ fontSize: 11, color: 'var(--slate-500)', marginTop: 1 }}>{cell.n}</div>
+                  </div>
+                ))}
               </div>
             ) : null}
 
-            {parts && parts.length > 0 ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 18 }}>
+              {/* What it takes. The parts a cluster keeps reaching for are the
+                  strongest evidence it's a service we could actually price. */}
               <div>
-                <MicroH>Parts used</MicroH>
-                <div style={{ fontSize: 12, color: 'var(--slate-500)', margin: '4px 0 8px' }}>
-                  Most of the catalog work for this service is already done here.
-                </div>
-                <table style={tableStyles.table}>
-                  <thead>
-                    <tr>
-                      <th style={tableStyles.th}>Part</th>
-                      <th style={tableStyles.th}>OEM</th>
-                      <th style={tableStyles.th}>Seen</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {parts.map((p: any, i: number) => (
-                      <tr key={i}>
-                        <td style={tableStyles.td}>{p.name}</td>
-                        <td style={{ ...tableStyles.td, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
-                          {p.oem_number ?? '—'}
-                        </td>
-                        <td style={tableStyles.td}>{p.count}</td>
+                <MicroH>What it takes</MicroH>
+                {parts && parts.parts.length > 0 ? (
+                  <table style={tableStyles.table}>
+                    <thead>
+                      <tr>
+                        <th style={tableStyles.th}>Part</th>
+                        <th style={tableStyles.th}>OEM</th>
+                        <th style={tableStyles.th}>Seen</th>
+                        <th style={tableStyles.th}>Spend</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {parts.parts.map((p: any, i: number) => (
+                        <tr key={i}>
+                          <td style={tableStyles.td}>{p.name}</td>
+                          <td style={{ ...tableStyles.td, fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+                            {p.oem_number ?? '—'}
+                          </td>
+                          <td style={tableStyles.td}>{p.count}×</td>
+                          <td style={tableStyles.td}>{p.total_cents ? fmtMoney(p.total_cents) : '—'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div style={{ fontSize: 13, color: 'var(--slate-500)', marginTop: 8 }}>
+                    No parts recorded against this work yet.
+                  </div>
+                )}
+                {/* Said plainly rather than shown as an empty column: these are
+                    jobs that billed a part before per-line attribution existed,
+                    and claiming the part belongs to THIS work would be a guess. */}
+                {parts && parts.unattributed_jobs > 0 ? (
+                  <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 8, lineHeight: 1.5 }}>
+                    {parts.unattributed_jobs} job{parts.unattributed_jobs === 1 ? '' : 's'} billed parts that name no line — recorded before parts could be attributed, so they aren&apos;t counted above.
+                  </div>
+                ) : null}
               </div>
-            ) : null}
+
+              {/* Why it happens. The verbatim complaints are the only thing
+                  here that says what the work actually IS. */}
+              <div>
+                <MicroH>Why it happens</MicroH>
+                {detailCluster?.sample_complaints?.length ? (
+                  <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: 13, lineHeight: 1.6, color: 'var(--slate-700)' }}>
+                    {detailCluster.sample_complaints.map((text: string, i: number) => (
+                      <li key={i} style={{ marginBottom: 6 }}>{text}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div style={{ fontSize: 13, color: 'var(--slate-500)', marginTop: 8 }}>
+                    Nobody recorded why. Without it a cluster is a name and a number.
+                  </div>
+                )}
+                {detailCluster && detailCluster.systems.length > 0 ? (
+                  <div style={{ marginTop: 14 }}>
+                    <MicroH>Systems touched</MicroH>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8 }}>
+                      {detailCluster.systems.map((sys: string) => (
+                        <Badge key={sys} tone="slate">{sys.replace(/_/g, ' ')}</Badge>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
 
             <div>
               <MicroH>Every job in this cluster</MicroH>
@@ -465,10 +552,12 @@ export const TabCustomJobs = () => {
                   <tr>
                     <th style={tableStyles.th}>Shop</th>
                     <th style={tableStyles.th}>Vehicle</th>
+                    <th style={tableStyles.th}>Found</th>
                     <th style={tableStyles.th}>Complaint</th>
                     <th style={tableStyles.th}>Parts</th>
                     <th style={tableStyles.th}>Resolution</th>
                     <th style={tableStyles.th}>Min</th>
+                    <th style={tableStyles.th}>Charged</th>
                     <th style={tableStyles.th}>When</th>
                   </tr>
                 </thead>
@@ -476,15 +565,22 @@ export const TabCustomJobs = () => {
                   {(detail ?? []).map((row: any) => (
                     <tr key={String(row._id)}>
                       <td style={tableStyles.td}>{row.shop_name ?? '—'}</td>
-                      <td style={tableStyles.td}>
+                      <td style={{ ...tableStyles.td, maxWidth: 210 }}>
                         {row.config_key ?? (
                           // No config means a pseudo-VIN walk-in: the labor and
                           // price on this row aren't scoped to a real car.
                           <Badge tone="yellow">unidentified</Badge>
                         )}
                       </td>
-                      <td style={{ ...tableStyles.td, maxWidth: 220 }}>{row.complaint ?? '—'}</td>
-                      <td style={{ ...tableStyles.td, maxWidth: 200 }}>
+                      <td style={tableStyles.td}>
+                        {/* Work nobody planned for is the strongest evidence
+                            the catalog is short. */}
+                        {row.source === 'mid_job'
+                          ? <Badge tone="yellow">mid-job</Badge>
+                          : <span style={{ color: 'var(--slate-400)' }}>booked</span>}
+                      </td>
+                      <td style={{ ...tableStyles.td, maxWidth: 200 }}>{row.complaint ?? '—'}</td>
+                      <td style={{ ...tableStyles.td, maxWidth: 190 }}>
                         {row.parts && row.parts.length > 0 ? (
                           <div>
                             {row.parts.map((part: any, i: number) => (
@@ -514,6 +610,7 @@ export const TabCustomJobs = () => {
                         {row.resolved_complaint === false ? ' ✕' : null}
                       </td>
                       <td style={tableStyles.td}>{row.actual_minutes ?? row.estimated_minutes ?? '—'}</td>
+                      <td style={tableStyles.td}>{fmtMoney(row.charged_price_cents)}</td>
                       <td style={tableStyles.td}>{fmtDate(row.created_at)}</td>
                     </tr>
                   ))}

@@ -554,6 +554,8 @@ export const clusterDetail = query({
           actual_minutes: job.actual_minutes ?? null,
           charged_price_cents: job.charged_price_cents ?? null,
           from_shortcut: !!job.shop_custom_service_id,
+          // Where the line came from. "mid_job" is the interesting one — work
+          // nobody planned for is the strongest evidence the catalog is short.
           source: job.source,
           status: job.status,
           created_at: job.created_at,
@@ -569,6 +571,26 @@ export const clusterDetail = query({
  * custom_jobs — parts already live in parts_quote_snapshots and duplicating them
  * would give us two sources of truth.
  */
+/**
+ * The parts this work actually consumes, across every job in the cluster.
+ *
+ * ─── WHY IT MOVED OFF parts_quote_snapshots ─────────────────────────────────
+ * It used to read that table filtered by custom_service_name, which could never
+ * return anything: parts_quote_snapshots exists to measure CATALOG accuracy —
+ * mechanic edit versus what the catalog predicted — and a custom line has no
+ * prediction, so custom rows are deliberately not written there. The query was
+ * dead by construction and the drawer showed "none" for work that plainly used
+ * a part.
+ *
+ * Two real sources, in order of evidence strength:
+ *   1. custom_jobs.parts — what completion recorded against this line
+ *   2. job_actuals.parts_used rows carrying this line's custom_service_name
+ *
+ * Anything on the booking that names no line at all is counted separately and
+ * reported as `unattributed`. Those are almost all pre-attribution jobs; the
+ * honest move is to say a part exists somewhere on the booking without
+ * claiming it belongs to this work.
+ */
 export const clusterParts = query({
   args: { token: v.string(), matchKey: v.string() },
   handler: async (ctx, args) => {
@@ -581,29 +603,86 @@ export const clusterParts = query({
 
     const counts = new Map<
       string,
-      { oem_number: string | null; name: string; count: number }
+      {
+        oem_number: string | null;
+        name: string;
+        count: number;
+        total_cents: number;
+      }
     >();
+    let unattributed = 0;
+
+    const bump = (
+      name: string,
+      oem: string | null,
+      lineCents: number,
+    ) => {
+      const key = (oem ?? name).toLowerCase();
+      const prior = counts.get(key);
+      if (prior) {
+        prior.count += 1;
+        prior.total_cents += lineCents;
+      } else {
+        counts.set(key, {
+          oem_number: oem,
+          name,
+          count: 1,
+          total_cents: lineCents,
+        });
+      }
+    };
 
     for (const job of jobs) {
-      const snapshots = await ctx.db
-        .query("parts_quote_snapshots")
-        .withIndex("by_booking", (q) => q.eq("booking_id", job.booking_id))
-        .collect();
-      for (const snap of snapshots) {
-        // Only rows the mechanic attributed to this custom line.
-        if (serviceMatchKey(snap.custom_service_name ?? "") !== args.matchKey) {
-          continue;
+      const recorded = (job.parts ?? []) as any[];
+      if (recorded.length > 0) {
+        for (const part of recorded) {
+          bump(
+            String(part.part_name ?? "Unnamed"),
+            part.oem_number ? String(part.oem_number) : null,
+            typeof part.line_total_cents === "number" ? part.line_total_cents : 0,
+          );
         }
-        const oem = snap.mechanic_oem_number ?? snap.catalog_oem_number ?? null;
-        const label =
-          snap.mechanic_part_name ?? snap.catalog_part_name ?? oem ?? "Unnamed";
-        const key = oem ?? label.toLowerCase();
-        const prior = counts.get(key);
-        if (prior) prior.count += 1;
-        else counts.set(key, { oem_number: oem, name: label, count: 1 });
+        continue;
+      }
+
+      // Nothing on the row — fall back to what the mechanic confirmed at
+      // completion, which is where attribution now lives.
+      const actual = await ctx.db
+        .query("job_actuals")
+        .withIndex("by_booking_id", (q: any) => q.eq("booking_id", job.booking_id))
+        .order("desc")
+        .first();
+      const used = Array.isArray((actual as any)?.parts_used)
+        ? ((actual as any).parts_used as any[])
+        : [];
+      let matchedAny = false;
+      for (const part of used) {
+        if (part?.not_used === true) continue;
+        const name = String(part?.custom_service_name ?? "").trim();
+        if (!name) continue;
+        if (serviceMatchKey(name) !== args.matchKey) continue;
+        matchedAny = true;
+        const quantity =
+          typeof part.quantity === "number" && part.quantity > 0
+            ? part.quantity
+            : 1;
+        bump(
+          String(part.part_name ?? "Unnamed"),
+          part.oem_number ? String(part.oem_number) : null,
+          Math.round(Number(part.cost ?? 0) * 100) * quantity,
+        );
+      }
+      // The booking billed parts, but none of them name any line — a job
+      // completed before per-line attribution existed.
+      if (!matchedAny && used.some((p: any) => !p?.not_used && !p?.service_id)) {
+        unattributed += 1;
       }
     }
 
-    return Array.from(counts.values()).sort((a, b) => b.count - a.count);
+    return {
+      parts: Array.from(counts.values()).sort((a, b) => b.count - a.count),
+      /** Jobs that billed a part nothing could be attributed to. */
+      unattributed_jobs: unattributed,
+    };
   },
 });

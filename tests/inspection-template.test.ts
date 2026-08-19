@@ -16,6 +16,7 @@ import {
   requiredZonesForBooking,
   requiresRotorStampPhoto,
   rotorEvidenceCornersFromSubmission,
+  specPrefillFromPassport,
   toggleInspectionTreadMode,
   validateZoneForCompletion,
   type InspectionState,
@@ -844,5 +845,35 @@ describe("multi-point inspection payload derivation", () => {
     expect(
       derivePrejobFromInspection(state, { mileage: 45_000 }).filters,
     ).toEqual({ engine_air_filter: "not_checked", cabin_air_filter: null });
+  });
+});
+
+describe("specPrefillFromPassport", () => {
+  it("seeds ENG fluid specs into the text bucket so the type:'text' fields render them", () => {
+    // Regression: these entries were bucketed "select" while the ENG fields
+    // render from zs.text, so every enriched fluid spec (oil viscosity,
+    // coolant, brake fluid, ATF) rendered blank on a first visit even though
+    // the passport carried the value.
+    const passport = {
+      tires: {},
+      brakes: {},
+      fluids: {
+        oil_viscosity: "0W-16",
+        coolant_type: "Toyota Super Long Life Coolant (SLLC) / Pink",
+        brake_fluid_type: "DOT 3",
+        transmission_fluid_type: "Toyota Genuine ATF WS",
+      },
+    } as never;
+
+    const eng = specPrefillFromPassport(passport, null).ENG ?? [];
+    const byKey = Object.fromEntries(eng.map((e) => [e.fieldKey, e]));
+
+    expect(byKey.coolant_type?.value).toBe(
+      "Toyota Super Long Life Coolant (SLLC) / Pink",
+    );
+    expect(byKey.oil_viscosity?.value).toBe("0W-16");
+    // A "select" bucket here silently blanks the field — every ENG spec must
+    // land in the text bucket the fields read from.
+    expect(eng.every((e) => e.bucket === "text")).toBe(true);
   });
 });

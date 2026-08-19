@@ -116,12 +116,46 @@ function noListingRetryMs(): number {
   return Number(process.env.PARTS_PRICE_NO_LISTING_RETRY_DAYS ?? "30") * 24 * 60 * 60 * 1000;
 }
 
+/**
+ * How long an "unparsed" verdict suppresses re-discovery.
+ *
+ * SHORTER than no_listing on purpose, because the two describe opposite
+ * situations. `no_listing` means nobody sells this number — only the market
+ * changing fixes that. `unparsed` means sellers exist and we could not read a
+ * price off their pages, which OUR next deploy might fix: a new selector, a
+ * store admitted to getPriceStores, a JSON-LD shape learned. Retrying our own
+ * fixable failure on the market's cadence would be wrong in both directions.
+ */
+function unparsedRetryMs(): number {
+  return Number(process.env.PARTS_PRICE_UNPARSED_RETRY_DAYS ?? "7") * 24 * 60 * 60 * 1000;
+}
+
+/**
+ * Is this part suppressed from target selection right now?
+ *
+ * THE SPLIT (Aug 2026). This used to recognise one verdict, and the gap was
+ * not the one it looks like: a part whose discovery found URLs but whose pages
+ * yielded NO PRICE recorded nothing at all. It therefore stayed fully eligible
+ * and every sweep re-selected it, re-searched it, re-fetched the same
+ * unparseable pages and failed identically — spending backfill budget on a
+ * known-losing part, forever, while genuinely winnable parts waited behind it.
+ *
+ * "Found nothing" and "found something unreadable" now record separately and
+ * back off on their own clocks. Any unrecognised verdict suppresses nothing,
+ * so an older row or a future value can only ever cost a retry.
+ */
 function isDiscoveryDead(part: { price_discovery_outcome?: string; price_discovery_at?: number }): boolean {
-  return (
-    part.price_discovery_outcome === "no_listing" &&
-    typeof part.price_discovery_at === "number" &&
-    Date.now() - part.price_discovery_at < noListingRetryMs()
-  );
+  const at = part.price_discovery_at;
+  if (typeof at !== "number") return false;
+  const age = Date.now() - at;
+  switch (part.price_discovery_outcome) {
+    case "no_listing":
+      return age < noListingRetryMs();
+    case "unparsed":
+      return age < unparsedRetryMs();
+    default:
+      return false;
+  }
 }
 
 /** Durable per-part discovery verdict — the answer to the canary's open
@@ -130,7 +164,7 @@ function isDiscoveryDead(part: { price_discovery_outcome?: string; price_discove
 export const markPriceDiscoveryOutcome = internalMutation({
   args: {
     part_id: v.id("oem_parts"),
-    outcome: v.union(v.literal("no_listing"), v.null()),
+    outcome: v.union(v.literal("no_listing"), v.literal("unparsed"), v.null()),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.part_id, {
@@ -378,7 +412,7 @@ export const refreshStalePrices = internalAction({
       const targets = zeroTargets.filter((t) => !t.discovery_dead).slice(0, backfillBudget);
       console.log(
         `[price-refresh] ${targets.length} zero-price parts selected (backfill budget ${backfillBudget}` +
-          (skippedDead > 0 ? `, ${skippedDead} skipped as no_listing` : "") + `)`,
+          (skippedDead > 0 ? `, ${skippedDead} skipped as no_listing/unparsed` : "") + `)`,
       );
 
       for (const t of targets) {
@@ -410,10 +444,24 @@ export const refreshStalePrices = internalAction({
           const wrote = await priceAndWrite({ ...t, urls, discovered: true });
           if (wrote) {
             backfilledParts++;
-            // A price landed — clear any stale no_listing marker.
+            // A price landed — clear any stale marker of either kind.
             await ctx.runMutation(internal.vehicleEnrichment.priceRefresh.markPriceDiscoveryOutcome, {
               part_id: t.part_id as any,
               outcome: null,
+            });
+          } else {
+            // Sellers EXIST and we could not read a price off any of them.
+            // Recording nothing here is what made the sweep re-select this
+            // part every run to fail the same way; recording `no_listing`
+            // would be a lie about the market and would back off far too long
+            // for a failure that is ours to fix.
+            console.warn(
+              `[price-refresh] backfill: ${urls.length} source(s) found for ` +
+                `${t.oem_part_number} but no price parsed — unparsed`,
+            );
+            await ctx.runMutation(internal.vehicleEnrichment.priceRefresh.markPriceDiscoveryOutcome, {
+              part_id: t.part_id as any,
+              outcome: "unparsed",
             });
           }
         } catch (e) {

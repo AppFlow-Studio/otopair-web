@@ -13,6 +13,7 @@
 // =============================================================================
 import type { QueryCtx } from "../_generated/server";
 import type { Doc, Id } from "../_generated/dataModel";
+import { customServiceNames } from "./customServiceNames";
 
 export type VehicleDisplay = {
   vin: string | null;
@@ -132,17 +133,25 @@ export async function resolveVehicleDisplayById(
   return { vin: veh.vin ?? null, ymm, imageUrl: veh.image_url ?? null };
 }
 
-/** Resolve booking.service_ids to display names (missing → "—"). */
+/**
+ * Resolve a booking's work to display names (missing catalog row → "—").
+ *
+ * Takes `custom_services` as well as `service_ids`: a booking whose only work
+ * is off-catalog has an empty `service_ids`, and returning [] for it is what
+ * made custom-only jobs render blank on every ops and invoice surface.
+ */
 export async function resolveServiceNames(
   ctx: QueryCtx,
   serviceIds: ReadonlyArray<Id<"services">>,
+  customServices?: unknown,
 ): Promise<string[]> {
-  return Promise.all(
+  const catalog = await Promise.all(
     serviceIds.map(async (sid) => {
       const s = await ctx.db.get(sid);
       return s?.name ?? "—";
     }),
   );
+  return [...catalog, ...customServiceNames(customServices)];
 }
 
 /**
@@ -158,7 +167,7 @@ export async function enrichBookingRefs(
     ctx.db.get(booking.user_id),
     booking.shop_id ? ctx.db.get(booking.shop_id) : null,
     resolveVehicleDisplay(ctx, booking.vin),
-    resolveServiceNames(ctx, booking.service_ids),
+    resolveServiceNames(ctx, booking.service_ids, booking.custom_services),
   ]);
   return {
     userId: booking.user_id,

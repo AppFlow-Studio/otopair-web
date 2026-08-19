@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
 export type LiveAlertKind =
+  | "pickup_request"
   | "on_my_way"
   | "no_show_decision"
   | "late_notification_sent"
@@ -15,11 +16,14 @@ export type LiveAlertKind =
 
 const PRIORITY: Record<LiveAlertKind, number> = {
   no_show_decision: 1,
-  on_my_way: 2,
-  manual_scheduling: 3,
-  late_notification_sent: 4,
-  overrun: 5,
-  late_start: 6,
+  // Customer is physically at the shop asking for their car — rank it right
+  // below a no-show decision, above the softer time/late alerts.
+  pickup_request: 2,
+  on_my_way: 3,
+  manual_scheduling: 4,
+  late_notification_sent: 5,
+  overrun: 6,
+  late_start: 7,
 };
 
 export type LiveAlert = {
@@ -62,6 +66,7 @@ export function useLiveAlerts(): {
   alerts: LiveAlert[];
   isLoading: boolean;
 } {
+  const pickupRequests = useQuery(api.bookings.getOpenPickupRequests);
   const onMyWay = useQuery(api.bookings.getCustomerOnMyWayMonitors);
   const noShowDecisions = useQuery(api.bookings.getOpenCustomerLateAlerts);
   const notificationSent = useQuery(
@@ -73,6 +78,29 @@ export function useLiveAlerts(): {
 
   const alerts = useMemo<LiveAlert[]>(() => {
     const out: LiveAlert[] = [];
+
+    for (const row of (pickupRequests ?? []) as any[]) {
+      if (!row) continue;
+      const time = formatTime12h(row.scheduledTime);
+      out.push({
+        id: String(row._id),
+        kind: "pickup_request",
+        priority: PRIORITY.pickup_request,
+        bookingId: row.bookingId,
+        customerName: row.customerName ?? null,
+        vehicleLabel: row.vehicle ?? null,
+        scheduledDate: row.scheduledDate ?? null,
+        scheduledTime: row.scheduledTime ?? null,
+        mechanicId: row.mechanicId ?? null,
+        mechanicName: row.mechanicName ?? null,
+        serviceSummary: row.serviceSummary ?? null,
+        reason: row.reason ?? undefined,
+        timestamp: row.requestedAtMs ?? Date.now(),
+        summary: `${row.customerName ?? "Customer"} is requesting pickup${time ? ` · ${time}` : ""}`,
+        headerLabel: "Pickup requested",
+        accent: "red",
+      });
+    }
 
     for (const row of (onMyWay ?? []) as any[]) {
       if (!row) continue;
@@ -217,6 +245,7 @@ export function useLiveAlerts(): {
 
     return out;
   }, [
+    pickupRequests,
     onMyWay,
     noShowDecisions,
     notificationSent,
@@ -226,6 +255,7 @@ export function useLiveAlerts(): {
   ]);
 
   const isLoading =
+    pickupRequests === undefined ||
     onMyWay === undefined ||
     noShowDecisions === undefined ||
     notificationSent === undefined ||

@@ -10,6 +10,7 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { sanitizePartNumber } from "./vehicleEnrichment/contentSanitization";
 import { getOrCreateMake } from "./lib/makeKey";
 import { normalizeOemNumber } from "./vehicleEnrichment/priceParser";
+import { deriveSparkPlugQuantity } from "./lib/sparkPlugs";
 
 // ============================================
 // INTERNAL QUERIES
@@ -370,6 +371,32 @@ export const storeEngineSpecs = internalMutation({
     if (s.spark_plug_gap_mm) patch.spark_plug_gap_mm = parseFloat(s.spark_plug_gap_mm) || undefined;
     if (s.timing_system) patch.timing_system = s.timing_system;
     if (s.fuel_injection_type) patch.fuel_injection = s.fuel_injection_type;
+
+    // Fill the plug COUNT from the cylinder count when nothing supplied one.
+    // The enrichment pass returns null for this field often enough to matter —
+    // 17 of 100 engines sampled Aug 17 2026 — and 15 of those already knew
+    // their cylinder count, so the number was sitting unused in the same row.
+    // Never overwrites: an extracted or human-entered value outranks a
+    // derivation, and an unknown cylinder count yields null, not a default.
+    const engineDoc = await ctx.db.get(args.engineId);
+    if (engineDoc && patch.spark_plug_quantity == null && engineDoc.spark_plug_quantity == null) {
+      // Make decides the twin-plug question (a 6.2 V8 is 16 plugs as a Mopar
+      // Hellcat and 8 as a Chevy LT1), so resolve it rather than deriving blind.
+      const makeDoc = engineDoc.make_id ? await ctx.db.get(engineDoc.make_id) : null;
+      const derived = deriveSparkPlugQuantity({
+        cylinders: engineDoc.cylinders,
+        make: makeDoc?.name ?? null,
+        engineCode: engineDoc.engine_code,
+        displacementL: engineDoc.displacement_l,
+      });
+      if (derived) {
+        patch.spark_plug_quantity = derived.quantity;
+        console.log(
+          `[engine-specs] derived spark_plug_quantity=${derived.quantity} ` +
+            `for engine ${args.engineId} (${derived.why})`,
+        );
+      }
+    }
 
     patch.data_quality = "enriched";
     patch.created_at = Date.now();

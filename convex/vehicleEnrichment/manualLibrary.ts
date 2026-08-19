@@ -188,6 +188,27 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string | null> {
 /** Below this a "PDF" is an error page or a redirect stub, not a manual. */
 export const MIN_MANUAL_BYTES = 40 * 1024;
 
+/**
+ * Is this Messages-API rejection a SIZE limit rather than a real failure?
+ *
+ * The Files API refuses documents over 600 PDF pages or ~1M prompt tokens. That
+ * is a routing verdict — the document is real and readable, just not by this
+ * extractor — so both the interval and the spec pass hand it to Reducto instead
+ * of recording a gap.
+ *
+ * Shared because the two passes had drifted: intervals caught this and specs
+ * did not, so the same 395-page Acadia manual reached Reducto for its schedule
+ * and died with a raw `messages_400` for its 18 spec fields. One definition
+ * means they cannot drift again.
+ *
+ * Deliberately narrow — matched against Anthropic's own error text, not a
+ * generic "400 means too big". A 400 for a malformed request must stay a
+ * failure, because retrying it on a second extractor just burns the credit too.
+ */
+export function isFilesApiSizeLimit(status: number, detail: string): boolean {
+  return status === 400 && /maximum of 600 PDF pages|prompt is too long/i.test(detail);
+}
+
 /** Negative caching: a failed (make, model, year) is not retried for this long. */
 export const MANUAL_FAILURE_TTL_DAYS = 14;
 
@@ -2502,12 +2523,9 @@ export const extractIntervalsFromManual = internalAction({
           // under the byte cap but over the page cap; the byte-based
           // extractorForBytes cannot see page count up front). Hand it to the
           // same Reducto path oversize-by-bytes manuals already use.
-          if (
-            res.status === 400 &&
-            /maximum of 600 PDF pages|prompt is too long/i.test(detail)
-          ) {
+          if (isFilesApiSizeLimit(res.status, detail)) {
             console.log(
-              `[manual-library] ${label}: Files-API size limit (${detail.slice(0, 80)}…) — falling back to Reducto`,
+              `[manual-library] ${label}: Files-API size limit (${detail.slice(0, 240)}…) — falling back to Reducto`,
             );
             try {
               return await ctx.runAction(

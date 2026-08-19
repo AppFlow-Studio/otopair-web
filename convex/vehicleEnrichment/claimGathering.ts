@@ -369,6 +369,25 @@ export const gatherClaims = internalAction({
           // Only adapters with a wired rescue seam attempt — summitCentric's
           // WHOLE flow needs a browser, so attempting it would just burn
           // ~45s of the gather deadline for nothing.
+          //
+          // RE-PROBED LIVE Aug 2026, and the exclusion still holds. It is
+          // worth writing down because summit_centric is the only broad
+          // US-application rotor DISCARD source we have (Brembo skews
+          // European/performance), it has filed ZERO claims fleet-wide, and
+          // that makes it a standing temptation to "just switch on". Measured
+          // against summitracing.com:
+          //   bare fetch      → 200, 6.0 KB, Imperva "Pardon Our Interruption"
+          //   scrapling http  → 200, 5.7 KB, same wall
+          //   scrapling auto  → 200, 5.7 KB, same wall
+          //   scrapling stealth → 502 from the scraper service
+          // So Imperva ABP currently defeats every tier we have, and widening
+          // this gate would buy nothing but latency. The blocker is the
+          // SCRAPER SERVICE (the stealth 502), not this condition — fix that
+          // first, re-run devOnly/summitProbe, and only then revisit.
+          //
+          // NOTE: the adapter also still uses a bare `fetch()` rather than
+          // `sourceAdapters/http.ts`'s `adapterFetch`, so it would not reach
+          // Scrapling even if this gate let it through. Both need doing.
           const scraplingOn =
             process.env.PARTS_SCRAPLING === "on" &&
             scraplingEnabled() &&

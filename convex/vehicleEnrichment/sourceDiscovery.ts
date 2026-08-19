@@ -2,7 +2,37 @@
  * vehicleEnrichment/sourceDiscovery.ts — Auto-discover new data sources per make.
  *
  * Uses FireCrawl searchAndFetch to find sources, tests them with regex extraction,
- * scores them, and promotes viable ones to source_registry.
+ * scores them, and records viable ones in the `source_registry` TABLE.
+ *
+ * ── WHAT "PROMOTED" DOES AND DOES NOT MEAN (Aug 2026) ──────────────────────
+ *
+ * It does NOT make a source part of the scraper's lane. `source_registry` is
+ * the director's reference surface (the /sources data portal); the scraper
+ * reads `sourceRegistry.SOURCE_REGISTRY`, a code table. For a long time that
+ * gap was the whole reason turning this on bought nothing: a discovered store
+ * had nowhere to LAND that any consumer would read, so the flag was dark and
+ * the honest fix was thought to be "make the registry data-driven".
+ *
+ * It isn't, quite. The registry now expresses second-voice stores directly —
+ * `AlternateStore` in sourceRegistry.ts, surfaced as a work queue by
+ * `makeCoverage.auditOperatorDiversity().pendingAlternates` — and the missing
+ * piece was never the flag, it was that a candidate had nowhere to sit while
+ * being proven. Now it does.
+ *
+ * PROMOTION IS DELIBERATE, AND STAYS THAT WAY. Before a discovered store may
+ * serve parts it must clear two things this module cannot check:
+ *
+ *   1. `looksLikeRevolutionParts` — most alternative OEM parts sites are RP
+ *      SKINS on the same backend with the same catalogue gaps. Admitting one
+ *      would look like diversity, buy none, and inflate the claim ledger's
+ *      operator count, which its corroboration math is a function of.
+ *   2. A walk to a DETAIL page that actually yields an OEM number and a price.
+ *      A homepage that returns 200 proves only that the domain resolves.
+ *
+ * A store that has not cleared both can inject wrong part numbers into a
+ * quote, which is why `AlternateStore.validated` defaults false and
+ * `getPartsStores` omits unvalidated entries. Auto-promotion is not a missing
+ * feature here; it is the thing being refused.
  */
 
 import { v } from "convex/values";

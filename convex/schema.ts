@@ -2773,12 +2773,39 @@ export default defineSchema({
     ),
     cancel_requested_at_ms: v.optional(v.number()),
     cancel_request_reason: v.optional(v.string()),
+    // Shop/mechanic response to the customer's "request pickup" above. Written
+    // by respondToPickupRequest; surfaced back to the customer's booking card
+    // and cleared implicitly by the eventual cancel/settlement transition.
+    pickup_response: v.optional(
+      v.union(
+        v.literal("acknowledged"),
+        v.literal("bringing_out"),
+        v.literal("declined"),
+      ),
+    ),
+    pickup_responded_at_ms: v.optional(v.number()),
+    pickup_response_by: v.optional(v.id("users")),
+    pickup_response_note: v.optional(v.string()),
     reschedule_count: v.optional(v.number()),
+    // Off-catalog work on this booking. The mechanic's typed name plus how long
+    // they expect it to take.
+    //
+    // The key is snake_case because that is what every writer and reader in
+    // bookings.ts actually uses (`duration_minutes: c.durationMinutes` when
+    // normalising the camelCase mutation arg, then `c.duration_minutes ?? 0`
+    // when summing minutes). This validator previously declared `durationMinutes`,
+    // which no code path ever wrote.
+    //
+    // That mismatch was an intermittent live failure, not a dead letter: Convex
+    // strips undefined before validating, so a custom service with NO duration
+    // stored fine, while one WITH a duration hit "Unexpected field
+    // `duration_minutes`" and threw the whole booking insert. Adding minutes to
+    // a walk-in was the thing that broke it.
     custom_services: v.optional(
       v.array(
         v.object({
           name: v.string(),
-          durationMinutes: v.optional(v.float64()),
+          duration_minutes: v.optional(v.float64()),
         })
       )
     ),
@@ -2796,7 +2823,13 @@ export default defineSchema({
     // from the upfront estimates above. `backfilled_at_ms` doubles as both a
     // boolean marker and the audit timestamp of when the backfill was logged.
     backfilled_at_ms: v.optional(v.number()),
+    // WORKED minutes, not elapsed — blocked spans are subtracted (Flag Issue
+    // spec, §5). Every labour estimate we derive reads this, so it must not
+    // include time nobody was working.
     actual_duration_minutes: v.optional(v.number()),
+    // The wall-clock time subtracted, kept so "why was my car there all day" is
+    // still answerable. Absent when the job was never blocked.
+    blocked_minutes: v.optional(v.number()),
     actual_price_charged: v.optional(v.number()),
 
     // ---------------------------------------------------------------------
@@ -2838,7 +2871,13 @@ export default defineSchema({
     priced_parts_snapshot: v.optional(
       v.array(
         v.object({
-          service_id: v.id("services"),
+          // Optional since off-catalog work landed: a part can now belong to a
+          // custom line, which has no services row. Exactly one of
+          // service_id / custom_service_name is set on every row.
+          service_id: v.optional(v.id("services")),
+          /** Set on parts attached to a custom_services line, matched by name
+           *  (the same key custom_jobs uses). */
+          custom_service_name: v.optional(v.string()),
           part_id: v.optional(v.id("oem_parts")),
           oem_number: v.string(),
           part_name: v.string(),
@@ -3991,6 +4030,12 @@ export default defineSchema({
       v.literal("correction"),
       v.literal("report"),
       v.literal("survey"),
+      // Off-catalog names that look like a service we already offer
+      // (Off-Catalog Work spec, §8). Each row is one cluster waiting to be
+      // aliased away. Unlike the other four streams this one is load-bearing for
+      // correctness, not just data quality: while a cluster sits here unresolved,
+      // every driver whose custom job it covers is losing maintenance credit.
+      v.literal("alias"),
     ),
     // _id of the source document (enrichment_run, mechanic_verification, …)
     source_id: v.string(),
@@ -4135,6 +4180,42 @@ export default defineSchema({
     updated_at: v.number(),
     updated_by_user_id: v.optional(v.id("director_users")),
   }).index("by_key", ["key"]),
+
+  // Director-managed catalog of the third-party services the company pays for
+  // (Convex, Slack, Firecrawl, Anthropic, Fly.io, Reducto, Stripe, the app
+  // stores, …). Purely an internal bookkeeping surface — a place to paste a
+  // dashboard link, stash the login/account it's under, and track roughly what
+  // it costs per month. The favicon is derived client-side from `url`; store an
+  // explicit `logo_url` only to override it. See app/(director-panel)/…/
+  // TabIntegrations.tsx and convex/directorIntegrations.ts.
+  director_integrations: defineTable({
+    name: v.string(),
+    // Where to go to manage the service (the dashboard/console URL). Clicking a
+    // card opens this in a new tab.
+    url: v.string(),
+    // Optional logo override. Absent → favicon derived from `url`'s hostname.
+    logo_url: v.optional(v.string()),
+    // Free-text grouping shown as a chip (Backend, AI, Payments, Infra, …).
+    category: v.optional(v.string()),
+    // Which login / org / email the account sits under, plus any freeform notes
+    // (where the API key lives, plan name, seat count, …).
+    account: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    // How we're billed. `monthly_cost` is the recurring monthly figure for a
+    // subscription, or a rough monthly estimate for pay-as-you-go usage; unset
+    // for free / one-time tools.
+    billing_type: v.union(
+      v.literal("subscription"),
+      v.literal("pay_as_you_go"),
+      v.literal("free"),
+    ),
+    monthly_cost: v.optional(v.number()),
+    sort_order: v.optional(v.number()),
+    archived: v.optional(v.boolean()),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+    updated_by_user_id: v.optional(v.id("director_users")),
+  }).index("by_created_at", ["created_at"]),
 
   // ==========================================================================
   // Scheduling-overhaul tables — late-start monitoring, no-show monitoring,
@@ -4311,6 +4392,10 @@ export default defineSchema({
     mechanic_id: v.optional(v.id("mechanics")),
     channel: v.string(),
     category: v.string(),
+    // `status` is the DELIVERY axis only (pending → dispatching → dispatched |
+    // failed | no_push_token | resolved-for-front_desk). Owned by enqueue + the
+    // channel dispatchers. It no longer drives the in-app feed — see read_at /
+    // resolved_at below.
     status: v.string(),
     dedupe_key: v.string(),
     payload: v.any(),
@@ -4318,12 +4403,23 @@ export default defineSchema({
     created_at: v.number(),
     updated_at: v.optional(v.number()),
     processed_at: v.optional(v.number()),
+    // READ axis: set when the user/staff has seen the row. Drives read/unread
+    // styling; does NOT remove the row from the feed.
+    read_at: v.optional(v.number()),
+    // RESOLVE axis: set when the underlying action is no longer actionable
+    // (user acted, booking state moved on, or a proposal expired). The in-app
+    // feed shows rows where resolved_at == null, independent of delivery status.
+    resolved_at: v.optional(v.number()),
+    // "user_action" | "superseded" | "expired" | "backfill" — drives copy.
+    resolved_reason: v.optional(v.string()),
   })
     .index("by_dedupe_key", ["dedupe_key"])
     .index("by_status", ["status"])
     .index("by_shop_id", ["shop_id"])
     .index("by_booking_id", ["booking_id"])
-    .index("by_shop_and_status", ["shop_id", "status"]),
+    .index("by_shop_and_status", ["shop_id", "status"])
+    // The customer feed now spans delivered rows, so it can't ride by_status.
+    .index("by_user_id", ["user_id"]),
 
   sms_delivery_log: defineTable({
     outbox_id: v.optional(v.id("notification_outbox")),
@@ -4439,6 +4535,296 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_recommended_service_id", ["recommended_service_id"])
     .index("by_vehicle_and_status", ["vehicle_vin", "status"]),
+
+  // A job that cannot proceed as planned (Flag Issue spec, §5).
+  //
+  // Before this table the system had no way to say "stopped, and here's why" —
+  // `live_stage` has only forward-progress values, so a mechanic waiting three
+  // hours for the right part could either leave the job in `service_in_progress`
+  // or mark it complete when it wasn't.
+  //
+  // WHY IT'S A TABLE AND NOT A FLAG: "this job was blocked twice for parts" is
+  // exactly the pattern a shop wants to see, and the open→resolved spans are also
+  // the arithmetic that keeps blocked time out of recorded labour. A boolean on
+  // the booking could do neither.
+  //
+  // THE CLOCK: job_actuals.started_at runs to completion, so without subtracting
+  // these spans, blocked time lands in actual_duration_minutes → then in
+  // labor_quote_snapshots, custom_jobs.actual_minutes, and the shortcut variance
+  // stats — every one of which we use to derive what work *should* take. See
+  // blockedMinutesForBooking and maybePersistEarlyCompletionDuration.
+  job_blockers: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    raised_by_user_id: v.id("users"),
+    mechanic_id: v.optional(v.id("mechanics")),
+
+    kind: v.union(
+      // Work has stopped and is waiting on something external.
+      v.literal("parts_delay"),
+      v.literal("vehicle_condition"),
+      v.literal("needs_specialist"),
+      v.literal("customer_unreachable"),
+      // Work continues — these are escalations, not stoppages. Neither may ever
+      // route into a customer quote: you cannot bill a customer for damage you
+      // caused, and a safety finding reaches the driver whether or not they buy
+      // the fix. See jobBlockers.KIND_POLICY.
+      v.literal("safety_hold"),
+      v.literal("damage"),
+    ),
+    note: v.string(),
+    photos: v.optional(v.array(postjobPhotoValidator)),
+    // When the shop expects to be unblocked. Drives the driver notice, so it's
+    // the difference between "your car is delayed" and "your car is delayed
+    // until tomorrow afternoon".
+    eta_ms: v.optional(v.number()),
+
+    // Denormalised from KIND_POLICY at open time. Stored rather than derived so
+    // a later policy change can't retroactively rewrite what a past job billed.
+    stops_clock: v.boolean(),
+
+    opened_at: v.number(),
+    resolved_at: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+    resolution_note: v.optional(v.string()),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_shop", ["shop_id"])
+    .index("by_shop_open", ["shop_id", "resolved_at"])
+    .index("by_kind", ["kind"])
+    .index("by_opened_at", ["opened_at"]),
+
+  // Audit trail for pseudo-VIN → real-VIN re-keys (Off-Catalog Work spec, §5).
+  //
+  // A walk-in entered without a valid VIN gets a placeholder, and every row about
+  // that car is keyed on it. When the real VIN finally arrives we move all of them
+  // at once — a partial move is worse than none, because it forks one car into two
+  // identities with two service histories.
+  //
+  // `moved` records the per-table counts so the operation is auditable, and
+  // `batch` is the handle a revert would key on. Same shape as the merge ledgers
+  // (make_merge_log, configsMerge) that already exist for this class of
+  // whole-identity rewrite.
+  vin_repair_log: defineTable({
+    from_vin: v.string(),
+    to_vin: v.string(),
+    // Who authorised it: the driver claiming their account, shop staff correcting
+    // a booking, or a director running a repair.
+    trigger: v.string(),
+    actor_user_id: v.optional(v.id("users")),
+    moved: v.any(),
+    skipped: v.optional(v.any()),
+    batch: v.string(),
+    created_at: v.number(),
+  })
+    .index("by_from_vin", ["from_vin"])
+    .index("by_to_vin", ["to_vin"])
+    .index("by_batch", ["batch"]),
+
+  // A shop's own shortcuts for off-catalog work they've done before
+  // (Off-Catalog Work spec, §3).
+  //
+  // This is NOT a catalog and never driver-facing. Custom work is emergent —
+  // it comes up mid-job or gets recommended after — so this is framed to the
+  // mechanic as "things you've typed before", not "your services". It never
+  // appears in search, never renders on a shop profile, and no driver can book
+  // against it.
+  //
+  // WHY IT EARNS A TABLE: pressing a button instead of retyping collapses forty
+  // spellings into one key pressed forty times. Repeat counts become exact and
+  // labor distributions become real distributions, so the director view (§8) only
+  // has to fuzzy-match ACROSS shops and on first-time entries — never within one
+  // shop's own repeats.
+  //
+  // Consequently the match gate runs STRICTER here than on a one-off line: a
+  // mistake in a shortcut is replayed every time the button is pressed, whereas a
+  // mistake in a one-off is a single bad row. See shopCustomServices.create.
+  //
+  // `name` is immutable after creation. Renaming a shortcut with history would
+  // retroactively change what past jobs were called; retire it and make a new one.
+  shop_custom_services: defineTable({
+    shop_id: v.id("shops"),
+    name: v.string(),
+    // normalizeServiceName — the pending_service_submissions ledger key.
+    normalized_name: v.string(),
+    // serviceMatchKey — the cross-shop clustering key.
+    match_key: v.string(),
+    // Defaults carried onto every job the shortcut creates, so a press is one
+    // tap rather than three. See lib/custom-job-taxonomy.ts.
+    system_tags: v.optional(v.array(v.string())),
+    work_type: v.optional(v.string()),
+    // Legacy — see the note on custom_jobs.category_id.
+    category_id: v.optional(v.id("service_categories")),
+
+    // Prefilled when the shortcut is pressed. Editable, unlike the name.
+    default_minutes: v.optional(v.number()),
+    default_price_cents: v.optional(v.number()),
+    // The complaint text from the last time, offered as a starting point.
+    last_complaint: v.optional(v.string()),
+
+    use_count: v.number(),
+    last_used_at: v.number(),
+
+    // ── Drift detection (§3) ────────────────────────────────────────────────
+    // A mechanic pressing "Brake job — custom" for three different pieces of
+    // work gives one key a bimodal labor distribution that LOOKS trustworthy —
+    // arguably worse than free text. We don't block it, we measure it: running
+    // sums let the director view compute variance without storing every sample,
+    // and deviation_count tracks how often actuals diverged sharply from the
+    // shortcut's own default.
+    minutes_samples: v.optional(v.number()),
+    minutes_sum: v.optional(v.number()),
+    minutes_sum_sq: v.optional(v.number()),
+    deviation_count: v.optional(v.number()),
+
+    // Retired shortcuts leave the picker but keep their key and history, so past
+    // custom_jobs rows still resolve.
+    retired_at: v.optional(v.number()),
+    created_by_mechanic_id: v.optional(v.id("mechanics")),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_shop", ["shop_id"])
+    .index("by_shop_and_match_key", ["shop_id", "match_key"])
+    .index("by_match_key", ["match_key"]),
+
+  // One structured record per piece of off-catalog work (Off-Catalog Work
+  // spec, §7). `bookings.custom_services[]` stays as the lightweight display
+  // and scheduling copy — this table is the extraction spine.
+  //
+  // The two fields that don't exist anywhere else in the schema are `complaint`
+  // and `resolution`. Together with `resolved_complaint` they bracket the work
+  // into a symptom → action → outcome triple, produced as a by-product of a
+  // mechanic doing their job. Everything else here (labor, price, parts) is
+  // already captured in the *_quote_snapshots tables; the reasoning is not.
+  //
+  // NOTHING in this table may influence the Vehicle Health Score. See the
+  // CUSTOM JOB INVARIANT comments in bookings.ts and jobRecommendations.ts.
+  custom_jobs: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.id("shops"),
+    mechanic_id: v.optional(v.id("mechanics")),
+    vehicle_vin: v.string(),
+    // Scopes labor/price evidence to a real engine + chassis. Null on
+    // pseudo-VIN walk-ins, which is exactly why VIN capture matters — unscoped,
+    // the numbers here are anecdotes.
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+
+    // What the mechanic typed, plus both normalised forms:
+    //   normalized_name — normalizeServiceName, the pending_service_submissions key
+    //   match_key       — serviceMatchKey, the clustering key (order-insensitive)
+    // Two keys because the two normalisers are deliberately different; see
+    // convex/lib/serviceMatch.ts.
+    name: v.string(),
+    normalized_name: v.string(),
+    match_key: v.string(),
+
+    // ── Descriptive taxonomy (lib/custom-job-taxonomy.ts) ──────────────────
+    // Two stacked axes: where on the car, and what was done to it. Both are
+    // MANDATORY on every write path — requireCustomJobTaxonomy is the single
+    // enforcement point. They're optional in the validator only so rows written
+    // before this shipped still pass schema validation on deploy; nothing may
+    // write a NEW row without them.
+    //
+    // system_tags is ordered: [0] is the primary system, and the coarse
+    // gap-clustering read groups on that rather than on the whole set.
+    system_tags: v.optional(v.array(v.string())),
+    work_type: v.optional(v.string()),
+    // Legacy. Was the catalog's merchandising taxonomy, which describes what a
+    // driver can BOOK and therefore could never describe off-catalog work —
+    // this is the field that filed a window-switch replacement under
+    // "Inspections". No longer collected; kept so historical rows resolve.
+    category_id: v.optional(v.id("service_categories")),
+
+    // The reasoning. `complaint` is why the work happened, `resolution` is what
+    // was actually done, `resolved_complaint` is whether it worked.
+    complaint: v.optional(v.string()),
+    resolution: v.optional(v.string()),
+    resolved_complaint: v.optional(v.boolean()),
+
+    estimated_minutes: v.optional(v.number()),
+    actual_minutes: v.optional(v.number()),
+    quoted_price_cents: v.optional(v.number()),
+    charged_price_cents: v.optional(v.number()),
+
+    // ── Parts quoted against this line ────────────────────────────────────
+    // Denormalised from the booking's priced_parts_snapshot at write time.
+    // The snapshot is the billing record and stays authoritative for money;
+    // this copy is what makes a custom job self-describing for the extraction
+    // reads, which scan custom_jobs and never load the booking. Without it
+    // "what does this work actually involve" is unanswerable at scale — the
+    // single most useful thing to know before deciding to build a service.
+    parts: v.optional(
+      v.array(
+        v.object({
+          part_name: v.string(),
+          oem_number: v.optional(v.string()),
+          brand: v.optional(v.string()),
+          quantity: v.number(),
+          unit_price_cents: v.optional(v.number()),
+          line_total_cents: v.optional(v.number()),
+        }),
+      ),
+    ),
+    /** Sum of the parts above at quote time. Frozen — a later price edit must
+     *  not silently rewrite what this job was quoted at. */
+    quoted_parts_cents: v.optional(v.number()),
+
+    // Set once the job completes and the post-job report lands.
+    job_actual_id: v.optional(v.id("job_actuals")),
+    // The dedupe ledger row this name bumped, so the director view can join
+    // cluster counts to individual jobs.
+    pending_service_submission_id: v.optional(
+      v.id("pending_service_submissions"),
+    ),
+    // The shop shortcut this job came from, when it was pressed rather than
+    // typed. Its presence is what makes a repeat exactly countable instead of
+    // fuzzy-matched.
+    shop_custom_service_id: v.optional(v.id("shop_custom_services")),
+
+    // Where it was entered: "booking" (create-booking drawer), "mid_job",
+    // "post_job", or "recommendation" (advisory that was later performed).
+    source: v.string(),
+    status: v.union(
+      v.literal("planned"),
+      v.literal("completed"),
+      v.literal("cancelled"),
+    ),
+    created_at: v.number(),
+    updated_at: v.optional(v.number()),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_shop", ["shop_id"])
+    .index("by_vehicle_vin", ["vehicle_vin"])
+    .index("by_match_key", ["match_key"])
+    .index("by_status", ["status"])
+    .index("by_created_at", ["created_at"]),
+
+  // Alternate names that resolve to a canonical service. Written by hand from
+  // the director side when somebody recognises a cluster of custom jobs as
+  // work we already offer ("carbon clean" → Fuel System Cleaning).
+  //
+  // This is the ONLY feedback path into the custom-job match gate
+  // (convex/lib/serviceMatch.ts). Every row here means the next mechanic who
+  // types that name lands on the canonical service instead of creating a
+  // custom job — so the gate's accuracy is a direct function of how well this
+  // table is maintained. See the Off-Catalog Work spec, §2 Leak 2 and §8.
+  //
+  // `normalized_alias` holds serviceMatchKey(alias), NOT normalizeServiceName —
+  // the two normalisers are different on purpose (see serviceMatch.ts header).
+  service_aliases: defineTable({
+    alias: v.string(),
+    normalized_alias: v.string(),
+    service_id: v.id("services"),
+    // How the alias came to exist: "director_link" (someone cleared it out of
+    // the review band), "seed" (shipped with the catalog), "merge" (a candidate
+    // cluster folded into an existing service).
+    source: v.string(),
+    created_by_user_id: v.optional(v.id("users")),
+    created_at: v.number(),
+  })
+    .index("by_normalized_alias", ["normalized_alias"])
+    .index("by_service", ["service_id"]),
 
   // Review queue for mechanic-proposed service names that didn't match the
   // canonical services catalog. Mirrors the tire_brands.review_flagged
@@ -5897,6 +6283,48 @@ export default defineSchema({
      *  dead source instead of re-paying for it every run (negative caching). */
     failure_reason: v.optional(v.string()),
     attempts: v.optional(v.number()),
+    /**
+     * Which pages of this manual are worth extracting from.
+     *
+     * Reducto bills per page and defaults to the whole document, so sending a
+     * 395-page manual to recover ~10 intervals cost ~$16.67. Computed once from
+     * the stored bytes (free, ~1.5 s) by manualPageIndex_node; the extractors
+     * pass it as `settings.page_range`. Absent = never indexed, which means
+     * whole-document behaviour and the page budget still apply.
+     */
+    page_index: v.optional(
+      v.object({
+        version: v.number(),
+        total_pages: v.number(),
+        intervals: v.array(v.object({ start: v.number(), end: v.number() })),
+        specs: v.array(v.object({ start: v.number(), end: v.number() })),
+        /**
+         * Brake-specification pages — where the rotor DISCARD MINIMUM lives.
+         * Scored separately from `specs` because capacities and brake limits
+         * sit in different chapters; the specs extraction sends the union.
+         * Optional: v1 indexes predate the category.
+         */
+        brakes: v.optional(v.array(v.object({ start: v.number(), end: v.number() }))),
+        computed_at: v.number(),
+        /**
+         * Documents this manual says hold the schedule instead of itself.
+         * A 2021 Subaru Legacy points at the "Warranty and Maintenance
+         * Booklet" — so `schedule_found=false` there is a CORRECT reading of a
+         * document that defers, not a failed extraction. Present = we know the
+         * exact title to go and find.
+         */
+        defers_to: v.optional(
+          v.array(
+            v.object({
+              title: v.string(),
+              pages: v.array(v.number()),
+              region: v.optional(v.union(v.literal("us"), v.literal("ca"))),
+              evidence: v.string(),
+            }),
+          ),
+        ),
+      }),
+    ),
     /**
      * URLs already tried and REJECTED for this vehicle, so a retry picks a
      * different candidate instead of re-uploading the same useless PDF.

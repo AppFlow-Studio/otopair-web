@@ -212,7 +212,7 @@ export const list = query({
         ]);
         // Resolve what was bought + the car from the booking (already fetched).
         const [services, vehicle] = await Promise.all([
-          booking ? resolveServiceNames(ctx, booking.service_ids) : Promise.resolve([]),
+          booking ? resolveServiceNames(ctx, booking.service_ids, booking.custom_services) : Promise.resolve([]),
           booking ? resolveVehicleDisplay(ctx, booking.vin) : Promise.resolve(null),
         ]);
         return {
@@ -314,7 +314,7 @@ export const detail = query({
             status: booking.status,
             scheduledDate: booking.scheduled_date,
             totalCost: booking.total_cost, // dollars
-            services: await resolveServiceNames(ctx, booking.service_ids),
+            services: await resolveServiceNames(ctx, booking.service_ids, booking.custom_services),
             vehicleYmm: (await resolveVehicleDisplay(ctx, booking.vin)).ymm,
             vin: booking.vin ?? null,
             // Prefer the fixed quoted breakdown; fall back to the disclosed

@@ -95,6 +95,69 @@ export function isMarketplaceUrl(url: string | null | undefined): boolean {
 
 // ─── Interface ────────────────────────────────────────────────────
 
+/**
+ * A storefront that is NOT the make's primary, offered as a second voice.
+ *
+ * WHY THIS TYPE EXISTS. `makeCoverage.auditOperatorDiversity` reports the
+ * registry at severity `alarm`: all 36 makes resolve to ONE operator
+ * (RevolutionParts). A catalogue gap at that operator therefore fails every
+ * make simultaneously, which is what the Aug 2026 domestic misses looked like
+ * from outside. The registry had no way to express "and also try this other
+ * store" — `getSourceConfig` returns exactly one — so adding a second source
+ * meant editing consumers, and nobody did.
+ *
+ * THE TRAP THIS TYPE IS SHAPED AROUND. Most alternative OEM parts sites are
+ * RevolutionParts SKINS: a dealer group's brand on the same backend, serving
+ * the same catalogue with the same gaps. Adding one LOOKS like diversity and
+ * buys none — and worse, it would inflate ledger confidence, which counts
+ * distinct operators. So an alternate must declare its `operator`, and
+ * `getPartsStores` dedupes on it.
+ */
+/**
+ * What a store can actually be TRUSTED for. The two are independent.
+ *
+ *   "parts" — may PROPOSE an OEM number for a vehicle. Requires the store to
+ *             scope by year/model/engine, because the scoping IS the fitment
+ *             statement. A store that lists "GMC Spark Plug" across every GMC
+ *             ever built cannot say which of its 20 plugs fits a 2021 Acadia
+ *             3.6L, and choosing one would be the present-but-wrong write this
+ *             pipeline forbids.
+ *   "price"  — may price an OEM number we ALREADY trust. Needs no fitment at
+ *             all: the number came from somewhere that did attest it, and this
+ *             store only has to say what that number costs.
+ *
+ * Keeping them apart is what lets a store be admitted for the half it is good
+ * at. gmpartsgiant.com is exactly that case — real OEM numbers, real prices,
+ * no vehicle scoping — and collapsing the two into one boolean would have
+ * forced a choice between losing a genuine price source and inventing fitment.
+ */
+export type StoreCapability = "parts" | "price";
+
+export interface AlternateStore {
+  /** Storefront base URL, no trailing slash. */
+  baseUrl: string;
+  /** What this store may be used for. See StoreCapability. */
+  capabilities: readonly StoreCapability[];
+  /**
+   * Operator id, as `claimLedger.resolveOperator` would return. Declared here
+   * rather than derived so a skin cannot be admitted by accident: whoever adds
+   * a store has to state whose catalogue it is, and `looksLikeRevolutionParts`
+   * exists to check that claim against the page.
+   */
+  operator: string;
+  /**
+   * Has this store been proven to yield parts AND prices for a real vehicle?
+   *
+   * Default false, and `getPartsStores` omits unvalidated stores. That is the
+   * point: a candidate can be RECORDED the moment it is discovered, with its
+   * evidence, without any consumer silently starting to trust it. Promotion is
+   * a deliberate edit backed by a probe, not a side effect of being listed.
+   */
+  validated: boolean;
+  /** What is known so far — the probe date and what it showed. */
+  note: string;
+}
+
 export interface MakeSourceConfig {
   parts: {
     /** RevolutionParts storefront base, e.g. "https://subaru.oempartsonline.com". */
@@ -103,6 +166,9 @@ export interface MakeSourceConfig {
      *  slug's words ("cabin_air_filter" → "cabin air filter") become the
      *  storefront search keywords. */
     partSlugs: Record<string, string>;
+    /** Second-voice storefronts. See AlternateStore — unvalidated entries are
+     *  recorded but never returned by getPartsStores. */
+    alternates?: readonly AlternateStore[];
   };
   manual: {
     /** 2-4 broad search queries for maintenance schedules and fluid specs. */
@@ -327,12 +393,14 @@ const MINI_CONFIG: MakeSourceConfig = {
 function oemPartsOnlineConfig(
   make: string,
   partSlugs: Record<string, string> = OEM_PARTS_ONLINE_SLUGS,
+  alternates?: readonly AlternateStore[],
 ): MakeSourceConfig {
   const subdomain = OEM_PARTS_ONLINE_SUBDOMAINS[make] ?? make.toLowerCase();
   return {
     parts: {
       storeBaseUrl: `https://${subdomain}.oempartsonline.com`,
       partSlugs,
+      ...(alternates ? { alternates } : {}),
     },
     manual: {
       searchQueries: (year, mk, model) => [
@@ -342,6 +410,99 @@ function oemPartsOnlineConfig(
     },
   };
 }
+
+/**
+ * Second-voice candidates, probed live Aug 2026.
+ *
+ * All three answered 200, unblocked, and carry NONE of the RevolutionParts
+ * fingerprints — so unlike autonationparts/tascaparts (which are RP skins and
+ * are deliberately absent from this table) they are genuinely different
+ * catalogues.
+ *
+ * Every one is `validated: false`, so `getPartsStores` does not return them and
+ * no consumer touches them yet. Recording an unproven candidate is useful and
+ * trusting one is not: the probe reached each store's HOME page, and the
+ * catalogue URL shapes below still have to be walked to a DETAIL page that
+ * yields an OEM number and a price before any of this is a lane. Promotion is
+ * one edit per store, backed by that walk.
+ *
+ * Deliberately NOT listed:
+ *   gmpartsdirect.com     403 Cloudflare interstitial on every tier.
+ *   olathetoyotaparts.com 200, but the title reads "Ratu555 x Olathe Toyota
+ *                         Parts" — the domain is SEO-hijacked, not a store.
+ */
+const GM_ALTERNATES: readonly AlternateStore[] = [
+  {
+    baseUrl: "https://www.gmpartsgiant.com",
+    // NOT "gmpartsgiant.com" — and the correction is worth recording. This was
+    // first written as its own operator, alongside toyotapartsdeal.com as a
+    // second. Probed side by side Aug 2026 the two serve byte-identical URL
+    // schemes: one backend, per-make skins. The ledger already knew — its
+    // OPERATOR_TABLE has carried `/(^|\.)[a-z0-9-]*parts(giant|deal)\.com$/`
+    // all along — so `resolveOperator` returned the right answer while this
+    // hand-written field claimed otherwise. The invariant test in
+    // tests/operatorDiversity.test.ts now pins every entry to resolveOperator
+    // so a declared operator can never drift from the real one again.
+    operator: "original_parts_giant",
+    // VALIDATED FOR PRICE ONLY — walked end to end Aug 2026.
+    //
+    // What it does have: no RP markers anywhere, its own URL scheme
+    // (/{make}-parts.html → /category/{make}-*.html → /oem-{make}-{type}.html
+    // → /parts/gm-{name}-{oem}.html), and part-type pages that
+    // `parsePartPrices` reads with no changes at all —
+    // /oem-gmc-spark_plug.html returned 20 products with genuine GM 8-digit
+    // numbers and live prices (12680072 $9.62, 12622441 $9.87, …). One fetch
+    // prices twenty parts.
+    //
+    // What it does NOT have, and why "parts" is absent: VEHICLE SCOPING. There
+    // is no year/model/engine anywhere in the URL scheme — that spark-plug page
+    // is every GMC ever built. The store therefore cannot say which of its 20
+    // plugs fits a 2021 Acadia 3.6L, and picking one would be a guess dressed
+    // as a catalogue attestation. Contrast RevolutionParts, whose `/v-{slug}/`
+    // path IS the fitment statement, and RockAuto, whose carcode is.
+    //
+    // If a vehicle-scoped path is ever found here, add "parts" — the parse
+    // side is already proven.
+    capabilities: ["price"],
+    validated: true,
+    note:
+      "Walked Aug 2026. Non-RP, own scheme, covers the whole GM family " +
+      "(Buick/Cadillac/Chevrolet/GMC/Hummer/Oldsmobile/Pontiac/Saturn). " +
+      "parsePartPrices reads its part-type pages unmodified (20 products, real " +
+      "OEM numbers + prices). NO vehicle scoping in any URL, so it cannot " +
+      "attest fitment — price-capable only.",
+  },
+];
+
+const TOYOTA_ALTERNATES: readonly AlternateStore[] = [
+  {
+    baseUrl: "https://parts.toyota.com",
+    // `toyota.com`, not `parts.toyota.com` — resolveOperator folds to the
+    // REGISTRABLE domain, so a subdomain is never its own voice. Caught by the
+    // invariant test rather than by review.
+    operator: "toyota.com",
+    capabilities: ["price"],
+    validated: false,
+    note:
+      "Probed Aug 2026: 200, 107KB, no RP markers — Toyota's OWN store, so " +
+      "the strongest possible provenance. Carries NO JSON-LD at all, which " +
+      "means parsePartPrices cannot read it as-is; a selector path would be " +
+      "needed before this can serve prices.",
+  },
+  {
+    baseUrl: "https://www.toyotapartsdeal.com",
+    // Same backend as gmpartsgiant.com — see the note there.
+    operator: "original_parts_giant",
+    capabilities: ["price"],
+    validated: false,
+    note:
+      "Probed Aug 2026: 200, 160KB, no RP markers, JSON-LD present but only " +
+      "WebSite/AutoPartsStore on the homepage. NOTE: a Jul 2026 comment above " +
+      "calls this 'a JS shell with no server-rendered search' — it now returns " +
+      "160KB server-side, so that finding is stale and the search path is " +
+      "worth re-probing.",
+  },
+];
 
 // ─── Registry ─────────────────────────────────────────────────────
 
@@ -367,6 +528,7 @@ export const SOURCE_REGISTRY: Record<string, MakeSourceConfig> = {
     parts: {
       storeBaseUrl: "https://toyota.oempartsonline.com",
       partSlugs: TOYOTA_PART_SLUGS,
+      alternates: TOYOTA_ALTERNATES,
     },
     manual: {
       searchQueries: (year, _, model) => [
@@ -391,10 +553,10 @@ export const SOURCE_REGISTRY: Record<string, MakeSourceConfig> = {
 
   // ── Phase 2/3: oempartsonline.com subdomains ─────────────────
   Ford:            oemPartsOnlineConfig("Ford"),
-  Chevrolet:       oemPartsOnlineConfig("Chevrolet"),
-  GMC:             oemPartsOnlineConfig("GMC"),
-  Cadillac:        oemPartsOnlineConfig("Cadillac"),
-  Buick:           oemPartsOnlineConfig("Buick"),
+  Chevrolet:       oemPartsOnlineConfig("Chevrolet", OEM_PARTS_ONLINE_SLUGS, GM_ALTERNATES),
+  GMC:             oemPartsOnlineConfig("GMC", OEM_PARTS_ONLINE_SLUGS, GM_ALTERNATES),
+  Cadillac:        oemPartsOnlineConfig("Cadillac", OEM_PARTS_ONLINE_SLUGS, GM_ALTERNATES),
+  Buick:           oemPartsOnlineConfig("Buick", OEM_PARTS_ONLINE_SLUGS, GM_ALTERNATES),
   Hyundai:         oemPartsOnlineConfig("Hyundai"),
   Kia:             oemPartsOnlineConfig("Kia"),
   Genesis:         oemPartsOnlineConfig("Genesis"),
@@ -457,4 +619,162 @@ export function getSourceConfig(make: string): MakeSourceConfig | null {
     (k) => k.toLowerCase() === make?.toLowerCase(),
   );
   return key ? SOURCE_REGISTRY[key] : null;
+}
+
+
+// ─── Platform detection & multi-store access ────────────────────────────────
+
+/**
+ * Does this page come off the RevolutionParts platform?
+ *
+ * Asset hosts and URL shapes, not branding — the whole difficulty is that an RP
+ * skin wears the dealer group's brand everywhere a human would look. Verified
+ * against live pages Aug 2026: every registry storefront matches, and
+ * gmpartsgiant.com / parts.toyota.com / toyotapartsdeal.com do not.
+ *
+ * This is the check that keeps `AlternateStore.operator` honest. A store added
+ * as an independent voice that trips this is a skin, and admitting it would
+ * inflate the ledger's operator count — which is exactly what its corroboration
+ * math is a function of.
+ */
+export function looksLikeRevolutionParts(html: string | null | undefined): boolean {
+  if (!html) return false;
+  return (
+    /revolutionparts\.(?:io|com)/i.test(html) ||
+    /cdn-(?:static|product-images|illustrations)\.revolutionparts/i.test(html)
+  );
+}
+
+/**
+ * Known multi-brand storefront NETWORKS, fingerprinted by their URL scheme.
+ *
+ * WHY THIS IS NOT JUST THE RP CHECK. `looksLikeRevolutionParts` knows exactly
+ * one platform, and that turned out to be the shape of the mistake rather than
+ * the fix for it: gmpartsgiant.com and toyotapartsdeal.com were admitted as two
+ * independent operators, and they are one. Probed side by side Aug 2026 they
+ * serve byte-identical schemes — `/online/login`, `/online/track/order`,
+ * `/service/{make}-help_center.html`, `/{make}-parts.html`,
+ * `/category/{make}-*.html`, `/oem-{make}-{parttype}.html`,
+ * `/parts/{brand}-{name}-{oem}.html` — under the same title template and the
+ * same JSON-LD shape. A per-make skin of one backend, exactly like RP.
+ *
+ * A skin admitted as a distinct operator does real damage: ledger confidence is
+ * a function of DISTINCT OPERATORS, so two skins agreeing would score as
+ * cross-operator corroboration for one catalogue agreeing with itself, and
+ * `auditOperatorDiversity` would report diversity that does not exist.
+ *
+ * Fingerprints are URL SCHEMES rather than branding because branding is the one
+ * thing a skin changes. Each needs at least two distinct scheme hits, so a site
+ * that merely happens to have `/account` cannot match.
+ */
+const STOREFRONT_NETWORKS: ReadonlyArray<{
+  operator: string;
+  patterns: readonly RegExp[];
+}> = [
+  {
+    // The "PartsDeal / PartsGiant" family. Operator id matches the ledger's
+    // existing OPERATOR_TABLE rule so a page-derived verdict and a
+    // hostname-derived one agree.
+    operator: "original_parts_giant",
+    patterns: [
+      /\/online\/track\/order/i,
+      /\/service\/[a-z-]+-help_center\.html/i,
+      /\/category\/[a-z-]+-[a-z_]+\.html/i,
+      /\/oem-[a-z-]+-[a-z_]+\.html/i,
+    ],
+  },
+];
+
+/**
+ * Which known network a storefront belongs to, from its own HTML, or null.
+ *
+ * Used to CHECK an `AlternateStore.operator` claim against the page rather than
+ * trusting whoever added the entry — the failure this exists to prevent is
+ * silent and looks like success.
+ */
+export function detectStorefrontNetwork(html: string | null | undefined): string | null {
+  if (!html) return null;
+  if (looksLikeRevolutionParts(html)) return "revolutionparts";
+  for (const net of STOREFRONT_NETWORKS) {
+    const hits = net.patterns.filter((re) => re.test(html)).length;
+    if (hits >= 2) return net.operator;
+  }
+  return null;
+}
+
+export type PartsStore = {
+  baseUrl: string;
+  operator: string;
+  /** True for the make's primary storefront. */
+  primary: boolean;
+};
+
+/**
+ * Every storefront worth trying for a make, best first, ONE PER OPERATOR.
+ *
+ * The operator dedup is the reason this exists rather than callers reading
+ * `storeBaseUrl` and an array. Two stores on one backend are one attempt: if
+ * the catalogue lacks the part, asking its other skin returns the same nothing,
+ * slower. Callers that walk this list get genuinely independent tries or a
+ * single entry, never the illusion of a retry.
+ *
+ * Unvalidated alternates are omitted — recorded in the registry, invisible here
+ * until someone proves them.
+ */
+export function getPartsStores(make: string): PartsStore[] {
+  const cfg = getSourceConfig(make);
+  if (!cfg) return [];
+  const out: PartsStore[] = [
+    {
+      baseUrl: cfg.parts.storeBaseUrl.replace(/\/+$/, ""),
+      // Every primary in this registry is RevolutionParts today; stated
+      // explicitly so the dedup below is meaningful rather than accidental.
+      operator: "revolutionparts",
+      primary: true,
+    },
+  ];
+  const seen = new Set(out.map((s) => s.operator));
+  for (const alt of cfg.parts.alternates ?? []) {
+    if (!alt.validated) continue;
+    // A price-only store must never propose a part number.
+    if (!alt.capabilities.includes("parts")) continue;
+    if (seen.has(alt.operator)) continue;
+    seen.add(alt.operator);
+    out.push({ baseUrl: alt.baseUrl.replace(/\/+$/, ""), operator: alt.operator, primary: false });
+  }
+  return out;
+}
+
+/** Alternates on file for a make, validated or not — the audit surface. */
+export function getAlternateStores(make: string): readonly AlternateStore[] {
+  return getSourceConfig(make)?.parts.alternates ?? [];
+}
+
+/**
+ * Validated stores that may PRICE an OEM number we already hold.
+ *
+ * Separate from getPartsStores because the trust required is different and
+ * strictly weaker: pricing a number needs no fitment claim, so a store with no
+ * vehicle scoping is perfectly sound here while being unusable there.
+ *
+ * This is also where the operator argument bites hardest. Price discovery
+ * currently falls back to an open-web search per unpriced part, and every
+ * storefront it can reach deterministically is RevolutionParts — so a part
+ * absent from RP's catalogue is unpriced no matter how many times we look. A
+ * second price operator is a genuinely independent answer to "what does this
+ * number cost".
+ */
+export function getPriceStores(make: string): PartsStore[] {
+  const cfg = getSourceConfig(make);
+  if (!cfg) return [];
+  const out: PartsStore[] = [];
+  const seen = new Set<string>();
+  for (const alt of cfg.parts.alternates ?? []) {
+    if (!alt.validated) continue;
+    if (!alt.capabilities.includes("price")) continue;
+    if (seen.has(alt.operator)) continue;
+    seen.add(alt.operator);
+    out.push({ baseUrl: alt.baseUrl.replace(/\/+$/, ""), operator: alt.operator, primary: false });
+  }
+  return out;
 }

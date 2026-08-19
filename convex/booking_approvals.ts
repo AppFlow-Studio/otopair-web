@@ -377,6 +377,13 @@ async function performSubmission(
     bookingPatch.running_approved_ceiling_cents = priced.total_cents;
     bookingPatch.estimate_approved_at_ms = now;
     bookingPatch.sla_expires_at_ms = undefined;
+    // Auto-approved within range → the re-quote is agreed. Sync the booking's
+    // stored totals so every surface (lists, detail panel, invoices) shows the
+    // agreed amount instead of the original estimate. (Out-of-range stays
+    // pending; totals are synced on customer approval in applyApprovalDecision.)
+    bookingPatch.total_cost = priced.total_cents / 100;
+    bookingPatch.parts_cost = priced.parts_subtotal_cents / 100;
+    bookingPatch.labor_cost = priced.labor_cents / 100;
   } else {
     bookingPatch.sla_expires_at_ms = now + SLA_MS;
   }
@@ -656,6 +663,12 @@ export const applyApprovalDecision = mutation({
         estimate_approved_at_ms: now,
         estimate_decided_by_user_id: user._id,
         sla_expires_at_ms: undefined,
+        // Customer approved the re-quote → it's the agreed price. Sync the
+        // booking's stored totals from the approved breakdown so every surface
+        // shows the agreed amount, not the original estimate.
+        total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
+        parts_cost: (open.parts_subtotal_cents ?? 0) / 100,
+        labor_cost: (open.labor_cents ?? 0) / 100,
         updated_at: now,
       });
       if (ctx.scheduler?.runAfter) {
@@ -714,6 +727,65 @@ export const applyApprovalDecision = mutation({
   },
 });
 
+/**
+ * Records an approved pre/mid-job over-range estimate and parks the booking in
+ * `reauth_required` so the customer confirms the new hold on their CHOSEN
+ * payment method next. Unlike `applyApprovalDecision`, it does NOT schedule the
+ * silent `adjustAuthorization` — the caller (`approveAndAuthorizeHold`) places
+ * the hold on-session with the picked method, so that choice is always
+ * authoritative (an async increment could otherwise land on the original card
+ * first). Internal: the action authenticates and passes the resolved user id.
+ * Post-job is a final capture, not a hold, so it stays on `applyApprovalDecision`.
+ */
+export const _recordApprovalApproved = internalMutation({
+  args: { bookingId: v.id("bookings"), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const booking: any = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    if (String(booking.user_id) !== String(args.userId)) {
+      throw new Error("Not your booking.");
+    }
+
+    const candidates = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+    const open = candidates.find((r: any) => r.decision == null);
+    if (!open) throw new Error("No estimate is waiting for your decision.");
+
+    const cycle = open.cycle as "pre_job" | "mid_job" | "post_job";
+    if (cycle !== "pre_job" && cycle !== "mid_job") {
+      throw new Error("This estimate can't be authorized as a hold.");
+    }
+
+    const now = Date.now();
+    const newCeiling = open.mechanic_set_price_cents;
+    await ctx.db.patch(open._id, {
+      decision: "approved",
+      decided_at_ms: now,
+      decided_by_user_id: args.userId,
+      ceiling_after_decision_cents: newCeiling,
+    });
+    await ctx.db.patch(args.bookingId, {
+      // Customer confirms the new hold on their chosen method next (the caller
+      // drives an on-session PI), so we skip the silent auto-adjust.
+      payment_approval_state: "reauth_required",
+      running_approved_ceiling_cents: newCeiling,
+      estimate_approved_at_ms: now,
+      estimate_decided_by_user_id: args.userId,
+      sla_expires_at_ms: undefined,
+      total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
+      parts_cost: (open.parts_subtotal_cents ?? 0) / 100,
+      labor_cost: (open.labor_cents ?? 0) / 100,
+      updated_at: now,
+    });
+    return { ceilingCents: newCeiling, cycle };
+  },
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // Query: open approval for a booking (customer side)
 // ─────────────────────────────────────────────────────────────────────────
@@ -763,6 +835,35 @@ export const getOpenApprovalForBooking = query({
  * the numbers reconcile. Returns null when no adjustment was approved (the
  * caller then falls back to the booking's original quote).
  */
+/**
+ * Approval rows, genuinely newest-first.
+ *
+ * ─── WHY THIS EXISTS ────────────────────────────────────────────────────────
+ * `.order("desc")` on `by_booking_and_cycle` does NOT give you this. That index
+ * is ["booking_id", "cycle"], so descending sorts by the CYCLE STRING:
+ *
+ *     "pre_job"  >  "post_job"  >  "mid_job"
+ *
+ * So "the first row" was always the pre-job one, whatever had happened since.
+ * Three separate reads took that first row as "latest" — including the
+ * customer-facing receipt — which meant a mid-job change the customer had
+ * approved and paid for was invisible downstream: the post-job confirmation
+ * showed the original parts list and the original total, short by exactly the
+ * work that had just been added.
+ *
+ * Sort by when the customer actually answered. `_creationTime` covers rows
+ * written before `decided_at_ms` existed.
+ */
+function approvalsNewestFirst<T extends { decided_at_ms?: number; _creationTime?: number }>(
+  rows: T[],
+): T[] {
+  return [...rows].sort(
+    (a, b) =>
+      (b.decided_at_ms ?? b._creationTime ?? 0) -
+      (a.decided_at_ms ?? a._creationTime ?? 0),
+  );
+}
+
 export const getEffectiveQuoteForBooking = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -770,14 +871,26 @@ export const getEffectiveQuoteForBooking = query({
     if (!user) return null;
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return null;
-    // Soft shop-staff check — mirror getActiveJobConflict's read-only style.
+    // Soft shop-staff check. Must authorize the same viewers as requireShopStaff
+    // (which gates the panel): shop_users members AND the shop OWNER. The owner
+    // often has no shop_users row, so a shop_users-only check would return null
+    // for them and the read-only post-job dialog would silently fall back to the
+    // pre-approval snapshot (stale $0 parts) instead of the agreed quote.
+    // (The assigned mechanic is covered by the shop_users branch: their
+    // membership row is what links user → mechanics roster in the first place.)
     const membership = await ctx.db
       .query("shop_users")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
       .collect();
-    const inShop = membership.some(
+    let inShop = membership.some(
       (m: any) => String(m.shop_id) === String((booking as any).shop_id),
     );
+    if (!inShop) {
+      const shop = await ctx.db.get((booking as any).shop_id);
+      if (shop && String((shop as any).owner_user_id) === String(user._id)) {
+        inShop = true;
+      }
+    }
     if (!inShop) return null;
 
     const rows = await ctx.db
@@ -792,8 +905,20 @@ export const getEffectiveQuoteForBooking = query({
       "approved",
       "auto_approved_within_range",
     ]);
-    // Latest approved row wins (rows are newest-first).
-    const eff = rows.find(
+    // ─── ORDER BY TIME, NOT BY INDEX ──────────────────────────────────────
+    // `by_booking_and_cycle` is ["booking_id", "cycle"], so `.order("desc")`
+    // sorts by the CYCLE STRING — not by recency, whatever the previous
+    // comment here claimed. Descending that reads
+    // "pre_job" > "post_job" > "mid_job", so the first approved row found was
+    // always the PRE-JOB one.
+    //
+    // The effect: every mid-job change the customer approved was invisible to
+    // the post-job confirmation. The mechanic confirmed against the original
+    // quote — the extra work missing from the parts list and the total short
+    // by whatever had been added — while the booking itself carried the
+    // correct, higher figure. Two numbers for one job, and the wrong one in
+    // front of the person signing it off.
+    const eff = approvalsNewestFirst(rows as any[]).find(
       (r: any) =>
         APPROVED.has(r.decision ?? "") &&
         r.parts_subtotal_cents != null &&
@@ -876,7 +1001,10 @@ export const getReauthBreakdownForBooking = query({
       .order("desc")
       .collect();
     const APPROVED = new Set(["approved", "auto_approved_within_range"]);
-    const eff = rows.find(
+    // Newest by decision time — see approvalsNewestFirst. This one is the
+    // customer's own view, so picking the pre-job row showed them a receipt
+    // for work they'd already agreed to change.
+    const eff = approvalsNewestFirst(rows as any[]).find(
       (r: any) =>
         APPROVED.has(r.decision ?? "") &&
         r.parts_subtotal_cents != null &&
@@ -1122,8 +1250,9 @@ export const getBookingApprovalState = query({
       )
       .order("desc")
       .collect();
-    const latest = rows[0] ?? null;
-    const open = rows.find((r: any) => r.decision == null) ?? null;
+    const byTime = approvalsNewestFirst(rows as any[]);
+    const latest = byTime[0] ?? null;
+    const open = byTime.find((r: any) => r.decision == null) ?? null;
 
     return {
       booking_status: (booking as any).status as string,

@@ -23,6 +23,7 @@ import { TabStripe }    from './components/tabs/TabStripe'
 import { TabAudit }     from './components/tabs/TabAudit'
 import { TabSettings }       from './components/tabs/TabSettings'
 import { TabMechanicEdits } from './components/tabs/TabMechanicEdits'
+import { TabCustomJobs } from './components/tabs/TabCustomJobs'
 import { TabServiceParts } from './components/tabs/TabServiceParts'
 import { TabEstimatorLabor } from './components/tabs/TabEstimatorLabor'
 import { TabOtoSim }    from './components/tabs/TabOtoSim'
@@ -35,6 +36,7 @@ import { TabSystemHealth }  from './components/tabs/TabSystemHealth'
 import { TabTransactions }  from './components/tabs/TabTransactions'
 import { TabSettlement }    from './components/tabs/TabSettlement'
 import { TabAnalytics }     from './components/tabs/TabAnalytics'
+import { TabIntegrations }  from './components/tabs/TabIntegrations'
 
 const SESSION_KEY = 'otopair_director_token'
 
@@ -65,6 +67,8 @@ const TABS: Record<string, React.ComponentType> = {
   feedback:    TabFeedback,
   audit:          TabAudit,
   mechanicEdits:  TabMechanicEdits,
+  customJobs:     TabCustomJobs,
+  integrations:   TabIntegrations,
   settings:       TabSettings,
 }
 

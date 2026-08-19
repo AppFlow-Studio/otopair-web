@@ -87,7 +87,7 @@ export const ledger = query({
           const booking = await ctx.db.get(t.booking_id);
           if (booking) {
             const [names, vehicle] = await Promise.all([
-              resolveServiceNames(ctx, booking.service_ids),
+              resolveServiceNames(ctx, booking.service_ids, booking.custom_services),
               resolveVehicleDisplay(ctx, booking.vin),
             ]);
             const clean = names.filter((n) => n && n !== "—");

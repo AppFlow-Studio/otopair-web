@@ -4,7 +4,11 @@
 // Tiered resolution of the OEM rotor DISCARD minimum, per axle.
 //
 //   already_present     an existing value stands (a human's always wins)
-//   sourced_markdown    deterministic parse of the cached parts-page markdown
+//   sourced_markdown    deterministic parse of cached page markdown
+//   sourced_manual      the manufacturer's OWN manual, via the claim ledger —
+//                       graded oem_spec, not warn-capped
+//   sourced_catalog     an aftermarket disc catalogue (Brembo/Centric) —
+//                       graded oem_spec_flagged, warn-capped
 //   derived_from_nominal ESTIMATE from the nominal — env-gated OFF by default
 //   nominal_only        nominal found, no minimum: honest gap, not an estimate
 //   not_applicable      drum axle (na_role_keys) — never alarm on it
@@ -17,6 +21,14 @@
 // source link — or a mechanic with a flashlight — is both cheaper and more
 // trustworthy than a second model call for a number that decides whether we
 // tell a customer their brakes need replacing.
+//
+// `sourced_manual` (Aug 2026) is not a departure from that. It costs no new
+// search and no new model call: the manual is already resolved, already stored,
+// and already being read for capacities — the specs pass simply asks four more
+// questions of a document it was opening anyway, and the answer is filed as
+// evidence through the same ledger as everything else. What made rotor
+// minimums sparse was never the absence of a research rung; it was that the one
+// document class which actually prints a discard limit was never asked.
 //
 // Pure module: no ctx, no network. Shared by the pipeline finalize and the
 // backfill action so the two can never drift.
@@ -36,6 +48,12 @@ export type RotorMinOutcome =
    *  markdown-sourced OEM text and is graded as an estimate, never a clean
    *  spec. See the quality stamp in resolveRotorMinimums. */
   | "sourced_catalog"
+  /** Discard minimum read from the MANUFACTURER'S OWN manual via the claim
+   *  ledger. This is the authoritative number for the OEM rotor — the same
+   *  figure cast on the hat — so unlike `sourced_catalog` it is graded a clean
+   *  `oem_spec` and is not warn-capped. Outranks the catalogue tier and is
+   *  outranked only by an OEM page's own discard text and by a human. */
+  | "sourced_manual"
   | "derived_from_nominal"
   | "nominal_only"
   | "not_applicable"
@@ -123,6 +141,22 @@ export type CatalogRotorClaim = {
   /** Verbatim label the value was read under, e.g. "Min. thickness". */
   observedLabel?: string | null;
   sourceUrl?: string | null;
+  /**
+   * WHICH KIND of source won the ledger's consensus for this value.
+   *
+   * `"manual"` when the manufacturer's own documentation backed the winner —
+   * the caller reads `ClaimConsensus.families` for `owners_manual` — and
+   * `"catalog"` (the default, so existing callers are unchanged) for an
+   * aftermarket disc catalogue.
+   *
+   * This is not cosmetic. The two produce different STORED QUALITIES and
+   * therefore different behaviour in the inspection grader: a manual figure is
+   * `oem_spec` and can drive a replace recommendation, while a catalogue figure
+   * is `oem_spec_flagged` and is warn-capped because it is Brembo's spec for
+   * Brembo's disc, which can differ from the OEM rotor the car is wearing
+   * (Camry XV70 front: 25 mm vs 26 mm).
+   */
+  provenance?: "manual" | "catalog";
 };
 
 export type ResolveRotorInput = {
@@ -199,16 +233,24 @@ export function resolveRotorMinimums(
       };
     }
 
-    // Aftermarket disc catalogue (claim ledger). Ranked BELOW the markdown
-    // parse — an OEM page's own discard text always wins — and above deriving
-    // a number from nominal, because this is a real published minimum read
-    // under a real discard label rather than an arithmetic guess.
+    // Claim-ledger minimum (manufacturer's manual, or an aftermarket disc
+    // catalogue). Ranked BELOW the markdown parse — an OEM page's own discard
+    // text always wins — and above deriving a number from nominal, because
+    // this is a real published minimum read under a real discard label rather
+    // than an arithmetic guess.
     //
-    // Stamped "oem_spec_flagged", never "oem_spec": the value is Brembo's
-    // discard spec for Brembo's disc, and the vehicle may be wearing the OEM
-    // rotor whose stamped minimum differs. classify() warn-caps a flagged
-    // value, so it can never auto-sell a rotor job — but it CAN stop grading a
-    // rotor against nothing, which is what a null minimum does today.
+    // The GRADE depends on who said it, and the difference is load-bearing:
+    //
+    //   manual  → "oem_spec". The manufacturer's own figure for the OEM rotor,
+    //             which is the number cast on the hat. Not warn-capped: this
+    //             may drive a replace recommendation, because it is the same
+    //             thing the mechanic would read with the rotor in hand.
+    //   catalog → "oem_spec_flagged". Brembo's discard spec for Brembo's disc,
+    //             and the vehicle may be wearing the OEM rotor whose stamped
+    //             minimum differs (Camry XV70 front: 25 mm vs 26 mm).
+    //             classify() warn-caps a flagged value so it can never
+    //             auto-sell a rotor job — but it CAN stop grading a rotor
+    //             against nothing, which is what a null minimum does.
     const catalog = input.catalogClaims?.[axle];
     const catalogMin = num(catalog?.minMm);
     if (catalogMin != null) {
@@ -216,12 +258,13 @@ export function resolveRotorMinimums(
       // A minimum that meets or exceeds its own nominal is incoherent — refuse
       // both rather than store a figure that condemns every healthy rotor.
       if (catalogNominal == null || catalogMin < catalogNominal) {
+        const fromManual = catalog?.provenance === "manual";
         return {
           axle,
-          outcome: "sourced_catalog",
+          outcome: fromManual ? "sourced_manual" : "sourced_catalog",
           minMm: catalogMin,
           nominalMm: catalogNominal,
-          quality: "oem_spec_flagged",
+          quality: fromManual ? "oem_spec" : "oem_spec_flagged",
           observedLabel: catalog?.observedLabel ?? null,
           sourceUrl: catalog?.sourceUrl ?? cur.sourceUrl ?? null,
           changed: true,
@@ -285,6 +328,11 @@ export function rotorErrorTag(r: RotorAxleResolution): string | null {
       // graded as an estimate, so it stays visible in the run's error tally
       // rather than reading as a clean OEM resolution.
       return `rotor_min:catalog:${r.axle}:${r.minMm ?? "?"}`;
+    // `sourced_manual` deliberately returns null: the manufacturer's own
+    // discard figure is a clean resolution and has no business in an error
+    // tally. It is the outcome this whole tier exists to produce.
+    case "sourced_manual":
+      return null;
     default:
       return null;
   }

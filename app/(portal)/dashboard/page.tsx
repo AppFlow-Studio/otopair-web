@@ -276,6 +276,10 @@ function OwnerDashboardPage({
     function onKeyDown(e: KeyboardEvent) {
       if (!selectedJobId) return;
 
+      // Never hijack browser/OS chords (⌘R reload, ⌘L, ⌃…): with a modifier
+      // held, let the key pass through instead of firing a single-key shortcut
+      // (e.g. ⌘R was triggering "r" = mark-completed, popping a new form).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
         if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
         if (jobDetailRef.current?.handleEscape()) return;

@@ -7,11 +7,13 @@ export function ClaimSignUp({
   firstName,
   shopName,
   vehicleSummary,
+  vehicleNeedsVin = false,
 }: {
   email: string;
   firstName: string;
   shopName: string;
   vehicleSummary: string;
+  vehicleNeedsVin?: boolean;
 }) {
   const greeting = firstName ? `Welcome, ${firstName}` : "Welcome to Otopair";
   const subline = shopName
@@ -29,6 +31,13 @@ export function ClaimSignUp({
         {vehicleSummary ? (
           <p className="mt-3 text-sm text-gray-700">
             <span className="font-medium">Vehicle:</span> {vehicleSummary}
+          </p>
+        ) : null}
+        {vehicleNeedsVin ? (
+          <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+            We don&apos;t have this car&apos;s VIN yet. After you sign up
+            we&apos;ll ask for it once — it&apos;s what lets us pull the right
+            parts and track its maintenance properly.
           </p>
         ) : null}
         <p className="mt-3 text-xs text-gray-500">

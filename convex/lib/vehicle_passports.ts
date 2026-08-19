@@ -343,6 +343,16 @@ export const postjobPartValidator = v.object({
   // flows stamp it so multi-service bookings get accurate per-service
   // analytics (shop_part_preferences, cost-by-service).
   service_id: v.optional(v.id("services")),
+  // The CUSTOM line this part belongs to, when there's no catalog service to
+  // point at. Off-catalog work has no services row, so without this the
+  // association is lost the moment a quoted part becomes a used part — which
+  // is why a switch fitted through Flag Issue billed correctly but left its
+  // custom_jobs row reading "no parts".
+  // Nullable, not just optional: the client sends an explicit null for a part
+  // that belongs to a catalog service, exactly as `brand` above does.
+  // `v.optional(v.string())` accepts undefined but REJECTS null, which failed
+  // every post-job submit carrying a catalog part.
+  custom_service_name: v.optional(nullableStringValidator),
   // "catalog" rows came from the Otopair prefill (part_fitments); identity
   // fields (part_name/brand/oem_number) are read-only and only price/qty/
   // supplied_by/swap can change. "manual" rows are mechanic-added and stay
@@ -445,6 +455,9 @@ export const postjobReportValidator = v.object({
   parts_used: v.array(postjobPartValidator),
   vehicle_updates: v.optional(v.union(vehicleUpdateValuesValidator, v.null())),
   technician_notes: v.optional(nullableStringValidator),
+  // Customer-facing "what did you find / do" summary. Read by getReceipt →
+  // Past Service report. See job_actuals.mechanic_findings.
+  mechanic_findings: v.optional(nullableStringValidator),
   flagged_vehicle_specs: v.optional(v.boolean()),
   flagged_vehicle_specs_reason: v.optional(nullableStringValidator),
   actual_labor_minutes: v.optional(nullableNumberValidator),

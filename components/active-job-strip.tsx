@@ -46,6 +46,17 @@ export default function ActiveJobStrip() {
       overrunCheckin.status === "awaiting_extension" ||
       overrunCheckin.status === "front_desk_escalated");
 
+  // A clock-stopping blocker pauses the job. The pill lives in the header on
+  // every page (the schedule included), so freezing its timer here is what
+  // keeps "paused on the job" from reading as "still running" everywhere else.
+  const pauseBlockers = useQuery(
+    api.jobBlockers.listForBooking,
+    mechanicBookingId ? { bookingId: mechanicBookingId } : "skip",
+  );
+  const jobPaused = Boolean(
+    pauseBlockers?.blockers.some((b) => b.resolved_at == null && b.stops_clock),
+  );
+
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 3000);
@@ -74,16 +85,27 @@ export default function ActiveJobStrip() {
           }`}
         >
           <span
-            className={`inline-flex h-2 w-2 shrink-0 animate-pulse rounded-full ${
-              needsOverrunAttention ? "bg-amber-400" : "bg-emerald-400"
+            className={`inline-flex h-2 w-2 shrink-0 rounded-full ${
+              jobPaused
+                ? "bg-amber-400"
+                : needsOverrunAttention
+                  ? "animate-pulse bg-amber-400"
+                  : "animate-pulse bg-emerald-400"
             }`}
           />
-          <span className="hidden text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-200/80 sm:inline">
-            Now working
+          <span
+            className={`hidden text-[10px] font-semibold uppercase tracking-[0.16em] sm:inline ${
+              jobPaused ? "text-amber-200/90" : "text-emerald-200/80"
+            }`}
+          >
+            {jobPaused ? "Paused" : "Now working"}
           </span>
           <ElapsedTimer
             startedAtMs={job.startedAtMs}
-            className="font-mono text-sm font-semibold tabular-nums text-white"
+            paused={jobPaused}
+            className={`font-mono text-sm font-semibold tabular-nums ${
+              jobPaused ? "text-amber-200" : "text-white"
+            }`}
           />
           {needsOverrunAttention ? (
             <span className="rounded-full bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
@@ -114,8 +136,12 @@ export default function ActiveJobStrip() {
                     <Wrench className="h-4 w-4" />
                   </span>
                   <div className="min-w-0">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
-                      Now working
+                    <p
+                      className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                        jobPaused ? "text-amber-300/90" : "text-emerald-300/80"
+                      }`}
+                    >
+                      {jobPaused ? "Paused" : "Now working"}
                     </p>
                     <p className="truncate text-sm font-medium text-slate-100">
                       {job.vehicleLabel}
@@ -136,7 +162,10 @@ export default function ActiveJobStrip() {
               <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-white/5 px-3 py-2">
                 <ElapsedTimer
                   startedAtMs={job.startedAtMs}
-                  className="font-mono text-lg font-semibold tabular-nums text-white"
+                  paused={jobPaused}
+                  className={`font-mono text-lg font-semibold tabular-nums ${
+                    jobPaused ? "text-amber-200" : "text-white"
+                  }`}
                 />
                 <button
                   type="button"

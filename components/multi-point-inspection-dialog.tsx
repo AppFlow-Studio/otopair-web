@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  FluidCatalogSelectField,
+  FLUID_KIND_BY_KEY,
+} from "@/components/fluid-catalog-select-field";
+import {
   Camera,
   Check,
   ChevronDown,
@@ -507,6 +511,35 @@ function MultiPointInspectionDialogBody({
   } | null>(null);
   const photoPreviewsRef = useRef(photoPreviews);
 
+  // ---- autosave ----------------------------------------------------------
+  // Draft persistence as the mechanic fills in fields: a debounced write to
+  // onSaveDraft (savePrejob) fires ~1s after the last change so their input is
+  // registered without hunting for a save button. The header shows a
+  // "Saving… / Saved" indicator. Owner-profile answers keep their own explicit
+  // confirm flow and are intentionally excluded (savePrejob doesn't persist
+  // them).
+  const [saveStatus, setSaveStatus] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const savedSignatureRef = useRef<string | null>(null);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-field autosave state, keyed `${zoneId}::${fieldKey}`. A field flips to
+  // "saving" the instant it's edited, then to "saved"/"error" when the shared
+  // debounced draft write settles — so every answer carries its own proof it's
+  // banked. Held here (not per-zone) so a zone-switch doesn't drop indicators.
+  const [fieldSaveState, setFieldSaveState] = useState<
+    Record<string, FieldSaveState>
+  >({});
+  const markFieldSaving = useCallback((zoneId: ZoneId, fieldKey: string) => {
+    setFieldSaveState((prev) => ({
+      ...prev,
+      [`${zoneId}::${fieldKey}`]: "saving",
+    }));
+  }, []);
+  // The queued draft write, exposed so a close/unmount can flush it immediately
+  // instead of losing the last edit inside the debounce window.
+  const pendingSaveRef = useRef<null | (() => Promise<void>)>(null);
+
   // Global header fields that don't belong to a single wheel.
   const [mileage, setMileage] = useState("");
   const [mileageError, setMileageError] = useState("");
@@ -549,6 +582,15 @@ function MultiPointInspectionDialogBody({
   const requiredSet = useMemo(() => new Set(requiredZones), [requiredZones]);
   const baselineMileage =
     prefillData?.mileage ?? passportData?.passport.mileage ?? null;
+  // An odometer physically can't run backwards, so a new reading below the
+  // vehicle's stored mileage is always an error — enforced live as the mechanic
+  // types and again as a hard gate on every "continue" path (submit + save).
+  const odometerBelowBaseline = (value: string) =>
+    typeof baselineMileage === "number" &&
+    value.trim() !== "" &&
+    Number(value) < baselineMileage;
+  const odometerTooLowMessage = () =>
+    `Odometer can't be below the current ${(baselineMileage as number).toLocaleString()} mi reading.`;
   const brakeScope = useMemo<BrakeAxleScope>(
     () =>
       savedBrakeScope?.hasBrakeWork
@@ -628,6 +670,7 @@ function MultiPointInspectionDialogBody({
           methods: { ...base.methods, ...(z.methods ?? {}) },
           photoIds: Array.isArray(z.photo_ids) ? [...z.photo_ids] : [],
           photoTags: { ...base.photoTags, ...(z.photo_tags ?? {}) },
+          lights: { ...base.lights, ...(z.lights ?? {}) },
         };
       }
       const pf = prefillData;
@@ -872,6 +915,131 @@ function MultiPointInspectionDialogBody({
     completionContext,
   ]);
 
+  // Compact signature of everything savePrejob persists — a change here is what
+  // arms the autosave debounce. Owner answers are excluded on purpose (they
+  // have their own confirm flow and savePrejob doesn't store them).
+  const autosaveSignature = useMemo(
+    () =>
+      JSON.stringify({
+        zones: state.zones,
+        mileage,
+        liftStatus,
+        inspectionStatus,
+        inspectionExpires,
+        modAftermarket,
+        modNotes,
+        modAffectedSystems,
+        nextTip,
+      }),
+    [
+      state.zones,
+      mileage,
+      liftStatus,
+      inspectionStatus,
+      inspectionExpires,
+      modAftermarket,
+      modNotes,
+      modAffectedSystems,
+      nextTip,
+    ],
+  );
+
+  useEffect(() => {
+    if (!hydrated || !bookingId || !onSaveDraft) return;
+    // First run after hydration is the baseline — a resumed draft is already
+    // persisted, so don't re-save it (or flash "Saving…") on open.
+    if (savedSignatureRef.current === null) {
+      savedSignatureRef.current = autosaveSignature;
+      return;
+    }
+    if (autosaveSignature === savedSignatureRef.current) return;
+
+    setSaveStatus("saving");
+    const signatureToPersist = autosaveSignature;
+
+    // The actual write, reused by both the debounce timer and an immediate
+    // flush on close/unmount. Marks every in-flight field saved (or failed) so
+    // the per-field checkmarks resolve in lockstep with the draft write.
+    const runSave = async () => {
+      try {
+        const { prejob, inspection } = buildPayloads();
+        await onSaveDraft(prejob, inspection);
+        savedSignatureRef.current = signatureToPersist;
+        setSaveStatus("saved");
+        setFieldSaveState((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const key in next) {
+            if (next[key] === "saving") {
+              next[key] = "saved";
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      } catch {
+        // Non-blocking: the mechanic can still use "Save & close". A soft
+        // "Not saved yet" tells them autosave didn't take (e.g. the booking
+        // scope isn't resolved yet).
+        setSaveStatus("error");
+        setFieldSaveState((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const key in next) {
+            if (next[key] === "saving") {
+              next[key] = "error";
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      } finally {
+        pendingSaveRef.current = null;
+      }
+    };
+    pendingSaveRef.current = runSave;
+
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      autosaveTimerRef.current = null;
+      void runSave();
+    }, 1000);
+
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    };
+  }, [hydrated, bookingId, onSaveDraft, autosaveSignature, buildPayloads]);
+
+  // Flush a queued draft write right now — used when the mechanic closes the
+  // dialog or the tab/app is about to unload, so an edit made inside the 1s
+  // debounce window is still persisted instead of silently dropped.
+  const flushPendingSave = useCallback(() => {
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    const run = pendingSaveRef.current;
+    if (run) void run();
+  }, []);
+
+  // Last-resort safety net: if the tab/app is closed while a save is still
+  // pending, flush it and warn so the mechanic can stay long enough for the
+  // write to land. Only fires when there's genuinely unsaved work.
+  useEffect(() => {
+    const handler = (event: BeforeUnloadEvent) => {
+      if (pendingSaveRef.current || saveStatus === "saving") {
+        flushPendingSave();
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [saveStatus, flushPendingSave]);
+
+  // Flush on unmount too (dialog torn down without an explicit "Save & close").
+  useEffect(() => () => flushPendingSave(), [flushPendingSave]);
+
   const persistOwnerAnswers = useCallback(async () => {
     if (!bookingId || !ownerConfirmed) return;
     const answers: Record<string, OwnerProfileAnswerValue> = {};
@@ -910,6 +1078,19 @@ function MultiPointInspectionDialogBody({
       document
         .getElementById("inspection-zone-panel")
         ?.scrollIntoView({ behavior: "auto", block: "start" }),
+    );
+  }
+
+  // User-initiated zone selection (tapping a part on the car diagram, or the
+  // Owner-profile chip): switch zones and smoothly bring the panel into view so
+  // the mechanic sees the section scroll down to them instead of having to hunt
+  // for it below the diagram.
+  function selectZone(zoneId: ZoneId | "PARTS") {
+    setActiveZone(zoneId);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("inspection-zone-panel")
+        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
     );
   }
 
@@ -1022,12 +1203,11 @@ function MultiPointInspectionDialogBody({
       );
       return false;
     }
-    if (
-      action === "start" &&
-      typeof baselineMileage === "number" &&
-      Number(mileage) < baselineMileage
-    ) {
-      const message = `Odometer cannot be lower than the stored ${baselineMileage.toLocaleString()} mi.`;
+    // A backwards odometer is invalid on every continue path — block both
+    // "Submit" and "Save & close" whenever a reading has been entered (an empty
+    // reading is only required for "start", handled above).
+    if (odometerBelowBaseline(mileage)) {
+      const message = odometerTooLowMessage();
       setError(message);
       setMileageError(message);
       requestAnimationFrame(() =>
@@ -1040,11 +1220,33 @@ function MultiPointInspectionDialogBody({
   }
 
   async function handleSubmit(action: SubmitIntent) {
+    // Cancel any queued autosave so it doesn't race the explicit submit (and so
+    // the close/unmount flush can't re-fire a stale draft write afterward).
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    pendingSaveRef.current = null;
     if (!validateBeforePersistence(action)) return;
     await persistOwnerAnswers();
     const { prejob, inspection } = buildPayloads();
     try {
       await onSubmit(prejob, inspection, action);
+      // This explicit save persisted everything on screen — resolve any field
+      // still mid-spinner so the mechanic sees each answer landed.
+      savedSignatureRef.current = autosaveSignature;
+      setSaveStatus("saved");
+      setFieldSaveState((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const key in next) {
+          if (next[key] === "saving") {
+            next[key] = "saved";
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     } catch (err) {
       const message = userFacingInspectionError(err, "Could not save inspection.");
       if (message.toLowerCase().includes("mileage")) {
@@ -1270,7 +1472,12 @@ function MultiPointInspectionDialogBody({
     <>
       <SurveyDialogShell
       open={open}
-      onClose={onClose}
+      onClose={() => {
+        // Bank any edit still sitting in the debounce window before the dialog
+        // tears down, so closing never costs the mechanic their last answer.
+        flushPendingSave();
+        onClose();
+      }}
       title="Multi-point inspection"
       description={bookingSubLabel}
       maxWidthClassName="max-w-2xl"
@@ -1342,8 +1549,14 @@ function MultiPointInspectionDialogBody({
                   inputMode="numeric"
                   value={mileage}
                   onChange={(e) => {
-                    setMileage(e.target.value.replace(/[^0-9]/g, ""));
-                    setMileageError("");
+                    const next = e.target.value.replace(/[^0-9]/g, "");
+                    setMileage(next);
+                    // Flag a backwards odometer the instant it's typed, so the
+                    // mechanic fixes it in place instead of hitting a wall at
+                    // submit time.
+                    setMileageError(
+                      odometerBelowBaseline(next) ? odometerTooLowMessage() : "",
+                    );
                   }}
                   placeholder="—"
                   className="w-24 rounded-lg border border-primary/20 bg-card px-2 py-1 text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none"
@@ -1411,6 +1624,10 @@ function MultiPointInspectionDialogBody({
                 Tap a part of the car to inspect it
               </div>
             </div>
+            <SaveStatusIndicator
+              status={saveStatus}
+              enabled={!!bookingId && !!onSaveDraft}
+            />
             <div className="hidden items-center gap-3 sm:flex">
               {(["g", "y", "r"] as TriValue[]).map((c) => (
                 <span key={c} className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -1443,7 +1660,7 @@ function MultiPointInspectionDialogBody({
               activeZone={activeZone === "PARTS" ? null : activeZone}
               isDone={(id) => !!state.zones[id]?.done}
               isRequired={(id) => requiredSet.has(id)}
-              onSelect={setActiveZone}
+              onSelect={selectZone}
             />
           </div>
 
@@ -1451,7 +1668,7 @@ function MultiPointInspectionDialogBody({
           <div className="flex justify-center">
             <button
               type="button"
-              onClick={() => setActiveZone("OWNER")}
+              onClick={() => selectZone("OWNER")}
               className={cn(
                 "inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[12px] font-medium transition-colors",
                 activeZone === "OWNER"
@@ -1508,6 +1725,7 @@ function MultiPointInspectionDialogBody({
               <ZonePanel
                 zoneId={activeZone}
                 zs={zoneState(activeZone)}
+                vin={passportData?.vin ?? null}
                 isFirstVisit={isFirstVisit}
                 isRequired={requiredSet.has(activeZone)}
                 tireSizeOptions={tireSizeOptionsFromList(
@@ -1563,6 +1781,8 @@ function MultiPointInspectionDialogBody({
                   const index = NAV_ZONE_IDS.indexOf(activeZone);
                   openZoneAtTop(NAV_ZONE_IDS[(index + 1) % NAV_ZONE_IDS.length]);
                 }}
+                fieldSaveState={fieldSaveState}
+                onFieldSaving={(key) => markFieldSaving(activeZone, key)}
               />
             )}
           </div>
@@ -1624,6 +1844,83 @@ function MultiPointInspectionDialogBody({
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
+
+// Autosave affordance shown in the progress row: reassures the mechanic their
+// input is registered as they fill in fields, without a manual save step.
+function SaveStatusIndicator({
+  status,
+  enabled,
+}: {
+  status: "idle" | "saving" | "saved" | "error";
+  enabled: boolean;
+}) {
+  if (!enabled) return null;
+  const base =
+    "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors";
+  if (status === "saving") {
+    return (
+      <span className={cn(base, "bg-primary/5 text-muted-foreground")}>
+        <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+      </span>
+    );
+  }
+  if (status === "saved") {
+    return (
+      <span className={cn(base, "bg-emerald-50 text-emerald-700")}>
+        <Check className="h-3 w-3" /> Saved
+      </span>
+    );
+  }
+  if (status === "error") {
+    return (
+      <span className={cn(base, "bg-amber-50 text-amber-700")}>
+        Not saved yet
+      </span>
+    );
+  }
+  // idle: no edits yet — tell the mechanic autosave is on so they trust it.
+  return (
+    <span className={cn(base, "text-muted-foreground")}>
+      Autosaves as you go
+    </span>
+  );
+}
+
+// Per-field save affordance shown right next to the answer the mechanic just
+// entered: a spinner while the debounced draft write is in flight, a green
+// check once the server has it, or an amber "Not saved" if the write failed
+// (autosave keeps retrying on the next edit). This is what lets a mechanic
+// trust that every individual answer is banked before they close the app.
+export type FieldSaveState = "saving" | "saved" | "error";
+
+function FieldSaveBadge({ state }: { state?: FieldSaveState }) {
+  if (!state) return null;
+  if (state === "saving") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+      </span>
+    );
+  }
+  if (state === "saved") {
+    return (
+      <span
+        className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-600"
+        title="Saved — safe to close"
+      >
+        <Check className="h-3 w-3" /> Saved
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-amber-600"
+      title="Not saved yet — this answer will retry on your next edit"
+    >
+      Not saved
+    </span>
+  );
+}
 
 function CarDiagram({
   activeZone,
@@ -1722,6 +2019,7 @@ function CarDiagram({
 function ZonePanel({
   zoneId,
   zs,
+  vin,
   isFirstVisit,
   isRequired,
   tireSizeOptions,
@@ -1742,9 +2040,13 @@ function ZonePanel({
   onToggleDone,
   onPrevious,
   onNext,
+  fieldSaveState,
+  onFieldSaving,
 }: {
   zoneId: ZoneId;
   zs: ZoneState;
+  /** Vehicle VIN — feeds the fluid catalog picker (make-pinned OEM options). */
+  vin: string | null;
   isFirstVisit: boolean;
   isRequired: boolean;
   /** Axle-resolved tire-size options (vehicle's OEM fitments, generic fallback). */
@@ -1767,6 +2069,10 @@ function ZonePanel({
   onToggleDone: () => void;
   onPrevious: () => void;
   onNext: () => void;
+  /** Per-field autosave state, keyed `${zoneId}::${fieldKey}`. */
+  fieldSaveState: Record<string, FieldSaveState>;
+  /** Flags a field as pending-save the moment the mechanic edits it. */
+  onFieldSaving: (fieldKey: string) => void;
 }) {
   const zone = INSPECTION_ZONES_BY_ID[zoneId];
   const tireReplacementScheduled =
@@ -1878,6 +2184,7 @@ function ZonePanel({
               zoneId={zoneId}
               field={field}
               zs={zs}
+              vin={vin}
               isFirstVisit={isFirstVisit}
               tireSizeOptions={tireSizeOptions}
               required={isFieldRequiredForZone(
@@ -1894,8 +2201,15 @@ function ZonePanel({
               }
               prefill={specByKey.get(field.key)}
               onSpecEdited={onSpecEdited}
-              onPatch={onPatch}
-              onSharedText={onSharedText}
+              onPatch={(patch) => {
+                onFieldSaving(field.key);
+                onPatch(patch);
+              }}
+              onSharedText={(key, value) => {
+                onFieldSaving(field.key);
+                onSharedText(key, value);
+              }}
+              saveState={fieldSaveState[`${zoneId}::${field.key}`]}
             />
           </div>
         );
@@ -2019,6 +2333,7 @@ function FieldRow({
   zoneId,
   field,
   zs,
+  vin,
   isFirstVisit,
   tireSizeOptions,
   required,
@@ -2027,10 +2342,13 @@ function FieldRow({
   onSpecEdited,
   onPatch,
   onSharedText,
+  saveState,
 }: {
   zoneId: ZoneId;
   field: InspectionField;
   zs: ZoneState;
+  /** Vehicle VIN — feeds the fluid catalog picker. */
+  vin: string | null;
   isFirstVisit: boolean;
   /** Axle-resolved tire-size options for this zone (OEM fitments + fallback). */
   tireSizeOptions: InspectionOption[];
@@ -2042,6 +2360,8 @@ function FieldRow({
   onSpecEdited?: () => void;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
+  /** Autosave state for this field's last edit (spinner / check / retry). */
+  saveState?: FieldSaveState;
 }) {
   const clearUnavailable = () => {
     const statuses = { ...zs.statuses };
@@ -2072,6 +2392,7 @@ function FieldRow({
         errorMessage={errorMessage}
         disabled={rotorNotConfirmed}
         onPatch={onPatch}
+        saveState={saveState}
       />
     );
   }
@@ -2083,7 +2404,7 @@ function FieldRow({
     );
     return (
       <div className="border-b border-primary/10">
-        <Row label={field.label} required={required}>
+        <Row label={field.label} required={required} saveState={saveState}>
           <div className="flex flex-wrap gap-2">
             {(["g", "y", "r"] as TriValue[]).map((color) => {
               const label = triLabelFor(field.key, color);
@@ -2153,16 +2474,19 @@ function FieldRow({
       >
         <div
           className={cn(
-            "mb-1.5 text-[13px] text-foreground",
+            "mb-1.5 flex items-center gap-2 text-[13px] text-foreground",
             required && "font-medium",
           )}
         >
-          {field.label}
-          {required ? (
-            <span className="ml-1 text-red-500" title="Required">
-              *
-            </span>
-          ) : null}
+          <span className="flex-1">
+            {field.label}
+            {required ? (
+              <span className="ml-1 text-red-500" title="Required">
+                *
+              </span>
+            ) : null}
+          </span>
+          <FieldSaveBadge state={saveState} />
         </div>
         <div className="flex flex-wrap gap-2">
           {field.options.map((option, index) => {
@@ -2233,16 +2557,19 @@ function FieldRow({
       >
         <div
           className={cn(
-            "mb-1.5 text-[13px] text-foreground",
+            "mb-1.5 flex items-center gap-2 text-[13px] text-foreground",
             required && "font-medium",
           )}
         >
-          {field.label}
-          {required ? (
-            <span className="ml-1 text-red-500" title="Required">
-              *
-            </span>
-          ) : null}
+          <span className="flex-1">
+            {field.label}
+            {required ? (
+              <span className="ml-1 text-red-500" title="Required">
+                *
+              </span>
+            ) : null}
+          </span>
+          <FieldSaveBadge state={saveState} />
         </div>
         <div className="space-y-2">
           {entries.map((entry, index) => (
@@ -2334,7 +2661,7 @@ function FieldRow({
     const showPrefillTag = !!prefill && value === prefill.value;
     return (
       <div className="border-b border-primary/10">
-        <Row label={field.label} required={required}>
+        <Row label={field.label} required={required} saveState={saveState}>
           <div className="flex w-44 flex-col items-end gap-1">
             <CompactSelect
               id={`inspection-${zoneId}-${field.key}`}
@@ -2363,6 +2690,47 @@ function FieldRow({
           {isMeasurementMethod || field.key === "rotor_applicable"
             ? null
             : unavailableControl}
+        </Row>
+        {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+      </div>
+    );
+  }
+
+  // Fluid PRODUCT fields (coolant / ATF / brake / power-steering) use the same
+  // OEM + scraped catalog picker as the post-job survey instead of the generic
+  // combobox. Value lives in the text bucket, where the passport prefill seeds
+  // it and job_actuals reads it. Oil viscosity/type keep the generic picker —
+  // oil is chosen by grade+type, not a single SKU.
+  if (field.type === "text" && FLUID_KIND_BY_KEY[field.key]) {
+    const fluidValue = zs.text[field.key] ?? "";
+    const showFluidPrefillTag = !!prefill && fluidValue === prefill.value;
+    return (
+      <div className="border-b border-primary/10">
+        <Row
+          label={field.label}
+          required={required}
+          badge={field.firstVisitOnly && isFirstVisit ? "1ST" : undefined}
+          saveState={saveState}
+        >
+          <div className="w-64 space-y-1.5">
+            <FluidCatalogSelectField
+              value={fluidValue}
+              onChange={(next) => {
+                if (prefill) onSpecEdited?.();
+                onSharedText(field.key, next);
+              }}
+              fluidKind={FLUID_KIND_BY_KEY[field.key]}
+              vin={vin}
+              placeholder="Search or select"
+              otherPlaceholder={`Enter ${field.label.toLowerCase()}`}
+            />
+            {showFluidPrefillTag ? (
+              <div className="flex justify-end">
+                <SpecSourceTag source={prefill!.source} />
+              </div>
+            ) : null}
+          </div>
+          {unavailableControl}
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
       </div>
@@ -2417,7 +2785,7 @@ function FieldRow({
   if (options.length === 0) {
     return (
       <div className="border-b border-primary/10">
-        <Row label={field.label} required={required}>
+        <Row label={field.label} required={required} saveState={saveState}>
           <div className="flex w-48 flex-col items-end gap-1">
             <input
               id={`inspection-${zoneId}-${field.key}`}
@@ -2441,6 +2809,7 @@ function FieldRow({
         label={field.label}
         required={required}
         badge={field.firstVisitOnly && isFirstVisit ? "1ST" : undefined}
+        saveState={saveState}
       >
         <div className="w-48 space-y-1.5">
           <Combobox
@@ -2525,6 +2894,7 @@ function MeasureField({
   errorMessage,
   disabled,
   onPatch,
+  saveState,
 }: {
   zoneId: ZoneId;
   field: Extract<InspectionField, { type: "measure" }>;
@@ -2533,6 +2903,8 @@ function MeasureField({
   errorMessage?: string;
   disabled?: boolean;
   onPatch: (patch: Partial<ZoneState>) => void;
+  /** Autosave state for this field's last edit (spinner / check / retry). */
+  saveState?: FieldSaveState;
 }) {
   const value = zs.measures[field.key] ?? "";
   const result = classifyInspectionMeasure(field, zs.measures, zs.select);
@@ -2575,7 +2947,7 @@ function MeasureField({
     };
     return (
       <div className="border-b border-primary/10 py-2.5">
-        <Row label={field.label} hint={field.hint} required={required}>
+        <Row label={field.label} hint={field.hint} required={required} saveState={saveState}>
           {!detailed ? (
             <>
               <input
@@ -2656,7 +3028,7 @@ function MeasureField({
       : field.hint;
   return (
     <div className="border-b border-primary/10">
-      <Row label={field.label} hint={hint} required={required}>
+      <Row label={field.label} hint={hint} required={required} saveState={saveState}>
         <input
           id={`inspection-${zoneId}-${field.key}`}
           aria-invalid={!!errorMessage}
@@ -2835,12 +3207,14 @@ function Row({
   hint,
   required,
   badge,
+  saveState,
   children,
 }: {
   label: string;
   hint?: string;
   required?: boolean;
   badge?: string;
+  saveState?: FieldSaveState;
   children: React.ReactNode;
 }) {
   return (
@@ -2872,6 +3246,7 @@ function Row({
         ) : null}
       </span>
       {children}
+      <FieldSaveBadge state={saveState} />
     </div>
   );
 }

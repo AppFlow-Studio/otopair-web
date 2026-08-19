@@ -445,6 +445,11 @@ export const harvestRefutedReplacements = internalAction({
  *    1. repairMissingRoles — fills core roles still empty at the END of the
  *       run, including holes the late gates themselves created (a pass-2
  *       refutation empties a role after the in-run repair already finished).
+ *       Ahead of it run the catalog-structure rungs, cheapest first, each
+ *       self-noopping when nothing is missing: rejection resurrect, refute
+ *       harvest, genuine-fluid seeds, vehicle category pages, RockAuto
+ *       interchange, the vehicle-keyed RockAuto walk (the only rung that is
+ *       not RevolutionParts), and the engine-oil product fetch.
  *    2. The TARGETED zero-price backfill for this config — scheduled, not
  *       awaited, so the two legs never share one 600s action budget. Its
  *       census runs inside refreshStalePrices, so it SEES the parts step 1
@@ -519,6 +524,21 @@ export const healAfterRun = internalAction({
     } catch (e) {
       console.error("[heal-after-run] interchange backtrack failed (non-fatal):", e);
     }
+    // The SECOND OPERATOR. Everything above resolves to RevolutionParts —
+    // makeCoverage.auditOperatorDiversity reports 36/36 makes on that one
+    // operator — so when its catalogue is thin for a year/model every rung so
+    // far has failed together. RockAuto is an independent catalogue, walked by
+    // vehicle. Most expensive rung here, so it runs last and only on what the
+    // cheap ones left behind.
+    let rockautoVehicle: any = null;
+    try {
+      rockautoVehicle = await ctx.runAction(
+        internal.vehicleEnrichment.categoryHarvest.harvestRockAutoVehicle,
+        { vehicleConfigId: args.vehicleConfigId },
+      );
+    } catch (e) {
+      console.error("[heal-after-run] rockauto vehicle walk failed (non-fatal):", e);
+    }
     // Engine oil is NEVER in missingCoreRoles — its universal fallback keeps
     // the service quotable at a synthetic $/qt — so no rung above touches it.
     // This one replaces the synthetic with the car's real spec-viscosity
@@ -576,6 +596,8 @@ export const healAfterRun = internalAction({
       categories: categories?.status ?? "error",
       categoriesWritten: categories?.written ?? [],
       interchange: interchange?.status ?? "error",
+      rockautoVehicle: rockautoVehicle?.status ?? "error",
+      rockautoVehicleWritten: rockautoVehicle?.written ?? [],
       interchangeWritten: interchange?.written ?? [],
       oil: oil?.status ?? "error",
       oilWritten: oil?.written ?? null,

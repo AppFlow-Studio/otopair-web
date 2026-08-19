@@ -23,6 +23,7 @@ import {
 import { ensureWalkInCashPayment } from "./bookings";
 import { partFitsConfigMake } from "./partSelector";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
+import { resolveSparkPlugQuantity } from "./lib/sparkPlugs";
 import { deriveSuggestedRecommendations } from "../lib/inspection-template";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
@@ -563,7 +564,30 @@ export const getPrefillData = query({
           // Per-unit cost (the dialog multiplies by quantity for the total).
           // Pre-fix bug: previously pushed `cost: 12 * qty` (line total)
           // with no `quantity`, which the dialog then multiplied again.
-          const qty = s.spark_plug_quantity ?? 4;
+          //
+          // The `?? 4` this replaces was a second, quieter bug: a missing
+          // quantity billed FOUR plugs on every engine, so a V6 was under-
+          // quoted by two and a HEMI V8 by twelve — confidently, with nothing
+          // marking it as a guess. `engine` is in scope here, so derive from
+          // its real cylinder count instead (lib/sparkPlugs owns the twin-plug
+          // exceptions). A genuinely unknown count now falls back to 1 rather
+          // than 4: still not the truth, but off by the smallest possible
+          // margin and visible as an obviously-wrong line rather than a
+          // plausible one. The pre-job form is where a mechanic corrects it.
+          const resolved = resolveSparkPlugQuantity({
+            spark_plug_quantity: s.spark_plug_quantity ?? engine.spark_plug_quantity,
+            cylinders: engine.cylinders,
+            make: make?.name,
+            engineCode: engine.engine_code,
+            displacementL: engine.displacement_l,
+          });
+          if (resolved.quantity == null) {
+            console.warn(
+              `[job-actuals] spark plug quantity unknown for engine ${engine._id} ` +
+                `(cylinders=${engine.cylinders ?? "null"}) — quoting 1, needs mechanic input`,
+            );
+          }
+          const qty = resolved.quantity ?? 1;
           suggestedParts.push({
             part_name: "Spark Plug",
             oem_number: s.spark_plug_oem,

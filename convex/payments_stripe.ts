@@ -1461,6 +1461,168 @@ export const resumeReauthFromMobile = action({
   },
 });
 
+/**
+ * Approve an over-range pre/mid-job estimate AND place the new hold on the
+ * customer's CHOSEN payment method in one on-session call. Backs the merged
+ * approve-and-hold screen so the picked method (a switched card, Apple Pay, or
+ * Google Pay) is always the one authorized — unlike the async
+ * `applyApprovalDecision` path, whose `adjustAuthorization` can silently raise
+ * the hold on the original card before any switch applies.
+ *
+ * Records the approval (parks the booking in `reauth_required`), then cancels
+ * the stale hold and creates + confirms a fresh manual-capture PI at the
+ * approved ceiling with `paymentMethodId`. Wallet callers mint the one-time PM
+ * client-side first and pass `paymentOrigin`. Returns `requiresAction` +
+ * `clientSecret` for the client to drive 3DS inline; the
+ * `amount_capturable_updated` webhook clears `reauth_required` once it lands.
+ * On an immediate `requires_capture`/`succeeded` we clear it synchronously.
+ */
+export const approveAndAuthorizeHold = action({
+  args: {
+    bookingId: v.id("bookings"),
+    paymentMethodId: v.string(),
+    /** Origin of the chosen method. Wallets mint a fresh one-time PM client-
+     *  side and pass this so the payments row records the right origin. */
+    paymentOrigin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    paymentIntentId: string;
+    clientSecret: string;
+    status: string;
+    requiresAction: boolean;
+    targetCents: number;
+  }> => {
+    const { user } = await requireAuthedUser(ctx);
+    const result: any = await ctx.runQuery(
+      internal.payments_stripe._getBookingForPayment,
+      { bookingId: args.bookingId },
+    );
+    if (!result?.booking) throw new Error("Booking not found.");
+    const { booking, shop } = result;
+    if (booking.user_id !== user._id) throw new Error("Not your booking.");
+    if (!shop?.stripe_connect_account_id) {
+      throw new Error("Shop is not ready to accept payments yet.");
+    }
+    if (!user.stripe_customer_id) {
+      throw new Error("Add a payment method before confirming.");
+    }
+
+    // Record the approval and park the booking in `reauth_required`. Throws for
+    // post-job (stays on the capture path) or when no estimate is open.
+    await ctx.runMutation(internal.booking_approvals._recordApprovalApproved, {
+      bookingId: args.bookingId,
+      userId: user._id,
+    });
+
+    // Re-read to pick up the freshly-set approved ceiling.
+    const afterResult: any = await ctx.runQuery(
+      internal.payments_stripe._getBookingForPayment,
+      { bookingId: args.bookingId },
+    );
+    const afterBooking = afterResult?.booking ?? booking;
+    const payment: any = await ctx.runQuery(
+      internal.payments_stripe._getPaymentByBookingId,
+      { bookingId: args.bookingId },
+    );
+    if (!payment) throw new Error("No payment row found for this booking.");
+
+    const targetCents = Math.max(
+      afterBooking.mechanic_set_price_cents ?? 0,
+      afterBooking.running_approved_ceiling_cents ?? 0,
+    );
+    if (!(targetCents > 0)) {
+      throw new Error("Booking has no approved hold amount to authorize.");
+    }
+
+    const stripe = getStripe();
+
+    // PM-ownership check (mirrors resumeReauthFromMobile). Unattached PMs are
+    // wallet-minted one-time tokens — accept them.
+    const pm = await stripe.paymentMethods.retrieve(args.paymentMethodId);
+    if (pm.customer != null && pm.customer !== user.stripe_customer_id) {
+      throw new Error("This card doesn't belong to you.");
+    }
+
+    // Cancel the stale hold (tolerate an already-terminal PI).
+    const oldPiId = payment.stripe_payment_intent_id;
+    if (oldPiId) {
+      try {
+        await stripe.paymentIntents.cancel(oldPiId);
+      } catch {
+        // ignore — PI may already be in a terminal state.
+      }
+    }
+
+    // Create + confirm the new PI ON-SESSION so 3DS can surface to the client.
+    let newPi;
+    try {
+      newPi = await stripe.paymentIntents.create({
+        amount: targetCents,
+        currency: "usd",
+        customer: user.stripe_customer_id,
+        payment_method: args.paymentMethodId,
+        confirm: true,
+        off_session: false,
+        capture_method: "manual",
+        transfer_data: { destination: shop.stripe_connect_account_id },
+        automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+        metadata: {
+          bookingId: String(args.bookingId),
+          userId: String(user._id),
+          shopId: String(shop._id),
+          reauthOf: oldPiId ?? "",
+        },
+      });
+    } catch (err: any) {
+      throw new Error(err?.message ?? "Card authorization failed.");
+    }
+
+    await ctx.runMutation(
+      internal.payments_stripe._recordAuthorizationAdjustment,
+      {
+        bookingId: args.bookingId,
+        incrementedTotalCents: targetCents,
+        reauthPaymentIntentId: newPi.id,
+        ...(args.paymentOrigin != null
+          ? { paymentOrigin: args.paymentOrigin }
+          : {}),
+      },
+    );
+    await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
+      bookingId: args.bookingId,
+      stripeAction: "approve_and_hold",
+      stripePaymentIntentId: newPi.id,
+    });
+
+    if (
+      newPi.status === "requires_capture" ||
+      newPi.status === "succeeded"
+    ) {
+      await ctx.runMutation(
+        internal.payments_stripe._clearReauthRequiredAfterSuccess,
+        { bookingId: args.bookingId },
+      );
+    }
+
+    return {
+      paymentIntentId: newPi.id,
+      clientSecret: newPi.client_secret!,
+      status: newPi.status,
+      requiresAction: newPi.status === "requires_action",
+      targetCents,
+    };
+  },
+});
+
 /** Snapshots the captured parts list + amount onto the booking, flips state
  *  to `captured`, and transitions the payments row. */
 export const _patchBookingCaptured = internalMutation({

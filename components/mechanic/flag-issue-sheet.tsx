@@ -13,42 +13,39 @@
  * exactly three consequences (change today's price, remember for later, stop) —
  * a taxonomy of observations would grow forever.
  *
- * The fourth row exists because of a guard, not a feature: damage and safety must
- * never be able to fall into the first lane. If a mechanic scratches a wing and
- * the sheet routes them to "extra work needed now", the platform will build a
- * quote and ask the customer to approve paying for it — the system helping a shop
- * bill a customer for the shop's own mistake.
+ * NOTE — the old fourth row, "Damage or safety", was pulled from the menu: it
+ * was confusing next to the other three and wants a purpose-built flow rather
+ * than a blocker sub-kind. The guard it embodied still matters — damage the shop
+ * caused must never route to "extra work needed now", where the platform would
+ * build a quote and ask the customer to pay for the shop's own mistake — so the
+ * server keeps the `damage` / `safety_hold` blocker kinds live for whatever
+ * replaces it. This sheet just no longer offers them.
  */
 
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
 import ServicePickerModal from "@/components/booking/service-picker-modal";
-import ServiceSuggestions, {
-  type SuggestedService,
-} from "@/components/booking/service-suggestions";
+import { type SuggestedService } from "@/components/booking/service-suggestions";
 import {
-  AlertTriangle,
   ArrowLeft,
   ClipboardList,
   Loader2,
   ScanLine,
   PauseCircle,
+  Search,
   Wrench,
   X,
 } from "lucide-react";
 
-type Lane = "scope" | "later" | "blocked" | "harm" | "vin";
+type Lane = "scope" | "later" | "blocked" | "vin";
 
 type BlockerKind =
   | "parts_delay"
   | "vehicle_condition"
   | "needs_specialist"
-  | "customer_unreachable"
-  | "safety_hold"
-  | "damage";
+  | "customer_unreachable";
 
 /** Present tense, because choosing between these is choosing who gets interrupted. */
 const LANES: Array<{
@@ -75,12 +72,6 @@ const LANES: Array<{
     title: "Can't finish this job",
     sub: "Pauses the clock and tells the front desk",
   },
-  {
-    lane: "harm",
-    icon: AlertTriangle,
-    title: "Damage or safety",
-    sub: "Goes straight to the owner. No customer quote",
-  },
 ];
 
 /** Appended only when this booking's car is still on a placeholder VIN. */
@@ -98,28 +89,14 @@ const BLOCKED_KINDS: Array<{ kind: BlockerKind; label: string; hint: string }> =
   { kind: "customer_unreachable", label: "Can't reach the customer", hint: "Waiting on approval for work already opened up" },
 ];
 
-const HARM_KINDS: Array<{ kind: BlockerKind; label: string; hint: string }> = [
-  { kind: "safety_hold", label: "This car shouldn't be driven", hint: "Work continues. The driver is told urgently" },
-  { kind: "damage", label: "Damage to the vehicle", hint: "Owner only, photo required. We don't message the customer" },
-];
-
 export default function FlagIssueSheet({
   bookingId,
   onClose,
   onAddScope,
   onToast,
-  jobPhotos = [],
 }: {
   bookingId: Id<"bookings">;
   onClose: () => void;
-  /** The job's in-progress photos, passed down rather than re-queried — the
-   *  overlay already has them, and a damage report has to attach real ones. */
-  jobPhotos?: Array<{
-    storageId: string;
-    caption: string | null;
-    takenAt: number;
-    url: string | null;
-  }>;
   /** Hands off to the existing mid-job approval dialog — the one path that may
    *  change a total. Nothing in this sheet re-quotes anything itself. */
   onAddScope: () => void;
@@ -129,7 +106,7 @@ export default function FlagIssueSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  // Blocked / harm form state
+  // Blocked form state
   const [kind, setKind] = useState<BlockerKind | null>(null);
   const [note, setNote] = useState("");
 
@@ -140,8 +117,8 @@ export default function FlagIssueSheet({
     "next_visit" | "within_3_months" | "soon"
   >("next_visit");
   const [laterVisible, setLaterVisible] = useState(true);
-  /* Set only when the mechanic actively picks a catalog match. Left null, the
-     typed text is filed as an advisory — the typed text is always a valid
+  /* Set only when the mechanic picks a catalog match in the picker. Left null,
+     the typed text is filed as an advisory — the typed text is always a valid
      answer, never something to be talked out of. */
   const [browsing, setBrowsing] = useState(false);
   const [pickedService, setPickedService] = useState<SuggestedService | null>(
@@ -149,10 +126,6 @@ export default function FlagIssueSheet({
   );
 
   const [vin, setVin] = useState("");
-  /* Which of the job's photos evidence the damage. Required by the server for
-     kind="damage" — a damage report without a photo is an assertion, not a
-     record — so the sheet has to actually collect them rather than promise to. */
-  const [damagePhotoIds, setDamagePhotoIds] = useState<string[]>([]);
 
   const vinStatus = useQuery(api.walkinVinRepair.bookingNeedsVin, { bookingId });
   const submitVin = useMutation(api.walkinVinRepair.submitVinForBooking);
@@ -167,7 +140,6 @@ export default function FlagIssueSheet({
     setLaterReason("");
     setPickedService(null);
     setVin("");
-    setDamagePhotoIds([]);
     setError("");
   };
 
@@ -176,26 +148,8 @@ export default function FlagIssueSheet({
     setBusy(true);
     setError("");
     try {
-      await openBlocker({
-        bookingId,
-        kind,
-        note: note.trim(),
-        photos:
-          kind === "damage"
-            ? jobPhotos
-                .filter((p) => damagePhotoIds.includes(p.storageId))
-                .map((p) => ({
-                  storage_id: p.storageId as Id<"_storage">,
-                  caption: p.caption ?? undefined,
-                  taken_at: p.takenAt,
-                }))
-            : undefined,
-      });
-      onToast?.(
-        kind === "damage"
-          ? "Reported to the shop owner"
-          : "Flagged — the front desk has been told",
-      );
+      await openBlocker({ bookingId, kind, note: note.trim() });
+      onToast?.("Flagged — the front desk has been told");
       onClose();
       reset();
     } catch (err: unknown) {
@@ -284,9 +238,7 @@ export default function FlagIssueSheet({
                 ? "For next time"
                 : lane === "blocked"
                   ? "Can't finish"
-                  : lane === "vin"
-                    ? "Vehicle identity"
-                    : "Damage or safety"}
+                  : "Vehicle identity"}
         </p>
       </div>
       <button
@@ -302,8 +254,6 @@ export default function FlagIssueSheet({
       </button>
     </div>
   );
-
-  const kindList = lane === "harm" ? HARM_KINDS : BLOCKED_KINDS;
 
   return (
     <div
@@ -346,11 +296,7 @@ export default function FlagIssueSheet({
                     }}
                     className="flex w-full items-start gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-3.5 py-3 text-left transition-colors hover:border-white/20 hover:bg-white/[0.08]"
                   >
-                    <Icon
-                      className={`mt-0.5 h-4 w-4 shrink-0 ${
-                        row.lane === "harm" ? "text-red-400" : "text-slate-300"
-                      }`}
-                    />
+                    <Icon className="mt-0.5 h-4 w-4 shrink-0 text-slate-300" />
                     <span className="min-w-0">
                       <span className="block text-[14px] font-semibold text-slate-100">
                         {row.title}
@@ -372,62 +318,42 @@ export default function FlagIssueSheet({
                 Flag it while you&apos;re looking at it — this pre-fills your
                 post-job report so you won&apos;t be asked again.
               </p>
-              <input
-                type="text"
-                autoFocus
-                value={laterName}
-                onChange={(e) => {
-                  setLaterName(e.target.value);
-                  // A stale pick would silently file work the mechanic has
-                  // since retyped.
-                  setPickedService(null);
-                }}
-                placeholder="What needs doing? e.g. Serpentine belt"
-                className="w-full rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-[13px] text-slate-100 outline-none placeholder:text-slate-500 focus:border-white/30"
-              />
-              {/* Matches appear as options; what they typed stays the default.
-                  Picking one makes it a service the customer can book directly,
-                  otherwise it goes over as the mechanic's own recommendation. */}
-              <ServiceSuggestions
-                typed={laterName}
-                dark
-                onPick={(svc) => setPickedService(svc)}
-              />
-              {/* And what other shops call it, when the catalog has nothing.
-                  Same band as the booking drawer and the mid-job picker — a
-                  name typed forty ways is forty clusters, and this lane is
-                  where the most off-catalog names get invented. */}
-              <button
-                type="button"
-                onClick={() => setBrowsing(true)}
-                className="w-full rounded-lg border border-dashed border-white/20 px-3 py-2 text-[12px] text-slate-300 transition-colors hover:border-white/35 hover:bg-white/5"
-              >
-                Search the service catalog
-              </button>
-              <KnownNameSuggestions
-                typed={laterName}
-                onPick={(s) => {
-                  setLaterName(s.name);
-                  // Still not a catalog service, so it files as the mechanic's
-                  // own recommendation — it just files under the name the
-                  // cluster already uses.
-                  setPickedService(null);
-                }}
-              />
-              {pickedService ? (
-                <p className="flex items-center justify-between gap-2 rounded-lg border border-emerald-400/40 bg-emerald-400/10 px-3 py-2 text-[12px] text-emerald-200">
-                  <span>
-                    Filing as <strong>{pickedService.name}</strong> — bookable
+
+              {/* One search surface. The same catalog picker the "extra work"
+                  lane opens — so both lanes search one catalog under one set of
+                  rules, and the cross-shop "other shops call it" band lives
+                  inside it (readable there) instead of being duplicated here. */}
+              {laterName ? (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-white/15 bg-white/5 px-3 py-2.5">
+                  <span className="min-w-0">
+                    <span className="block truncate text-[13px] font-medium text-slate-100">
+                      {laterName}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] text-slate-400">
+                      {pickedService
+                        ? "Bookable service"
+                        : "Filed as a recommendation"}
+                    </span>
                   </span>
                   <button
                     type="button"
-                    onClick={() => setPickedService(null)}
-                    className="shrink-0 text-[11px] text-emerald-300/80 underline underline-offset-2 hover:text-emerald-100"
+                    onClick={() => setBrowsing(true)}
+                    className="shrink-0 text-[12px] font-medium text-emerald-300 underline underline-offset-2 transition-colors hover:text-emerald-100"
                   >
-                    undo
+                    Change
                   </button>
-                </p>
-              ) : null}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  autoFocus
+                  onClick={() => setBrowsing(true)}
+                  className="flex w-full items-center gap-2 rounded-lg border border-dashed border-white/20 px-3 py-2.5 text-[13px] text-slate-300 transition-colors hover:border-white/35 hover:bg-white/5"
+                >
+                  <Search className="h-4 w-4 shrink-0 text-slate-400" />
+                  Search the service catalog
+                </button>
+              )}
 
               <textarea
                 value={laterReason}
@@ -473,18 +399,11 @@ export default function FlagIssueSheet({
             </div>
           ) : null}
 
-          {/* ── Can't finish / damage-safety ───────────────────────────── */}
-          {lane === "blocked" || lane === "harm" ? (
+          {/* ── Can't finish ───────────────────────────────────────────── */}
+          {lane === "blocked" ? (
             <div className="space-y-3">
-              {lane === "harm" ? (
-                <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[12px] leading-relaxed text-red-200">
-                  This goes to the shop owner only. Otopair won&apos;t message the
-                  customer or add anything to their bill.
-                </p>
-              ) : null}
-
               <div className="space-y-2">
-                {kindList.map((k) => (
+                {BLOCKED_KINDS.map((k) => (
                   <button
                     key={k.kind}
                     type="button"
@@ -513,57 +432,6 @@ export default function FlagIssueSheet({
                   placeholder="What's going on? The front desk reads this."
                   className="min-h-[80px] w-full resize-y rounded-lg border border-white/15 bg-white/5 px-3 py-2.5 text-[13px] leading-relaxed text-slate-100 outline-none placeholder:text-slate-500 focus:border-white/30"
                 />
-              ) : null}
-
-              {kind === "damage" ? (
-                jobPhotos.length === 0 ? (
-                  <p className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-[12px] leading-relaxed text-amber-200">
-                    A photo is required. Close this, take one with the camera on
-                    the job, then come back — the report needs evidence attached,
-                    not a description of it.
-                  </p>
-                ) : (
-                  <div className="space-y-2">
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-slate-500">
-                      Tap the photos that show it
-                    </p>
-                    <div className="grid grid-cols-4 gap-2">
-                      {jobPhotos.map((photo) => {
-                        const picked = damagePhotoIds.includes(photo.storageId);
-                        return (
-                          <button
-                            key={photo.storageId}
-                            type="button"
-                            onClick={() =>
-                              setDamagePhotoIds((prev) =>
-                                prev.includes(photo.storageId)
-                                  ? prev.filter((id) => id !== photo.storageId)
-                                  : [...prev, photo.storageId],
-                              )
-                            }
-                            className={`relative overflow-hidden rounded-lg border-2 transition-colors ${
-                              picked
-                                ? "border-emerald-400"
-                                : "border-white/10 hover:border-white/30"
-                            }`}
-                          >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
-                              src={photo.url ?? ""}
-                              alt=""
-                              className="aspect-square w-full object-cover"
-                            />
-                            {picked ? (
-                              <span className="absolute inset-0 flex items-center justify-center bg-emerald-400/25 text-[11px] font-bold text-emerald-50">
-                                ✓
-                              </span>
-                            ) : null}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )
               ) : null}
             </div>
           ) : null}
@@ -615,11 +483,7 @@ export default function FlagIssueSheet({
                     // Same structural test the server applies, so the button
                     // can't be enabled for something the mutation will reject.
                     ? !/^[A-HJ-NPR-Z0-9]{17}$/.test(vin.trim().toUpperCase())
-                    : !kind ||
-                      note.trim().length === 0 ||
-                      // Server-enforced too; disabling here means the mechanic
-                      // finds out before they tap, not after.
-                      (kind === "damage" && damagePhotoIds.length === 0))
+                    : !kind || note.trim().length === 0)
               }
               onClick={
                 lane === "later"

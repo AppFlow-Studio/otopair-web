@@ -15,6 +15,7 @@ import {
 } from "../convex/vehicleEnrichment/makeCoverage";
 import { resolveOperator } from "../convex/vehicleEnrichment/sourceAdapters/claimLedger";
 import {
+  detectStorefrontNetwork,
   getAlternateStores,
   getPartsStores,
   getPriceStores,
@@ -147,9 +148,11 @@ describe("getPartsStores — one attempt per operator", () => {
   it("records UNvalidated candidates as pending, and drops them once promoted", () => {
     const ops = auditOperatorDiversity().pendingAlternates.map((p) => p.operator);
     // Still being proven.
-    expect(ops).toContain("parts.toyota.com");
-    // Promoted Aug 2026 (price-capable), so it has left the work queue.
-    expect(ops).not.toContain("gmpartsgiant.com");
+    expect(ops).toContain("toyota.com");
+    // gmpartsgiant is promoted, but toyotapartsdeal shares its operator and is
+    // still unvalidated — so the OPERATOR remains pending via that entry. The
+    // queue is per-candidate, not per-operator.
+    expect(ops).toContain("toyota.com");
   });
 
   it("never lists an RP skin as a second voice", () => {
@@ -172,14 +175,14 @@ describe("capability split — a price source must never propose a part", () => 
   it("gives GM makes a validated second PRICE operator", () => {
     for (const make of ["GMC", "Chevrolet", "Buick", "Cadillac"]) {
       const price = getPriceStores(make);
-      expect(price.map((s) => s.operator), make).toContain("gmpartsgiant.com");
+      expect(price.map((s) => s.operator), make).toContain("original_parts_giant");
     }
   });
 
   it("does NOT let that store into the parts lane", () => {
     for (const make of ["GMC", "Chevrolet"]) {
       expect(getPartsStores(make).every((s) => s.primary), make).toBe(true);
-      expect(getPartsStores(make).map((s) => s.operator)).not.toContain("gmpartsgiant.com");
+      expect(getPartsStores(make).map((s) => s.operator)).not.toContain("partsdeal-network");
     }
   });
 
@@ -206,6 +209,84 @@ describe("capability split — a price source must never propose a part", () => 
         if (!alt.capabilities.includes("parts")) continue;
         expect(alt.operator, `${make} → ${alt.baseUrl}`).not.toBe("revolutionparts");
       }
+    }
+  });
+});
+
+
+describe("detectStorefrontNetwork — a second skin family", () => {
+  // gmpartsgiant.com and toyotapartsdeal.com were briefly registered as TWO
+  // operators. They are one backend wearing per-make brands, and admitting
+  // both would have scored one catalogue agreeing with itself as
+  // cross-operator corroboration.
+  const PARTSDEAL_PAGE =
+    '<html><title>Genuine OEM GM Parts and Accessories Online - GM Parts Giant</title>' +
+    '<a href="/online/track/order">track</a>' +
+    '<a href="/service/gm-help_center.html">help</a>' +
+    '<a href="/category/gm-engine.html">engine</a>' +
+    '<a href="/oem-gmc-spark_plug.html">plugs</a></html>';
+
+  const TOYOTA_SKIN_PAGE =
+    '<html><title>Genuine OEM Toyota Parts and Accessories Online - Toyota Parts Deal</title>' +
+    '<a href="/online/track/order">track</a>' +
+    '<a href="/service/toyota-help_center.html">help</a>' +
+    '<a href="/category/toyota-body.html">body</a>' +
+    '<a href="/oem-toyota-brake_disc.html">discs</a></html>';
+
+  it("recognises both brands as ONE network", () => {
+    expect(detectStorefrontNetwork(PARTSDEAL_PAGE)).toBe("original_parts_giant");
+    expect(detectStorefrontNetwork(TOYOTA_SKIN_PAGE)).toBe("original_parts_giant");
+  });
+
+  it("the ledger already folded both hostnames into one operator", () => {
+    // OPERATOR_TABLE has carried /(^|\.)[a-z0-9-]*parts(giant|deal)\.com$/ all
+    // along, so resolveOperator was right before anyone noticed the collision.
+    const a = resolveOperator("www.gmpartsgiant.com");
+    const b = resolveOperator("www.toyotapartsdeal.com");
+    expect(a).toBe("original_parts_giant");
+    expect(b).toBe(a);
+  });
+
+  it("a sibling nobody has registered yet resolves to the same voice", () => {
+    // The hostPattern generalises, which is why it beat the enumerated list
+    // that briefly replaced it.
+    expect(resolveOperator("www.subarupartsdeal.com")).toBe("original_parts_giant");
+    expect(resolveOperator("hyundaipartsgiant.com")).toBe("original_parts_giant");
+  });
+
+  it("EVERY registered alternate's declared operator matches resolveOperator", () => {
+    // THE INVARIANT THAT WOULD HAVE CAUGHT THE COLLISION. `operator` was hand
+    // written on each entry, and two skins of one backend were declared as two
+    // voices while resolveOperator knew better. Deriving is not possible at the
+    // literal, so it is pinned here instead.
+    for (const make of Object.keys(SOURCE_REGISTRY)) {
+      for (const alt of getAlternateStores(make)) {
+        const host = new URL(alt.baseUrl).hostname;
+        expect(alt.operator, `${make} → ${alt.baseUrl}`).toBe(resolveOperator(host));
+      }
+    }
+  });
+
+  it("still identifies RevolutionParts first", () => {
+    expect(
+      detectStorefrontNetwork('<img src="https://cdn-static.revolutionparts.io/x.png">'),
+    ).toBe("revolutionparts");
+  });
+
+  it("does not fire on a site with one incidental path match", () => {
+    expect(detectStorefrontNetwork('<a href="/category/foo-bar.html">x</a>')).toBeNull();
+  });
+
+  it("is safe on empty input", () => {
+    expect(detectStorefrontNetwork(null)).toBeNull();
+  });
+
+  it("no two registered alternates share an operator with each other", () => {
+    // The invariant the collision violated: within a make, alternates must be
+    // distinct voices.
+    for (const make of Object.keys(SOURCE_REGISTRY)) {
+      const ops = getAlternateStores(make).map((a) => a.operator);
+      expect(new Set(ops).size, make).toBe(ops.length);
     }
   });
 });

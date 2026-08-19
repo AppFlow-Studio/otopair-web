@@ -81,6 +81,7 @@ export default function ServicePickerModal({
   initialQuery,
   onClose,
   onPick,
+  recentNames,
 }: {
   engineId: string | null;
   initialQuery: string;
@@ -104,6 +105,14 @@ export default function ServicePickerModal({
           work_type?: string | null;
         },
   ) => void;
+  /** Off-catalog lines already on this job. Surfaced as a case-insensitive
+   *  band so typing part of a name the mechanic already used ("power wi")
+   *  brings it back instead of forking a second spelling of it. */
+  recentNames?: Array<{
+    name: string;
+    system_tags?: string[];
+    work_type?: string | null;
+  }>;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const results = useQuery(api.services.listForVehicle, {
@@ -112,6 +121,13 @@ export default function ServicePickerModal({
     limit: 25,
   });
   const trimmed = query.trim();
+  const needle = trimmed.toLowerCase();
+  const matchingRecent =
+    needle.length >= 1
+      ? (recentNames ?? []).filter((r) =>
+          r.name.toLowerCase().includes(needle),
+        )
+      : [];
 
   return (
     <div
@@ -123,7 +139,12 @@ export default function ServicePickerModal({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-primary/10 bg-background shadow-xl"
+        // text-foreground is explicit because this modal is opened from dark
+        // surfaces too (the Flag Issue sheet / now-working overlay). Color
+        // inherits down the DOM tree regardless of the modal's fixed position,
+        // so without this the search input + headers inherit the dark
+        // overlay's near-white text and vanish on the white background.
+        className="flex max-h-[80vh] w-full max-w-md flex-col overflow-hidden rounded-2xl border border-primary/10 bg-background text-foreground shadow-xl"
       >
         <div className="flex items-center justify-between border-b border-primary/10 px-4 py-3">
           <div>
@@ -151,11 +172,43 @@ export default function ServicePickerModal({
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search the service catalog…"
               autoFocus
-              className="flex-1 bg-transparent text-[13px] outline-none"
+              className="flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-muted-foreground"
             />
           </div>
         </div>
         <div className="flex-1 overflow-y-auto px-2 py-2">
+          {matchingRecent.length > 0 ? (
+            <div className="mb-2 space-y-1">
+              <p className="px-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                On this job
+              </p>
+              <ul className="space-y-1">
+                {matchingRecent.map((r) => (
+                  <li key={r.name}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onPick({
+                          kind: "freeform",
+                          name: r.name,
+                          system_tags: r.system_tags,
+                          work_type: r.work_type,
+                        })
+                      }
+                      className="flex w-full items-center justify-between gap-2 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-primary/15 hover:bg-primary/5"
+                    >
+                      <span className="truncate text-[13px] font-medium text-foreground">
+                        {r.name}
+                      </span>
+                      <span className="inline-flex shrink-0 items-center rounded-md bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">
+                        Added
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           {results === undefined ? (
             <div className="flex items-center justify-center py-8 text-[12px] text-muted-foreground">
               <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />

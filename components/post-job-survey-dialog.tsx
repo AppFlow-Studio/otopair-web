@@ -22,6 +22,7 @@ import {
   Loader2,
   Lock,
   Minus,
+  Pencil,
   Plus,
   Search,
   CalendarClock,
@@ -1135,6 +1136,13 @@ function PostJobSurveyDialogBody({
       ? String(estimatedLaborMinutes)
       : ""
   );
+  // Per-service labor split for the estimate-cycle labor step. Keyed by "base"
+  // (the original quoted work) plus one entry per custom job id. The sum is
+  // written back to `actualLaborMinutes`, which stays the single money source
+  // of truth — this just lets the mechanic see and set each service's share.
+  const [laborAllocations, setLaborAllocations] = useState<
+    Record<string, string>
+  >({});
   const [actualPartsCost, setActualPartsCost] = useState("");
   const [difficultyRating, setDifficultyRating] = useState("");
   const [partsAccuracyStatus, setPartsAccuracyStatus] =
@@ -1922,6 +1930,8 @@ function PostJobSurveyDialogBody({
             baselineMileage={baselineMileage}
             actualLaborMinutes={actualLaborMinutes}
             setActualLaborMinutes={setActualLaborMinutes}
+            laborAllocations={laborAllocations}
+            setLaborAllocations={setLaborAllocations}
             parts={parts}
             setParts={setParts}
             requiresParts={requiresParts}
@@ -2188,6 +2198,10 @@ function StepContent(props: {
   baselineMileage: number | null;
   actualLaborMinutes: string;
   setActualLaborMinutes: (value: string) => void;
+  laborAllocations: Record<string, string>;
+  setLaborAllocations: React.Dispatch<
+    React.SetStateAction<Record<string, string>>
+  >;
   parts: PartRowState[];
   setParts: React.Dispatch<React.SetStateAction<PartRowState[]>>;
   requiresParts: boolean;
@@ -2685,10 +2699,13 @@ function StepContent(props: {
     case "labor":
       return (
         <LaborStep
-          minutes={props.actualLaborMinutes}
-          setMinutes={props.setActualLaborMinutes}
+          allocations={props.laborAllocations}
+          setAllocations={props.setLaborAllocations}
+          setTotalMinutes={props.setActualLaborMinutes}
           rateCents={props.laborRateCents}
           estimatedLaborMinutes={props.estimatedLaborMinutes}
+          baseLabel={props.serviceLabel}
+          customJobs={props.customJobs}
         />
       );
     case "summary":
@@ -3618,16 +3635,39 @@ function PartsStep({
             <SelectTrigger className="inline-flex w-auto items-center gap-1.5 rounded-full border border-primary/30 bg-primary/5 px-3 py-1.5 text-[12px] font-medium text-primary">
               <SelectValue />
             </SelectTrigger>
-            <SelectPopover placement="bottom start">
-              <SelectListBox shouldFocusWrap>
+            {/* Fixed, roomy width instead of the trigger's pill width — the
+                default `w-(--trigger-width)` squeezed every part name onto three
+                wrapped lines. Two-line rows (name, then OEM # · price) read far
+                cleaner than one ` · `-joined string. */}
+            <SelectPopover
+              placement="bottom start"
+              className="w-[24rem] max-w-[calc(100vw-2rem)]"
+            >
+              <SelectListBox shouldFocusWrap className="p-1.5">
                 {catalogOptions.map((o) => {
                   const unit = o.part.median_price || o.part.average_price || 0;
-                  const label = `${o.part.part_name}${
-                    o.part.oem_part_number ? ` · ${o.part.oem_part_number}` : ""
-                  }${unit > 0 ? ` · $${unit.toFixed(2)}` : ""}`;
+                  const meta = [
+                    o.part.oem_part_number || null,
+                    unit > 0 ? `$${unit.toFixed(2)}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ");
+                  const label = `${o.part.part_name}${meta ? ` · ${meta}` : ""}`;
                   return (
-                    <SelectItem key={o.key} id={o.key} textValue={label}>
-                      {label}
+                    <SelectItem
+                      key={o.key}
+                      id={o.key}
+                      textValue={label}
+                      className="flex-col items-start gap-0.5 rounded-lg px-3 py-2.5 data-[selected]:bg-transparent data-[selected]:text-foreground"
+                    >
+                      <span className="text-[13px] font-medium leading-snug text-foreground">
+                        {o.part.part_name}
+                      </span>
+                      {meta ? (
+                        <span className="text-[11px] leading-snug text-muted-foreground">
+                          {meta}
+                        </span>
+                      ) : null}
                     </SelectItem>
                   );
                 })}
@@ -4820,39 +4860,103 @@ function FoundWorkStep({
   const [complaint, setComplaint] = useState("");
   const [systemTags, setSystemTags] = useState<string[]>([]);
   const [workType, setWorkType] = useState<string | null>(null);
+  // Labor estimate for this line, in minutes. Flows through to the labor step's
+  // per-service breakdown so the quote adds this work's time to the total.
+  const [minutesInput, setMinutesInput] = useState("");
   const [pending, setPending] = useState<{
     kind: "service" | "freeform";
     name: string;
     id?: string;
   } | null>(null);
+  // When set, the form below is editing this existing line rather than adding
+  // a new one — commit() branches to the update mutation.
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   const addMidJob = useMutation(api.customJobs.addMidJobCustomService);
+  const updateMidJob = useMutation(api.customJobs.updateMidJobCustomService);
+  const removeMidJob = useMutation(api.customJobs.removeMidJobCustomService);
   const existing = useQuery(
     api.customJobs.listForBooking,
     bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
   );
   const midJobLines = (existing ?? []).filter((j) => j.name);
 
+  function resetForm() {
+    setPending(null);
+    setEditingId(null);
+    setComplaint("");
+    setSystemTags([]);
+    setWorkType(null);
+    setMinutesInput("");
+  }
+
+  function startEdit(line: (typeof midJobLines)[number]) {
+    setPicking(false);
+    setEditingId(String(line._id));
+    setPending({ kind: "freeform", name: line.name });
+    setComplaint(line.complaint ?? "");
+    setSystemTags(line.system_tags ?? []);
+    setWorkType(line.work_type ?? null);
+    setMinutesInput(
+      typeof line.estimated_minutes === "number" && line.estimated_minutes > 0
+        ? String(line.estimated_minutes)
+        : "",
+    );
+  }
+
+  async function remove(line: (typeof midJobLines)[number]) {
+    if (!bookingId) return;
+    setBusy(true);
+    try {
+      await removeMidJob({
+        bookingId: bookingId as Id<"bookings">,
+        customJobId: line._id as Id<"custom_jobs">,
+      });
+      if (editingId === String(line._id)) resetForm();
+    } catch (err: unknown) {
+      onToast?.(
+        err instanceof Error ? err.message : "Could not remove that work.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function commit() {
     if (!pending || !bookingId) return;
     setBusy(true);
+    const minutes = Number(minutesInput);
+    const estimatedMinutes =
+      minutesInput.trim() !== "" && Number.isFinite(minutes) && minutes > 0
+        ? minutes
+        : undefined;
     try {
-      // Catalog picks land on the booking's service_ids through the normal
-      // approval payload; only off-catalog lines need the custom-job record.
-      await addMidJob({
-        bookingId: bookingId as Id<"bookings">,
-        name: pending.name,
-        complaint: complaint.trim() || undefined,
-        systemTags,
-        workType: workType ?? undefined,
-      });
-      setPending(null);
-      setComplaint("");
-      setSystemTags([]);
-      setWorkType(null);
+      if (editingId) {
+        await updateMidJob({
+          bookingId: bookingId as Id<"bookings">,
+          customJobId: editingId as Id<"custom_jobs">,
+          name: pending.name,
+          complaint: complaint.trim() || undefined,
+          systemTags,
+          workType: workType ?? undefined,
+          estimatedMinutes,
+        });
+      } else {
+        // Catalog picks land on the booking's service_ids through the normal
+        // approval payload; only off-catalog lines need the custom-job record.
+        await addMidJob({
+          bookingId: bookingId as Id<"bookings">,
+          name: pending.name,
+          complaint: complaint.trim() || undefined,
+          systemTags,
+          workType: workType ?? undefined,
+          estimatedMinutes,
+        });
+      }
+      resetForm();
     } catch (err: unknown) {
       onToast?.(
-        err instanceof Error ? err.message : "Could not add that work.",
+        err instanceof Error ? err.message : "Could not save that work.",
       );
     } finally {
       setBusy(false);
@@ -4866,31 +4970,67 @@ function FoundWorkStep({
       hint="Naming it keeps it on the customer's service history. Pricing comes next."
     >
       <div className="space-y-3">
-        {midJobLines.length > 0 ? (
+        {midJobLines.some((line) => String(line._id) !== editingId) ? (
           <ul className="space-y-1.5">
-            {midJobLines.map((line) => (
-              <li
-                key={String(line._id)}
-                className="rounded-lg border border-primary/15 bg-primary/5 px-3 py-2"
-              >
-                <p className="text-[13px] font-semibold text-foreground">
-                  {line.name}
-                </p>
-                <p className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.06em] text-primary/70">
-                  {describeCustomJobTaxonomy(line.system_tags, line.work_type)}
-                </p>
-                {line.complaint ? (
-                  <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
-                    {line.complaint}
-                  </p>
-                ) : null}
-              </li>
-            ))}
+            {midJobLines
+              .filter((line) => String(line._id) !== editingId)
+              .map((line) => (
+                <li
+                  key={String(line._id)}
+                  className="flex items-start gap-2 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[13px] font-semibold text-foreground">
+                      {line.name}
+                    </p>
+                    <p className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.06em] text-primary/70">
+                      {describeCustomJobTaxonomy(
+                        line.system_tags,
+                        line.work_type,
+                      )}
+                      {typeof line.estimated_minutes === "number" &&
+                      line.estimated_minutes > 0
+                        ? ` · ${line.estimated_minutes} min`
+                        : ""}
+                    </p>
+                    {line.complaint ? (
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">
+                        {line.complaint}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => startEdit(line)}
+                      aria-label={`Edit ${line.name}`}
+                      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary disabled:opacity-40"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => remove(line)}
+                      aria-label={`Remove ${line.name}`}
+                      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </li>
+              ))}
           </ul>
         ) : null}
 
         {pending ? (
           <div className="rounded-xl border border-primary/20 bg-background p-3">
+            {editingId ? (
+              <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-primary/70">
+                Editing
+              </p>
+            ) : null}
             <p className="text-[13px] font-semibold text-foreground">
               {pending.name}
             </p>
@@ -4914,15 +5054,32 @@ function FoundWorkStep({
                 onWorkTypeChange={setWorkType}
               />
             </div>
+            {/* Labor time for this line. Optional here — the mechanic can also
+                set it on the labor step — but capturing it at the keyboard is
+                when they best know how long it took. */}
+            <div className="mt-2.5 flex items-center justify-between gap-3">
+              <label className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">
+                Labor time
+                <span className="ml-1 text-muted-foreground/60">· optional</span>
+              </label>
+              <div className="flex items-center rounded-lg border border-primary/15 bg-background pr-3 focus-within:border-primary">
+                <input
+                  value={minutesInput}
+                  onChange={(event) => {
+                    const raw = event.target.value;
+                    if (raw === "" || /^\d{0,4}$/.test(raw)) setMinutesInput(raw);
+                  }}
+                  inputMode="numeric"
+                  placeholder="0"
+                  className="w-16 bg-transparent px-3 py-1.5 text-right text-[13px] font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
+                />
+                <span className="text-[11px] text-muted-foreground">min</span>
+              </div>
+            </div>
             <div className="mt-2 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setPending(null);
-                  setComplaint("");
-                  setSystemTags([]);
-                  setWorkType(null);
-                }}
+                onClick={resetForm}
                 className="px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
               >
                 Cancel
@@ -4936,7 +5093,7 @@ function FoundWorkStep({
                 className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground disabled:opacity-40"
               >
                 {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                Add to job
+                {editingId ? "Save changes" : "Add to job"}
               </button>
             </div>
           </div>
@@ -4963,6 +5120,11 @@ function FoundWorkStep({
         <ServicePickerModal
           engineId={engineId}
           initialQuery=""
+          recentNames={midJobLines.map((l) => ({
+            name: l.name,
+            system_tags: l.system_tags,
+            work_type: l.work_type,
+          }))}
           onClose={() => setPicking(false)}
           onPick={(picked) => {
             setPicking(false);
@@ -4994,6 +5156,7 @@ type CustomJobRow = {
     line_total_cents?: number;
   }>;
   quoted_parts_cents?: number | null;
+  estimated_minutes?: number | null;
   complaint: string | null;
   resolution: string | null;
   resolved_complaint: boolean | null;
@@ -5705,60 +5868,154 @@ function ApprovalStatusPanel({
 }
 
 /**
- * Labor step for estimate cycles. Mechanic enters labor minutes; the
- * displayed labor cost is `(minutes/60) × shop labor_rate`. The same rate
- * is sent to the submit mutation so the server's recomputation lands on
- * the same number the mechanic just saw.
+ * Labor step for estimate cycles.
+ *
+ * One row per piece of work — the original quoted service plus every custom
+ * line the mechanic found — each with its own minutes. The displayed labor
+ * cost is `(Σ minutes / 60) × shop labor_rate`, and that sum is written back
+ * to the single `actualLaborMinutes` money field the submit mutation reads, so
+ * the server's recomputation lands on the same number the mechanic just saw.
+ *
+ * The per-service split is only a lens on that total: it lets the mechanic add
+ * the extra work's time on top of the original quote instead of re-typing one
+ * lump figure, and shows the breakdown that makes the number legible.
  */
 function LaborStep({
-  minutes,
-  setMinutes,
+  allocations,
+  setAllocations,
+  setTotalMinutes,
   rateCents,
   estimatedLaborMinutes,
+  baseLabel,
+  customJobs,
 }: {
-  minutes: string;
-  setMinutes: (value: string) => void;
+  allocations: Record<string, string>;
+  setAllocations: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  setTotalMinutes: (value: string) => void;
   rateCents: number;
   estimatedLaborMinutes: number | null;
+  baseLabel: string | null;
+  customJobs: CustomJobRow[] | undefined;
 }) {
-  const minutesNum = Number(minutes) || 0;
-  const hours = minutesNum > 0 ? minutesNum / 60 : 0;
-  const laborDollars = hours > 0 ? (hours * rateCents) / 100 : 0;
+  const lines = useMemo(() => {
+    const rows: Array<{ key: string; label: string; def: number }> = [
+      {
+        key: "base",
+        label: baseLabel?.trim() || "Original service",
+        def:
+          typeof estimatedLaborMinutes === "number" && estimatedLaborMinutes > 0
+            ? estimatedLaborMinutes
+            : 0,
+      },
+    ];
+    for (const job of customJobs ?? []) {
+      rows.push({
+        key: String(job._id),
+        label: job.name,
+        def:
+          typeof job.estimated_minutes === "number" && job.estimated_minutes > 0
+            ? job.estimated_minutes
+            : 0,
+      });
+    }
+    return rows;
+  }, [baseLabel, estimatedLaborMinutes, customJobs]);
+
+  const sumFor = (alloc: Record<string, string>) =>
+    lines.reduce((sum, line) => {
+      const raw = alloc[line.key];
+      const value = raw === undefined ? line.def : Number(raw) || 0;
+      return sum + (value > 0 ? value : 0);
+    }, 0);
+
+  // Seed any line without an allocation yet — first visit, or a line added
+  // since — with its estimate, and keep the money total in step. Never
+  // overwrites a value the mechanic already typed.
+  useEffect(() => {
+    const missing = lines.filter((line) => allocations[line.key] === undefined);
+    if (missing.length === 0) return;
+    const next = { ...allocations };
+    for (const line of missing) next[line.key] = line.def > 0 ? String(line.def) : "";
+    setAllocations(next);
+    setTotalMinutes(String(sumFor(next)));
+    // sumFor closes over `lines`, which is in the dep list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lines, allocations, setAllocations, setTotalMinutes]);
+
+  const valueFor = (line: { key: string; def: number }) => {
+    const raw = allocations[line.key];
+    if (raw !== undefined) return raw;
+    return line.def > 0 ? String(line.def) : "";
+  };
+
+  function updateLine(key: string, raw: string) {
+    if (raw !== "" && !/^\d{0,4}$/.test(raw)) return;
+    const next = { ...allocations, [key]: raw };
+    setAllocations(next);
+    setTotalMinutes(String(sumFor(next)));
+  }
+
+  const totalMinutes = sumFor(allocations);
+  const laborDollars = totalMinutes > 0 ? (totalMinutes / 60) * (rateCents / 100) : 0;
   const ratePerHourDollars = (rateCents / 100).toFixed(2);
+  const multiline = lines.length > 1;
+
   return (
     <QuestionScreen
       eyebrow="Labor"
       question="How long will this take?"
-      hint={`Your shop's labor rate is $${ratePerHourDollars}/hr — we'll calculate from the minutes you enter.`}
+      hint={
+        multiline
+          ? `Your shop's labor rate is $${ratePerHourDollars}/hr — set the time for each and we'll add it up.`
+          : `Your shop's labor rate is $${ratePerHourDollars}/hr — we'll calculate from the minutes you enter.`
+      }
     >
-      <div className="mx-auto flex w-full max-w-xs flex-col items-center gap-3">
-        <div className="flex items-baseline gap-2">
-          <input
-            value={minutes}
-            onChange={(e) => {
-              const raw = e.target.value;
-              if (raw === "" || /^\d{0,4}$/.test(raw)) setMinutes(raw);
-            }}
-            inputMode="numeric"
-            placeholder={
-              typeof estimatedLaborMinutes === "number" && estimatedLaborMinutes > 0
-                ? String(estimatedLaborMinutes)
-                : "0"
-            }
-            className="h-16 w-28 rounded-xl border border-primary/15 bg-background text-center text-[36px] font-semibold tabular-nums outline-none focus:border-primary"
-          />
-          <span className="text-[13px] text-muted-foreground">minutes</span>
+      <div className="mx-auto w-full max-w-md space-y-3">
+        <div className="space-y-2">
+          {lines.map((line) => {
+            const mins = Number(valueFor(line)) || 0;
+            const lineDollars =
+              mins > 0 ? (mins / 60) * (rateCents / 100) : 0;
+            return (
+              <div
+                key={line.key}
+                className="flex items-center justify-between gap-3 rounded-xl border border-primary/10 bg-card px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-[13px] font-medium text-foreground">
+                    {line.label}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {line.def > 0 ? `Est. ${line.def} min · ` : ""}$
+                    {lineDollars.toFixed(2)}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center rounded-lg border border-primary/15 bg-background pr-2.5 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
+                  <input
+                    value={valueFor(line)}
+                    onChange={(e) => updateLine(line.key, e.target.value)}
+                    inputMode="numeric"
+                    placeholder="0"
+                    aria-label={`Labor minutes for ${line.label}`}
+                    className="w-16 bg-transparent px-2.5 py-2 text-right text-[16px] font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
+                  />
+                  <span className="text-[11px] text-muted-foreground">min</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
-        {typeof estimatedLaborMinutes === "number" && estimatedLaborMinutes > 0 ? (
-          <p className="text-[11px] text-muted-foreground">
-            Quoted estimate: {estimatedLaborMinutes} minutes
-          </p>
-        ) : null}
-        <div className="mt-2 flex items-baseline justify-center gap-1.5">
-          <span className="text-[11px] uppercase tracking-[0.08em] text-muted-foreground">
-            Labor cost
-          </span>
-          <span className="text-[18px] font-semibold tabular-nums">
+
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              {multiline ? "Total labor" : "Labor cost"}
+            </p>
+            <p className="mt-0.5 text-[12px] text-muted-foreground tabular-nums">
+              {totalMinutes} min · ${ratePerHourDollars}/hr
+            </p>
+          </div>
+          <span className="text-[22px] font-semibold tabular-nums">
             ${laborDollars.toFixed(2)}
           </span>
         </div>

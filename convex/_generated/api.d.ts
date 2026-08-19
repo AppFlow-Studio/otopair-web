@@ -64,6 +64,7 @@ import type * as devOnly_auditPartRejections from "../devOnly/auditPartRejection
 import type * as devOnly_auditRunFlow from "../devOnly/auditRunFlow.js";
 import type * as devOnly_backfillBrakeSystem from "../devOnly/backfillBrakeSystem.js";
 import type * as devOnly_backfillSettlement from "../devOnly/backfillSettlement.js";
+import type * as devOnly_batchCandidates from "../devOnly/batchCandidates.js";
 import type * as devOnly_canaryRun from "../devOnly/canaryRun.js";
 import type * as devOnly_claimCensus from "../devOnly/claimCensus.js";
 import type * as devOnly_dataFixes from "../devOnly/dataFixes.js";
@@ -94,6 +95,7 @@ import type * as devOnly_repriceJsonProbe from "../devOnly/repriceJsonProbe.js";
 import type * as devOnly_resetEvalFixture from "../devOnly/resetEvalFixture.js";
 import type * as devOnly_rockautoCatalogProbe from "../devOnly/rockautoCatalogProbe.js";
 import type * as devOnly_rockautoProbe from "../devOnly/rockautoProbe.js";
+import type * as devOnly_rockautoSpecProbe from "../devOnly/rockautoSpecProbe.js";
 import type * as devOnly_rotorManualPeek from "../devOnly/rotorManualPeek.js";
 import type * as devOnly_rotorManualProbe from "../devOnly/rotorManualProbe.js";
 import type * as devOnly_round3IdentityProbe from "../devOnly/round3IdentityProbe.js";
@@ -654,6 +656,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/auditRunFlow": typeof devOnly_auditRunFlow;
   "devOnly/backfillBrakeSystem": typeof devOnly_backfillBrakeSystem;
   "devOnly/backfillSettlement": typeof devOnly_backfillSettlement;
+  "devOnly/batchCandidates": typeof devOnly_batchCandidates;
   "devOnly/canaryRun": typeof devOnly_canaryRun;
   "devOnly/claimCensus": typeof devOnly_claimCensus;
   "devOnly/dataFixes": typeof devOnly_dataFixes;
@@ -684,6 +687,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/resetEvalFixture": typeof devOnly_resetEvalFixture;
   "devOnly/rockautoCatalogProbe": typeof devOnly_rockautoCatalogProbe;
   "devOnly/rockautoProbe": typeof devOnly_rockautoProbe;
+  "devOnly/rockautoSpecProbe": typeof devOnly_rockautoSpecProbe;
   "devOnly/rotorManualPeek": typeof devOnly_rotorManualPeek;
   "devOnly/rotorManualProbe": typeof devOnly_rotorManualProbe;
   "devOnly/round3IdentityProbe": typeof devOnly_round3IdentityProbe;

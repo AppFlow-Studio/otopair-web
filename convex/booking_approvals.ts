@@ -727,6 +727,65 @@ export const applyApprovalDecision = mutation({
   },
 });
 
+/**
+ * Records an approved pre/mid-job over-range estimate and parks the booking in
+ * `reauth_required` so the customer confirms the new hold on their CHOSEN
+ * payment method next. Unlike `applyApprovalDecision`, it does NOT schedule the
+ * silent `adjustAuthorization` — the caller (`approveAndAuthorizeHold`) places
+ * the hold on-session with the picked method, so that choice is always
+ * authoritative (an async increment could otherwise land on the original card
+ * first). Internal: the action authenticates and passes the resolved user id.
+ * Post-job is a final capture, not a hold, so it stays on `applyApprovalDecision`.
+ */
+export const _recordApprovalApproved = internalMutation({
+  args: { bookingId: v.id("bookings"), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const booking: any = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    if (String(booking.user_id) !== String(args.userId)) {
+      throw new Error("Not your booking.");
+    }
+
+    const candidates = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+    const open = candidates.find((r: any) => r.decision == null);
+    if (!open) throw new Error("No estimate is waiting for your decision.");
+
+    const cycle = open.cycle as "pre_job" | "mid_job" | "post_job";
+    if (cycle !== "pre_job" && cycle !== "mid_job") {
+      throw new Error("This estimate can't be authorized as a hold.");
+    }
+
+    const now = Date.now();
+    const newCeiling = open.mechanic_set_price_cents;
+    await ctx.db.patch(open._id, {
+      decision: "approved",
+      decided_at_ms: now,
+      decided_by_user_id: args.userId,
+      ceiling_after_decision_cents: newCeiling,
+    });
+    await ctx.db.patch(args.bookingId, {
+      // Customer confirms the new hold on their chosen method next (the caller
+      // drives an on-session PI), so we skip the silent auto-adjust.
+      payment_approval_state: "reauth_required",
+      running_approved_ceiling_cents: newCeiling,
+      estimate_approved_at_ms: now,
+      estimate_decided_by_user_id: args.userId,
+      sla_expires_at_ms: undefined,
+      total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
+      parts_cost: (open.parts_subtotal_cents ?? 0) / 100,
+      labor_cost: (open.labor_cents ?? 0) / 100,
+      updated_at: now,
+    });
+    return { ceilingCents: newCeiling, cycle };
+  },
+});
+
 // ─────────────────────────────────────────────────────────────────────────
 // Query: open approval for a booking (customer side)
 // ─────────────────────────────────────────────────────────────────────────

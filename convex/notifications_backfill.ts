@@ -34,10 +34,13 @@ import { internal } from "./_generated/api";
 const PAGE = 500;
 
 // Delivery/lifecycle states that mean "no longer an open feed item" under the
-// pre-split model. Everything else (pending, dispatching, unknown) stays open.
+// pre-split model (feeds showed only status=="pending"). Everything else
+// (pending, dispatching, unknown) stays open. `superseded` closes a cancelled
+// delivery (e.g. a customer-late SMS the customer pre-empted by acknowledging).
 const TERMINAL_STATUSES = new Set([
   "dispatched",
   "resolved",
+  "superseded",
   "failed",
   "no_push_token",
 ]);

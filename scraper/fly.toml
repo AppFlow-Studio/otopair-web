@@ -22,8 +22,14 @@ primary_region = 'iad'
     method = 'GET'
     path = '/health'
 
+# Headless Chromium needs real headroom. The Dockerfile documented ">=1GB for
+# the browser tier" and this was set to exactly that minimum, which leaves the
+# stealth tier one heavy page away from an OOM kill — a 502 indistinguishable
+# from the missing-binary 502 that was actually happening. Machines auto-stop
+# at zero traffic (min_machines_running = 0), so the idle cost of the headroom
+# is nil.
 [[vm]]
-  memory = '1gb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 1024
+  memory_mb = 2048

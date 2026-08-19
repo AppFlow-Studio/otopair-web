@@ -434,7 +434,16 @@ function oemPartsOnlineConfig(
 const GM_ALTERNATES: readonly AlternateStore[] = [
   {
     baseUrl: "https://www.gmpartsgiant.com",
-    operator: "gmpartsgiant.com",
+    // NOT "gmpartsgiant.com" — and the correction is worth recording. This was
+    // first written as its own operator, alongside toyotapartsdeal.com as a
+    // second. Probed side by side Aug 2026 the two serve byte-identical URL
+    // schemes: one backend, per-make skins. The ledger already knew — its
+    // OPERATOR_TABLE has carried `/(^|\.)[a-z0-9-]*parts(giant|deal)\.com$/`
+    // all along — so `resolveOperator` returned the right answer while this
+    // hand-written field claimed otherwise. The invariant test in
+    // tests/operatorDiversity.test.ts now pins every entry to resolveOperator
+    // so a declared operator can never drift from the real one again.
+    operator: "original_parts_giant",
     // VALIDATED FOR PRICE ONLY — walked end to end Aug 2026.
     //
     // What it does have: no RP markers anywhere, its own URL scheme
@@ -468,7 +477,10 @@ const GM_ALTERNATES: readonly AlternateStore[] = [
 const TOYOTA_ALTERNATES: readonly AlternateStore[] = [
   {
     baseUrl: "https://parts.toyota.com",
-    operator: "parts.toyota.com",
+    // `toyota.com`, not `parts.toyota.com` — resolveOperator folds to the
+    // REGISTRABLE domain, so a subdomain is never its own voice. Caught by the
+    // invariant test rather than by review.
+    operator: "toyota.com",
     capabilities: ["price"],
     validated: false,
     note:
@@ -479,7 +491,8 @@ const TOYOTA_ALTERNATES: readonly AlternateStore[] = [
   },
   {
     baseUrl: "https://www.toyotapartsdeal.com",
-    operator: "toyotapartsdeal.com",
+    // Same backend as gmpartsgiant.com — see the note there.
+    operator: "original_parts_giant",
     capabilities: ["price"],
     validated: false,
     note:
@@ -630,6 +643,63 @@ export function looksLikeRevolutionParts(html: string | null | undefined): boole
     /revolutionparts\.(?:io|com)/i.test(html) ||
     /cdn-(?:static|product-images|illustrations)\.revolutionparts/i.test(html)
   );
+}
+
+/**
+ * Known multi-brand storefront NETWORKS, fingerprinted by their URL scheme.
+ *
+ * WHY THIS IS NOT JUST THE RP CHECK. `looksLikeRevolutionParts` knows exactly
+ * one platform, and that turned out to be the shape of the mistake rather than
+ * the fix for it: gmpartsgiant.com and toyotapartsdeal.com were admitted as two
+ * independent operators, and they are one. Probed side by side Aug 2026 they
+ * serve byte-identical schemes — `/online/login`, `/online/track/order`,
+ * `/service/{make}-help_center.html`, `/{make}-parts.html`,
+ * `/category/{make}-*.html`, `/oem-{make}-{parttype}.html`,
+ * `/parts/{brand}-{name}-{oem}.html` — under the same title template and the
+ * same JSON-LD shape. A per-make skin of one backend, exactly like RP.
+ *
+ * A skin admitted as a distinct operator does real damage: ledger confidence is
+ * a function of DISTINCT OPERATORS, so two skins agreeing would score as
+ * cross-operator corroboration for one catalogue agreeing with itself, and
+ * `auditOperatorDiversity` would report diversity that does not exist.
+ *
+ * Fingerprints are URL SCHEMES rather than branding because branding is the one
+ * thing a skin changes. Each needs at least two distinct scheme hits, so a site
+ * that merely happens to have `/account` cannot match.
+ */
+const STOREFRONT_NETWORKS: ReadonlyArray<{
+  operator: string;
+  patterns: readonly RegExp[];
+}> = [
+  {
+    // The "PartsDeal / PartsGiant" family. Operator id matches the ledger's
+    // existing OPERATOR_TABLE rule so a page-derived verdict and a
+    // hostname-derived one agree.
+    operator: "original_parts_giant",
+    patterns: [
+      /\/online\/track\/order/i,
+      /\/service\/[a-z-]+-help_center\.html/i,
+      /\/category\/[a-z-]+-[a-z_]+\.html/i,
+      /\/oem-[a-z-]+-[a-z_]+\.html/i,
+    ],
+  },
+];
+
+/**
+ * Which known network a storefront belongs to, from its own HTML, or null.
+ *
+ * Used to CHECK an `AlternateStore.operator` claim against the page rather than
+ * trusting whoever added the entry — the failure this exists to prevent is
+ * silent and looks like success.
+ */
+export function detectStorefrontNetwork(html: string | null | undefined): string | null {
+  if (!html) return null;
+  if (looksLikeRevolutionParts(html)) return "revolutionparts";
+  for (const net of STOREFRONT_NETWORKS) {
+    const hits = net.patterns.filter((re) => re.test(html)).length;
+    if (hits >= 2) return net.operator;
+  }
+  return null;
 }
 
 export type PartsStore = {

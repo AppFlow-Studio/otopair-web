@@ -802,6 +802,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       api.job_actuals.getPostjobReportForBooking,
       job ? { bookingId: job._id } : "skip"
     );
+    // A clock-stopping blocker pauses the job. The step indicator otherwise
+    // keeps saying "Active job · underway" while the mechanic has it stopped.
+    const jobBlockers = useQuery(
+      api.jobBlockers.listForBooking,
+      job ? { bookingId: job._id } : "skip"
+    );
+    const jobPaused = Boolean(
+      jobBlockers?.blockers.some(
+        (b) => b.resolved_at == null && b.stops_clock
+      )
+    );
     const activityLog = useQuery(
       (api as any).booking_activity.getBookingActivityLog,
       job ? { bookingId: job._id } : "skip"
@@ -1968,6 +1979,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   currentStep={getJobStep(job.status)}
                   status={job.status}
                   compact={isStepIndicatorCompact}
+                  paused={jobPaused}
                   className="border-0 bg-transparent px-0 py-0"
                 />
                 {actionBar}

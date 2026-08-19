@@ -99,10 +99,37 @@ type Cluster = {
   } | null
 }
 
+type RecCluster = {
+  match_key: string
+  name: string
+  occurrences: number
+  distinct_shops: number
+  distinct_vehicles: number
+  trend: number
+  recent_count: number
+  open_count: number
+  driver_visible: number
+  urgency_soon: number
+  urgency_3mo: number
+  urgency_next: number
+  sample_reasons: string[]
+  last_seen_at: number
+  canonical_suggestion: {
+    service_id: string
+    service_name: string
+    confidence: string
+    score: number
+  } | null
+}
+
 export const TabCustomJobs = () => {
   const session = useContext(DirectorSessionCtx)
   const token = session?.token ?? ''
   const view = useQuery(api.directorCustomJobs.patternView, token ? { token } : 'skip')
+  const recView = useQuery(
+    api.directorCustomJobs.recommendedPatternView,
+    token ? { token } : 'skip',
+  )
   const linkAlias = useMutation(api.serviceMatch.linkAlias)
 
   const [detailKey, setDetailKey] = useState<string | null>(null)
@@ -120,6 +147,42 @@ export const TabCustomJobs = () => {
     api.directorCustomJobs.clusterParts,
     token && detailKey ? { token, matchKey: detailKey } : 'skip',
   )
+
+  // Recommended band: detail drawer (where + who) and the promote action.
+  const [recDetailKey, setRecDetailKey] = useState<string | null>(null)
+  const [promoting, setPromoting] = useState<RecCluster | null>(null)
+  const [promoteBusy, setPromoteBusy] = useState(false)
+  const [promoteError, setPromoteError] = useState('')
+  const [promoteDone, setPromoteDone] = useState<{ slug: string } | null>(null)
+  const promoteCluster = useMutation(
+    api.directorCustomJobs.promoteRecommendationCluster,
+  )
+  const recDetail = useQuery(
+    api.directorCustomJobs.recommendedClusterDetail,
+    token && recDetailKey ? { token, matchKey: recDetailKey } : 'skip',
+  )
+  const recDetailCluster = useMemo(
+    () => recView?.clusters.find((c: RecCluster) => c.match_key === recDetailKey) ?? null,
+    [recView, recDetailKey],
+  )
+
+  async function confirmPromote() {
+    if (!promoting) return
+    setPromoteBusy(true)
+    setPromoteError('')
+    try {
+      const res = await promoteCluster({
+        token,
+        name: promoting.name,
+        matchKey: promoting.match_key,
+      })
+      setPromoteDone({ slug: res.slug })
+    } catch (err: unknown) {
+      setPromoteError(err instanceof Error ? err.message : 'Could not promote that.')
+    } finally {
+      setPromoteBusy(false)
+    }
+  }
 
   const totals = view?.totals
   const exposure = totals?.exposed_vehicles ?? 0
@@ -199,6 +262,11 @@ export const TabCustomJobs = () => {
           <StatCard
             label="Distinct clusters"
             value={fmtNumber(totals?.clusters ?? 0)}
+          />
+          <StatCard
+            label="Recommended, unmodelled"
+            value={fmtNumber(recView?.totals?.clusters ?? 0)}
+            hint="Names shops recommend that we don't offer"
           />
         </div>
 
@@ -401,6 +469,105 @@ export const TabCustomJobs = () => {
                       )}
                     </td>
                     <td style={tableStyles.td}>{fmtDate(c.last_seen_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </Card>
+
+        {/* ── Band 4: recommended, not yet modelled ──────────────────────────
+            patternView's forward-looking twin. Band 3 is work shops already DID
+            off-catalog; this is work they keep RECOMMENDING with no catalog
+            service behind it — the "Tail Light Replacement" a mechanic types
+            into "Something for next time". Same breadth-first ranking. */}
+        <Card padded={false}>
+          <div style={{ padding: '14px 16px', borderBottom: '1px solid var(--slate-200)' }}>
+            <MicroH>What shops keep recommending that we don&apos;t model</MicroH>
+            <p style={{ margin: '6px 0 0', fontSize: 12, color: 'var(--slate-500)', maxWidth: '72ch', lineHeight: 1.5 }}>
+              Forward-looking demand: freeform &ldquo;something for next time&rdquo;
+              recommendations with no catalog service behind them. Same signal as
+              above — breadth across shops, not raw volume — but for work drivers
+              have been told they&apos;ll need, not work already done.
+            </p>
+          </div>
+          {!recView ? (
+            <div style={{ padding: 24, fontSize: 13, color: 'var(--slate-500)' }}>Loading…</div>
+          ) : recView.clusters.length === 0 ? (
+            <div style={{ padding: 24, fontSize: 13, color: 'var(--slate-500)' }}>
+              No off-catalog recommendations recorded yet.
+            </div>
+          ) : (
+            <table style={tableStyles.table}>
+              <thead>
+                <tr>
+                  <th style={tableStyles.th}>Recommended work</th>
+                  <th style={tableStyles.th}>Shops</th>
+                  <th style={tableStyles.th}>Recs</th>
+                  <th style={tableStyles.th}>Cars</th>
+                  <th style={tableStyles.th}>Open</th>
+                  <th style={tableStyles.th}>Urgency</th>
+                  <th style={tableStyles.th}>90d trend</th>
+                  <th style={tableStyles.th}>Last seen</th>
+                  <th style={tableStyles.th} />
+                </tr>
+              </thead>
+              <tbody>
+                {recView.clusters.map((c: RecCluster) => (
+                  <tr key={c.match_key}>
+                    <td style={tableStyles.td}>
+                      <button
+                        onClick={() => setRecDetailKey(c.match_key)}
+                        style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', font: 'inherit', color: 'var(--slate-900)', fontWeight: 600, textAlign: 'left' }}
+                      >
+                        {c.name}
+                      </button>
+                      {c.canonical_suggestion ? (
+                        <span style={{ marginLeft: 6 }}>
+                          <Badge tone={c.canonical_suggestion.confidence === 'exact' ? 'red' : 'yellow'}>
+                            looks like {c.canonical_suggestion.service_name}
+                          </Badge>
+                        </span>
+                      ) : null}
+                      {c.sample_reasons[0] ? (
+                        <div style={{ fontSize: 11, color: 'var(--slate-500)', marginTop: 3, maxWidth: '44ch', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {c.sample_reasons[0]}
+                        </div>
+                      ) : null}
+                    </td>
+                    <td style={{ ...tableStyles.td, fontWeight: 600 }}>{c.distinct_shops}</td>
+                    <td style={tableStyles.td}>{c.occurrences}</td>
+                    <td style={tableStyles.td}>{c.distinct_vehicles}</td>
+                    <td style={tableStyles.td}>{c.open_count}</td>
+                    <td style={tableStyles.td}>
+                      <span style={{ fontSize: 11, color: 'var(--slate-500)' }}>
+                        {[
+                          c.urgency_soon ? `${c.urgency_soon} soon` : null,
+                          c.urgency_3mo ? `${c.urgency_3mo} few-mo` : null,
+                          c.urgency_next ? `${c.urgency_next} next` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ') || '—'}
+                      </span>
+                    </td>
+                    <td style={tableStyles.td}><TrendPill trend={c.trend} /></td>
+                    <td style={tableStyles.td}>{fmtDate(c.last_seen_at)}</td>
+                    <td style={tableStyles.td}>
+                      {writable ? (
+                        c.canonical_suggestion?.confidence === 'exact' ? (
+                          // Already a service we offer — promoting would create a
+                          // duplicate. The name-level "looks like" badge says so;
+                          // the fix is aliasing, not a new service.
+                          <span style={{ fontSize: 11, color: 'var(--slate-400)' }}>
+                            exists
+                          </span>
+                        ) : (
+                          <Button size="sm" variant="secondary" onClick={() => { setPromoting(c); setPromoteError(''); setPromoteDone(null) }}>
+                            Promote
+                          </Button>
+                        )
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -650,6 +817,144 @@ export const TabCustomJobs = () => {
                 {busy ? 'Linking…' : 'Link alias'}
               </Button>
             </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {/* Recommended-cluster detail — where and who recommends it. */}
+      {recDetailKey ? (
+        <Modal
+          open
+          width={1000}
+          onClose={() => setRecDetailKey(null)}
+          eyebrow={
+            <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--slate-500)' }}>
+              Recommended · where &amp; who
+            </span>
+          }
+          title={recDetailCluster?.name ?? 'Recommended work'}
+        >
+          <div style={{ display: 'grid', gap: 16, maxHeight: '72vh', overflowY: 'auto' }}>
+            {recDetailCluster ? (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 1, background: 'var(--slate-200)', border: '1px solid var(--slate-200)', borderRadius: 8, overflow: 'hidden' }}>
+                {[
+                  { k: 'Shops', v: String(recDetailCluster.distinct_shops), n: 'breadth' },
+                  { k: 'Recs', v: String(recDetailCluster.occurrences), n: 'total flagged' },
+                  { k: 'Cars', v: String(recDetailCluster.distinct_vehicles), n: 'distinct VINs' },
+                  { k: 'Open', v: String(recDetailCluster.open_count), n: 'still live' },
+                  { k: 'Shown driver', v: String(recDetailCluster.driver_visible), n: 'of recs' },
+                ].map((cell) => (
+                  <div key={cell.k} style={{ background: '#fff', padding: '10px 12px' }}>
+                    <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--slate-400)' }}>{cell.k}</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, letterSpacing: '-0.02em', marginTop: 2, fontVariantNumeric: 'tabular-nums' }}>{cell.v}</div>
+                    <div style={{ fontSize: 11, color: 'var(--slate-500)', marginTop: 1 }}>{cell.n}</div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            <div>
+              <MicroH>Every recommendation in this cluster</MicroH>
+              {recDetail === undefined ? (
+                <div style={{ fontSize: 13, color: 'var(--slate-500)', marginTop: 8 }}>Loading…</div>
+              ) : recDetail.length === 0 ? (
+                <div style={{ fontSize: 13, color: 'var(--slate-500)', marginTop: 8 }}>Nothing here.</div>
+              ) : (
+                <table style={tableStyles.table}>
+                  <thead>
+                    <tr>
+                      <th style={tableStyles.th}>Shop</th>
+                      <th style={tableStyles.th}>Mechanic</th>
+                      <th style={tableStyles.th}>Vehicle</th>
+                      <th style={tableStyles.th}>Urgency</th>
+                      <th style={tableStyles.th}>Why</th>
+                      <th style={tableStyles.th}>Shown</th>
+                      <th style={tableStyles.th}>Status</th>
+                      <th style={tableStyles.th}>When</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recDetail.map((r: any) => (
+                      <tr key={String(r._id)}>
+                        <td style={{ ...tableStyles.td, fontWeight: 600 }}>{r.shop_name ?? '—'}</td>
+                        <td style={tableStyles.td}>{r.mechanic_name ?? '—'}</td>
+                        <td style={tableStyles.td}>
+                          {r.vehicle_year ? `${r.vehicle_year} · ` : ''}
+                          <span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: 'var(--slate-500)' }}>{r.vehicle_vin}</span>
+                        </td>
+                        <td style={tableStyles.td}>
+                          {r.urgency === 'soon' ? 'Soon' : r.urgency === 'within_3_months' ? 'Few months' : 'Next visit'}
+                        </td>
+                        <td style={{ ...tableStyles.td, maxWidth: 260 }}>{r.reason ?? <span style={{ color: 'var(--slate-400)' }}>—</span>}</td>
+                        <td style={tableStyles.td}>{r.visible_to_driver ? 'driver' : 'internal'}</td>
+                        <td style={tableStyles.td}>
+                          <Badge tone={r.status === 'open' ? 'green' : r.status === 'completed' ? 'slate' : 'yellow'}>{r.status}</Badge>
+                        </td>
+                        <td style={tableStyles.td}>{fmtDate(r.created_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </Modal>
+      ) : null}
+
+      {/* Promote a recommended cluster into a (draft) catalog service. */}
+      {promoting ? (
+        <Modal
+          open
+          onClose={() => { setPromoting(null); setPromoteError(''); setPromoteDone(null) }}
+          title={promoteDone ? 'Draft service created' : 'Promote to catalog service'}
+        >
+          <div style={{ display: 'grid', gap: 14, fontSize: 13, lineHeight: 1.55 }}>
+            {promoteDone ? (
+              <>
+                <p style={{ margin: 0 }}>
+                  <strong>&ldquo;{promoting.name}&rdquo;</strong> is now a draft service
+                  (<code>{promoteDone.slug}</code>).
+                </p>
+                <p style={{ margin: 0, color: 'var(--slate-600)' }}>
+                  It&apos;s <strong>not bookable yet</strong> — set its pricing, labor and
+                  parts in <strong>Services</strong> to make it live. The name is aliased,
+                  so mechanics typing it now land on this service instead of filing
+                  custom work. Existing recommendations are not re-pointed.
+                </p>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <Button onClick={() => { setPromoting(null); setPromoteDone(null) }}>Done</Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p style={{ margin: 0 }}>
+                  Create a catalog service from <strong>&ldquo;{promoting.name}&rdquo;</strong> —
+                  recommended by <strong>{promoting.distinct_shops}</strong> shop{promoting.distinct_shops === 1 ? '' : 's'} across{' '}
+                  <strong>{promoting.occurrences}</strong> recommendation{promoting.occurrences === 1 ? '' : 's'}.
+                </p>
+                <p style={{ margin: 0, color: 'var(--slate-600)' }}>
+                  It&apos;s created as a <strong>draft (not bookable)</strong> — a cluster
+                  has no pricing, so finish it in Services before it goes live. The name
+                  is aliased so the next mechanic lands on it instead of re-typing it.
+                </p>
+                {promoting.canonical_suggestion ? (
+                  <p style={{ margin: 0, color: 'var(--amber-700, #b45309)' }}>
+                    Heads up: this looks like <strong>{promoting.canonical_suggestion.service_name}</strong>{' '}
+                    ({promoting.canonical_suggestion.confidence}). If that&apos;s the same
+                    work, alias it instead of creating a duplicate.
+                  </p>
+                ) : null}
+                {promoteError ? (
+                  <p style={{ margin: 0, color: 'var(--red-600, #b3261e)' }}>{promoteError}</p>
+                ) : null}
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <Button variant="secondary" onClick={() => { setPromoting(null); setPromoteError('') }}>Cancel</Button>
+                  <Button onClick={confirmPromote} disabled={promoteBusy}>
+                    {promoteBusy ? 'Promoting…' : 'Create draft service'}
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         </Modal>
       ) : null}

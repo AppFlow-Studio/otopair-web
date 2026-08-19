@@ -163,8 +163,42 @@ def _fetch_stealth(url: str, timeout_ms: int):
 
 
 @app.get("/health")
-def health():
-    return {"ok": True}
+def health(deep: bool = False):
+    """Liveness, and optionally whether the STEALTH TIER actually works.
+
+    The shallow answer is process liveness and nothing more. That is what Fly's
+    check calls, and on its own it is what let a container with no browser
+    binary sit in production reporting `{"ok": true}` while every stealth call
+    502'd and every `auto` call silently returned the anti-bot wall it was
+    escalating to get past.
+
+    `?deep=1` launches the browser. It is deliberately NOT the Fly check —
+    starting Chromium on every interval would dominate the memory budget of a
+    1-shared-CPU machine — but it is what a deploy should be verified with, and
+    what to hit first when the stealth tier looks broken:
+
+        curl "$SCRAPLING_URL/health?deep=1"
+
+    `browser: "ok"` means a page can actually be opened. Anything else names
+    the failure instead of hiding it.
+    """
+    if not deep:
+        return {"ok": True}
+    try:
+        # patchright, NOT playwright — StealthyFetcher drives Patchright and it
+        # keeps a separate chromium build. A deep check against the wrong
+        # library reports healthy while the stealth tier is dead.
+        from patchright.sync_api import sync_playwright
+
+        pw = sync_playwright().start()
+        try:
+            browser = pw.chromium.launch(headless=True)
+            browser.close()
+        finally:
+            pw.stop()
+        return {"ok": True, "browser": "ok"}
+    except Exception as e:  # noqa: BLE001 - the message IS the diagnostic
+        return {"ok": False, "browser": "unavailable", "error": str(e)[:400]}
 
 
 @app.post("/scrape", response_model=ScrapeResponse)

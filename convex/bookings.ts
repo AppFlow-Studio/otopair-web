@@ -3189,6 +3189,8 @@ export const acknowledgeCustomerLate = mutation({
       ) {
         await ctx.db.patch(row._id, {
           status: "superseded",
+          resolved_at: now,
+          resolved_reason: "superseded",
           processed_at: now,
           updated_at: now,
         } as any);
@@ -6933,7 +6935,13 @@ async function resolveNeverStartedBellNotificationsForBooking(ctx: any, bookingI
           (r.status === "pending" || r.status === "dispatching"),
       )
       .map((r: any) =>
-        ctx.db.patch(r._id, { status: "resolved", processed_at: now, updated_at: now }),
+        ctx.db.patch(r._id, {
+          status: "resolved",
+          resolved_at: now,
+          resolved_reason: "superseded",
+          processed_at: now,
+          updated_at: now,
+        }),
       ),
   );
 }
@@ -7413,6 +7421,8 @@ async function resolveManualSchedulingAlertsForBooking(
     }
     await ctx.db.patch(row._id, {
       status: "resolved",
+      resolved_at: now,
+      resolved_reason: "superseded",
       processed_at: now,
       updated_at: now,
     } as any);
@@ -14136,6 +14146,8 @@ export const cleanupStaleManualSchedulingAlerts = mutation({
       for (const dupe of list.slice(1)) {
         await ctx.db.patch(dupe._id, {
           status: "superseded",
+          resolved_at: now,
+          resolved_reason: "superseded",
           processed_at: now,
           updated_at: now,
         } as any);
@@ -14160,10 +14172,14 @@ export const dismissManualSchedulingAlert = mutation({
     if ((row as any).category !== "manual_scheduling_required") {
       throw new Error("Cannot dismiss this alert");
     }
+    const now = Date.now();
     await ctx.db.patch(args.alertId, {
       status: "resolved",
-      processed_at: Date.now(),
-      updated_at: Date.now(),
+      read_at: now,
+      resolved_at: now,
+      resolved_reason: "user_action",
+      processed_at: now,
+      updated_at: now,
     } as any);
   },
 });

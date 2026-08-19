@@ -15,7 +15,8 @@ import PillNav from "./pill-nav";
 import OtoOrb from "./oto-orb";
 import VoiceBar, { Waveform } from "./voice-bar";
 import ChatCard from "./chat-card";
-import { PlatformToggle, useReducedMotionSafe } from "./shared";
+import { useReducedMotionSafe } from "./shared";
+import { serifDisplay } from "./landing/reveal";
 import {
   BookingConfirmedCard,
   ChooseShopCard,
@@ -209,7 +210,7 @@ function HeroInner() {
   return (
     <section
       ref={sectionRef}
-      className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[#eceae6]"
+      className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_600px)]"
     >
       <PillNav />
 
@@ -222,43 +223,34 @@ function HeroInner() {
           active ? "pt-[100px]" : "pt-[150px]"
         }`}
       >
+        {/* Idle state is Figma V1's declared type (node 302:901): 60px / 65px
+            line-height / #1a1a1a / 683px measure / no tracking. V1 sets it in
+            Romie, which we don't license — Lora is the standing substitute. */}
         <motion.h1
           layout
-          className={`tracking-[-0.01em] text-[#1a1a1a] transition-all duration-500 ${
+          className={`text-[#1a1a1a] transition-all duration-500 ${
             active
-              ? "max-w-[20ch] text-[34px] leading-[1.05] sm:text-[42px]"
-              : "max-w-[14ch] text-[46px] leading-[1.04] sm:text-[58px] md:text-[62px]"
+              ? "max-w-[20ch] text-[34px] leading-[1.05] tracking-[-0.01em] sm:text-[42px]"
+              : "max-w-[683px] text-[38px] leading-[1.08] sm:text-[48px] md:text-[60px] md:leading-[65px]"
           }`}
-          style={{ fontFamily: "var(--font-Lora)" }}
+          style={serifDisplay}
         >
           No more phone tag with mechanics
         </motion.h1>
 
-        {/* Subhead stays present (per the Figma hero vision); just shrinks. */}
+        {/* Subhead stays present (per the Figma hero vision); just shrinks.
+            Idle state is V1 node 302:978: 18px / 25px / #777169 / 487px. */}
         <p
-          className={`text-[#6b655d] transition-all duration-500 ${
-            active ? "mt-3 max-w-[52ch] text-[14px]" : "mt-5 max-w-[44ch] text-[17px] leading-relaxed"
+          className={`transition-all duration-500 ${
+            active
+              ? "mt-3 max-w-[52ch] text-[14px] text-[#6b655d]"
+              : "mt-5 max-w-[487px] text-[16px] text-[#777169] sm:text-[18px] sm:leading-[25px]"
           }`}
         >
           Talk to Oto. Get fixed prices from real shops nearby.
           {!active && <br className="hidden sm:block" />} Book in 90 seconds.
         </p>
 
-        <AnimatePresence initial={false}>
-          {!active && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-              transition={{ duration: 0.4 }}
-              className="flex flex-col items-center overflow-hidden"
-            >
-              <div className="mt-7">
-                <PlatformToggle />
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
       </div>
 
       {/* Content stage. The orb is the centerpiece: large, and it sits BEHIND

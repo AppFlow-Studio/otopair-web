@@ -4,15 +4,16 @@ import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { motion, useMotionValueEvent, useScroll } from "motion/react";
-import { ArrowUpRight } from "lucide-react";
 import { UnderlineLink } from "./shared";
 
-// Section anchors on the landing page itself — /about, /careers and /services
-// don't exist yet, and a 404 from the main nav is worse than honest anchors.
+// Labels are Figma V1's verbatim (node 302:886) so the bar matches the design.
+// The destinations stay as landing-page section anchors — /about, /careers and
+// /services don't exist, and a 404 from the main nav is worse than a loose
+// label. Swap the hrefs the day those pages ship.
 const LINKS = [
-  { label: "How it works", href: "#how-it-works" },
-  { label: "For shops", href: "#for-shops" },
-  { label: "Coverage", href: "#coverage" },
+  { label: "About", href: "#how-it-works" },
+  { label: "Careers", href: "#for-shops" },
+  { label: "Services", href: "#coverage" },
 ];
 
 /** Floating glass pill nav — fixed, hides on scroll-down, reveals on scroll-up. */
@@ -34,26 +35,39 @@ export default function PillNav() {
       transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
       className="fixed inset-x-0 top-0 z-50 flex justify-center px-4 pt-4"
     >
-      <nav className="flex h-[60px] w-full max-w-[600px] items-center justify-between gap-2 rounded-[14px] border border-white/60 bg-white/55 px-4 backdrop-blur-2xl shadow-[0_8px_30px_rgba(0,0,0,0.06)]">
-        <Link href="/" className="flex items-center gap-2 pl-1" aria-label="Otopair home">
-          <motion.span whileHover={{ rotate: -8, scale: 1.08 }} transition={{ type: "spring", stiffness: 400, damping: 15 }}>
+      {/* Values are Figma V1's declared layer props (node 302:1212), not
+          eyeballed: 597x69, r100, white @ 20%, 0.5px white @ 50% edge, 35px
+          backdrop blur, and no shadow on the pill itself. */}
+      <nav className="flex h-[69px] w-full max-w-[597px] items-center justify-between gap-2 rounded-[100px] border-[0.5px] border-white/50 bg-white/20 backdrop-blur-[35px]" style={{ paddingLeft: 26.5, paddingRight: 17 }}>
+        <Link href="/" className="flex items-center" aria-label="Otopair home">
+          {/* The layout box is V1's true mark size (24x30). logo.png carries
+              transparent padding, so the image itself is scaled to 46px and
+              centred inside that box — otherwise the box would eat 22px of
+              flex space the design doesn't allow for. */}
+          <motion.span
+            whileHover={{ rotate: -8, scale: 1.08 }}
+            transition={{ type: "spring", stiffness: 400, damping: 15 }}
+            className="relative block h-[30px] w-[24px]"
+          >
             <Image
               src="/logo.png"
               alt="Otopair"
-              width={30}
-              height={30}
+              width={46}
+              height={46}
               priority
-              className="h-[26px] w-[26px] object-contain"
+              className="absolute left-1/2 top-1/2 h-[46px] w-[46px] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
             />
           </motion.span>
         </Link>
 
-        <ul className="hidden items-center gap-7 sm:flex">
+        {/* V1 centres each label in a 103px box on 108px centres (node
+            302:1214-1216) — so the visible gaps differ per word length. */}
+        <ul className="hidden items-center gap-[5px] sm:flex">
           {LINKS.map((l) => (
-            <li key={l.label}>
+            <li key={l.label} className="w-[103px] text-center">
               <UnderlineLink
                 href={l.href}
-                className="text-[15px] text-[#1a1a1a]/85 transition-colors hover:text-[#1a1a1a]"
+                className="text-[15px] leading-[28px] text-[#1a1a1a] transition-colors hover:text-[#1a1a1a]/70"
               >
                 {l.label}
               </UnderlineLink>
@@ -66,13 +80,19 @@ export default function PillNav() {
           whileHover={{ scale: 1.04 }}
           whileTap={{ scale: 0.95 }}
           transition={{ type: "spring", stiffness: 400, damping: 20 }}
-          className="group flex h-9 items-center justify-center gap-1 rounded-lg bg-[#1a1a1a] px-5 text-[15px] font-medium text-white shadow-[-6px_12px_18px_rgba(43,9,120,0.22)]"
+          className="group relative flex h-9 w-[159px] items-center justify-center rounded-[40px] border border-[#1a1a1a] bg-[#1a1a1a] text-[15px] leading-[22px] text-white shadow-[-5px_10px_20px_rgba(70,127,237,0.17)]"
         >
-          Get Oto
-          <ArrowUpRight
-            className="h-4 w-4 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
-            strokeWidth={1.8}
+          {/* V1 floats the pin over the button rather than putting it in flow,
+              so the label stays centred on the full 159px. */}
+          <Image
+            src="/logo.png"
+            alt=""
+            width={21}
+            height={21}
+            aria-hidden
+            className="absolute left-[20px] top-1/2 h-[21px] w-[21px] -translate-y-1/2 object-contain transition-transform duration-300 group-hover:-rotate-6"
           />
+          Get Oto
         </motion.a>
       </nav>
     </motion.header>

@@ -91,6 +91,17 @@ export const detect = internalAction({
               .slice(0, 12)
               .map(([head, samples]) => ({ head, samples }));
           })(),
+          // The raw Product block, so a parser MISS can be diagnosed as a
+          // shape mismatch rather than guessed at.
+          productJsonLd: (() => {
+            for (const m of body.matchAll(
+              /<script[^>]*application\/ld\+json[^>]*>([\s\S]*?)<\/script>/gi,
+            )) {
+              const raw = m[1].trim();
+              if (/"@type"\s*:\s*"Product"/.test(raw)) return raw.slice(0, 1400);
+            }
+            return null;
+          })(),
           hasJsonLd: /application\/ld\+json/i.test(body),
           jsonLdTypes: [...new Set(
             [...body.matchAll(/"@type"\s*:\s*"([A-Za-z]+)"/g)].map((m) => m[1]),

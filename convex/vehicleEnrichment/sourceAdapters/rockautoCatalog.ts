@@ -398,3 +398,36 @@ export function rankInterchangeCandidates(
  * listings per part type.
  */
 export const MIN_BRAND_CORROBORATION = 2;
+
+/**
+ * Is this OEM number from a family THIS manufacturer has been observed selling?
+ *
+ * The gate brand corroboration cannot provide. An interchange set is one
+ * aftermarket part's list of the OEM numbers it replaces, and one filter
+ * casting fits a Subaru AND a Kia — so every brand that makes that casting
+ * lists BOTH makes' numbers, and all of them are equally corroborated. Live
+ * Aug 2026: a Kia Sportage oil-filter walk ranked Subaru's 15208AA030 at
+ * three-brand agreement.
+ *
+ * Shape does not separate them either. Subaru and Kia/Hyundai both number 5+5,
+ * so `sanitizePartNumber("15208AA030", "Kia")` returns the number unchanged —
+ * only GM's 8-digit format happens to reject it.
+ *
+ * What separates them is whether the manufacturer has ever been seen selling
+ * something in that family, which `v3queries.getOemPrefixesForMake` reads off
+ * parts already on file.
+ *
+ * An EMPTY vocabulary means "cannot judge" and returns false for everything —
+ * the caller must decline rather than write. Failing open on a cold-start make
+ * would reinstate exactly the hole this closes.
+ */
+export function isMakeAttestedNumber(
+  oem: string,
+  makePrefixes: readonly string[],
+): boolean {
+  if (makePrefixes.length === 0) return false;
+  const n = makePrefixes[0].length;
+  const key = String(oem ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, n);
+  if (key.length < n) return false;
+  return makePrefixes.some((p) => p.slice(0, n) === key);
+}

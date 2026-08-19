@@ -103,6 +103,18 @@ export const EARLY_SERVICE_SLUGS = [
  */
 const COMBUSTION_ROLE_KEYS = [
   "oil_filter",
+  // INERT HERE, deliberately kept. `engine_oil` carries a universalFallback,
+  // so `satisfiedWhenAbsent` is true for it and it never appears in
+  // `missingCoreRoles` — the harvest cannot target it however wide this scope
+  // gets. It is listed so the set reads as "what a combustion engine has"
+  // rather than "what the harvest happens to chase", and so the day that
+  // fallback is removed this needs no edit.
+  //
+  // What actually improves engine oil is oilProduct.fetchEngineOilProduct in
+  // the heal ladder, which replaces the synthetic $/qt with the car's real
+  // spec-viscosity product. Worth knowing, because that same fallback is why
+  // engine oil was invisible to every metric while a share of the fleet billed
+  // a nameless per-quart line.
   "engine_oil",
   "air_filter",
   "drain_plug_gasket",

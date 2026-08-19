@@ -455,6 +455,9 @@ export const postjobReportValidator = v.object({
   parts_used: v.array(postjobPartValidator),
   vehicle_updates: v.optional(v.union(vehicleUpdateValuesValidator, v.null())),
   technician_notes: v.optional(nullableStringValidator),
+  // Customer-facing "what did you find / do" summary. Read by getReceipt →
+  // Past Service report. See job_actuals.mechanic_findings.
+  mechanic_findings: v.optional(nullableStringValidator),
   flagged_vehicle_specs: v.optional(v.boolean()),
   flagged_vehicle_specs_reason: v.optional(nullableStringValidator),
   actual_labor_minutes: v.optional(nullableNumberValidator),

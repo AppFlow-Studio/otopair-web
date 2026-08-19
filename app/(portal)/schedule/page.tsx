@@ -18,6 +18,7 @@ import {
   Info,
   Loader2,
   MessageCircle,
+  MoreHorizontal,
   Pen,
   Tag,
   Trash2,
@@ -354,6 +355,9 @@ export default function SchedulePage() {
 
   const [legendOpen, setLegendOpen] = useState(false);
   const legendRef = useRef<HTMLDivElement>(null);
+  // Mobile-only "More" dropdown (folds Today + view switcher + legend)
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
   const context = useQuery(api.schedule.getScheduleContext);
   const portalAccess = useQuery(api.shops.getMyPortalAccess);
   const viewerMechanicId =
@@ -476,6 +480,17 @@ export default function SchedulePage() {
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [legendOpen]);
+
+  // Dismiss mobile "More" menu on click-outside
+  useEffect(() => {
+    if (!moreMenuOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (moreMenuRef.current?.contains(e.target as Node)) return;
+      setMoreMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [moreMenuOpen]);
 
   // Keyboard shortcuts for the job detail modal
   useEffect(() => {
@@ -1577,99 +1592,135 @@ export default function SchedulePage() {
     );
   }
 
+  // Shared between the desktop legend popover and the mobile "More" menu
+  const legendContent = (
+    <div className="flex flex-col gap-1.5">
+      {BOOKING_STATUS_LEGEND_KEYS.map((key) => {
+        const colors = statusColors[key];
+        if (!colors) return null;
+        const isPendingCustomer = key === "pending_customer_acceptance";
+        return (
+          <div key={key} className="flex items-center gap-2">
+            <div
+              className="shrink-0 rounded-sm"
+              style={{
+                width: 32,
+                height: 18,
+                backgroundColor: colors.bg,
+                borderLeft: isPendingCustomer
+                  ? `3px dashed ${colors.border}`
+                  : `3px solid ${colors.border}`,
+              }}
+            />
+            <span className="text-xs text-foreground">{getBookingStatusLabel(key)}</span>
+          </div>
+        );
+      })}
+      <div className="flex items-center gap-2">
+        <div className="shrink-0 rounded-sm blocked-slot-pattern" style={{ width: 32, height: 18 }} />
+        <span className="text-xs text-foreground">Blocked</span>
+      </div>
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       <NoShowNotificationBanner />
-      {/* Page header */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-foreground">Schedule</h1>
+      {/* Flat toolbar — page title + date nav share one line on desktop;
+          mobile keeps the essentials (title + date nav + Create booking +
+          mechanic) and folds Today / views / legend into a "More" menu. */}
+      <div className="flex items-center justify-between gap-2">
+        {/* Left: page title + date navigation */}
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <h1 className="shrink-0 text-lg sm:text-2xl font-bold text-foreground">Schedule</h1>
           {context.lateStartTestMode ? (
-            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
+            <span className="hidden lg:inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
               Late-start test mode active
               {` (${context.lateStartTiming.warningLeadMinutes}/${context.lateStartTiming.initialCycleMinutes} min)`}
             </span>
           ) : null}
-        </div>
-      </div>
-
-      {/* Toolbar: nav + view switcher + mechanic filter */}
-      {/* Stopped jobs, above the board. A blocker rendered only inside its own
-          job's overlay ages silently — nobody opens the overlay of a car they've
-          stopped thinking about (Flag Issue spec, §5). */}
-      <OpenBlockersBar onOpenBooking={(id) => setSelectedBookingId(id)} />
-
-      <div className="bg-card border border-border rounded-xl p-4">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          {/* Left: navigation */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={goToday}
-              className="px-3 py-1.5 text-sm font-medium rounded-lg border border-border hover:bg-muted transition-colors"
-            >
-              Today
-            </button>
-            <button
-              onClick={goBack}
-              className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-            >
-              <ChevronLeft className="w-5 h-5" />
-            </button>
-            <button
-              onClick={goForward}
-              className="p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-            >
-              <ChevronRight className="w-5 h-5" />
-            </button>
-            <h2 className="text-base font-semibold text-foreground ml-2">
+          <div className="hidden sm:block h-6 w-px bg-border shrink-0" aria-hidden="true" />
+          <button
+            onClick={goToday}
+            className="hidden sm:inline-flex px-3 py-1.5 text-sm font-medium rounded-lg border border-border hover:bg-muted transition-colors"
+          >
+            Today
+          </button>
+          <button
+            onClick={goBack}
+            aria-label="Previous"
+            className="shrink-0 p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+          >
+            <ChevronLeft className="w-5 h-5" />
+          </button>
+          <h2 className="min-w-0 text-sm sm:text-base font-semibold text-foreground truncate">
+            <span className="hidden sm:inline">
               {currentView === "day"
                 ? format(currentDate, "EEEE, MMMM d, yyyy")
                 : currentView === "week"
                 ? `${format(startOfWeek(currentDate, { weekStartsOn: 0 }), "MMM d")} – ${format(addDays(startOfWeek(currentDate, { weekStartsOn: 0 }), 6), "MMM d, yyyy")}`
                 : formatDateRange(currentDate)}
-            </h2>
-          </div>
+            </span>
+            <span className="sm:hidden">
+              {currentView === "day"
+                ? format(currentDate, "EEE, MMM d")
+                : currentView === "week"
+                ? `${format(startOfWeek(currentDate, { weekStartsOn: 0 }), "MMM d")} – ${format(addDays(startOfWeek(currentDate, { weekStartsOn: 0 }), 6), "MMM d")}`
+                : format(currentDate, "MMM yyyy")}
+            </span>
+          </h2>
+          <button
+            onClick={goForward}
+            aria-label="Next"
+            className="shrink-0 p-1.5 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+          >
+            <ChevronRight className="w-5 h-5" />
+          </button>
+        </div>
 
-          {/* Right: filters + view switcher */}
-          <div className="flex items-center gap-3">
-            {/* Create booking — jumps to the next open slot */}
-            <button
-              type="button"
-              onClick={openCreateBookingAtNextSlot}
-              disabled={context.mechanics.length === 0 || pendingCreate}
-              className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {pendingCreate ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <CalendarPlus className="w-4 h-4" />
-              )}
-              Create booking
-            </button>
-
-            {/* Mechanic filter */}
-            {context.mechanics.length > 0 && (
-              <Select
-                selectedKey={mechanicFilter}
-                onSelectionChange={(key) => setMechanicFilter(String(key))}
-              >
-                <SelectTrigger className="h-9 rounded-lg border-border bg-card text-sm px-3 min-w-40">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectPopover placement="bottom end">
-                  <SelectListBox shouldFocusWrap>
-                    <SelectItem id="all" textValue={`All ${entityLabel.plural}`}>{`All ${entityLabel.plural}`}</SelectItem>
-                    {context.mechanics.map((m) => (
-                      <SelectItem key={m._id} id={m._id} textValue={m.name}>
-                        {m.name}
-                        {isMechanicViewer && m._id === viewerMechanicId ? " (you)" : ""}
-                      </SelectItem>
-                    ))}
-                  </SelectListBox>
-                </SelectPopover>
-              </Select>
+        {/* Right: actions */}
+        <div className="flex items-center gap-2 min-w-0">
+          {/* Create booking — jumps to the next open slot */}
+          <button
+            type="button"
+            onClick={openCreateBookingAtNextSlot}
+            disabled={context.mechanics.length === 0 || pendingCreate}
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            {pendingCreate ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <CalendarPlus className="w-4 h-4" />
             )}
+            <span className="sm:hidden">Book</span>
+            <span className="hidden sm:inline">Create booking</span>
+          </button>
 
+          {/* Mechanic filter */}
+          {context.mechanics.length > 0 && (
+            <Select
+              selectedKey={mechanicFilter}
+              onSelectionChange={(key) => setMechanicFilter(String(key))}
+            >
+              <SelectTrigger className="h-9 rounded-lg border-border bg-card text-sm px-3 min-w-0 max-w-[8.5rem] sm:max-w-none sm:min-w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopover placement="bottom end">
+                <SelectListBox shouldFocusWrap>
+                  <SelectItem id="all" textValue={`All ${entityLabel.plural}`}>{`All ${entityLabel.plural}`}</SelectItem>
+                  {context.mechanics.map((m) => (
+                    <SelectItem key={m._id} id={m._id} textValue={m.name}>
+                      {m.name}
+                      {isMechanicViewer && m._id === viewerMechanicId ? " (you)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectListBox>
+              </SelectPopover>
+            </Select>
+          )}
+
+          {/* Desktop-only inline options: view switcher + legend */}
+          <div className="hidden sm:flex items-center gap-2 shrink-0">
             {/* View switcher */}
             <div className="flex border border-border rounded-lg overflow-hidden">
               {(["day", "week", "month"] as const).map((view) => (
@@ -1699,39 +1750,70 @@ export default function SchedulePage() {
               {legendOpen && (
                 <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-lg shadow-lg p-3 min-w-[220px]">
                   <p className="text-xs font-semibold text-muted-foreground mb-2.5 uppercase tracking-wide">Status Legend</p>
-                  <div className="flex flex-col gap-1.5">
-                    {BOOKING_STATUS_LEGEND_KEYS.map((key) => {
-                        const colors = statusColors[key];
-                        if (!colors) return null;
-                        const isPendingCustomer = key === "pending_customer_acceptance";
-                        return (
-                          <div key={key} className="flex items-center gap-2">
-                            <div
-                              className="shrink-0 rounded-sm"
-                              style={{
-                                width: 32,
-                                height: 18,
-                                backgroundColor: colors.bg,
-                                borderLeft: isPendingCustomer
-                                  ? `3px dashed ${colors.border}`
-                                  : `3px solid ${colors.border}`,
-                              }}
-                            />
-                            <span className="text-xs text-foreground">{getBookingStatusLabel(key)}</span>
-                          </div>
-                        );
-                      })}
-                    <div className="flex items-center gap-2">
-                      <div className="shrink-0 rounded-sm blocked-slot-pattern" style={{ width: 32, height: 18 }} />
-                      <span className="text-xs text-foreground">Blocked</span>
-                    </div>
-                  </div>
+                  {legendContent}
                 </div>
               )}
             </div>
           </div>
+
+          {/* Mobile-only "More" menu: Today + view switcher + legend */}
+          <div className="sm:hidden relative shrink-0" ref={moreMenuRef}>
+            <button
+              onClick={() => setMoreMenuOpen((o) => !o)}
+              aria-label="More options"
+              className="p-1.5 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+            >
+              <MoreHorizontal className="w-5 h-5" />
+            </button>
+            {moreMenuOpen && (
+              <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-xl shadow-lg p-2 min-w-[240px]">
+                <button
+                  onClick={() => {
+                    goToday();
+                    setMoreMenuOpen(false);
+                  }}
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted transition-colors"
+                >
+                  Today
+                </button>
+
+                <div className="px-1 pt-1.5">
+                  <p className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">View</p>
+                  <div className="flex border border-border rounded-lg overflow-hidden">
+                    {(["day", "week", "month"] as const).map((view) => (
+                      <button
+                        key={view}
+                        onClick={() => {
+                          handleViewChange(view);
+                          setMoreMenuOpen(false);
+                        }}
+                        className={`flex-1 px-3 py-1.5 text-sm font-medium transition-colors ${
+                          currentView === view
+                            ? "bg-primary text-primary-foreground"
+                            : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                        }`}
+                      >
+                        {view.charAt(0).toUpperCase() + view.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-1 pt-1.5 px-1 border-t border-border">
+                  <p className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Status legend</p>
+                  <div className="px-2 pb-1">{legendContent}</div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Stopped jobs, above the board. A blocker rendered only inside its own
+          job's overlay ages silently — nobody opens the overlay of a car they've
+          stopped thinking about (Flag Issue spec, §5). */}
+      <OpenBlockersBar onOpenBooking={(id) => setSelectedBookingId(id)} />
+
       {/* Flex row: calendar + drawers */}
       <div className="flex items-start">
       {/* Main content */}

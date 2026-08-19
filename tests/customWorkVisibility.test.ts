@@ -502,3 +502,87 @@ describe("quoted parts as a fallback at completion", () => {
     expect(row.parts[0].oem_number).toBe("83071AN00B");
   });
 });
+
+/**
+ * The activity log.
+ *
+ * Adding work mid-job is the single most consequential thing that happens to a
+ * booking after it starts, and the log was silent about it — a bigger estimate
+ * appeared with no statement of what had been added.
+ *
+ * Derived from custom_jobs rather than written as its own row, so it covers
+ * every job recorded before the event type existed and can't drift from the
+ * table it describes.
+ */
+describe("custom work in the activity log", () => {
+  it("emits an event per custom line, marking which were found mid-job", async () => {
+    const { makeT } = await import("./helpers");
+    const { api } = await import("../convex/_generated/api");
+    const { recordCustomJobsForBooking } = await import("../convex/customJobs");
+
+    const t = makeT();
+    const base = await t.run(async (ctx: any) => {
+      const userId = await ctx.db.insert("users", {
+        clerkUserId: "clerk_activity_customer",
+        email: "activity@test.local",
+        role: "customer",
+        createdAt: Date.now(),
+      });
+      const shopId = await ctx.db.insert("shops", { name: "Temur Auto" } as any);
+      const bookingId = await ctx.db.insert("bookings", {
+        vin: "VINACTIVITY000001",
+        user_id: userId,
+        service_ids: [],
+        status: "in_progress",
+      } as any);
+      return { userId, shopId, bookingId };
+    });
+
+    const add = (name: string, source: string, parts?: any[]) =>
+      t.run(async (ctx: any) =>
+        recordCustomJobsForBooking(ctx, {
+          booking: {
+            _id: base.bookingId,
+            shop_id: base.shopId,
+            vin: "VINACTIVITY000001",
+          },
+          customJobs: [
+            {
+              name,
+              system_tags: ["electrical"],
+              work_type: "replace",
+              complaint: "Switch dead on the driver's door",
+              parts: parts ?? null,
+            },
+          ],
+          source,
+          now: Date.now(),
+        }),
+      );
+
+    await add("Ceramic coating", "booking");
+    await add("Power window switch replacement", "mid_job", [
+      { part_name: "Window switch", oem_number: "83071AN00B", quantity: 1 },
+    ]);
+
+    const log: any[] = await t
+      .withIdentity({ subject: "clerk_activity_customer" })
+      .query(api.booking_activity.getBookingActivityLog, {
+        bookingId: base.bookingId,
+      });
+
+    const custom = log.filter((e) => e.type === "custom_work_added");
+    expect(custom).toHaveLength(2);
+
+    const midJob = custom.find((e) => e.data.source === "mid_job");
+    expect(midJob.data.name).toBe("Power window switch replacement");
+    expect(midJob.data.complaint).toBe("Switch dead on the driver's door");
+    // Named parts justify the figure the estimate jumped to.
+    expect(midJob.data.parts[0].oem_number).toBe("83071AN00B");
+
+    // Work on the original order isn't a surprise and mustn't read as one.
+    expect(custom.find((e) => e.data.name === "Ceramic coating").data.source).toBe(
+      "booking",
+    );
+  });
+})

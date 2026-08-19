@@ -3189,6 +3189,8 @@ export const acknowledgeCustomerLate = mutation({
       ) {
         await ctx.db.patch(row._id, {
           status: "superseded",
+          resolved_at: now,
+          resolved_reason: "superseded",
           processed_at: now,
           updated_at: now,
         } as any);
@@ -4337,19 +4339,23 @@ export async function enqueueNotificationOutbox(
     scheduledForMs?: number;
   },
 ) {
-  // Dedupe only against still-actionable rows. Once a row has been
-  // resolved/superseded/failed, a fresh event with the same key should
-  // produce a new row.
-  const existing = await ctx.db
+  // Dedupe against any still-OPEN row for this key — one that hasn't been
+  // resolved yet (resolved_at == null), regardless of delivery status. This
+  // stops a repeat event from stacking a second in-app card (or re-pushing)
+  // while the first is still live. Dedupe keys are event-specific (booking +
+  // category + timestamp/date), so the only collisions are idempotent
+  // re-fires. `failed` rows are excluded so a genuine retry can produce a new
+  // row. Once a row is resolved, a fresh event with the same key opens a new
+  // one.
+  const priorRows = await ctx.db
     .query("notification_outbox")
     .withIndex("by_dedupe_key", (q: any) => q.eq("dedupe_key", dedupeKey))
-    .first();
-  if (
-    existing &&
-    ((existing as any).status === "pending" ||
-      (existing as any).status === "dispatching")
-  ) {
-    return existing._id;
+    .collect();
+  const openExisting = priorRows.find(
+    (r: any) => r.resolved_at == null && r.status !== "failed",
+  );
+  if (openExisting) {
+    return openExisting._id;
   }
 
   const now = Date.now();
@@ -4367,6 +4373,56 @@ export async function enqueueNotificationOutbox(
     created_at: now,
     updated_at: now,
   });
+}
+
+// Categories whose in-app card is an ACTION the customer takes on a live
+// proposal. Once the proposal is decided (accepted / declined / withdrawn /
+// auto-reverted) or the booking otherwise moves on, the card is stale and must
+// be resolved so it drops out of the feed.
+const RESCHEDULE_PROPOSAL_CATEGORIES = [
+  "booking_reschedule_proposed",
+  "booking_forced_delay_proposed",
+];
+
+/**
+ * Stamp still-open notification_outbox rows for a booking as resolved.
+ *
+ * Writes the new RESOLVE axis (resolved_at + resolved_reason) AND keeps
+ * status:"resolved" so the current status-based feeds drop the row
+ * immediately — the dual-write bridges the delivery/read/resolve split until
+ * every reader is on resolved_at. Optionally scoped to specific categories.
+ * Idempotent: rows that already carry resolved_at are skipped.
+ *
+ * reason: "user_action" (customer/shop acted) | "superseded" (booking state
+ * moved on) | "expired" (proposal TTL lapsed).
+ */
+async function resolveBookingNotifications(
+  ctx: any,
+  bookingId: any,
+  opts?: { categories?: string[]; reason?: string },
+): Promise<number> {
+  if (!bookingId) return 0;
+  const rows = await ctx.db
+    .query("notification_outbox")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
+    .collect();
+  const cats = opts?.categories ? new Set(opts.categories) : null;
+  const reason = opts?.reason ?? "superseded";
+  const now = Date.now();
+  let resolved = 0;
+  for (const row of rows) {
+    if ((row as any).resolved_at != null) continue;
+    if (cats && !cats.has((row as any).category)) continue;
+    await ctx.db.patch(row._id, {
+      status: "resolved",
+      resolved_at: now,
+      resolved_reason: reason,
+      processed_at: now,
+      updated_at: now,
+    } as any);
+    resolved += 1;
+  }
+  return resolved;
 }
 
 type WalkinUpdateCategory =
@@ -6879,7 +6935,13 @@ async function resolveNeverStartedBellNotificationsForBooking(ctx: any, bookingI
           (r.status === "pending" || r.status === "dispatching"),
       )
       .map((r: any) =>
-        ctx.db.patch(r._id, { status: "resolved", processed_at: now, updated_at: now }),
+        ctx.db.patch(r._id, {
+          status: "resolved",
+          resolved_at: now,
+          resolved_reason: "superseded",
+          processed_at: now,
+          updated_at: now,
+        }),
       ),
   );
 }
@@ -7359,6 +7421,8 @@ async function resolveManualSchedulingAlertsForBooking(
     }
     await ctx.db.patch(row._id, {
       status: "resolved",
+      resolved_at: now,
+      resolved_reason: "superseded",
       processed_at: now,
       updated_at: now,
     } as any);
@@ -9000,6 +9064,21 @@ export async function applyBookingStatusTransition(
     )
   ) {
     await resolveManualSchedulingAlertsForBooking(ctx, booking);
+  }
+
+  // A reschedule/forced-delay proposal card is only actionable while the
+  // booking sits in pending_customer_acceptance. Any transition out of it
+  // supersedes the card. (The reschedule accept/decline/withdraw/auto-revert
+  // paths patch the booking directly and resolve their own with a precise
+  // reason; this catches every other transition — e.g. a cancel.)
+  if (
+    booking.status === "pending_customer_acceptance" &&
+    newStatus !== "pending_customer_acceptance"
+  ) {
+    await resolveBookingNotifications(ctx, booking._id, {
+      categories: RESCHEDULE_PROPOSAL_CATEGORIES,
+      reason: "superseded",
+    });
   }
 
   if (newStatus === "in_progress") {
@@ -10891,6 +10970,7 @@ export const completeWithPostjob = mutation({
             ? undefined
             : args.postjob.difficulty_rating ?? null,
         technician_notes: args.postjob.technician_notes ?? "",
+        mechanic_findings: args.postjob.mechanic_findings ?? "",
         parts_used: normalizedParts,
         completion_mileage: args.postjob.completion_mileage,
         vehicle_updates: args.postjob.vehicle_updates ?? undefined,
@@ -12788,6 +12868,7 @@ export const backfillCompletedBooking = mutation({
         actual_parts_cost: partsCost,
         difficulty_rating: args.postjob.difficulty_rating ?? null,
         technician_notes: args.postjob.technician_notes ?? "",
+        mechanic_findings: args.postjob.mechanic_findings ?? "",
         parts_used: normalizedParts,
         completion_mileage: args.postjob.completion_mileage,
         vehicle_updates: args.postjob.vehicle_updates ?? undefined,
@@ -13286,6 +13367,14 @@ async function proposeRescheduleImpl(
     reason
   );
 
+  // A re-proposal supersedes any earlier proposal card for this booking (the
+  // new one carries a different dedupe key). Resolve the old one first so the
+  // feed shows a single, current proposal. No-op on a first proposal.
+  await resolveBookingNotifications(ctx, booking._id, {
+    categories: RESCHEDULE_PROPOSAL_CATEGORIES,
+    reason: "superseded",
+  });
+
   await enqueueNotificationOutbox(ctx, {
     shopId: booking.shop_id,
     bookingId: booking._id,
@@ -13458,6 +13547,12 @@ export const customerApproveReschedule = mutation({
     await upsertCustomerLateMonitorForBooking(ctx, confirmedBooking);
     await upsertAppointmentReminderForBooking(ctx, confirmedBooking);
 
+    // Customer accepted — the proposal card is done.
+    await resolveBookingNotifications(ctx, booking._id, {
+      categories: RESCHEDULE_PROPOSAL_CATEGORIES,
+      reason: "user_action",
+    });
+
     return booking._id;
   },
 });
@@ -13582,6 +13677,13 @@ export const shopCancelReschedule = mutation({
       },
     });
 
+    // Proposal withdrawn — resolve the proposal card (the "withdrawn" notice
+    // enqueued just above is a different category and stays).
+    await resolveBookingNotifications(ctx, booking._id, {
+      categories: RESCHEDULE_PROPOSAL_CATEGORIES,
+      reason: "superseded",
+    });
+
     return booking._id;
   },
 });
@@ -13686,6 +13788,12 @@ export const customerDeclineReschedule = mutation({
       await resolveCustomerLateMonitorForBooking(ctx, booking);
     }
     await upsertAppointmentReminderForBooking(ctx, restoredBooking);
+
+    // Customer declined — the proposal card is done.
+    await resolveBookingNotifications(ctx, booking._id, {
+      categories: RESCHEDULE_PROPOSAL_CATEGORIES,
+      reason: "user_action",
+    });
 
     return booking._id;
   },
@@ -14038,6 +14146,8 @@ export const cleanupStaleManualSchedulingAlerts = mutation({
       for (const dupe of list.slice(1)) {
         await ctx.db.patch(dupe._id, {
           status: "superseded",
+          resolved_at: now,
+          resolved_reason: "superseded",
           processed_at: now,
           updated_at: now,
         } as any);
@@ -14062,10 +14172,14 @@ export const dismissManualSchedulingAlert = mutation({
     if ((row as any).category !== "manual_scheduling_required") {
       throw new Error("Cannot dismiss this alert");
     }
+    const now = Date.now();
     await ctx.db.patch(args.alertId, {
       status: "resolved",
-      processed_at: Date.now(),
-      updated_at: Date.now(),
+      read_at: now,
+      resolved_at: now,
+      resolved_reason: "user_action",
+      processed_at: now,
+      updated_at: now,
     } as any);
   },
 });
@@ -15149,6 +15263,14 @@ export const revertExpiredReschedules = internalMutation({
 
       const proposedAt = (booking as any).reschedule_proposed_at as number;
       const revertedDedupe = `booking-reschedule-auto-reverted:${String(booking._id)}:${proposedAt}`;
+
+      // The proposal TTL lapsed — resolve the stale proposal card before
+      // posting the "offer expired" notice.
+      await resolveBookingNotifications(ctx, booking._id, {
+        categories: RESCHEDULE_PROPOSAL_CATEGORIES,
+        reason: "expired",
+      });
+
       await enqueueNotificationOutbox(ctx, {
         shopId: booking.shop_id,
         bookingId: booking._id,
@@ -16547,6 +16669,35 @@ export const getReceipt = query({
     }
     const partsSaved = Math.max(0, partsSubtotalQuoted - partsSubtotalActual);
 
+    // The mechanic's own "why I changed this" notes, one per estimate cycle
+    // the customer was asked to approve (pre-job quote, mid-job added scope,
+    // post-job final). Only cycles the mechanic actually annotated and that
+    // weren't declined/withdrawn — a rejected adjustment isn't part of the
+    // story of what happened to the car. Same `notes` the Booking Details
+    // activity log prints; surfaced here so the Past Service report can show
+    // the reasoning alongside the findings.
+    const CYCLE_LABEL: Record<string, string> = {
+      pre_job: "Initial estimate",
+      mid_job: "Added during the job",
+      post_job: "Final adjustment",
+    };
+    const adjustments = approvalRows
+      .filter(
+        (a) =>
+          typeof a.notes === "string" &&
+          a.notes.trim().length > 0 &&
+          a.decision !== "declined" &&
+          a.decision !== "withdrawn",
+      )
+      .sort((a, b) => a.submitted_at_ms - b.submitted_at_ms)
+      .map((a) => ({
+        cycle: a.cycle,
+        cycle_label: CYCLE_LABEL[a.cycle] ?? "Adjustment",
+        note: a.notes!.trim(),
+        at: a.submitted_at_ms,
+        total_cents: a.mechanic_set_price_cents,
+      }));
+
     return {
       receipt_number: `OTP-${booking._id.slice(-8).toUpperCase()}`,
       service_date: booking.scheduled_date ?? null,
@@ -16594,6 +16745,7 @@ export const getReceipt = query({
         customer_concern: booking.customer_notes ?? "",
         mechanic_findings: jobActual?.mechanic_findings ?? "",
       },
+      adjustments,
       line_items: [...serviceLines, ...partLines] as Array<
         ServiceLine | PartLine
       >,

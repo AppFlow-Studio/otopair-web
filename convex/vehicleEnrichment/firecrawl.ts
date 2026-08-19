@@ -7,7 +7,7 @@
  */
 
 import { FirecrawlResult } from "./helpers";
-import { scraplingEnabled, scraplingFetchUrlWithHtml } from "./scrapling";
+import { looksBlockedBody, scraplingEnabled, scraplingFetchUrlWithHtml } from "./scrapling";
 
 const FIRECRAWL_BASE = "https://api.firecrawl.dev/v2";
 
@@ -263,11 +263,35 @@ export async function fetchUrlWithHtml(
 
   try {
     const first = await attempt(false);
-    if (first.html || first.markdown) return first;
-    // Empty/blocked on the standard proxy — one stealth retry for anti-bot
-    // walls before giving up on the page.
-    console.warn(`[firecrawl] empty scrape for ${url} — retrying with stealth proxy`);
-    return await attempt(true);
+    // A WALL IS NOT A RESULT. This used to be `if (first.html || first.markdown)`,
+    // which is the same defect the Scrapling tier above documents and fixed:
+    // an anti-bot challenge is several KB of perfectly real HTML, so a
+    // truthiness check accepts it, returns it, and never reaches the stealth
+    // proxy — the one tier with a residential IP and therefore the only one
+    // with a chance of getting past. The bug was fixed for Scrapling and left
+    // standing here, ten lines below its own explanation.
+    //
+    // `looksBlockedBody` recognises Cloudflare, Incapsula, PerimeterX and
+    // Imperva ABP ("Pardon Our Interruption" / reese84), so the escalation now
+    // fires on the pages that actually need it rather than only on empties.
+    const firstBlocked =
+      looksBlockedBody(first.html) || looksBlockedBody(first.markdown);
+    if ((first.html || first.markdown) && !firstBlocked) return first;
+    console.warn(
+      `[firecrawl] ${firstBlocked ? "anti-bot wall" : "empty scrape"} for ${url} — ` +
+        `retrying with stealth proxy`,
+    );
+    const second = await attempt(true);
+    // If the stealth retry is ALSO walled, prefer returning nothing over
+    // returning a challenge page: callers treat a body as content, and a
+    // parser fed an interstitial reports "this source had no data" rather than
+    // "we were blocked" — which is what makes a blocking problem masquerade as
+    // a coverage problem.
+    if (looksBlockedBody(second.html) || looksBlockedBody(second.markdown)) {
+      console.warn(`[firecrawl] stealth proxy also walled for ${url} — treating as a miss`);
+      return { markdown: null, html: null };
+    }
+    return second;
   } catch (error) {
     console.error(`Firecrawl scrape(html) error for ${url}:`, error);
     return { markdown: null, html: null };

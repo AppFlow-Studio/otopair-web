@@ -38,8 +38,9 @@
  */
 
 import { v } from "convex/values";
-import { query } from "./_generated/server";
-import { requireDirector } from "./directorGate";
+import { query, mutation } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
+import { requireDirector, logAudit } from "./directorGate";
 import {
   matchServiceName,
   serviceMatchKey,
@@ -554,6 +555,8 @@ export const clusterDetail = query({
           actual_minutes: job.actual_minutes ?? null,
           charged_price_cents: job.charged_price_cents ?? null,
           from_shortcut: !!job.shop_custom_service_id,
+          // Where the line came from. "mid_job" is the interesting one — work
+          // nobody planned for is the strongest evidence the catalog is short.
           source: job.source,
           status: job.status,
           created_at: job.created_at,
@@ -569,6 +572,26 @@ export const clusterDetail = query({
  * custom_jobs — parts already live in parts_quote_snapshots and duplicating them
  * would give us two sources of truth.
  */
+/**
+ * The parts this work actually consumes, across every job in the cluster.
+ *
+ * ─── WHY IT MOVED OFF parts_quote_snapshots ─────────────────────────────────
+ * It used to read that table filtered by custom_service_name, which could never
+ * return anything: parts_quote_snapshots exists to measure CATALOG accuracy —
+ * mechanic edit versus what the catalog predicted — and a custom line has no
+ * prediction, so custom rows are deliberately not written there. The query was
+ * dead by construction and the drawer showed "none" for work that plainly used
+ * a part.
+ *
+ * Two real sources, in order of evidence strength:
+ *   1. custom_jobs.parts — what completion recorded against this line
+ *   2. job_actuals.parts_used rows carrying this line's custom_service_name
+ *
+ * Anything on the booking that names no line at all is counted separately and
+ * reported as `unattributed`. Those are almost all pre-attribution jobs; the
+ * honest move is to say a part exists somewhere on the booking without
+ * claiming it belongs to this work.
+ */
 export const clusterParts = query({
   args: { token: v.string(), matchKey: v.string() },
   handler: async (ctx, args) => {
@@ -581,29 +604,424 @@ export const clusterParts = query({
 
     const counts = new Map<
       string,
-      { oem_number: string | null; name: string; count: number }
+      {
+        oem_number: string | null;
+        name: string;
+        count: number;
+        total_cents: number;
+      }
     >();
+    let unattributed = 0;
+
+    const bump = (
+      name: string,
+      oem: string | null,
+      lineCents: number,
+    ) => {
+      const key = (oem ?? name).toLowerCase();
+      const prior = counts.get(key);
+      if (prior) {
+        prior.count += 1;
+        prior.total_cents += lineCents;
+      } else {
+        counts.set(key, {
+          oem_number: oem,
+          name,
+          count: 1,
+          total_cents: lineCents,
+        });
+      }
+    };
 
     for (const job of jobs) {
-      const snapshots = await ctx.db
-        .query("parts_quote_snapshots")
-        .withIndex("by_booking", (q) => q.eq("booking_id", job.booking_id))
-        .collect();
-      for (const snap of snapshots) {
-        // Only rows the mechanic attributed to this custom line.
-        if (serviceMatchKey(snap.custom_service_name ?? "") !== args.matchKey) {
-          continue;
+      const recorded = (job.parts ?? []) as any[];
+      if (recorded.length > 0) {
+        for (const part of recorded) {
+          bump(
+            String(part.part_name ?? "Unnamed"),
+            part.oem_number ? String(part.oem_number) : null,
+            typeof part.line_total_cents === "number" ? part.line_total_cents : 0,
+          );
         }
-        const oem = snap.mechanic_oem_number ?? snap.catalog_oem_number ?? null;
-        const label =
-          snap.mechanic_part_name ?? snap.catalog_part_name ?? oem ?? "Unnamed";
-        const key = oem ?? label.toLowerCase();
-        const prior = counts.get(key);
-        if (prior) prior.count += 1;
-        else counts.set(key, { oem_number: oem, name: label, count: 1 });
+        continue;
+      }
+
+      // Nothing on the row — fall back to what the mechanic confirmed at
+      // completion, which is where attribution now lives.
+      const actual = await ctx.db
+        .query("job_actuals")
+        .withIndex("by_booking_id", (q: any) => q.eq("booking_id", job.booking_id))
+        .order("desc")
+        .first();
+      const used = Array.isArray((actual as any)?.parts_used)
+        ? ((actual as any).parts_used as any[])
+        : [];
+      let matchedAny = false;
+      for (const part of used) {
+        if (part?.not_used === true) continue;
+        const name = String(part?.custom_service_name ?? "").trim();
+        if (!name) continue;
+        if (serviceMatchKey(name) !== args.matchKey) continue;
+        matchedAny = true;
+        const quantity =
+          typeof part.quantity === "number" && part.quantity > 0
+            ? part.quantity
+            : 1;
+        bump(
+          String(part.part_name ?? "Unnamed"),
+          part.oem_number ? String(part.oem_number) : null,
+          Math.round(Number(part.cost ?? 0) * 100) * quantity,
+        );
+      }
+      // The booking billed parts, but none of them name any line — a job
+      // completed before per-line attribution existed.
+      if (!matchedAny && used.some((p: any) => !p?.not_used && !p?.service_id)) {
+        unattributed += 1;
       }
     }
 
-    return Array.from(counts.values()).sort((a, b) => b.count - a.count);
+    return {
+      parts: Array.from(counts.values()).sort((a, b) => b.count - a.count),
+      /** Jobs that billed a part nothing could be attributed to. */
+      unattributed_jobs: unattributed,
+    };
+  },
+});
+
+/* ─── Recommended, not yet modelled ─────────────────────────────────────────
+ * patternView's forward-looking twin. That view reads custom_jobs — work shops
+ * already DID off-catalog. This one reads freeform job_recommendations — work
+ * shops keep RECOMMENDING that has no catalog service behind it (the "Tail Light
+ * Replacement" names a mechanic types into "Something for next time"). Those
+ * never reach custom_jobs because nobody performed them, so the roadmap read was
+ * blind to recommended demand until now.
+ *
+ * Same ranking as patternView: distinct shops first (breadth is the signal),
+ * then trend, then volume. Recommendations that picked a catalog service are
+ * excluded — they're already modelled and belong to that service. */
+export type RecommendedCluster = {
+  match_key: string;
+  name: string;
+  /** Total freeform recommendations in the cluster. */
+  occurrences: number;
+  distinct_shops: number;
+  distinct_vehicles: number;
+  /** recent-window count minus prior-window count. Positive = growing. */
+  trend: number;
+  recent_count: number;
+  /** Still open or acknowledged — live demand, not yet fulfilled or dismissed. */
+  open_count: number;
+  /** How many were flagged visible to the driver (vs. shop-internal notes). */
+  driver_visible: number;
+  urgency_soon: number;
+  urgency_3mo: number;
+  urgency_next: number;
+  sample_reasons: string[];
+  last_seen_at: number;
+  /** Set when a recommended name already looks like a service we offer — a
+   *  mechanic freeform-typed something the catalog already has. */
+  canonical_suggestion: {
+    service_id: string;
+    service_name: string;
+    confidence: string;
+    score: number;
+  } | null;
+};
+
+export const recommendedPatternView = query({
+  args: { token: v.string(), limit: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireDirector(ctx, args.token);
+
+    const now = Date.now();
+    const [catalog, resolved] = await Promise.all([
+      loadCatalog(ctx),
+      resolvedAliasKeys(ctx),
+    ]);
+
+    const recs = await ctx.db.query("job_recommendations").collect();
+
+    type RecAcc = {
+      match_key: string;
+      names: Map<string, number>;
+      shops: Set<string>;
+      vins: Set<string>;
+      occurrences: number;
+      recent: number;
+      prior: number;
+      open: number;
+      driverVisible: number;
+      soon: number;
+      threeMo: number;
+      next: number;
+      reasons: string[];
+      lastSeenAt: number;
+    };
+    const acc = new Map<string, RecAcc>();
+
+    for (const rec of recs) {
+      // Freeform, unmodelled only. A rec that picked a catalog service is
+      // already modelled and belongs to that service, not this roadmap read.
+      if (rec.recommended_service_id) continue;
+      const text = String(rec.freeform_text ?? "").trim();
+      if (!text) continue;
+      const key = serviceMatchKey(text);
+      if (!key) continue;
+
+      let c = acc.get(key);
+      if (!c) {
+        c = {
+          match_key: key,
+          names: new Map(),
+          shops: new Set(),
+          vins: new Set(),
+          occurrences: 0,
+          recent: 0,
+          prior: 0,
+          open: 0,
+          driverVisible: 0,
+          soon: 0,
+          threeMo: 0,
+          next: 0,
+          reasons: [],
+          lastSeenAt: 0,
+        };
+        acc.set(key, c);
+      }
+
+      c.occurrences += 1;
+      c.names.set(text, (c.names.get(text) ?? 0) + 1);
+      c.shops.add(String(rec.shop_id));
+      if (rec.vehicle_vin) c.vins.add(rec.vehicle_vin);
+      if (rec.status === "open" || rec.status === "acknowledged") c.open += 1;
+      if (rec.visible_to_driver) c.driverVisible += 1;
+      if (rec.urgency === "soon") c.soon += 1;
+      else if (rec.urgency === "within_3_months") c.threeMo += 1;
+      else if (rec.urgency === "next_visit") c.next += 1;
+
+      const reason = String(rec.reason ?? "").trim();
+      if (reason && c.reasons.length < 4 && !c.reasons.includes(reason)) {
+        c.reasons.push(reason);
+      }
+
+      const age = now - rec.created_at;
+      if (age <= TREND_WINDOW_DAYS * DAY_MS) c.recent += 1;
+      else if (age <= 2 * TREND_WINDOW_DAYS * DAY_MS) c.prior += 1;
+
+      if (rec.created_at > c.lastSeenAt) c.lastSeenAt = rec.created_at;
+    }
+
+    const clusters: RecommendedCluster[] = [];
+    for (const c of acc.values()) {
+      const name = dominant(c.names) ?? c.match_key;
+
+      // Only score when nobody has already ruled on this name (same gate as
+      // patternView). A hit here means a mechanic freeform-typed work the
+      // catalog already models — it should have been picked, not typed.
+      let suggestion: RecommendedCluster["canonical_suggestion"] = null;
+      if (!resolved.has(c.match_key)) {
+        const verdict = matchServiceName(name, catalog);
+        if (verdict.best && verdict.confidence !== "none") {
+          suggestion = {
+            service_id: verdict.best.serviceId,
+            service_name: verdict.best.name,
+            confidence: verdict.confidence,
+            score: Math.round(verdict.best.score * 100) / 100,
+          };
+        }
+      }
+
+      clusters.push({
+        match_key: c.match_key,
+        name,
+        occurrences: c.occurrences,
+        distinct_shops: c.shops.size,
+        distinct_vehicles: c.vins.size,
+        trend: c.recent - c.prior,
+        recent_count: c.recent,
+        open_count: c.open,
+        driver_visible: c.driverVisible,
+        urgency_soon: c.soon,
+        urgency_3mo: c.threeMo,
+        urgency_next: c.next,
+        sample_reasons: c.reasons,
+        last_seen_at: c.lastSeenAt,
+        canonical_suggestion: suggestion,
+      });
+    }
+
+    clusters.sort(
+      (a, b) =>
+        b.distinct_shops - a.distinct_shops ||
+        b.trend - a.trend ||
+        b.occurrences - a.occurrences,
+    );
+
+    const limited =
+      typeof args.limit === "number" ? clusters.slice(0, args.limit) : clusters;
+
+    return {
+      clusters: limited,
+      totals: {
+        clusters: clusters.length,
+        recommendations: clusters.reduce((s, c) => s + c.occurrences, 0),
+        open: clusters.reduce((s, c) => s + c.open_count, 0),
+      },
+    };
+  },
+});
+
+/**
+ * Every freeform recommendation in one cluster — "where and who recommends it".
+ * The recommended band's twin of clusterDetail. WHO is the shop and the mechanic
+ * who flagged it; WHERE is the vehicle they flagged it on.
+ *
+ * job_recommendations has no match_key column, so membership is recomputed here
+ * exactly the way recommendedPatternView groups them (serviceMatchKey of the
+ * freeform text). custom_jobs is young and recs younger; a full scan is fine.
+ */
+export const recommendedClusterDetail = query({
+  args: {
+    token: v.string(),
+    matchKey: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await requireDirector(ctx, args.token);
+
+    const recs = await ctx.db.query("job_recommendations").collect();
+    const rows = recs.filter((r) => {
+      if (r.recommended_service_id) return false;
+      const text = String(r.freeform_text ?? "").trim();
+      if (!text) return false;
+      return serviceMatchKey(text) === args.matchKey;
+    });
+    rows.sort((a, b) => b.created_at - a.created_at);
+
+    const limited = rows.slice(0, args.limit ?? 100);
+    return await Promise.all(
+      limited.map(async (rec) => {
+        const shop = await ctx.db.get(rec.shop_id);
+        const mech = await ctx.db.get(rec.mechanic_id);
+        const mechName = mech
+          ? `${(mech as any).first_name ?? ""} ${(mech as any).last_name ?? ""}`.trim() ||
+            null
+          : null;
+        const vehicle = await ctx.db
+          .query("vehicles")
+          .withIndex("by_vin", (q: any) => q.eq("vin", rec.vehicle_vin))
+          .first();
+        return {
+          _id: rec._id,
+          name: rec.freeform_text ?? "",
+          shop_id: rec.shop_id,
+          shop_name: (shop as any)?.name ?? null,
+          mechanic_name: mechName,
+          vehicle_vin: rec.vehicle_vin,
+          vehicle_year: (vehicle as any)?.year ?? null,
+          urgency: rec.urgency,
+          reason: rec.reason ?? null,
+          visible_to_driver: rec.visible_to_driver,
+          status: rec.status,
+          source: rec.source ?? null,
+          created_at: rec.created_at,
+        };
+      }),
+    );
+  },
+});
+
+/** Lowercase, dash-separated slug from a display name. Local to avoid importing
+ *  the parts-admin copy; matches its behaviour for our purposes. */
+function slugifyName(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/**
+ * Promote a recommended cluster into a catalog service.
+ *
+ * Deliberately conservative: it creates the service as a DRAFT (`is_bookable:
+ * false`) because a cluster carries no pricing, labor or parts config — guessing
+ * a price is worse than shipping nothing. Promote captures the product decision
+ * ("yes, model this"), seeds the shell, and aliases the cluster's name so the
+ * next mechanic lands on the new service instead of re-typing it as freeform.
+ * A human finishes pricing in Services and flips it bookable.
+ */
+export const promoteRecommendationCluster = mutation({
+  args: {
+    token: v.string(),
+    name: v.string(),
+    matchKey: v.string(),
+    slug: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await requireDirector(ctx, args.token, "data.write");
+
+    const name = args.name.trim();
+    if (!name) throw new Error("A name is required.");
+    const slug = (args.slug?.trim() || slugifyName(name)).toLowerCase();
+    if (!slug) throw new Error("That name doesn't produce a usable slug.");
+
+    const slugTaken = await ctx.db
+      .query("services")
+      .withIndex("by_slug", (q) => q.eq("slug", slug))
+      .first();
+    if (slugTaken) {
+      throw new Error(`A service with slug "${slug}" already exists.`);
+    }
+
+    const now = Date.now();
+    const serviceId = await ctx.db.insert("services", {
+      name,
+      slug,
+      // No pricing/labor/parts config yet — it must not be bookable until a
+      // human finishes it in Services, or the quote engine would price it at $0.
+      is_bookable: false,
+      requires_parts: false,
+      created_at: now,
+    });
+
+    // Teach the match gate the cluster's name so the next mechanic lands on the
+    // new service instead of filing it freeform again. Mirrors linkAlias.
+    const normalized = serviceMatchKey(name) || args.matchKey;
+    let aliasId: Id<"service_aliases"> | null = null;
+    if (normalized) {
+      const existing = await ctx.db
+        .query("service_aliases")
+        .withIndex("by_normalized_alias", (q) =>
+          q.eq("normalized_alias", normalized),
+        )
+        .first();
+      if (existing) {
+        await ctx.db.patch(existing._id, {
+          service_id: serviceId,
+          alias: name,
+          source: "director_promote",
+          created_at: now,
+        });
+        aliasId = existing._id;
+      } else {
+        aliasId = await ctx.db.insert("service_aliases", {
+          alias: name,
+          normalized_alias: normalized,
+          service_id: serviceId,
+          source: "director_promote",
+          created_at: now,
+        });
+      }
+    }
+
+    await logAudit(ctx, actor, {
+      entity_type: "service",
+      entity_id: String(serviceId),
+      action: "create",
+      detail: `Promoted recommended work "${name}" → draft service (${slug})`,
+    });
+
+    return { ok: true as const, service_id: serviceId, slug, alias_id: aliasId };
   },
 });

@@ -20,6 +20,7 @@ import {
   Pause,
   Phone,
   Play,
+  Plus,
   X,
 } from "lucide-react";
 import ElapsedTimer from "./elapsed-timer";
@@ -118,7 +119,7 @@ export function NowWorkingPane({
     [job?.jobActuals?.inProgressPhotos],
   );
 
-  const [notes, setNotes] = useState(serverNotes);
+  const [notes, setNotes] = useState<string>(serverNotes);
   const [transientPhotos, setTransientPhotos] = useState<TransientPhoto[]>([]);
 
   const seededForBookingRef = useRef<string | null>(null);
@@ -133,6 +134,42 @@ export function NowWorkingPane({
 
   const notesRef = useRef(notes);
   notesRef.current = notes;
+
+  /* Notes are kept as one newline-joined string on the server (unchanged
+     contract — the post-job report reads it verbatim), but entered one at a
+     time: write a note, add it, write the next. Each non-empty line is one
+     entry, so the list survives a reload and any legacy free-text note just
+     shows up as its existing lines. */
+  const [draftNote, setDraftNote] = useState("");
+  const noteEntries = useMemo(
+    () =>
+      notes
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+    [notes],
+  );
+
+  function addNote() {
+    const text = draftNote.trim();
+    if (!text) return;
+    setNotes((prev) => {
+      const base = prev.trim();
+      return base ? `${base}\n${text}` : text;
+    });
+    setDraftNote("");
+  }
+
+  function removeNoteAt(index: number) {
+    setNotes((prev) =>
+      prev
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((_, i) => i !== index)
+        .join("\n"),
+    );
+  }
 
   const flushNotes = async () => {
     try {
@@ -527,13 +564,66 @@ export function NowWorkingPane({
                   Saved automatically · carried into post-job report
                 </p>
               </div>
-              <textarea
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                placeholder="Jot down what you find as you work — torque values, surprises, what you replaced..."
-                rows={3}
-                className="mt-3 w-full rounded-xl border border-white/10 bg-slate-900/40 p-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-emerald-400/50 focus:outline-none"
-              />
+
+              {noteEntries.length > 0 ? (
+                <ul className="mt-3 space-y-2">
+                  {noteEntries.map((entry, index) => (
+                    <li
+                      key={`${index}-${entry}`}
+                      className="flex items-start gap-2 rounded-xl border border-white/10 bg-slate-900/40 px-3 py-2.5"
+                    >
+                      <span className="mt-1.5 inline-flex h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400/70" />
+                      <span className="flex-1 whitespace-pre-wrap break-words text-sm text-slate-100">
+                        {entry}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeNoteAt(index)}
+                        aria-label="Delete note"
+                        className="shrink-0 rounded-md p-1 text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              <div className="mt-3">
+                <textarea
+                  value={draftNote}
+                  onChange={(event) => setDraftNote(event.target.value)}
+                  onKeyDown={(event) => {
+                    // Enter files the note; Shift+Enter keeps a line break for
+                    // the occasional longer one.
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      addNote();
+                    }
+                  }}
+                  placeholder={
+                    noteEntries.length > 0
+                      ? "Add another note…"
+                      : "Jot down what you find as you work — torque values, surprises, what you replaced…"
+                  }
+                  rows={2}
+                  className="w-full rounded-xl border border-white/10 bg-slate-900/40 p-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-emerald-400/50 focus:outline-none"
+                />
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <p className="text-[11px] text-slate-500">
+                    Enter to add · Shift+Enter for a line break
+                  </p>
+                  <button
+                    type="button"
+                    onClick={addNote}
+                    disabled={draftNote.trim().length === 0}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add note
+                  </button>
+                </div>
+              </div>
 
               <div className="mt-5 flex items-center justify-between gap-3">
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -635,9 +725,6 @@ export function NowWorkingPane({
           onClose={() => setFlagOpen(false)}
           onAddScope={() => setScopeOpen(true)}
           onToast={onToast}
-          // A damage report has to attach real evidence, and these are the
-          // photos the mechanic already took on this job.
-          jobPhotos={serverPhotos}
         />
       ) : null}
 

@@ -330,6 +330,8 @@ export type PostJobSurveyPayload = {
   parts_used: JobActualPartPayload[];
   vehicle_updates?: VehicleUpdateValues | null;
   technician_notes?: string | null;
+  /** Customer-facing "what did you find / do" summary (job_actuals.mechanic_findings). */
+  mechanic_findings?: string | null;
   flagged_vehicle_specs?: boolean;
   flagged_vehicle_specs_reason?: string | null;
   actual_labor_minutes?: number | null;

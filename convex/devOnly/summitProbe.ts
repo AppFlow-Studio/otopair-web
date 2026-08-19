@@ -20,6 +20,7 @@ import {
   scraplingEnabled,
   scraplingFetchPage,
 } from "../vehicleEnrichment/scrapling";
+import { fetchUrlWithHtml } from "../vehicleEnrichment/firecrawl";
 
 const CHALLENGE = /Pardon Our Interruption|reese84|_Incapsula_Resource|incapsula/i;
 
@@ -71,6 +72,24 @@ export const probe = internalAction({
         : { mode, result: "null (miss)" };
     } catch (e) {
       out.scrapling = { error: String(e).slice(0, 200) };
+    }
+    // Tier 2 — Firecrawl, which now escalates to its RESIDENTIAL stealth proxy
+    // when the first attempt comes back walled rather than only when empty.
+    // This is the tier with a non-datacenter IP, so it is the only one with a
+    // real chance against Imperva/Cloudflare.
+    try {
+      const fc = await fetchUrlWithHtml(args.url, 90_000);
+      const body = fc.html ?? fc.markdown ?? null;
+      out.firecrawlLeg = {
+        chars: body?.length ?? 0,
+        isChallenge: CHALLENGE.test(body ?? ""),
+        looksBlocked: looksBlockedBody(body),
+        titleish: ((body ?? "").match(/<title[^>]*>([^<]{0,90})/i) ?? [])[1] ?? null,
+        hasNominalLabel: /Nominal Thickness/i.test(body ?? ""),
+        hasDiscardLabel: /Discard Thickness/i.test(body ?? ""),
+      };
+    } catch (e) {
+      out.firecrawlLeg = { error: String(e).slice(0, 200) };
     }
     return out;
   },

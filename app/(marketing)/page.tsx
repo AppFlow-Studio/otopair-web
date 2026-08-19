@@ -9,9 +9,9 @@ import FooterCta from "@/components/flagship/landing/footer-cta";
 
 export default function Home() {
   return (
-    <main className="min-h-screen w-full bg-[#eceae6]">
+    <main className="min-h-screen w-full bg-white">
       <FlagshipHero />
-      <div className="w-full bg-[#eceae6]">
+      <div className="w-full bg-white">
         <WhyOtoSection />
         <PriceLockSection />
         <PayoutSection />

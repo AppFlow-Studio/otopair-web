@@ -460,3 +460,115 @@ describe("the immediate shortcut override alert", () => {
     expect(outbox).toHaveLength(1);
   });
 });
+
+/**
+ * clusterParts.
+ *
+ * It used to read parts_quote_snapshots filtered by custom_service_name, which
+ * could never return anything: that table exists to measure CATALOG accuracy —
+ * mechanic edit versus what the catalog predicted — and a custom line has no
+ * prediction, so custom rows are deliberately never written there. The query
+ * was dead by construction, and the drawer showed "none" for work that plainly
+ * consumed a part.
+ */
+describe("clusterParts", () => {
+  it("counts parts recorded on the custom job", async () => {
+    const t = makeT();
+    await seedDirector(t);
+    const shop = await seedShop(t, "cp1", "VINCP1000000000A");
+    await addJob(t, shop, { name: "Power window switch replacement" });
+    const matchKey = await t.run(async (ctx: any) =>
+      (await ctx.db.query("custom_jobs").collect())[0].match_key,
+    );
+
+    await t.run(async (ctx: any) => {
+      const rows = await ctx.db.query("custom_jobs").collect();
+      await ctx.db.patch(rows[0]._id, {
+        parts: [
+          {
+            part_name: "Window switch",
+            oem_number: "83071AN00B",
+            quantity: 1,
+            line_total_cents: 7855,
+          },
+        ],
+      });
+    });
+
+    const out: any = await t.query(api.directorCustomJobs.clusterParts, {
+      token: DIRECTOR_TOKEN,
+      matchKey,
+    });
+
+    expect(out.parts).toHaveLength(1);
+    expect(out.parts[0].oem_number).toBe("83071AN00B");
+    expect(out.parts[0].total_cents).toBe(7855);
+    expect(out.unattributed_jobs).toBe(0);
+  });
+
+  it("falls back to the mechanic's confirmed parts when the row has none", async () => {
+    const t = makeT();
+    await seedDirector(t);
+    const shop = await seedShop(t, "cp2", "VINCP2000000000A");
+    await addJob(t, shop, { name: "Power window switch replacement" });
+    const matchKey = await t.run(async (ctx: any) =>
+      (await ctx.db.query("custom_jobs").collect())[0].match_key,
+    );
+
+    await t.run(async (ctx: any) => {
+      const job = (await ctx.db.query("custom_jobs").collect())[0];
+      await ctx.db.insert("job_actuals", {
+        booking_id: job.booking_id,
+        mechanic_id: job.mechanic_id,
+        parts_used: [
+          {
+            part_name: "Window switch",
+            oem_number: "83071AN00B",
+            custom_service_name: job.name,
+            cost: 78.55,
+            quantity: 1,
+          },
+          // A catalog part on the same booking — must not be counted here.
+          { part_name: "Oil filter", oem_number: "90915", cost: 12, quantity: 1, service_id: undefined },
+        ],
+      } as any);
+    });
+
+    const out: any = await t.query(api.directorCustomJobs.clusterParts, {
+      token: DIRECTOR_TOKEN,
+      matchKey,
+    });
+    expect(out.parts).toHaveLength(1);
+    expect(out.parts[0].name).toBe("Window switch");
+  });
+
+  it("reports jobs whose parts name no line rather than claiming them", async () => {
+    const t = makeT();
+    await seedDirector(t);
+    const shop = await seedShop(t, "cp3", "VINCP3000000000A");
+    await addJob(t, shop, { name: "Power window switch replacement" });
+    const matchKey = await t.run(async (ctx: any) =>
+      (await ctx.db.query("custom_jobs").collect())[0].match_key,
+    );
+
+    await t.run(async (ctx: any) => {
+      const job = (await ctx.db.query("custom_jobs").collect())[0];
+      await ctx.db.insert("job_actuals", {
+        booking_id: job.booking_id,
+        mechanic_id: job.mechanic_id,
+        // Completed before per-line attribution existed.
+        parts_used: [
+          { part_name: "Window switch", oem_number: "83071AN00B", cost: 78.55, quantity: 1 },
+        ],
+      } as any);
+    });
+
+    const out: any = await t.query(api.directorCustomJobs.clusterParts, {
+      token: DIRECTOR_TOKEN,
+      matchKey,
+    });
+    // Counted as unknown, not attributed to this work — that would be a guess.
+    expect(out.parts).toHaveLength(0);
+    expect(out.unattributed_jobs).toBe(1);
+  });
+});

@@ -20,6 +20,11 @@ export const jobActualInputValidator = v.object({
   actual_parts_cost: v.optional(v.union(v.float64(), v.null())),
   difficulty_rating: v.optional(v.union(v.float64(), v.null())),
   technician_notes: v.optional(v.union(v.string(), v.null())),
+  // Customer-facing summary of what was found / done. Distinct from
+  // technician_notes ("for the next mechanic") and additional_observations
+  // (private shop note) — this is the one free-text field the driver reads on
+  // the receipt and Past Service report.
+  mechanic_findings: v.optional(v.union(v.string(), v.null())),
   parts_used: v.optional(v.union(v.array(jobActualPartValidator), v.null())),
   prejob_report: v.optional(v.union(prejobReportValidator, v.null())),
   completion_mileage: v.optional(v.union(v.float64(), v.null())),
@@ -50,6 +55,7 @@ export type JobActualInput = {
   actual_parts_cost?: number | null;
   difficulty_rating?: number | null;
   technician_notes?: string | null;
+  mechanic_findings?: string | null;
   parts_used?: JobActualPartInput[] | null;
   prejob_report?: Record<string, unknown> | null;
   completion_mileage?: number | null;
@@ -205,6 +211,9 @@ function applyActualsInputToPatch(patch: Record<string, any>, actuals?: JobActua
   }
   if (hasOwn(actuals, "technician_notes")) {
     patch.technician_notes = actuals.technician_notes ?? "";
+  }
+  if (hasOwn(actuals, "mechanic_findings")) {
+    patch.mechanic_findings = actuals.mechanic_findings ?? "";
   }
   if (hasOwn(actuals, "parts_used")) {
     patch.parts_used = actuals.parts_used ?? [];

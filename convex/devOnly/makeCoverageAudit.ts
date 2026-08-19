@@ -84,6 +84,9 @@ export const audit = internalQuery({
         // The work queue that would close the alarm: stores already probed and
         // recorded, waiting on a detail-page walk before they can be promoted.
         pendingAlternates: diversity.pendingAlternates,
+        // Per-lane, because the two diversify independently — a validated
+        // price source does not make the PARTS lane any less single-operator.
+        secondVoice: diversity.secondVoice,
         byOperator: diversity.byOperator.map((o) => ({
           operator: o.operator,
           makes: o.makes.length,

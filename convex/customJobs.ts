@@ -460,6 +460,56 @@ export async function completeCustomJobsForBooking(
 }
 
 /**
+ * Shared gate for the mid-job edit surface (add / rename / remove).
+ *
+ * Same three questions each entry point has to answer before it touches a line:
+ * is the caller a real user, do they belong to (or own) the booking's shop, and
+ * is the job actually running. Kept as one helper so a fourth entry point can't
+ * later ship without one of them.
+ */
+async function authorizeMidJobEdit(
+  ctx: any,
+  bookingId: Id<"bookings">,
+): Promise<{ user: any; booking: any }> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Not authenticated");
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q: any) =>
+      q.eq("clerkUserId", identity.subject),
+    )
+    .unique();
+  if (!user) throw new Error("User not found");
+
+  const booking = await ctx.db.get(bookingId);
+  if (!booking) throw new Error("Booking not found");
+  if (!booking.shop_id) throw new Error("Booking has no shop");
+
+  const shopUser = await ctx.db
+    .query("shop_users")
+    .withIndex("by_user_and_shop", (q: any) =>
+      q.eq("user_id", user._id).eq("shop_id", booking.shop_id),
+    )
+    .first();
+  if (!shopUser?.is_active) {
+    const owned = await ctx.db
+      .query("shops")
+      .withIndex("by_owner_user_id", (q: any) => q.eq("owner_user_id", user._id))
+      .filter((q: any) => q.eq(q.field("_id"), booking.shop_id))
+      .first();
+    if (!owned) throw new Error("Not authorized for this shop");
+  }
+
+  // Same gate the mid-job approval cycle enforces — changing work on a job that
+  // isn't running would land money on a booking nobody is standing at.
+  if (booking.status !== "in_progress") {
+    throw new Error("Work can only be changed while the booking is in progress.");
+  }
+
+  return { user, booking };
+}
+
+/**
  * Add off-catalog work to a job that's already underway — the "while I was in
  * there" case (Off-Catalog Work spec, §4).
  *
@@ -580,6 +630,144 @@ export const addMidJobCustomService = mutation({
       // about the booking's money has moved yet.
       requiresApproval: true,
     };
+  },
+});
+
+/**
+ * Edit a line the mechanic just added — before it's been sent for approval.
+ *
+ * Only the three things captured at the keyboard are editable here: the name,
+ * the complaint, and the taxonomy. Parts, minutes and price are owned by the
+ * mid-job approval cycle downstream, so they're deliberately untouched. Same
+ * "no money moves" contract as the add path.
+ */
+export const updateMidJobCustomService = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    customJobId: v.id("custom_jobs"),
+    name: v.string(),
+    complaint: v.optional(v.string()),
+    systemTags: v.optional(v.array(v.string())),
+    workType: v.optional(v.string()),
+    // Labor estimate for this line. Feeds the per-service breakdown on the
+    // labor step; the mid-job approval cycle still owns the money.
+    estimatedMinutes: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { booking } = await authorizeMidJobEdit(ctx, args.bookingId);
+
+    const row = await ctx.db.get(args.customJobId);
+    if (!row) throw new Error("That work is no longer on the job.");
+    if (row.booking_id !== args.bookingId) {
+      throw new Error("That work belongs to a different booking.");
+    }
+
+    const name = args.name.trim();
+    if (!name) throw new Error("A name is required");
+
+    // Same single enforcement point the record path uses.
+    const taxonomy = requireCustomJobTaxonomy({
+      system_tags: args.systemTags,
+      work_type: args.workType,
+      jobName: name,
+    });
+
+    const now = Date.now();
+    const oldKey = row.match_key ?? serviceMatchKey(row.name);
+    const newKey = serviceMatchKey(name);
+
+    // A rename that collides with another line on the same booking would give
+    // two custom_jobs rows one match_key. The completion path matches outcomes
+    // on that key, so refuse the rename rather than silently merge two jobs.
+    if (newKey !== oldKey) {
+      const siblings = await ctx.db
+        .query("custom_jobs")
+        .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+        .collect();
+      if (
+        siblings.some((r: any) => r._id !== row._id && r.match_key === newKey)
+      ) {
+        throw new Error("That work is already on the job.");
+      }
+    }
+
+    await ctx.db.patch(args.customJobId, {
+      name,
+      normalized_name: normalizeServiceName(name),
+      match_key: newKey,
+      system_tags: taxonomy.system_tags,
+      work_type: taxonomy.work_type,
+      complaint: args.complaint?.trim() || undefined,
+      estimated_minutes:
+        args.estimatedMinutes !== undefined
+          ? args.estimatedMinutes
+          : row.estimated_minutes,
+      updated_at: now,
+    });
+
+    // Keep the booking's lightweight scheduling copy in sync when the name moved.
+    if (newKey !== oldKey) {
+      const lines = Array.isArray((booking as any).custom_services)
+        ? [...(booking as any).custom_services]
+        : [];
+      let mutated = false;
+      for (const line of lines) {
+        if (serviceMatchKey(String(line.name)) === oldKey) {
+          line.name = name;
+          mutated = true;
+        }
+      }
+      if (mutated) {
+        await ctx.db.patch(args.bookingId, {
+          custom_services: lines,
+          updated_at: now,
+        });
+      }
+    }
+
+    return { ok: true, customJobId: args.customJobId };
+  },
+});
+
+/**
+ * Pull a line the mechanic added by mistake back off the job.
+ *
+ * Drops the structured custom_jobs row and the matching scheduling copy on the
+ * booking. Only reachable before the mid-job change is submitted (the money
+ * hasn't moved yet), so there's nothing to reverse downstream.
+ */
+export const removeMidJobCustomService = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    customJobId: v.id("custom_jobs"),
+  },
+  handler: async (ctx, args) => {
+    const { booking } = await authorizeMidJobEdit(ctx, args.bookingId);
+
+    const row = await ctx.db.get(args.customJobId);
+    if (!row) throw new Error("That work is no longer on the job.");
+    if (row.booking_id !== args.bookingId) {
+      throw new Error("That work belongs to a different booking.");
+    }
+
+    // Drop the scheduling copy on the booking, matched on the same key the row
+    // is keyed on so an edited name still lines up.
+    const matchKey = row.match_key ?? serviceMatchKey(row.name);
+    const lines = Array.isArray((booking as any).custom_services)
+      ? (booking as any).custom_services
+      : [];
+    const nextLines = lines.filter(
+      (c: any) => serviceMatchKey(String(c.name)) !== matchKey,
+    );
+    if (nextLines.length !== lines.length) {
+      await ctx.db.patch(args.bookingId, {
+        custom_services: nextLines,
+        updated_at: Date.now(),
+      });
+    }
+
+    await ctx.db.delete(args.customJobId);
+    return { ok: true };
   },
 });
 

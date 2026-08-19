@@ -4,8 +4,30 @@ import { createContext, useContext, useRef } from "react";
 import { motion, useInView } from "motion/react";
 import { useReducedMotionSafe } from "../shared";
 
-/** Serif used for every landing headline (design: Romie → site serif). */
-export const serif = { fontFamily: "var(--font-Lora)" } as const;
+/** Serif used across the landing at text sizes — role titles, card stats, the
+ * sim labels. The design face is Romie (Claude Type); Petrona is the
+ * licensed-free stand-in, picked by scoring 26 free serifs against the V1
+ * render on proportion and per-glyph shape (see app/layout.tsx). 400 here
+ * because these run 15-26px, where the display weight would read spindly. */
+export const serif = { fontFamily: "var(--font-Petrona)", fontWeight: 400 } as const;
+
+/** Display cut of the same face, for headlines ~40px and up. Romie's stem is
+ * 0.102 of its cap height on the V1 render — light. Petrona at 250 lands on
+ * 0.094, which matches V1's colour by eye at equal cap height; 300 measures
+ * closer on the stem but reads visibly darker than the design. Lighter at
+ * display and heavier at text is the normal optical compensation, not a
+ * mismatch. */
+export const serifDisplay = {
+  fontFamily: "var(--font-Petrona)",
+  fontWeight: 250,
+  // Romie renders a 0.72em cap; Petrona renders 0.662em. Without this every
+  // heading would come out ~9% smaller than the size V1 declares, and the
+  // declared sizes in the markup would stop meaning what they say. Normalizing
+  // the cap keeps them literal — and turns into a no-op the day real Romie
+  // lands, since 0.72 is its own ratio. Browsers without the two-value syntax
+  // fall back to the un-normalized size, which is merely small, not broken.
+  fontSizeAdjust: "cap-height 0.72",
+} as const;
 
 /** Fade-up once the element scrolls into view — the landing sections' shared entrance. */
 export function Reveal({

@@ -99,11 +99,26 @@ const TIME_OPTIONS = buildTimeOptions();
 
 const ESTIMATE_MINUTE_OPTIONS: number[] = Array.from({ length: 32 }, (_, i) => (i + 1) * 15);
 
+// How many "Done here before" shortcut pills to show at a glance before the rest
+// fold behind the search box. Keeps the closed picker tidy for shops with a long
+// off-catalog history without hiding the search itself.
+const SHORTCUT_PILL_CAP = 8;
+
 function formatMinutesLabel(mins: number): string {
   if (mins < 60) return `${mins} min`;
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   return m === 0 ? `${h} hr` : `${h} hr ${m} min`;
+}
+
+// The estimate Select can only display a value that exists in the options list,
+// so a catalog/custom duration that isn't a clean 15-min multiple (e.g. a 0.4hr
+// labor time = 24m) has to snap to the nearest option before we can prefill it.
+function snapToEstimateOption(mins: number): number {
+  return ESTIMATE_MINUTE_OPTIONS.reduce(
+    (best, opt) => (Math.abs(opt - mins) < Math.abs(best - mins) ? opt : best),
+    ESTIMATE_MINUTE_OPTIONS[0],
+  );
 }
 
 function toMins(hhmm: string): number {
@@ -420,6 +435,9 @@ export default function CreateBookingDrawer({
      back together later (Off-Catalog Work spec, §3). */
   const [customDraftShortcutId, setCustomDraftShortcutId] = useState("");
   const [customDraftSaveShortcut, setCustomDraftSaveShortcut] = useState(false);
+  // Filters the "Done here before" shortcut pills so a long off-catalog history
+  // stays findable by name instead of forcing the mechanic to eyeball the list.
+  const [shortcutSearch, setShortcutSearch] = useState("");
 
   /* ---- Customer states / notes ---- */
   const [customerNotes, setCustomerNotes] = useState("");
@@ -464,6 +482,9 @@ export default function CreateBookingDrawer({
   // Once the mechanic types in the quoted price we stop auto-prefilling it from
   // the tier rate, so we never clobber a hand-entered quote.
   const [quotedPriceTouched, setQuotedPriceTouched] = useState(false);
+  // Same guard for the time estimate: once the mechanic picks a duration we stop
+  // auto-prefilling it from the selected services, so a manual override sticks.
+  const [estimateMinutesTouched, setEstimateMinutesTouched] = useState(false);
 
   /* ---- Diagnostic system ---- */
   type DiagnosticSystem =
@@ -1094,6 +1115,19 @@ export default function CreateBookingDrawer({
     );
   }, [isBackfill, quotedPriceTouched, suggestedQuotedPrice]);
 
+  // Prefill the time estimate from the selected catalog + custom services and
+  // keep it in sync as the selection changes — until the mechanic sets it
+  // themselves. Selecting a job already tells us how long it should take, so the
+  // mechanic shouldn't have to re-enter that duration by hand; it stays editable.
+  // Backfill captures the actual time taken, so we don't seed a default there.
+  useEffect(() => {
+    if (isBackfill) return;
+    if (estimateMinutesTouched) return;
+    if (catalogEstimateMinutes <= 0) return;
+    const snapped = snapToEstimateOption(catalogEstimateMinutes);
+    setMechanicEstimateMinutes((prev) => (prev === snapped ? prev : snapped));
+  }, [isBackfill, estimateMinutesTouched, catalogEstimateMinutes]);
+
   /* ---- Overlap check ---- */
   const overlapError = useMemo(() => {
     if (isBackfill) return null;
@@ -1254,10 +1288,31 @@ export default function CreateBookingDrawer({
   const shopShortcuts = useQuery(
     api.shopCustomServices.listForShop,
     shopData?.shopId
-      ? { shopId: shopData.shopId as Id<"shops">, limit: 8 }
+      ? // Fetch the fuller list (still best-first) so the search box below can
+        // reach past jobs beyond the handful of pills shown at a glance.
+        { shopId: shopData.shopId as Id<"shops">, limit: 50 }
       : "skip",
   );
   const saveShortcut = useMutation(api.shopCustomServices.create);
+
+  // Best-first pills capped for a tidy default view; the search box widens the
+  // net across the whole fetched list once the mechanic starts typing.
+  const shortcutMatches = useMemo(() => {
+    const all = (shopShortcuts ?? []) as any[];
+    const q = shortcutSearch.trim().toLowerCase();
+    if (!q) {
+      return {
+        visible: all.slice(0, SHORTCUT_PILL_CAP),
+        hidden: Math.max(0, all.length - SHORTCUT_PILL_CAP),
+        searching: false,
+      };
+    }
+    return {
+      visible: all.filter((sc) => sc.name.toLowerCase().includes(q)),
+      hidden: 0,
+      searching: true,
+    };
+  }, [shopShortcuts, shortcutSearch]);
 
   /* The services this shop actually offers. The match gate scores against the
      whole catalog, but suggesting a service that isn't in `categories` would
@@ -2066,7 +2121,55 @@ export default function CreateBookingDrawer({
           )}
 
           {/* Add custom service */}
-          <div className="mt-3">
+          <div className="mt-3 space-y-2">
+            {/* Past jobs this shop has done before. Lifted out of the closed-state
+                branch so the search box + shortcuts stay reachable whether or not
+                the custom form is open, and searchable once the list grows. */}
+            {shopShortcuts && shopShortcuts.length > 0 ? (
+              <div>
+                <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                  Done here before
+                </p>
+                <div className="relative mb-2">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={shortcutSearch}
+                    onChange={(e) => setShortcutSearch(e.target.value)}
+                    placeholder="Search past jobs…"
+                    className="w-full rounded-lg border-0 bg-muted/70 py-2 pl-8 pr-3 text-xs text-foreground outline-none placeholder:text-muted-foreground/50 focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+                {shortcutMatches.visible.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {shortcutMatches.visible.map((sc: any) => (
+                      <button
+                        key={String(sc._id)}
+                        type="button"
+                        onClick={() => openShortcut(sc)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/30 px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5"
+                      >
+                        {sc.name}
+                        {sc.default_minutes ? (
+                          <span className="text-[10px] tabular-nums text-muted-foreground">
+                            {sc.default_minutes}m
+                          </span>
+                        ) : null}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground">
+                    No past jobs match “{shortcutSearch.trim()}”.
+                  </p>
+                )}
+                {shortcutMatches.hidden > 0 ? (
+                  <p className="mt-1.5 text-[10px] text-muted-foreground/70">
+                    +{shortcutMatches.hidden} more — search to find them.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
             {showCustomForm ? (
               <div className="rounded-xl border border-dashed border-border p-3 space-y-2 bg-muted/20">
                 <div className="grid grid-cols-[1fr_88px] gap-2">
@@ -2231,40 +2334,14 @@ export default function CreateBookingDrawer({
                 </div>
               </div>
             ) : (
-              <div className="space-y-2">
-                {shopShortcuts && shopShortcuts.length > 0 ? (
-                  <div>
-                    <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                      Done here before
-                    </p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {shopShortcuts.map((sc: any) => (
-                        <button
-                          key={String(sc._id)}
-                          type="button"
-                          onClick={() => openShortcut(sc)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-muted/30 px-2.5 py-1.5 text-[11px] font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5"
-                        >
-                          {sc.name}
-                          {sc.default_minutes ? (
-                            <span className="text-[10px] tabular-nums text-muted-foreground">
-                              {sc.default_minutes}m
-                            </span>
-                          ) : null}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => setShowCustomForm(true)}
-                  className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Add custom service
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setShowCustomForm(true)}
+                className="w-full flex items-center justify-center gap-1.5 py-2 rounded-xl border border-dashed border-border text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/40 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Add custom service
+              </button>
             )}
           </div>
         </CollapsibleSection>
@@ -2293,6 +2370,7 @@ export default function CreateBookingDrawer({
               <Select
                 selectedKey={mechanicEstimateMinutes != null ? String(mechanicEstimateMinutes) : null}
                 onSelectionChange={(key) => {
+                  if (!isBackfill) setEstimateMinutesTouched(true);
                   if (key == null) {
                     setMechanicEstimateMinutes(null);
                     return;
@@ -2322,7 +2400,9 @@ export default function CreateBookingDrawer({
               <p className="mt-1 text-xs text-muted-foreground">
                 {isBackfill
                   ? "How long the job actually took."
-                  : "Your estimate for total job time."}
+                  : !estimateMinutesTouched && catalogEstimateMinutes > 0
+                    ? "Prefilled from the selected service. Editable."
+                    : "Your estimate for total job time."}
               </p>
             </div>
             <div>

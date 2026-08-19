@@ -87,6 +87,35 @@ type ActivityEvent =
       };
     }
   | {
+      /* Off-catalog work landing on a booking. Derived from custom_jobs rather
+         than written as its own log row, so it also covers every job recorded
+         before this event existed — and can't drift from the table it
+         describes.
+
+         Worth its own type: adding work mid-job is the single most consequential
+         thing that happens to a booking after it starts, and until now it showed
+         up only as an estimate_submitted with a bigger number. The activity log
+         said the price changed without ever saying what changed. */
+      type: "custom_work_added";
+      at: number;
+      actor: Actor;
+      data: {
+        name: string;
+        /** "booking" = on the original order, "mid_job" = found while working. */
+        source: string;
+        complaint: string | null;
+        systemTags: string[];
+        workType: string | null;
+        estimatedMinutes: number | null;
+        parts: Array<{
+          part_name: string;
+          oem_number: string | null;
+          quantity: number;
+        }>;
+        quotedPartsCents: number | null;
+      };
+    }
+  | {
       type: "part_edit";
       at: number;
       actor: Actor;
@@ -199,7 +228,7 @@ export const getBookingActivityLog = query({
     );
     if (!booking) return [];
 
-    const [statusHistory, approvals, partEdits, services] = await Promise.all([
+    const [statusHistory, approvals, partEdits, services, customJobs] = await Promise.all([
       ctx.db
         .query("booking_status_history")
         .withIndex("by_booking_id", (q: any) =>
@@ -223,6 +252,10 @@ export const getBookingActivityLog = query({
           async (sid) => ((await ctx.db.get(sid)) as any)?.name as string | undefined,
         ),
       ),
+      ctx.db
+        .query("custom_jobs")
+        .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+        .collect(),
     ]);
 
     const resolveActor = makeActorResolver(ctx);
@@ -335,6 +368,33 @@ export const getBookingActivityLog = query({
           oemNumber: e.oem_number_snapshot ?? null,
           oldValue: e.old_value ?? null,
           newValue: e.new_value ?? null,
+        },
+      });
+    }
+
+    // ── 5. Off-catalog work ─────────────────────────────────────────────
+    for (const job of customJobs as any[]) {
+      if (job.status === "cancelled") continue;
+      events.push({
+        type: "custom_work_added",
+        at: job.created_at,
+        // custom_jobs stores a mechanics id, which is not a users id — the
+        // resolver keys on users, so pass the booking's mechanic through the
+        // same path the other events use rather than guessing.
+        actor: await resolveActor(booking.mechanic_id ?? null),
+        data: {
+          name: job.name,
+          source: job.source ?? "booking",
+          complaint: job.complaint ?? null,
+          systemTags: (job.system_tags ?? []) as string[],
+          workType: job.work_type ?? null,
+          estimatedMinutes: job.estimated_minutes ?? null,
+          parts: ((job.parts ?? []) as any[]).map((part) => ({
+            part_name: part.part_name,
+            oem_number: part.oem_number ?? null,
+            quantity: part.quantity,
+          })),
+          quotedPartsCents: job.quoted_parts_cents ?? null,
         },
       });
     }

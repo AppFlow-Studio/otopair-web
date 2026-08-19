@@ -617,6 +617,56 @@ const CompletionTab = ({ token, id }: { token: string; id: Id<'bookings'> }) => 
               </span>
             } />
           </div>
+          {/* Which parts, not just how much. The receipt has itemised this for
+              the customer all along — the operator had less detail than the
+              person who paid the bill. Each row names the work it went into,
+              so an off-catalog part is traceable to its line. */}
+          {ja.partsUsed && ja.partsUsed.length > 0 && (
+            <div style={{ marginTop:14, borderTop:'1px solid var(--slate-100)', paddingTop:12 }}>
+              <div style={{ marginBottom:8, fontSize:10, fontWeight:600, color:'var(--slate-400)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
+                Parts used ({ja.partsUsed.filter((p: any) => !p.notUsed).length})
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                {ja.partsUsed.map((p: any, i: number) => (
+                  <div
+                    key={i}
+                    style={{
+                      display:'flex', alignItems:'baseline', justifyContent:'space-between',
+                      gap:12, fontSize:13,
+                      opacity: p.notUsed ? 0.45 : 1,
+                    }}
+                  >
+                    <span style={{ minWidth:0 }}>
+                      <span style={{ fontWeight:600, textDecoration: p.notUsed ? 'line-through' : 'none' }}>
+                        {p.partName}
+                      </span>
+                      {p.quantity > 1 && <span style={{ color:'var(--slate-500)' }}> ×{p.quantity}</span>}
+                      {p.oemNumber && (
+                        <span className="mono" style={{ marginLeft:6, fontSize:11, color:'var(--slate-500)' }}>
+                          {p.oemNumber}
+                        </span>
+                      )}
+                      <span style={{ display:'block', fontSize:11, color:'var(--slate-500)', marginTop:1 }}>
+                        {p.forWork ?? 'Unattributed'}
+                        {p.isCustom && (
+                          <span style={{ marginLeft:6, borderRadius:3, border:'1px solid var(--amber-500, #B45309)', color:'var(--amber-700, #B45309)', padding:'0 4px', fontSize:9, fontWeight:700, letterSpacing:'0.04em', textTransform:'uppercase' }}>
+                            custom
+                          </span>
+                        )}
+                        {p.suppliedByCustomer && (
+                          <span style={{ marginLeft:6, color:'var(--slate-400)' }}>customer-supplied</span>
+                        )}
+                        {p.notUsed && <span style={{ marginLeft:6 }}>not used</span>}
+                      </span>
+                    </span>
+                    <span className="mono" style={{ whiteSpace:'nowrap' }}>
+                      {money(p.lineCost, { cents: true })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {(ja.mechanicFindings || ja.technicianNotes || ja.additionalObservations || ja.inProgressNotes) && (
             <div style={{ marginTop:14, display:'flex', flexDirection:'column', gap:10, borderTop:'1px solid var(--slate-100)', paddingTop:12 }}>
               {ja.mechanicFindings && <Field label="Mechanic findings (customer-facing)" value={ja.mechanicFindings} />}

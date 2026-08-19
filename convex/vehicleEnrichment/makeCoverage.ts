@@ -314,6 +314,16 @@ export type OperatorDiversityFinding = {
    *  that closes this alarm. Surfaced here so a probed-but-unpromoted store is
    *  visible in the audit rather than buried in a const nobody re-reads. */
   pendingAlternates: PendingAlternate[];
+  /**
+   * Makes that DO have a validated second operator, per lane.
+   *
+   * Reported separately because the two lanes are diverse independently and
+   * conflating them would let a price win silence a parts alarm. gmpartsgiant
+   * is the live example: a genuine second PRICE operator for eight GM makes,
+   * and no help at all for proposing part numbers, because it has no vehicle
+   * scoping to attest fitment with.
+   */
+  secondVoice: { parts: string[]; price: string[] };
   /** Makes per operator, largest first. */
   byOperator: Array<{ operator: string; makes: string[] }>;
   /** Share of makes riding the single largest operator, 0..1. */
@@ -384,5 +394,24 @@ export function auditOperatorDiversity(
     }
   }
 
-  return { operatorCount, byOperator, dominantShare, severity, message, pendingAlternates };
+  const secondVoice = { parts: [] as string[], price: [] as string[] };
+  for (const r of rows) {
+    for (const alt of getAlternateStores(r.make)) {
+      if (!alt.validated) continue;
+      if (alt.capabilities.includes("parts")) secondVoice.parts.push(r.make);
+      if (alt.capabilities.includes("price")) secondVoice.price.push(r.make);
+    }
+  }
+  secondVoice.parts = [...new Set(secondVoice.parts)].sort();
+  secondVoice.price = [...new Set(secondVoice.price)].sort();
+
+  return {
+    operatorCount,
+    byOperator,
+    dominantShare,
+    severity,
+    message,
+    pendingAlternates,
+    secondVoice,
+  };
 }

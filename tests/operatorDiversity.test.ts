@@ -17,6 +17,7 @@ import { resolveOperator } from "../convex/vehicleEnrichment/sourceAdapters/clai
 import {
   getAlternateStores,
   getPartsStores,
+  getPriceStores,
   looksLikeRevolutionParts,
   SOURCE_REGISTRY,
 } from "../convex/vehicleEnrichment/sourceRegistry";
@@ -132,22 +133,23 @@ describe("getPartsStores — one attempt per operator", () => {
   });
 
   it("omits UNVALIDATED alternates — recorded is not trusted", () => {
-    // GM and Toyota both carry probed candidates today; none is validated, so
-    // no consumer may see them yet.
     for (const make of ["GMC", "Toyota"]) {
       expect(getAlternateStores(make).length, make).toBeGreaterThan(0);
-      expect(getPartsStores(make).every((s) => s.primary), make).toBe(true);
     }
+    // Toyota's candidates are all still unvalidated.
+    expect(getPriceStores("Toyota")).toEqual([]);
   });
 
   it("returns [] for an unregistered make", () => {
     expect(getPartsStores("Koenigsegg")).toEqual([]);
   });
 
-  it("records candidates as pending in the audit", () => {
+  it("records UNvalidated candidates as pending, and drops them once promoted", () => {
     const ops = auditOperatorDiversity().pendingAlternates.map((p) => p.operator);
-    expect(ops).toContain("gmpartsgiant.com");
+    // Still being proven.
     expect(ops).toContain("parts.toyota.com");
+    // Promoted Aug 2026 (price-capable), so it has left the work queue.
+    expect(ops).not.toContain("gmpartsgiant.com");
   });
 
   it("never lists an RP skin as a second voice", () => {
@@ -156,6 +158,52 @@ describe("getPartsStores — one attempt per operator", () => {
     // count, which its corroboration math is a function of.
     for (const make of Object.keys(SOURCE_REGISTRY)) {
       for (const alt of getAlternateStores(make)) {
+        expect(alt.operator, `${make} → ${alt.baseUrl}`).not.toBe("revolutionparts");
+      }
+    }
+  });
+});
+
+
+describe("capability split — a price source must never propose a part", () => {
+  // gmpartsgiant.com is the live case this split exists for: genuine GM OEM
+  // numbers and live prices, and NO vehicle scoping anywhere in its URL scheme,
+  // so it cannot say which of its 20 GMC spark plugs fits a 2021 Acadia.
+  it("gives GM makes a validated second PRICE operator", () => {
+    for (const make of ["GMC", "Chevrolet", "Buick", "Cadillac"]) {
+      const price = getPriceStores(make);
+      expect(price.map((s) => s.operator), make).toContain("gmpartsgiant.com");
+    }
+  });
+
+  it("does NOT let that store into the parts lane", () => {
+    for (const make of ["GMC", "Chevrolet"]) {
+      expect(getPartsStores(make).every((s) => s.primary), make).toBe(true);
+      expect(getPartsStores(make).map((s) => s.operator)).not.toContain("gmpartsgiant.com");
+    }
+  });
+
+  it("keeps the PARTS alarm firing despite the price win", () => {
+    // The two lanes diversify independently; a price source must not silence
+    // a parts alarm.
+    const f = auditOperatorDiversity();
+    expect(f.severity).toBe("alarm");
+    expect(f.secondVoice.parts).toEqual([]);
+    expect(f.secondVoice.price).toContain("GMC");
+  });
+
+  it("every registered alternate declares at least one capability", () => {
+    for (const make of Object.keys(SOURCE_REGISTRY)) {
+      for (const alt of getAlternateStores(make)) {
+        expect(alt.capabilities.length, `${make} → ${alt.baseUrl}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("a parts-capable alternate must not be an RP skin", () => {
+    for (const make of Object.keys(SOURCE_REGISTRY)) {
+      for (const alt of getAlternateStores(make)) {
+        if (!alt.capabilities.includes("parts")) continue;
         expect(alt.operator, `${make} → ${alt.baseUrl}`).not.toBe("revolutionparts");
       }
     }

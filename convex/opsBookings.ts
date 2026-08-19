@@ -649,6 +649,27 @@ export const completion = query({
       inProgressPhotos: { url: string; caption: string | null; takenAt: number }[];
       hasPrejobReport: boolean;
       hasPostjobReport: boolean;
+      /* The parts the mechanic confirmed, itemised and attributed. The card
+         used to show only actual_parts_cost — a single number, with no way to
+         answer "which parts", which is the question anyone opening a completion
+         report is actually asking. The receipt has shown the itemisation to the
+         CUSTOMER all along; the operator had less detail than the person who
+         paid the bill. */
+      partsUsed: Array<{
+        partName: string;
+        oemNumber: string | null;
+        brand: string | null;
+        quantity: number;
+        unitCost: number;
+        lineCost: number;
+        /** Catalog service name, or the off-catalog line's own name. */
+        forWork: string | null;
+        /** True when it belongs to a custom line — worth marking, because
+         *  off-catalog parts are the ones with no catalog price to check. */
+        isCustom: boolean;
+        suppliedByCustomer: boolean;
+        notUsed: boolean;
+      }>;
     } | null = null;
 
     if (ja) {
@@ -664,6 +685,51 @@ export const completion = query({
           takenAt: p.taken_at,
         })),
       );
+      // Attribute each part to the work it went into. service_id resolves to a
+      // catalog name; custom_service_name IS the name for off-catalog lines.
+      const rawParts = Array.isArray(ja.parts_used) ? (ja.parts_used as any[]) : [];
+      const serviceNameCache = new Map<string, string | null>();
+      const partsUsed = await Promise.all(
+        rawParts.map(async (part: any) => {
+          const quantity =
+            typeof part?.quantity === "number" && part.quantity > 0
+              ? part.quantity
+              : 1;
+          const unitCost = Number(part?.cost ?? 0);
+          let forWork: string | null = null;
+          let isCustom = false;
+          const customName =
+            typeof part?.custom_service_name === "string"
+              ? part.custom_service_name.trim()
+              : "";
+          if (customName) {
+            forWork = customName;
+            isCustom = true;
+          } else if (part?.service_id) {
+            const key = String(part.service_id);
+            if (!serviceNameCache.has(key)) {
+              serviceNameCache.set(
+                key,
+                ((await ctx.db.get(part.service_id)) as any)?.name ?? null,
+              );
+            }
+            forWork = serviceNameCache.get(key) ?? null;
+          }
+          return {
+            partName: String(part?.part_name ?? "").trim() || "Part",
+            oemNumber: part?.oem_number ? String(part.oem_number) : null,
+            brand: part?.brand ? String(part.brand) : null,
+            quantity,
+            unitCost,
+            lineCost: unitCost * quantity,
+            forWork,
+            isCustom,
+            suppliedByCustomer: part?.supplied_by === "customer",
+            notUsed: part?.not_used === true,
+          };
+        }),
+      );
+
       jobActual = {
         startedAt: ja.started_at ?? null,
         completedAtMs: ja.completed_at_ms ?? null,
@@ -683,6 +749,7 @@ export const completion = query({
         inProgressPhotos: photos.filter((p): p is { url: string; caption: string | null; takenAt: number } => p.url != null),
         hasPrejobReport: ja.prejob_report != null,
         hasPostjobReport: ja.postjob_report != null,
+        partsUsed,
       };
     }
 

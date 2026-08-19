@@ -2,7 +2,7 @@
 
 import { Check } from "lucide-react";
 import { Waveform } from "../voice-bar";
-import { PopIn, Reveal, Seq, SeqPop, Sequence, serif } from "./reveal";
+import { PopIn, Reveal, Seq, SeqPop, Sequence, serif, serifDisplay } from "./reveal";
 
 /* ------------------------------------------------------------------ */
 /*  Live quote assembly — three overlapping shop cards                 */
@@ -237,7 +237,7 @@ export default function PathSection() {
       <Reveal>
         <h2
           className="max-w-[600px] text-[40px] leading-[1.0] text-[#1a1a1a] sm:text-[54px] lg:text-[68px]"
-          style={serif}
+          style={serifDisplay}
         >
           The whole path, shown.
         </h2>

@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { Reveal, Seq, SeqPop, SeqRule, Sequence, serif } from "./reveal";
+import { Reveal, Seq, SeqPop, SeqRule, Sequence, serif, serifDisplay } from "./reveal";
 
 /* Each column runs the same internal beat — number, rule drawing itself in,
    title, body, then its mock — staggered by LEAD so the three read as one
@@ -40,7 +40,7 @@ export default function BuiltSection() {
             </p>
             <h2
               className="mt-3 text-[40px] leading-[0.95] text-[#1a1a1a] sm:text-[54px] lg:text-[68px]"
-              style={serif}
+              style={serifDisplay}
             >
               Built to understand
               <br />

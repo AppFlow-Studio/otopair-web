@@ -1626,31 +1626,20 @@ export default function SchedulePage() {
   return (
     <div className="space-y-6">
       <NoShowNotificationBanner />
-      {/* Page header */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-2xl font-bold text-foreground">Schedule</h1>
+      {/* Flat toolbar — page title + date nav share one line on desktop;
+          mobile keeps the essentials (title + date nav + Create booking +
+          mechanic) and folds Today / views / legend into a "More" menu. */}
+      <div className="flex items-center justify-between gap-2">
+        {/* Left: page title + date navigation */}
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <h1 className="shrink-0 text-lg sm:text-2xl font-bold text-foreground">Schedule</h1>
           {context.lateStartTestMode ? (
-            <span className="inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
+            <span className="hidden lg:inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
               Late-start test mode active
               {` (${context.lateStartTiming.warningLeadMinutes}/${context.lateStartTiming.initialCycleMinutes} min)`}
             </span>
           ) : null}
-        </div>
-      </div>
-
-      {/* Toolbar: nav + view switcher + mechanic filter */}
-      {/* Stopped jobs, above the board. A blocker rendered only inside its own
-          job's overlay ages silently — nobody opens the overlay of a car they've
-          stopped thinking about (Flag Issue spec, §5). */}
-      <OpenBlockersBar onOpenBooking={(id) => setSelectedBookingId(id)} />
-
-      {/* Flat toolbar — one line on desktop; mobile keeps the essentials
-          (date nav + Create booking + mechanic) and folds Today / views /
-          legend into a "More" menu. */}
-      <div className="flex items-center justify-between gap-2">
-        {/* Left: date navigation */}
-        <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+          <div className="hidden sm:block h-6 w-px bg-border shrink-0" aria-hidden="true" />
           <button
             onClick={goToday}
             className="hidden sm:inline-flex px-3 py-1.5 text-sm font-medium rounded-lg border border-border hover:bg-muted transition-colors"
@@ -1819,6 +1808,12 @@ export default function SchedulePage() {
           </div>
         </div>
       </div>
+
+      {/* Stopped jobs, above the board. A blocker rendered only inside its own
+          job's overlay ages silently — nobody opens the overlay of a car they've
+          stopped thinking about (Flag Issue spec, §5). */}
+      <OpenBlockersBar onOpenBooking={(id) => setSelectedBookingId(id)} />
+
       {/* Flex row: calendar + drawers */}
       <div className="flex items-start">
       {/* Main content */}

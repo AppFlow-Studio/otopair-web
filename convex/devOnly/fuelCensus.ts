@@ -30,3 +30,32 @@ export const fuel = internalQuery({
     };
   },
 });
+
+/** A few configs per fuel class — fixtures for validating the harvest scope. */
+export const configsByFuel = internalQuery({
+  args: { limit: v.optional(v.float64()) },
+  handler: async (ctx, args) => {
+    const lim = Math.max(1, Math.trunc(args.limit ?? 3));
+    const configs = await ctx.db.query("vehicle_configs").take(400);
+    const out: Record<string, any[]> = {};
+    for (const c of configs) {
+      const cfg = c as any;
+      if (!cfg.engine_id || !cfg.make_id || !cfg.model_id) continue;
+      const [eng, mk, md] = await Promise.all([
+        ctx.db.get(cfg.engine_id),
+        ctx.db.get(cfg.make_id),
+        ctx.db.get(cfg.model_id),
+      ]);
+      const fuel = String((eng as any)?.fuel_type ?? "").trim() || "(empty)";
+      const list = out[fuel] ?? [];
+      if (list.length >= lim) continue;
+      list.push({
+        id: c._id,
+        label: `${cfg.year} ${(mk as any)?.name} ${(md as any)?.name}`,
+        status: cfg.enrichment_status ?? null,
+      });
+      out[fuel] = list;
+    }
+    return out;
+  },
+});

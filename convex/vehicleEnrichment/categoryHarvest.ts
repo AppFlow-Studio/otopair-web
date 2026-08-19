@@ -63,6 +63,7 @@ import {
   pickEngineNode,
   pickNodeByPatterns,
   positionOfRoleKey,
+  isMakeAttestedNumber,
   rankInterchangeCandidates,
   ROCKAUTO_ROLE_LOCATION,
   type CatalogNode,
@@ -911,6 +912,31 @@ export const harvestRockAutoVehicle = internalAction({
     })();
     if (displacementL == null) return { status: "no_displacement" as const };
 
+    // Same-make prefix vocabulary. THE decisive gate for this rung — see
+    // getOemPrefixesForMake. Brand corroboration proves an interchange number
+    // is real; it cannot prove it is THIS manufacturer's, because one
+    // aftermarket casting spans makes and every brand lists every make's
+    // number. Live: a Kia Sportage oil-filter walk ranked Subaru's 15208AA030
+    // at x3, and `sanitizePartNumber` accepts it for Kia because both makes
+    // use a 5+5 shape.
+    let makePrefixes: string[] = [];
+    try {
+      makePrefixes = await ctx.runQuery(
+        internal.vehicleEnrichment.v3queries.getOemPrefixesForMake,
+        { makeId: resolved.makeId },
+      );
+    } catch (e) {
+      console.warn("[rockauto-vehicle] prefix vocabulary read failed (non-fatal):", e);
+    }
+    // FAIL CLOSED. No vocabulary means we cannot tell this make's numbers from
+    // a sibling's, and writing anyway is the present-but-wrong outcome the
+    // pipeline forbids. Declining costs a cold-start make one rung; guessing
+    // costs a customer the wrong part.
+    if (makePrefixes.length === 0) {
+      return { status: "no_make_prefix_vocabulary" as const, make: resolved.make };
+    }
+    const attestedForMake = (oem: string) => isMakeAttestedNumber(oem, makePrefixes);
+
     const fetchPath = async (path: string) => {
       const r = await adapterFetch(`https://www.rockauto.com${path}`, { timeoutMs: 25_000 });
       await new Promise((x) => setTimeout(x, 300));
@@ -992,14 +1018,28 @@ export const harvestRockAutoVehicle = internalAction({
 
         // Brand corroboration, then the SAME gates every other rung applies:
         // make format, refute blocklist, then the adversarial verifier.
-        const ranked = rankInterchangeCandidates(sets)
-          .filter((c) => c.brandCount >= MIN_BRAND_CORROBORATION)
+        const corroborated = rankInterchangeCandidates(sets).filter(
+          (c) => c.brandCount >= MIN_BRAND_CORROBORATION,
+        );
+        // Order matters: SHAPE first (cheap), then THIS MAKE'S OWN vocabulary,
+        // then the refute blocklist. The middle gate is the one that stops a
+        // sibling manufacturer's number wearing a compatible format.
+        const ranked = corroborated
           .map((c) => ({ ...c, sanitized: sanitizePartNumber(c.oem, resolved.make) }))
           .filter((c) => c.sanitized != null)
+          .filter((c) => attestedForMake(c.sanitized!))
           .filter((c) => !cx.blocked.has(normalizeOemNumber(c.sanitized!)))
           .slice(0, ROCKAUTO_VERIFY_BUDGET);
         if (ranked.length === 0) {
-          outcomes.push(`${roleKey}:no_corroborated_candidates(sets=${sets.length})`);
+          // Distinguish "nothing agreed" from "things agreed but none was this
+          // make's" — they look identical downstream and have opposite fixes.
+          const foreign = corroborated.filter(
+            (c) => sanitizePartNumber(c.oem, resolved.make) != null,
+          ).length;
+          outcomes.push(
+            `${roleKey}:no_candidates(sets=${sets.length},corroborated=${corroborated.length}` +
+              `,shape_ok=${foreign},make_attested=0)`,
+          );
           continue;
         }
 

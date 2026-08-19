@@ -12,6 +12,7 @@ import {
   buildCatalogPath,
   classifyPositionText,
   encodeSegment,
+  isMakeAttestedNumber,
   MIN_BRAND_CORROBORATION,
   parseCatalogNodes,
   parsePositionedListings,
@@ -239,5 +240,41 @@ describe("role → catalogue location", () => {
 
   it("returns null when nothing matches", () => {
     expect(pickNodeByPatterns([], ROCKAUTO_ROLE_LOCATION.front_rotor.partType)).toBeNull();
+  });
+});
+
+describe("isMakeAttestedNumber — the gate corroboration cannot provide", () => {
+  // Vocabularies captured live Aug 2026 from oem_parts (prefixLen 3).
+  const KIA = ["173", "188", "215", "252", "263", "273", "281", "314", "371", "517"];
+  const SUBARU = ["111", "130", "140", "147", "152", "165", "211", "212", "224", "237"];
+
+  it("rejects a Subaru number for a Kia, which SHAPE cannot do", () => {
+    // sanitizePartNumber("15208AA030","Kia") returns it unchanged — both makes
+    // number 5+5, so the format gate is blind to this.
+    expect(isMakeAttestedNumber("15208AA030", KIA)).toBe(false);
+  });
+
+  it("accepts that same number for Subaru", () => {
+    expect(isMakeAttestedNumber("15208AA030", SUBARU)).toBe(true);
+  });
+
+  it("accepts a genuine Kia number from a family only NEARLY on file", () => {
+    // 26300-35504 is not itself on file; 26320/26345 are. A 5-char prefix
+    // would reject the true number as readily as the contaminant, which is
+    // why the gate is 3.
+    expect(isMakeAttestedNumber("2630035504", KIA)).toBe(true);
+  });
+
+  it("tolerates punctuation and case", () => {
+    expect(isMakeAttestedNumber("26300-35504", KIA)).toBe(true);
+    expect(isMakeAttestedNumber("15208-aa030", SUBARU)).toBe(true);
+  });
+
+  it("FAILS CLOSED on an empty vocabulary — cannot judge is not permission", () => {
+    expect(isMakeAttestedNumber("2630035504", [])).toBe(false);
+  });
+
+  it("rejects a number too short to key", () => {
+    expect(isMakeAttestedNumber("26", KIA)).toBe(false);
   });
 });

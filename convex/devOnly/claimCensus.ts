@@ -46,3 +46,26 @@ export const byAdapter = internalQuery({
     };
   },
 });
+
+/** Same-make OEM prefix vocabulary per make — what the RockAuto rung gates on. */
+export const prefixes = internalQuery({
+  args: { make: v.string() },
+  handler: async (ctx, args) => {
+    const makes = await ctx.db.query("makes").collect();
+    const row = makes.find(
+      (m) => String((m as any).name ?? "").trim().toLowerCase() === args.make.trim().toLowerCase(),
+    );
+    if (!row) return { error: `make_not_found:${args.make}` };
+    const parts = await ctx.db
+      .query("oem_parts")
+      .withIndex("by_make_category", (q) => q.eq("make_id", row._id))
+      .take(2000);
+    const pre = new Set<string>();
+    for (const r of parts) {
+      const raw = String((r as any).oem_part_number_normalized ?? (r as any).oem_part_number ?? "")
+        .toUpperCase().replace(/[^A-Z0-9]/g, "");
+      if (raw.length >= 5) pre.add(raw.slice(0, 5));
+    }
+    return { make: args.make, parts: parts.length, prefixCount: pre.size, prefixes: [...pre].sort().slice(0, 40) };
+  },
+});

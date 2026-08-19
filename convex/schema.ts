@@ -4392,6 +4392,10 @@ export default defineSchema({
     mechanic_id: v.optional(v.id("mechanics")),
     channel: v.string(),
     category: v.string(),
+    // `status` is the DELIVERY axis only (pending → dispatching → dispatched |
+    // failed | no_push_token | resolved-for-front_desk). Owned by enqueue + the
+    // channel dispatchers. It no longer drives the in-app feed — see read_at /
+    // resolved_at below.
     status: v.string(),
     dedupe_key: v.string(),
     payload: v.any(),
@@ -4399,12 +4403,23 @@ export default defineSchema({
     created_at: v.number(),
     updated_at: v.optional(v.number()),
     processed_at: v.optional(v.number()),
+    // READ axis: set when the user/staff has seen the row. Drives read/unread
+    // styling; does NOT remove the row from the feed.
+    read_at: v.optional(v.number()),
+    // RESOLVE axis: set when the underlying action is no longer actionable
+    // (user acted, booking state moved on, or a proposal expired). The in-app
+    // feed shows rows where resolved_at == null, independent of delivery status.
+    resolved_at: v.optional(v.number()),
+    // "user_action" | "superseded" | "expired" | "backfill" — drives copy.
+    resolved_reason: v.optional(v.string()),
   })
     .index("by_dedupe_key", ["dedupe_key"])
     .index("by_status", ["status"])
     .index("by_shop_id", ["shop_id"])
     .index("by_booking_id", ["booking_id"])
-    .index("by_shop_and_status", ["shop_id", "status"]),
+    .index("by_shop_and_status", ["shop_id", "status"])
+    // The customer feed now spans delivered rows, so it can't ride by_status.
+    .index("by_user_id", ["user_id"]),
 
   sms_delivery_log: defineTable({
     outbox_id: v.optional(v.id("notification_outbox")),

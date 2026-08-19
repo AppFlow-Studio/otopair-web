@@ -285,6 +285,7 @@ type StepKey =
   | "difficulty"
   | "parts_accuracy"
   | "vehicle_updates"
+  | "findings"
   | "photos"
   | "tip"
   | "found_work"
@@ -1123,6 +1124,10 @@ function PostJobSurveyDialogBody({
     )
   );
   const [technicianNotes, setTechnicianNotes] = useState(initialTechnicianNotes);
+  // Customer-facing "what did you find / do" summary — the driver reads this
+  // on the receipt and Past Service report. Kept separate from technicianNotes
+  // (shop-to-shop tip) and additionalObservations (private shop note).
+  const [mechanicFindings, setMechanicFindings] = useState("");
   const [flaggedVehicleSpecs, setFlaggedVehicleSpecs] = useState(false);
   const [flaggedReason, setFlaggedReason] = useState("");
   const [actualLaborMinutes, setActualLaborMinutes] = useState(
@@ -1255,6 +1260,10 @@ function PostJobSurveyDialogBody({
       list.push("time_check");
       if (timeVariance && timeVariance !== "on_time") list.push("time_reason");
       list.push("difficulty");
+      // Customer-facing summary of what was found/done, then evidence (photos),
+      // then the shop-to-shop tip. Findings comes first because it's the one
+      // the driver actually reads.
+      list.push("findings");
       list.push("photos");
       list.push("tip");
       list.push("recommendations");
@@ -1596,6 +1605,7 @@ function PostJobSurveyDialogBody({
         ])
       ),
       technician_notes: technicianNotes.trim() || null,
+      mechanic_findings: mechanicFindings.trim() || null,
       flagged_vehicle_specs: flaggedVehicleSpecs,
       flagged_vehicle_specs_reason: flaggedReason.trim() || null,
       actual_labor_minutes:
@@ -1952,6 +1962,8 @@ function PostJobSurveyDialogBody({
             }
             technicianNotes={technicianNotes}
             setTechnicianNotes={setTechnicianNotes}
+            mechanicFindings={mechanicFindings}
+            setMechanicFindings={setMechanicFindings}
             additionalObservations={additionalObservations}
             setAdditionalObservations={setAdditionalObservations}
             recommendations={recommendations}
@@ -2207,6 +2219,8 @@ function StepContent(props: {
   removePhoto: (id: string) => void;
   technicianNotes: string;
   setTechnicianNotes: (value: string) => void;
+  mechanicFindings: string;
+  setMechanicFindings: (value: string) => void;
   additionalObservations: string;
   setAdditionalObservations: (value: string) => void;
   recommendations: RecRowState[];
@@ -2564,6 +2578,22 @@ function StepContent(props: {
               </div>
             ))}
           </div>
+        </QuestionScreen>
+      );
+    case "findings":
+      return (
+        <QuestionScreen
+          eyebrow="For the customer"
+          question="What did you find or do?"
+          hint="The driver sees this in their receipt and service history — write it for them, not the shop."
+        >
+          <textarea
+            value={props.mechanicFindings}
+            onChange={(event) => props.setMechanicFindings(event.target.value)}
+            placeholder='e.g. "Both front pads were down to 3mm and the rotors had a lip, so I replaced the pads and resurfaced the rotors. Everything else looked good."'
+            autoFocus
+            className="min-h-[140px] w-full resize-y rounded-xl border border-primary/15 bg-background px-4 py-3 text-[14px] leading-relaxed outline-none focus:border-primary"
+          />
         </QuestionScreen>
       );
     case "photos":

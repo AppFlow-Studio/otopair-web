@@ -251,6 +251,7 @@ import type * as migrations_seedDataIncidents from "../migrations/seedDataIncide
 import type * as models from "../models.js";
 import type * as notificationPreferences from "../notificationPreferences.js";
 import type * as notifications from "../notifications.js";
+import type * as notifications_backfill from "../notifications_backfill.js";
 import type * as oemParts from "../oemParts.js";
 import type * as onboarding_questions_answers from "../onboarding_questions_answers.js";
 import type * as opsAnalytics from "../opsAnalytics.js";
@@ -840,6 +841,7 @@ declare const fullApi: ApiFromModules<{
   models: typeof models;
   notificationPreferences: typeof notificationPreferences;
   notifications: typeof notifications;
+  notifications_backfill: typeof notifications_backfill;
   oemParts: typeof oemParts;
   onboarding_questions_answers: typeof onboarding_questions_answers;
   opsAnalytics: typeof opsAnalytics;

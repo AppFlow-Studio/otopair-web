@@ -1589,6 +1589,34 @@ export default defineSchema({
     .index("by_vin_user", ["vin", "user_id"])
     .index("by_user_status", ["user_id", "status"]),
 
+  // Provenance log for vehicle_owners.knownIssues. That field stays a flat
+  // string[] — every scoring/display reader keeps working unchanged — but
+  // its writes carry no source or timestamp of their own, so "did the driver
+  // report this at check-in, or did Oto?" was unanswerable. This is an
+  // append-only, additive log: every write site diffs its before/after
+  // knownIssues array and inserts one row per code added or cleared here,
+  // via convex/lib/knownIssueEvents.ts's logKnownIssueEvents. Never read for
+  // scoring — knownIssues itself remains the single fast/current-state read.
+  known_issue_events: defineTable({
+    vehicle_owner_id: v.id("vehicle_owners"),
+    // Canonical light code where one applies (see lib/warningLightVocab.ts);
+    // a raw legacy/symptom code otherwise (e.g. "alignment"). Stored as
+    // written, not canonicalized, so the log reflects exactly what each
+    // source wrote.
+    code: v.string(),
+    action: v.union(v.literal("added"), v.literal("cleared")),
+    source: v.union(
+      v.literal("check_in"),
+      v.literal("oto"),
+      v.literal("mechanic_inspection"),
+      v.literal("service_completion"),
+    ),
+    // Free-form, source-specific pointer: a checkin id, a shop name, a
+    // booking id. Optional — not every source has something to attach.
+    source_detail: v.optional(v.string()),
+    created_at: v.float64(),
+  }).index("by_vehicle_owner_id", ["vehicle_owner_id", "created_at"]),
+
   // [U-W] Owner-specific hardware facts about THIS car.
   // Resolves which package-tagged part_fitments apply at booking time.
   // See docs/PACKAGE_AWARE_PARTS.md.

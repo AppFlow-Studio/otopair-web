@@ -19,6 +19,7 @@ import { computeMaxDelta, validateMileageUpdate } from "./oto/vehicleTruthGuard"
 import { symptomForServiceSlug } from "./lib/serviceSymptoms";
 import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
 import { normalizeFaultLight, toCanonicalLight } from "../lib/warningLightVocab";
+import { logKnownIssueEvents } from "./lib/knownIssueEvents";
 
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -248,6 +249,13 @@ async function applyVehicleTruthImpl(
       });
     }
     await ctx.db.patch(owner._id, { knownIssues: next } as any);
+    await logKnownIssueEvents(ctx, {
+      vehicleOwnerId: owner._id,
+      before: current,
+      after: next,
+      source: "oto",
+      now,
+    });
   }
 
   // Record each completed service done (mirrors maintenance.upsertRecord): fresh

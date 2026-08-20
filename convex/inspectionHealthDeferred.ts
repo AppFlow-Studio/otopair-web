@@ -27,6 +27,7 @@ import {
   knownIssuesChanged,
   resolveKnownIssues,
 } from "./lib/warningLightsMerge";
+import { logKnownIssueEvents } from "./lib/knownIssueEvents";
 import { recomputeRecPenaltyForVehicle } from "./jobRecommendations";
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
@@ -138,6 +139,19 @@ export const applyDeferredInspectionHealth = internalMutation({
 
         if (knownIssuesChanged(existingIssues, nextIssues)) {
           await ctx.db.patch(owner._id, { knownIssues: nextIssues } as any);
+          // Same log the other three knownIssues sources write to (see
+          // convex/lib/knownIssueEvents.ts) — this duplicates what's already
+          // traceable via this inspection's own zones data, deliberately, so
+          // "this vehicle's warning-light history" is one consistent query
+          // regardless of which of the four sources touched it.
+          await logKnownIssueEvents(ctx, {
+            vehicleOwnerId: owner._id,
+            before: existingIssues,
+            after: nextIssues,
+            source: "mechanic_inspection",
+            sourceDetail: shopLabel,
+            now,
+          });
         }
       }
     }

@@ -129,6 +129,7 @@ import type * as invoices_template from "../invoices/template.js";
 import type * as invoices_node from "../invoices_node.js";
 import type * as jobRecommendations from "../jobRecommendations.js";
 import type * as job_actuals from "../job_actuals.js";
+import type * as knownIssueEvents from "../knownIssueEvents.js";
 import type * as laborTimes from "../laborTimes.js";
 import type * as labor_quote_snapshots from "../labor_quote_snapshots.js";
 import type * as landing from "../landing.js";
@@ -150,6 +151,7 @@ import type * as lib_hydrateInspectionState from "../lib/hydrateInspectionState.
 import type * as lib_inspectionHealth from "../lib/inspectionHealth.js";
 import type * as lib_intervals from "../lib/intervals.js";
 import type * as lib_job_actuals from "../lib/job_actuals.js";
+import type * as lib_knownIssueEvents from "../lib/knownIssueEvents.js";
 import type * as lib_laborBands from "../lib/laborBands.js";
 import type * as lib_laborConstants from "../lib/laborConstants.js";
 import type * as lib_laborFallback from "../lib/laborFallback.js";
@@ -657,6 +659,7 @@ declare const fullApi: ApiFromModules<{
   invoices_node: typeof invoices_node;
   jobRecommendations: typeof jobRecommendations;
   job_actuals: typeof job_actuals;
+  knownIssueEvents: typeof knownIssueEvents;
   laborTimes: typeof laborTimes;
   labor_quote_snapshots: typeof labor_quote_snapshots;
   landing: typeof landing;
@@ -678,6 +681,7 @@ declare const fullApi: ApiFromModules<{
   "lib/inspectionHealth": typeof lib_inspectionHealth;
   "lib/intervals": typeof lib_intervals;
   "lib/job_actuals": typeof lib_job_actuals;
+  "lib/knownIssueEvents": typeof lib_knownIssueEvents;
   "lib/laborBands": typeof lib_laborBands;
   "lib/laborConstants": typeof lib_laborConstants;
   "lib/laborFallback": typeof lib_laborFallback;

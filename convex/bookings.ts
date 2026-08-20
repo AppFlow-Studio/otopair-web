@@ -74,6 +74,7 @@ import {
 } from "./lib/serviceRecordType";
 import { symptomForRecordType } from "./lib/serviceSymptoms";
 import { logPrejobMechanicVerification } from "./lib/mechanic_verification_logging";
+import { logKnownIssueEvents } from "./lib/knownIssueEvents";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   addMinutesToHHMM,
@@ -8479,11 +8480,18 @@ export async function runCompletionSideEffects(ctx: any, booking: any) {
         // Service done → clear its warning-light code(s) so the pipeline stops
         // flagging it. Single patch; only writes when something actually clears.
         if (clearedCodes.size > 0 && Array.isArray(vehicleOwner.knownIssues)) {
-          const next = (vehicleOwner.knownIssues as string[]).filter(
-            (x) => !clearedCodes.has(x)
-          );
-          if (next.length !== vehicleOwner.knownIssues.length) {
+          const beforeIssues = vehicleOwner.knownIssues as string[];
+          const next = beforeIssues.filter((x) => !clearedCodes.has(x));
+          if (next.length !== beforeIssues.length) {
             await ctx.db.patch(vehicleOwner._id, { knownIssues: next } as any);
+            await logKnownIssueEvents(ctx, {
+              vehicleOwnerId: vehicleOwner._id,
+              before: beforeIssues,
+              after: next,
+              source: "service_completion",
+              sourceDetail: String(booking._id),
+              now: Date.now(),
+            });
           }
         }
       }

@@ -159,26 +159,8 @@ export const probeOne = internalAction({
           maxTokens: 8000,
           temperature: 0,
         });
-        // Channel-death guard. Terminal API failure returns {data:{}, usage
-        // all-zero} — a REAL model answer always has output tokens. Without
-        // this, an out-of-credits key reads as "no applicable services" per
-        // config and the run burns to a vacuous completion (Aug 20 2026: 75
-        // of 140 cohort configs "failed" this way after the key's balance ran
-        // out mid-run). Abort the invocation with the SAME cursor so a re-run
-        // resumes exactly here.
         if (res.usage.tokensOut === 0) {
-          console.error(
-            `[snapshot-backfill] Anthropic channel down (zero output tokens) at ${t.configKey} — aborting invocation`,
-          );
-          return {
-            aborted: "anthropic_channel_down",
-            pageConfigs: page.targets.length,
-            stamped: rows.filter((r) => r.status === "stamped").length,
-            promoted: rows.filter((r) => r.promoted).length,
-            rows,
-            continueCursor: args.cursor ?? null,
-            isDone: false,
-          };
+          return { configKey: t.configKey, error: "anthropic_channel_down" };
         }
         const parsed = parseBatch2(normalizeBatchShape(res.data, "2"), []);
         return {
@@ -226,6 +208,27 @@ export const backfill = internalAction({
           maxTokens: 8000,
           temperature: 0,
         });
+        // Channel-death guard. Terminal API failure returns {data:{}, usage
+        // all-zero} — a REAL model answer always has output tokens. Without
+        // this, an out-of-credits key reads as "no applicable services" per
+        // config and the run burns to a vacuous completion (Aug 20 2026: 75
+        // of 140 cohort configs "failed" this way after the key's balance ran
+        // out mid-run). Abort the invocation with the SAME cursor so a re-run
+        // resumes exactly here.
+        if (res.usage.tokensOut === 0) {
+          console.error(
+            `[snapshot-backfill] Anthropic channel down (zero output tokens) at ${t.configKey} — aborting invocation`,
+          );
+          return {
+            aborted: "anthropic_channel_down",
+            pageConfigs: page.targets.length,
+            stamped: rows.filter((r) => r.status === "stamped").length,
+            promoted: rows.filter((r) => r.promoted).length,
+            rows,
+            continueCursor: args.cursor ?? null,
+            isDone: false,
+          };
+        }
         // Same slug derivation as finalize: the rescue returns human
         // service_name rows; SERVICE_NAME_TO_SLUG is the one canonical map.
         const parsed = parseBatch2(normalizeBatchShape(res.data, "2"), []);

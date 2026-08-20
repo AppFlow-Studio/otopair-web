@@ -373,6 +373,19 @@ const CORPORATE_FAMILIES: Array<Set<string>> = [
 
 // Single-source identity key — see lib/makeKey.ts (imported at top).
 
+/** All make KEYS in `makeName`'s corporate family, own key first — so callers
+ *  that prefer own-make rows can rely on the order. A make outside every
+ *  family returns just its own key. Serves the thin-make lanes that store
+ *  family-shared truth under one badge's key (genuine fluid seeds: Motorcraft
+ *  coolant rows curated under "ford" must serve a Lincoln config — the same
+ *  widening the attestation vocabulary got in v3queries.getOemPrefixesForMake). */
+export function familyMakeKeys(makeName: string | null | undefined): string[] {
+  const key = makeKeyOf(String(makeName ?? ""));
+  if (!key) return [];
+  const fam = CORPORATE_FAMILIES.find((f) => f.has(key));
+  return fam ? [key, ...[...fam].filter((k) => k !== key)] : [key];
+}
+
 /** True when two make NAMES belong to the same corporate part-sharing family
  *  (or are the same make). */
 export function makesSameFamily(

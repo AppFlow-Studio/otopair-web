@@ -28,6 +28,7 @@ import { normalizeOemNumber } from "./priceParser";
 import { missingCoreRoles } from "./quotability";
 import { PART_FIELD_MAP } from "./v3pipeline";
 import { makeKeyOf } from "../lib/makeKey";
+import { familyMakeKeys } from "./contentSanitization";
 
 /** Loose token-contains spec match: row spec "MB 325.0" matches an engine
  *  coolant_type of "MB 325.0", "MB 325.0 / Q 1 03 0002", "MB325.0" — but not
@@ -154,23 +155,32 @@ export const seedFluidsRung = internalAction({
     );
     const hasReal = (sub: string) => fitments.some((f: any) => f.subcategory === sub);
 
-    // Which fluid roles to attempt, with each role's anchor value.
-    const targets: Array<{ roleKey: string; anchor: (row: any) => boolean }> = [];
+    // Which fluid roles to attempt. `specValue` is the vehicle-side anchor —
+    // when it is EMPTY the spec gate cannot fire, which used to end the rung
+    // for that role even when the make has exactly one curated chemistry.
+    const targets: Array<{
+      roleKey: string;
+      specValue: string | null;
+      anchor: (row: any) => boolean;
+    }> = [];
     if (missingRoles.has("coolant")) {
       targets.push({
         roleKey: "coolant",
+        specValue: engine?.coolant_type ?? null,
         anchor: (row) => specMatches(row.spec, engine?.coolant_type),
       });
     }
     if (!hasReal("engine_oil") && engine?.oil_viscosity) {
       targets.push({
         roleKey: "engine_oil",
+        specValue: engine.oil_viscosity,
         anchor: (row) => viscosityEquals(row.viscosity, engine.oil_viscosity),
       });
     }
     if (missingRoles.has("atf_fluid")) {
       targets.push({
         roleKey: "atf_fluid",
+        specValue: resolved?.transFluidType ?? null,
         anchor: (row) => specMatches(row.spec, resolved?.transFluidType ?? null),
       });
     }
@@ -179,7 +189,13 @@ export const seedFluidsRung = internalAction({
     const metaBySubcategory: Record<string, any> = Object.fromEntries(
       Object.values(PART_FIELD_MAP).map((m: any) => [m.subcategory, m]),
     );
-    const makeKey = makeKeyOf(resolved.make);
+    // Rows span the CORPORATE FAMILY, own make's rows first. Fluids are
+    // family-level truth under the parent's brand (Motorcraft serves Lincoln,
+    // ACDelco serves GMC/Buick/Cadillac) and curating one row per family is
+    // the whole point of the table — a make-only lookup re-created the
+    // thin-make failure the attestation vocabulary already fixed (live: the
+    // 2021 Nautilus's coolant hit no_seed_match with Ford rows on file).
+    const famKeys = familyMakeKeys(resolved.make);
 
     const toVerify: Array<{
       roleKey: string;
@@ -189,12 +205,36 @@ export const seedFluidsRung = internalAction({
       observedTitle: string | null;
     }> = [];
     for (const t of targets) {
-      const rows: any[] = await ctx.runQuery(
-        internal.vehicleEnrichment.genuineFluids._fluidRowsForMake,
-        { makeKey, fluidKind: t.roleKey },
-      );
-      for (const row of rows) {
-        if (!t.anchor(row)) continue;
+      const rows: any[] = [];
+      const seenRow = new Set<string>();
+      for (const famKey of famKeys) {
+        const famRows: any[] = await ctx.runQuery(
+          internal.vehicleEnrichment.genuineFluids._fluidRowsForMake,
+          { makeKey: famKey, fluidKind: t.roleKey },
+        );
+        for (const row of famRows) {
+          const norm = normalizeOemNumber(row.oem_part_number);
+          if (seenRow.has(norm)) continue;
+          seenRow.add(norm);
+          rows.push(row);
+        }
+      }
+      // Anchored rows are the normal path. When the vehicle carries NO spec
+      // string to anchor against, a family with exactly ONE curated chemistry
+      // for this kind is an unambiguous default — the adversarial verifier
+      // still adjudicates it against the real vehicle before any write. Two
+      // or more chemistries with no spec stays a real gap: guessing between
+      // them 50/50 is exactly the wrong-chemistry failure this rung exists
+      // to prevent.
+      const anchored = rows.filter((row) => t.anchor(row));
+      const candidates =
+        anchored.length > 0 ? anchored : !t.specValue && rows.length === 1 ? rows : [];
+      if (anchored.length === 0 && candidates.length === 1) {
+        console.log(
+          `[genuine-fluids] ${t.roleKey}: no vehicle spec on file — using the family's single curated chemistry (${candidates[0].oem_part_number}), verifier decides`,
+        );
+      }
+      for (const row of candidates) {
         if (toVerify.some((x) => normalizeOemNumber(x.oem) === normalizeOemNumber(row.oem_part_number))) continue;
         toVerify.push({
           roleKey: t.roleKey,

@@ -58,6 +58,29 @@ export const go = internalAction({
   },
 });
 
+/** The fluid-anchor inputs for a VIN — what seedFluidsRung's spec gates see. */
+export const specs = internalQuery({
+  args: { vin: v.string() },
+  handler: async (ctx, args): Promise<any> => {
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin.toUpperCase().trim()))
+      .first();
+    const cfg: any = (vehicle as any)?.vehicle_config_id
+      ? await ctx.db.get((vehicle as any).vehicle_config_id)
+      : null;
+    if (!cfg) return { vin: args.vin, error: "no_config" };
+    const eng: any = cfg.engine_id ? await ctx.db.get(cfg.engine_id) : null;
+    const trans: any = cfg.transmission_id ? await ctx.db.get(cfg.transmission_id) : null;
+    return {
+      vin: args.vin,
+      coolant_type: eng?.coolant_type ?? null,
+      oil_viscosity: eng?.oil_viscosity ?? null,
+      trans_fluid_type: trans?.fluid_type ?? null,
+    };
+  },
+});
+
 /** The FULL heal ladder for a VIN — every rung in order plus the price
  *  backfill epilogue and the promote-only gate re-evaluation. This is the
  *  production path a fresh run takes; running it here is the honest test. */

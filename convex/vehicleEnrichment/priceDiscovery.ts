@@ -41,6 +41,26 @@ export function buildPriceSearchQuery(args: {
   return parts.join(" ");
 }
 
+/**
+ * Fallback query when the primary returns NOTHING — deliberately unquoted
+ * and tail-free.
+ *
+ * Measured live (Aug 20 2026, Firecrawl, 2022 Tacoma rear pads 04466-04030 —
+ * a part with abundant dealer listings):
+ *   `"04466-04030" Toyota Rear Brake Pads OEM part price` → 0 results
+ *   `"04466-04030" price` / `"…" OEM price`               → junk aggregators
+ *   `04466-04030 OEM price`                               → 3 dealer pages
+ * Exact-phrase quoting plus the descriptive tail over-constrains the search
+ * into silence, while the UNQUOTED number lets dealer platforms win on
+ * relevance. Unquoted matching can surface adjacent part numbers
+ * (…-446604010 pages for a -04030 query) — safe because the downstream parse
+ * only trusts a price when the page echoes the exact OEM number; a near-miss
+ * page is rejected there, not mispriced.
+ */
+export function buildPriceFallbackQuery(args: { oem: string }): string {
+  return `${args.oem} OEM price`;
+}
+
 export type UrlSearcher = (
   query: string,
   numResults?: number,
@@ -191,5 +211,25 @@ export async function discoverPriceUrls(
     return urls.length > 0 ? urls : null;
   }
   take(results);
+
+  // Query ladder: an empty PRIMARY result is frequently the query's fault,
+  // not the market's (see buildPriceFallbackQuery — a part with dozens of
+  // dealer listings searched to zero). One simplified retry before letting a
+  // durable no_listing verdict be stamped off a self-inflicted silence. The
+  // channel is proven up by the primary call, so a failure here is ignored
+  // rather than escalated to null.
+  if (urls.length === 0) {
+    try {
+      const fallback = await search(buildPriceFallbackQuery(args), 5);
+      if (fallback.length > 0) {
+        console.log(
+          `[priceDiscovery] primary query empty for "${args.oem}" — unquoted fallback found ${fallback.length} result(s)`,
+        );
+      }
+      take(fallback);
+    } catch (e) {
+      console.warn(`[priceDiscovery] fallback query failed for "${args.oem}" (non-fatal): ${e}`);
+    }
+  }
   return urls;
 }

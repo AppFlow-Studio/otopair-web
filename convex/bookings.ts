@@ -8467,6 +8467,7 @@ async function mapBookingListItem(ctx: any, booking: any) {
     mechanicName: mechanic
       ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
       : null,
+    source: booking.source ?? null,
   };
 }
 
@@ -14221,6 +14222,10 @@ export const autoDropUnconfirmedBookings = internalMutation({
     let dropped = 0;
     for (const booking of confirmed) {
       if ((booking as any).vehicle_arrived_at_ms) continue;
+      // Walk-ins are physical-presence: the customer was AT the shop when
+      // the booking was created. Auto-dropping them to "no_show" makes no
+      // semantic sense — the mechanic already saw them at intake. Excluded.
+      if ((booking as any).source === "mechanic_walk_in") continue;
       if (!booking.scheduled_date || !booking.scheduled_time) continue;
 
       const timezone = await getShopTimezone(ctx, booking.shop_id);

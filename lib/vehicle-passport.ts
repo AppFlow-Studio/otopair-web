@@ -223,6 +223,15 @@ export type JobActualPartPayload = {
   // Server-stamped provenance — which cascade layer surfaced this row.
   // Drives the small "Used last time on this car" / "Shop default" badge.
   learned_from?: "vin" | "shop" | "config" | "catalog";
+  // Mechanic-entered tire-replacement line (mid-job / walk-in). Tires have no
+  // OEM number, so identity lives in these structured fields while oem_number
+  // carries the `TIRE-{size}` sentinel. tire_position is a free string
+  // ("front" / "rear") so staggered / aftermarket fitments never reject.
+  is_tire?: boolean;
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+  tire_position?: string | null;
 };
 
 export type PreJobSurveyPayload = {
@@ -624,6 +633,36 @@ export function sumJobActualParts(parts: JobActualPartPayload[]) {
         : 1;
     return sum + cost * qty;
   }, 0);
+}
+
+/**
+ * Human-facing secondary identity line for a part row. Regular parts show
+ * `brand · OEM number`; tire lines (mechanic-entered mid-job / walk-in) show
+ * `brand · model · size` so the internal `TIRE-{size}` sentinel oem_number is
+ * never surfaced to a customer or mechanic. Segments are middot-joined; blanks
+ * are dropped.
+ */
+export function formatPartIdentity(part: {
+  is_tire?: boolean | null;
+  oem_number?: string | null;
+  brand?: string | null;
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+}): string {
+  const oem = typeof part.oem_number === "string" ? part.oem_number : "";
+  const isTire = part.is_tire === true || oem.toUpperCase().startsWith("TIRE-");
+  const segments = isTire
+    ? [
+        part.tire_brand ?? part.brand,
+        part.tire_model,
+        part.tire_size ?? (oem ? oem.replace(/^TIRE-/i, "") : null),
+      ]
+    : [part.brand, oem];
+  return segments
+    .map((v) => (v ?? "").toString().trim())
+    .filter(Boolean)
+    .join(" · ");
 }
 import type {
   RotorThicknessMeasurements,

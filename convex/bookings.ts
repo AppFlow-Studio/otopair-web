@@ -55,6 +55,7 @@ import { serviceMatchKey } from "./lib/serviceMatch";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { hoursToMinutes } from "../lib/labor-units";
 import { metaMakeModel } from "./lib/bookingEnrichment";
 import { isRealVin, isPseudoVin, mintPseudoVin } from "./lib/vinIdentity";
 import { buildYmmtFingerprint } from "./vehicleEnrichment/types";
@@ -2856,6 +2857,34 @@ export const getActiveJobsForHeader = query({
     }
 
     inProgress.sort((a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+    // Enriched rows so the header "View" can open the active-jobs picker
+    // (mechanic · car, service, and a live elapsed timer) rather than a bare
+    // set of ids. Same order as the pill count (most recently touched first).
+    const activeJobs = await Promise.all(
+      inProgress.map(async (b: any) => {
+        const mechanic: any = b.mechanic_id
+          ? await ctx.db.get(b.mechanic_id)
+          : null;
+        const jobActual = await getLatestJobActualForBooking(ctx, b._id);
+        const vehicle = b.vin ? await resolveVehicleLabel(ctx, b.vin) : null;
+        const serviceNames = await resolveServiceNames(
+          ctx,
+          b.service_ids,
+          b.custom_services,
+        );
+        return {
+          bookingId: b._id,
+          mechanicName: mechanic
+            ? `${mechanic.first_name ?? ""} ${mechanic.last_name ?? ""}`.trim() ||
+              "Mechanic"
+            : "Unassigned",
+          vehicleLabel: vehicle?.full ?? vehicle?.short ?? "Vehicle",
+          serviceSummary: serviceNames.join(" · "),
+          startedAt: jobActual?.started_at ?? null,
+          scheduledDate: b.scheduled_date ?? null,
+        };
+      }),
+    );
     return {
       kind: "owner" as const,
       count: inProgress.length,
@@ -2864,6 +2893,7 @@ export const getActiveJobsForHeader = query({
       firstBookingTime: inProgress[0].scheduled_time ?? null,
       // Full set so the header "View" can expand every active job full-screen.
       activeBookingIds: inProgress.map((b: any) => b._id),
+      activeJobs,
     };
   },
 });
@@ -3196,6 +3226,15 @@ export const acknowledgeCustomerLate = mutation({
         } as any);
       }
     }
+
+    // The customer responded — drop the "are you on your way?" push card from
+    // their bookings banner and notifications feed right away. The monitor
+    // itself stays active (the shop still tracks physical arrival); we only
+    // clear the customer-facing prompt.
+    await resolveBookingNotifications(ctx, booking._id, {
+      categories: ["customer_late_push_reminder"],
+      reason: "user_action",
+    });
 
     return { acknowledged: true, monitorId: monitor._id };
   },
@@ -4384,6 +4423,17 @@ const RESCHEDULE_PROPOSAL_CATEGORIES = [
   "booking_forced_delay_proposed",
 ];
 
+// Customer-facing "are you on your way / shop is waiting" alerts. They only
+// make sense while the booking is still confirmed and the customer hasn't
+// arrived. The moment the vehicle checks in, work starts, or the booking moves
+// on, they're stale and must be resolved so the bookings banner AND the
+// notifications feed clear. (The front_desk decision variant is shop-side and
+// resolves on its own path.)
+const CUSTOMER_LATE_NOTIFICATION_CATEGORIES = [
+  "customer_late_push_reminder",
+  "customer_late_sms_reminder",
+];
+
 /**
  * Stamp still-open notification_outbox rows for a booking as resolved.
  *
@@ -4935,6 +4985,11 @@ export function normalizePartsUsed(parts: Array<{
   source?: "catalog" | "manual" | null;
   swap_from_oem_number?: string | null;
   not_used?: boolean | null;
+  is_tire?: boolean | null;
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+  tire_position?: string | null;
 }>) {
   return parts
     .map((part) => {
@@ -4979,6 +5034,16 @@ export function normalizePartsUsed(parts: Array<{
           ? (part.swap_from_oem_number as string).trim()
           : undefined,
         not_used: notUsed ? true : undefined,
+        // Preserve mechanic-entered tire identity through the canonical
+        // normalize so the job_actuals record + receipts render size/brand/
+        // model instead of the `TIRE-{size}` sentinel.
+        is_tire: part.is_tire === true ? true : undefined,
+        tire_size: hasText(part.tire_size) ? (part.tire_size as string).trim() : undefined,
+        tire_brand: hasText(part.tire_brand) ? (part.tire_brand as string).trim() : undefined,
+        tire_model: hasText(part.tire_model) ? (part.tire_model as string).trim() : undefined,
+        tire_position: hasText(part.tire_position)
+          ? (part.tire_position as string).trim()
+          : undefined,
       };
     })
     .filter(
@@ -6737,6 +6802,16 @@ async function resolveCustomerLateMonitorForBooking(
   resolvedByUserId?: any,
 ) {
   if (!booking?._id) return;
+
+  // Clear the customer-facing late / "on your way" cards for this booking.
+  // Runs BEFORE the monitor early-return (and independently of it) so the
+  // banner + notifications feed can never be left showing a "waiting" alert
+  // for a car that's already checked in or being worked on. Idempotent.
+  await resolveBookingNotifications(ctx, booking._id, {
+    categories: CUSTOMER_LATE_NOTIFICATION_CATEGORIES,
+    reason: resolvedByUserId ? "user_action" : "superseded",
+  });
+
   const monitor = await getCustomerLateMonitorByBookingId(ctx, booking._id);
   if (!monitor || monitor.status === "resolved") return;
 
@@ -9708,6 +9783,14 @@ export const getMyOwnerDashboard = query({
             (await resolveMechanicPhotoUrl(ctx, mechanic)) ??
             (await resolveUserPhotoUrl(ctx, linkedUser));
           const mapped = await mapMechanicDashboardJob(ctx, booking);
+          // Wall-clock anchor for the active-jobs list timers. Earliest
+          // started_at across this booking's actuals rows (a job is only
+          // clocked once, but be defensive about duplicates).
+          const startedAt =
+            (actualsByBookingId.get(String(booking._id)) ?? [])
+              .map((actual: any) => actual.started_at)
+              .filter((value: any) => value != null)
+              .sort((a: number, b: number) => a - b)[0] ?? null;
           return {
             mechanicId: mechanic._id,
             mechanicName:
@@ -9717,6 +9800,7 @@ export const getMyOwnerDashboard = query({
             photoUrl,
             booking: {
               ...mapped,
+              startedAt,
               scheduledTimeLabel: booking.scheduled_time
                 ? formatTime(booking.scheduled_time)
                 : "",
@@ -10362,6 +10446,17 @@ export const getJobDetail = query({
           })
         : ((booking as any).priced_parts_snapshot ?? null);
 
+    // Labor mirrors the parts logic above: the mechanic's agreed labor edit
+    // lives on the same approval row (booking_approvals.labor_hours), so the
+    // post-job Labor step must seed from it — not the stale catalog estimate on
+    // the booking. Derive from the SAME agreedApproval row so labor and parts
+    // never come from different approvals. Falls back to the booking estimate
+    // when nothing has been agreed yet.
+    const effectiveEstimatedLaborMinutes: number | null =
+      agreedApproval?.labor_hours != null
+        ? hoursToMinutes(agreedApproval.labor_hours)
+        : booking.estimated_labor_minutes ?? null;
+
     return {
       _id: booking._id,
       _creationTime: booking._creationTime,
@@ -10373,7 +10468,7 @@ export const getJobDetail = query({
       scheduledStartMs,
       partsCost: booking.parts_cost,
       totalCost: booking.total_cost,
-      estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
+      estimatedLaborMinutes: effectiveEstimatedLaborMinutes,
       vin: booking.vin,
       serviceIds: booking.service_ids ?? [],
       mechanicId: booking.mechanic_id ?? null,
@@ -11000,8 +11095,10 @@ export const completeWithPostjob = mutation({
       postjob_report: args.postjob,
       updated_at: now,
       logged_at_ms: now,
-      in_progress_notes: undefined,
-      in_progress_photos: undefined,
+      // Keep the mid-job layover notes/photos on the record so the post-job's
+      // read-only "From the active job" block still resolves if a completed job
+      // is re-opened. (Layover photos are also merged into postjob_photos for
+      // the customer report at submit time.)
     });
 
     await recordPartSnapshotsForBooking(ctx, {
@@ -11802,6 +11899,7 @@ export const createByShop = mutation({
           part_name: v.string(),
           oem_number: v.string(),
           brand: v.optional(v.string()),
+          source_url: v.optional(v.string()),
           quantity: v.optional(v.number()),
           unit_price_cents: v.optional(v.number()),
           catalog_origin: v.boolean(),
@@ -11810,6 +11908,14 @@ export const createByShop = mutation({
           part_id: v.optional(v.id("oem_parts")),
           role_key: v.optional(v.string()),
           quantity_basis: v.optional(v.string()),
+          // Mechanic-entered tire-replacement line (walk-in). Identity lives in
+          // these structured fields; oem_number carries the `TIRE-{size}`
+          // sentinel. Copied verbatim onto the priced_parts_snapshot row below.
+          is_tire: v.optional(v.boolean()),
+          tire_size: v.optional(v.string()),
+          tire_brand: v.optional(v.string()),
+          tire_model: v.optional(v.string()),
+          tire_position: v.optional(v.string()),
         }),
       ),
     ),
@@ -12041,15 +12147,28 @@ export const createByShop = mutation({
           service_id: m.service_id,
           custom_service_name: m.custom_service_name?.trim() || undefined,
           part_id: m.part_id,
-          oem_number: m.oem_number.trim().toUpperCase(),
+          // Universal OEM tidy: trim + uppercase + collapse internal whitespace.
+          // Never touches hyphens/separators, so it's safe for every make's
+          // format. Mirrors the client's tidyOem — authoritative even if a
+          // caller bypasses the drawer.
+          oem_number: m.oem_number.trim().toUpperCase().replace(/\s+/g, " "),
           part_name: m.part_name.trim(),
           brand: m.brand?.trim() || undefined,
+          source_url: m.source_url?.trim() || undefined,
           quantity: qty,
           unit_price_cents: unit,
           line_total_cents: line,
           role_key: m.role_key,
           quantity_basis: m.quantity_basis,
           price_unknown: m.unit_price_cents == null ? true : undefined,
+          // Tire identity (mechanic-entered tire-replacement line). Kept
+          // verbatim — the size string must not be OEM-normalized like
+          // oem_number is above.
+          is_tire: m.is_tire || undefined,
+          tire_size: m.tire_size?.trim() || undefined,
+          tire_brand: m.tire_brand?.trim() || undefined,
+          tire_model: m.tire_model?.trim() || undefined,
+          tire_position: m.tire_position?.trim() || undefined,
         });
       }
       if (rows.length > 0) pricedSnapshot = rows;

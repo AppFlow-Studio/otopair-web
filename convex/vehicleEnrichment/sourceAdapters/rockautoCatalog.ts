@@ -216,7 +216,14 @@ export const ROCKAUTO_ROLE_LOCATION: Readonly<
   front_rotor: { category: [/^brake & wheel hub$/], partType: [/^rotor$/] },
   rear_rotor: { category: [/^brake & wheel hub$/], partType: [/^rotor$/] },
   oil_filter: { category: [/^engine$/], partType: [/^oil filter$/] },
-  air_filter: { category: [/^engine$/], partType: [/^air filter$/] },
+  air_filter: {
+    // RockAuto's canonical home for engine air filters is the "Fuel & Air"
+    // top-level category — the 2021 Nautilus's "engine" category carries 40
+    // part types and no air filter (live `air_filter:no_part_type`, Aug 2026).
+    // "engine" stays as the fallback for older trees that file it there.
+    category: [/^fuel & air$/, /^engine$/],
+    partType: [/^air filter$/],
+  },
   cabin_filter: {
     category: [/^heat & air conditioning$/, /^interior$/],
     partType: [/^cabin air filter$/],
@@ -337,10 +344,20 @@ export type InterchangeSet = {
   brand: string;
   /** Normalized OEM numbers that listing claims to replace. */
   numbers: readonly string[];
+  /**
+   * Verbatim forms, keyed by normalized. Clustering needs the normalized key;
+   * the make FORMAT GATE needs the separators normalizing removes (Ford's
+   * `M2GZ-1125-A` fails its own pattern as `M2GZ1125A`). Optional so existing
+   * callers still type.
+   */
+  rawByNormalized?: Readonly<Record<string, string>>;
 };
 
 export type InterchangeCandidate = {
   oem: string;
+  /** Verbatim form as some listing printed it, when any set supplied one.
+   *  This is what the make format gate must see. Falls back to `oem`. */
+  raw: string;
   /** Distinct BRANDS that listed this number. The evidence. */
   brandCount: number;
   brands: string[];
@@ -368,20 +385,28 @@ export function rankInterchangeCandidates(
   sets: readonly InterchangeSet[],
 ): InterchangeCandidate[] {
   const brandsByOem = new Map<string, Set<string>>();
+  const rawByOem = new Map<string, string>();
   for (const s of sets) {
     const brand = String(s.brand ?? "").trim().toUpperCase();
     if (!brand) continue;
-    for (const raw of s.numbers) {
-      const oem = normalizeOemNumber(String(raw ?? ""));
+    for (const num of s.numbers) {
+      const oem = normalizeOemNumber(String(num ?? ""));
       if (oem.length < 5 || !/\d/.test(oem)) continue;
       const set = brandsByOem.get(oem) ?? new Set<string>();
       set.add(brand);
       brandsByOem.set(oem, set);
+      // Prefer a verbatim form that carries separators — that is the one the
+      // make format gate can actually accept.
+      const supplied = s.rawByNormalized?.[oem];
+      if (supplied && (!rawByOem.has(oem) || /[^A-Z0-9]/i.test(supplied))) {
+        rawByOem.set(oem, supplied);
+      }
     }
   }
   return [...brandsByOem.entries()]
     .map(([oem, brands]) => ({
       oem,
+      raw: rawByOem.get(oem) ?? oem,
       brandCount: brands.size,
       brands: [...brands].sort(),
     }))
@@ -431,3 +456,9 @@ export function isMakeAttestedNumber(
   if (key.length < n) return false;
   return makePrefixes.some((p) => p.slice(0, n) === key);
 }
+
+// The hyphenation salvage lives with the gate it defers to — the write-path
+// choke point (v3mutations.upsertPartAndFitment) needs it too, and a source
+// adapter is the wrong module for mutations to depend on. Re-exported here so
+// the rung callers and tests keep their import path.
+export { hyphenationCandidates, salvageForMakeFormat } from "../contentSanitization";

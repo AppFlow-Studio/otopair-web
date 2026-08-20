@@ -373,7 +373,10 @@ export const getOemPartsForBooking = query({
     // on Review & Pay and the mechanic sees in the job scope, so all three
     // surfaces agree. Grouped by service, in the booking's service order.
     const snapshot = ((booking as any).priced_parts_snapshot ?? []) as Array<{
-      service_id: Id<"services">;
+      // Optional: custom / off-catalog lines have no services row (they carry
+      // custom_service_name instead), so service_id can be absent.
+      service_id?: Id<"services">;
+      custom_service_name?: string;
       part_id?: Id<"oem_parts">;
       oem_number: string;
       part_name: string;
@@ -428,6 +431,9 @@ export const getOemPartsForBooking = query({
 
       const bySvc = new Map<string, OemPartsForService>();
       for (const row of snapshot) {
+        // Custom / off-catalog parts have no services row — this query groups
+        // OEM parts by catalog service, so skip them instead of get(undefined).
+        if (!row.service_id) continue;
         if (!(await rowPassesGuard(row))) continue;
         const key = String(row.service_id);
         let entry = bySvc.get(key);

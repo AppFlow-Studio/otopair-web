@@ -1,6 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   FluidCatalogSelectField,
   FLUID_KIND_BY_KEY,
@@ -12,6 +20,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Copy,
   Download,
   EyeOff,
   Loader2,
@@ -37,6 +46,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   classifyInspectionMeasure,
+  cornerCopyPatch,
   createInspectionState,
   defaultZoneState,
   derivePrejobFromInspection,
@@ -51,8 +61,10 @@ import {
   isSpecPrefillField,
   normalizeTireSize,
   nextInspectionZoneAfterCompletion,
+  OPPOSITE_CORNER,
   patchInspectionZone,
   patchSharedInspectionText,
+  zoneHasInput,
   specPrefillFromPassport,
   INSPECTION_ZONES,
   INSPECTION_ZONES_BY_ID,
@@ -64,6 +76,7 @@ import {
   validateZoneForCompletion,
   WARNING_LIGHT_PICKER_OPTIONS,
   type BrakeAxleScope,
+  type CornerZoneId,
   type FieldUnavailableStatus,
   type InspectionField,
   type InspectionState,
@@ -224,7 +237,6 @@ const ALWAYS_VISIBLE_FIELDS = new Set([
   "tire_brand",
   "tire_model",
   "tire_size",
-  "dot_code",
   "run_flat",
   "pad_inner",
   "pad_outer",
@@ -787,6 +799,24 @@ function MultiPointInspectionDialogBody({
     [],
   );
 
+  // Mirror a corner's readings onto its same-axle sibling (FL↔FR, RL↔RR). The
+  // two corners share an identical field set, so this is a straight overwrite;
+  // the mechanic then only fixes the few values that differ. No-op if the source
+  // corner is still blank (guards against wiping the sibling with empties).
+  const copyCornerToOpposite = useCallback(
+    (sourceId: ZoneId) => {
+      const opposite = OPPOSITE_CORNER[sourceId as CornerZoneId];
+      if (!opposite) return;
+      const source = zoneState(sourceId);
+      if (!zoneHasInput(sourceId, source)) return;
+      patchZone(opposite, cornerCopyPatch(source));
+      // The copied values equal the already-reviewed source, so don't force a
+      // redundant "Specs match" re-confirm on the sibling.
+      markSpecReviewed(opposite);
+    },
+    [zoneState, patchZone, markSpecReviewed],
+  );
+
   const photoUrl = useCallback(
     (storageId: string) =>
       photoPreviews[storageId] ??
@@ -1072,13 +1102,23 @@ function MultiPointInspectionDialogBody({
     });
   }
 
+  // Scroll the just-activated zone panel to the top of the form. Deferred to a
+  // layout effect (below) rather than fired inline, so the scroll measures the
+  // *incoming* zone after it commits — a bare requestAnimationFrame sometimes ran
+  // before the new zone rendered, leaving the form scrolled partway down.
+  const pendingZoneScrollRef = useRef<ScrollBehavior | null>(null);
+  useLayoutEffect(() => {
+    const behavior = pendingZoneScrollRef.current;
+    if (!behavior) return;
+    pendingZoneScrollRef.current = null;
+    document
+      .getElementById("inspection-zone-panel")
+      ?.scrollIntoView({ behavior, block: "start" });
+  }, [activeZone]);
+
   function openZoneAtTop(zoneId: ZoneId) {
+    pendingZoneScrollRef.current = "auto";
     setActiveZone(zoneId);
-    requestAnimationFrame(() =>
-      document
-        .getElementById("inspection-zone-panel")
-        ?.scrollIntoView({ behavior: "auto", block: "start" }),
-    );
   }
 
   // User-initiated zone selection (tapping a part on the car diagram, or the
@@ -1086,12 +1126,8 @@ function MultiPointInspectionDialogBody({
   // the mechanic sees the section scroll down to them instead of having to hunt
   // for it below the diagram.
   function selectZone(zoneId: ZoneId | "PARTS") {
+    pendingZoneScrollRef.current = "smooth";
     setActiveZone(zoneId);
-    requestAnimationFrame(() =>
-      document
-        .getElementById("inspection-zone-panel")
-        ?.scrollIntoView({ behavior: "smooth", block: "start" }),
-    );
   }
 
   function showZoneValidationError(
@@ -1764,6 +1800,7 @@ function MultiPointInspectionDialogBody({
                 onSharedText={(key, value) =>
                   patchSharedText(activeZone, key, value)
                 }
+                onCopyToOpposite={() => copyCornerToOpposite(activeZone)}
                 onPhoto={(file, tag) => handlePhotoUpload(activeZone, file, tag)}
                 onRemovePhoto={(storageId) =>
                   setPhotoToRemove({ zoneId: activeZone, storageId })
@@ -2035,6 +2072,7 @@ function ZonePanel({
   extraHeader,
   onPatch,
   onSharedText,
+  onCopyToOpposite,
   onPhoto,
   onRemovePhoto,
   onToggleDone,
@@ -2064,6 +2102,8 @@ function ZonePanel({
   extraHeader?: React.ReactNode;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
+  /** Copies this corner's readings onto its same-axle sibling (corners only). */
+  onCopyToOpposite: () => void;
   onPhoto: (file: File, tag?: "general" | "rotor_stamp") => void;
   onRemovePhoto: (storageId: string) => void;
   onToggleDone: () => void;
@@ -2074,7 +2114,35 @@ function ZonePanel({
   /** Flags a field as pending-save the moment the mechanic edits it. */
   onFieldSaving: (fieldKey: string) => void;
 }) {
+  // Transient "Copied ✓" confirmation on the copy-to-opposite button. Reset when
+  // the panel switches zones and auto-cleared after a short beat.
+  const [copiedFlash, setCopiedFlash] = useState(false);
+  useEffect(() => setCopiedFlash(false), [zoneId]);
+  useEffect(() => {
+    if (!copiedFlash) return;
+    const timer = window.setTimeout(() => setCopiedFlash(false), 2200);
+    return () => window.clearTimeout(timer);
+  }, [copiedFlash]);
+  // Refs to each seeded spec field so the "confirm specs match" prompt can jump
+  // straight to the row that needs checking, plus a transient highlight so the
+  // mechanic can see which one they landed on.
+  const specFieldRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [flashedSpecKey, setFlashedSpecKey] = useState<string | null>(null);
+  useEffect(() => setFlashedSpecKey(null), [zoneId]);
+  useEffect(() => {
+    if (!flashedSpecKey) return;
+    const timer = window.setTimeout(() => setFlashedSpecKey(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [flashedSpecKey]);
   const zone = INSPECTION_ZONES_BY_ID[zoneId];
+  // Same-axle sibling for the one-tap copy (undefined on non-corner zones).
+  const oppositeCorner = OPPOSITE_CORNER[zoneId as CornerZoneId] as
+    | CornerZoneId
+    | undefined;
+  const oppositeLabel = oppositeCorner
+    ? INSPECTION_ZONES_BY_ID[oppositeCorner].label
+    : null;
+  const canCopyOpposite = !!oppositeCorner && zoneHasInput(zoneId, zs);
   const tireReplacementScheduled =
     (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
     completionContext.tireReplacementPositions?.includes(zoneId);
@@ -2093,9 +2161,23 @@ function ZonePanel({
   const specByKey = new Map(specPrefill.map((s) => [s.fieldKey, s]));
   const hasSpecPrefill = specPrefill.length > 0;
   const needsSpecReview = hasSpecPrefill && !zs.done && !specConfirmed;
-  const seededLabels = specPrefill
-    .map((s) => zone.fields.find((f) => f.key === s.fieldKey)?.label ?? s.fieldKey)
-    .filter((label, i, arr) => arr.indexOf(label) === i);
+  // Seeded spec fields in the order they actually render, so the jump-to chips
+  // and the in-place confirm below land in the right places.
+  const seededSpecs = applicableFields
+    .filter((field) => specByKey.has(field.key))
+    .map((field) => ({ fieldKey: field.key, label: field.label }));
+  const firstSeededKey = seededSpecs[0]?.fieldKey;
+  const lastSeededKey = seededSpecs[seededSpecs.length - 1]?.fieldKey;
+  const manySpecs = seededSpecs.length > 1;
+  const scrollToSpec = (fieldKey?: string) => {
+    const key = fieldKey ?? firstSeededKey;
+    if (!key) return;
+    specFieldRefs.current[key]?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+    setFlashedSpecKey(key);
+  };
   return (
     <div className="space-y-1">
       <div className="sticky top-0 z-20 -mx-2 mb-2 flex items-center justify-between gap-2 border-b border-primary/10 bg-card/95 px-2 py-2 backdrop-blur">
@@ -2116,6 +2198,42 @@ function ZonePanel({
             <span className="mr-1 inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-600">
               <Check className="h-3.5 w-3.5" /> confirmed
             </span>
+          ) : null}
+          {oppositeCorner ? (
+            <button
+              type="button"
+              onClick={() => {
+                onCopyToOpposite();
+                setCopiedFlash(true);
+              }}
+              disabled={!canCopyOpposite}
+              title={
+                canCopyOpposite
+                  ? `Copy every reading from this corner to ${oppositeLabel}, then adjust the few that differ`
+                  : `Enter this corner's readings first, then copy them to ${oppositeLabel}`
+              }
+              aria-label={`Copy all readings to ${oppositeLabel}`}
+              className={cn(
+                "mr-0.5 inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[12px] font-medium transition-colors",
+                copiedFlash
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                  : canCopyOpposite
+                    ? "border-primary/20 text-muted-foreground hover:bg-primary/5"
+                    : "cursor-not-allowed border-primary/10 text-muted-foreground/40",
+              )}
+            >
+              {copiedFlash ? (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  Copied to {INSPECTION_ZONES_BY_ID[oppositeCorner].short}
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy to {INSPECTION_ZONES_BY_ID[oppositeCorner].short}
+                </>
+              )}
+            </button>
           ) : null}
           <button
             type="button"
@@ -2148,18 +2266,29 @@ function ZonePanel({
       {needsSpecReview ? (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
           <p className="text-[12px] text-amber-900">
-            <span className="font-semibold">
-              {seededLabels.join(", ")}
-            </span>{" "}
-            {seededLabels.length > 1 ? "are" : "is"} pre-filled from this
-            vehicle&apos;s records. Confirm {seededLabels.length > 1 ? "they" : "it"}{" "}
-            still {seededLabels.length > 1 ? "match" : "matches"} — or edit —
-            before completing this zone.
+            {manySpecs ? "These specs are" : "This spec is"} pre-filled from this
+            vehicle&apos;s records. Tap {manySpecs ? "one" : "it"} to jump down and
+            check {manySpecs ? "they" : "it"} still{" "}
+            {manySpecs ? "match" : "matches"} — or edit — then confirm.
           </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {seededSpecs.map((s) => (
+              <button
+                key={s.fieldKey}
+                type="button"
+                onClick={() => scrollToSpec(s.fieldKey)}
+                aria-label={`Jump to ${s.label}`}
+                className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white/70 px-2.5 py-1 text-[12px] font-medium text-amber-900 transition-colors hover:bg-white active:scale-95"
+              >
+                {s.label}
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             onClick={onConfirmSpecs}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-amber-700"
+            className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-600 px-3 py-2 text-[13px] font-semibold text-white hover:bg-amber-700 sm:w-auto"
           >
             <Check className="h-3.5 w-3.5" /> Specs match
           </button>
@@ -2173,45 +2302,78 @@ function ZonePanel({
       {applicableFields.map((field, i) => {
         const prevSection = i > 0 ? applicableFields[i - 1].section : undefined;
         const showSection = field.section && field.section !== prevSection;
+        const isSeeded = specByKey.has(field.key);
         return (
-          <div key={field.key}>
-            {showSection ? (
-              <div className="mb-1 mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-1">
-                {field.section}
-              </div>
-            ) : null}
-            <FieldRow
-              zoneId={zoneId}
-              field={field}
-              zs={zs}
-              vin={vin}
-              isFirstVisit={isFirstVisit}
-              tireSizeOptions={tireSizeOptions}
-              required={isFieldRequiredForZone(
-                zoneId,
-                field.key,
-                completionContext,
-              )}
-              errorMessage={
-                fieldError?.fieldKey === field.key ||
-                (field.key === "tread" &&
-                  fieldError?.fieldKey.startsWith("tread_"))
-                  ? fieldError.message
+          <Fragment key={field.key}>
+            <div
+              ref={
+                isSeeded
+                  ? (el) => {
+                      specFieldRefs.current[field.key] = el;
+                    }
                   : undefined
               }
-              prefill={specByKey.get(field.key)}
-              onSpecEdited={onSpecEdited}
-              onPatch={(patch) => {
-                onFieldSaving(field.key);
-                onPatch(patch);
-              }}
-              onSharedText={(key, value) => {
-                onFieldSaving(field.key);
-                onSharedText(key, value);
-              }}
-              saveState={fieldSaveState[`${zoneId}::${field.key}`]}
-            />
-          </div>
+              className={cn(
+                // scroll-mt clears the sticky zone header when we jump here.
+                isSeeded && "scroll-mt-20 rounded-lg transition-shadow",
+                isSeeded &&
+                  flashedSpecKey === field.key &&
+                  "ring-2 ring-amber-400 ring-offset-2 ring-offset-card",
+              )}
+            >
+              {showSection ? (
+                <div className="mb-1 mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-1">
+                  {field.section}
+                </div>
+              ) : null}
+              <FieldRow
+                zoneId={zoneId}
+                field={field}
+                zs={zs}
+                vin={vin}
+                isFirstVisit={isFirstVisit}
+                tireSizeOptions={tireSizeOptions}
+                required={isFieldRequiredForZone(
+                  zoneId,
+                  field.key,
+                  completionContext,
+                )}
+                errorMessage={
+                  fieldError?.fieldKey === field.key ||
+                  (field.key === "tread" &&
+                    fieldError?.fieldKey.startsWith("tread_"))
+                    ? fieldError.message
+                    : undefined
+                }
+                prefill={specByKey.get(field.key)}
+                onSpecEdited={onSpecEdited}
+                onPatch={(patch) => {
+                  onFieldSaving(field.key);
+                  onPatch(patch);
+                }}
+                onSharedText={(key, value) => {
+                  onFieldSaving(field.key);
+                  onSharedText(key, value);
+                }}
+                saveState={fieldSaveState[`${zoneId}::${field.key}`]}
+              />
+            </div>
+            {/* Confirm right where the specs are, so there's no scroll back up. */}
+            {needsSpecReview && field.key === lastSeededKey ? (
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2">
+                <span className="text-[12px] text-amber-900">
+                  {manySpecs ? "Everything above still match?" : "Still matches?"}
+                </span>
+                <button
+                  type="button"
+                  onClick={onConfirmSpecs}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-amber-700"
+                >
+                  <Check className="h-3.5 w-3.5" /> Specs match
+                </button>
+              </div>
+            ) : null}
+          </Fragment>
         );
       })}
 

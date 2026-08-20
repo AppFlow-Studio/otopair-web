@@ -7,7 +7,9 @@ import { ChevronDown, Maximize2, Wrench } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ElapsedTimer from "./mechanic/elapsed-timer";
-import NowWorkingOverlay from "./mechanic/now-working-overlay";
+import NowWorkingOverlay, {
+  type ActiveJobRow,
+} from "./mechanic/now-working-overlay";
 import OverrunExtendCard from "./mechanic/overrun-extend-card";
 
 function shortBookingCode(id: string) {
@@ -27,8 +29,6 @@ export default function ActiveJobStrip() {
   const [overlayOpen, setOverlayOpen] = useState(false);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  // Owner full-screen overlay: panes the viewer has dismissed this session.
-  const [dismissedPanes, setDismissedPanes] = useState<string[]>([]);
 
   // Mechanic view only: surface an overrun check-in awaiting a response so the
   // pill can flag it even before the popover is opened.
@@ -200,9 +200,18 @@ export default function ActiveJobStrip() {
         ) : null}
 
         <NowWorkingOverlay
-          bookingIds={overlayOpen ? [bookingId] : []}
+          open={overlayOpen}
+          jobs={[
+            {
+              bookingId,
+              mechanicName: "",
+              vehicle: job.vehicleLabel,
+              serviceSummary: job.serviceSummary,
+              startedAt: job.startedAtMs,
+              scheduledDate: null,
+            },
+          ]}
           onClose={() => setOverlayOpen(false)}
-          onClosePane={() => setOverlayOpen(false)}
           onMarkComplete={(id) => {
             setOverlayOpen(false);
             router.push(`/dashboard?postjob=${String(id)}`);
@@ -217,19 +226,20 @@ export default function ActiveJobStrip() {
   /* ---------------------------------------------------------------- */
   if (header.count === 0) return null;
 
-  const activeBookingIds = (header.activeBookingIds ?? []) as Id<"bookings">[];
-  const visibleOverlayIds = activeBookingIds.filter(
-    (id) => !dismissedPanes.includes(String(id)),
-  );
+  const ownerJobs: ActiveJobRow[] = (header.activeJobs ?? []).map((j: any) => ({
+    bookingId: j.bookingId as Id<"bookings">,
+    mechanicName: j.mechanicName ?? "",
+    vehicle: j.vehicleLabel ?? "Vehicle",
+    serviceSummary: j.serviceSummary ?? "",
+    startedAt: j.startedAt ?? null,
+    scheduledDate: j.scheduledDate ?? null,
+  }));
 
   return (
     <>
       <button
         type="button"
-        onClick={() => {
-          setDismissedPanes([]);
-          setOverlayOpen(true);
-        }}
+        onClick={() => setOverlayOpen(true)}
         title="One or more mechanics are mid-job — open full screen"
         className="group inline-flex h-9 items-center gap-2.5 rounded-full border border-emerald-400/30 bg-[linear-gradient(135deg,_#0f172a,_#0b1220)] pl-2 pr-2.5 text-slate-50 shadow-sm transition-all hover:border-emerald-400/60 hover:shadow"
       >
@@ -251,18 +261,9 @@ export default function ActiveJobStrip() {
       </button>
 
       <NowWorkingOverlay
-        bookingIds={overlayOpen ? visibleOverlayIds : []}
+        open={overlayOpen}
+        jobs={ownerJobs}
         onClose={() => setOverlayOpen(false)}
-        onClosePane={(id) => {
-          const remaining = visibleOverlayIds.filter(
-            (v) => String(v) !== String(id),
-          );
-          if (remaining.length === 0) {
-            setOverlayOpen(false);
-          } else {
-            setDismissedPanes((prev) => [...prev, String(id)]);
-          }
-        }}
         onMarkComplete={(id) => {
           setOverlayOpen(false);
           router.push(`/dashboard?postjob=${String(id)}`);

@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function PartnerWithUsPage() {
   return (
-    <main className="min-h-screen w-full bg-[#eceae6]">
+    <main className="min-h-screen w-full bg-white">
       <PartnerClient />
     </main>
   );

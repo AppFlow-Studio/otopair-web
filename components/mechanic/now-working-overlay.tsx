@@ -14,6 +14,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import {
   Camera,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Flag,
   Loader2,
   MessageSquare,
@@ -78,12 +80,15 @@ const NOTES_DEBOUNCE_MS = 800;
 
 export function NowWorkingPane({
   bookingId,
+  onBack,
   onClose,
   onMarkComplete,
   onToast,
   dense = false,
 }: {
   bookingId: Id<"bookings">;
+  /** When present, renders a "‹ All jobs" control that returns to the picker. */
+  onBack?: () => void;
   onClose: () => void;
   onMarkComplete: (bookingId: Id<"bookings">) => void;
   onToast?: (message: string) => void;
@@ -332,7 +337,16 @@ export function NowWorkingPane({
   return (
     <div className={containerClass}>
       <header className="flex items-center justify-between border-b border-white/10 pb-5">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          {onBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 py-2 pl-2 pr-3 text-sm font-medium text-slate-100 transition-colors hover:bg-white/10"
+            >
+              <ChevronLeft className="h-4 w-4" /> All jobs
+            </button>
+          ) : null}
           <span className="inline-flex h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400" />
           <p className="text-sm font-medium uppercase tracking-[0.2em] text-emerald-300/80">
             Now working
@@ -744,56 +758,195 @@ export function NowWorkingPane({
   );
 }
 
-export default function NowWorkingOverlay({
-  bookingIds,
+/** One active-in-the-bay job, as the picker needs to render it. */
+export type ActiveJobRow = {
+  bookingId: Id<"bookings">;
+  mechanicName: string;
+  vehicle: string;
+  serviceSummary: string;
+  startedAt: number | null;
+  /** YYYY-MM-DD the job was scheduled for; anything but today reads as overrun. */
+  scheduledDate: string | null;
+};
+
+function localTodayString() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+/**
+ * The picker a busy front desk lands on: every car in the bay, one tap to focus.
+ * Timers keep ticking for all of them — you're choosing which one to drive, not
+ * pausing the rest.
+ */
+function ActiveJobsList({
+  jobs,
+  onSelect,
   onClose,
-  onClosePane,
+}: {
+  jobs: ActiveJobRow[];
+  onSelect: (bookingId: Id<"bookings">) => void;
+  onClose: () => void;
+}) {
+  const today = localTodayString();
+
+  return (
+    <div className="mx-auto flex h-full max-w-3xl flex-col px-6 py-6">
+      <header className="flex items-center justify-between border-b border-white/10 pb-5">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400" />
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-emerald-300/80">
+            Active jobs
+          </p>
+          <span className="rounded-md border border-white/15 bg-white/5 px-2 py-0.5 text-xs font-mono text-slate-300">
+            {jobs.length} in the bay
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="inline-flex items-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-white/10"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </header>
+
+      <p className="mt-4 text-sm text-slate-400">
+        Pick a car to focus on — the clock keeps running for every job in the bay.
+      </p>
+
+      <div className="mt-4 flex-1 space-y-3 overflow-y-auto pb-6">
+        {jobs.length === 0 ? (
+          <div className="flex h-full items-center justify-center text-slate-400">
+            Nothing in the bay right now.
+          </div>
+        ) : (
+          jobs.map((job) => {
+            const overrun =
+              !!job.scheduledDate && job.scheduledDate !== today;
+            return (
+              <button
+                key={String(job.bookingId)}
+                type="button"
+                onClick={() => onSelect(job.bookingId)}
+                className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 text-left transition-colors hover:border-emerald-400/40 hover:bg-white/[0.06]"
+              >
+                <span className="inline-flex h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-base font-semibold text-slate-100">
+                    {[job.mechanicName, job.vehicle].filter(Boolean).join(" · ")}
+                  </p>
+                  <p className="mt-0.5 truncate text-sm text-slate-400">
+                    {job.serviceSummary || "No services listed"}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <ElapsedTimer
+                    startedAtMs={job.startedAt}
+                    className="font-mono text-lg font-semibold tabular-nums text-emerald-300"
+                  />
+                  {overrun ? (
+                    <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                      from {job.scheduledDate}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-500">in progress</span>
+                  )}
+                </div>
+                <ChevronRight className="h-5 w-5 shrink-0 text-slate-500" />
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function NowWorkingOverlay({
+  open,
+  jobs,
+  onClose,
   onMarkComplete,
   onToast,
 }: {
-  bookingIds: Array<Id<"bookings">>;
+  open: boolean;
+  jobs: ActiveJobRow[];
   onClose: () => void;
-  onClosePane: (bookingId: Id<"bookings">) => void;
   onMarkComplete: (bookingId: Id<"bookings">) => void;
   onToast?: (message: string) => void;
 }) {
+  const [selectedId, setSelectedId] = useState<Id<"bookings"> | null>(null);
+  const multiple = jobs.length > 1;
+
+  // On open, land straight in the focus view when there's a single car in the
+  // bay; otherwise show the picker. On close, forget the selection so the next
+  // open re-decides.
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (bookingIds.length === 0) return;
+    if (open && !wasOpenRef.current) {
+      wasOpenRef.current = true;
+      setSelectedId(jobs.length === 1 ? jobs[0].bookingId : null);
+    } else if (!open && wasOpenRef.current) {
+      wasOpenRef.current = false;
+      setSelectedId(null);
+    }
+  }, [open, jobs]);
+
+  // If the focused job leaves the bay (completed elsewhere, reassigned), drop
+  // back to the picker instead of rendering a pane for a stale booking.
+  useEffect(() => {
+    if (
+      selectedId &&
+      !jobs.some((job) => String(job.bookingId) === String(selectedId))
+    ) {
+      setSelectedId(null);
+    }
+  }, [jobs, selectedId]);
+
+  useEffect(() => {
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Let a focused input/textarea keep its own Escape (clearing a field).
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      // Step back one level: focus → picker → closed.
+      if (selectedId && multiple) {
+        setSelectedId(null);
+      } else {
+        onClose();
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [bookingIds.length, onClose]);
+  }, [open, selectedId, multiple, onClose]);
 
-  if (bookingIds.length === 0 || typeof document === "undefined") return null;
-
-  const dense = bookingIds.length === 2;
+  if (!open || typeof document === "undefined") return null;
 
   return createPortal(
     <div className="fixed inset-0 z-[60] bg-slate-950/95 text-slate-50">
-      <div className="flex h-full w-full flex-col md:flex-row">
-        {bookingIds.map((id, index) => (
-          <div
-            key={String(id)}
-            className={
-              dense
-                ? `h-1/2 w-full overflow-hidden md:h-full md:w-1/2 ${
-                    index === 0 ? "border-b border-white/10 md:border-b-0 md:border-r" : ""
-                  }`
-                : "h-full w-full overflow-hidden"
-            }
-          >
-            <NowWorkingPane
-              bookingId={id}
-              onClose={() => onClosePane(id)}
-              onMarkComplete={onMarkComplete}
-              onToast={onToast}
-              dense={dense}
-            />
-          </div>
-        ))}
-      </div>
+      {selectedId ? (
+        <div className="h-full w-full overflow-hidden">
+          <NowWorkingPane
+            bookingId={selectedId}
+            onBack={multiple ? () => setSelectedId(null) : undefined}
+            onClose={onClose}
+            onMarkComplete={onMarkComplete}
+            onToast={onToast}
+          />
+        </div>
+      ) : (
+        <ActiveJobsList
+          jobs={jobs}
+          onSelect={(id) => setSelectedId(id)}
+          onClose={onClose}
+        />
+      )}
     </div>,
     document.body,
   );

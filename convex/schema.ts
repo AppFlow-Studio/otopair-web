@@ -509,6 +509,13 @@ export default defineSchema({
     // budget goes to winnable ones; cleared on any successful price write.
     price_discovery_outcome: v.optional(v.string()),
     price_discovery_at: v.optional(v.number()),
+    /** Consecutive failed discovery attempts. One failure backs off HOURS,
+     *  repeat failures back off the full per-outcome window — a single
+     *  transient miss seconds after the part is written must not freeze
+     *  pricing for weeks (Aug 20 2026: two Nautilus parts with abundant
+     *  dealer listings sat unpriced behind first-attempt stamps). Cleared
+     *  when a price lands. */
+    price_discovery_strikes: v.optional(v.number()),
   })
     .index("by_part_number", ["oem_part_number"])
     .index("by_part_number_normalized", ["oem_part_number_normalized"])
@@ -2882,6 +2889,9 @@ export default defineSchema({
           oem_number: v.string(),
           part_name: v.string(),
           brand: v.optional(v.string()),
+          // Optional provenance link the mechanic pasted in the parts editor
+          // (where they sourced this part/price). Free-form, unvalidated.
+          source_url: v.optional(v.string()),
           part_tier: v.optional(v.string()),
           quantity: v.number(),
           unit_price_cents: v.number(),
@@ -2911,6 +2921,15 @@ export default defineSchema({
           // it. Reversible + auditable, mirroring fitmentQuarantine's
           // data_quality stamp.
           integrity_flag: v.optional(v.string()),
+          // Mechanic-entered tire-replacement line (mid-job / walk-in). Tires
+          // carry no OEM number, so identity lives in these structured fields
+          // while oem_number holds the `TIRE-{size}` sentinel. tire_position is
+          // a free string ("front" / "rear") for staggered / aftermarket cases.
+          is_tire: v.optional(v.boolean()),
+          tire_size: v.optional(v.string()),
+          tire_brand: v.optional(v.string()),
+          tire_model: v.optional(v.string()),
+          tire_position: v.optional(v.string()),
         })
       )
     ),

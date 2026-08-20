@@ -36,6 +36,12 @@ import { makeFunctionReference } from "convex/server";
 import { useApprovalWorkflow, type ApprovalWorkflow } from "@/lib/use-approval-workflow";
 import { computeBookingTax } from "@/lib/tax";
 import { computePlatformFeeDollars } from "@/lib/platformFee";
+import {
+  formatHoursValue,
+  hoursToMinutes,
+  minutesToHours,
+  parseHoursInput,
+} from "@/lib/labor-units";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import ScheduleSlotPicker from "@/components/booking/schedule-slot-picker";
 import ServiceOptionsPicker from "@/components/booking/service-options-picker";
@@ -61,6 +67,7 @@ import {
   passportSourceLabel,
   serviceLikelyUsesParts,
   sumJobActualParts,
+  formatPartIdentity,
   type JobActualPartPayload,
   type JobRecommendationInput,
   type PartsAccuracyStatus,
@@ -90,6 +97,14 @@ import {
 import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
 import ServicePickerModal from "@/components/booking/service-picker-modal";
 import { describeCustomJobTaxonomy } from "@/lib/custom-job-taxonomy";
+import { isTireReplacementService } from "@/lib/vehicle-service-relevance";
+import TirePartsEditor, {
+  type TireLine,
+  isTirePartRow,
+  tireLinesFromParts,
+  tireLinesFromPrejob,
+  tireLinesToPartPayloads,
+} from "@/components/booking/tire-parts-editor";
 
 /** Best-effort axle from a part name ("Front Brake Pads" → "front"). Mirrors
  *  convex/lib/brakeScope.partNameAxle; kept inline so the client bundle
@@ -172,6 +187,7 @@ type PostJobPrefillData = {
   vehicleLabel: string;
   serviceName: string;
   serviceSlug: string;
+  serviceId?: string | null;
   suggestedParts: JobActualPartPayload[];
   // Optional engine/trim context used by the parts step's sticky vehicle bar.
   // Server-side getPrefillData already returns engineCode; the others are
@@ -184,6 +200,14 @@ type PostJobPrefillData = {
   priorOpenRecommendations?: PriorOpenRecommendation[];
   confirmedThisVisit?: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection?: SuggestedFromInspection[];
+  // Prejob inspection tire findings (per axle) — seeds the custom tire editor
+  // when tire replacement is added mid-job. From getPrefillData.prejobTires.
+  prejobTires?: {
+    tire_size_front?: string | null;
+    tire_size_rear?: string | null;
+    front?: { brand?: string | null; model?: string | null } | null;
+    rear?: { brand?: string | null; model?: string | null } | null;
+  } | null;
 } | null;
 
 type RecRowState = {
@@ -262,12 +286,19 @@ type PartRowState = {
   // the small "Used last time on this car" / "Shop default" badge. Stamped
   // by the server in getPrefillData.
   learned_from?: "vin" | "shop" | "config" | "catalog";
-  // Required on "manual" rows that count toward approval (not customer-supplied,
-  // not flagged not_used). Server enforces ≥12 chars in validatePartsForApproval.
+  // Optional free-text note on a "manual" row. Not required; when present it's
+  // kept in the payment audit trail.
   justification_text?: string;
+  // Mechanic-entered tire-replacement line (mid-job / walk-in). When is_tire is
+  // set the row is edited through the custom TirePartsEditor (size / brand /
+  // model / per-tire price) instead of the generic OEM part fields, and is
+  // hidden from the generic parts list. oem_number still carries `TIRE-{size}`.
+  is_tire?: boolean;
+  tire_size?: string;
+  tire_brand?: string;
+  tire_model?: string;
+  tire_position?: string;
 };
-
-const MIN_MANUAL_JUSTIFICATION_LEN = 12;
 
 export type PhotoState = {
   id: string;
@@ -275,6 +306,9 @@ export type PhotoState = {
   previewUrl: string;
   caption: string;
   status: "uploading" | "ready" | "error";
+  /** Capture time (ms). Preserved from the mid-job layover so the report keeps
+   *  the real timestamp; absent for photos shot fresh in the post-job. */
+  takenAt?: number;
 };
 
 type StepKey =
@@ -710,8 +744,69 @@ function buildPartRows(parts: JobActualPartPayload[]): PartRowState[] {
         part.learned_from === "catalog"
           ? part.learned_from
           : undefined,
+      is_tire:
+        part.is_tire === true ||
+        (typeof part.oem_number === "string" &&
+          part.oem_number.toUpperCase().startsWith("TIRE-"))
+          ? true
+          : undefined,
+      tire_size: part.tire_size ?? undefined,
+      tire_brand: part.tire_brand ?? undefined,
+      tire_model: part.tire_model ?? undefined,
+      tire_position: part.tire_position ?? undefined,
     };
   });
+}
+
+/**
+ * Parts + labor + tax + fee → cents — the client-side estimate preview.
+ * Mirrors server-side computeMechanicSetPrice. Shared by the running-total bar
+ * (the mechanic's live edits) AND the quoted baseline (the seeded/quoted
+ * parts + labor), so "did the mechanic move the price?" compares like-for-like
+ * and can never drift against the server's midpoint-based quoted_set_price.
+ */
+function computeEstimateTotals(args: {
+  parts: PartRowState[];
+  hours: number;
+  laborRateCents: number;
+  shopState: string | null;
+  shopZip: string | null;
+}): {
+  partsCents: number;
+  laborCents: number;
+  taxCents: number;
+  feeCents: number;
+  totalCents: number;
+} {
+  let partsCents = 0;
+  for (const p of args.parts) {
+    if (p.not_used) continue;
+    if (p.supplied_by === "customer") continue;
+    const cost = Number(p.cost) || 0;
+    const qty = Math.max(1, Math.round(p.quantity || 1));
+    partsCents += Math.round(cost * qty * 100);
+  }
+  const laborCents =
+    args.hours > 0 ? Math.round(args.hours * args.laborRateCents) : 0;
+  const subtotalCents = partsCents + laborCents;
+  const tax = computeBookingTax({
+    laborDollars: laborCents / 100,
+    partsDollars: partsCents / 100,
+    state: args.shopState ?? null,
+    zip: args.shopZip ?? null,
+  });
+  const taxCents = Math.round((tax.taxDollars ?? 0) * 100);
+  const feeCents = Math.max(
+    0,
+    Math.round(computePlatformFeeDollars(subtotalCents / 100) * 100),
+  );
+  return {
+    partsCents,
+    laborCents,
+    taxCents,
+    feeCents,
+    totalCents: subtotalCents + taxCents + feeCents,
+  };
 }
 
 /**
@@ -787,8 +882,8 @@ export default function PostJobSurveyDialog({
   isSubmitting,
   onClose,
   onSubmit,
-  initialTechnicianNotes,
-  initialPhotos,
+  layoverNotes,
+  layoverPhotos,
   cycle,
   onApprovalSubmitted,
   laborRateCents,
@@ -813,8 +908,13 @@ export default function PostJobSurveyDialog({
     payload: PostJobSurveyPayload,
     customJobOutcomes?: CustomJobOutcome[],
   ) => Promise<void>;
-  initialTechnicianNotes?: string;
-  initialPhotos?: PhotoState[];
+  /** Notes captured during the mid-job "Active Job Layover" (newline-joined
+   *  entries). Shown read-only in the post-job review — never seeded into an
+   *  editable field, so the mechanic's "tip" stays their own. */
+  layoverNotes?: string;
+  /** Photos captured during the mid-job layover. Shown read-only in the review
+   *  and merged into the final report photos at submit. */
+  layoverPhotos?: PhotoState[];
   cycle?: PostJobSurveyCycle;
   onApprovalSubmitted?: (result: {
     state: string;
@@ -867,8 +967,8 @@ export default function PostJobSurveyDialog({
       isSubmitting={isSubmitting}
       onClose={onClose}
       onSubmit={onSubmit}
-      initialTechnicianNotes={initialTechnicianNotes ?? ""}
-      initialPhotos={initialPhotos ?? []}
+      layoverNotes={layoverNotes ?? ""}
+      layoverPhotos={layoverPhotos ?? []}
       cycle={cycle}
       onApprovalSubmitted={onApprovalSubmitted}
       laborRateCents={laborRateCents ?? null}
@@ -893,8 +993,8 @@ function PostJobSurveyDialogBody({
   isSubmitting,
   onClose,
   onSubmit,
-  initialTechnicianNotes,
-  initialPhotos,
+  layoverNotes,
+  layoverPhotos,
   cycle,
   onApprovalSubmitted,
   laborRateCents,
@@ -919,8 +1019,8 @@ function PostJobSurveyDialogBody({
     payload: PostJobSurveyPayload,
     customJobOutcomes?: CustomJobOutcome[],
   ) => Promise<void>;
-  initialTechnicianNotes: string;
-  initialPhotos: PhotoState[];
+  layoverNotes: string;
+  layoverPhotos: PhotoState[];
   cycle?: PostJobSurveyCycle;
   onApprovalSubmitted?: (result: {
     state: string;
@@ -1010,6 +1110,48 @@ function PostJobSurveyDialogBody({
     serviceSlug,
     passportData?.requires_parts
   );
+  // Tire replacement added mid-job / logged as a walk-in has no quote — the
+  // mechanic enters tires directly (size / brand / model / price) through the
+  // custom TirePartsEditor instead of the OEM-number parts fields.
+  const isTireService = useMemo(() => {
+    const names = [
+      prefillData?.serviceName,
+      passportData?.service_name,
+      serviceSlug,
+      ...(passportData?.parts_required_services ?? []).map((s) => s.name),
+    ].filter(Boolean) as string[];
+    return names.some((n) => isTireReplacementService(n));
+  }, [
+    prefillData?.serviceName,
+    passportData?.service_name,
+    serviceSlug,
+    passportData?.parts_required_services,
+  ]);
+  // Vehicle OEM tire fitments [front, rear] → size suggestion chips.
+  const tireOemSizes = useMemo<string[]>(() => {
+    const fromAvailable = passportData?.available_tire_sizes
+      ? [
+          ...(passportData.available_tire_sizes.front ?? []),
+          ...(passportData.available_tire_sizes.rear ?? []),
+        ]
+      : [];
+    const fromPassport = [
+      passportData?.passport?.tires?.size_front,
+      passportData?.passport?.tires?.size_rear,
+    ].filter(Boolean) as string[];
+    const fromPrejob = [
+      prefillData?.prejobTires?.tire_size_front,
+      prefillData?.prejobTires?.tire_size_rear,
+    ].filter(Boolean) as string[];
+    return Array.from(
+      new Set([...fromAvailable, ...fromPassport, ...fromPrejob]),
+    );
+  }, [
+    passportData?.available_tire_sizes,
+    passportData?.passport?.tires?.size_front,
+    passportData?.passport?.tires?.size_rear,
+    prefillData?.prejobTires,
+  ]);
   const updatePrompts = useMemo(
     () => (passportData ? getVehicleUpdatePrompts(serviceSlug, passportData) : []),
     [passportData, serviceSlug]
@@ -1098,6 +1240,38 @@ function PostJobSurveyDialogBody({
     seededPartsForOpenRef.current = true;
     setParts(buildPartRows(quotedParts));
   }, [open, quotedParts, readOnlyBillingMode, lockBilling, cycle]);
+  // Seed the custom tire editor from the prejob inspection when tire
+  // replacement is added mid-job — there's no quote to seed from, so pre-load
+  // every axle the inspection recorded a size for. Runs once per open and only
+  // when no tire rows already exist (a walk-in's priced snapshot brings its own
+  // via quotedParts).
+  const seededTiresForOpenRef = useRef(false);
+  useEffect(() => {
+    if (!open) {
+      seededTiresForOpenRef.current = false;
+      return;
+    }
+    if (readOnlyBillingMode) return;
+    if (!isTireService) return;
+    if (seededTiresForOpenRef.current) return;
+    const prejobLines = tireLinesFromPrejob(prefillData?.prejobTires);
+    if (prejobLines.length === 0) return;
+    seededTiresForOpenRef.current = true;
+    setParts((current) => {
+      if (current.some((p) => p.is_tire)) return current;
+      const payloads = tireLinesToPartPayloads(
+        prejobLines,
+        prefillData?.serviceId ?? null,
+      );
+      return [...current, ...buildPartRows(payloads)];
+    });
+  }, [
+    open,
+    readOnlyBillingMode,
+    isTireService,
+    prefillData?.prejobTires,
+    prefillData?.serviceId,
+  ]);
   // Scope the catalog's OEM recommendations to the booked axle too, so the
   // "N of M confirmed" counter and the swap/suggestion rows only count what
   // was actually quoted (rear-only → 1 of 1, never 1 of 2).
@@ -1124,22 +1298,25 @@ function PostJobSurveyDialogBody({
       updatePrompts.map((prompt) => [prompt.key, prompt.value ?? ""])
     )
   );
-  const [technicianNotes, setTechnicianNotes] = useState(initialTechnicianNotes);
+  const [technicianNotes, setTechnicianNotes] = useState("");
   // Customer-facing "what did you find / do" summary — the driver reads this
   // on the receipt and Past Service report. Kept separate from technicianNotes
   // (shop-to-shop tip) and additionalObservations (private shop note).
   const [mechanicFindings, setMechanicFindings] = useState("");
   const [flaggedVehicleSpecs, setFlaggedVehicleSpecs] = useState(false);
   const [flaggedReason, setFlaggedReason] = useState("");
-  const [actualLaborMinutes, setActualLaborMinutes] = useState(
+  // Mechanic's actual labor time in decimal HOURS (industry-standard entry).
+  // Seeded from the estimate (minutes) via formatHoursValue; converted back to
+  // whole minutes at submit. Stays the single labor money source of truth.
+  const [actualLaborHours, setActualLaborHours] = useState(
     typeof estimatedLaborMinutes === "number"
-      ? String(estimatedLaborMinutes)
+      ? formatHoursValue(estimatedLaborMinutes)
       : ""
   );
-  // Per-service labor split for the estimate-cycle labor step. Keyed by "base"
-  // (the original quoted work) plus one entry per custom job id. The sum is
-  // written back to `actualLaborMinutes`, which stays the single money source
-  // of truth — this just lets the mechanic see and set each service's share.
+  // Per-service labor split for the estimate-cycle labor step, in HOURS. Keyed
+  // by "base" (the original quoted work) plus one entry per custom job id. The
+  // sum is written back to `actualLaborHours`, the single money source of truth
+  // — this just lets the mechanic see and set each service's share.
   const [laborAllocations, setLaborAllocations] = useState<
     Record<string, string>
   >({});
@@ -1219,7 +1396,7 @@ function PostJobSurveyDialogBody({
       return seeded.length > 0 ? [...seeded, ...prev] : prev;
     });
   }, [open, bookingId, midJobFlagged]);
-  const [photos, setPhotos] = useState<PhotoState[]>(initialPhotos);
+  const [photos, setPhotos] = useState<PhotoState[]>([]);
   const [error, setError] = useState("");
 
   const generateUploadUrl = useMutation(generateUploadUrlRef) as (args: {
@@ -1317,41 +1494,49 @@ function PostJobSurveyDialogBody({
 
   const liveTotals = useMemo(() => {
     if (!isEstimateCycle) return null;
-    let partsCents = 0;
-    for (const p of parts) {
-      if (p.not_used) continue;
-      if (p.supplied_by === "customer") continue;
-      const cost = Number(p.cost) || 0;
-      const qty = Math.max(1, Math.round(p.quantity || 1));
-      partsCents += Math.round(cost * qty * 100);
-    }
-    const hours = Number(actualLaborMinutes) || 0;
-    const laborCents = hours > 0
-      ? Math.round((hours / 60) * effectiveLaborRateCents)
-      : 0;
-    const subtotalCents = partsCents + laborCents;
-    const tax = computeBookingTax({
-      laborDollars: laborCents / 100,
-      partsDollars: partsCents / 100,
-      state: shopState ?? null,
-      zip: shopZip ?? null,
+    return computeEstimateTotals({
+      parts,
+      hours: Number(actualLaborHours) || 0,
+      laborRateCents: effectiveLaborRateCents,
+      shopState,
+      shopZip,
     });
-    const taxCents = Math.round((tax.taxDollars ?? 0) * 100);
-    const feeCents = Math.max(
-      0,
-      Math.round(computePlatformFeeDollars(subtotalCents / 100) * 100),
-    );
-    return {
-      partsCents,
-      laborCents,
-      taxCents,
-      feeCents,
-      totalCents: subtotalCents + taxCents + feeCents,
-    };
   }, [
     isEstimateCycle,
     parts,
-    actualLaborMinutes,
+    actualLaborHours,
+    effectiveLaborRateCents,
+    shopState,
+    shopZip,
+  ]);
+
+  // The quoted price as the CLIENT computes it — same formula as liveTotals but
+  // over the seeded (quoted) parts + estimated labor, i.e. the untouched state
+  // when the dialog opens. Lets the pre-job summary decide whether the mechanic
+  // actually pushed the price ABOVE the quote before asking them to justify an
+  // "adjustment" — without exposing (or drifting against) the customer's hidden
+  // disclosed range. Because it reuses computeEstimateTotals with the same
+  // labor-hours seed, an unchanged quote compares exactly equal (integer cents),
+  // so no reason is requested. Null when there's no quoted snapshot to compare
+  // against (e.g. walk-ins).
+  const quotedBaselineTotalCents = useMemo(() => {
+    if (!isEstimateCycle) return null;
+    if (!quotedParts || quotedParts.length === 0) return null;
+    const hours =
+      typeof estimatedLaborMinutes === "number"
+        ? Number(formatHoursValue(estimatedLaborMinutes)) || 0
+        : 0;
+    return computeEstimateTotals({
+      parts: buildPartRows(quotedParts),
+      hours,
+      laborRateCents: effectiveLaborRateCents,
+      shopState,
+      shopZip,
+    }).totalCents;
+  }, [
+    isEstimateCycle,
+    quotedParts,
+    estimatedLaborMinutes,
     effectiveLaborRateCents,
     shopState,
     shopZip,
@@ -1362,8 +1547,8 @@ function PostJobSurveyDialogBody({
 
   // Note: we intentionally do NOT compare the mechanic's per-row price to a
   // catalog median in the UI. The shop sets the price; the customer decides.
-  // The justification gate for manual parts (source="manual") remains
-  // enforced server-side in validatePartsForApproval.
+  // Manual-part justification is optional (no client or server gate); the note
+  // is kept in the audit trail when provided.
 
   useEffect(() => {
     if (stepIndex >= visibleSteps.length) {
@@ -1420,6 +1605,11 @@ function PostJobSurveyDialogBody({
           swap_from_oem_number: part.swap_from_oem_number || undefined,
           not_used: notUsed ? true : undefined,
           justification_text: part.justification_text?.trim() || undefined,
+          is_tire: part.is_tire === true ? true : undefined,
+          tire_size: part.tire_size?.trim() || undefined,
+          tire_brand: part.tire_brand?.trim() || undefined,
+          tire_model: part.tire_model?.trim() || undefined,
+          tire_position: part.tire_position?.trim() || undefined,
         };
       })
       .filter(
@@ -1429,7 +1619,8 @@ function PostJobSurveyDialogBody({
           part.oem_number ||
           (Number.isFinite(part.cost) && part.cost > 0) ||
           part.supplied_by === "customer" ||
-          part.not_used === true
+          part.not_used === true ||
+          part.is_tire === true
       );
   }
 
@@ -1486,28 +1677,8 @@ function PostJobSurveyDialogBody({
       if (partsIdx >= 0) setStepIndex(partsIdx);
       return;
     }
-    // Manual (mechanic-added) parts that bill toward approval must carry a
-    // justification — server enforces this in validatePartsForApproval and a
-    // missing note will fail the submit with a generic error. Surface the
-    // gate here so the mechanic sees which row needs the note.
-    if (cycle) {
-      const missingJustification = normalizedParts.find(
-        (p) =>
-          p.source === "manual" &&
-          p.supplied_by !== "customer" &&
-          p.not_used !== true &&
-          (p.justification_text ?? "").trim().length <
-            MIN_MANUAL_JUSTIFICATION_LEN,
-      );
-      if (missingJustification) {
-        setError(
-          `Add a justification of at least ${MIN_MANUAL_JUSTIFICATION_LEN} characters for "${missingJustification.part_name || "manual part"}".`,
-        );
-        const partsIdx = visibleSteps.indexOf("parts");
-        if (partsIdx >= 0) setStepIndex(partsIdx);
-        return;
-      }
-    }
+    // Manual-part justification is optional — the mechanic can add a note but is
+    // never blocked from submitting for a missing one.
     if (flaggedVehicleSpecs && flaggedReason.trim() === "") {
       setError("Please explain why the vehicle specs should be reviewed.");
       const flagIdx = visibleSteps.indexOf("flag");
@@ -1524,12 +1695,21 @@ function PostJobSurveyDialogBody({
       return;
     }
 
-    const photosPayload: PostjobPhotoInput[] = photos
-      .filter((photo) => photo.status === "ready" && photo.storageId)
+    // Fresh post-job photos + the mid-job layover photos (shown read-only in
+    // the review) — merged so the layover evidence persists into the report.
+    // Deduped by storage id; layover photos keep their real capture time.
+    const seenPhotoStorageIds = new Set<string>();
+    const photosPayload: PostjobPhotoInput[] = [...photos, ...layoverPhotos]
+      .filter((photo) => {
+        if (photo.status !== "ready" || !photo.storageId) return false;
+        if (seenPhotoStorageIds.has(photo.storageId)) return false;
+        seenPhotoStorageIds.add(photo.storageId);
+        return true;
+      })
       .map((photo) => ({
         storage_id: photo.storageId,
         caption: photo.caption.trim() || null,
-        taken_at: Date.now(),
+        taken_at: photo.takenAt ?? Date.now(),
       }));
 
     const skipOptionalSurvey = answeredCount === 0;
@@ -1556,12 +1736,19 @@ function PostJobSurveyDialogBody({
         not_used: p.not_used ?? undefined,
         justification_text: p.justification_text ?? undefined,
         evidence_photo_ids: (p as any).evidence_photo_ids ?? undefined,
+        is_tire: p.is_tire ?? undefined,
+        tire_size: p.tire_size ?? undefined,
+        tire_brand: p.tire_brand ?? undefined,
+        tire_model: p.tire_model ?? undefined,
+        tire_position: p.tire_position ?? undefined,
       }));
-      const laborMinutes =
-        actualLaborMinutes.trim() === "" ? null : Number(actualLaborMinutes);
+      const laborHoursValue =
+        actualLaborHours.trim() === "" ? null : Number(actualLaborHours);
       const laborHours =
-        laborMinutes != null && Number.isFinite(laborMinutes) && laborMinutes > 0
-          ? laborMinutes / 60
+        laborHoursValue != null &&
+        Number.isFinite(laborHoursValue) &&
+        laborHoursValue > 0
+          ? laborHoursValue
           : undefined;
       // Send the rate alongside hours so the server can multiply directly
       // instead of falling back to booking.labor_cost. effectiveLaborRateCents
@@ -1617,7 +1804,9 @@ function PostJobSurveyDialogBody({
       flagged_vehicle_specs: flaggedVehicleSpecs,
       flagged_vehicle_specs_reason: flaggedReason.trim() || null,
       actual_labor_minutes:
-        actualLaborMinutes.trim() === "" ? null : Number(actualLaborMinutes),
+        actualLaborHours.trim() === ""
+          ? null
+          : hoursToMinutes(Number(actualLaborHours)),
       actual_parts_cost:
         actualPartsCost.trim() === ""
           ? sumJobActualParts(normalizedParts)
@@ -1928,8 +2117,8 @@ function PostJobSurveyDialogBody({
             completionMileage={completionMileage}
             setCompletionMileage={setCompletionMileage}
             baselineMileage={baselineMileage}
-            actualLaborMinutes={actualLaborMinutes}
-            setActualLaborMinutes={setActualLaborMinutes}
+            actualLaborHours={actualLaborHours}
+            setActualLaborHours={setActualLaborHours}
             laborAllocations={laborAllocations}
             setLaborAllocations={setLaborAllocations}
             parts={parts}
@@ -1972,6 +2161,8 @@ function PostJobSurveyDialogBody({
             }
             technicianNotes={technicianNotes}
             setTechnicianNotes={setTechnicianNotes}
+            layoverNotes={layoverNotes}
+            layoverPhotos={layoverPhotos}
             mechanicFindings={mechanicFindings}
             setMechanicFindings={setMechanicFindings}
             additionalObservations={additionalObservations}
@@ -1999,6 +2190,10 @@ function PostJobSurveyDialogBody({
             cycle={cycle}
             laborRateCents={effectiveLaborRateCents}
             liveTotals={liveTotals}
+            quotedBaselineTotalCents={quotedBaselineTotalCents}
+            isTireService={isTireService || parts.some((p) => isTirePartRow(p))}
+            tireOemSizes={tireOemSizes}
+            tirePrefill={prefillData?.prejobTires ?? null}
           />
 
           {showOneMore && !isLast ? (
@@ -2196,8 +2391,8 @@ function StepContent(props: {
   completionMileage: string;
   setCompletionMileage: (value: string) => void;
   baselineMileage: number | null;
-  actualLaborMinutes: string;
-  setActualLaborMinutes: (value: string) => void;
+  actualLaborHours: string;
+  setActualLaborHours: (value: string) => void;
   laborAllocations: Record<string, string>;
   setLaborAllocations: React.Dispatch<
     React.SetStateAction<Record<string, string>>
@@ -2233,6 +2428,9 @@ function StepContent(props: {
   removePhoto: (id: string) => void;
   technicianNotes: string;
   setTechnicianNotes: (value: string) => void;
+  /** Read-only mid-job layover data, surfaced in the summary/review step. */
+  layoverNotes: string;
+  layoverPhotos: PhotoState[];
   mechanicFindings: string;
   setMechanicFindings: (value: string) => void;
   additionalObservations: string;
@@ -2261,6 +2459,23 @@ function StepContent(props: {
     taxCents: number;
     feeCents: number;
     totalCents: number;
+  } | null;
+  /** The quoted total as the client computes it (cents), for the pre-job
+   *  "Why this adjustment?" gate. Null when there's no quote to compare to. */
+  quotedBaselineTotalCents: number | null;
+  /** True when the booking's service is tire replacement — the parts step
+   *  renders the custom TirePartsEditor (size/brand/model/price) for tire
+   *  lines instead of the generic OEM part fields. */
+  isTireService: boolean;
+  /** Vehicle OEM tire fitments [front, rear] surfaced as size chips. */
+  tireOemSizes: string[];
+  /** Prejob inspection tire findings (per axle) — the editor's "Add axle"
+   *  affordance uses these sizes when the mechanic adds a fresh line. */
+  tirePrefill: {
+    tire_size_front?: string | null;
+    tire_size_rear?: string | null;
+    front?: { brand?: string | null; model?: string | null } | null;
+    rear?: { brand?: string | null; model?: string | null } | null;
   } | null;
 }) {
   switch (props.step) {
@@ -2387,20 +2602,20 @@ function StepContent(props: {
               <div className="flex items-center gap-2">
                 <div className="flex items-center rounded-lg border border-primary/15 bg-card pr-3 transition-colors focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
                   <input
-                    value={props.actualLaborMinutes}
+                    value={props.actualLaborHours}
                     onChange={(event) =>
-                      props.setActualLaborMinutes(
-                        event.target.value.replace(/\D+/g, "")
+                      props.setActualLaborHours(
+                        event.target.value.replace(/[^0-9.]/g, "")
                       )
                     }
-                    inputMode="numeric"
+                    inputMode="decimal"
                     placeholder="0"
                     className="w-20 bg-transparent px-3 py-2 text-right text-[13px] font-medium tabular-nums outline-none placeholder:text-muted-foreground/40"
                   />
-                  <span className="text-[11px] text-muted-foreground">min</span>
+                  <span className="text-[11px] text-muted-foreground">hr</span>
                 </div>
                 <span className="whitespace-nowrap text-[11px] text-muted-foreground">
-                  Est. {props.estimatedLaborMinutes}
+                  Est. {formatHoursValue(props.estimatedLaborMinutes)}
                 </span>
               </div>
             </div>
@@ -2426,6 +2641,9 @@ function StepContent(props: {
           cycle={props.cycle}
           readOnly={props.readOnlyBilling}
           lockedQuote={props.lockedQuote}
+          isTireService={props.isTireService}
+          tireOemSizes={props.tireOemSizes}
+          tirePrefill={props.tirePrefill}
         />
       );
     case "difficulty":
@@ -2701,7 +2919,7 @@ function StepContent(props: {
         <LaborStep
           allocations={props.laborAllocations}
           setAllocations={props.setLaborAllocations}
-          setTotalMinutes={props.setActualLaborMinutes}
+          setTotalHours={props.setActualLaborHours}
           rateCents={props.laborRateCents}
           estimatedLaborMinutes={props.estimatedLaborMinutes}
           baseLabel={props.serviceLabel}
@@ -2720,9 +2938,10 @@ function StepContent(props: {
                 (p.part_name.trim() !== "" || p.oem_number.trim() !== "") &&
                 !p.not_used,
             )}
-            laborMinutes={props.actualLaborMinutes}
+            laborHours={props.actualLaborHours}
             laborRateCents={props.laborRateCents}
             totals={props.liveTotals}
+            quotedTotalCents={props.quotedBaselineTotalCents}
             technicianNotes={props.technicianNotes}
             setTechnicianNotes={props.setTechnicianNotes}
           />
@@ -2739,8 +2958,14 @@ function StepContent(props: {
           difficultyRating={props.difficultyRating}
           partsCount={props.parts.filter((p) => p.part_name.trim()).length}
           photoCount={
-            props.photos.filter((p) => p.status === "ready").length
+            new Set(
+              [...props.photos, ...props.layoverPhotos]
+                .filter((p) => p.status === "ready" && p.storageId)
+                .map((p) => p.storageId),
+            ).size
           }
+          layoverNotes={props.layoverNotes}
+          layoverPhotos={props.layoverPhotos}
           flagged={props.flaggedVehicleSpecs}
         />
       );
@@ -2871,6 +3096,9 @@ function PartsStep({
   cycle,
   readOnly,
   lockedQuote,
+  isTireService,
+  tireOemSizes,
+  tirePrefill,
 }: {
   parts: PartRowState[];
   setParts: React.Dispatch<React.SetStateAction<PartRowState[]>>;
@@ -2891,16 +3119,50 @@ function PartsStep({
   partsCostSum: number;
   vehicleLabel: string | null;
   engineCode: string | null;
-  // When set, this dialog is in an approval flow (pre/mid/post) — manual
-  // (mechanic-added) part rows must collect a justification.
+  // When set, this dialog is in an approval flow (pre/mid/post). Manual
+  // (mechanic-added) part rows may carry an optional justification note.
   cycle?: PostJobSurveyCycle;
   // Billing is locked (post-job completion of a customer-confirmed quote):
   // render parts read-only with the agreed breakdown instead of the editor.
   readOnly?: boolean;
   lockedQuote?: LockedQuote | null;
+  // Tire replacement: render the custom TirePartsEditor for tire lines.
+  isTireService?: boolean;
+  tireOemSizes?: string[];
+  tirePrefill?: {
+    tire_size_front?: string | null;
+    tire_size_rear?: string | null;
+    front?: { brand?: string | null; model?: string | null } | null;
+    rear?: { brand?: string | null; model?: string | null } | null;
+  } | null;
 }) {
   const normalizeOem = (n: string) =>
     n.trim().toUpperCase().replace(/\s+/g, "");
+  // Tire lines are edited through TirePartsEditor and hidden from the generic
+  // parts list below. `tireLines` mirrors the is_tire rows in `parts`; writing
+  // back replaces just that subset so non-tire rows (multi-service jobs) keep
+  // their positions and index-based edit handlers stay correct.
+  const tireLines = useMemo<TireLine[]>(
+    () => tireLinesFromParts(parts.filter((p) => isTirePartRow(p))),
+    [parts],
+  );
+  const tireServiceId = useMemo(
+    () =>
+      parts.find((p) => p.is_tire && p.service_id)?.service_id ??
+      partsRequiredServices.find((s) =>
+        isTireReplacementService(s.name),
+      )?._id ??
+      partsRequiredServices[0]?._id ??
+      null,
+    [parts, partsRequiredServices],
+  );
+  function setTireLines(next: TireLine[]) {
+    const payloads = tireLinesToPartPayloads(next, tireServiceId);
+    setParts((current) => [
+      ...current.filter((p) => !isTirePartRow(p)),
+      ...buildPartRows(payloads),
+    ]);
+  }
   const oemRecommendedMap = useMemo(() => {
     const map = new Map<string, OemRecommendationPart>();
     for (const rec of oemRecommendations) {
@@ -2945,6 +3207,40 @@ function PartsStep({
     });
     return opts;
   }, [oemRecommendations, partsRequiredServices]);
+
+  // Every place a manually-added part can be attributed: the booking's
+  // parts-required catalog services (stamped as service_id) plus any
+  // off-catalog custom-job lines (stamped as custom_service_name). Unioning in
+  // names already stamped on rows keeps a just-created custom job selectable
+  // even if the reactive customPartLines query hasn't caught up yet — otherwise
+  // the part could silently land on a catalog service instead of that job.
+  const assignTargets = useMemo(() => {
+    type Target = {
+      key: string;
+      label: string;
+      serviceId?: string;
+      customName?: string;
+    };
+    const targets: Target[] = [];
+    const seen = new Set<string>();
+    const push = (t: Target) => {
+      if (seen.has(t.key)) return;
+      seen.add(t.key);
+      targets.push(t);
+    };
+    for (const svc of partsRequiredServices) {
+      push({ key: svc._id, label: svc.name, serviceId: svc._id });
+    }
+    for (const line of customPartLines) {
+      if (!line.name) continue;
+      push({ key: `custom:${line.name}`, label: line.name, customName: line.name });
+    }
+    for (const p of parts) {
+      const name = p.custom_service_name;
+      if (name) push({ key: `custom:${name}`, label: name, customName: name });
+    }
+    return targets;
+  }, [partsRequiredServices, customPartLines, parts]);
 
   function addCatalogPart(optionKey: string) {
     const opt = catalogOptions.find((o) => o.key === optionKey);
@@ -2998,16 +3294,29 @@ function PartsStep({
       (Number(p.cost) || 0) <= 0,
   ).length;
   const prefilled = suggestedParts.length > 0;
-  // Step copy adapts: when the cascade pre-loaded suggestions, the step is
-  // "confirm what we expect you to use" — otherwise it's "tell us what
-  // you're using."
+  // Step copy adapts on two axes. Prefill: when the cascade pre-loaded
+  // suggestions the step is "confirm" — otherwise "tell us." Tense: estimate
+  // cycles (pre/mid-job) are forward-looking quotes for work not yet done, so
+  // they keep present/future phrasing; the post-job report describes a
+  // completed job, so it reads in past tense.
+  const isEstimateCycle = cycle === "pre_job" || cycle === "mid_job";
   const eyebrow = prefilled ? "Confirm" : requiresParts ? "Required" : "Optional";
-  const question = prefilled ? "Confirm parts to use" : "What parts are you using?";
+  const question = prefilled
+    ? isEstimateCycle
+      ? "Confirm parts to use"
+      : "Confirm parts used"
+    : isEstimateCycle
+      ? "What parts are you using?"
+      : "What parts did you use?";
   const hint = prefilled
     ? "Verify the inventory planned for this service task."
     : requiresParts
-      ? "This service requires parts — please add at least one part to be installed before continuing."
-      : "Add each part to be installed. Skip if none.";
+      ? isEstimateCycle
+        ? "This service requires parts — please add at least one part to be installed before continuing."
+        : "This service requires parts — please add at least one part you installed before continuing."
+      : isEstimateCycle
+        ? "Add each part to be installed. Skip if none."
+        : "Add each part you installed. Skip if none.";
 
   const [swapIndex, setSwapIndex] = useState<number | null>(null);
   const closeSwap = () => setSwapIndex(null);
@@ -3069,7 +3378,7 @@ function PartsStep({
     return (
       <QuestionScreen
         eyebrow="Confirm"
-        question="Confirm parts to use"
+        question="Confirm parts used"
         hint="Billing is locked to the customer-approved quote — review only."
       >
         <div className="space-y-3">
@@ -3101,10 +3410,16 @@ function PartsStep({
                         ) : null}
                       </div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-x-1 font-mono text-[11px] tabular-nums text-muted-foreground">
-                        <CopyableOemNumber
-                          value={part.oem_number || ""}
-                          className="text-[11px] text-muted-foreground"
-                        />
+                        {isTirePartRow(part) ? (
+                          <span className="text-[11px] text-muted-foreground">
+                            {formatPartIdentity(part)}
+                          </span>
+                        ) : (
+                          <CopyableOemNumber
+                            value={part.oem_number || ""}
+                            className="text-[11px] text-muted-foreground"
+                          />
+                        )}
                         {qty > 1 ? <span>· qty {qty}</span> : null}
                         {part.supplied_by === "customer" ? (
                           <span>· customer-supplied</span>
@@ -3204,12 +3519,32 @@ function PartsStep({
           </div>
         ) : null}
 
-        {parts.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-primary/20 bg-muted/30 px-4 py-6 text-center text-[12px] text-muted-foreground">
-            No parts added yet.
+        {isTireService && !readOnly ? (
+          <div className="space-y-2">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+              Tires
+            </p>
+            <TirePartsEditor
+              value={tireLines}
+              onChange={setTireLines}
+              oemSizes={tireOemSizes}
+            />
           </div>
+        ) : null}
+
+        {!parts.some((p) => !isTirePartRow(p)) ? (
+          // Empty state is only for non-tire parts; when this is a tire service
+          // the editor above already covers the lines.
+          isTireService ? null : (
+            <div className="rounded-xl border border-dashed border-primary/20 bg-muted/30 px-4 py-6 text-center text-[12px] text-muted-foreground">
+              No parts added yet.
+            </div>
+          )
         ) : (
           parts.map((part, index) => {
+            // Tire lines are edited in TirePartsEditor above; returning null
+            // keeps `index` aligned for the remaining rows' updatePart calls.
+            if (isTirePartRow(part)) return null;
             const isCustomer = part.supplied_by === "customer";
             const isNotUsed = part.not_used === true;
             const tierLabel = tierLabelOf(part.part_tier);
@@ -3297,16 +3632,6 @@ function PartsStep({
                           {tierLabel}
                         </span>
                       ) : null}
-                      {partsRequiredServices.length > 1 && part.service_id ? (
-                        <span
-                          className="inline-flex shrink-0 items-center rounded-md bg-primary/8 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-[0.06em] text-primary/80"
-                          title="Service this part is attributed to"
-                        >
-                          {partsRequiredServices.find(
-                            (s) => s._id === part.service_id,
-                          )?.name ?? ""}
-                        </span>
-                      ) : null}
                       {isNotUsed ? (
                         <span
                           className="inline-flex shrink-0 items-center rounded-md bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-amber-800"
@@ -3323,6 +3648,62 @@ function PartsStep({
                       >
                         {learnedFromLabel}
                       </p>
+                    ) : null}
+                    {/*
+                      "For:" selector — attribute this part to a catalog service
+                      or an off-catalog custom job. Only rendered when there's a
+                      real choice (≥2 targets); single-target bookings auto-stamp
+                      via the add buttons below. Writes service_id /
+                      custom_service_name mutually exclusively so completion
+                      groups the part under the intended work.
+                    */}
+                    {!readOnly && assignTargets.length >= 2 ? (
+                      <div className="mt-2 flex items-center gap-1.5">
+                        <span className="shrink-0 text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          For
+                        </span>
+                        <Select
+                          aria-label="Assign this part to a service"
+                          selectedKey={
+                            part.custom_service_name
+                              ? `custom:${part.custom_service_name}`
+                              : part.service_id ?? null
+                          }
+                          onSelectionChange={(key) => {
+                            if (key == null) return;
+                            const target = assignTargets.find(
+                              (t) => t.key === String(key),
+                            );
+                            if (!target) return;
+                            updatePart(index, {
+                              service_id: target.serviceId ?? null,
+                              custom_service_name: target.customName ?? null,
+                            });
+                          }}
+                          placeholder="Choose service"
+                        >
+                          <SelectTrigger className="inline-flex h-7 w-auto max-w-full items-center gap-1.5 rounded-full border border-primary/25 bg-primary/5 px-2.5 py-1 text-[11px] font-medium text-primary/90">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectPopover
+                            placement="bottom start"
+                            className="w-[18rem] max-w-[calc(100vw-2rem)]"
+                          >
+                            <SelectListBox shouldFocusWrap className="p-1.5">
+                              {assignTargets.map((t) => (
+                                <SelectItem
+                                  key={t.key}
+                                  id={t.key}
+                                  textValue={t.label}
+                                  className="rounded-lg px-3 py-2 text-[13px] data-[selected]:bg-transparent data-[selected]:text-foreground"
+                                >
+                                  {t.label}
+                                </SelectItem>
+                              ))}
+                            </SelectListBox>
+                          </SelectPopover>
+                        </Select>
+                      </div>
                     ) : null}
                     {/* Brand + part number, compact and inline */}
                     <div className="mt-2 grid grid-cols-2 gap-1.5">
@@ -3483,17 +3864,16 @@ function PartsStep({
                   )}
                 </div>
 
-                {/* Justification — shown on every editable (manual) row that
-                    bills toward approval. Mirrors the `!isCatalogRow` heuristic
-                    used to make the identity fields editable. Server enforces
-                    ≥12 chars on cycle submissions; rendering it here lets the
-                    mechanic satisfy the gate inline. */}
+                {/* Optional note on an editable (manual) row. Shown via the same
+                    `!isCatalogRow` heuristic that makes identity fields editable.
+                    Never required — a mechanic can leave it blank and still
+                    submit; when filled it's kept in the payment audit trail. */}
                 {!isCatalogRow && !isCustomer && !isNotUsed && (
                     <div className="mt-2.5">
                       <span className="block text-[9px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                         Why this part?{" "}
                         <span className="font-normal normal-case text-muted-foreground/80">
-                          (required, ≥{MIN_MANUAL_JUSTIFICATION_LEN} chars)
+                          (optional)
                         </span>
                       </span>
                       <textarea
@@ -3503,14 +3883,10 @@ function PartsStep({
                             justification_text: event.target.value,
                           })
                         }
-                        placeholder="Explain why this part is needed (vehicle condition, OEM unavailable, customer request, etc.)"
+                        placeholder="Add a note if useful (vehicle condition, OEM unavailable, customer request, etc.)"
                         rows={2}
                         className="mt-1 w-full resize-y rounded-md border border-primary/10 bg-background px-2 py-1.5 text-[12px] leading-snug text-foreground outline-none placeholder:text-muted-foreground focus:border-primary/30"
                       />
-                      <p className="mt-0.5 text-[10px] text-muted-foreground">
-                        {(part.justification_text ?? "").trim().length}/
-                        {MIN_MANUAL_JUSTIFICATION_LEN} characters minimum
-                      </p>
                     </div>
                   )}
 
@@ -4860,9 +5236,9 @@ function FoundWorkStep({
   const [complaint, setComplaint] = useState("");
   const [systemTags, setSystemTags] = useState<string[]>([]);
   const [workType, setWorkType] = useState<string | null>(null);
-  // Labor estimate for this line, in minutes. Flows through to the labor step's
-  // per-service breakdown so the quote adds this work's time to the total.
-  const [minutesInput, setMinutesInput] = useState("");
+  // Labor estimate for this line, in decimal HOURS. Flows through to the labor
+  // step's per-service breakdown so the quote adds this work's time to the total.
+  const [laborHoursInput, setLaborHoursInput] = useState("");
   const [pending, setPending] = useState<{
     kind: "service" | "freeform";
     name: string;
@@ -4887,7 +5263,7 @@ function FoundWorkStep({
     setComplaint("");
     setSystemTags([]);
     setWorkType(null);
-    setMinutesInput("");
+    setLaborHoursInput("");
   }
 
   function startEdit(line: (typeof midJobLines)[number]) {
@@ -4897,9 +5273,9 @@ function FoundWorkStep({
     setComplaint(line.complaint ?? "");
     setSystemTags(line.system_tags ?? []);
     setWorkType(line.work_type ?? null);
-    setMinutesInput(
+    setLaborHoursInput(
       typeof line.estimated_minutes === "number" && line.estimated_minutes > 0
-        ? String(line.estimated_minutes)
+        ? formatHoursValue(line.estimated_minutes)
         : "",
     );
   }
@@ -4925,11 +5301,9 @@ function FoundWorkStep({
   async function commit() {
     if (!pending || !bookingId) return;
     setBusy(true);
-    const minutes = Number(minutesInput);
+    const laborHours = parseHoursInput(laborHoursInput);
     const estimatedMinutes =
-      minutesInput.trim() !== "" && Number.isFinite(minutes) && minutes > 0
-        ? minutes
-        : undefined;
+      laborHours != null && laborHours > 0 ? hoursToMinutes(laborHours) : undefined;
     try {
       if (editingId) {
         await updateMidJob({
@@ -4990,7 +5364,7 @@ function FoundWorkStep({
                       )}
                       {typeof line.estimated_minutes === "number" &&
                       line.estimated_minutes > 0
-                        ? ` · ${line.estimated_minutes} min`
+                        ? ` · ${formatHoursValue(line.estimated_minutes)} hr`
                         : ""}
                     </p>
                     {line.complaint ? (
@@ -5064,16 +5438,17 @@ function FoundWorkStep({
               </label>
               <div className="flex items-center rounded-lg border border-primary/15 bg-background pr-3 focus-within:border-primary">
                 <input
-                  value={minutesInput}
+                  value={laborHoursInput}
                   onChange={(event) => {
                     const raw = event.target.value;
-                    if (raw === "" || /^\d{0,4}$/.test(raw)) setMinutesInput(raw);
+                    if (raw === "" || /^\d{0,2}(\.\d{0,2})?$/.test(raw))
+                      setLaborHoursInput(raw);
                   }}
-                  inputMode="numeric"
+                  inputMode="decimal"
                   placeholder="0"
                   className="w-16 bg-transparent px-3 py-1.5 text-right text-[13px] font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
                 />
-                <span className="text-[11px] text-muted-foreground">min</span>
+                <span className="text-[11px] text-muted-foreground">hr</span>
               </div>
             </div>
             <div className="mt-2 flex justify-end gap-2">
@@ -5410,6 +5785,8 @@ function SummaryStep({
   difficultyRating,
   partsCount,
   photoCount,
+  layoverNotes,
+  layoverPhotos,
   flagged,
 }: {
   bookingLabel: string;
@@ -5421,8 +5798,20 @@ function SummaryStep({
   difficultyRating: string;
   partsCount: number;
   photoCount: number;
+  layoverNotes: string;
+  layoverPhotos: PhotoState[];
   flagged: boolean;
 }) {
+  // Notes are stored as newline-joined entries by the layover overlay.
+  const layoverNoteEntries = layoverNotes
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const layoverReadyPhotos = layoverPhotos.filter(
+    (photo) => photo.status === "ready" && photo.previewUrl,
+  );
+  const hasLayoverContext =
+    layoverNoteEntries.length > 0 || layoverReadyPhotos.length > 0;
   const rows: { label: string; value: string }[] = [
     {
       label: "Vehicle",
@@ -5477,6 +5866,52 @@ function SummaryStep({
           </div>
         ))}
       </div>
+
+      {hasLayoverContext ? (
+        <div className="mt-6 overflow-hidden rounded-2xl border border-primary/15 bg-muted/30">
+          <div className="border-b border-primary/10 px-4 py-2.5">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+              From the active job
+            </p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground/80">
+              Notes &amp; photos you added while working — carried into this
+              report.
+            </p>
+          </div>
+          {layoverNoteEntries.length > 0 ? (
+            <ul className="space-y-1.5 px-4 py-3">
+              {layoverNoteEntries.map((entry, idx) => (
+                <li
+                  key={idx}
+                  className="flex gap-2 text-[13px] leading-snug text-foreground"
+                >
+                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-primary/40" />
+                  <span className="min-w-0 break-words">{entry}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {layoverReadyPhotos.length > 0 ? (
+            <div className="flex flex-wrap gap-2 px-4 pb-3 pt-1">
+              {layoverReadyPhotos.map((photo) => (
+                <div
+                  key={photo.id}
+                  className="h-16 w-16 overflow-hidden rounded-lg border border-primary/15 bg-background"
+                  title={photo.caption || undefined}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={photo.previewUrl}
+                    alt={photo.caption || "Active-job photo"}
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="mt-6 flex items-center justify-center gap-2 text-[12px] text-muted-foreground">
         <Check className="h-3.5 w-3.5 text-success" />
         All data attaches to this VIN's passport.
@@ -5871,10 +6306,11 @@ function ApprovalStatusPanel({
  * Labor step for estimate cycles.
  *
  * One row per piece of work — the original quoted service plus every custom
- * line the mechanic found — each with its own minutes. The displayed labor
- * cost is `(Σ minutes / 60) × shop labor_rate`, and that sum is written back
- * to the single `actualLaborMinutes` money field the submit mutation reads, so
- * the server's recomputation lands on the same number the mechanic just saw.
+ * line the mechanic found — each with its own labor hours. The displayed labor
+ * cost is `Σ hours × shop labor_rate`, and that sum (in hours) is written back
+ * to the single `actualLaborHours` money field the submit mutation reads (as
+ * minutes), so the server's recomputation lands on the same number the mechanic
+ * just saw.
  *
  * The per-service split is only a lens on that total: it lets the mechanic add
  * the extra work's time on top of the original quote instead of re-typing one
@@ -5883,7 +6319,7 @@ function ApprovalStatusPanel({
 function LaborStep({
   allocations,
   setAllocations,
-  setTotalMinutes,
+  setTotalHours,
   rateCents,
   estimatedLaborMinutes,
   baseLabel,
@@ -5891,7 +6327,7 @@ function LaborStep({
 }: {
   allocations: Record<string, string>;
   setAllocations: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  setTotalMinutes: (value: string) => void;
+  setTotalHours: (value: string) => void;
   rateCents: number;
   estimatedLaborMinutes: number | null;
   baseLabel: string | null;
@@ -5921,10 +6357,12 @@ function LaborStep({
     return rows;
   }, [baseLabel, estimatedLaborMinutes, customJobs]);
 
+  // Sum in HOURS. Allocation strings hold hours; an unset line falls back to
+  // its estimate (`def` is minutes → convert).
   const sumFor = (alloc: Record<string, string>) =>
     lines.reduce((sum, line) => {
       const raw = alloc[line.key];
-      const value = raw === undefined ? line.def : Number(raw) || 0;
+      const value = raw === undefined ? minutesToHours(line.def) : Number(raw) || 0;
       return sum + (value > 0 ? value : 0);
     }, 0);
 
@@ -5935,28 +6373,29 @@ function LaborStep({
     const missing = lines.filter((line) => allocations[line.key] === undefined);
     if (missing.length === 0) return;
     const next = { ...allocations };
-    for (const line of missing) next[line.key] = line.def > 0 ? String(line.def) : "";
+    for (const line of missing)
+      next[line.key] = line.def > 0 ? formatHoursValue(line.def) : "";
     setAllocations(next);
-    setTotalMinutes(String(sumFor(next)));
+    setTotalHours(String(sumFor(next)));
     // sumFor closes over `lines`, which is in the dep list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lines, allocations, setAllocations, setTotalMinutes]);
+  }, [lines, allocations, setAllocations, setTotalHours]);
 
   const valueFor = (line: { key: string; def: number }) => {
     const raw = allocations[line.key];
     if (raw !== undefined) return raw;
-    return line.def > 0 ? String(line.def) : "";
+    return line.def > 0 ? formatHoursValue(line.def) : "";
   };
 
   function updateLine(key: string, raw: string) {
-    if (raw !== "" && !/^\d{0,4}$/.test(raw)) return;
+    if (raw !== "" && !/^\d{0,2}(\.\d{0,2})?$/.test(raw)) return;
     const next = { ...allocations, [key]: raw };
     setAllocations(next);
-    setTotalMinutes(String(sumFor(next)));
+    setTotalHours(String(sumFor(next)));
   }
 
-  const totalMinutes = sumFor(allocations);
-  const laborDollars = totalMinutes > 0 ? (totalMinutes / 60) * (rateCents / 100) : 0;
+  const totalHours = sumFor(allocations);
+  const laborDollars = totalHours > 0 ? totalHours * (rateCents / 100) : 0;
   const ratePerHourDollars = (rateCents / 100).toFixed(2);
   const multiline = lines.length > 1;
 
@@ -5967,15 +6406,15 @@ function LaborStep({
       hint={
         multiline
           ? `Your shop's labor rate is $${ratePerHourDollars}/hr — set the time for each and we'll add it up.`
-          : `Your shop's labor rate is $${ratePerHourDollars}/hr — we'll calculate from the minutes you enter.`
+          : `Your shop's labor rate is $${ratePerHourDollars}/hr — we'll calculate from the hours you enter.`
       }
     >
       <div className="mx-auto w-full max-w-md space-y-3">
         <div className="space-y-2">
           {lines.map((line) => {
-            const mins = Number(valueFor(line)) || 0;
+            const lineHours = Number(valueFor(line)) || 0;
             const lineDollars =
-              mins > 0 ? (mins / 60) * (rateCents / 100) : 0;
+              lineHours > 0 ? lineHours * (rateCents / 100) : 0;
             return (
               <div
                 key={line.key}
@@ -5986,7 +6425,7 @@ function LaborStep({
                     {line.label}
                   </p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    {line.def > 0 ? `Est. ${line.def} min · ` : ""}$
+                    {line.def > 0 ? `Est. ${formatHoursValue(line.def)} hr · ` : ""}$
                     {lineDollars.toFixed(2)}
                   </p>
                 </div>
@@ -5994,12 +6433,12 @@ function LaborStep({
                   <input
                     value={valueFor(line)}
                     onChange={(e) => updateLine(line.key, e.target.value)}
-                    inputMode="numeric"
+                    inputMode="decimal"
                     placeholder="0"
-                    aria-label={`Labor minutes for ${line.label}`}
+                    aria-label={`Labor hours for ${line.label}`}
                     className="w-16 bg-transparent px-2.5 py-2 text-right text-[16px] font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
                   />
-                  <span className="text-[11px] text-muted-foreground">min</span>
+                  <span className="text-[11px] text-muted-foreground">hr</span>
                 </div>
               </div>
             );
@@ -6012,7 +6451,7 @@ function LaborStep({
               {multiline ? "Total labor" : "Labor cost"}
             </p>
             <p className="mt-0.5 text-[12px] text-muted-foreground tabular-nums">
-              {totalMinutes} min · ${ratePerHourDollars}/hr
+              {Number(totalHours.toFixed(2))} hr · ${ratePerHourDollars}/hr
             </p>
           </div>
           <span className="text-[22px] font-semibold tabular-nums">
@@ -6035,9 +6474,10 @@ function EstimateSummary({
   bookingLabel,
   bookingSubLabel,
   parts,
-  laborMinutes,
+  laborHours,
   laborRateCents,
   totals,
+  quotedTotalCents,
   technicianNotes,
   setTechnicianNotes,
 }: {
@@ -6045,7 +6485,7 @@ function EstimateSummary({
   bookingLabel: string;
   bookingSubLabel: string;
   parts: PartRowState[];
-  laborMinutes: string;
+  laborHours: string;
   laborRateCents: number;
   totals: {
     partsCents: number;
@@ -6054,12 +6494,28 @@ function EstimateSummary({
     feeCents: number;
     totalCents: number;
   };
+  /** Quoted total (cents), client-computed. Pre-job only asks the mechanic to
+   *  justify an adjustment when the live total rises above this. Null = unknown
+   *  baseline (fall back to always asking). */
+  quotedTotalCents?: number | null;
   technicianNotes?: string;
   setTechnicianNotes?: (value: string) => void;
 }) {
-  const eyebrow = "Reasoning · review · send";
-  const question =
-    cycle === "post_job_reapproval"
+  const canAdjust = typeof setTechnicianNotes === "function";
+  // Pre-job: the customer already agreed to their quote, so only ask "Why this
+  // adjustment?" when the mechanic's live total rises ABOVE the quoted price —
+  // leaving it unchanged (or lowering it) needs no justification. Other cycles
+  // (mid-job added scope, post-job re-approval) always collect a reason. When
+  // the quoted baseline is unknown (null) we fall back to asking.
+  const isUnjustifiedPreJob =
+    cycle === "pre_job" &&
+    quotedTotalCents != null &&
+    totals.totalCents <= quotedTotalCents;
+  const showReasoning = canAdjust && !isUnjustifiedPreJob;
+  const eyebrow = showReasoning ? "Reasoning · review · send" : "Review · send";
+  const question = !showReasoning
+    ? "Review & send"
+    : cycle === "post_job_reapproval"
       ? "Confirm the final billing"
       : cycle === "mid_job"
         ? "Why the added scope?"
@@ -6070,8 +6526,7 @@ function EstimateSummary({
       : cycle === "mid_job"
         ? 'e.g. "Found a seized caliper that needs replacing in addition to the pads."'
         : 'e.g. "OEM pads were back-ordered; substituting Akebono ceramic at higher cost."';
-  const showReasoning = typeof setTechnicianNotes === "function";
-  const minutesNum = Number(laborMinutes) || 0;
+  const hoursNum = Number(laborHours) || 0;
   function laborDurationLabel(mins: number): string {
     const total = Math.round(mins);
     if (total < 60) return `${total} min`;
@@ -6133,7 +6588,10 @@ function EstimateSummary({
                       {p.part_name || p.oem_number || "Part"}
                     </div>
                     <div className="truncate text-[11px] text-muted-foreground">
-                      {p.oem_number ? `${p.oem_number} · ` : ""}
+                      {(() => {
+                        const id = formatPartIdentity(p);
+                        return id ? `${id} · ` : "";
+                      })()}
                       qty {qty}
                       {isCustomer
                         ? " · customer-supplied"
@@ -6158,8 +6616,8 @@ function EstimateSummary({
             <div>
               <div className="font-medium text-foreground">Labor</div>
               <div className="text-[11px] text-muted-foreground">
-                {minutesNum > 0
-                  ? `${laborDurationLabel(minutesNum)} @ $${(laborRateCents / 100).toFixed(2)}/hr`
+                {hoursNum > 0
+                  ? `${laborDurationLabel(hoursToMinutes(hoursNum))} @ $${(laborRateCents / 100).toFixed(2)}/hr`
                   : "—"}
               </div>
             </div>

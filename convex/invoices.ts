@@ -171,13 +171,21 @@ async function assembleInvoiceData(
       (s: any) => !s.superseded_by_id && !s.not_used,
     );
 
+    // Tire lines key on a `TIRE-{size}` sentinel oem_number so downstream
+    // consumers don't treat a size as an OEM part number. On a customer-facing
+    // receipt that sentinel must never show — surface the bare size instead.
+    const displayOem = (oem: string | null | undefined): string | null =>
+      typeof oem === "string" && oem.toUpperCase().startsWith("TIRE-")
+        ? oem.replace(/^TIRE-/i, "")
+        : (oem ?? null);
+
     let parts: AssembledInvoicePart[] = liveSnaps.map((s: any) => {
       const qty = Number(s.quantity ?? 0);
       const unit = Number(s.unit_cost ?? 0);
       const line = Number(s.total_cost ?? qty * unit);
       return {
         name: s.part_name,
-        oemNumber: s.oem_part_number ?? null,
+        oemNumber: displayOem(s.oem_part_number),
         brand: s.brand ?? null,
         qty,
         unitCents: Math.round(unit * 100),
@@ -195,7 +203,7 @@ async function assembleInvoiceData(
           const unit = Number(p.cost ?? 0);
           return {
             name: p.part_name,
-            oemNumber: p.oem_number ?? null,
+            oemNumber: displayOem(p.oem_number),
             brand: p.brand ?? null,
             qty,
             unitCents: Math.round(unit * 100),

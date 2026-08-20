@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { formatHoursValue, hoursToMinutes, parseHoursInput } from "@/lib/labor-units";
 
 type JobActualPart = {
   part_name: string;
@@ -74,7 +75,7 @@ function getDefaultLaborMinutes(
 }
 
 function toPayload(parts: PartRowState[], values: {
-  laborMinutes: string;
+  laborHours: string;
   partsCost: string;
   difficultyRating: string;
   technicianNotes: string;
@@ -94,9 +95,9 @@ function toPayload(parts: PartRowState[], values: {
       cost: Number(part.cost || 0),
     }));
 
+  const laborHours = parseHoursInput(values.laborHours);
   return {
-    actual_labor_minutes:
-      values.laborMinutes.trim() === "" ? null : Number(values.laborMinutes),
+    actual_labor_minutes: laborHours == null ? null : hoursToMinutes(laborHours),
     actual_parts_cost:
       values.partsCost.trim() === "" ? null : Number(values.partsCost),
     difficulty_rating:
@@ -128,7 +129,7 @@ export default function JobActualsDialog({
   onSaveDraft?: (payload: JobActualsPayload) => Promise<void>;
   onFinalize: (payload: JobActualsPayload) => Promise<void>;
 }) {
-  const [laborMinutes, setLaborMinutes] = useState("");
+  const [laborHoursText, setLaborHoursText] = useState("");
   const [partsCost, setPartsCost] = useState("");
   const [difficultyRating, setDifficultyRating] = useState("");
   const [technicianNotes, setTechnicianNotes] = useState("");
@@ -138,8 +139,12 @@ export default function JobActualsDialog({
   useEffect(() => {
     if (!open) return;
 
-    setLaborMinutes(
-      toNumberString(getDefaultLaborMinutes(jobActuals, estimatedLaborMinutes))
+    const defaultLaborMinutes = getDefaultLaborMinutes(
+      jobActuals,
+      estimatedLaborMinutes,
+    );
+    setLaborHoursText(
+      defaultLaborMinutes != null ? formatHoursValue(defaultLaborMinutes) : "",
     );
     setPartsCost(toNumberString(jobActuals?.actualPartsCost ?? null));
     setDifficultyRating(toNumberString(jobActuals?.difficultyRating ?? null));
@@ -187,7 +192,7 @@ export default function JobActualsDialog({
     try {
       await fn(
         toPayload(parts, {
-          laborMinutes,
+          laborHours: laborHoursText,
           partsCost,
           difficultyRating,
           technicianNotes,
@@ -239,15 +244,16 @@ export default function JobActualsDialog({
 
         <div className="mt-5 grid gap-4 md:grid-cols-2">
           <label className="space-y-1.5">
-            <span className="text-sm font-medium text-foreground">Labor minutes</span>
+            <span className="text-sm font-medium text-foreground">Labor time (hours)</span>
             <input
-              type="number"
-              min="0"
-              step="1"
-              value={laborMinutes}
-              onChange={(event) => setLaborMinutes(event.target.value)}
+              type="text"
+              inputMode="decimal"
+              value={laborHoursText}
+              onChange={(event) =>
+                setLaborHoursText(event.target.value.replace(/[^0-9.]/g, ""))
+              }
               className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary"
-              placeholder={estimatedLaborMinutes != null ? String(estimatedLaborMinutes) : "Auto"}
+              placeholder={estimatedLaborMinutes != null ? formatHoursValue(estimatedLaborMinutes) : "Auto"}
             />
           </label>
 

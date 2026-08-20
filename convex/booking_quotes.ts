@@ -392,6 +392,8 @@ export type PricedPartSnapshotRow = {
   oem_number: string;
   part_name: string;
   brand?: string;
+  /** Optional provenance link the mechanic pasted for this part/price. */
+  source_url?: string;
   part_tier?: string;
   quantity: number;
   unit_price_cents: number;
@@ -417,6 +419,15 @@ export type PricedPartSnapshotRow = {
    *  "foreign_signature"). Row is kept (frozen price = customer contract);
    *  display/itemization surfaces filter on it. */
   integrity_flag?: string;
+  /** Mechanic-entered tire-replacement line (mid-job / walk-in). Tires have no
+   *  OEM number — identity lives here while oem_number carries the
+   *  `TIRE-{size}` sentinel. tire_position is a free string ("front" / "rear")
+   *  so staggered / aftermarket fitments never reject. */
+  is_tire?: boolean;
+  tire_size?: string;
+  tire_brand?: string;
+  tire_model?: string;
+  tire_position?: string;
 };
 
 // ─────────────────────────────────────────────────────────────────────────

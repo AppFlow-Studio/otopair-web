@@ -326,13 +326,6 @@ function cornerFields(opts: {
       section: "Tire",
     },
     {
-      type: "text",
-      key: "dot_code",
-      label: "DOT code",
-      firstVisitOnly: true,
-      section: "Tire",
-    },
-    {
       type: "select",
       key: "run_flat",
       label: "Run-flat tire",
@@ -721,6 +714,49 @@ export type ZoneCompletionResult =
 const CORNER_IDS: CornerZoneId[] = ["FL", "FR", "RL", "RR"];
 const TIRE_SIZE_PATTERN = /^\d{3}\/\d{2}R\d{2}$/i;
 
+/**
+ * Left/right mirror within the same axle. The two corners on one axle share an
+ * identical field set and usually wear near-identically, so copying one corner's
+ * readings onto its sibling saves re-entering the same pad/rotor/tread/condition
+ * values — the mechanic then only fixes the few that differ. Front↔rear is
+ * deliberately excluded (different rotor sizes, wear rates, field applicability).
+ */
+export const OPPOSITE_CORNER: Record<CornerZoneId, CornerZoneId> = {
+  FL: "FR",
+  FR: "FL",
+  RL: "RR",
+  RR: "RL",
+};
+
+/**
+ * Deep-copies every measured/observed value from a corner into a zone patch for
+ * {@link patchInspectionZone}. Photos are intentionally excluded — they're
+ * position-specific evidence — as are done/dirty, which patchInspectionZone
+ * re-derives (it clears `done` so the copied-into corner is re-reviewed).
+ */
+export function cornerCopyPatch(source: ZoneState): Partial<ZoneState> {
+  return {
+    measures: { ...source.measures },
+    tri: { ...source.tri },
+    descriptors: Object.fromEntries(
+      Object.entries(source.descriptors).map(([key, values]) => [
+        key,
+        [...values],
+      ]),
+    ),
+    text: { ...source.text },
+    select: { ...source.select },
+    statuses: { ...source.statuses },
+    methods: { ...source.methods },
+    lights: Object.fromEntries(
+      Object.entries(source.lights).map(([key, entries]) => [
+        key,
+        entries.map((entry) => ({ ...entry })),
+      ]),
+    ),
+  };
+}
+
 export function deriveTierInspectionScope(
   context: ZoneCompletionContext,
 ): TierInspectionScope {
@@ -848,7 +884,7 @@ export function isFieldRequiredForZone(
       );
     if (["tread", "psi", "wear"].includes(fieldKey)) return !isReplacementTire;
     if (fieldKey === "brake_visual") return true;
-    if (["tire_brand", "tire_model", "tire_size", "dot_code", "run_flat"].includes(fieldKey)) {
+    if (["tire_brand", "tire_model", "tire_size", "run_flat"].includes(fieldKey)) {
       return requiresTier5Identity(zoneId as CornerZoneId, context);
     }
     const scope = deriveTierInspectionScope(context);
@@ -914,7 +950,7 @@ export function isFieldApplicableToZone(
   context: ZoneCompletionContext,
 ): boolean {
   if (!CORNER_IDS.includes(zoneId as CornerZoneId)) return true;
-  if (["tire_brand", "tire_model", "tire_size", "dot_code", "run_flat"].includes(fieldKey)) {
+  if (["tire_brand", "tire_model", "tire_size", "run_flat"].includes(fieldKey)) {
     return isFieldRequiredForZone(zoneId, fieldKey, context);
   }
   if (
@@ -1442,10 +1478,6 @@ export function derivePrejobFromInspection(
       !applies(zoneId, "tire_model") || zone.statuses.tire_model
         ? ""
         : zone.text.tire_model?.trim();
-    const dotCode =
-      !applies(zoneId, "dot_code") || zone.statuses.dot_code
-        ? ""
-        : zone.text.dot_code?.trim();
     const runFlat =
       !applies(zoneId, "run_flat") || zone.statuses.run_flat
         ? ""
@@ -1453,7 +1485,6 @@ export function derivePrejobFromInspection(
     if (
       (!brand || brand === OTHER_INSPECTION_OPTION) &&
       (!model || model === OTHER_INSPECTION_OPTION) &&
-      !dotCode &&
       !runFlat
     ) {
       continue;
@@ -1461,7 +1492,6 @@ export function derivePrejobFromInspection(
     tireDetails[position] = {
       ...(brand && brand !== OTHER_INSPECTION_OPTION ? { brand } : {}),
       ...(model && model !== OTHER_INSPECTION_OPTION ? { model } : {}),
-      ...(dotCode ? { dot_code: dotCode } : {}),
       ...(runFlat ? { run_flat: runFlat === "yes" } : {}),
     };
   }

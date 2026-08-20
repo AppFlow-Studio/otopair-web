@@ -2889,6 +2889,9 @@ export default defineSchema({
           oem_number: v.string(),
           part_name: v.string(),
           brand: v.optional(v.string()),
+          // Optional provenance link the mechanic pasted in the parts editor
+          // (where they sourced this part/price). Free-form, unvalidated.
+          source_url: v.optional(v.string()),
           part_tier: v.optional(v.string()),
           quantity: v.number(),
           unit_price_cents: v.number(),
@@ -2918,6 +2921,15 @@ export default defineSchema({
           // it. Reversible + auditable, mirroring fitmentQuarantine's
           // data_quality stamp.
           integrity_flag: v.optional(v.string()),
+          // Mechanic-entered tire-replacement line (mid-job / walk-in). Tires
+          // carry no OEM number, so identity lives in these structured fields
+          // while oem_number holds the `TIRE-{size}` sentinel. tire_position is
+          // a free string ("front" / "rear") for staggered / aftermarket cases.
+          is_tire: v.optional(v.boolean()),
+          tire_size: v.optional(v.string()),
+          tire_brand: v.optional(v.string()),
+          tire_model: v.optional(v.string()),
+          tire_position: v.optional(v.string()),
         })
       )
     ),

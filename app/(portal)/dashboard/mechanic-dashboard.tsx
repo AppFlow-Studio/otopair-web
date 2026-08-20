@@ -791,10 +791,10 @@ export default function MechanicDashboard() {
         }
         onClose={closeWorkflowDialog}
         onSubmit={handleCompleteAction}
-        initialTechnicianNotes={
+        layoverNotes={
           (selectedWorkflowBooking?.jobActuals as any)?.inProgressNotes ?? ""
         }
-        initialPhotos={
+        layoverPhotos={
           ((selectedWorkflowBooking?.jobActuals as any)?.inProgressPhotos ?? []).map(
             (p: any) => ({
               id: p.storageId,
@@ -802,6 +802,7 @@ export default function MechanicDashboard() {
               previewUrl: p.url ?? "",
               caption: p.caption ?? "",
               status: "ready" as const,
+              takenAt: p.takenAt ?? undefined,
             }),
           )
         }

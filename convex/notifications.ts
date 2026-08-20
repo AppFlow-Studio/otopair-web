@@ -56,12 +56,26 @@ export const getMyNotifications = query({
         let shortHandle: string | null = null;
         let rescheduleExpiresAt: number | null = null;
         let assignedMechanicId: string | null = null;
+        // Muted context line ("what is this notification about"): the car,
+        // plus the shop and mechanic when the row references them.
+        let vin: string | null = null;
+        let vehicleYMMT: string | null = null;
+        let mileage: number | null = null;
+        let mechanicName: string | null = null;
+        let bookingShopId: any = null;
+        // Raw YMMT parts — filled from the booking vehicle first, then the
+        // payload (car-bound rows like vehicle_enrichment_complete have no
+        // booking_id but carry the vehicle in their payload).
+        let vYear: number | string | null = null;
+        let vMake: string | null = null;
+        let vModel: string | null = null;
         if (row.booking_id) {
           const booking: any = await ctx.db.get(row.booking_id);
           if (booking) {
             scheduledDate = booking.scheduled_date ?? null;
             scheduledTime = booking.scheduled_time ?? null;
             assignedMechanicId = booking.mechanic_id ?? null;
+            bookingShopId = booking.shop_id ?? null;
             if (
               (row.category === "booking_reschedule_proposed" ||
                 row.category === "booking_forced_delay_proposed") &&
@@ -88,19 +102,47 @@ export const getMyNotifications = query({
                 cust?.email ||
                 null;
             }
-            if (booking.vehicle_id) {
-              const veh: any = await ctx.db.get(booking.vehicle_id);
-              if (veh) {
-                const meta = veh.metadata ?? {};
-                const parts = [veh.year ?? meta.year, meta.make, meta.model].filter(
-                  Boolean,
-                );
-                vehicleLabel =
-                  parts.length > 0
-                    ? parts.join(" ")
-                    : veh.vin
-                      ? `VIN …${String(veh.vin).slice(-6)}`
-                      : null;
+            // Resolve the car from vehicle_id first; bookings always carry
+            // the VIN directly, so fall back to a by_vin lookup when
+            // vehicle_id is missing or dangling. This keeps the car showing
+            // (year/make/model) on every booking-bound row, not just ones
+            // whose vehicle_id happens to be set.
+            let veh: any = booking.vehicle_id
+              ? await ctx.db.get(booking.vehicle_id)
+              : null;
+            if (!veh && typeof booking.vin === "string" && booking.vin) {
+              veh = await ctx.db
+                .query("vehicles")
+                .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
+                .first();
+            }
+            if (typeof booking.vin === "string" && booking.vin) {
+              vin = booking.vin;
+            }
+            if (veh) {
+              const meta = veh.metadata ?? {};
+              const parts = [veh.year ?? meta.year, meta.make, meta.model].filter(
+                Boolean,
+              );
+              vehicleLabel =
+                parts.length > 0
+                  ? parts.join(" ")
+                  : veh.vin
+                    ? `VIN …${String(veh.vin).slice(-6)}`
+                    : null;
+              vin = veh.vin ?? vin;
+              vYear = veh.year ?? meta.year ?? null;
+              vMake = meta.make ?? null;
+              vModel = meta.model ?? null;
+            }
+            if (booking.mechanic_id) {
+              const mech: any = await ctx.db.get(booking.mechanic_id);
+              if (mech) {
+                const mn = [mech.first_name, mech.last_name]
+                  .filter(Boolean)
+                  .join(" ")
+                  .trim();
+                mechanicName = mn.length > 0 ? mn : null;
               }
             }
           }
@@ -108,6 +150,33 @@ export const getMyNotifications = query({
         if (row.shop_id) {
           const shop: any = await ctx.db.get(row.shop_id);
           shopName = shop?.name ?? null;
+        }
+        // Fall back to the booking's shop when the row itself isn't shop-scoped
+        // (customer rows are user-scoped but still concern a shop).
+        if (!shopName && bookingShopId) {
+          const shop: any = await ctx.db.get(bookingShopId);
+          shopName = shop?.name ?? null;
+        }
+        // Payload fallback for car-bound rows without a booking.
+        const pl = row.payload ?? {};
+        if (!vin && typeof pl.vin === "string") vin = pl.vin;
+        if (vYear == null && pl.year != null) vYear = pl.year;
+        if (!vMake && typeof pl.make === "string") vMake = pl.make;
+        if (!vModel && typeof pl.model === "string") vModel = pl.model;
+        // Year / make / model only — no trim or body-style tail in the feed.
+        const ymmtParts = [vYear, vMake, vModel].filter(Boolean);
+        vehicleYMMT = ymmtParts.length > 0 ? ymmtParts.join(" ") : null;
+        // Mileage = the recipient's own odometer for this VIN.
+        if (vin && user?._id) {
+          const vinStr: string = vin;
+          const ownerRow: any = await ctx.db
+            .query("vehicle_owners")
+            .withIndex("by_vin_user", (q: any) =>
+              q.eq("vin", vinStr).eq("user_id", user._id),
+            )
+            .first();
+          mileage =
+            typeof ownerRow?.mileage === "number" ? ownerRow.mileage : null;
         }
         return {
           _id: row._id,
@@ -126,6 +195,10 @@ export const getMyNotifications = query({
           scheduledTime,
           rescheduleExpiresAt,
           assignedMechanicId,
+          vin,
+          vehicleYMMT,
+          mileage,
+          mechanicName,
         };
       }),
     );

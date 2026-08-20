@@ -34,6 +34,7 @@ import Stripe from "stripe";
 import { capturedCentsOrNull } from "./lib/money";
 import { requireShopOwnerBySubject, requireShopViewerForPayments } from "./lib/shopAuth";
 import { resolveServiceNames, resolveVehicleDisplay } from "./lib/bookingEnrichment";
+import { formatPartIdentity } from "../lib/vehicle-passport";
 
 const STRIPE_API_VERSION = Stripe.API_VERSION;
 let stripeClient: Stripe | null = null;
@@ -380,7 +381,9 @@ export const getShopInvoice = query({
         if (p?.not_used === true || p?.supplied_by === "customer") continue;
         const qty = Math.max(0, Number(p.quantity ?? 1));
         const unit = Math.round((Number(p.cost) || 0) * 100);
-        const notes = [p.brand, p.oem_number].filter(Boolean);
+        // Tire lines render brand · model · size; the `TIRE-{size}` sentinel
+        // oem_number is never surfaced on an invoice.
+        const notes = [formatPartIdentity(p)].filter(Boolean);
         lineItems.push({
           kind: "part",
           name: p.part_name ?? "Part",
@@ -404,8 +407,7 @@ export const getShopInvoice = query({
         // failed the make guard. Both are things a merchant would otherwise have
         // to ask about.
         const notes = [
-          p.brand,
-          p.oem_number,
+          formatPartIdentity(p),
           p.price_unknown ? "priced at completion" : null,
           p.price_stale ? "price estimate" : null,
           p.integrity_flag ? `flagged: ${p.integrity_flag}` : null,

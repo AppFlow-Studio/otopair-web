@@ -1,3 +1,5 @@
+import { hoursToMinutes, parseHoursInput } from "./labor-units";
+
 export type JobActualPart = {
   part_name: string;
   brand?: string | null;
@@ -64,7 +66,7 @@ export function getDefaultLaborMinutes(
 export function toPayload(
   parts: PartRowState[],
   values: {
-    laborMinutes: string;
+    laborHours: string;
     partsCost: string;
     difficultyRating: string;
     technicianNotes: string;
@@ -85,9 +87,9 @@ export function toPayload(
       cost: Number(part.cost || 0),
     }));
 
+  const laborHours = parseHoursInput(values.laborHours);
   return {
-    actual_labor_minutes:
-      values.laborMinutes.trim() === "" ? null : Number(values.laborMinutes),
+    actual_labor_minutes: laborHours == null ? null : hoursToMinutes(laborHours),
     actual_parts_cost:
       values.partsCost.trim() === "" ? null : Number(values.partsCost),
     difficulty_rating:

@@ -4,7 +4,17 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Reveal, Sequence, Seq, SeqRule, serif } from "@/components/flagship/landing/reveal";
-import NetworkGraph from "@/components/flagship/landing/network-graph";
+import NetworkMap from "@/components/flagship/landing/network-map";
+import PillNav from "@/components/flagship/pill-nav";
+
+// The partner page carries the flagship glass pill nav (same component as the
+// home hero), retargeted to this page's own sections plus the Apply CTA.
+const NAV_LINKS = [
+  { label: "The network", href: "#network" },
+  { label: "Why join", href: "#why" },
+  { label: "Home", href: "/" },
+];
+const NAV_CTA = { label: "Apply", href: "/apply" };
 
 const HOW_IT_WORKS = [
   {
@@ -39,39 +49,49 @@ const STATS = [
 export default function PartnerClient() {
   return (
     <div className="w-full">
+      {/* Same floating glass pill nav as the flagship home hero. */}
+      <PillNav links={NAV_LINKS} cta={NAV_CTA} />
+
       {/* ---------- Hero ---------- */}
-      <section className="mx-auto w-full max-w-[1120px] px-4 pt-[150px] text-center sm:px-10">
-        <Reveal>
-          <p className="text-[13px] tracking-[0.14em] text-[#777169]">FOR REPAIR SHOPS</p>
-        </Reveal>
-        <Reveal delay={0.05}>
-          <h1
-            className="mx-auto mt-4 max-w-[16ch] text-[42px] leading-[1.04] text-[#1a1a1a] sm:text-[52px] lg:text-[58px]"
-            style={serif}
-          >
-            Fill your bays. Skip the phone tag.
-          </h1>
-        </Reveal>
-        <Reveal delay={0.1}>
-          <p className="mx-auto mt-6 max-w-[52ch] text-[17px] leading-relaxed text-[#6b655d]">
-            Otopair sends you booked, pre-diagnosed customers at a price you set — and pays
-            you fast. Join the network of shops growing without chasing calls.
-          </p>
-        </Reveal>
-        <Reveal delay={0.15}>
-          <div className="mt-9 flex justify-center">
-            <Button asChild size="lg" className="bg-[#5299fe] px-7 text-white hover:bg-[#5299fe]/90">
-              <Link href="/apply">
-                Apply to partner
-                <ChevronRight className="size-4" />
-              </Link>
-            </Button>
-          </div>
-        </Reveal>
+      {/* Cool blue → white wash, matching the home hero, so the glass nav reads
+          against blue exactly as it does on the landing page. */}
+      <section className="w-full bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_620px)] pb-2">
+        <div className="mx-auto w-full max-w-[1120px] px-4 pt-[150px] text-center sm:px-10">
+          <Reveal>
+            <p className="text-[13px] tracking-[0.14em] text-[#5f7182]">FOR REPAIR SHOPS</p>
+          </Reveal>
+          <Reveal delay={0.05}>
+            <h1
+              className="mx-auto mt-4 max-w-[16ch] text-[42px] leading-[1.04] text-[#1a1a1a] sm:text-[52px] lg:text-[58px]"
+              style={serif}
+            >
+              Fill your bays. Skip the phone tag.
+            </h1>
+          </Reveal>
+          <Reveal delay={0.1}>
+            <p className="mx-auto mt-6 max-w-[52ch] text-[17px] leading-relaxed text-[#4c5661]">
+              Otopair sends you booked, pre-diagnosed customers at a price you set — and pays
+              you fast. Join the network of shops growing without chasing calls.
+            </p>
+          </Reveal>
+          <Reveal delay={0.15}>
+            <div className="mt-9 flex justify-center">
+              <Button asChild size="lg" className="bg-[#5299fe] px-7 text-white hover:bg-[#5299fe]/90">
+                <Link href="/apply">
+                  Apply to partner
+                  <ChevronRight className="size-4" />
+                </Link>
+              </Button>
+            </div>
+          </Reveal>
+        </div>
       </section>
 
       {/* ---------- Network + how it works ---------- */}
-      <section className="mx-auto w-full max-w-[1440px] px-4 pt-28 sm:px-10 sm:pt-36 lg:px-[78px]">
+      <section
+        id="network"
+        className="mx-auto w-full max-w-[1440px] scroll-mt-28 px-4 pt-28 sm:px-10 sm:pt-36 lg:px-[78px]"
+      >
         <Reveal>
           <p className="text-[13px] tracking-[0.14em] text-[#777169]">THE NETWORK</p>
           <h2
@@ -84,7 +104,8 @@ export default function PartnerClient() {
 
         <div className="mt-14 grid grid-cols-1 items-center gap-10 lg:grid-cols-2 lg:gap-16">
           <Reveal delay={0.05}>
-            <NetworkGraph />
+            {/* The real live network map — same Mapbox map as the home page. */}
+            <NetworkMap className="h-[440px] sm:h-[520px] lg:h-[560px]" />
           </Reveal>
 
           <div>
@@ -116,7 +137,10 @@ export default function PartnerClient() {
       </section>
 
       {/* ---------- Benefits stat band ---------- */}
-      <section className="mx-auto w-full max-w-[1440px] px-4 pt-28 sm:px-10 sm:pt-36 lg:px-[78px]">
+      <section
+        id="why"
+        className="mx-auto w-full max-w-[1440px] scroll-mt-28 px-4 pt-28 sm:px-10 sm:pt-36 lg:px-[78px]"
+      >
         <Reveal>
           <p className="text-[13px] tracking-[0.14em] text-[#777169]">WHY SHOPS JOIN</p>
           <h2

@@ -40,6 +40,10 @@ export interface CalendarEvent {
   customerNote?: string | null;
   scheduleChangeMode?: string;
   customerCanRestoreOriginal?: boolean;
+  /** payment_approval_state on the booking. When it's one of the `*_pending`
+   *  values an out-of-range estimate is sitting with the customer, so the
+   *  day-lane block shows a "Confirming new hold" badge. */
+  paymentApprovalState?: string | null;
   isDraft?: boolean;
   recommendationState?:
     | "none"

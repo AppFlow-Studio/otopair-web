@@ -82,6 +82,11 @@ export default function MidJobScopeDialog({
           service_id?: string | null;
           source?: string;
           not_used?: boolean;
+          is_tire?: boolean;
+          tire_size?: string | null;
+          tire_brand?: string | null;
+          tire_model?: string | null;
+          tire_position?: string | null;
         }>;
       }
     | null
@@ -108,6 +113,13 @@ export default function MidJobScopeDialog({
         // Preserve the prior "Not used" flag, or re-opening revives a dropped
         // part as an active $0 line.
         not_used: p.not_used === true ? true : undefined,
+        // Round-trip mechanic-entered tire identity so re-opening the dialog
+        // keeps the size/brand/model instead of the `TIRE-{size}` sentinel.
+        is_tire: p.is_tire ?? undefined,
+        tire_size: p.tire_size ?? undefined,
+        tire_brand: p.tire_brand ?? undefined,
+        tire_model: p.tire_model ?? undefined,
+        tire_position: p.tire_position ?? undefined,
       }));
     }
     const snapshot = (job as any)?.pricedPartsSnapshot;
@@ -123,6 +135,11 @@ export default function MidJobScopeDialog({
       service_id: p.service_id ?? null,
       source: "catalog" as const,
       not_used: p.not_used === true ? true : undefined,
+      is_tire: p.is_tire ?? undefined,
+      tire_size: p.tire_size ?? undefined,
+      tire_brand: p.tire_brand ?? undefined,
+      tire_model: p.tire_model ?? undefined,
+      tire_position: p.tire_position ?? undefined,
     }));
   }, [effectiveQuote, job]);
 

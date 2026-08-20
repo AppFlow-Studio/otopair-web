@@ -128,7 +128,7 @@ describe("multi-point inspection requirements", () => {
       priorTreadReadings: { FL: 6 },
       inspectionState: state,
     };
-    for (const field of ["tire_brand", "tire_model", "tire_size", "dot_code", "run_flat"]) {
+    for (const field of ["tire_brand", "tire_model", "tire_size", "run_flat"]) {
       expect(isFieldRequiredForZone("FL", field, laterContext)).toBe(true);
     }
     expect(
@@ -610,7 +610,6 @@ describe("multi-point inspection requirements", () => {
         "tire_brand",
         "tire_model",
         "tire_size",
-        "dot_code",
         "run_flat",
         "brake_visual",
         "pad_inner",

@@ -27,6 +27,7 @@ import {
   isCustomJobTaxonomyComplete,
 } from "@/components/custom-job-taxonomy-picker";
 import { describeCustomJobTaxonomy } from "@/lib/custom-job-taxonomy";
+import { formatHoursValue, hoursToMinutes, parseHoursInput } from "@/lib/labor-units";
 
 export default function ShopShortcutsManager({
   shopId,
@@ -41,7 +42,7 @@ export default function ShopShortcutsManager({
   const retire = useMutation(api.shopCustomServices.retire);
 
   const [editing, setEditing] = useState<string | null>(null);
-  const [minutes, setMinutes] = useState("");
+  const [hoursText, setHoursText] = useState("");
   const [systemTags, setSystemTags] = useState<string[]>([]);
   const [workType, setWorkType] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,7 +82,7 @@ export default function ShopShortcutsManager({
                     <p className="mt-0.5 text-[11px] text-muted-foreground">
                       {describeCustomJobTaxonomy(s.system_tags, s.work_type)} ·
                       used {s.use_count}×
-                      {s.default_minutes ? ` · ${s.default_minutes}m default` : ""}
+                      {s.default_minutes ? ` · ${formatHoursValue(s.default_minutes)}h default` : ""}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
@@ -91,8 +92,8 @@ export default function ShopShortcutsManager({
                           type="button"
                           onClick={() => {
                             setEditing(id);
-                            setMinutes(
-                              s.default_minutes ? String(s.default_minutes) : "",
+                            setHoursText(
+                              s.default_minutes ? formatHoursValue(s.default_minutes) : "",
                             );
                             setSystemTags(s.system_tags ?? []);
                             setWorkType(s.work_type ?? null);
@@ -132,12 +133,14 @@ export default function ShopShortcutsManager({
                     />
                     <div className="flex items-center gap-2">
                     <input
-                      type="number"
-                      min={0}
+                      type="text"
+                      inputMode="decimal"
                       autoFocus
-                      value={minutes}
-                      onChange={(e) => setMinutes(e.target.value)}
-                      placeholder="Minutes"
+                      value={hoursText}
+                      onChange={(e) =>
+                        setHoursText(e.target.value.replace(/[^0-9.]/g, ""))
+                      }
+                      placeholder="Hours"
                       className="w-28 rounded-md border border-border bg-background px-2.5 py-1.5 text-xs outline-none focus:border-primary"
                     />
                     <button
@@ -148,11 +151,11 @@ export default function ShopShortcutsManager({
                       onClick={async () => {
                         setBusy(true);
                         try {
-                          const n = Number(minutes);
+                          const h = parseHoursInput(hoursText);
                           await updateDefaults({
                             id: s._id,
                             defaultMinutes:
-                              Number.isFinite(n) && n > 0 ? n : undefined,
+                              h != null && h > 0 ? hoursToMinutes(h) : undefined,
                             systemTags,
                             workType: workType ?? undefined,
                           });

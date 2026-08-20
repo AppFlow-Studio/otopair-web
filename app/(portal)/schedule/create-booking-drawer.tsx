@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { formatHoursValue, hoursToMinutes, parseHoursInput } from "@/lib/labor-units";
 import { useMutation, useQuery } from "convex/react";
 import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/phone";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useEntityLabel } from "@/lib/use-entity-label";
-import { ArrowRight, Car, ChevronDown, Clock, Loader2, MessageSquare, Package, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
+import { ArrowRight, Car, Check, ChevronDown, Clock, ExternalLink, Loader2, MessageSquare, Package, Plus, Search, Stethoscope, User, Wrench, X } from "lucide-react";
 import {
   Select,
   SelectItem,
@@ -15,9 +16,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Combobox } from "@/components/ui/combobox";
 import {
   drawerInputClassName,
-  drawerSelectTriggerClassName,
   drawerCardClassName,
   DrawerCardSectionHeader,
   DrawerFieldLabel,
@@ -26,6 +27,10 @@ import { cn } from "@/lib/utils";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import ServiceOptionsPicker, { type SelectedServiceOption } from "@/components/booking/service-options-picker";
 import TireSpecPicker, { type TireSpecs } from "@/components/booking/tire-spec-picker";
+import TirePartsEditor, {
+  type TireLine,
+  tireLinesToPartPayloads,
+} from "@/components/booking/tire-parts-editor";
 import DatePicker from "@/components/ui/date-picker";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 import VehicleYMMTPicker from "./vehicle-ymmt-picker";
@@ -97,29 +102,10 @@ function buildTimeOptions(): Array<{ value: string; label: string }> {
 
 const TIME_OPTIONS = buildTimeOptions();
 
-const ESTIMATE_MINUTE_OPTIONS: number[] = Array.from({ length: 32 }, (_, i) => (i + 1) * 15);
-
 // How many "Done here before" shortcut pills to show at a glance before the rest
 // fold behind the search box. Keeps the closed picker tidy for shops with a long
 // off-catalog history without hiding the search itself.
 const SHORTCUT_PILL_CAP = 8;
-
-function formatMinutesLabel(mins: number): string {
-  if (mins < 60) return `${mins} min`;
-  const h = Math.floor(mins / 60);
-  const m = mins % 60;
-  return m === 0 ? `${h} hr` : `${h} hr ${m} min`;
-}
-
-// The estimate Select can only display a value that exists in the options list,
-// so a catalog/custom duration that isn't a clean 15-min multiple (e.g. a 0.4hr
-// labor time = 24m) has to snap to the nearest option before we can prefill it.
-function snapToEstimateOption(mins: number): number {
-  return ESTIMATE_MINUTE_OPTIONS.reduce(
-    (best, opt) => (Math.abs(opt - mins) < Math.abs(best - mins) ? opt : best),
-    ESTIMATE_MINUTE_OPTIONS[0],
-  );
-}
 
 function toMins(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);
@@ -213,6 +199,34 @@ function CollapsibleSection({
  *  lines have none — so it's the line's name behind a prefix no Convex id can
  *  collide with. The submit mapper splits it back out into
  *  `custom_service_name` on the wire. */
+/** Universal, make-agnostic OEM-number tidy: trim, uppercase, collapse
+ *  internal whitespace runs to a single space. Deliberately does NOT touch
+ *  hyphens or other punctuation — it never inserts or strips a separator, so
+ *  it's safe for every make's format (Toyota `90981-15021`, VAG `5Q0 698 451
+ *  A`, Honda `12345-XXX-000`). Just makes the stored value match what the
+ *  uppercased field already shows. (The hyphen-stripped MATCH key is a
+ *  separate concern handled server-side.) */
+function tidyOem(raw: string): string {
+  return raw.trim().toUpperCase().replace(/\s+/g, " ");
+}
+
+/** Favicon URL for a pasted source link, via Google's public s2 service.
+ *  Returns null until the input parses as a host (so we render nothing rather
+ *  than a broken/globe icon while the mechanic is still typing). Bare domains
+ *  are accepted by prepending https://. */
+function faviconUrl(rawUrl: string | undefined): string | null {
+  const value = (rawUrl ?? "").trim();
+  if (!value) return null;
+  try {
+    const withProto = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+    const host = new URL(withProto).hostname;
+    if (!host || !host.includes(".")) return null;
+    return `https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(host)}`;
+  } catch {
+    return null;
+  }
+}
+
 const CUSTOM_BUCKET_PREFIX = "custom::";
 
 export default function CreateBookingDrawer({
@@ -478,6 +492,11 @@ export default function CreateBookingDrawer({
   // mechanic-quote vs. catalog vs. actual price/time distributions per
   // (shop, service, engine, chassis).
   const [mechanicEstimateMinutes, setMechanicEstimateMinutes] = useState<number | null>(null);
+  // Mechanics enter labor in decimal HOURS; mechanicEstimateMinutes stays in
+  // minutes (scheduling/booking rows need minutes) and this raw hours text
+  // buffer backs the input so mid-typing values like "0." aren't reformatted away.
+  const [estimateHoursText, setEstimateHoursText] = useState("");
+  const estimateHoursFocused = useRef(false);
   const [mechanicQuotedPrice, setMechanicQuotedPrice] = useState<number | null>(null);
   // Once the mechanic types in the quoted price we stop auto-prefilling it from
   // the tier rate, so we never clobber a hand-entered quote.
@@ -543,6 +562,10 @@ export default function CreateBookingDrawer({
   const [outsideHoursConfirmOpen, setOutsideHoursConfirmOpen] = useState(false);
   const [selectedServiceOptions, setSelectedServiceOptions] = useState<SelectedServiceOption[]>([]);
   const [tireSpecs, setTireSpecs] = useState<TireSpecs | null>(null);
+  // Priced tire lines (size/brand/model/per-tire price) for a walk-in tire
+  // replacement — there's no quote, so the mechanic enters them directly. These
+  // become is_tire priced_parts_snapshot rows (see TirePartsEditor).
+  const [tirePartLines, setTirePartLines] = useState<TireLine[]>([]);
   const [showOptionsPicker, setShowOptionsPicker] = useState(false);
   const [showTirePicker, setShowTirePicker] = useState(false);
   const [pendingSubmitOutsideHours, setPendingSubmitOutsideHours] = useState<boolean | null>(null);
@@ -560,6 +583,12 @@ export default function CreateBookingDrawer({
     part_name: string;
     oem_number: string;
     brand: string;
+    /** Optional provenance link the mechanic pasted for this part/price. */
+    source_url?: string;
+    /** UI-only: mechanic clicked "Save part" → row collapses to a summary.
+     *  Persistence still happens with the booking submit; this is a clarity
+     *  affordance, not a separate write. */
+    saved?: boolean;
     quantity: string;
     unit_price: string; // dollars (string input)
     catalog_origin: boolean;
@@ -583,6 +612,14 @@ export default function CreateBookingDrawer({
   const addedPartSeqRef = useRef(0);
 
   const shopData = useQuery(api.schedule.getShopServicesWithCategories);
+  // OEM brand picker options — the full (deduped) makes catalog. Brand on a
+  // walk-in part defaults to the vehicle's make (OEM), but stays free-form so
+  // supplier brands (Denso, Bosch…) or custom values can still be typed.
+  const makesList = useQuery(api.makes.list);
+  const makeOptions = useMemo(
+    () => (makesList ?? []).map((m) => ({ value: m.name, label: m.name })),
+    [makesList],
+  );
   const createBooking = useMutation(api.bookings.createByShop);
   const backfillBooking = useMutation((api as any).bookings.backfillCompletedBooking);
 
@@ -701,7 +738,9 @@ export default function CreateBookingDrawer({
               service_id: sid,
               part_name: r.part_name,
               oem_number: r.oem_number,
-              brand: r.brand ?? "",
+              // OEM parts are branded by the make — if the catalog row has no
+              // brand, fall back to the vehicle make so Brand is never blank.
+              brand: (r.brand ?? "").trim() || make.trim() || "",
               quantity: String(r.quantity),
               unit_price: r.price_unknown
                 ? "0.00"
@@ -734,7 +773,13 @@ export default function CreateBookingDrawer({
   const setCatalogPartField = (
     sid: string,
     idx: number,
-    field: "part_name" | "oem_number" | "brand" | "quantity" | "unit_price",
+    field:
+      | "part_name"
+      | "oem_number"
+      | "brand"
+      | "source_url"
+      | "quantity"
+      | "unit_price",
     value: string,
   ) =>
     setCatalogPartEdits((prev) => {
@@ -761,7 +806,10 @@ export default function CreateBookingDrawer({
             service_id: sid,
             part_name: "",
             oem_number: "",
-            brand: "",
+            // OEM parts are branded by the vehicle make — default to it, but
+            // the field stays a free-form/searchable picker for supplier brands.
+            brand: make.trim() || "",
+            source_url: "",
             quantity: "1",
             unit_price: "0.00",
             catalog_origin: false,
@@ -777,6 +825,34 @@ export default function CreateBookingDrawer({
       const row = rows[idx];
       if (row) dirtyPartKeysRef.current.delete(`${sid}::${row.key}`);
       return { ...prev, [sid]: rows.filter((_, i) => i !== idx) };
+    });
+
+  // "Save part" — tidy the OEM one last time and collapse the row to a
+  // summary so the mechanic gets clear feedback the part is on the job. The
+  // actual write still happens with the booking submit.
+  const saveCatalogPartRow = (sid: string, idx: number) =>
+    setCatalogPartEdits((prev) => {
+      const rows = prev[sid] ?? [];
+      const row = rows[idx];
+      if (!row) return prev;
+      dirtyPartKeysRef.current.add(`${sid}::${row.key}`);
+      return {
+        ...prev,
+        [sid]: rows.map((r, i) =>
+          i === idx
+            ? { ...r, oem_number: tidyOem(r.oem_number), saved: true }
+            : r,
+        ),
+      };
+    });
+
+  const editCatalogPartRow = (sid: string, idx: number) =>
+    setCatalogPartEdits((prev) => {
+      const rows = prev[sid] ?? [];
+      return {
+        ...prev,
+        [sid]: rows.map((r, i) => (i === idx ? { ...r, saved: false } : r)),
+      };
     });
 
   /* Every line on this booking that can carry parts — catalog services first,
@@ -834,8 +910,14 @@ export default function CreateBookingDrawer({
         }
       }
     }
+    // Priced tire lines contribute to the parts total too.
+    for (const l of tirePartLines) {
+      const qty = Math.max(1, l.quantity || 1);
+      const price = Number(l.perTirePrice);
+      if (Number.isFinite(price) && price > 0) sum += qty * price;
+    }
     return sum;
-  }, [catalogPartEdits, selectedIds, customServices]);
+  }, [catalogPartEdits, selectedIds, customServices, tirePartLines]);
 
   const isDiagnostic = useMemo(() => {
     const matchesDiagnostic = (text: string | undefined | null) =>
@@ -923,6 +1005,46 @@ export default function CreateBookingDrawer({
       return [next, ...rows];
     });
   }, [isBackfill, tireSpecs, tireService]);
+
+  // Walk-in tire pricing: seed the per-axle tire editor from the tire specs the
+  // mechanic picked (size + how many corners on each axle), preserving any
+  // brand / model / price already entered. Cleared when the tire service is
+  // deselected.
+  useEffect(() => {
+    if (!tireService || !tireSpecs) {
+      setTirePartLines((cur) => (cur.length ? [] : cur));
+      return;
+    }
+    const positions = tireSpecs.positions ?? [];
+    const frontQty = positions.filter((p) => p === "FL" || p === "FR").length;
+    const rearQty = positions.filter((p) => p === "RL" || p === "RR").length;
+    setTirePartLines((cur) => {
+      const byPos = new Map(cur.map((l) => [l.position, l] as const));
+      const next: TireLine[] = [];
+      const axles: Array<["front" | "rear", number]> = [
+        ["front", frontQty],
+        ["rear", rearQty],
+      ];
+      // No corner-level positions (older specs) → default a single front line
+      // carrying the full quantity so the mechanic can still price the tires.
+      if (frontQty === 0 && rearQty === 0) {
+        axles[0][1] = tireSpecs.quantity ?? 4;
+      }
+      for (const [position, qty] of axles) {
+        if (qty <= 0) continue;
+        const prev = byPos.get(position);
+        next.push({
+          position,
+          size: tireSpecs.size,
+          brand: prev?.brand ?? "",
+          model: prev?.model ?? "",
+          perTirePrice: prev?.perTirePrice ?? "",
+          quantity: qty,
+        });
+      }
+      return next;
+    });
+  }, [tireService, tireSpecs]);
 
   // Selected services that mandate parts entry. Surfaced in backfill mode
   // as one parts block per service so each is attributable downstream.
@@ -1124,9 +1246,19 @@ export default function CreateBookingDrawer({
     if (isBackfill) return;
     if (estimateMinutesTouched) return;
     if (catalogEstimateMinutes <= 0) return;
-    const snapped = snapToEstimateOption(catalogEstimateMinutes);
-    setMechanicEstimateMinutes((prev) => (prev === snapped ? prev : snapped));
+    setMechanicEstimateMinutes((prev) =>
+      prev === catalogEstimateMinutes ? prev : catalogEstimateMinutes,
+    );
   }, [isBackfill, estimateMinutesTouched, catalogEstimateMinutes]);
+
+  // Mirror the (possibly prefilled) minutes value into the hours input, except
+  // while the mechanic is actively typing in it.
+  useEffect(() => {
+    if (estimateHoursFocused.current) return;
+    setEstimateHoursText(
+      mechanicEstimateMinutes != null ? formatHoursValue(mechanicEstimateMinutes) : "",
+    );
+  }, [mechanicEstimateMinutes]);
 
   /* ---- Overlap check ---- */
   const overlapError = useMemo(() => {
@@ -1388,8 +1520,9 @@ export default function CreateBookingDrawer({
               : undefined,
             key: r.key,
             part_name: r.part_name.trim(),
-            oem_number: r.oem_number.trim().toUpperCase(),
+            oem_number: tidyOem(r.oem_number),
             brand: r.brand.trim() || undefined,
+            source_url: r.source_url?.trim() || undefined,
             quantity: toPartNum(r.quantity),
             unit_price_cents:
               priceDollars != null ? Math.round(priceDollars * 100) : undefined,
@@ -1403,8 +1536,53 @@ export default function CreateBookingDrawer({
             role_key: r.catalog_origin && !isCustom ? r.role_key : undefined,
             quantity_basis:
               r.catalog_origin && !isCustom ? r.quantity_basis : undefined,
+            // Tire identity — unset on generic part rows; the inferred element
+            // type must include these so the tire lines can be pushed below.
+            is_tire: undefined as boolean | undefined,
+            tire_size: undefined as string | undefined,
+            tire_brand: undefined as string | undefined,
+            tire_model: undefined as string | undefined,
+            tire_position: undefined as string | undefined,
           };
         });
+
+      // Priced tire lines (walk-in tire replacement) → mechanic part entries.
+      // Tires carry no OEM number; oem_number is the `TIRE-{size}` sentinel and
+      // identity lives in the is_tire/tire_* fields. Attributed to the tire
+      // service so the snapshot rows land under it. Only when the mechanic chose
+      // "Add parts" (the only declaration the server bills the snapshot for).
+      if (
+        tireService &&
+        tirePartLines.length > 0 &&
+        partsDeclaration === "add"
+      ) {
+        const tsid = String(tireService._id);
+        for (const payload of tireLinesToPartPayloads(tirePartLines, tsid)) {
+          mechanicPartEntries.push({
+            service_id: tsid as Id<"services">,
+            custom_service_name: undefined,
+            key: `tire-${payload.tire_position ?? "axle"}-${payload.tire_size ?? ""}`,
+            part_name: payload.part_name,
+            oem_number: payload.oem_number,
+            brand: payload.brand ?? undefined,
+            source_url: undefined,
+            quantity: payload.quantity,
+            unit_price_cents:
+              typeof payload.cost === "number" && payload.cost > 0
+                ? Math.round(payload.cost * 100)
+                : undefined,
+            catalog_origin: false,
+            part_id: undefined,
+            role_key: undefined,
+            quantity_basis: undefined,
+            is_tire: true,
+            tire_size: payload.tire_size ?? undefined,
+            tire_brand: payload.tire_brand ?? undefined,
+            tire_model: payload.tire_model ?? undefined,
+            tire_position: payload.tire_position ?? undefined,
+          });
+        }
+      }
 
       await createBooking({
         shopId: shopData.shopId as Id<"shops">,
@@ -2181,24 +2359,16 @@ export default function CreateBookingDrawer({
                     onChange={(e) => setCustomDraftName(e.target.value)}
                     className={drawerInputClassName}
                   />
-                  <Select
-                    selectedKey={customDraftMinutes || null}
-                    onSelectionChange={(key) => setCustomDraftMinutes(key == null ? "" : String(key))}
-                    placeholder="min"
-                  >
-                    <SelectTrigger className={drawerSelectTriggerClassName}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectPopover placement="bottom start">
-                      <SelectListBox shouldFocusWrap>
-                        {ESTIMATE_MINUTE_OPTIONS.map((m) => (
-                          <SelectItem key={m} id={String(m)} textValue={formatMinutesLabel(m)}>
-                            {formatMinutesLabel(m)}
-                          </SelectItem>
-                        ))}
-                      </SelectListBox>
-                    </SelectPopover>
-                  </Select>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={customDraftMinutes}
+                    onChange={(e) =>
+                      setCustomDraftMinutes(e.target.value.replace(/[^0-9.]/g, ""))
+                    }
+                    placeholder="hr"
+                    className={drawerInputClassName}
+                  />
                 </div>
                 <CustomNameGate
                   typed={customDraftName.trim()}
@@ -2289,9 +2459,11 @@ export default function CreateBookingDrawer({
                       ) {
                         return;
                       }
-                      const mins = customDraftMinutes ? Number(customDraftMinutes) : NaN;
+                      const customDraftHours = parseHoursInput(customDraftMinutes);
                       const minutes =
-                        Number.isFinite(mins) && mins > 0 ? mins : undefined;
+                        customDraftHours != null && customDraftHours > 0
+                          ? hoursToMinutes(customDraftHours)
+                          : undefined;
 
                       // Saving a shortcut runs the strict gate server-side. If it
                       // refuses, surface the canonical service and add nothing —
@@ -2362,41 +2534,42 @@ export default function CreateBookingDrawer({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <DrawerFieldLabel>
-                {isBackfill ? "Actual time (minutes)" : "Time (minutes)"}{" "}
+                {isBackfill ? "Actual time (hours)" : "Time (hours)"}{" "}
                 <span className="text-destructive normal-case tracking-normal font-normal">
                   *
                 </span>
               </DrawerFieldLabel>
-              <Select
-                selectedKey={mechanicEstimateMinutes != null ? String(mechanicEstimateMinutes) : null}
-                onSelectionChange={(key) => {
+              <input
+                type="text"
+                inputMode="decimal"
+                value={estimateHoursText}
+                onFocus={() => {
+                  estimateHoursFocused.current = true;
+                }}
+                onBlur={() => {
+                  estimateHoursFocused.current = false;
+                  setEstimateHoursText(
+                    mechanicEstimateMinutes != null
+                      ? formatHoursValue(mechanicEstimateMinutes)
+                      : "",
+                  );
+                }}
+                onChange={(e) => {
                   if (!isBackfill) setEstimateMinutesTouched(true);
-                  if (key == null) {
-                    setMechanicEstimateMinutes(null);
-                    return;
-                  }
-                  const n = Number(key);
-                  setMechanicEstimateMinutes(Number.isFinite(n) && n >= 0 ? n : null);
+                  const raw = e.target.value.replace(/[^0-9.]/g, "");
+                  setEstimateHoursText(raw);
+                  const parsed = parseHoursInput(raw);
+                  setMechanicEstimateMinutes(
+                    parsed == null ? null : hoursToMinutes(parsed),
+                  );
                 }}
                 placeholder={
                   catalogEstimateMinutes > 0
-                    ? formatMinutesLabel(catalogEstimateMinutes)
-                    : "Select duration"
+                    ? formatHoursValue(catalogEstimateMinutes)
+                    : "e.g. 1.5"
                 }
-              >
-                <SelectTrigger className={drawerSelectTriggerClassName}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectPopover placement="bottom start">
-                  <SelectListBox shouldFocusWrap>
-                    {ESTIMATE_MINUTE_OPTIONS.map((m) => (
-                      <SelectItem key={m} id={String(m)} textValue={formatMinutesLabel(m)}>
-                        {formatMinutesLabel(m)}
-                      </SelectItem>
-                    ))}
-                  </SelectListBox>
-                </SelectPopover>
-              </Select>
+                className={drawerInputClassName}
+              />
               <p className="mt-1 text-xs text-muted-foreground">
                 {isBackfill
                   ? "How long the job actually took."
@@ -2716,6 +2889,36 @@ export default function CreateBookingDrawer({
                   )}
                 {catalogPartServices.map(({ service_id: sid, name, custom }) => {
                   const rows = catalogPartEdits[sid] ?? [];
+                  // Tire replacement has no OEM parts — the mechanic enters the
+                  // tires directly (size / brand / model / per-tire price).
+                  if (tireService != null && sid === String(tireService._id)) {
+                    return (
+                      <div
+                        key={sid}
+                        className="rounded-lg border border-border bg-background/40 p-3"
+                      >
+                        <DrawerFieldLabel>{name} — tires</DrawerFieldLabel>
+                        {tireSpecs == null ? (
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Pick the tire specs above first, then set the brand,
+                            model, and price per tire here.
+                          </p>
+                        ) : (
+                          <div className="mt-2">
+                            <TirePartsEditor
+                              value={tirePartLines}
+                              onChange={setTirePartLines}
+                              oemSizes={[
+                                tireSpecs.size,
+                                convexVehicleInfo?.tire_size_front ?? null,
+                                convexVehicleInfo?.tire_size_rear ?? null,
+                              ]}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
                   return (
                     <div
                       key={sid}
@@ -2737,11 +2940,76 @@ export default function CreateBookingDrawer({
                               : "No catalog parts for this service — add one below."}
                           </p>
                         )}
-                        {rows.map((p, idx) => (
-                          <div
-                            key={p.key}
-                            className="relative rounded-lg border border-border/70 bg-muted/30 p-3 space-y-3"
-                          >
+                        {rows.map((p, idx) =>
+                          p.saved ? (
+                            <div
+                              key={p.key}
+                              className="relative flex items-center gap-3 rounded-lg border border-border/70 bg-muted/30 px-3 py-2"
+                            >
+                              {faviconUrl(p.source_url) ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img
+                                  src={faviconUrl(p.source_url)!}
+                                  alt=""
+                                  width={20}
+                                  height={20}
+                                  className="h-5 w-5 shrink-0 rounded-sm"
+                                  onError={(e) => {
+                                    e.currentTarget.style.visibility = "hidden";
+                                  }}
+                                />
+                              ) : (
+                                <Package className="h-5 w-5 shrink-0 text-muted-foreground" />
+                              )}
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-medium">
+                                  {p.part_name.trim() ||
+                                    p.oem_number.trim() ||
+                                    "Part"}
+                                </p>
+                                <p className="truncate text-[11px] text-muted-foreground">
+                                  {[
+                                    p.oem_number.trim(),
+                                    p.brand?.trim(),
+                                    `Qty ${p.quantity || "1"}`,
+                                    `$${p.unit_price || "0.00"}`,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                </p>
+                              </div>
+                              {p.source_url?.trim() && (
+                                <a
+                                  href={p.source_url.trim()}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="shrink-0 text-muted-foreground hover:text-primary"
+                                  aria-label="Open source link"
+                                >
+                                  <ExternalLink className="h-4 w-4" />
+                                </a>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => editCatalogPartRow(sid, idx)}
+                                className="shrink-0 text-xs text-primary hover:underline"
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeCatalogPartRow(sid, idx)}
+                                className="shrink-0 text-muted-foreground hover:text-destructive"
+                                aria-label="Remove part"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+                          ) : (
+                            <div
+                              key={p.key}
+                              className="relative rounded-lg border border-border/70 bg-muted/30 p-3 space-y-3"
+                            >
                             <button
                               type="button"
                               onClick={() => removeCatalogPartRow(sid, idx)}
@@ -2772,19 +3040,30 @@ export default function CreateBookingDrawer({
                                   onChange={(e) =>
                                     setCatalogPartField(sid, idx, "oem_number", e.target.value)
                                   }
+                                  onBlur={() =>
+                                    setCatalogPartField(
+                                      sid,
+                                      idx,
+                                      "oem_number",
+                                      tidyOem(p.oem_number),
+                                    )
+                                  }
                                   className={`${drawerInputClassName} font-mono uppercase`}
                                 />
                               </div>
                               <div>
                                 <DrawerFieldLabel>Brand</DrawerFieldLabel>
-                                <input
-                                  type="text"
+                                <Combobox
+                                  ariaLabel="Brand"
                                   placeholder="Brand"
-                                  value={p.brand}
-                                  onChange={(e) =>
-                                    setCatalogPartField(sid, idx, "brand", e.target.value)
+                                  value={p.brand ?? ""}
+                                  onChange={(value) =>
+                                    setCatalogPartField(sid, idx, "brand", value)
                                   }
-                                  className={drawerInputClassName}
+                                  options={makeOptions}
+                                  loading={makesList === undefined}
+                                  emptyText="No matching make — type to add a custom brand"
+                                  inputClassName={drawerInputClassName}
                                 />
                               </div>
                             </div>
@@ -2825,8 +3104,57 @@ export default function CreateBookingDrawer({
                                 )}
                               </div>
                             </div>
+                            <div>
+                              <DrawerFieldLabel>
+                                Source link (optional)
+                              </DrawerFieldLabel>
+                              <div className="flex items-center gap-2">
+                                {faviconUrl(p.source_url) && (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={faviconUrl(p.source_url)!}
+                                    alt=""
+                                    width={16}
+                                    height={16}
+                                    className="h-4 w-4 shrink-0 rounded-sm"
+                                    onError={(e) => {
+                                      e.currentTarget.style.visibility = "hidden";
+                                    }}
+                                  />
+                                )}
+                                <input
+                                  type="url"
+                                  inputMode="url"
+                                  placeholder="https://… where you sourced this part"
+                                  value={p.source_url ?? ""}
+                                  onChange={(e) =>
+                                    setCatalogPartField(
+                                      sid,
+                                      idx,
+                                      "source_url",
+                                      e.target.value,
+                                    )
+                                  }
+                                  className={`${drawerInputClassName} flex-1`}
+                                />
+                              </div>
+                            </div>
+                            <div className="flex justify-end pt-1">
+                              <button
+                                type="button"
+                                onClick={() => saveCatalogPartRow(sid, idx)}
+                                disabled={
+                                  !p.part_name.trim() && !p.oem_number.trim()
+                                }
+                                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+                              >
+                                <Check className="w-3.5 h-3.5" />
+                                Save part
+                              </button>
+                            </div>
                           </div>
-                        ))}
+                          )
+                        )}
                         <button
                           type="button"
                           onClick={() => addCatalogPartRow(sid)}
@@ -3134,6 +3462,12 @@ export default function CreateBookingDrawer({
         onConfirm={(specs) => {
           setTireSpecs(specs);
           setShowTirePicker(false);
+          // When the mechanic chose "Add parts", tire brand / model / price is
+          // entered in the drawer's tire editor — return there instead of
+          // submitting immediately so the priced lines make it onto the booking.
+          if (!isBackfill && partsDeclaration === "add") {
+            return;
+          }
           if (isBackfill) {
             void submitBackfill(backfillDuplicateAcknowledged);
           } else if (outsideHoursWarning) {

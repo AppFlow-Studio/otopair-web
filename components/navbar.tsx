@@ -21,7 +21,7 @@ const navItems = [
         href: '/services'
     },
     {
-        label: 'For shops',
+        label: 'Partner with us',
         href: '/partner-with-us'
     }
 ]
@@ -34,6 +34,9 @@ function Navbar() {
     const [name, setName] = useState('')
     const [submitted, setSubmitted] = useState(false)
     const isHome = pathname === "/"
+    // The flagship home hero and the partner page each ship their own floating
+    // glass pill nav, so the global chrome stands down on both routes.
+    const hideChrome = isHome || pathname === "/partner-with-us"
 
     useEffect(() => {
         if (!isHome) {
@@ -81,8 +84,8 @@ function Navbar() {
         }
     }
 
-    // The flagship home hero ships its own floating pill nav.
-    if (isHome) return null
+    // The flagship home hero and partner page ship their own floating pill nav.
+    if (hideChrome) return null
 
     return (
         <>

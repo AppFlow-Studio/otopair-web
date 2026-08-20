@@ -79,11 +79,11 @@ const DEFAULT_OEM_SIZES = ["225/55R17", "235/50R18"];
 const POSITION_ORDER: TirePosition[] = ["FL", "FR", "RL", "RR"];
 const TIRE_SIZE_PATTERN = /^\d{3}\/\d{2}R\d{2}$/i;
 
-function normalizeTireSizeValue(value?: string | null) {
+export function normalizeTireSizeValue(value?: string | null) {
   return (value ?? "").toUpperCase().replace(/\s+/g, "").replace(/[^0-9R/]/g, "");
 }
 
-function isValidTireSize(value: string) {
+export function isValidTireSize(value: string) {
   return TIRE_SIZE_PATTERN.test(normalizeTireSizeValue(value));
 }
 
@@ -98,7 +98,7 @@ function composeTireSize(width: string, aspect: string, wheel: string): string {
   return `${width}/${aspect}R${wheel}`;
 }
 
-function TireSizeInput({ value, onChange, className }: { value: string; onChange: (next: string) => void; className?: string }) {
+export function TireSizeInput({ value, onChange, className }: { value: string; onChange: (next: string) => void; className?: string }) {
   const parts = parseTireSizeParts(value);
   const aspectRef = useRef<HTMLInputElement | null>(null);
   const wheelRef = useRef<HTMLInputElement | null>(null);

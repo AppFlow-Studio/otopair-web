@@ -41,7 +41,6 @@ import {
 } from "../lib/inspection-measurements";
 
 const SLA_MS = 24 * 60 * 60 * 1000;
-const MIN_MANUAL_JUSTIFICATION_LEN = 12;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Auth helpers (local copies — mirror convex/bookings.ts pattern)
@@ -119,25 +118,6 @@ function partsSubtotalCents(parts: SubmittedPart[]): number {
     total += Math.round((p.cost ?? 0) * qty * 100);
   }
   return total;
-}
-
-/** Validates parts gate: manual parts need a justification of ≥12 chars.
- *  UI is expected to enforce the catalog-median cap; this is a server-side
- *  defense (justification only — the median cap requires loading the part
- *  catalog and is the dialog's responsibility). */
-function validatePartsForApproval(parts: SubmittedPart[]): void {
-  for (const p of parts) {
-    if (p.not_used) continue;
-    if (p.supplied_by === "customer") continue;
-    if (p.source === "manual") {
-      const j = (p.justification_text ?? "").trim();
-      if (j.length < MIN_MANUAL_JUSTIFICATION_LEN) {
-        throw new Error(
-          `Manual part "${p.part_name}" requires a justification of at least ${MIN_MANUAL_JUSTIFICATION_LEN} characters.`,
-        );
-      }
-    }
-  }
 }
 
 type SetPriceComputed = {
@@ -258,8 +238,6 @@ async function performSubmission(
 }> {
   const booking: any = await ctx.db.get(args.bookingId);
   if (!booking) throw new Error("Booking not found.");
-
-  validatePartsForApproval(args.parts);
 
   const priced = await computeMechanicSetPrice(ctx, {
     booking,

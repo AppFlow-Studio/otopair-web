@@ -22,6 +22,7 @@ import {
   Lock,
   Minus,
   Plus,
+  RotateCcw,
   Search,
   CalendarClock,
   Gauge,
@@ -1752,6 +1753,7 @@ function PostJobSurveyDialogBody({
             confirmedThisVisit={prefillData?.confirmedThisVisit ?? []}
             suggestedFromInspection={prefillData?.suggestedFromInspection ?? []}
             currentWarningLights={prefillData?.currentWarningLights ?? []}
+            bookingId={bookingId}
             clearedWarningLights={clearedWarningLights}
             setClearedWarningLights={setClearedWarningLights}
             actualPartsCost={actualPartsCost}
@@ -1972,6 +1974,7 @@ function StepContent(props: {
   priorOpenRecommendations: PriorOpenRecommendation[];
   confirmedThisVisit: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection: SuggestedFromInspection[];
+  bookingId: string | null;
   currentWarningLights: string[];
   clearedWarningLights: string[];
   setClearedWarningLights: React.Dispatch<React.SetStateAction<string[]>>;
@@ -2339,6 +2342,7 @@ function StepContent(props: {
           priorOpenRecommendations={props.priorOpenRecommendations}
           confirmedThisVisit={props.confirmedThisVisit}
           suggestedFromInspection={props.suggestedFromInspection}
+          bookingId={props.bookingId}
           currentWarningLights={props.currentWarningLights}
           clearedWarningLights={props.clearedWarningLights}
           setClearedWarningLights={props.setClearedWarningLights}
@@ -3605,6 +3609,7 @@ function RecommendationsStep({
   priorOpenRecommendations,
   confirmedThisVisit,
   suggestedFromInspection,
+  bookingId,
   currentWarningLights,
   clearedWarningLights,
   setClearedWarningLights,
@@ -3618,6 +3623,7 @@ function RecommendationsStep({
   priorOpenRecommendations: PriorOpenRecommendation[];
   confirmedThisVisit: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection: SuggestedFromInspection[];
+  bookingId: string | null;
   currentWarningLights: string[];
   clearedWarningLights: string[];
   setClearedWarningLights: React.Dispatch<React.SetStateAction<string[]>>;
@@ -3634,6 +3640,28 @@ function RecommendationsStep({
     Number.isFinite(currentMileage) && currentMileage > 0
       ? Math.round((currentMileage + 5000) / 1000) * 1000
       : null;
+
+  const confirmFromPreJob = useMutation(api.jobRecommendations.confirmFromPreJob);
+  const [undoingId, setUndoingId] = useState<string | null>(null);
+
+  async function handleUndoConfirmed(recId: string) {
+    if (!bookingId || undoingId) return;
+    setUndoingId(recId);
+    try {
+      await confirmFromPreJob({
+        bookingId: bookingId as Id<"bookings">,
+        confirmations: [
+          {
+            recommendation_id: recId as Id<"job_recommendations">,
+            outcome: "dismissed",
+            dismissed_reason: "mistake",
+          },
+        ],
+      });
+    } finally {
+      setUndoingId(null);
+    }
+  }
 
   function updateRec(index: number, patch: Partial<RecRowState>) {
     setRecommendations((current) =>
@@ -3772,11 +3800,24 @@ function RecommendationsStep({
                     <span className="text-muted-foreground"> — {rec.reason}</span>
                   ) : null}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => handleUndoConfirmed(rec._id)}
+                  disabled={!bookingId || undoingId !== null}
+                  className="flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition hover:bg-emerald-100 hover:text-emerald-800 disabled:opacity-50"
+                >
+                  {undoingId === rec._id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-3 w-3" />
+                  )}
+                  Undo
+                </button>
               </li>
             ))}
           </ul>
           <p className="mt-2 text-[10px] text-muted-foreground">
-            Already confirmed at pre-job — no action needed.
+            Already confirmed at pre-job — changed your mind or fixed it during the job? Undo it.
           </p>
         </div>
       ) : null}

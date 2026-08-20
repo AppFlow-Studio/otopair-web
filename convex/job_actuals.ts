@@ -823,8 +823,13 @@ export const getPrefillData = query({
       .query("job_recommendations")
       .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
       .collect();
+    // status === "open" excludes a rec the mechanic already undid this same
+    // screen (see the "Undo" action in the post-job survey UI, which dismisses
+    // via jobRecommendations.confirmFromPreJob) — once retracted, it should
+    // drop out of this read-only list AND stop being excluded from
+    // suggestedFromInspection below, so it's offered again as a candidate.
     const confirmedThisVisitRows = thisVisitRecRows.filter(
-      (r) => r.source === "inspection",
+      (r) => r.source === "inspection" && r.status === "open",
     );
     const confirmedThisVisit = await Promise.all(
       confirmedThisVisitRows.map(async (rec) => {

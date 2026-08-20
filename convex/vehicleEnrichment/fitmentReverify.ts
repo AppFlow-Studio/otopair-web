@@ -155,6 +155,32 @@ export const sweep = internalAction({
         if (!bundle || bundle.candidates.length === 0) continue;
 
         const verdicts1 = await verifyPartFitments(bundle.vehicle, bundle.candidates);
+        // Channel-death guard: verifyPartFitments never throws — a dead API
+        // key comes back as every part "uncertain" with a channel reason, and
+        // "uncertain deletes nothing" quietly turns the whole remaining fleet
+        // into zero-refute rows that read as CLEAN (Aug 20 2026: the key ran
+        // out of credits at row ~31 and the next 228 configs "passed"). A
+        // channel failure aborts the invocation with the SAME cursor.
+        const CHANNEL_REASONS = new Set(["verifier_error", "no_api_key"]);
+        if (
+          verdicts1.length > 0 &&
+          verdicts1.every((x) => x.verdict === "uncertain" && CHANNEL_REASONS.has(x.reason))
+        ) {
+          console.error(
+            `[fitment-reverify] verifier channel down (${verdicts1[0].reason}) at ${bundle.configKey} — aborting invocation`,
+          );
+          return {
+            aborted: `verifier_channel_down:${verdicts1[0].reason}`,
+            examined: rows.length,
+            flagged: rows.filter((r) => (r.refuted ?? 0) > 0).length,
+            removedTotal: rows.reduce((n, r) => n + (r.removed ?? 0), 0),
+            healsScheduled,
+            dryRun: args.dryRun === true,
+            rows,
+            continueCursor: args.cursor ?? null,
+            isDone: false,
+          };
+        }
         const refuted1 = verdicts1.filter((x) => x.verdict === "refuted");
         if (refuted1.length === 0) {
           rows.push({

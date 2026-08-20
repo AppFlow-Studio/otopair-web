@@ -134,6 +134,74 @@ export const _stampSnapshot = internalMutation({
   },
 });
 
+/** Diagnose ONE cohort config's rescue call — raw response head + parse
+ *  counts. For the Aug 20 finding that 57/75 rescue failures were Fords. */
+export const probeOne = internalAction({
+  args: { configKey: v.string() },
+  handler: async (ctx, args): Promise<any> => {
+    const cfg: any = await ctx.runQuery(
+      internal.vehicleEnrichment.v3queries.getVehicleConfigByKey,
+      { configKey: args.configKey },
+    );
+    if (!cfg) return { error: "config_not_found" };
+    let cursor: string | null = null;
+    for (let i = 0; i < 300; i++) {
+      const page: any = await ctx.runQuery(
+        internal.vehicleEnrichment.servicesSnapshotBackfill._cohortPage,
+        { cursor, limit: 20 },
+      );
+      const t = page.targets.find((x: any) => x.configKey === args.configKey);
+      if (t) {
+        const res = await callClaudeWithWebSearch({
+          system: SERVICES_RESCUE_SYSTEM,
+          userPrompt: buildServicesRescuePrompt(t.vehicle as any, t.knownParts),
+          maxSearchUses: 8,
+          maxTokens: 8000,
+          temperature: 0,
+        });
+        // Channel-death guard. Terminal API failure returns {data:{}, usage
+        // all-zero} — a REAL model answer always has output tokens. Without
+        // this, an out-of-credits key reads as "no applicable services" per
+        // config and the run burns to a vacuous completion (Aug 20 2026: 75
+        // of 140 cohort configs "failed" this way after the key's balance ran
+        // out mid-run). Abort the invocation with the SAME cursor so a re-run
+        // resumes exactly here.
+        if (res.usage.tokensOut === 0) {
+          console.error(
+            `[snapshot-backfill] Anthropic channel down (zero output tokens) at ${t.configKey} — aborting invocation`,
+          );
+          return {
+            aborted: "anthropic_channel_down",
+            pageConfigs: page.targets.length,
+            stamped: rows.filter((r) => r.status === "stamped").length,
+            promoted: rows.filter((r) => r.promoted).length,
+            rows,
+            continueCursor: args.cursor ?? null,
+            isDone: false,
+          };
+        }
+        const parsed = parseBatch2(normalizeBatchShape(res.data, "2"), []);
+        return {
+          configKey: t.configKey,
+          vehicleLine: `${t.vehicle.year} ${t.vehicle.make} ${t.vehicle.model} ${t.vehicle.trim} — ${t.vehicle.engineCode} ${t.vehicle.displacement}L`,
+          knownParts: Object.keys(t.knownParts).length,
+          parsedServices: parsed.services.length,
+          applicable: parsed.services.filter((s: any) => s.is_applicable).length,
+          serviceNames: parsed.services.slice(0, 6).map((s: any) => s.service_name),
+          mappedSlugs: parsed.services
+            .filter((s: any) => s.is_applicable)
+            .map((s: any) => SERVICE_NAME_TO_SLUG[s.service_name] ?? `UNMAPPED:${s.service_name}`)
+            .slice(0, 10),
+          rawHead: JSON.stringify(res.data).slice(0, 600),
+        };
+      }
+      if (page.isDone) return { error: "not_in_cohort (already stamped or no terminal run)" };
+      cursor = page.continueCursor;
+    }
+    return { error: "cursor_exhausted" };
+  },
+});
+
 export const backfill = internalAction({
   args: {
     limit: v.optional(v.float64()),

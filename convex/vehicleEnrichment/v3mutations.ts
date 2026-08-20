@@ -7,7 +7,11 @@ import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
 import { isLaborOnlyService } from "../lib/servicePartsReference";
 import { partFitsConfigMake } from "../partSelector";
-import { makesSameFamily, sanitizePartNumber } from "./contentSanitization";
+import {
+  makesSameFamily,
+  salvageForMakeFormat,
+  sanitizePartNumber,
+} from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
 import { checkRoleIdentity } from "./roleIdentity";
 import { isMarketplaceDomain, isMarketplaceUrl } from "./sourceRegistry";
@@ -977,6 +981,34 @@ export const upsertPartAndFitment = internalMutation({
       args.build_source_make.toLowerCase() !== (badgeMake ?? "").toLowerCase()
     ) {
       cleanNumber = sanitizePartNumber(args.oem_part_number, args.build_source_make);
+    }
+    if (!cleanNumber) {
+      // Hyphenation salvage. Catalog sources publish OEM numbers with the
+      // separators already stripped ("M2GZ1125A" for M2GZ-1125-A), and several
+      // make formats REQUIRE those separators — so a genuine number can fail
+      // its own make's pattern at the write even after the sourcing rung
+      // format-gated it (live: the Nautilus rotor cleared the RockAuto rung's
+      // gate + the fitment verifier and then died HERE as invalid_number).
+      // Identity below is the NORMALIZED number, so separators never affect
+      // what a part IS — the salvage only asks whether some legitimate
+      // spelling has the make's shape, and stores the source's own form.
+      for (const mk of [
+        badgeMake,
+        args.build_source_make &&
+        args.build_source_make.toLowerCase() !== (badgeMake ?? "").toLowerCase()
+          ? args.build_source_make
+          : null,
+      ]) {
+        if (!mk) continue;
+        const salvaged = salvageForMakeFormat(args.oem_part_number, mk, sanitizePartNumber);
+        if (salvaged) {
+          console.log(
+            `[v8-parts] format gate passed via hyphenation salvage: "${args.oem_part_number}" (${args.subcategory}) for make=${mk}`,
+          );
+          cleanNumber = salvaged;
+          break;
+        }
+      }
     }
     if (!cleanNumber) {
       console.log(

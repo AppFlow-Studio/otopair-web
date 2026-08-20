@@ -509,6 +509,13 @@ export default defineSchema({
     // budget goes to winnable ones; cleared on any successful price write.
     price_discovery_outcome: v.optional(v.string()),
     price_discovery_at: v.optional(v.number()),
+    /** Consecutive failed discovery attempts. One failure backs off HOURS,
+     *  repeat failures back off the full per-outcome window — a single
+     *  transient miss seconds after the part is written must not freeze
+     *  pricing for weeks (Aug 20 2026: two Nautilus parts with abundant
+     *  dealer listings sat unpriced behind first-attempt stamps). Cleared
+     *  when a price lands. */
+    price_discovery_strikes: v.optional(v.number()),
   })
     .index("by_part_number", ["oem_part_number"])
     .index("by_part_number_normalized", ["oem_part_number_normalized"])

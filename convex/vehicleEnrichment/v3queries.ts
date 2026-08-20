@@ -11,6 +11,7 @@ import { v } from "convex/values";
 import { internalQuery, internalMutation } from "../_generated/server";
 import { isPoisonPriceType, isNonPooledPriceType } from "../lib/priceTypes";
 import { findMakeByName } from "../lib/makeKey";
+import { makesSameFamily } from "./contentSanitization";
 import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "../lib/labor_aggregation";
 
 export const getVehicleConfigByKey = internalQuery({
@@ -725,12 +726,47 @@ export const getOemPrefixesForMake = internalQuery({
     // the make format gate before this and the adversarial fitment verifier
     // after it, and the rung writes only on a positively CONFIRMED verdict.
     const n = Math.max(2, Math.trunc(args.prefixLen ?? 3));
-    const rows = await ctx.db
-      .query("oem_parts")
-      // by_make_category leads with make_id, so an equality on that alone is a
-      // valid prefix scan — no dedicated by_make index needed.
-      .withIndex("by_make_category", (q) => q.eq("make_id", args.makeId))
-      .take(2000);
+    // ── The vocabulary spans the CORPORATE FAMILY, not just the make ──────
+    //
+    // Measured Aug 2026: Lincoln has TWO parts on file. A make-only vocabulary
+    // rejects essentially every candidate for it, which is fail-closed and
+    // therefore safe — but it disabled the RockAuto rung on exactly the makes
+    // whose coverage is worst, and those are the ones that need it. The 2021
+    // Nautilus is the case in point: five unquotable services, a rung built to
+    // fill them, and a gate that could never pass anything. Coverage cannot
+    // bootstrap when earning parts requires already having parts.
+    //
+    // A badge shares its parent's part numbering — Lincoln IS Ford (Ford: 397
+    // parts / 252 prefixes, and the source registry already routes Lincoln to
+    // Ford's storefront for the same reason). So the family is the honest unit.
+    //
+    // This does NOT reopen the contamination this gate exists to stop. The
+    // failure was Subaru's 15208AA030 passing for a Kia, and Subaru shares no
+    // family with Hyundai/Kia/Genesis — cross-family numbers are rejected
+    // exactly as before. Only genuine badge-siblings are admitted.
+    const self: any = await ctx.db.get(args.makeId);
+    const selfName = String(self?.name ?? "");
+    const makeIds: Array<typeof args.makeId> = [args.makeId];
+    if (selfName) {
+      for (const m of await ctx.db.query("makes").collect()) {
+        if (m._id === args.makeId) continue;
+        if (makesSameFamily(selfName, String((m as any).name ?? ""))) {
+          makeIds.push(m._id as typeof args.makeId);
+        }
+      }
+    }
+
+    const rows: any[] = [];
+    for (const id of makeIds) {
+      rows.push(
+        ...(await ctx.db
+          .query("oem_parts")
+          // by_make_category leads with make_id, so an equality on that alone
+          // is a valid prefix scan — no dedicated by_make index needed.
+          .withIndex("by_make_category", (q) => q.eq("make_id", id))
+          .take(2000)),
+      );
+    }
     const out = new Set<string>();
     for (const r of rows) {
       const raw = String(

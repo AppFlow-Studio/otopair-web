@@ -16,7 +16,24 @@
  */
 
 import Anthropic from "@anthropic-ai/sdk";
-import { MODEL_HAIKU } from "./batchClient";
+import { MODEL_HAIKU, MODEL_SONNET } from "./batchClient";
+
+/**
+ * Which model adjudicates fitment. Default SONNET since Aug 20 2026: the
+ * Aug-20 rung validation ground-truthed a Haiku session's confirms and 3 of 8
+ * were textbook misses it is explicitly prompted against — a 2.4L I4 plug
+ * CONFIRMED on a 3.5L V6, a zero-catalog-existence rotor CONFIRMED (phantom
+ * rule), and a "without Sport" pad set CONFIRMED on a Sport. This verdict is
+ * the only vehicle-evidence gate in front of sight-unseen catalog writes and
+ * the only authority allowed to DELETE fitments, so it is the wrong place to
+ * save pennies. `PARTS_VERIFY_MODEL=haiku` restores the old economics.
+ */
+function verifyModel(): string {
+  const v = (process.env.PARTS_VERIFY_MODEL ?? "").trim().toLowerCase();
+  if (v === "haiku") return MODEL_HAIKU;
+  if (v && v !== "sonnet") return v; // explicit model id passes through
+  return MODEL_SONNET;
+}
 
 let _client: Anthropic | null = null;
 function getClient(): Anthropic {
@@ -114,6 +131,10 @@ A claim is REFUTED when the part number belongs to:
 - the wrong axle or position (a front-axle pad set claimed as rear pads, a FRONT rotor part number claimed as the REAR rotor — check the position stated on each part line, and where the platform has lug-count or heavy-duty rotor variants, that the variant matches this vehicle's configuration),
 - a fluid spec the vehicle must not use (e.g. an older-generation coolant on a car requiring the newer chemistry),
 - **an engine oil / fluid PRODUCT whose viscosity or spec grade differs from this vehicle's stated requirement** (e.g. a 5W-20 synthetic-blend product attached to an engine that requires 0W-20 full synthetic — the product is real and the brand is right, but the grade is wrong: REFUTED; name the product's actual grade in your reason).
+
+**A PLATFORM TWIN is not "a different vehicle."** Corporate families sell one vehicle under several badges (Ford Edge ↔ Lincoln Nautilus/MKX; Chevrolet Tahoe ↔ GMC Yukon ↔ Cadillac Escalade; Toyota ↔ Lexus; Honda ↔ Acura; Hyundai ↔ Kia ↔ Genesis; Nissan ↔ Infiniti; shared VW-group platforms), and the OEM issues ONE part number under the donor program's code — dealer pages then TITLE the part under the donor badge ("2021-2024 Ford Disc Brake Rotor") while the fitment TABLE lists the twin too. Finding the number documented on the target vehicle's badge-sibling is therefore NOT positive refutation: read the listing's full fitment table for THIS vehicle before judging. (Live failure: M2GZ-1125-A, titled everywhere as a Ford Edge rotor, was refuted for a 2021 Nautilus — the same pages' fitment tables list "2021-2023 Lincoln Nautilus 2.0L", the factory rotor for that exact car.) To refute on platform-twin grounds you must either name the DIFFERENT part number this vehicle actually uses or show the twin listing's qualifiers (years, engine, brake package) exclude this vehicle. Genuinely different platforms under one badge (Golf pads on an Atlas) stay refutable as before. **Badge-sibling documentation alone is never CONFIRMATION either** — family sharing removes one ground for refuting; it adds nothing to the confirm side, which keeps its full standard below.
+
+**TRIM and BRAKE-PACKAGE qualifiers bind exactly like engine qualifiers.** Dealer application tables scope brake parts by trim ("LX, EX, EX-L", "without Sport or Touring", "with 18-inch brakes") because trims genuinely take different rotors/pads. A part whose found listings scope it to trims that EXCLUDE this vehicle's stated trim is REFUTED, not confirmed — a "without Sport" pad set on a Sport is a wrong part even though model, year, and engine all match. (Live failures: pad set 45022-TVA-A00, scoped LX/EX/EX-L, and rotor 45251-T2F-A51, scoped "without Sport", were both CONFIRMED onto a 2019 Accord SPORT.) If no listing states any trim scope, trim is not grounds for refuting — but when the scope is stated, it is decisive in both directions.
 
 **A dealer/OEM catalog page for the right MODEL is NOT confirmation.** Genuine-brand catalog pages list parts for EVERY engine, trim, axle, and generation of that nameplate — the single most common false confirmation in this pipeline is a real part, on a trusted dealer domain, for the right truck, but keyed to a DIFFERENT engine option (a 4.2L V6 belt on the 5.4L V8), a different position (front rotor as rear), or a different generation. Confirmation requires the listing's engine/position/year qualifiers to match THIS vehicle, not just the model name.
 
@@ -213,7 +234,7 @@ export async function verifyPartFitments(
 
   try {
     const response = await getClient().messages.create({
-      model: MODEL_HAIKU,
+      model: verifyModel(),
       max_tokens: 3000,
       temperature: 0,
       system: SYSTEM,

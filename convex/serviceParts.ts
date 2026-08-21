@@ -22,6 +22,7 @@ import {
   type TraceEntry,
 } from "./partSelector";
 import { passesI1ReadGuardNamed } from "./lib/makeIdentity";
+import { lookupOeOil, isOeCatalogOil } from "./vehicleEnrichment/oilCatalog";
 import {
   getServicePartsSpec,
   normalizeServiceSlug,
@@ -372,7 +373,10 @@ export const getOemPartsForBooking = query({
     // on Review & Pay and the mechanic sees in the job scope, so all three
     // surfaces agree. Grouped by service, in the booking's service order.
     const snapshot = ((booking as any).priced_parts_snapshot ?? []) as Array<{
-      service_id: Id<"services">;
+      // Optional: custom / off-catalog lines have no services row (they carry
+      // custom_service_name instead), so service_id can be absent.
+      service_id?: Id<"services">;
+      custom_service_name?: string;
       part_id?: Id<"oem_parts">;
       oem_number: string;
       part_name: string;
@@ -427,6 +431,9 @@ export const getOemPartsForBooking = query({
 
       const bySvc = new Map<string, OemPartsForService>();
       for (const row of snapshot) {
+        // Custom / off-catalog parts have no services row — this query groups
+        // OEM parts by catalog service, so skip them instead of get(undefined).
+        if (!row.service_id) continue;
         if (!(await rowPassesGuard(row))) continue;
         const key = String(row.service_id);
         let entry = bySvc.get(key);
@@ -1508,12 +1515,29 @@ async function synthesizeUniversalCandidate(
   serviceRole: ServiceRole,
 ): Promise<WinnerCandidate | null> {
   if (!role.universalFallback) return null;
-  const universalPart = await ctx.db
+  const consumables = await ctx.db
     .query("oem_parts")
     .withIndex("by_subcategory", (q: any) => q.eq("subcategory", role.roleKey))
     .filter((q: any) => q.eq(q.field("category"), "consumable"))
-    .first();
-  if (!universalPart) return null; // seed not run yet — skip silently
+    .collect();
+  if (consumables.length === 0) return null; // seed not run yet — skip silently
+
+  // Engine oil is GRADE-critical (Aug 2026). The lane used to hold one
+  // nameless "Engine oil (per quart)" row handed to every vehicle, so a
+  // 0W-8 hybrid and a 15W-40 diesel billed the same anonymous line. Prefer
+  // the row matching THIS engine's viscosity; fall back to the generic row
+  // only when the grade is unknown or uncatalogued — never substitute a
+  // neighbouring grade, since the wrong oil is worse than an unnamed one.
+  let universalPart = consumables[0];
+  if (role.roleKey === "engine_oil") {
+    const config: any = await ctx.db.get(vehicleConfigId);
+    const engine: any = config?.engine_id ? await ctx.db.get(config.engine_id) : null;
+    const graded = lookupOeOil(engine?.oil_viscosity);
+    const match = graded
+      ? consumables.find((p: any) => p.oem_part_number === graded.identifier)
+      : null;
+    universalPart = match ?? consumables.find((p: any) => !isOeCatalogOil(p.oem_part_number)) ?? consumables[0];
+  }
   const priceSummary = await summarizePartPrices(ctx, universalPart._id);
   if (priceSummary.sample_size === 0) return null; // unpriced seed — skip
   const stubFitment = {

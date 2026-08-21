@@ -296,6 +296,35 @@ export function buildNhtsaVinKey(input: {
   return parts.join("_");
 }
 
+/**
+ * Identity fingerprint for a vehicle known only by year/make/model[/trim] —
+ * no VIN, no engine resolved yet.
+ *
+ * Deliberately built from the SAME canonicalize/canonicalizeMake pair as
+ * buildEngineKey and buildNhtsaVinKey so a manually-entered "mercedes benz"
+ * fingerprints identically to a VIN-decoded "Mercedes-Benz". Used to recognise
+ * a returning walk-in's car (bookings.resolveWalkInVin) so we reuse their
+ * existing placeholder VIN instead of forking a second vehicles row — service
+ * history is keyed by VIN string, so a fork splits the car's history in two.
+ *
+ * Format: `{year}_{makeSlug}_{modelSlug}[_{trimSlug}]`
+ * Example: "2020_honda_cr_v_ex_l"
+ */
+export function buildYmmtFingerprint(input: {
+  year: number;
+  make: string;
+  model: string;
+  trim?: string;
+}): string {
+  const parts = [
+    String(input.year),
+    canonicalizeMake(input.make),
+    canonicalize(input.model),
+    canonicalize(input.trim ?? ""),
+  ].filter((p) => p.length > 0);
+  return parts.join("_");
+}
+
 // ─── Field Lists (for fill rate calculation) ─────────────────────
 
 // ─── P2.4 · Field-level sibling inheritance ──────────────────────

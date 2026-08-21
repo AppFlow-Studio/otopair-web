@@ -119,6 +119,12 @@ import type { Id } from "../_generated/dataModel";
 import { searchLinksOnly } from "./firecrawl";
 import { resolveExtractionModel } from "./utils/enrichmentFlags";
 import { discoverDirectManuals, USER_AGENT as MANUAL_DOWNLOAD_USER_AGENT } from "./manualDirectSources";
+import {
+  declaredLength,
+  fetchMaybeProxied,
+  isEgressRefusal,
+  proxyTruncated,
+} from "./egressProxy";
 
 // This module is new — `internal.vehicleEnrichment.manualLibrary` is absent
 // from _generated/api.d.ts until `npx convex dev` regenerates it. Same pattern
@@ -181,6 +187,27 @@ export async function sha256Hex(bytes: Uint8Array): Promise<string | null> {
 }
 /** Below this a "PDF" is an error page or a redirect stub, not a manual. */
 export const MIN_MANUAL_BYTES = 40 * 1024;
+
+/**
+ * Is this Messages-API rejection a SIZE limit rather than a real failure?
+ *
+ * The Files API refuses documents over 600 PDF pages or ~1M prompt tokens. That
+ * is a routing verdict — the document is real and readable, just not by this
+ * extractor — so both the interval and the spec pass hand it to Reducto instead
+ * of recording a gap.
+ *
+ * Shared because the two passes had drifted: intervals caught this and specs
+ * did not, so the same 395-page Acadia manual reached Reducto for its schedule
+ * and died with a raw `messages_400` for its 18 spec fields. One definition
+ * means they cannot drift again.
+ *
+ * Deliberately narrow — matched against Anthropic's own error text, not a
+ * generic "400 means too big". A 400 for a malformed request must stay a
+ * failure, because retrying it on a second extractor just burns the credit too.
+ */
+export function isFilesApiSizeLimit(status: number, detail: string): boolean {
+  return status === 400 && /maximum of 600 PDF pages|prompt is too long/i.test(detail);
+}
 
 /** Negative caching: a failed (make, model, year) is not retried for this long. */
 export const MANUAL_FAILURE_TTL_DAYS = 14;
@@ -1604,6 +1631,20 @@ export const _writeManualIntervals = internalMutation({
   args: {
     vehicleConfigId: v.id("vehicle_configs"),
     source_url: v.optional(v.string()),
+    /**
+     * Provenance for these rows. UNSET means the PDF pipeline — `oem_manual`
+     * at 0.95, which is what this mutation always wrote and what every existing
+     * caller still gets byte for byte.
+     *
+     * Supplied by the website-route pipeline (routeSources/), which reads the
+     * same manuals as HTML and must NOT be able to claim the PDF path's
+     * authority: `oem_manual` is in PROTECTED_DATA_QUALITY, so a route row
+     * stamped with it would permanently refuse the real manual's extraction.
+     * See routeSources/provenance.ts.
+     */
+    provenance: v.optional(
+      v.object({ data_quality: v.string(), confidence: v.float64() }),
+    ),
     rows: v.array(
       v.object({
         service_slug: v.string(),
@@ -1619,6 +1660,28 @@ export const _writeManualIntervals = internalMutation({
     let skipped = 0;
     let unseeded = 0;
     const decisions: string[] = [];
+
+    // An EXPLICIT provenance may never be a protected one. The protected set is
+    // what lets a row refuse later writes, and the only writer entitled to it is
+    // the default path below — a caller that names its own quality is by
+    // definition not the factory-PDF extraction. Refused rather than thrown so a
+    // bad caller cannot take the pipeline down, and logged as an error because
+    // it is a bug, not a runtime condition.
+    if (
+      args.provenance &&
+      (PROTECTED_DATA_QUALITY as readonly string[]).includes(
+        args.provenance.data_quality.trim().toLowerCase(),
+      )
+    ) {
+      console.error(
+        `[manual-library] REFUSED interval write: caller supplied protected data_quality ` +
+          `"${args.provenance.data_quality}" (config ${args.vehicleConfigId})`,
+      );
+      return { written: 0, skipped: args.rows.length, unseeded: 0, refused: true };
+    }
+
+    const quality = args.provenance?.data_quality ?? "oem_manual";
+    const confidence = args.provenance?.confidence ?? 0.95;
 
     for (const row of args.rows) {
       const svc = await ctx.db
@@ -1654,11 +1717,11 @@ export const _writeManualIntervals = internalMutation({
         interval_months: row.interval_months ?? undefined,
         status: "scheduled",
         display_string: row.display_string ?? undefined,
-        confidence: 0.95,
-        data_quality: "oem_manual",
+        confidence,
+        data_quality: quality,
         // Clear the months-provenance override when this write lands a REAL
-        // months from the manual: the row's own data_quality ("oem_manual") is
-        // then the truth for both numbers. Leaving a stale
+        // months from the manual: the row's own data_quality (`quality`, above)
+        // is then the truth for both numbers. Leaving a stale
         // interval_months_source="default_fallback" here would under-report
         // genuine OEM data, which is its own kind of wrong.
         //
@@ -1685,10 +1748,11 @@ export const _writeManualIntervals = internalMutation({
 
     console.log(
       `[manual-library] intervals written=${written} skipped=${skipped} unseeded=${unseeded}` +
+        ` quality=${quality}` +
         (args.source_url ? ` src=${args.source_url}` : "") +
         ` [${decisions.join(", ")}]`,
     );
-    return { written, skipped, unseeded };
+    return { written, skipped, unseeded, refused: false };
   },
 });
 
@@ -2073,34 +2137,68 @@ export const resolveManualForVehicle = internalAction({
           // succeeds, then this download went out bare and volvocars.com
           // answered 403 (round-2 XC90). On 403/429 retry once with a
           // referer, which clears the remaining polite-bot walls.
-          const baseHeaders = {
-            Accept: "application/pdf,*/*",
-            "User-Agent": MANUAL_DOWNLOAD_USER_AGENT,
-            "Accept-Language": "en-US,en;q=0.9",
+          //
+          // Both legs route through the egress proxy when the host refuses
+          // Convex specifically (egressProxy.ts). The referer retry is kept
+          // because it fixes a DIFFERENT thing: a polite-bot wall that judges
+          // the request, not the IP. Order matters — cheap remedy first.
+          const fetchOpts = {
+            accept: "application/pdf,*/*",
+            timeoutMs: PDF_DOWNLOAD_TIMEOUT_MS,
+            maxBytes: MAX_ACTION_MANUAL_BYTES,
           };
-          let res = await fetch(candidate.url, {
-            headers: baseHeaders,
-            signal: AbortSignal.timeout(PDF_DOWNLOAD_TIMEOUT_MS),
-          });
-          if (res.status === 403 || res.status === 429) {
+          let outcome = await fetchMaybeProxied(
+            candidate.url,
+            MANUAL_DOWNLOAD_USER_AGENT,
+            fetchOpts,
+          );
+          if (isEgressRefusal(outcome.status)) {
             console.log(
-              `[manual-library] ${label}: ${res.status} from ${candidate.source_domain} — retrying with referer`,
+              `[manual-library] ${label}: ${outcome.status} from ${candidate.source_domain} (via ${outcome.via}) — retrying with referer`,
             );
-            res = await fetch(candidate.url, {
-              headers: {
-                ...baseHeaders,
-                Referer: `https://${candidate.source_domain}/`,
-                "Cache-Control": "no-cache",
-              },
-              signal: AbortSignal.timeout(PDF_DOWNLOAD_TIMEOUT_MS),
+            outcome = await fetchMaybeProxied(candidate.url, MANUAL_DOWNLOAD_USER_AGENT, {
+              ...fetchOpts,
+              referer: `https://${candidate.source_domain}/`,
             });
           }
-          if (!res.ok) {
-            lastReason = `download_${res.status}`;
+          // NOT `res.ok` — a proxied response is a 200 envelope carrying the
+          // target's real status, so `ok` would wave a 403 straight through.
+          if (outcome.status < 200 || outcome.status >= 300) {
+            lastReason = `download_${outcome.status}`;
             lastFailedCandidate = candidate;
             continue;
           }
-          const declared = Number(res.headers.get("content-length") ?? "");
+          const res = outcome.res;
+          // The proxy buffers up to a ceiling, so an oversize PDF arrives as a
+          // valid-looking PREFIX — right magic number, right content-type,
+          // wrong document — and the streaming guard below cannot catch it
+          // because the truncation already happened upstream of us. Route it
+          // to Reducto, which downloads server-side and has no such cap.
+          if (proxyTruncated(res)) {
+            await ctx.runMutation(selfApi().upsertManualRow, {
+              make: args.make,
+              model: args.model,
+              year: args.year,
+              source_url: candidate.url,
+              source_domain: candidate.source_domain,
+              is_oem_domain: candidate.is_oem_domain,
+              doc_kind: candidate.doc_kind,
+              extractor: EXTRACTOR_REDUCTO,
+              expires_at: Date.now() + MANUAL_REFRESH_DAYS * DAY_MS,
+            });
+            console.log(
+              `[manual-library] ${label}: proxy truncated ${candidate.url} — stored reference-only row for Reducto`,
+            );
+            return {
+              status: "uploaded",
+              file_id: null,
+              source_url: candidate.url,
+              is_oem_domain: candidate.is_oem_domain,
+              doc_kind: candidate.doc_kind,
+              reason: "reference_only_proxy_truncated",
+            };
+          }
+          const declared = declaredLength(res) ?? NaN;
           // Stricter than the Files-API 30 MB cap on purpose: past ~20 MB the
           // COPIES (bytes + Blob + form body) blow the 64 MB action limit.
           // But a too-big-for-the-runtime manual is NOT a dead end: Reducto
@@ -2425,12 +2523,9 @@ export const extractIntervalsFromManual = internalAction({
           // under the byte cap but over the page cap; the byte-based
           // extractorForBytes cannot see page count up front). Hand it to the
           // same Reducto path oversize-by-bytes manuals already use.
-          if (
-            res.status === 400 &&
-            /maximum of 600 PDF pages|prompt is too long/i.test(detail)
-          ) {
+          if (isFilesApiSizeLimit(res.status, detail)) {
             console.log(
-              `[manual-library] ${label}: Files-API size limit (${detail.slice(0, 80)}…) — falling back to Reducto`,
+              `[manual-library] ${label}: Files-API size limit (${detail.slice(0, 240)}…) — falling back to Reducto`,
             );
             try {
               return await ctx.runAction(

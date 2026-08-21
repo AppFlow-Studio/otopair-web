@@ -139,6 +139,89 @@ export function acceptNormalizedTrim(
   return false;
 }
 
+/**
+ * Guard the decode-time LLM model normalizer (round 3, Aug 2026).
+ *
+ * Round 8 gated the normalizer's TRIM (above) but left its MODEL applied
+ * unconditionally — `if (normalized.model) finalModel = normalized.model`.
+ * VIN JA4J4UA85NZ067758 is a 2022 Mitsubishi Outlander: vPIC decoded model
+ * "Outlander", VDB decoded model "Outlander", and the config stored
+ * **"Outlander Sport"** — the RVR-based compact, a different vehicle with a
+ * different engine, platform and parts. Neither decoder ever produced the word
+ * "Sport"; the normalizer appended it, and the corrupt nameplate then keyed the
+ * config and every downstream lookup (the manual page built for "2022
+ * mitsubishi outlander sport" redirected to a Nissan X-Trail category).
+ *
+ * The rule is the trim gate's philosophy applied to the nameplate, narrowed to
+ * the one move that changes WHICH VEHICLE this is:
+ *
+ *   Restructuring is the normalizer's job and is left alone. Turning NHTSA's
+ *   model "M550i" into model "5 Series" + trim "M550i" REPLACES the nameplate
+ *   and is exactly what the normalizer exists for.
+ *
+ *   EXTENDING is not. Keeping the decoded nameplate and appending a token no
+ *   decoder mentioned ("Outlander" → "Outlander Sport", "Q5" → "Q5 Sportback")
+ *   silently swaps in a sibling product. Decoders drop tokens; they don't
+ *   invent them — so an appended token absent from every decode field is an
+ *   invention, and we keep what the decoders actually said.
+ *
+ * Evidence-based and fail-open: an appended token the decode DOES corroborate
+ * is accepted (NHTSA model "Silverado" + series "1500" → "Silverado 1500"), and
+ * so is any model that isn't a strict extension. Pure; exported for tests.
+ */
+export function acceptNormalizedModel(
+  normalizedModel: string | null | undefined,
+  decodedModel: string | null | undefined,
+  decodeEvidence: Array<string | null | undefined>,
+): boolean {
+  if (!normalizedModel || !normalizedModel.trim()) return false;
+  // No decoded nameplate to extend — the normalizer is the only model source.
+  if (!decodedModel || !decodedModel.trim()) return true;
+
+  // Single-character tokens are kept here (unlike the trim gate): "Grand
+  // Cherokee" → "Grand Cherokee L" and "Model 3" → "Model 3 Performance" turn
+  // on exactly one short token, and a rejection only ever falls back to the
+  // decoders' own nameplate.
+  const toks = (s: string): string[] =>
+    s.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+
+  const normTokens = toks(normalizedModel);
+  const decodedTokens = toks(decodedModel);
+  if (normTokens.length === 0 || decodedTokens.length === 0) return true;
+
+  // Not a strict extension of the decoded nameplate → a replacement, which is
+  // the normalizer's legitimate restructuring job. Leave it alone.
+  const normSet = new Set(normTokens);
+  const keepsDecodedNameplate = decodedTokens.every((t) => normSet.has(t));
+  const addsTokens = normTokens.some((t) => !decodedTokens.includes(t));
+  if (!keepsDecodedNameplate || !addsTokens) return true;
+
+  // Structural nameplate words are canonicalization artifacts, not product
+  // distinctions — "3" → "3 Series", "C" → "C-Class". Never treated as
+  // invented tokens.
+  const STRUCTURAL = new Set(["series", "class", "klasse", "line"]);
+
+  // Callers must pass NAMEPLATE evidence (model/series/trim), never body-class
+  // text: vPIC's body class for this very VIN is "Sport Utility Vehicle
+  // [SUV]/Multipurpose Vehicle [MPV]", whose "sport" token would corroborate
+  // "Outlander Sport" on essentially every SUV and reopen the exact hole this
+  // gate closes. Stripped defensively here so a future caller adding body
+  // class to the evidence list cannot silently disarm the gate.
+  const evidence = new Set<string>();
+  for (const e of decodeEvidence) {
+    if (!e) continue;
+    const cleaned = e.replace(/sport\s*utility/gi, " ");
+    for (const t of toks(cleaned)) evidence.add(t);
+  }
+
+  for (const t of normTokens) {
+    if (decodedTokens.includes(t)) continue; // came from the decoded nameplate
+    if (STRUCTURAL.has(t)) continue;
+    if (!evidence.has(t)) return false; // invented nameplate token
+  }
+  return true;
+}
+
 /** VDB decode subset relevant here (extractVDBFields output). */
 export interface VdbIdentitySubset {
   bodyType?: string | null;

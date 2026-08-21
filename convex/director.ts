@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { effectiveBookingTotalDollars } from "../lib/booking-total";
 import { requireDirector } from "./directorGate";
 import { metaMakeModel } from "./lib/bookingEnrichment";
 
@@ -10,7 +11,7 @@ export const sidebarCounts = query({
   handler: async (ctx, { token }) => {
     await requireDirector(ctx, token);
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const [bugs, feedback, otoFeedback, refunds, pendingVerifications, pendingDeletions, reviews, errorLogs] = await Promise.all([
+    const [bugs, feedback, otoFeedback, refunds, pendingVerifications, pendingDeletions, reviews, errorLogs, awaitingSettlement] = await Promise.all([
       ctx.db.query("bugs").collect(),
       ctx.db.query("app_feedback").collect(),
       ctx.db.query("ai_feedback").collect(),
@@ -20,6 +21,7 @@ export const sidebarCounts = query({
       ctx.db.query("users").withIndex("by_isPendingDeletion", (q) => q.eq("isPendingDeletion", true)).collect(),
       ctx.db.query("reviews").take(500),
       ctx.db.query("client_logs").withIndex("by_level", (q) => q.eq("level", "error")).order("desc").take(200),
+      ctx.db.query("bookings").withIndex("by_settlement_state", (q) => q.eq("settlement_state", "awaiting_settlement")).collect(),
     ]);
     const openBugStatuses   = new Set(["new", "triaged", "assigned", "in_progress"]);
     const openFbStatuses    = new Set(["new", "reviewed", "triaged"]);
@@ -34,6 +36,7 @@ export const sidebarCounts = query({
       // "Needs eyes": visible low-rating reviews awaiting moderation.
       reviews:       reviews.filter((r) => r.hidden_at == null && r.rating <= 3).length,
       systemHealth:  errorLogs.filter((l) => l.timestamp >= sevenDaysAgo).length,
+      settlement:    awaitingSettlement.length,
     };
   },
 });
@@ -504,7 +507,9 @@ export const recentBookingsList = query({
         scheduled: b.scheduled_date ?? "—",
         time:      b.scheduled_time ?? "—",
         status:    b.status,
-        total:     b.total_cost ?? 0,
+        // Approved-but-not-captured re-quotes live in mechanic_set_price_cents;
+        // total_cost still holds the original estimate. Show the effective one.
+        total:     effectiveBookingTotalDollars(b) ?? 0,
         fallback: {
           catches,
           corrected,

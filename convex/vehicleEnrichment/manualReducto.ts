@@ -71,8 +71,17 @@ import {
   parseManualIntervals,
 } from "./manualLibrary";
 import {
+  billedPageCount,
+  pageCountOf,
+  pageIndexIsFresh,
+  specsPageRanges,
+  toReductoPageRange,
+  type ManualPageIndex,
+} from "./manualPageIndex";
+import {
   familyForManual,
   parseSpecPayload,
+  ROTOR_QUOTE_RULE,
   SPECS_ADAPTER_REDUCTO,
   SPEC_FIELDS,
   SPEC_FIELD_KEYS,
@@ -84,6 +93,37 @@ const specsApi = () => (internal as any).vehicleEnrichment.manualSpecs;
 const claimApi = () => (internal as any).vehicleEnrichment.claimGathering;
 
 const REDUCTO_BASE = "https://platform.reducto.ai";
+
+/**
+ * COST CONTROL. Reducto bills per PAGE, and `settings.page_range` defaults to
+ * the ENTIRE document — so every oversize manual we hand it is a 400-page
+ * charge to recover about ten interval rows and eighteen specs that live on a
+ * handful of pages. Measured Aug 18 2026: three manuals cost roughly $50, i.e.
+ * ~$16.67 each, ~$0.042/page against the 395-page Acadia. At that rate a
+ * thousand vehicles is ~$17k, which is not a pipeline, it is a bill.
+ *
+ * Two bounds until page-range selection lands:
+ *   PARTS_REDUCTO=off      hard kill switch, no calls at all.
+ *   REDUCTO_MAX_PAGES      refuse a document larger than this (default 250).
+ *                          A refusal is an honest gap; a silent $16 charge for
+ *                          a document we may not even be able to use is not.
+ */
+export function reductoEnabled(): boolean {
+  return process.env.PARTS_REDUCTO !== "off";
+}
+
+/** Page ceiling above which a document is too expensive to send whole. */
+export function reductoMaxPages(): number {
+  const n = parseInt(process.env.REDUCTO_MAX_PAGES ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : 250;
+}
+
+/** Is this document within the page budget? Unknown page count passes — the
+ *  ceiling exists to stop known-huge documents, not to block on missing data. */
+export function withinReductoPageBudget(pageCount: number | null | undefined): boolean {
+  if (typeof pageCount !== "number" || !Number.isFinite(pageCount) || pageCount <= 0) return true;
+  return pageCount <= reductoMaxPages();
+}
 /** A 600-page manual takes Reducto meaningfully longer than a receipt. */
 const REDUCTO_TIMEOUT_MS = 300_000;
 
@@ -272,6 +312,7 @@ export function buildReductoSpecsInstructions(vehicle: {
     "Engine oil capacity means DRAIN AND REFILL WITH FILTER CHANGE — not the dry-fill total and not the without-filter figure. Transmission fluid means the drain-and-fill service quantity, not the total.",
     "If a value is split by engine or trim, report the row for the engine named above and copy that row's label verbatim into engine_qualifier; if you cannot tell which row applies, omit that field entirely.",
     "Omit anything the vehicle does not have. Every reported value needs a verbatim quoted_text.",
+    ROTOR_QUOTE_RULE,
   ].join(" ");
 }
 
@@ -372,6 +413,12 @@ export const getReductoContext = internalQuery({
       source_url: manual.source_url,
       doc_kind: manual.doc_kind,
       file_bytes: manual.file_bytes ?? null,
+      // Reducto bills per page, so the page count is a COST figure, not
+      // metadata. Carried here so the budget gate can refuse a 395-page
+      // document before it becomes a ~$16 charge.
+      page_count: (manual as any).page_count ?? null,
+      /** Which pages to actually bill for. See manualPageIndex. */
+      page_index: ((manual as any).page_index ?? null) as ManualPageIndex | null,
       // A signed, unguessable URL Reducto can fetch — or, for reference-only
       // rows, the public source PDF itself.
       url: storageUrl ?? directPdfUrl,
@@ -397,14 +444,24 @@ export const extractIntervalsViaReducto = internalAction({
     ctx,
     args,
   ): Promise<{ status: "ok" | "skipped" | "failed"; written: number; skipped: number; reason: string }> => {
-    const none = (status: "skipped" | "failed", reason: string) => ({
-      status,
-      written: 0,
-      skipped: 0,
-      reason,
-    });
+    // A `failed` here used to return its reason to a caller that discarded it,
+    // so the whole rung was invisible: the four Aug-14 proxied manuals all
+    // routed to Reducto, all got `reducto_401: Invalid access token`, and the
+    // runs simply recorded zero intervals. The read looked like "these manuals
+    // had no schedule" when the truth was an expired credential. A dead
+    // fallback that says nothing is worse than no fallback at all — it costs
+    // the round trip AND hides the reason.
+    const none = (status: "skipped" | "failed", reason: string) => {
+      if (status === "failed") {
+        console.error(`[manual-reducto] FAILED: ${reason.slice(0, 300)}`);
+      } else {
+        console.warn(`[manual-reducto] skipped: ${reason.slice(0, 200)}`);
+      }
+      return { status, written: 0, skipped: 0, reason };
+    };
 
     try {
+      if (!reductoEnabled()) return none("skipped", "reducto_disabled");
       const apiKey = process.env.REDUCTO_API_KEY;
       if (!apiKey) return none("failed", "no_reducto_api_key");
 
@@ -412,9 +469,61 @@ export const extractIntervalsViaReducto = internalAction({
         vehicleConfigId: args.vehicleConfigId,
       });
       if (!context) return none("skipped", "no_stored_manual");
+      // Budget judges the BILLED pages, not the document. A 395-page manual
+      // narrowed to 15 is a 15-page charge and must not be refused; an
+      // unindexed one is still a 395-page charge and must be.
+
       if (!context.url) return none("failed", "storage_url_unavailable");
 
       const label = `${context.year} ${context.make} ${context.model}`;
+
+      // Narrow to the maintenance-schedule pages when the manual has been
+      // indexed. This is what turns a ~$16 call into a ~$0.60 one.
+      //
+      // Index ON DEMAND when it is missing: the scan is local, free and about
+      // 1.5 s, against a per-page bill that is three orders of magnitude
+      // larger. Doing it here rather than at download time means every manual
+      // already in the library gets narrowed on its next extraction instead of
+      // needing a backfill.
+      let ivIdxLive = ((context as any).page_index ?? null) as ManualPageIndex | null;
+      if (!pageIndexIsFresh(ivIdxLive)) {
+        try {
+          await ctx.runAction(
+            (internal as any).vehicleEnrichment.manualPageIndex_node.indexManualPages,
+            { make: context.make, model: context.model, year: context.year },
+          );
+          const re: any = await ctx.runQuery(selfApi().getReductoContext, {
+            vehicleConfigId: args.vehicleConfigId,
+          });
+          ivIdxLive = (re?.page_index ?? null) as ManualPageIndex | null;
+        } catch (e) {
+          // Fail open — an unindexed manual still extracts, at full price.
+          console.warn(`[manual-reducto] ${label}: page indexing failed, sending whole document:`, e);
+        }
+      }
+      const ivIndex = ivIdxLive;
+      // Budget judges the BILLED pages, and it must run AFTER indexing: gating
+      // on the raw document size first would refuse the 395-page manuals this
+      // narrowing exists for, before they ever got narrowed.
+      // billedPageCount, not pageCountOf: a fresh index with NO interval pages
+      // narrows nothing and therefore bills the whole document — see its
+      // header. Passing the empty list's 0 here approved exactly that.
+      const ivBilled = pageIndexIsFresh(ivIndex)
+        ? billedPageCount(ivIndex!.intervals, context.page_count)
+        : context.page_count;
+      if (!withinReductoPageBudget(ivBilled)) {
+        return none("skipped", `page_budget_exceeded:${ivBilled}>${reductoMaxPages()}`);
+      }
+      const ivPageRange = pageIndexIsFresh(ivIndex)
+        ? toReductoPageRange(ivIndex!.intervals)
+        : null;
+      if (ivPageRange) {
+        console.log(
+          `[manual-reducto] ${label}: intervals narrowed to ` +
+            `${pageCountOf(ivIndex!.intervals)}/${ivIndex!.total_pages} pages ` +
+            `(${ivIndex!.intervals.map((r) => `${r.start}-${r.end}`).join(",")})`,
+        );
+      }
 
       let body: any;
       try {
@@ -433,7 +542,14 @@ export const extractIntervalsViaReducto = internalAction({
               schema: REDUCTO_INTERVAL_SCHEMA,
               prompt: buildReductoInstructions(context),
             },
-            settings: { citations: { enabled: true } },
+            settings: {
+              citations: { enabled: true },
+              // THE COST LEVER. Omitting this bills the whole document —
+              // ~395 pages to recover ten interval rows. Null when the manual
+              // was never indexed, which restores the previous behaviour
+              // rather than silently narrowing to nothing.
+              ...(ivPageRange ? { page_range: ivPageRange } : {}),
+            },
           }),
           signal: AbortSignal.timeout(REDUCTO_TIMEOUT_MS),
         });
@@ -487,6 +603,18 @@ export const extractIntervalsViaReducto = internalAction({
           } catch (e) {
             console.warn(`[manual-reducto] ${label}: could not record rejection:`, e);
           }
+        }
+        if (ivIndex?.defers_to?.length) {
+          // NOT a failed extraction. The document told us where the schedule
+          // actually lives, so report the title rather than a generic miss —
+          // one of those is actionable and the other looks like a dead end.
+          const d = ivIndex.defers_to[0];
+          console.warn(
+            `[manual-reducto] ${label}: no schedule here — the manual defers to ` +
+              `"${d.title}"${d.region ? ` (${d.region})` : ""} on p${d.pages[0]}. ` +
+              `Fetch that document; this one will never carry intervals.`,
+          );
+          return none("skipped", `defers_to:${d.title}`);
         }
         return none("skipped", "no_intervals_extracted");
       }
@@ -546,14 +674,21 @@ export const extractSpecsViaReducto = internalAction({
     ctx,
     args,
   ): Promise<{ status: "ok" | "skipped" | "failed"; claims: number; dropped: number; reason: string }> => {
-    const none = (status: "skipped" | "failed", reason: string) => ({
-      status,
-      claims: 0,
-      dropped: 0,
-      reason,
-    });
+    // Logged for the same reason the interval side is: a reason returned to a
+    // caller that discards it is a rung that fails in total silence. This path
+    // now carries all 18 spec fields for every oversize manual, so a quiet
+    // failure here loses more than the interval one did.
+    const none = (status: "skipped" | "failed", reason: string) => {
+      if (status === "failed") {
+        console.error(`[manual-reducto] specs FAILED: ${reason.slice(0, 300)}`);
+      } else {
+        console.warn(`[manual-reducto] specs skipped: ${reason.slice(0, 200)}`);
+      }
+      return { status, claims: 0, dropped: 0, reason };
+    };
 
     try {
+      if (!reductoEnabled()) return none("skipped", "reducto_disabled");
       const apiKey = process.env.REDUCTO_API_KEY;
       if (!apiKey) return none("failed", "no_reducto_api_key");
 
@@ -567,7 +702,45 @@ export const extractSpecsViaReducto = internalAction({
       if (!context.manual?.storage_id) return none("skipped", "no_stored_manual");
       if (!context.manual?.url) return none("failed", "storage_url_unavailable");
 
+
       const label = `${context.year} ${context.make} ${context.model}`;
+
+      let spIdxLive = ((context.manual as any)?.page_index ?? null) as ManualPageIndex | null;
+      if (!pageIndexIsFresh(spIdxLive)) {
+        try {
+          await ctx.runAction(
+            (internal as any).vehicleEnrichment.manualPageIndex_node.indexManualPages,
+            { make: context.make, model: context.model, year: context.year },
+          );
+          const re: any = await ctx.runQuery(specsApi().getSpecExtractionContext, {
+            vehicleConfigId: args.vehicleConfigId,
+          });
+          spIdxLive = ((re?.manual as any)?.page_index ?? null) as ManualPageIndex | null;
+        } catch (e) {
+          console.warn(`[manual-reducto] ${label}: page indexing failed, sending whole document:`, e);
+        }
+      }
+      const spIndex = spIdxLive;
+      // Capacities AND brake limits — this pass asks for rotor minimums, so it
+      // has to be sent the brake pages too. `specsPageRanges` merges the two
+      // lists so an overlap is billed once. See BRAKE SIGNALS in
+      // manualPageIndex.ts.
+      const spRanges = pageIndexIsFresh(spIndex) ? specsPageRanges(spIndex) : [];
+      const spBilled = pageIndexIsFresh(spIndex)
+        ? billedPageCount(spRanges, (context.manual as any)?.page_count)
+        : (context.manual as any)?.page_count;
+      if (!withinReductoPageBudget(spBilled)) {
+        return none("skipped", `page_budget_exceeded:${spBilled}>${reductoMaxPages()}`);
+      }
+      const spPageRange = pageIndexIsFresh(spIndex) ? toReductoPageRange(spRanges) : null;
+      if (spPageRange) {
+        console.log(
+          `[manual-reducto] ${label}: specs narrowed to ` +
+            `${pageCountOf(spRanges)}/${spIndex!.total_pages} pages ` +
+            `(${spRanges.map((r) => `${r.start}-${r.end}`).join(",")}) ` +
+            `[specs ${spIndex!.specs.length} + brakes ${spIndex!.brakes?.length ?? 0} ranges]`,
+        );
+      }
 
       let body: any;
       try {
@@ -582,7 +755,10 @@ export const extractSpecsViaReducto = internalAction({
               schema: REDUCTO_SPECS_SCHEMA,
               prompt: buildReductoSpecsInstructions(context),
             },
-            settings: { citations: { enabled: true } },
+            settings: {
+              citations: { enabled: true },
+              ...(spPageRange ? { page_range: spPageRange } : {}),
+            },
           }),
           signal: AbortSignal.timeout(REDUCTO_TIMEOUT_MS),
         });

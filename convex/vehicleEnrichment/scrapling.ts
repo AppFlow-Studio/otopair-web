@@ -51,6 +51,22 @@ const BLOCK_SIGNATURES = [
   /_Incapsula_Resource/i,
   /PerimeterX|px-captcha/i,
   /Enable JavaScript and cookies to continue/i,
+  // Imperva Advanced Bot Protection. Its newer challenge does NOT emit
+  // `_Incapsula_Resource` above — it serves ~6 KB of 200-status HTML titled
+  // "Pardon Our Interruption" with a `reese84` token script, and without these
+  // two lines `looksBlockedBody` returned FALSE for it. Live fire Aug 2026:
+  // summitracing.com answered the bare fetch, Scrapling `http` AND Scrapling
+  // `auto` with exactly that wall, and every tier reported success — so the
+  // caller kept a challenge page and read zero specs off it, which is
+  // indistinguishable downstream from "this source had no data".
+  //
+  // That is the same defect this module's header describes for Cloudflare,
+  // arriving through a second vendor: the danger is never the block, it is a
+  // block that does not LOOK like one, because that is what skips the fallback
+  // tier. Both patterns are vendor internals — a real automotive page does not
+  // carry them.
+  /Pardon Our Interruption/i,
+  /\breese84\b/i,
 ];
 
 /** True when the body looks like an anti-bot challenge rather than the page. */

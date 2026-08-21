@@ -76,7 +76,7 @@ export const list = query({
         if (booking) {
           const [vehicle, services] = await Promise.all([
             resolveVehicleDisplay(ctx, booking.vin),
-            resolveServiceNames(ctx, booking.service_ids),
+            resolveServiceNames(ctx, booking.service_ids, booking.custom_services),
           ]);
           bookingCtx.set(bid, { vehicleYmm: vehicle.ymm, services });
         } else {

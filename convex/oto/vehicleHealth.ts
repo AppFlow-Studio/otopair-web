@@ -134,7 +134,84 @@ export interface VehicleHealthItem {
   record_provenance: RecordProvenance;
 }
 
+// -----------------------------------------------------------------------------
+// K5 fix (2026-08-12) — coverage scope declaration.
+//
+// The QA report's most consequential fabrication: a user asked about the
+// hybrid traction battery, get_vehicle_health came back with no problems on
+// the list, and Oto answered "the hybrid battery is in good shape — the system
+// has that covered" about a $4,000+ component we have never measured.
+//
+// Root cause is structural, not a prompt slip. MaintenanceType is a CLOSED
+// FIVE-VALUE SET (oil | brakes | tires | battery | inspection — see
+// utils/maintenanceStatus.ts and the mirror in convex/vehicleDocuments.ts).
+// This query returns those five and nothing else, and the payload never said
+// that five was the whole universe. So "absent because we have never looked"
+// and "absent because there is nothing wrong" serialized to the SAME JSON.
+// The response literally could not express the difference, and Haiku resolved
+// the ambiguity the flattering way.
+//
+// Note the second trap folded into the same defect: `battery` here is the
+// ordinary 12V starter battery. It is NOT a hybrid/EV high-voltage traction
+// pack. A model scanning for "battery: on_time" finds a match and answers the
+// wrong question. MONITORED_SYSTEM_SCOPE says so in the payload itself.
+//
+// Same philosophy as the F1 strip pass in toAiShape below: don't rely on the
+// prompt to stop a misread — make the misread unavailable in the data. The
+// two fields are emitted FIRST in the response object so the boundary is read
+// before the item list, not after.
+// -----------------------------------------------------------------------------
+
+/** One entry in the monitored set — what this type does and does NOT cover. */
+export interface MonitoredSystem {
+  type: MaintenanceType;
+  label: string;
+  /** Plain-language boundary of this type. Deliberately names the exclusions. */
+  covers: string;
+}
+
+const MONITORED_SYSTEM_SCOPE: Record<MaintenanceType, string> = {
+  oil: "Engine oil and filter change interval only. Says nothing about oil leaks, oil pressure, or internal engine condition.",
+  brakes:
+    "Brake pad / rotor service history and wear interval only. Says nothing about brake lines, master cylinder, or the ABS module.",
+  tires:
+    "Tire tread, tire age, and rotation/replacement history only. Says nothing about wheel alignment, TPMS sensors, or wheel condition.",
+  battery:
+    "The ordinary 12V starter battery ONLY. This is NOT a hybrid or electric-vehicle high-voltage traction battery — traction packs are never tracked by OtoPair and never appear in this response.",
+  inspection:
+    "State safety / emissions inspection due date only. Present in `items` only when the user has an inspection record on file.",
+};
+
+/**
+ * The complete monitored set. Built from ALL_MAINTENANCE_TYPES plus
+ * "inspection" (which ALL_MAINTENANCE_TYPES omits because it's record-gated
+ * for display — but it IS a monitored type, so it belongs in the declaration
+ * whether or not an item for it shows up in `items` this call).
+ */
+const MONITORED_SYSTEMS: MonitoredSystem[] = [...ALL_MAINTENANCE_TYPES, "inspection" as const].map(
+  (type) => ({
+    type,
+    label: MAINTENANCE_LABELS[type] ?? type,
+    covers: MONITORED_SYSTEM_SCOPE[type],
+  }),
+);
+
+/**
+ * The boundary statement. Deliberately NOT an exhaustive list of untracked car
+ * parts — that would be unmaintainable and would still read as a checklist.
+ * It states the rule (only the five above exist here) and names the handful of
+ * systems users actually ask Oto about, hybrid/EV traction battery first.
+ */
+const NOT_MONITORED_STATEMENT =
+  "OtoPair tracks ONLY the systems listed in `monitored_systems`. This response carries no data whatsoever — not good, not bad — about anything else. That includes, among many others, the hybrid/EV high-voltage traction battery, the transmission, the suspension, and the air conditioning. If a system is not in `monitored_systems`, it is absent because it has never been measured, NOT because it was checked and found healthy. Never infer that an unlisted system is fine, healthy, or 'covered' from this payload, from an absence of problems in `items`, or from the health score — the score is computed from the monitored set alone. For anything unlisted, say plainly that you have no data on it and offer an inspection.";
+
 export interface VehicleHealthResponse {
+  /**
+   * K5 — what IS tracked. Emitted before `items` so the scope is read first.
+   */
+  monitored_systems: MonitoredSystem[];
+  /** K5 — the boundary. See NOT_MONITORED_STATEMENT above. */
+  not_monitored: string;
   score: number;
   score_is_estimated: boolean;
   items: VehicleHealthItem[];
@@ -395,11 +472,24 @@ async function loadVehicleContextForUser(
     if (type === "battery") {
       const age = vehicleYear ? new Date().getFullYear() - vehicleYear : 0;
       if (age < 3) {
+        // W4.1b (2026-08-10): this branch used to read "— healthy", which is an
+        // affirmative health CLAIM derived from nothing but the model year. No
+        // battery was measured; no record exists. That is the same "absence
+        // re-interpreted as evidence" lie the F1 fix below was written to kill,
+        // and it survived here as an exception. It is also the most likely
+        // origin of the QA report's K5 line ("the hybrid battery is in good
+        // shape") — provenance is correctly `inferred` and toAiShape strips the
+        // enrichment fields, but `description` was never stripped, so the word
+        // "healthy" rode straight through the anti-fabrication pass.
+        //
+        // Now states the age and the absence of history, and nothing else.
+        // `status: "on_time"` is deliberately unchanged — it feeds the health
+        // score, and re-scoring young vehicles is a separate product decision.
         merged.push({
           id: `unknown-${type}`,
           serviceName: MAINTENANCE_LABELS[type] || type,
-          description: `Battery is ~${age || "<1"} year${age !== 1 ? "s" : ""} old — healthy`,
-          detail: "On time",
+          description: `Battery is ~${age || "<1"} year${age !== 1 ? "s" : ""} old — no service history on file`,
+          detail: "No record",
           status: "on_time",
         });
         continue;
@@ -555,7 +645,12 @@ async function _getVehicleHealthCore(
     await loadHealthScoreWeights(ctx),
   );
 
+  // K5: scope declaration first, item list second. Static per response — it
+  // describes what this query is capable of knowing, not what this vehicle's
+  // data happens to say.
   return {
+    monitored_systems: MONITORED_SYSTEMS,
+    not_monitored: NOT_MONITORED_STATEMENT,
     score,
     score_is_estimated: owner.health_score_is_estimated ?? false,
     items: enrichedItems.map((item) => toAiShape(item, provenanceByType)),

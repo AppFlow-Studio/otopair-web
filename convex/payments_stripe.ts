@@ -667,6 +667,24 @@ export const listPaymentMethods = action({
     const defaultPmId =
       typeof defaultPm === "string" ? defaultPm : (defaultPm as any)?.id ?? null;
 
+    // Reconcile `users.has_saved_payment_method` against what Stripe just
+    // told us. The webhook (setup_intent.succeeded / payment_method.detached)
+    // is still the fast path, but it silently no-ops whenever the endpoint
+    // isn't reachable — which is every local dev session without `stripe
+    // listen` forwarding, leaving accounts with a real card stuck showing
+    // the "Payment Method" tile as incomplete. This runs on every home
+    // visit (StripePaymentMethodsSync is mounted at the root), so a missed
+    // webhook self-heals on the next app open instead of needing a manual
+    // DB patch. The internal mutation early-returns when the value already
+    // matches, so the steady state is a read, not a write.
+    const cardCount = list.data.filter((pm) => pm.card).length;
+    if (user.has_saved_payment_method !== (cardCount > 0)) {
+      await ctx.runMutation(
+        internal.payments_stripe._setUserHasSavedPaymentMethodByCustomerId,
+        { stripeCustomerId: user.stripe_customer_id, value: cardCount > 0 },
+      );
+    }
+
     return list.data
       .filter((pm) => pm.card)
       .map((pm) => ({
@@ -1443,6 +1461,168 @@ export const resumeReauthFromMobile = action({
   },
 });
 
+/**
+ * Approve an over-range pre/mid-job estimate AND place the new hold on the
+ * customer's CHOSEN payment method in one on-session call. Backs the merged
+ * approve-and-hold screen so the picked method (a switched card, Apple Pay, or
+ * Google Pay) is always the one authorized — unlike the async
+ * `applyApprovalDecision` path, whose `adjustAuthorization` can silently raise
+ * the hold on the original card before any switch applies.
+ *
+ * Records the approval (parks the booking in `reauth_required`), then cancels
+ * the stale hold and creates + confirms a fresh manual-capture PI at the
+ * approved ceiling with `paymentMethodId`. Wallet callers mint the one-time PM
+ * client-side first and pass `paymentOrigin`. Returns `requiresAction` +
+ * `clientSecret` for the client to drive 3DS inline; the
+ * `amount_capturable_updated` webhook clears `reauth_required` once it lands.
+ * On an immediate `requires_capture`/`succeeded` we clear it synchronously.
+ */
+export const approveAndAuthorizeHold = action({
+  args: {
+    bookingId: v.id("bookings"),
+    paymentMethodId: v.string(),
+    /** Origin of the chosen method. Wallets mint a fresh one-time PM client-
+     *  side and pass this so the payments row records the right origin. */
+    paymentOrigin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    paymentIntentId: string;
+    clientSecret: string;
+    status: string;
+    requiresAction: boolean;
+    targetCents: number;
+  }> => {
+    const { user } = await requireAuthedUser(ctx);
+    const result: any = await ctx.runQuery(
+      internal.payments_stripe._getBookingForPayment,
+      { bookingId: args.bookingId },
+    );
+    if (!result?.booking) throw new Error("Booking not found.");
+    const { booking, shop } = result;
+    if (booking.user_id !== user._id) throw new Error("Not your booking.");
+    if (!shop?.stripe_connect_account_id) {
+      throw new Error("Shop is not ready to accept payments yet.");
+    }
+    if (!user.stripe_customer_id) {
+      throw new Error("Add a payment method before confirming.");
+    }
+
+    // Record the approval and park the booking in `reauth_required`. Throws for
+    // post-job (stays on the capture path) or when no estimate is open.
+    await ctx.runMutation(internal.booking_approvals._recordApprovalApproved, {
+      bookingId: args.bookingId,
+      userId: user._id,
+    });
+
+    // Re-read to pick up the freshly-set approved ceiling.
+    const afterResult: any = await ctx.runQuery(
+      internal.payments_stripe._getBookingForPayment,
+      { bookingId: args.bookingId },
+    );
+    const afterBooking = afterResult?.booking ?? booking;
+    const payment: any = await ctx.runQuery(
+      internal.payments_stripe._getPaymentByBookingId,
+      { bookingId: args.bookingId },
+    );
+    if (!payment) throw new Error("No payment row found for this booking.");
+
+    const targetCents = Math.max(
+      afterBooking.mechanic_set_price_cents ?? 0,
+      afterBooking.running_approved_ceiling_cents ?? 0,
+    );
+    if (!(targetCents > 0)) {
+      throw new Error("Booking has no approved hold amount to authorize.");
+    }
+
+    const stripe = getStripe();
+
+    // PM-ownership check (mirrors resumeReauthFromMobile). Unattached PMs are
+    // wallet-minted one-time tokens — accept them.
+    const pm = await stripe.paymentMethods.retrieve(args.paymentMethodId);
+    if (pm.customer != null && pm.customer !== user.stripe_customer_id) {
+      throw new Error("This card doesn't belong to you.");
+    }
+
+    // Cancel the stale hold (tolerate an already-terminal PI).
+    const oldPiId = payment.stripe_payment_intent_id;
+    if (oldPiId) {
+      try {
+        await stripe.paymentIntents.cancel(oldPiId);
+      } catch {
+        // ignore — PI may already be in a terminal state.
+      }
+    }
+
+    // Create + confirm the new PI ON-SESSION so 3DS can surface to the client.
+    let newPi;
+    try {
+      newPi = await stripe.paymentIntents.create({
+        amount: targetCents,
+        currency: "usd",
+        customer: user.stripe_customer_id,
+        payment_method: args.paymentMethodId,
+        confirm: true,
+        off_session: false,
+        capture_method: "manual",
+        transfer_data: { destination: shop.stripe_connect_account_id },
+        automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+        metadata: {
+          bookingId: String(args.bookingId),
+          userId: String(user._id),
+          shopId: String(shop._id),
+          reauthOf: oldPiId ?? "",
+        },
+      });
+    } catch (err: any) {
+      throw new Error(err?.message ?? "Card authorization failed.");
+    }
+
+    await ctx.runMutation(
+      internal.payments_stripe._recordAuthorizationAdjustment,
+      {
+        bookingId: args.bookingId,
+        incrementedTotalCents: targetCents,
+        reauthPaymentIntentId: newPi.id,
+        ...(args.paymentOrigin != null
+          ? { paymentOrigin: args.paymentOrigin }
+          : {}),
+      },
+    );
+    await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
+      bookingId: args.bookingId,
+      stripeAction: "approve_and_hold",
+      stripePaymentIntentId: newPi.id,
+    });
+
+    if (
+      newPi.status === "requires_capture" ||
+      newPi.status === "succeeded"
+    ) {
+      await ctx.runMutation(
+        internal.payments_stripe._clearReauthRequiredAfterSuccess,
+        { bookingId: args.bookingId },
+      );
+    }
+
+    return {
+      paymentIntentId: newPi.id,
+      clientSecret: newPi.client_secret!,
+      status: newPi.status,
+      requiresAction: newPi.status === "requires_action",
+      targetCents,
+    };
+  },
+});
+
 /** Snapshots the captured parts list + amount onto the booking, flips state
  *  to `captured`, and transitions the payments row. */
 export const _patchBookingCaptured = internalMutation({
@@ -1476,6 +1656,49 @@ export const _patchBookingCaptured = internalMutation({
         updated_at: now,
       });
     }
+  },
+});
+
+/** Settlement marker (Option A). Completion never blocks on payment; instead we
+ *  record whether the final total was fully captured. A shortfall (hold
+ *  couldn't be raised, capture failed, or reauth is pending) flags the booking
+ *  `awaiting_settlement` with the outstanding cents so the reconciliation cron +
+ *  ops can chase the rest. A near-full capture (within the drift tolerance)
+ *  counts as settled and clears any prior awaiting flag. First-seen timestamp is
+ *  preserved so the cron can age the shortfall. */
+export const _stampSettlement = internalMutation({
+  args: {
+    bookingId: v.id("bookings"),
+    capturedCents: v.number(),
+    finalCents: v.number(),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const shortfall = Math.max(
+      0,
+      Math.round(args.finalCents) - Math.round(args.capturedCents),
+    );
+    if (shortfall <= FINALIZE_DRIFT_TOLERANCE_CENTS) {
+      await ctx.db.patch(args.bookingId, {
+        settlement_state: "settled",
+        settlement_shortfall_cents: 0,
+        settlement_reason: undefined,
+        awaiting_settlement_since_ms: undefined,
+        updated_at: now,
+      });
+      return { state: "settled" as const };
+    }
+    const existing: any = await ctx.db.get(args.bookingId);
+    await ctx.db.patch(args.bookingId, {
+      settlement_state: "awaiting_settlement",
+      settlement_shortfall_cents: shortfall,
+      settlement_reason: args.reason,
+      awaiting_settlement_since_ms:
+        existing?.awaiting_settlement_since_ms ?? now,
+      updated_at: now,
+    });
+    return { state: "awaiting_settlement" as const, shortfall };
   },
 });
 
@@ -1998,6 +2221,14 @@ export const finalizeAndChargeForBooking = internalAction({
         booking.disclosed_range_high_cents ??
         0;
       if (safeCap <= 0) {
+        // Completed job we genuinely can't charge (no set price, no ceiling).
+        // Flag it so it surfaces for ops instead of vanishing.
+        await ctx.runMutation(internal.payments_stripe._stampSettlement, {
+          bookingId: args.bookingId,
+          capturedCents: 0,
+          finalCents,
+          reason: "no_ceiling_or_set_price",
+        });
         return { status: "skipped", reason: "no ceiling and no mechanic set price" };
       }
       // Capture at min(actuals, ceiling) — never above what the customer
@@ -2031,12 +2262,22 @@ export const finalizeAndChargeForBooking = internalAction({
       );
     }
 
-    // Actuals > approved set price → open post-job re-approval.
-    await ctx.runMutation(internal.booking_approvals.submitPostJobReapproval, {
-      bookingId: args.bookingId,
-      parts: partsSnapshot,
-    });
-    return { status: "post_job_pending" };
+    // Actuals exceeded the pre-agreed set price. The customer approved the
+    // price BEFORE the job started (pre-job approval, plus any mid-job "found
+    // extra work" approvals granted during it), so we do NOT reopen a post-job
+    // negotiation with a decline the customer could use to walk away from
+    // finished work. Capture the agreed price and settle. Any excess beyond
+    // what was agreed is absorbed — never charged without the customer's prior
+    // consent (the mid-job approval is the consented path to raise the price
+    // while the work is still in progress).
+    return await captureAtAmount(
+      ctx,
+      args.bookingId,
+      mechanicSet, // charge the agreed price, not the higher raw actuals
+      mechanicSet, // owed == agreed price → no false "shortfall" to chase
+      partsSnapshot,
+      feeCents,
+    );
   },
 });
 
@@ -2070,7 +2311,18 @@ async function captureAtAmount(
     return { status: "skipped", reason: "already completed" };
   }
   const stripe = getStripe();
-  const amountToCapture = Math.max(1, Math.round(captureCents));
+  // Never ask Stripe to capture more than the live hold authorizes — an over-
+  // capture 400s and would otherwise strand the whole charge. Cap at what the
+  // authorization actually covers (Option A: capture the ceiling, never $0);
+  // any shortfall vs the final total is flagged for settlement below.
+  const holdCents: number =
+    payment.incremented_total_cents ??
+    payment.hold_amount_cents ??
+    BOOKING_DEPOSIT_CENTS;
+  const amountToCapture = Math.max(
+    1,
+    Math.min(Math.round(captureCents), Math.round(holdCents)),
+  );
   const captureParams: Record<string, number> = {
     amount_to_capture: amountToCapture,
   };
@@ -2089,18 +2341,29 @@ async function captureAtAmount(
     await ctx.runMutation(internal.payments_stripe._patchBookingCaptured, {
       bookingId,
       finalTotalCents: finalCents,
-      finalCaptureAmountCents: captureCents,
+      // What we actually captured (capped at the hold), not the requested total.
+      finalCaptureAmountCents: amountToCapture,
       partsSnapshot,
     });
     await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
       bookingId,
       stripeAction: "capture_final",
     });
+    // Flag any shortfall: the hold couldn't cover the full final total, so the
+    // job is captured-at-ceiling and the remainder is chased via settlement.
+    await ctx.runMutation(internal.payments_stripe._stampSettlement, {
+      bookingId,
+      capturedCents: amountToCapture,
+      finalCents,
+      reason:
+        amountToCapture < finalCents ? "hold_below_final_total" : undefined,
+    });
     return { status: pi.status };
   } catch (err: any) {
-    // Mirror capturePaymentIntentForBooking: surface the failure on the row
-    // so the UI can react, instead of leaving the booking completed with an
-    // uncaptured authorization that nobody sees.
+    // Capture is impossible right now (PI not capturable — e.g. reauth pending /
+    // requires_action). Surface it on the payment row AND flag the completed job
+    // for settlement so the reconciliation cron + ops chase it — never leave it
+    // silently uncaptured with nobody watching.
     console.error(
       `[captureAtAmount] capture failed booking=${String(bookingId)} pi=${activePiId} amount=${amountToCapture}: ${err?.message ?? err}`,
     );
@@ -2112,6 +2375,12 @@ async function captureAtAmount(
         errorMessage: err?.message?.slice(0, 500),
       });
     }
+    await ctx.runMutation(internal.payments_stripe._stampSettlement, {
+      bookingId,
+      capturedCents: 0,
+      finalCents,
+      reason: `capture_failed:${err?.code ?? "unknown"}`,
+    });
     return { status: "failed", reason: err?.message };
   }
 }

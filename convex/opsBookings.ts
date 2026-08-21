@@ -9,7 +9,8 @@
 // =============================================================================
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { query } from "./_generated/server";
+import { query, mutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { requireDirector } from "./directorGate";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
@@ -125,6 +126,75 @@ export const list = query({
       ...page,
       page: await Promise.all(page.page.map((b) => bookingRow(ctx, b))),
     };
+  },
+});
+
+type AwaitingSettlementRow = Awaited<ReturnType<typeof bookingRow>> & {
+  settlementShortfallCents: number;
+  settlementReason: string | null;
+  awaitingSinceMs: number | null;
+  escalatedAtMs: number | null;
+  paymentApprovalState: string | null;
+};
+type AwaitingSettlementResult = {
+  rows: AwaitingSettlementRow[];
+  count: number;
+  totalShortfallCents: number;
+  truncated: boolean;
+};
+
+/** Completed jobs still owed money — the reconciliation cron flags these
+ *  `settlement_state = "awaiting_settlement"` when the hold couldn't cover the
+ *  final total (reauth pending, capture failed, no set price). Oldest shortfall
+ *  first so ops chase the most stale. Bounded window; token-gated. */
+export const awaitingSettlementBookings = query({
+  args: { token: v.string() },
+  handler: async (ctx, { token }): Promise<AwaitingSettlementResult> => {
+    await requireDirector(ctx, token);
+    const LIMIT = 200;
+    const found = await ctx.db
+      .query("bookings")
+      .withIndex("by_settlement_state", (q) =>
+        q.eq("settlement_state", "awaiting_settlement"),
+      )
+      .take(LIMIT + 1);
+    const truncated = found.length > LIMIT;
+    const window = truncated ? found.slice(0, LIMIT) : found;
+    const rows: AwaitingSettlementRow[] = await Promise.all(
+      window.map(async (b) => ({
+        ...(await bookingRow(ctx, b)),
+        settlementShortfallCents: b.settlement_shortfall_cents ?? 0,
+        settlementReason: b.settlement_reason ?? null,
+        awaitingSinceMs: b.awaiting_settlement_since_ms ?? null,
+        escalatedAtMs: b.settlement_escalated_at_ms ?? null,
+        paymentApprovalState: b.payment_approval_state ?? null,
+      })),
+    );
+    rows.sort((a, b) => (a.awaitingSinceMs ?? 0) - (b.awaitingSinceMs ?? 0));
+    const totalShortfallCents = rows.reduce(
+      (sum, r) => sum + (r.settlementShortfallCents ?? 0),
+      0,
+    );
+    return { rows, count: rows.length, totalShortfallCents, truncated };
+  },
+});
+
+/** Ops "retry capture now" — the reconciliation cron already retries every
+ *  30 min; this lets a director force an immediate attempt from the Settlement
+ *  tab. Schedules the same capture-at-ceiling path (idempotent: skips if the
+ *  payment is already captured). Token-gated. */
+export const retrySettlement = mutation({
+  args: { token: v.string(), id: v.id("bookings") },
+  handler: async (ctx, { token, id }): Promise<{ queued: boolean }> => {
+    await requireDirector(ctx, token);
+    const booking = await ctx.db.get(id);
+    if (!booking) throw new Error("Booking not found.");
+    await ctx.scheduler.runAfter(
+      0,
+      internal.payments_stripe.finalizeAndChargeForBooking,
+      { bookingId: id, forceCaptureAtCeiling: true },
+    );
+    return { queued: true };
   },
 });
 
@@ -579,6 +649,27 @@ export const completion = query({
       inProgressPhotos: { url: string; caption: string | null; takenAt: number }[];
       hasPrejobReport: boolean;
       hasPostjobReport: boolean;
+      /* The parts the mechanic confirmed, itemised and attributed. The card
+         used to show only actual_parts_cost — a single number, with no way to
+         answer "which parts", which is the question anyone opening a completion
+         report is actually asking. The receipt has shown the itemisation to the
+         CUSTOMER all along; the operator had less detail than the person who
+         paid the bill. */
+      partsUsed: Array<{
+        partName: string;
+        oemNumber: string | null;
+        brand: string | null;
+        quantity: number;
+        unitCost: number;
+        lineCost: number;
+        /** Catalog service name, or the off-catalog line's own name. */
+        forWork: string | null;
+        /** True when it belongs to a custom line — worth marking, because
+         *  off-catalog parts are the ones with no catalog price to check. */
+        isCustom: boolean;
+        suppliedByCustomer: boolean;
+        notUsed: boolean;
+      }>;
     } | null = null;
 
     if (ja) {
@@ -594,6 +685,51 @@ export const completion = query({
           takenAt: p.taken_at,
         })),
       );
+      // Attribute each part to the work it went into. service_id resolves to a
+      // catalog name; custom_service_name IS the name for off-catalog lines.
+      const rawParts = Array.isArray(ja.parts_used) ? (ja.parts_used as any[]) : [];
+      const serviceNameCache = new Map<string, string | null>();
+      const partsUsed = await Promise.all(
+        rawParts.map(async (part: any) => {
+          const quantity =
+            typeof part?.quantity === "number" && part.quantity > 0
+              ? part.quantity
+              : 1;
+          const unitCost = Number(part?.cost ?? 0);
+          let forWork: string | null = null;
+          let isCustom = false;
+          const customName =
+            typeof part?.custom_service_name === "string"
+              ? part.custom_service_name.trim()
+              : "";
+          if (customName) {
+            forWork = customName;
+            isCustom = true;
+          } else if (part?.service_id) {
+            const key = String(part.service_id);
+            if (!serviceNameCache.has(key)) {
+              serviceNameCache.set(
+                key,
+                ((await ctx.db.get(part.service_id)) as any)?.name ?? null,
+              );
+            }
+            forWork = serviceNameCache.get(key) ?? null;
+          }
+          return {
+            partName: String(part?.part_name ?? "").trim() || "Part",
+            oemNumber: part?.oem_number ? String(part.oem_number) : null,
+            brand: part?.brand ? String(part.brand) : null,
+            quantity,
+            unitCost,
+            lineCost: unitCost * quantity,
+            forWork,
+            isCustom,
+            suppliedByCustomer: part?.supplied_by === "customer",
+            notUsed: part?.not_used === true,
+          };
+        }),
+      );
+
       jobActual = {
         startedAt: ja.started_at ?? null,
         completedAtMs: ja.completed_at_ms ?? null,
@@ -613,6 +749,7 @@ export const completion = query({
         inProgressPhotos: photos.filter((p): p is { url: string; caption: string | null; takenAt: number } => p.url != null),
         hasPrejobReport: ja.prejob_report != null,
         hasPostjobReport: ja.postjob_report != null,
+        partsUsed,
       };
     }
 
@@ -792,6 +929,11 @@ export const moneyDetail = query({
       finalTotal: centsToDollars(booking.final_total_cents),
       finalCaptureAmount: centsToDollars(booking.final_capture_amount_cents),
       slaExpiresAtMs: booking.sla_expires_at_ms ?? null,
+      // Settlement tracking (completed jobs still owed money).
+      settlementState: booking.settlement_state ?? null,
+      settlementShortfall: centsToDollars(booking.settlement_shortfall_cents),
+      settlementReason: booking.settlement_reason ?? null,
+      awaitingSettlementSinceMs: booking.awaiting_settlement_since_ms ?? null,
       // Walk-in baselines (dollars on the row).
       mechanicQuotedPrice: booking.mechanic_quoted_price ?? null,
       catalogQuotedPrice: booking.catalog_quoted_price ?? null,

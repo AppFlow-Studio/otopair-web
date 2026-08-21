@@ -16,6 +16,15 @@ interface JobStepIndicatorProps {
    *  (no motion FLIP) so the wrapper resizes smoothly without the layout
    *  oscillation that occurs near the scroll threshold. */
   compact?: boolean;
+  /** The job has an open clock-stopping blocker. Tints the active step and
+   *  swaps the "underway" copy for a paused note so this panel doesn't say a
+   *  job is running while the mechanic has it stopped. */
+  paused?: boolean;
+  /** An out-of-range estimate is sitting with the customer. Tints the active
+   *  step amber (like `paused`) and swaps the copy for a "waiting on the
+   *  customer to confirm the new hold" note, so the stepper reflects that work
+   *  can't begin until the customer approves. */
+  awaitingHold?: boolean;
   className?: string;
 }
 
@@ -27,10 +36,14 @@ export function JobStepIndicator({
   currentStep,
   status,
   compact = false,
+  paused = false,
+  awaitingHold = false,
   className,
 }: JobStepIndicatorProps) {
   const isTerminal = currentStep === "terminal";
   const transition = `${DURATION_MS}ms ${EASE}`;
+  // Both states tint the active step amber; awaiting-hold wins its own copy.
+  const amberActive = paused || awaitingHold;
 
   return (
     <div
@@ -58,7 +71,18 @@ export function JobStepIndicator({
         >
           JOB PROGRESS
         </span>
-        <StatusPill status={status} />
+        <div className="flex items-center gap-2">
+          {awaitingHold && !isTerminal ? (
+            <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+              Awaiting hold
+            </span>
+          ) : paused && !isTerminal ? (
+            <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+              Paused
+            </span>
+          ) : null}
+          <StatusPill status={status} />
+        </div>
       </div>
 
       <ol
@@ -79,7 +103,9 @@ export function JobStepIndicator({
                 className={cn(
                   "flex shrink-0 items-center justify-center rounded-full border font-semibold",
                   isActive &&
-                    "border-primary bg-primary text-primary-foreground",
+                    (amberActive
+                      ? "border-amber-500 bg-amber-500 text-white"
+                      : "border-primary bg-primary text-primary-foreground"),
                   isComplete &&
                     "border-emerald-500 bg-emerald-500 text-white",
                   isUpcoming && "border-border bg-muted text-muted-foreground",
@@ -144,7 +170,11 @@ export function JobStepIndicator({
         aria-hidden={compact || isTerminal}
       >
         {!isTerminal &&
-          JOB_STEP_DESCRIPTIONS[currentStep as Exclude<JobStep, "terminal">]}
+          (awaitingHold
+            ? "Waiting for the customer to confirm the new hold — work can't begin until they do."
+            : paused
+              ? "Paused — a blocker is open and the clock is stopped until it's cleared."
+              : JOB_STEP_DESCRIPTIONS[currentStep as Exclude<JobStep, "terminal">])}
       </div>
     </div>
   );

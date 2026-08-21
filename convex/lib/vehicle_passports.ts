@@ -342,7 +342,23 @@ export const postjobPartValidator = v.object({
   // back to booking.service_ids[0]. New rows from the post-job and backfill
   // flows stamp it so multi-service bookings get accurate per-service
   // analytics (shop_part_preferences, cost-by-service).
-  service_id: v.optional(v.id("services")),
+  // Nullable, not just optional: the client sends an explicit null for a part
+  // with no resolvable catalog service (a manually-added row, or a booking
+  // whose partsRequiredServices[0] is absent). `v.optional(v.id("services"))`
+  // accepts undefined but REJECTS null — exactly the failure that hit
+  // custom_service_name below — so every such post-job submit was rejected at
+  // the arg validator before normalizePartsUsed could strip the null away.
+  service_id: v.optional(v.union(v.id("services"), v.null())),
+  // The CUSTOM line this part belongs to, when there's no catalog service to
+  // point at. Off-catalog work has no services row, so without this the
+  // association is lost the moment a quoted part becomes a used part — which
+  // is why a switch fitted through Flag Issue billed correctly but left its
+  // custom_jobs row reading "no parts".
+  // Nullable, not just optional: the client sends an explicit null for a part
+  // that belongs to a catalog service, exactly as `brand` above does.
+  // `v.optional(v.string())` accepts undefined but REJECTS null, which failed
+  // every post-job submit carrying a catalog part.
+  custom_service_name: v.optional(nullableStringValidator),
   // "catalog" rows came from the Otopair prefill (part_fitments); identity
   // fields (part_name/brand/oem_number) are read-only and only price/qty/
   // supplied_by/swap can change. "manual" rows are mechanic-added and stay
@@ -366,6 +382,18 @@ export const postjobPartValidator = v.object({
   justification_text: v.optional(v.string()),
   evidence_photo_ids: v.optional(v.array(v.id("_storage"))),
   verified_against_catalog_median_cents: v.optional(v.number()),
+  // Tire-replacement lines entered directly by a mechanic (mid-job / walk-in)
+  // instead of the customer quote flow. Tires have no OEM number — they're
+  // identified by size (fitment) / brand / model with a mechanic-set price — so
+  // these structured fields carry that identity while oem_number still holds the
+  // `TIRE-{size}` sentinel (see tireOem in job_actuals.ts) so every OEM-keyed
+  // consumer keeps working unchanged. tire_position is a free string
+  // ("front" / "rear") so staggered / aftermarket fitments never reject.
+  is_tire: v.optional(v.boolean()),
+  tire_size: v.optional(nullableStringValidator),
+  tire_brand: v.optional(nullableStringValidator),
+  tire_model: v.optional(nullableStringValidator),
+  tire_position: v.optional(nullableStringValidator),
 });
 
 export const postjobPhotoValidator = v.object({
@@ -445,6 +473,9 @@ export const postjobReportValidator = v.object({
   parts_used: v.array(postjobPartValidator),
   vehicle_updates: v.optional(v.union(vehicleUpdateValuesValidator, v.null())),
   technician_notes: v.optional(nullableStringValidator),
+  // Customer-facing "what did you find / do" summary. Read by getReceipt →
+  // Past Service report. See job_actuals.mechanic_findings.
+  mechanic_findings: v.optional(nullableStringValidator),
   flagged_vehicle_specs: v.optional(v.boolean()),
   flagged_vehicle_specs_reason: v.optional(nullableStringValidator),
   actual_labor_minutes: v.optional(nullableNumberValidator),

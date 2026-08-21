@@ -79,7 +79,23 @@ const OPERATOR_TABLE: readonly OperatorRule[] = [
     // is what folds all of *.oempartsonline.com into one voice.
     operator: "revolutionparts",
     hostPatterns: [],
-    domains: ["oempartsonline.com"],
+    domains: [
+      "oempartsonline.com",
+      // RevolutionParts storefronts that do NOT wear the platform's domain.
+      // Each is the manufacturer's or dealer group's own brand on the same
+      // backend, and sourceRegistry.ts documents them as such — so leaving
+      // them unmapped made them look like independent voices.
+      //
+      // The corroboration math is the reason this matters: confidence is a
+      // function of DISTINCT operators, so an unmapped RP skin agreeing with
+      // oempartsonline.com would score as two-source agreement when it is one
+      // catalogue talking to itself. It also flattered
+      // makeCoverage.auditOperatorDiversity, which read 34/36 makes on one
+      // operator when the true figure is all of them.
+      "mbusa.com",          // classicparts.mbusa.com — MB's own RP store
+      "autonationparts.com", // multi-make RP fallback (categoryHarvest)
+      "tascaparts.com",      // multi-make RP fallback (categoryHarvest)
+    ],
   },
 ];
 

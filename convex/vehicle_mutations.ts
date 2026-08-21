@@ -10,6 +10,7 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { sanitizePartNumber } from "./vehicleEnrichment/contentSanitization";
 import { getOrCreateMake } from "./lib/makeKey";
 import { normalizeOemNumber } from "./vehicleEnrichment/priceParser";
+import { deriveSparkPlugQuantity } from "./lib/sparkPlugs";
 
 // ============================================
 // INTERNAL QUERIES
@@ -371,6 +372,32 @@ export const storeEngineSpecs = internalMutation({
     if (s.timing_system) patch.timing_system = s.timing_system;
     if (s.fuel_injection_type) patch.fuel_injection = s.fuel_injection_type;
 
+    // Fill the plug COUNT from the cylinder count when nothing supplied one.
+    // The enrichment pass returns null for this field often enough to matter —
+    // 17 of 100 engines sampled Aug 17 2026 — and 15 of those already knew
+    // their cylinder count, so the number was sitting unused in the same row.
+    // Never overwrites: an extracted or human-entered value outranks a
+    // derivation, and an unknown cylinder count yields null, not a default.
+    const engineDoc = await ctx.db.get(args.engineId);
+    if (engineDoc && patch.spark_plug_quantity == null && engineDoc.spark_plug_quantity == null) {
+      // Make decides the twin-plug question (a 6.2 V8 is 16 plugs as a Mopar
+      // Hellcat and 8 as a Chevy LT1), so resolve it rather than deriving blind.
+      const makeDoc = engineDoc.make_id ? await ctx.db.get(engineDoc.make_id) : null;
+      const derived = deriveSparkPlugQuantity({
+        cylinders: engineDoc.cylinders,
+        make: makeDoc?.name ?? null,
+        engineCode: engineDoc.engine_code,
+        displacementL: engineDoc.displacement_l,
+      });
+      if (derived) {
+        patch.spark_plug_quantity = derived.quantity;
+        console.log(
+          `[engine-specs] derived spark_plug_quantity=${derived.quantity} ` +
+            `for engine ${args.engineId} (${derived.why})`,
+        );
+      }
+    }
+
     patch.data_quality = "enriched";
     patch.created_at = Date.now();
 
@@ -590,6 +617,146 @@ export const upsertServiceVehicleSpec = internalMutation({
       engine_id: args.engineId,
       service_id: args.serviceId,
     });
+  },
+});
+
+/**
+ * Vehicles that were added without a VIN, still have no config, but DO carry
+ * enough year/make/model to resolve — i.e. the backlog this feature stranded.
+ *
+ * Scans the whole table. `vehicles` is small (hundreds of rows) and this runs
+ * on demand, not on a hot path.
+ */
+export const listUnresolvedYmmtVehicles = internalQuery({
+  args: { limit: v.optional(v.float64()) },
+  handler: async (ctx, args) => {
+    const all = await ctx.db.query("vehicles").collect();
+    const out: Array<{
+      vin: string;
+      year: number;
+      make: string;
+      model: string;
+      trim?: string;
+    }> = [];
+    for (const v of all) {
+      if (v.vehicle_config_id || v.engine_id) continue;
+      const meta = (v.metadata ?? {}) as Record<string, unknown>;
+      const make = meta.make ? String(meta.make) : "";
+      const model = meta.model ? String(meta.model) : "";
+      if (!v.year || !make || !model) continue;
+      out.push({
+        vin: v.vin,
+        year: v.year,
+        make,
+        model,
+        trim: meta.trim ? String(meta.trim) : undefined,
+      });
+      if (args.limit && out.length >= args.limit) break;
+    }
+    return out;
+  },
+});
+
+/**
+ * Record the outcome of a YMMT (no-VIN) identity resolution into `vin_queue`.
+ *
+ * WHY A LEDGER AT ALL: before this, a no-VIN car whose enrichment failed left
+ * no trace anywhere. `runPublic.go` returned `{status:"error"}` to a scheduler
+ * that discarded it, nothing was written to enrichment_runs or vin_queue, and
+ * the vehicle simply sat with a null vehicle_config_id forever — invisible to
+ * every director/ops dashboard, which all read vehicle_configs/enrichment_runs.
+ * A vehicle we refused to enrich is a real operational fact and has to be
+ * visible, especially since the honest "we can't tell which engine" outcome is
+ * an EXPECTED result here, not a bug.
+ *
+ * vin_queue is the right home: it already carries vin/year/make/model/trim,
+ * status, skip_reason and error, and dataVehicleResolve.resolve already surfaces
+ * it ("VIN is in the enrichment queue (status: …)").
+ */
+export const recordYmmtOutcome = internalMutation({
+  args: {
+    vin: v.string(),
+    year: v.optional(v.float64()),
+    make: v.optional(v.string()),
+    model: v.optional(v.string()),
+    trim: v.optional(v.string()),
+    status: v.string(), // "enriching" | "complete" | "skipped" | "failed"
+    skip_reason: v.optional(v.string()),
+    error: v.optional(v.string()),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("vin_queue")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin))
+      .first();
+
+    const payload = {
+      vin: args.vin,
+      source: "ymmt_manual_entry",
+      year: args.year,
+      make: args.make,
+      model: args.model,
+      trim: args.trim,
+      status: args.status,
+      skip_reason: args.skip_reason,
+      error: args.error,
+      vehicle_config_id: args.vehicle_config_id,
+      processed_at: now,
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, payload);
+      return existing._id;
+    }
+    return await ctx.db.insert("vin_queue", { ...payload, queued_at: now });
+  },
+});
+
+/**
+ * Attach the resolved FK chain + normalized YMMT to a vehicles row.
+ *
+ * The no-VIN paths create the vehicles row first (inside the booking mutation,
+ * so the booking is transactional) and resolve identity afterwards in an action.
+ * This is how the action hands the result back.
+ *
+ * `metadata` is merged rather than replaced — the consumer app stores a color
+ * there, and the walk-in path stores the mechanic's raw typed make/model, both
+ * of which we keep alongside the normalized values.
+ */
+export const attachResolvedIdentity = internalMutation({
+  args: {
+    vin: v.string(),
+    trim_id: v.id("trims"),
+    engine_id: v.id("engines"),
+    transmission_id: v.optional(v.id("transmissions")),
+    year: v.float64(),
+    make: v.string(),
+    model: v.string(),
+    trim: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const vehicle = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q) => q.eq("vin", args.vin))
+      .first();
+    if (!vehicle) return null;
+
+    await ctx.db.patch(vehicle._id, {
+      trim_id: args.trim_id,
+      engine_id: args.engine_id,
+      ...(args.transmission_id ? { transmission_id: args.transmission_id } : {}),
+      year: args.year,
+      metadata: {
+        ...(vehicle.metadata ?? {}),
+        make: args.make,
+        model: args.model,
+        trim: args.trim,
+      },
+      updated_at: Date.now(),
+    });
+    return vehicle._id;
   },
 });
 

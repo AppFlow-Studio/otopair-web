@@ -4,6 +4,7 @@ import {
   partNameAxle,
   fitmentMatchesPosition,
   deriveServiceVariantsFromOptions,
+  isAxleOptionType,
   isBrakeSlug,
 } from "../convex/lib/brakeScope";
 import type { Id } from "../convex/_generated/dataModel";
@@ -58,11 +59,40 @@ describe("fitmentMatchesPosition", () => {
   });
 });
 
+describe("isAxleOptionType", () => {
+  it("accepts both live-catalog and seed axle types, plus untyped rows", () => {
+    // The live services catalog tags brake axle choices as "position"; the
+    // older seed used "axle_position". Both must be read as axle signals.
+    expect(isAxleOptionType("position")).toBe(true);
+    expect(isAxleOptionType("axle_position")).toBe(true);
+    expect(isAxleOptionType(null)).toBe(true);
+    expect(isAxleOptionType(undefined)).toBe(true);
+  });
+  it("rejects unrelated option types", () => {
+    expect(isAxleOptionType("filter_type")).toBe(false);
+    expect(isAxleOptionType("quantity")).toBe(false);
+  });
+});
+
 describe("deriveServiceVariantsFromOptions", () => {
   it("maps axle_position options to service variants", () => {
     const out = deriveServiceVariantsFromOptions([
       { service_id: svc("a"), option_label: "Rear only", option_type: "axle_position" },
       { service_id: svc("b"), option_label: "Both", option_type: "axle_position" },
+    ]);
+    expect(out).toEqual([
+      { serviceId: svc("a"), position: "rear" },
+      { serviceId: svc("b"), position: "both" },
+    ]);
+  });
+  it("maps live-catalog \"position\" options (the real booking shape)", () => {
+    // Regression: brake bookings store the customer's axle pick as
+    // option_type "position" / option_label "Rear"; the resolver used to drop
+    // it (only accepting "axle_position"), surfacing a bogus "axle missing"
+    // error in the pre-job inspection.
+    const out = deriveServiceVariantsFromOptions([
+      { service_id: svc("a"), option_label: "Rear", option_type: "position" },
+      { service_id: svc("b"), option_label: "Front and rear", option_type: "position" },
     ]);
     expect(out).toEqual([
       { serviceId: svc("a"), position: "rear" },

@@ -1,10 +1,16 @@
 // =============================================================================
 // sourceAdapters/rockauto.ts — RockAuto part-number attestation.
 //
-// Family: aftermarket_catalog. UNLIKE every other adapter here, this one is
-// keyed by PART NUMBER, not by vehicle: RockAuto cannot answer "what pad fits a
-// 2016 CR-V" through a stable server-fetchable path, but it answers "is
-// 45022-T0A-A01 a real part, and what kind" exactly and deterministically.
+// Family: aftermarket_catalog. This adapter is keyed by PART NUMBER: it answers
+// "is 45022-T0A-A01 a real part, and what kind" exactly and deterministically.
+//
+// It used to say RockAuto "cannot answer 'what pad fits a 2016 CR-V' through a
+// stable server-fetchable path". RE-PROBED LIVE Aug 2026, that is no longer
+// true — the catalogue walks server-side through plain URLs, all levels 200 and
+// unblocked. That walk lives in rockautoCatalog.ts and is wired as rung 3 of
+// categoryHarvest; this file stays part-keyed on purpose, because confirming a
+// number we hold and proposing one from a vehicle are different jobs with
+// different evidence standards. Both are real, and neither replaces the other.
 // It therefore consumes `AdapterVehicle.known_parts` and emits nothing without
 // them — it corroborates numbers the pipeline already has, and never proposes
 // new ones.
@@ -207,6 +213,51 @@ export function parseInterchangeNumbers(
       if (seen.has(n)) continue;
       seen.add(n);
       out.push(n);
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Interchange numbers WITH their verbatim form preserved.
+ *
+ * `parseInterchangeNumbers` above normalizes (uppercase, alphanumeric only),
+ * which is right for CLUSTERING — "5Q0 698 451 A" and "5Q0698451A" must land
+ * in one bucket. It is wrong for the FORMAT GATE, and the difference is not
+ * cosmetic: several makes' patterns require the separators that normalizing
+ * removes. Ford/Lincoln's is `^[A-Z0-9]{2,4}-[A-Z0-9]{1,7}(-[A-Z0-9]{1,4})?$`,
+ * so a genuine `M2GZ-1125-A` arrives as `M2GZ1125A` and
+ * `sanitizePartNumber(..., "Lincoln")` rejects it — every Ford-family
+ * interchange number was unpassable by construction (observed live on the 2021
+ * Nautilus: shape_ok=0 with a correct number in hand).
+ *
+ * So: cluster on `normalized`, gate on `raw`. Same discipline as the verbatim
+ * string fields that survive parseField.
+ */
+export function parseInterchangeNumbersDetailed(
+  html: string | null | undefined,
+): Array<{ raw: string; normalized: string }> {
+  try {
+    if (!html) return [];
+    const m = /OEM\s*\/\s*Interchange\s*Numbers:\s*([\s\S]*?)<\/section>/i.exec(html);
+    if (!m) return [];
+    const text = stripTags(m[1])
+      .replace(/\.\.\.\s*Show All/gi, " ")
+      .replace(/Show Fewer/gi, " ");
+    const out: Array<{ raw: string; normalized: string }> = [];
+    const seen = new Set<string>();
+    // Split on whitespace/commas ONLY — hyphens and spaces inside a number are
+    // part of it, which is the whole point of keeping the raw form.
+    for (const rawTok of text.split(/[,\s]{1,}/)) {
+      const raw = rawTok.trim().replace(/[.;:]+$/, "");
+      if (!raw) continue;
+      const normalized = normalizeOemNumber(raw);
+      if (normalized.length < 5 || !/\d/.test(normalized)) continue;
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      out.push({ raw, normalized });
     }
     return out;
   } catch {

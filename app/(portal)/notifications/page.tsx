@@ -376,7 +376,7 @@ function HistoryView() {
     <div className="overflow-hidden rounded-xl border border-border bg-card">
       <ul className="divide-y divide-border">
         {history.map((row: any) => {
-          const open = row.status === "pending";
+          const open = row.resolved_at == null;
           const descriptor = [row.customerName, row.vehicleLabel]
             .filter(Boolean)
             .join(" · ");

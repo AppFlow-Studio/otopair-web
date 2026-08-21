@@ -18,7 +18,7 @@ import { internalQuery } from "../_generated/server";
 export const version = internalQuery({
   args: {},
   handler: async () => ({
-    marker: "services-rescue-70b952e",
-    deployedFrom: "worktree cranky-proskuriakova-910519",
+    marker: "egress-proxy-296cdf3",
+    deployedFrom: "temur-dev @ 296cdf3 (egress proxy + ford categories + make coverage)",
   }),
 });

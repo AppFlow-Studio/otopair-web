@@ -20,7 +20,12 @@
  */
 
 import { searchAndFetch } from "./firecrawl";
-import { BLOCKED_DOMAINS, isMarketplaceUrl, domainOfUrl } from "./sourceRegistry";
+import {
+  BLOCKED_DOMAINS,
+  domainOfUrl,
+  getPriceStores,
+  isMarketplaceUrl,
+} from "./sourceRegistry";
 
 /** `"{oem}" {make} OEM part price` — quoted OEM anchors the search on the
  *  exact part number; make + part name narrow ambiguous numbers. */
@@ -34,6 +39,26 @@ export function buildPriceSearchQuery(args: {
   if (args.name) parts.push(args.name);
   parts.push("OEM part price");
   return parts.join(" ");
+}
+
+/**
+ * Fallback query when the primary returns NOTHING — deliberately unquoted
+ * and tail-free.
+ *
+ * Measured live (Aug 20 2026, Firecrawl, 2022 Tacoma rear pads 04466-04030 —
+ * a part with abundant dealer listings):
+ *   `"04466-04030" Toyota Rear Brake Pads OEM part price` → 0 results
+ *   `"04466-04030" price` / `"…" OEM price`               → junk aggregators
+ *   `04466-04030 OEM price`                               → 3 dealer pages
+ * Exact-phrase quoting plus the descriptive tail over-constrains the search
+ * into silence, while the UNQUOTED number lets dealer platforms win on
+ * relevance. Unquoted matching can surface adjacent part numbers
+ * (…-446604010 pages for a -04030 query) — safe because the downstream parse
+ * only trusts a price when the page echoes the exact OEM number; a near-miss
+ * page is rejected there, not mispriced.
+ */
+export function buildPriceFallbackQuery(args: { oem: string }): string {
+  return `${args.oem} OEM price`;
 }
 
 export type UrlSearcher = (
@@ -105,32 +130,106 @@ export function prioritizeDiscoveryQueue<
 const strictSearchAndFetch: UrlSearcher = (query, numResults) =>
   searchAndFetch(query, numResults, false, { throwOnError: true });
 
+/**
+ * `site:{host} "{oem}"` — a SITE-SCOPED query at a store we have validated.
+ *
+ * Exported for tests: the quoting is load-bearing. An unquoted OEM number
+ * matches any page that merely mentions it, and the whole point of preferring
+ * a known store is that the hit is the part's own page.
+ */
+export function buildStoreScopedQuery(host: string, oem: string): string {
+  return `site:${host} "${oem}"`;
+}
+
+/**
+ * Discover candidate price URLs for one part.
+ *
+ * TWO LEGS, deterministic first.
+ *
+ * The open-web leg below has always been the whole of this function, and it
+ * has a structural weakness: every storefront it can reach deterministically
+ * belongs to ONE operator (makeCoverage.auditOperatorDiversity reports 36/36
+ * makes on RevolutionParts), so a part absent from that catalogue stayed
+ * unpriced no matter how often we searched. `getPriceStores` returns stores
+ * validated as a genuinely independent PRICE voice for this make — today
+ * gmpartsgiant.com for the GM family, whose pages parsePartPrices reads
+ * unmodified — and asking them first is what makes the cross-source median
+ * span real operators rather than one catalogue quoting itself.
+ *
+ * Price stores are deliberately NOT parts sources: gmpartsgiant has no vehicle
+ * scoping and so cannot attest fitment. It is only ever asked what a number we
+ * already trust COSTS. See StoreCapability in sourceRegistry.ts.
+ *
+ * The store leg NEVER decides the outcome on its own — a store miss falls
+ * through to the open web, and only the open-web leg can report `null`
+ * (channel unavailable), because a store returning nothing is a real answer
+ * about that store while a dead search channel is no answer at all.
+ */
 export async function discoverPriceUrls(
   args: { oem: string; make?: string | null; name?: string | null },
   search: UrlSearcher = strictSearchAndFetch,
 ): Promise<string[] | null> {
-  const query = buildPriceSearchQuery(args);
-  let results: Array<{ url: string }> = [];
-  try {
-    results = await search(query, 5);
-  } catch (e) {
-    // null = discovery channel unavailable. Callers must treat this as "no
-    // answer" — never as evidence that nothing sells the part.
-    console.warn(`[priceDiscovery] search unavailable for "${args.oem}": ${e}`);
-    return null;
-  }
-
   const seenDomains = new Set<string>();
   const urls: string[] = [];
-  for (const r of results) {
-    if (!r.url) continue;
-    if (isMarketplaceUrl(r.url)) continue;
-    const domain = domainOfUrl(r.url);
-    if (isBlockedPriceDomain(domain)) continue;
-    if (seenDomains.has(domain!)) continue;
-    seenDomains.add(domain!);
-    urls.push(r.url);
+
+  const take = (list: Array<{ url: string }>) => {
+    for (const r of list) {
+      if (urls.length >= 3) return;
+      if (!r?.url) continue;
+      if (isMarketplaceUrl(r.url)) continue;
+      const domain = domainOfUrl(r.url);
+      if (isBlockedPriceDomain(domain)) continue;
+      if (seenDomains.has(domain!)) continue;
+      seenDomains.add(domain!);
+      urls.push(r.url);
+    }
+  };
+
+  // ── Leg 1: validated independent price stores for this make ───────────
+  for (const store of args.make ? getPriceStores(args.make) : []) {
     if (urls.length >= 3) break;
+    const host = domainOfUrl(store.baseUrl);
+    if (!host || seenDomains.has(host)) continue;
+    try {
+      take(await search(buildStoreScopedQuery(host, args.oem), 3));
+    } catch (e) {
+      // A store leg failing is not the discovery channel failing — say so and
+      // carry on to the open web rather than reporting no answer.
+      console.warn(`[priceDiscovery] store leg ${host} failed for "${args.oem}": ${e}`);
+    }
+  }
+
+  // ── Leg 2: open web ───────────────────────────────────────────────────
+  let results: Array<{ url: string }> = [];
+  try {
+    results = await search(buildPriceSearchQuery(args), 5);
+  } catch (e) {
+    // null = discovery channel unavailable. Callers must treat this as "no
+    // answer" — never as evidence that nothing sells the part. If a store leg
+    // already found URLs, those are a real answer and are returned instead.
+    console.warn(`[priceDiscovery] search unavailable for "${args.oem}": ${e}`);
+    return urls.length > 0 ? urls : null;
+  }
+  take(results);
+
+  // Query ladder: an empty PRIMARY result is frequently the query's fault,
+  // not the market's (see buildPriceFallbackQuery — a part with dozens of
+  // dealer listings searched to zero). One simplified retry before letting a
+  // durable no_listing verdict be stamped off a self-inflicted silence. The
+  // channel is proven up by the primary call, so a failure here is ignored
+  // rather than escalated to null.
+  if (urls.length === 0) {
+    try {
+      const fallback = await search(buildPriceFallbackQuery(args), 5);
+      if (fallback.length > 0) {
+        console.log(
+          `[priceDiscovery] primary query empty for "${args.oem}" — unquoted fallback found ${fallback.length} result(s)`,
+        );
+      }
+      take(fallback);
+    } catch (e) {
+      console.warn(`[priceDiscovery] fallback query failed for "${args.oem}" (non-fatal): ${e}`);
+    }
   }
   return urls;
 }

@@ -614,6 +614,110 @@ const PartFitmentDrawerBody = ({ partId, configId, onClose }: {
   )
 }
 
+// ---------------------------------------------------------------------------
+// RefutedFitmentsDrawerBody — expands a run's terse `fitment_refuted:<role>:<oem>`
+// error codes into the full picture: which OEM number the adversarial verifier
+// rejected for this vehicle, whether it was deleted or kept-but-demoted, and
+// the verdict sentence explaining WHY (e.g. "fits 2019-2024 X, not this 2013").
+// Sourced from refuted_fitments (durable, config-scoped) rather than the run's
+// error strings, so it survives re-runs and carries the reason text.
+// ---------------------------------------------------------------------------
+type RefutedFitmentRow = {
+  oem: string
+  serviceType: string | null
+  mode: 'block' | 'flag'
+  reason: string
+  refutedAt: number
+  partName: string | null
+  roleKey: string | null
+  brand: string | null
+}
+
+const RefutedFitmentsDrawerBody = ({ configId, onClose }: {
+  configId: Id<'vehicle_configs'>
+  onClose: () => void
+}) => {
+  const rows = useQuery(api.directorCars.configRefutedFitments,
+    { vehicle_config_id: configId }) as RefutedFitmentRow[] | undefined
+
+  const blocked = rows?.filter(r => r.mode === 'block') ?? []
+  const flagged = rows?.filter(r => r.mode === 'flag') ?? []
+
+  return (
+    <>
+      <div style={{ padding:'14px 18px', borderBottom:'1px solid var(--slate-200)',
+        background:'var(--slate-25)', borderRadius:'0 12px 0 0',
+        display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:12 }}>
+        <div style={{ minWidth:0 }}>
+          <div style={{ fontSize:10, fontWeight:600, color:'var(--red-700)', textTransform:'uppercase', letterSpacing:'0.1em', marginBottom:4 }}>Refuted fitments</div>
+          <div style={{ fontSize:13, fontWeight:600, color:'var(--slate-900)' }}>
+            {rows == null ? 'Loading…' : `${rows.length} part${rows.length === 1 ? '' : 's'} rejected for this vehicle`}
+          </div>
+          <div style={{ fontSize:11, color:'var(--slate-600)', marginTop:2 }}>
+            The adversarial fitment verifier placed these on a different vehicle.
+          </div>
+        </div>
+        <button onClick={onClose} style={{ border:'none', background:'transparent', cursor:'pointer', color:'var(--slate-500)', padding:4, borderRadius:6, display:'inline-flex' }}>
+          <IconX size={18} />
+        </button>
+      </div>
+
+      <div style={{ flex:1, overflowY:'auto', padding:18, display:'flex', flexDirection:'column', gap:18 }}>
+        {rows == null ? (
+          <div style={{ color:'var(--slate-400)', fontSize:12, textAlign:'center', padding:20 }}>Loading…</div>
+        ) : rows.length === 0 ? (
+          <div style={{ fontSize:12, color:'var(--slate-400)', fontStyle:'italic', textAlign:'center', padding:20 }}>
+            No refuted fitments recorded for this config.
+          </div>
+        ) : (
+          <>
+            {blocked.length > 0 && (
+              <div>
+                <SectionTitle label={`Deleted — wrong part (${blocked.length})`} />
+                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                  {blocked.map((r, i) => <RefutedRowCard key={`b-${i}`} r={r} />)}
+                </div>
+              </div>
+            )}
+            {flagged.length > 0 && (
+              <div>
+                <SectionTitle label={`Kept but demoted — multi-source (${flagged.length})`} />
+                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                  {flagged.map((r, i) => <RefutedRowCard key={`f-${i}`} r={r} />)}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
+      <div style={{ padding:'10px 18px', borderTop:'1px solid var(--slate-200)', fontSize:11, color:'var(--slate-500)',
+        background:'var(--slate-25)', borderRadius:'0 0 12px 0' }}>
+        <strong style={{ color:'var(--red-700)' }}>Deleted</strong> parts were removed from quotes; <strong style={{ color:'var(--amber-700, #B45309)' }}>demoted</strong> parts are kept but never win over an unflagged rival.
+      </div>
+    </>
+  )
+}
+
+const RefutedRowCard = ({ r }: { r: RefutedFitmentRow }) => (
+  <div style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:6, padding:'10px 12px' }}>
+    <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:8, marginBottom:6 }}>
+      <div style={{ minWidth:0 }}>
+        <span className="mono" style={{ fontSize:13, fontWeight:600, color:'var(--slate-900)', wordBreak:'break-all' }}>{r.oem}</span>
+        {r.partName && <div style={{ fontSize:11, color:'var(--slate-600)', marginTop:1 }}>{r.partName}{r.brand ? ` · ${r.brand}` : ''}</div>}
+      </div>
+      <Badge tone={r.mode === 'block' ? 'red' : 'yellow'}>{r.mode === 'block' ? 'deleted' : 'demoted'}</Badge>
+    </div>
+    <div style={{ display:'flex', flexWrap:'wrap', gap:6, marginBottom:6 }}>
+      {(r.roleKey ?? r.serviceType) && <Badge tone="slate">{r.roleKey ?? r.serviceType}</Badge>}
+      <span style={{ fontSize:10, color:'var(--slate-400)' }}>{fmtDate(r.refutedAt)} ({ageLabel(r.refutedAt)})</span>
+    </div>
+    <div style={{ fontSize:12, color:'var(--slate-800)', lineHeight:1.5, background:'var(--slate-25)', border:'1px solid var(--slate-100)', borderRadius:5, padding:'6px 8px' }}>
+      {r.reason || <span style={{ color:'var(--slate-400)', fontStyle:'italic' }}>No reason recorded.</span>}
+    </div>
+  </div>
+)
+
 const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | null; onClose: () => void }) => {
   const session   = useContext(DirectorSessionCtx)
   // Every config-edit mutation + backfill action validates this server-side
@@ -627,6 +731,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   const [chassisOpen, setChassisOpen] = useState(false)
   const [trimOpen,    setTrimOpen]    = useState(false)
   const [partDrawerPartId, setPartDrawerPartId] = useState<Id<'oem_parts'> | null>(null)
+  const [refuteDrawerOpen, setRefuteDrawerOpen] = useState(false)
   const [expandedServices, setExpandedServices] = useState<Set<string>>(new Set())
   const [toast,     setToast]     = useState<string | null>(null)
   const detail = useQuery(api.directorCars.vehicleConfigDetail,
@@ -683,6 +788,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
   // Reset drill-down + accordion state when the modal closes or jumps configs.
   useEffect(() => {
     setPartDrawerPartId(null)
+    setRefuteDrawerOpen(false)
     setExpandedServices(new Set())
   }, [configId])
 
@@ -798,15 +904,20 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
         entries: auditEntries,
       }}
       rightDrawer={{
-        open: !!partDrawerPartId,
-        onClose: () => setPartDrawerPartId(null),
+        open: !!partDrawerPartId || refuteDrawerOpen,
+        onClose: () => { setPartDrawerPartId(null); setRefuteDrawerOpen(false) },
         children: partDrawerPartId && configId
           ? <PartFitmentDrawerBody
               partId={partDrawerPartId}
               configId={configId}
               onClose={() => setPartDrawerPartId(null)}
             />
-          : null,
+          : refuteDrawerOpen && configId
+            ? <RefutedFitmentsDrawerBody
+                configId={configId}
+                onClose={() => setRefuteDrawerOpen(false)}
+              />
+            : null,
       }}
       footer={<Button onClick={onClose}>Close</Button>}>
       {!detail ? (
@@ -1173,7 +1284,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                                 return (
                                   <button
                                     key={it.fitmentId}
-                                    onClick={() => setPartDrawerPartId(it.partId as unknown as Id<'oem_parts'>)}
+                                    onClick={() => { setRefuteDrawerOpen(false); setPartDrawerPartId(it.partId as unknown as Id<'oem_parts'>) }}
                                     style={{
                                       width:'100%', textAlign:'left', cursor:'pointer',
                                       display:'grid', gridTemplateColumns:'minmax(0, 2fr) minmax(0, 2fr) 110px 60px 70px',
@@ -1261,9 +1372,25 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                           {run.estimatedCostUsd != null && <span>· ${run.estimatedCostUsd.toFixed(2)}</span>}
                           {run.scrapeCacheHit && <Badge tone="indigo">cache hit</Badge>}
                         </div>
-                        {run.errors && run.errors.length > 0 && (
-                          <div style={{ fontSize:10, color:'var(--red-700)', marginTop:3 }}>{run.errors.slice(0, 2).join(' · ')}{run.errors.length > 2 ? ` (+${run.errors.length - 2})` : ''}</div>
-                        )}
+                        {run.errors && run.errors.length > 0 && (() => {
+                          const hasRefute = run.errors.some(e => e.startsWith('fitment_refuted') || e.startsWith('fitment_refute_kept'))
+                          const text = `${run.errors!.slice(0, 2).join(' · ')}${run.errors!.length > 2 ? ` (+${run.errors!.length - 2})` : ''}`
+                          if (!hasRefute) {
+                            return <div style={{ fontSize:10, color:'var(--red-700)', marginTop:3 }}>{text}</div>
+                          }
+                          return (
+                            <button
+                              onClick={() => { setPartDrawerPartId(null); setRefuteDrawerOpen(true) }}
+                              title="View what got refuted and why"
+                              style={{ display:'inline-flex', alignItems:'center', gap:4, marginTop:3, padding:0, border:'none',
+                                background:'transparent', cursor:'pointer', textAlign:'left',
+                                fontSize:10, color:'var(--red-700)', textDecoration:'underline', textUnderlineOffset:2 }}
+                            >
+                              <span>{text}</span>
+                              <span aria-hidden style={{ textDecoration:'none' }}>→</span>
+                            </button>
+                          )
+                        })()}
                         {run.fieldGaps && run.fieldGaps.filter(g => g.reason !== 'not_applicable').length > 0 && (
                           <details style={{ marginTop:3 }}>
                             <summary style={{ fontSize:10, color:'var(--amber-700, #B45309)', cursor:'pointer' }}>

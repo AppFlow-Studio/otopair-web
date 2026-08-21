@@ -6,6 +6,7 @@ import {
   extractVehicleSlugPath,
   interchangeCandidates,
   pickVehicleSlug,
+  verdictNote,
 } from "../convex/vehicleEnrichment/categoryHarvest";
 
 const SLUG = "/v-2020-mercedes-benz-glc43-amg--4matic--3-0l-v6-gas";
@@ -71,6 +72,80 @@ describe("categoriesForRoles", () => {
   it("never routes a positioned role to the opposite axle's category", () => {
     const pages = categoriesForRoles(["rear_rotor"], [links[2]]); // only front-brakes offered
     expect(pages).toEqual([]);
+  });
+
+  // ── Multi-`*--filters` stores (ford.oempartsonline.com, live Aug 13 2026) ──
+  //
+  // Ground truth from fetching each of these pages for the 2021 Nautilus:
+  //   air-and-fuel-delivery--filters   48 products, 4 air filters, 0 oil filters
+  //   engine--filters                  60 products, 6 oil filters
+  //   hvac--filters                    43 products, the cabin filter
+  //   maintenance-and-lubrication--filters  48 products, 4 air filters
+  // The bare /filter/ hint used to win for oil and cabin, and it resolved to
+  // whichever `*--filters` category appeared first in the page — the fuel/air
+  // one — so neither role could ever be found on a Ford.
+  describe("a store that publishes several *--filters categories", () => {
+    // Deliberately in the store's real document order: the fuel/air page first,
+    // which is what made this fail. A test that lists them in a helpful order
+    // would pass against the old hints too.
+    const fordLinks = [
+      "air-and-fuel-delivery--filters",
+      "engine--air-intake",
+      "engine--filters",
+      "hvac--filters",
+      "transmission--filters",
+      "ignition--ignition-coil",
+      "ignition--secondary-ignition",
+      "electrical--battery",
+      "cooling-system--cooling-system",
+      "brakes--front-brakes",
+      "brakes--rear-brakes",
+    ].map((slug) => ({ slug, url: `https://ford.oempartsonline.com/v-x/${slug}`, label: null }));
+
+    const routed = (roleKey: string) => {
+      const pages = categoriesForRoles([roleKey], fordLinks, 6);
+      return pages[0]?.slug ?? null;
+    };
+
+    it("sends the oil filter to the engine page, not the fuel/air one", () => {
+      expect(routed("oil_filter")).toBe("engine--filters");
+    });
+
+    it("sends the cabin filter to HVAC, not the fuel/air one", () => {
+      expect(routed("cabin_filter")).toBe("hvac--filters");
+    });
+
+    it("still finds the engine air filter", () => {
+      expect(["air-and-fuel-delivery--filters", "engine--air-intake"]).toContain(
+        routed("air_filter"),
+      );
+    });
+
+    it("prefers secondary ignition over the coil category for spark plugs", () => {
+      expect(routed("spark_plug")).toBe("ignition--secondary-ignition");
+    });
+
+    it("keeps a single-filters-category store working (the Mercedes shape)", () => {
+      // Regression guard on the new negative screens: Mercedes publishes ONE
+      // filters category holding oil, air and cabin filters alike, so all three
+      // roles must still land on it.
+      const mb = [
+        { slug: "maintenance-and-lubrication--filters", url: `${BASE}/maintenance-and-lubrication--filters`, label: "Filters" },
+      ];
+      for (const role of ["oil_filter", "air_filter", "cabin_filter"]) {
+        expect(categoriesForRoles([role], mb, 6)[0]?.slug).toBe(
+          "maintenance-and-lubrication--filters",
+        );
+      }
+    });
+
+    it("covers a full six-role gap set within budget", () => {
+      // The Nautilus arrived with exactly these six missing and the old budget
+      // of 4 discarded the last two without a word.
+      const missing = ["battery", "coolant", "air_filter", "front_rotor", "rear_rotor", "spark_plug"];
+      const covered = categoriesForRoles(missing, fordLinks, 6).flatMap((p) => p.roles);
+      expect(covered.sort()).toEqual(missing.sort());
+    });
   });
 });
 
@@ -181,5 +256,29 @@ describe("interchangeCandidates", () => {
       exclude: new Set(["0004213000"]),
     });
     expect(out.map((n) => n.replace(/[^0-9A-Z]/gi, ""))).toEqual(["0004204904"]);
+  });
+});
+
+describe("verdictNote — verdicts carry the verifier's reason", () => {
+  // The 2021 Nautilus's `front_rotor:M2GZ1125A:x2:refuted` was unadjudicable
+  // after the fact: the refute turned out to be FALSE (the rotor's fitment
+  // table lists 2021-2023 Nautilus) but nothing recorded why the verifier
+  // thought otherwise. Non-confirmed verdicts now carry the reason inline.
+  it("appends the reason to refuted and uncertain", () => {
+    expect(
+      verdictNote({ verdict: "refuted", reason: "fits 2021-2024 Edge only" }),
+    ).toBe("refuted[fits 2021-2024 Edge only]");
+    expect(verdictNote({ verdict: "uncertain", reason: "no listing found" })).toBe(
+      "uncertain[no listing found]",
+    );
+  });
+  it("keeps confirmed bare and tolerates missing verdict/reason", () => {
+    expect(verdictNote({ verdict: "confirmed", reason: "exact fitment row" })).toBe("confirmed");
+    expect(verdictNote(undefined)).toBe("uncertain");
+    expect(verdictNote({ verdict: "refuted" })).toBe("refuted");
+  });
+  it("caps runaway reasons", () => {
+    const long = verdictNote({ verdict: "refuted", reason: "x".repeat(500) });
+    expect(long.length).toBeLessThanOrEqual("refuted[]".length + 160);
   });
 });

@@ -9,6 +9,7 @@
 //   correction  mechanic_verifications (pending) + job_actual part/labor edits
 //   report      fact_reports with disposition "open"
 //   survey      spec_variances flagged_for_review and not yet reviewed
+//   alias       off-catalog clusters that look like a service we already offer
 //
 // Day-1 volume is consensus + corrections; report/survey streams are live
 // but empty (0 rows measured Jul 2026).
@@ -17,8 +18,9 @@ import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { logAudit, requireDirector } from "./directorGate";
+import { likelyCanonicalClusters } from "./directorCustomJobs";
 
-type Stream = "consensus" | "correction" | "report" | "survey";
+type Stream = "consensus" | "correction" | "report" | "survey" | "alias";
 
 async function insertIfNew(
   ctx: MutationCtx,
@@ -69,6 +71,11 @@ export const backfillSurveys = internalMutation({
   handler: async (ctx) => ({ inserted: await backfillSurveysImpl(ctx) }),
 });
 
+export const backfillAliases = internalMutation({
+  args: {},
+  handler: async (ctx) => ({ inserted: await backfillAliasesImpl(ctx) }),
+});
+
 /** Cron entry point — sweeps all four streams. Safe to run repeatedly. */
 export const sweepAllStreams = internalMutation({
   args: {},
@@ -79,9 +86,43 @@ export const sweepAllStreams = internalMutation({
     const corrections = await backfillCorrectionsImpl(ctx);
     const reports = await backfillReportsImpl(ctx);
     const surveys = await backfillSurveysImpl(ctx);
-    return { consensus, corrections, reports, surveys };
+    const aliases = await backfillAliasesImpl(ctx);
+    return { consensus, corrections, reports, surveys, aliases };
   },
 });
+
+/**
+ * Off-catalog clusters that probably name a service we already offer
+ * (Off-Catalog Work spec, §8).
+ *
+ * This stream is load-bearing for correctness rather than data quality: while a
+ * cluster sits here unresolved, every driver whose custom job it covers is losing
+ * maintenance credit for work they paid for (§2 Leak 2). Priority is therefore
+ * "high" when more than one vehicle is affected — the row is measuring harm in
+ * progress, not a backlog item.
+ *
+ * Keyed on the cluster's match_key, so aliasing it away stops it being
+ * re-created on the next sweep. Rows already resolved by a human are left alone.
+ */
+async function backfillAliasesImpl(ctx: MutationCtx) {
+  const clusters = await likelyCanonicalClusters(ctx, Date.now());
+  let inserted = 0;
+  for (const c of clusters) {
+    if (
+      await insertIfNew(ctx, {
+        source_stream: "alias",
+        source_id: c.match_key,
+        entity_type: "custom_job_cluster",
+        entity_id: c.match_key,
+        title: `"${c.name}" looks like ${c.service_name} — ${c.distinct_vehicles} vehicle(s) affected`,
+        priority: c.distinct_vehicles > 1 ? "high" : "normal",
+      })
+    ) {
+      inserted += 1;
+    }
+  }
+  return inserted;
+}
 
 // Shared per-stream implementations — used by both the individual backfill
 // mutations and the cron sweep.
@@ -233,7 +274,13 @@ export const list = query({
       v.union(v.literal("open"), v.literal("claimed"), v.literal("resolved"), v.literal("dismissed")),
     ),
     source_stream: v.optional(
-      v.union(v.literal("consensus"), v.literal("correction"), v.literal("report"), v.literal("survey")),
+      v.union(
+        v.literal("consensus"),
+        v.literal("correction"),
+        v.literal("report"),
+        v.literal("survey"),
+        v.literal("alias"),
+      ),
     ),
   },
   handler: async (ctx, { token, status, source_stream }) => {

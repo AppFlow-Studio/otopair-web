@@ -17,10 +17,19 @@
  *
  * The enrichment runs async. Check progress via the vehicle_configs row's
  * enrichment_status field or the enrichment_runs table.
+ *
+ * INTERNAL (Aug 2026). This was declared `action` — i.e. publicly callable by
+ * any anonymous client — while the comment below already described it as
+ * `internal.vehicleEnrichment.runHeadless.go`. That's the same anonymous
+ * LLM-spend exposure runPublic.ts was closed for in Jun 2026. CLI use is
+ * unchanged: `npx convex run` and the dashboard both invoke internal functions
+ * with the admin key. bookings.ts now schedules this (via internal.*) for
+ * walk-ins with a real VIN, replacing the runPublic.go call that was attaching
+ * a hardcoded test account as an owner of customer vehicles.
  */
 
 import { v } from "convex/values";
-import { action } from "../_generated/server";
+import { internalAction } from "../_generated/server";
 import { internal, api } from "../_generated/api";
 
 // `@ts-expect-error TS2589` silences a known Convex+TypeScript quirk:
@@ -32,7 +41,7 @@ import { internal, api } from "../_generated/api";
 // makes tsc complain if Convex ever ships a fix that eliminates the
 // false positive, so we know to drop the suppression. Same root cause
 // + remedy as `convex/oto/chat.ts:115`.
-export const go = action({
+export const go = internalAction({
   args: { vin: v.string() },
   handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();

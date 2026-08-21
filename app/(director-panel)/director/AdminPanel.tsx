@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useQuery, useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import { Sidebar } from './components/Shell'
+import { DirectorCommandK } from './components/DirectorCommandK'
 import { DirectorLogin } from './components/DirectorLogin'
 import { DirectorSessionCtx, type DirectorSession } from './components/DirectorSessionCtx'
 import { TabOverview }  from './components/tabs/TabOverview'
@@ -22,6 +23,7 @@ import { TabStripe }    from './components/tabs/TabStripe'
 import { TabAudit }     from './components/tabs/TabAudit'
 import { TabSettings }       from './components/tabs/TabSettings'
 import { TabMechanicEdits } from './components/tabs/TabMechanicEdits'
+import { TabCustomJobs } from './components/tabs/TabCustomJobs'
 import { TabServiceParts } from './components/tabs/TabServiceParts'
 import { TabEstimatorLabor } from './components/tabs/TabEstimatorLabor'
 import { TabOtoSim }    from './components/tabs/TabOtoSim'
@@ -32,7 +34,9 @@ import { TabDeletionQueue } from './components/tabs/TabDeletionQueue'
 import { TabFollowUps }     from './components/tabs/TabFollowUps'
 import { TabSystemHealth }  from './components/tabs/TabSystemHealth'
 import { TabTransactions }  from './components/tabs/TabTransactions'
+import { TabSettlement }    from './components/tabs/TabSettlement'
 import { TabAnalytics }     from './components/tabs/TabAnalytics'
+import { TabIntegrations }  from './components/tabs/TabIntegrations'
 
 const SESSION_KEY = 'otopair_director_token'
 
@@ -46,6 +50,7 @@ const TABS: Record<string, React.ComponentType> = {
   reviews:  TabReviews,
   stripe:      TabStripe,
   transactions: TabTransactions,
+  settlement:  TabSettlement,
   cars:        TabCars,
   configs:     TabVehicleConfigs,
   enrichment:  TabEnrichment,
@@ -62,6 +67,8 @@ const TABS: Record<string, React.ComponentType> = {
   feedback:    TabFeedback,
   audit:          TabAudit,
   mechanicEdits:  TabMechanicEdits,
+  customJobs:     TabCustomJobs,
+  integrations:   TabIntegrations,
   settings:       TabSettings,
 }
 
@@ -75,6 +82,7 @@ function getHashTab(): string {
 
 const PanelShell = ({ session, onLogout }: { session: DirectorSession; onLogout: () => void }) => {
   const [active, setActive] = useState('overview')
+  const [searchOpen, setSearchOpen] = useState(false)
   const counts = useQuery(api.director.sidebarCounts, { token: session.token })
 
   useEffect(() => {
@@ -82,6 +90,18 @@ const PanelShell = ({ session, onLogout }: { session: DirectorSession; onLogout:
     const onHash = () => setActive(getHashTab())
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
+  }, [])
+
+  // ⌘K / Ctrl+K toggles the global search palette.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setSearchOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
   }, [])
 
   const navigate = (id: string) => {
@@ -100,11 +120,13 @@ const PanelShell = ({ session, onLogout }: { session: DirectorSession; onLogout:
           counts={counts ?? undefined}
           currentUser={{ name: session.name, role: session.role }}
           onLogout={onLogout}
+          onOpenSearch={() => setSearchOpen(true)}
         />
         <main style={{ flex:1, minWidth:0, display:'flex', flexDirection:'column', overflow:'hidden' }}>
           <Tab />
         </main>
       </div>
+      <DirectorCommandK open={searchOpen} onOpenChange={setSearchOpen} onNavigateTab={navigate} />
     </DirectorSessionCtx.Provider>
   )
 }

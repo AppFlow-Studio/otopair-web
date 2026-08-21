@@ -12,11 +12,13 @@ import MultiPointInspectionDialog, {
   type InspectionInputPayload,
 } from "@/components/multi-point-inspection-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import { useLockedQuote } from "@/lib/use-locked-quote";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
 import type {
   PostJobSurveyPayload,
+  CustomJobOutcome,
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
 import {
@@ -149,6 +151,12 @@ export default function MechanicDashboard() {
     api.job_actuals.getPrefillData,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"
   );
+  // Customer-approved quote for the post-job "Confirm parts to use" step. Same
+  // hook the owner's booking-detail-panel uses, so the mechanic's completion
+  // dialog shows the AGREED parts + total (e.g. battery $350, oil filter $35,
+  // not-used rows dropped, $726.69 total) instead of falling back to the
+  // pre-approval snapshot (stale $0 parts, $103 total).
+  const workflowLockedQuote = useLockedQuote(selectedWorkflowBooking);
   const selectedBooking = useQuery(
     api.bookings.getJobDetail,
     actualsBookingId ? { bookingId: actualsBookingId } : "skip"
@@ -309,7 +317,10 @@ export default function MechanicDashboard() {
     }
   }
 
-  async function handleCompleteAction(payload: PostJobSurveyPayload) {
+  async function handleCompleteAction(
+    payload: PostJobSurveyPayload,
+    customJobOutcomes?: CustomJobOutcome[],
+  ) {
     if (!workflowBookingId) return;
 
     setBusyAction(`complete:${String(workflowBookingId)}`);
@@ -317,6 +328,10 @@ export default function MechanicDashboard() {
       await completeWithPostjob({
         bookingId: workflowBookingId,
         postjob: payload,
+        customJobOutcomes:
+          customJobOutcomes && customJobOutcomes.length > 0
+            ? customJobOutcomes
+            : undefined,
       });
       setToast("Booking completed");
       closeWorkflowDialog();
@@ -776,10 +791,10 @@ export default function MechanicDashboard() {
         }
         onClose={closeWorkflowDialog}
         onSubmit={handleCompleteAction}
-        initialTechnicianNotes={
+        layoverNotes={
           (selectedWorkflowBooking?.jobActuals as any)?.inProgressNotes ?? ""
         }
-        initialPhotos={
+        layoverPhotos={
           ((selectedWorkflowBooking?.jobActuals as any)?.inProgressPhotos ?? []).map(
             (p: any) => ({
               id: p.storageId,
@@ -787,10 +802,14 @@ export default function MechanicDashboard() {
               previewUrl: p.url ?? "",
               caption: p.caption ?? "",
               status: "ready" as const,
+              takenAt: p.takenAt ?? undefined,
             }),
           )
         }
-        lockBilling
+        lockBilling={!workflowLockedQuote.isWalkIn}
+        quotedParts={workflowLockedQuote.lockedQuoteParts}
+        lockedQuote={workflowLockedQuote.lockedQuote}
+        isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
       />
 
       {/* Pre-Job Approval — auto-chained from the inspection dialog. Same

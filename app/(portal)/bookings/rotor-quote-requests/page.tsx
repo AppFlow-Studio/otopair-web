@@ -13,6 +13,7 @@ import DaySwimLanes from "@/app/(portal)/schedule/day-swim-lanes";
 import type { CalendarEvent } from "@/app/(portal)/schedule/day-swim-lanes";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
+import { formatHoursValue } from "@/lib/labor-units";
 import {
   Select,
   SelectItem,
@@ -940,7 +941,7 @@ function QuoteSubmissionDialog({
                           : "border-border bg-background text-foreground hover:bg-muted"
                       }`}
                     >
-                      {mins} min
+                      {formatHoursValue(mins)} hr
                     </button>
                   ))}
                 </div>

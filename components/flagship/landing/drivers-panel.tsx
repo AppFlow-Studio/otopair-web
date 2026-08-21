@@ -838,11 +838,15 @@ export default function DriversPanel({ active, reduce }: { active: boolean; redu
       </div>
 
       {/* Caption — pinned to the card bottom, same treatment as Shops */}
-      <div className="flex h-8 shrink-0 items-center justify-center sm:h-9">
-        <AnimatePresence mode="wait" initial={false}>
+      {/* popLayout, not wait: "wait" empties the row for a full exit+enter
+          cycle, so the subtitle blinks out between beats. The crossfade
+          keeps a line on screen at all times, and `relative` gives the
+          exiting chip something to pin to while it fades. */}
+      <div className="relative flex h-8 shrink-0 items-center justify-center sm:h-9">
+        <AnimatePresence mode="popLayout" initial={false}>
           <motion.span
             key={caption}
-            className="whitespace-nowrap rounded-full bg-white/70 px-5 py-1.5 text-[12px] tracking-[0.03em] text-[#1a1a1a] ring-1 ring-black/5 backdrop-blur-md sm:text-[13px] lg:px-6 lg:py-2 lg:text-[13.5px]"
+            className="whitespace-nowrap rounded-full border-[0.5px] border-white/50 bg-white/20 px-5 py-1.5 text-[12px] tracking-[0.03em] text-[#1a1a1a] backdrop-blur-[35px] sm:text-[13px] lg:px-6 lg:py-2 lg:text-[13.5px]"
             initial={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
             animate={{ opacity: active ? 1 : 0, y: 0 }}
             exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}

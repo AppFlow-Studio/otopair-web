@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { PlatformToggle } from "../shared";
-import { Reveal, serif } from "./reveal";
+import DownloadApp from "../download-app";
+import { Reveal, serif, serifDisplay } from "./reveal";
 
 const FOOTER_LINKS = [
   { href: "/privacy", label: "Privacy" },
@@ -30,7 +30,7 @@ export default function FooterCta() {
         <Reveal>
           <h2
             className="max-w-[895px] text-center leading-[1.08] text-white text-[34px] sm:text-[46px] lg:text-[58px]"
-            style={serif}
+            style={serifDisplay}
           >
             Available whenever you need it
           </h2>
@@ -38,7 +38,7 @@ export default function FooterCta() {
 
         <Reveal delay={0.12}>
           <div className="mt-9 flex justify-center lg:mt-11">
-            <PlatformToggle size="lg" />
+            <DownloadApp size="lg" tone="light" />
           </div>
         </Reveal>
       </div>

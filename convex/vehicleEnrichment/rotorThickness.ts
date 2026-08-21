@@ -63,6 +63,25 @@ const NOMINAL_LABELS: RegExp[] = [
   /\bthickness\b/i,
 ];
 
+/**
+ * Every label form `classifyThicknessLabel` recognises, in one list.
+ *
+ * Exported for the MANUAL PAGE SCORER (manualPageIndex.ts), which decides
+ * which pages of a PDF are worth paying Reducto to read. The two have to hunt
+ * for the same vocabulary or the pipeline pays for the wrong pages in both
+ * directions: a page selected on a label this parser cannot classify is billed
+ * for nothing, and a label this parser knows but the scorer ignores is a page
+ * that never gets sent at all.
+ *
+ * Order is not meaningful here — the scorer counts hits, it does not classify.
+ * Classification stays in classifyThicknessLabel, where precedence matters.
+ */
+export const ROTOR_THICKNESS_LABEL_PATTERNS: readonly RegExp[] = [
+  ...MACHINE_TO_LABELS,
+  ...DISCARD_LABELS,
+  ...NOMINAL_LABELS,
+];
+
 /** Plausible discard-minimum bands, mm. Shared with the sanity rules. */
 export const ROTOR_MIN_BANDS = {
   front: { typicalLow: 15, typicalHigh: 32, validLow: 8, validHigh: 40 },
@@ -71,7 +90,19 @@ export const ROTOR_MIN_BANDS = {
 
 /** Physical bounds for a rotor size string, used to reject non-rotor matches. */
 const DIAMETER_MM = { min: 200, max: 430 };
-const THICKNESS_MM = { min: 5, max: 60 };
+
+/**
+ * Bounds any rotor thickness must fall inside, nominal or minimum, mm.
+ *
+ * Exported because consumers that accept a thickness from somewhere other than
+ * `parseRotorThickness` — the manual extractor's cross-check, the adapters —
+ * need the same floor and ceiling. sourceAdapters/brembo.ts still carries its
+ * own identical copy (`NOMINAL_VALID_MM`); fold it in when that file is next
+ * touched.
+ */
+export const ROTOR_THICKNESS_VALID_MM = { min: 5, max: 60 } as const;
+
+const THICKNESS_MM = ROTOR_THICKNESS_VALID_MM;
 
 /** How far back to look for the label that qualifies a number. */
 const LABEL_WINDOW = 64;
@@ -172,9 +203,26 @@ export function parseRotorThickness(
     const raw = parseFloat(m[1]);
     if (!Number.isFinite(raw)) continue;
     const isInches = /^(?:in|inch|″|")/i.test(m[2].trim());
+    const valueMm = isInches ? round2(raw * 25.4) : raw;
+    // A rotor is 5-60 mm thick. Anything outside that is not a rotor spec,
+    // whatever its label said.
+    //
+    // The size-string branch above has always bounded its output; this branch
+    // did not, and the catch-all `\bthickness\b` / `\bnominal\b` labels are
+    // wide enough to need it. Live fire (2021 GMC Acadia owner's manual, p317):
+    // "tires with nominal rim diameters of 10 to 12 in" classified as `nominal`
+    // and yielded 304.8 mm. Unbounded, that reading wins `pickRotorThickness`'s
+    // largest-nominal tie-break outright and becomes the vehicle's nominal —
+    // and a nominal that large makes every real minimum look coherent beside
+    // it. The risk grew when the resolver widened from one cached page to all
+    // of them: more pages means more tyre, glass and trim text reaching this
+    // parser, and precision here is what makes that widening safe.
+    if (valueMm < ROTOR_THICKNESS_VALID_MM.min || valueMm > ROTOR_THICKNESS_VALID_MM.max) {
+      continue;
+    }
     out.push({
       kind,
-      valueMm: isInches ? round2(raw * 25.4) : raw,
+      valueMm,
       observedLabel: label,
       observedValueText: m[0].trim(),
     });

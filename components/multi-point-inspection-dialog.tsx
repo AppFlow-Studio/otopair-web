@@ -1,6 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  FluidCatalogSelectField,
+  FLUID_KIND_BY_KEY,
+} from "@/components/fluid-catalog-select-field";
 import {
   Camera,
   Check,
@@ -8,6 +20,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Copy,
   Download,
   EyeOff,
   Loader2,
@@ -34,6 +47,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   classifyInspectionMeasure,
+  cornerCopyPatch,
   createInspectionState,
   defaultZoneState,
   derivePrejobFromInspection,
@@ -48,8 +62,10 @@ import {
   isSpecPrefillField,
   normalizeTireSize,
   nextInspectionZoneAfterCompletion,
+  OPPOSITE_CORNER,
   patchInspectionZone,
   patchSharedInspectionText,
+  zoneHasInput,
   specPrefillFromPassport,
   INSPECTION_ZONES,
   INSPECTION_ZONES_BY_ID,
@@ -61,6 +77,7 @@ import {
   validateZoneForCompletion,
   WARNING_LIGHT_PICKER_OPTIONS,
   type BrakeAxleScope,
+  type CornerZoneId,
   type FieldUnavailableStatus,
   type InspectionField,
   type InspectionState,
@@ -221,7 +238,6 @@ const ALWAYS_VISIBLE_FIELDS = new Set([
   "tire_brand",
   "tire_model",
   "tire_size",
-  "dot_code",
   "run_flat",
   "pad_inner",
   "pad_outer",
@@ -509,6 +525,35 @@ function MultiPointInspectionDialogBody({
   } | null>(null);
   const photoPreviewsRef = useRef(photoPreviews);
 
+  // ---- autosave ----------------------------------------------------------
+  // Draft persistence as the mechanic fills in fields: a debounced write to
+  // onSaveDraft (savePrejob) fires ~1s after the last change so their input is
+  // registered without hunting for a save button. The header shows a
+  // "Saving… / Saved" indicator. Owner-profile answers keep their own explicit
+  // confirm flow and are intentionally excluded (savePrejob doesn't persist
+  // them).
+  const [saveStatus, setSaveStatus] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const savedSignatureRef = useRef<string | null>(null);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Per-field autosave state, keyed `${zoneId}::${fieldKey}`. A field flips to
+  // "saving" the instant it's edited, then to "saved"/"error" when the shared
+  // debounced draft write settles — so every answer carries its own proof it's
+  // banked. Held here (not per-zone) so a zone-switch doesn't drop indicators.
+  const [fieldSaveState, setFieldSaveState] = useState<
+    Record<string, FieldSaveState>
+  >({});
+  const markFieldSaving = useCallback((zoneId: ZoneId, fieldKey: string) => {
+    setFieldSaveState((prev) => ({
+      ...prev,
+      [`${zoneId}::${fieldKey}`]: "saving",
+    }));
+  }, []);
+  // The queued draft write, exposed so a close/unmount can flush it immediately
+  // instead of losing the last edit inside the debounce window.
+  const pendingSaveRef = useRef<null | (() => Promise<void>)>(null);
+
   // Global header fields that don't belong to a single wheel.
   const [mileage, setMileage] = useState("");
   const [mileageError, setMileageError] = useState("");
@@ -551,6 +596,15 @@ function MultiPointInspectionDialogBody({
   const requiredSet = useMemo(() => new Set(requiredZones), [requiredZones]);
   const baselineMileage =
     prefillData?.mileage ?? passportData?.passport.mileage ?? null;
+  // An odometer physically can't run backwards, so a new reading below the
+  // vehicle's stored mileage is always an error — enforced live as the mechanic
+  // types and again as a hard gate on every "continue" path (submit + save).
+  const odometerBelowBaseline = (value: string) =>
+    typeof baselineMileage === "number" &&
+    value.trim() !== "" &&
+    Number(value) < baselineMileage;
+  const odometerTooLowMessage = () =>
+    `Odometer can't be below the current ${(baselineMileage as number).toLocaleString()} mi reading.`;
   const brakeScope = useMemo<BrakeAxleScope>(
     () =>
       savedBrakeScope?.hasBrakeWork
@@ -757,6 +811,24 @@ function MultiPointInspectionDialogBody({
     [],
   );
 
+  // Mirror a corner's readings onto its same-axle sibling (FL↔FR, RL↔RR). The
+  // two corners share an identical field set, so this is a straight overwrite;
+  // the mechanic then only fixes the few values that differ. No-op if the source
+  // corner is still blank (guards against wiping the sibling with empties).
+  const copyCornerToOpposite = useCallback(
+    (sourceId: ZoneId) => {
+      const opposite = OPPOSITE_CORNER[sourceId as CornerZoneId];
+      if (!opposite) return;
+      const source = zoneState(sourceId);
+      if (!zoneHasInput(sourceId, source)) return;
+      patchZone(opposite, cornerCopyPatch(source));
+      // The copied values equal the already-reviewed source, so don't force a
+      // redundant "Specs match" re-confirm on the sibling.
+      markSpecReviewed(opposite);
+    },
+    [zoneState, patchZone, markSpecReviewed],
+  );
+
   const photoUrl = useCallback(
     (storageId: string) =>
       photoPreviews[storageId] ??
@@ -891,6 +963,131 @@ function MultiPointInspectionDialogBody({
     completionContext,
   ]);
 
+  // Compact signature of everything savePrejob persists — a change here is what
+  // arms the autosave debounce. Owner answers are excluded on purpose (they
+  // have their own confirm flow and savePrejob doesn't store them).
+  const autosaveSignature = useMemo(
+    () =>
+      JSON.stringify({
+        zones: state.zones,
+        mileage,
+        liftStatus,
+        inspectionStatus,
+        inspectionExpires,
+        modAftermarket,
+        modNotes,
+        modAffectedSystems,
+        nextTip,
+      }),
+    [
+      state.zones,
+      mileage,
+      liftStatus,
+      inspectionStatus,
+      inspectionExpires,
+      modAftermarket,
+      modNotes,
+      modAffectedSystems,
+      nextTip,
+    ],
+  );
+
+  useEffect(() => {
+    if (!hydrated || !bookingId || !onSaveDraft) return;
+    // First run after hydration is the baseline — a resumed draft is already
+    // persisted, so don't re-save it (or flash "Saving…") on open.
+    if (savedSignatureRef.current === null) {
+      savedSignatureRef.current = autosaveSignature;
+      return;
+    }
+    if (autosaveSignature === savedSignatureRef.current) return;
+
+    setSaveStatus("saving");
+    const signatureToPersist = autosaveSignature;
+
+    // The actual write, reused by both the debounce timer and an immediate
+    // flush on close/unmount. Marks every in-flight field saved (or failed) so
+    // the per-field checkmarks resolve in lockstep with the draft write.
+    const runSave = async () => {
+      try {
+        const { prejob, inspection } = buildPayloads();
+        await onSaveDraft(prejob, inspection);
+        savedSignatureRef.current = signatureToPersist;
+        setSaveStatus("saved");
+        setFieldSaveState((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const key in next) {
+            if (next[key] === "saving") {
+              next[key] = "saved";
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      } catch {
+        // Non-blocking: the mechanic can still use "Save & close". A soft
+        // "Not saved yet" tells them autosave didn't take (e.g. the booking
+        // scope isn't resolved yet).
+        setSaveStatus("error");
+        setFieldSaveState((prev) => {
+          let changed = false;
+          const next = { ...prev };
+          for (const key in next) {
+            if (next[key] === "saving") {
+              next[key] = "error";
+              changed = true;
+            }
+          }
+          return changed ? next : prev;
+        });
+      } finally {
+        pendingSaveRef.current = null;
+      }
+    };
+    pendingSaveRef.current = runSave;
+
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      autosaveTimerRef.current = null;
+      void runSave();
+    }, 1000);
+
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    };
+  }, [hydrated, bookingId, onSaveDraft, autosaveSignature, buildPayloads]);
+
+  // Flush a queued draft write right now — used when the mechanic closes the
+  // dialog or the tab/app is about to unload, so an edit made inside the 1s
+  // debounce window is still persisted instead of silently dropped.
+  const flushPendingSave = useCallback(() => {
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    const run = pendingSaveRef.current;
+    if (run) void run();
+  }, []);
+
+  // Last-resort safety net: if the tab/app is closed while a save is still
+  // pending, flush it and warn so the mechanic can stay long enough for the
+  // write to land. Only fires when there's genuinely unsaved work.
+  useEffect(() => {
+    const handler = (event: BeforeUnloadEvent) => {
+      if (pendingSaveRef.current || saveStatus === "saving") {
+        flushPendingSave();
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [saveStatus, flushPendingSave]);
+
+  // Flush on unmount too (dialog torn down without an explicit "Save & close").
+  useEffect(() => () => flushPendingSave(), [flushPendingSave]);
+
   const persistOwnerAnswers = useCallback(async () => {
     if (!bookingId || !ownerConfirmed) return;
     const answers: Record<string, OwnerProfileAnswerValue> = {};
@@ -923,13 +1120,32 @@ function MultiPointInspectionDialogBody({
     });
   }
 
+  // Scroll the just-activated zone panel to the top of the form. Deferred to a
+  // layout effect (below) rather than fired inline, so the scroll measures the
+  // *incoming* zone after it commits — a bare requestAnimationFrame sometimes ran
+  // before the new zone rendered, leaving the form scrolled partway down.
+  const pendingZoneScrollRef = useRef<ScrollBehavior | null>(null);
+  useLayoutEffect(() => {
+    const behavior = pendingZoneScrollRef.current;
+    if (!behavior) return;
+    pendingZoneScrollRef.current = null;
+    document
+      .getElementById("inspection-zone-panel")
+      ?.scrollIntoView({ behavior, block: "start" });
+  }, [activeZone]);
+
   function openZoneAtTop(zoneId: ZoneId) {
+    pendingZoneScrollRef.current = "auto";
     setActiveZone(zoneId);
-    requestAnimationFrame(() =>
-      document
-        .getElementById("inspection-zone-panel")
-        ?.scrollIntoView({ behavior: "auto", block: "start" }),
-    );
+  }
+
+  // User-initiated zone selection (tapping a part on the car diagram, or the
+  // Owner-profile chip): switch zones and smoothly bring the panel into view so
+  // the mechanic sees the section scroll down to them instead of having to hunt
+  // for it below the diagram.
+  function selectZone(zoneId: ZoneId | "PARTS") {
+    pendingZoneScrollRef.current = "smooth";
+    setActiveZone(zoneId);
   }
 
   function showZoneValidationError(
@@ -1041,12 +1257,11 @@ function MultiPointInspectionDialogBody({
       );
       return false;
     }
-    if (
-      action === "start" &&
-      typeof baselineMileage === "number" &&
-      Number(mileage) < baselineMileage
-    ) {
-      const message = `Odometer cannot be lower than the stored ${baselineMileage.toLocaleString()} mi.`;
+    // A backwards odometer is invalid on every continue path — block both
+    // "Submit" and "Save & close" whenever a reading has been entered (an empty
+    // reading is only required for "start", handled above).
+    if (odometerBelowBaseline(mileage)) {
+      const message = odometerTooLowMessage();
       setError(message);
       setMileageError(message);
       requestAnimationFrame(() =>
@@ -1059,11 +1274,33 @@ function MultiPointInspectionDialogBody({
   }
 
   async function handleSubmit(action: SubmitIntent) {
+    // Cancel any queued autosave so it doesn't race the explicit submit (and so
+    // the close/unmount flush can't re-fire a stale draft write afterward).
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    pendingSaveRef.current = null;
     if (!validateBeforePersistence(action)) return;
     await persistOwnerAnswers();
     const { prejob, inspection } = buildPayloads();
     try {
       await onSubmit(prejob, inspection, action);
+      // This explicit save persisted everything on screen — resolve any field
+      // still mid-spinner so the mechanic sees each answer landed.
+      savedSignatureRef.current = autosaveSignature;
+      setSaveStatus("saved");
+      setFieldSaveState((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const key in next) {
+          if (next[key] === "saving") {
+            next[key] = "saved";
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     } catch (err) {
       const message = userFacingInspectionError(err, "Could not save inspection.");
       if (message.toLowerCase().includes("mileage")) {
@@ -1323,7 +1560,12 @@ function MultiPointInspectionDialogBody({
     <>
       <SurveyDialogShell
       open={open}
-      onClose={onClose}
+      onClose={() => {
+        // Bank any edit still sitting in the debounce window before the dialog
+        // tears down, so closing never costs the mechanic their last answer.
+        flushPendingSave();
+        onClose();
+      }}
       title="Multi-point inspection"
       description={bookingSubLabel}
       maxWidthClassName="max-w-2xl"
@@ -1397,8 +1639,14 @@ function MultiPointInspectionDialogBody({
                   inputMode="numeric"
                   value={mileage}
                   onChange={(e) => {
-                    setMileage(e.target.value.replace(/[^0-9]/g, ""));
-                    setMileageError("");
+                    const next = e.target.value.replace(/[^0-9]/g, "");
+                    setMileage(next);
+                    // Flag a backwards odometer the instant it's typed, so the
+                    // mechanic fixes it in place instead of hitting a wall at
+                    // submit time.
+                    setMileageError(
+                      odometerBelowBaseline(next) ? odometerTooLowMessage() : "",
+                    );
                   }}
                   placeholder="—"
                   className="w-24 rounded-lg border border-primary/20 bg-card px-2 py-1 text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none"
@@ -1466,6 +1714,10 @@ function MultiPointInspectionDialogBody({
                 Tap a part of the car to inspect it
               </div>
             </div>
+            <SaveStatusIndicator
+              status={saveStatus}
+              enabled={!!bookingId && !!onSaveDraft}
+            />
             <div className="hidden items-center gap-3 sm:flex">
               {(["g", "y", "r"] as TriValue[]).map((c) => (
                 <span key={c} className="flex items-center gap-1 text-[11px] text-muted-foreground">
@@ -1498,7 +1750,7 @@ function MultiPointInspectionDialogBody({
               activeZone={activeZone === "PARTS" ? null : activeZone}
               isDone={(id) => !!state.zones[id]?.done}
               isRequired={(id) => requiredSet.has(id)}
-              onSelect={setActiveZone}
+              onSelect={selectZone}
             />
           </div>
 
@@ -1506,7 +1758,7 @@ function MultiPointInspectionDialogBody({
           <div className="flex justify-center">
             <button
               type="button"
-              onClick={() => setActiveZone("OWNER")}
+              onClick={() => selectZone("OWNER")}
               className={cn(
                 "inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[12px] font-medium transition-colors",
                 activeZone === "OWNER"
@@ -1563,6 +1815,7 @@ function MultiPointInspectionDialogBody({
               <ZonePanel
                 zoneId={activeZone}
                 zs={zoneState(activeZone)}
+                vin={passportData?.vin ?? null}
                 isFirstVisit={isFirstVisit}
                 isRequired={requiredSet.has(activeZone)}
                 tireSizeOptions={tireSizeOptionsFromList(
@@ -1601,6 +1854,7 @@ function MultiPointInspectionDialogBody({
                 onSharedText={(key, value) =>
                   patchSharedText(activeZone, key, value)
                 }
+                onCopyToOpposite={() => copyCornerToOpposite(activeZone)}
                 onPhoto={(file, tag) => handlePhotoUpload(activeZone, file, tag)}
                 onRemovePhoto={(storageId) =>
                   setPhotoToRemove({ zoneId: activeZone, storageId })
@@ -1618,6 +1872,8 @@ function MultiPointInspectionDialogBody({
                   const index = NAV_ZONE_IDS.indexOf(activeZone);
                   openZoneAtTop(NAV_ZONE_IDS[(index + 1) % NAV_ZONE_IDS.length]);
                 }}
+                fieldSaveState={fieldSaveState}
+                onFieldSaving={(key) => markFieldSaving(activeZone, key)}
               />
             )}
           </div>
@@ -1679,6 +1935,83 @@ function MultiPointInspectionDialogBody({
 // ---------------------------------------------------------------------------
 // Sub-components
 // ---------------------------------------------------------------------------
+
+// Autosave affordance shown in the progress row: reassures the mechanic their
+// input is registered as they fill in fields, without a manual save step.
+function SaveStatusIndicator({
+  status,
+  enabled,
+}: {
+  status: "idle" | "saving" | "saved" | "error";
+  enabled: boolean;
+}) {
+  if (!enabled) return null;
+  const base =
+    "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors";
+  if (status === "saving") {
+    return (
+      <span className={cn(base, "bg-primary/5 text-muted-foreground")}>
+        <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+      </span>
+    );
+  }
+  if (status === "saved") {
+    return (
+      <span className={cn(base, "bg-emerald-50 text-emerald-700")}>
+        <Check className="h-3 w-3" /> Saved
+      </span>
+    );
+  }
+  if (status === "error") {
+    return (
+      <span className={cn(base, "bg-amber-50 text-amber-700")}>
+        Not saved yet
+      </span>
+    );
+  }
+  // idle: no edits yet — tell the mechanic autosave is on so they trust it.
+  return (
+    <span className={cn(base, "text-muted-foreground")}>
+      Autosaves as you go
+    </span>
+  );
+}
+
+// Per-field save affordance shown right next to the answer the mechanic just
+// entered: a spinner while the debounced draft write is in flight, a green
+// check once the server has it, or an amber "Not saved" if the write failed
+// (autosave keeps retrying on the next edit). This is what lets a mechanic
+// trust that every individual answer is banked before they close the app.
+export type FieldSaveState = "saving" | "saved" | "error";
+
+function FieldSaveBadge({ state }: { state?: FieldSaveState }) {
+  if (!state) return null;
+  if (state === "saving") {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-muted-foreground">
+        <Loader2 className="h-3 w-3 animate-spin" /> Saving…
+      </span>
+    );
+  }
+  if (state === "saved") {
+    return (
+      <span
+        className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-emerald-600"
+        title="Saved — safe to close"
+      >
+        <Check className="h-3 w-3" /> Saved
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-amber-600"
+      title="Not saved yet — this answer will retry on your next edit"
+    >
+      Not saved
+    </span>
+  );
+}
 
 function CarDiagram({
   activeZone,
@@ -1777,6 +2110,7 @@ function CarDiagram({
 function ZonePanel({
   zoneId,
   zs,
+  vin,
   isFirstVisit,
   isRequired,
   tireSizeOptions,
@@ -1792,14 +2126,19 @@ function ZonePanel({
   extraHeader,
   onPatch,
   onSharedText,
+  onCopyToOpposite,
   onPhoto,
   onRemovePhoto,
   onToggleDone,
   onPrevious,
   onNext,
+  fieldSaveState,
+  onFieldSaving,
 }: {
   zoneId: ZoneId;
   zs: ZoneState;
+  /** Vehicle VIN — feeds the fluid catalog picker (make-pinned OEM options). */
+  vin: string | null;
   isFirstVisit: boolean;
   isRequired: boolean;
   /** Axle-resolved tire-size options (vehicle's OEM fitments, generic fallback). */
@@ -1817,13 +2156,47 @@ function ZonePanel({
   extraHeader?: React.ReactNode;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
+  /** Copies this corner's readings onto its same-axle sibling (corners only). */
+  onCopyToOpposite: () => void;
   onPhoto: (file: File, tag?: "general" | "rotor_stamp") => void;
   onRemovePhoto: (storageId: string) => void;
   onToggleDone: () => void;
   onPrevious: () => void;
   onNext: () => void;
+  /** Per-field autosave state, keyed `${zoneId}::${fieldKey}`. */
+  fieldSaveState: Record<string, FieldSaveState>;
+  /** Flags a field as pending-save the moment the mechanic edits it. */
+  onFieldSaving: (fieldKey: string) => void;
 }) {
+  // Transient "Copied ✓" confirmation on the copy-to-opposite button. Reset when
+  // the panel switches zones and auto-cleared after a short beat.
+  const [copiedFlash, setCopiedFlash] = useState(false);
+  useEffect(() => setCopiedFlash(false), [zoneId]);
+  useEffect(() => {
+    if (!copiedFlash) return;
+    const timer = window.setTimeout(() => setCopiedFlash(false), 2200);
+    return () => window.clearTimeout(timer);
+  }, [copiedFlash]);
+  // Refs to each seeded spec field so the "confirm specs match" prompt can jump
+  // straight to the row that needs checking, plus a transient highlight so the
+  // mechanic can see which one they landed on.
+  const specFieldRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [flashedSpecKey, setFlashedSpecKey] = useState<string | null>(null);
+  useEffect(() => setFlashedSpecKey(null), [zoneId]);
+  useEffect(() => {
+    if (!flashedSpecKey) return;
+    const timer = window.setTimeout(() => setFlashedSpecKey(null), 1800);
+    return () => window.clearTimeout(timer);
+  }, [flashedSpecKey]);
   const zone = INSPECTION_ZONES_BY_ID[zoneId];
+  // Same-axle sibling for the one-tap copy (undefined on non-corner zones).
+  const oppositeCorner = OPPOSITE_CORNER[zoneId as CornerZoneId] as
+    | CornerZoneId
+    | undefined;
+  const oppositeLabel = oppositeCorner
+    ? INSPECTION_ZONES_BY_ID[oppositeCorner].label
+    : null;
+  const canCopyOpposite = !!oppositeCorner && zoneHasInput(zoneId, zs);
   const tireReplacementScheduled =
     (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
     completionContext.tireReplacementPositions?.includes(zoneId);
@@ -1842,9 +2215,23 @@ function ZonePanel({
   const specByKey = new Map(specPrefill.map((s) => [s.fieldKey, s]));
   const hasSpecPrefill = specPrefill.length > 0;
   const needsSpecReview = hasSpecPrefill && !zs.done && !specConfirmed;
-  const seededLabels = specPrefill
-    .map((s) => zone.fields.find((f) => f.key === s.fieldKey)?.label ?? s.fieldKey)
-    .filter((label, i, arr) => arr.indexOf(label) === i);
+  // Seeded spec fields in the order they actually render, so the jump-to chips
+  // and the in-place confirm below land in the right places.
+  const seededSpecs = applicableFields
+    .filter((field) => specByKey.has(field.key))
+    .map((field) => ({ fieldKey: field.key, label: field.label }));
+  const firstSeededKey = seededSpecs[0]?.fieldKey;
+  const lastSeededKey = seededSpecs[seededSpecs.length - 1]?.fieldKey;
+  const manySpecs = seededSpecs.length > 1;
+  const scrollToSpec = (fieldKey?: string) => {
+    const key = fieldKey ?? firstSeededKey;
+    if (!key) return;
+    specFieldRefs.current[key]?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+    setFlashedSpecKey(key);
+  };
   return (
     <div className="space-y-1">
       <div className="sticky top-0 z-20 -mx-2 mb-2 flex items-center justify-between gap-2 border-b border-primary/10 bg-card/95 px-2 py-2 backdrop-blur">
@@ -1865,6 +2252,42 @@ function ZonePanel({
             <span className="mr-1 inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-600">
               <Check className="h-3.5 w-3.5" /> confirmed
             </span>
+          ) : null}
+          {oppositeCorner ? (
+            <button
+              type="button"
+              onClick={() => {
+                onCopyToOpposite();
+                setCopiedFlash(true);
+              }}
+              disabled={!canCopyOpposite}
+              title={
+                canCopyOpposite
+                  ? `Copy every reading from this corner to ${oppositeLabel}, then adjust the few that differ`
+                  : `Enter this corner's readings first, then copy them to ${oppositeLabel}`
+              }
+              aria-label={`Copy all readings to ${oppositeLabel}`}
+              className={cn(
+                "mr-0.5 inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[12px] font-medium transition-colors",
+                copiedFlash
+                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                  : canCopyOpposite
+                    ? "border-primary/20 text-muted-foreground hover:bg-primary/5"
+                    : "cursor-not-allowed border-primary/10 text-muted-foreground/40",
+              )}
+            >
+              {copiedFlash ? (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  Copied to {INSPECTION_ZONES_BY_ID[oppositeCorner].short}
+                </>
+              ) : (
+                <>
+                  <Copy className="h-3.5 w-3.5" />
+                  Copy to {INSPECTION_ZONES_BY_ID[oppositeCorner].short}
+                </>
+              )}
+            </button>
           ) : null}
           <button
             type="button"
@@ -1897,18 +2320,29 @@ function ZonePanel({
       {needsSpecReview ? (
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
           <p className="text-[12px] text-amber-900">
-            <span className="font-semibold">
-              {seededLabels.join(", ")}
-            </span>{" "}
-            {seededLabels.length > 1 ? "are" : "is"} pre-filled from this
-            vehicle&apos;s records. Confirm {seededLabels.length > 1 ? "they" : "it"}{" "}
-            still {seededLabels.length > 1 ? "match" : "matches"} — or edit —
-            before completing this zone.
+            {manySpecs ? "These specs are" : "This spec is"} pre-filled from this
+            vehicle&apos;s records. Tap {manySpecs ? "one" : "it"} to jump down and
+            check {manySpecs ? "they" : "it"} still{" "}
+            {manySpecs ? "match" : "matches"} — or edit — then confirm.
           </p>
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {seededSpecs.map((s) => (
+              <button
+                key={s.fieldKey}
+                type="button"
+                onClick={() => scrollToSpec(s.fieldKey)}
+                aria-label={`Jump to ${s.label}`}
+                className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white/70 px-2.5 py-1 text-[12px] font-medium text-amber-900 transition-colors hover:bg-white active:scale-95"
+              >
+                {s.label}
+                <ChevronDown className="h-3 w-3" />
+              </button>
+            ))}
+          </div>
           <button
             type="button"
             onClick={onConfirmSpecs}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-amber-700"
+            className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-600 px-3 py-2 text-[13px] font-semibold text-white hover:bg-amber-700 sm:w-auto"
           >
             <Check className="h-3.5 w-3.5" /> Specs match
           </button>
@@ -1922,37 +2356,78 @@ function ZonePanel({
       {applicableFields.map((field, i) => {
         const prevSection = i > 0 ? applicableFields[i - 1].section : undefined;
         const showSection = field.section && field.section !== prevSection;
+        const isSeeded = specByKey.has(field.key);
         return (
-          <div key={field.key}>
-            {showSection ? (
-              <div className="mb-1 mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-1">
-                {field.section}
-              </div>
-            ) : null}
-            <FieldRow
-              zoneId={zoneId}
-              field={field}
-              zs={zs}
-              isFirstVisit={isFirstVisit}
-              tireSizeOptions={tireSizeOptions}
-              required={isFieldRequiredForZone(
-                zoneId,
-                field.key,
-                completionContext,
-              )}
-              errorMessage={
-                fieldError?.fieldKey === field.key ||
-                (field.key === "tread" &&
-                  fieldError?.fieldKey.startsWith("tread_"))
-                  ? fieldError.message
+          <Fragment key={field.key}>
+            <div
+              ref={
+                isSeeded
+                  ? (el) => {
+                      specFieldRefs.current[field.key] = el;
+                    }
                   : undefined
               }
-              prefill={specByKey.get(field.key)}
-              onSpecEdited={onSpecEdited}
-              onPatch={onPatch}
-              onSharedText={onSharedText}
-            />
-          </div>
+              className={cn(
+                // scroll-mt clears the sticky zone header when we jump here.
+                isSeeded && "scroll-mt-20 rounded-lg transition-shadow",
+                isSeeded &&
+                  flashedSpecKey === field.key &&
+                  "ring-2 ring-amber-400 ring-offset-2 ring-offset-card",
+              )}
+            >
+              {showSection ? (
+                <div className="mb-1 mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-1">
+                  {field.section}
+                </div>
+              ) : null}
+              <FieldRow
+                zoneId={zoneId}
+                field={field}
+                zs={zs}
+                vin={vin}
+                isFirstVisit={isFirstVisit}
+                tireSizeOptions={tireSizeOptions}
+                required={isFieldRequiredForZone(
+                  zoneId,
+                  field.key,
+                  completionContext,
+                )}
+                errorMessage={
+                  fieldError?.fieldKey === field.key ||
+                  (field.key === "tread" &&
+                    fieldError?.fieldKey.startsWith("tread_"))
+                    ? fieldError.message
+                    : undefined
+                }
+                prefill={specByKey.get(field.key)}
+                onSpecEdited={onSpecEdited}
+                onPatch={(patch) => {
+                  onFieldSaving(field.key);
+                  onPatch(patch);
+                }}
+                onSharedText={(key, value) => {
+                  onFieldSaving(field.key);
+                  onSharedText(key, value);
+                }}
+                saveState={fieldSaveState[`${zoneId}::${field.key}`]}
+              />
+            </div>
+            {/* Confirm right where the specs are, so there's no scroll back up. */}
+            {needsSpecReview && field.key === lastSeededKey ? (
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2">
+                <span className="text-[12px] text-amber-900">
+                  {manySpecs ? "Everything above still match?" : "Still matches?"}
+                </span>
+                <button
+                  type="button"
+                  onClick={onConfirmSpecs}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-amber-700"
+                >
+                  <Check className="h-3.5 w-3.5" /> Specs match
+                </button>
+              </div>
+            ) : null}
+          </Fragment>
         );
       })}
 
@@ -2074,6 +2549,7 @@ function FieldRow({
   zoneId,
   field,
   zs,
+  vin,
   isFirstVisit,
   tireSizeOptions,
   required,
@@ -2082,10 +2558,13 @@ function FieldRow({
   onSpecEdited,
   onPatch,
   onSharedText,
+  saveState,
 }: {
   zoneId: ZoneId;
   field: InspectionField;
   zs: ZoneState;
+  /** Vehicle VIN — feeds the fluid catalog picker. */
+  vin: string | null;
   isFirstVisit: boolean;
   /** Axle-resolved tire-size options for this zone (OEM fitments + fallback). */
   tireSizeOptions: InspectionOption[];
@@ -2097,6 +2576,8 @@ function FieldRow({
   onSpecEdited?: () => void;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
+  /** Autosave state for this field's last edit (spinner / check / retry). */
+  saveState?: FieldSaveState;
 }) {
   const clearUnavailable = () => {
     const statuses = { ...zs.statuses };
@@ -2127,6 +2608,7 @@ function FieldRow({
         errorMessage={errorMessage}
         disabled={rotorNotConfirmed}
         onPatch={onPatch}
+        saveState={saveState}
       />
     );
   }
@@ -2138,7 +2620,7 @@ function FieldRow({
     );
     return (
       <div className="border-b border-primary/10">
-        <Row label={field.label} required={required}>
+        <Row label={field.label} required={required} saveState={saveState}>
           <div className="flex flex-wrap gap-2">
             {(["g", "y", "r"] as TriValue[]).map((color) => {
               const label = triLabelFor(field.key, color);
@@ -2208,16 +2690,19 @@ function FieldRow({
       >
         <div
           className={cn(
-            "mb-1.5 text-[13px] text-foreground",
+            "mb-1.5 flex items-center gap-2 text-[13px] text-foreground",
             required && "font-medium",
           )}
         >
-          {field.label}
-          {required ? (
-            <span className="ml-1 text-red-500" title="Required">
-              *
-            </span>
-          ) : null}
+          <span className="flex-1">
+            {field.label}
+            {required ? (
+              <span className="ml-1 text-red-500" title="Required">
+                *
+              </span>
+            ) : null}
+          </span>
+          <FieldSaveBadge state={saveState} />
         </div>
         <div className="flex flex-wrap gap-2">
           {field.options.map((option, index) => {
@@ -2288,16 +2773,19 @@ function FieldRow({
       >
         <div
           className={cn(
-            "mb-1.5 text-[13px] text-foreground",
+            "mb-1.5 flex items-center gap-2 text-[13px] text-foreground",
             required && "font-medium",
           )}
         >
-          {field.label}
-          {required ? (
-            <span className="ml-1 text-red-500" title="Required">
-              *
-            </span>
-          ) : null}
+          <span className="flex-1">
+            {field.label}
+            {required ? (
+              <span className="ml-1 text-red-500" title="Required">
+                *
+              </span>
+            ) : null}
+          </span>
+          <FieldSaveBadge state={saveState} />
         </div>
         <div className="space-y-2">
           {entries.map((entry, index) => (
@@ -2389,7 +2877,7 @@ function FieldRow({
     const showPrefillTag = !!prefill && value === prefill.value;
     return (
       <div className="border-b border-primary/10">
-        <Row label={field.label} required={required}>
+        <Row label={field.label} required={required} saveState={saveState}>
           <div className="flex w-44 flex-col items-end gap-1">
             <CompactSelect
               id={`inspection-${zoneId}-${field.key}`}
@@ -2418,6 +2906,47 @@ function FieldRow({
           {isMeasurementMethod || field.key === "rotor_applicable"
             ? null
             : unavailableControl}
+        </Row>
+        {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+      </div>
+    );
+  }
+
+  // Fluid PRODUCT fields (coolant / ATF / brake / power-steering) use the same
+  // OEM + scraped catalog picker as the post-job survey instead of the generic
+  // combobox. Value lives in the text bucket, where the passport prefill seeds
+  // it and job_actuals reads it. Oil viscosity/type keep the generic picker —
+  // oil is chosen by grade+type, not a single SKU.
+  if (field.type === "text" && FLUID_KIND_BY_KEY[field.key]) {
+    const fluidValue = zs.text[field.key] ?? "";
+    const showFluidPrefillTag = !!prefill && fluidValue === prefill.value;
+    return (
+      <div className="border-b border-primary/10">
+        <Row
+          label={field.label}
+          required={required}
+          badge={field.firstVisitOnly && isFirstVisit ? "1ST" : undefined}
+          saveState={saveState}
+        >
+          <div className="w-64 space-y-1.5">
+            <FluidCatalogSelectField
+              value={fluidValue}
+              onChange={(next) => {
+                if (prefill) onSpecEdited?.();
+                onSharedText(field.key, next);
+              }}
+              fluidKind={FLUID_KIND_BY_KEY[field.key]}
+              vin={vin}
+              placeholder="Search or select"
+              otherPlaceholder={`Enter ${field.label.toLowerCase()}`}
+            />
+            {showFluidPrefillTag ? (
+              <div className="flex justify-end">
+                <SpecSourceTag source={prefill!.source} />
+              </div>
+            ) : null}
+          </div>
+          {unavailableControl}
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
       </div>
@@ -2472,7 +3001,7 @@ function FieldRow({
   if (options.length === 0) {
     return (
       <div className="border-b border-primary/10">
-        <Row label={field.label} required={required}>
+        <Row label={field.label} required={required} saveState={saveState}>
           <div className="flex w-48 flex-col items-end gap-1">
             <input
               id={`inspection-${zoneId}-${field.key}`}
@@ -2496,6 +3025,7 @@ function FieldRow({
         label={field.label}
         required={required}
         badge={field.firstVisitOnly && isFirstVisit ? "1ST" : undefined}
+        saveState={saveState}
       >
         <div className="w-48 space-y-1.5">
           <Combobox
@@ -2580,6 +3110,7 @@ function MeasureField({
   errorMessage,
   disabled,
   onPatch,
+  saveState,
 }: {
   zoneId: ZoneId;
   field: Extract<InspectionField, { type: "measure" }>;
@@ -2588,6 +3119,8 @@ function MeasureField({
   errorMessage?: string;
   disabled?: boolean;
   onPatch: (patch: Partial<ZoneState>) => void;
+  /** Autosave state for this field's last edit (spinner / check / retry). */
+  saveState?: FieldSaveState;
 }) {
   const value = zs.measures[field.key] ?? "";
   const result = classifyInspectionMeasure(field, zs.measures, zs.select);
@@ -2630,7 +3163,7 @@ function MeasureField({
     };
     return (
       <div className="border-b border-primary/10 py-2.5">
-        <Row label={field.label} hint={field.hint} required={required}>
+        <Row label={field.label} hint={field.hint} required={required} saveState={saveState}>
           {!detailed ? (
             <>
               <input
@@ -2711,7 +3244,7 @@ function MeasureField({
       : field.hint;
   return (
     <div className="border-b border-primary/10">
-      <Row label={field.label} hint={hint} required={required}>
+      <Row label={field.label} hint={hint} required={required} saveState={saveState}>
         <input
           id={`inspection-${zoneId}-${field.key}`}
           aria-invalid={!!errorMessage}
@@ -2890,12 +3423,14 @@ function Row({
   hint,
   required,
   badge,
+  saveState,
   children,
 }: {
   label: string;
   hint?: string;
   required?: boolean;
   badge?: string;
+  saveState?: FieldSaveState;
   children: React.ReactNode;
 }) {
   return (
@@ -2927,6 +3462,7 @@ function Row({
         ) : null}
       </span>
       {children}
+      <FieldSaveBadge state={saveState} />
     </div>
   );
 }

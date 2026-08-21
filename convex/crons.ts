@@ -173,6 +173,28 @@ crons.interval(
   internal.booking_approvals.expireApprovals,
 );
 
+// Safety net for the completion-capture path: retry capture on completed jobs
+// still flagged `awaiting_settlement` (belated customer re-auth, transient
+// Stripe failure), and escalate the aged ones. Without this a shortfall sits
+// uncaptured forever — the completion transition fires capture only once and
+// the webhooks never initiate one.
+crons.interval(
+  "reconcile-unsettled-bookings",
+  { minutes: 30 },
+  internal.payments_reconcile.reconcileUnsettledBookings,
+  {},
+);
+
+// Warn ops ~1 day before a card authorization hits Stripe's ~7-day expiry on a
+// still-active (pre-service) booking, so the hold can be re-confirmed or the
+// booking rescheduled before it lapses and capture becomes impossible.
+crons.daily(
+  "flag-expiring-holds",
+  { hourUTC: 9, minuteUTC: 0 },
+  internal.payments_reconcile.flagExpiringHolds,
+  {},
+);
+
 // Pre-Job Approval: drain notification_outbox rows with channel="push" via
 // the Expo Push API. Existing SMS/email dispatchers handle their own
 // channels; this is the push sibling.

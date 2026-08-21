@@ -22,10 +22,14 @@ import { advancedVinDecode, extractVDBFields } from "./lib/vehicleDatabases";
 import { findHaloVariant } from "./lib/haloVariantRules";
 import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
-import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
+import {
+  contradictsDecodedEngine,
+  isSyntheticEngineCode,
+  lookupKnownEngineCode,
+} from "./vehicleEnrichment/utils/engineLookup";
 import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
 import { sanitizeCylinders } from "./vehicleEnrichment/cylindersRepair";
-import { acceptNormalizedTrim } from "./vehicleEnrichment/identityResolution";
+import { acceptNormalizedModel, acceptNormalizedTrim } from "./vehicleEnrichment/identityResolution";
 import { parseGvwrUpperLbs } from "./vehicleEnrichment/validation/sanityChecks";
 import { assembleVariantFingerprint, type TransmissionFamily } from "./vehicleEnrichment/variantFingerprint";
 import { resolveFuelClass } from "./vehicleEnrichment/fuelTypeResolver";
@@ -491,8 +495,37 @@ export const processVin = internalAction({
         console.log(`[decode] VDB engine code "${vdb.engineCode}" is a placeholder/marketing term — ignored`);
       }
 
-      let finalEngineCode = vdbCode || nhtsaEngineClean || "";
-      const engineCodeSource = vdbCode ? "vdb" : nhtsaEngineClean ? "nhtsa" : "none";
+      // ── Engine-spec gate (round 3, Aug 2026) ──
+      // A decoder can hand back a REAL code for the WRONG engine in the same
+      // lineup: the 2022 Macan (vPIC: 2.0L, 4-cyl, 261 hp — an EA888) was
+      // stored as EA839, the 2.9L V6 of the Macan S/GTS/Turbo, because VDB
+      // decoded the trim as "S". Format checks cannot see this (EA839 is a
+      // real Porsche code in real code shape) and adversarial web search
+      // cannot refute it (EA839 genuinely exists on a 2022 Macan). Physical
+      // facts can. Fail-open: unknown codes and undecoded engines pass.
+      const decodedEngine = {
+        displacementL: merged.displacement,
+        cylinders: merged.cylinders,
+      };
+      const gateEngineCode = (code: string, source: string): string => {
+        if (!code) return "";
+        const verdict = contradictsDecodedEngine(code, decodedEngine);
+        if (verdict.known && verdict.contradicts) {
+          console.warn(`[decode] ENGINE SPEC GATE (${source}) — ${verdict.reason}; rejected`);
+          return "";
+        }
+        return code;
+      };
+
+      // Gated once, up front: downstream conditions test whether VDB supplied a
+      // code, and a code the facts contradict must not count as "supplied" —
+      // otherwise rejecting it would also silently block the normalizer's
+      // replacement below (`!vdbCode`), leaving the vehicle with no code at all.
+      const vdbCodeOk = gateEngineCode(vdbCode, "vdb");
+      const nhtsaCodeOk = gateEngineCode(nhtsaEngineClean, "nhtsa");
+
+      let finalEngineCode = vdbCodeOk || nhtsaCodeOk || "";
+      const engineCodeSource = vdbCodeOk ? "vdb" : nhtsaCodeOk ? "nhtsa" : "none";
       console.log(`[decode] Engine code after merge: "${finalEngineCode}" (from ${engineCodeSource})`);
 
       // AI normalization (fix NHTSA model/trim/drivetrain mislabeling)
@@ -515,7 +548,32 @@ export const processVin = internalAction({
           engineModel: finalEngineCode || nhtsaEngineRaw,
         });
         if (normalized) {
-          if (normalized.model) finalModel = normalized.model;
+          // Round 3 (Aug 2026): the model was applied unconditionally here and
+          // a 2022 Outlander was stored as an "Outlander Sport" — a different
+          // vehicle — though neither decoder ever said "Sport". Same
+          // evidence-overlap philosophy as the trim gate below.
+          if (normalized.model) {
+            if (
+              // NAMEPLATE evidence only. bodyClass is deliberately excluded:
+              // vPIC returns "Sport Utility Vehicle [SUV]/..." for this VIN,
+              // which would corroborate "Sport" on any SUV.
+              acceptNormalizedModel(normalized.model, merged.model, [
+                merged.model,
+                merged.trim,
+                merged.trim2,
+                merged.series,
+                merged.series2,
+                vdb?.model,
+                vdb?.trim,
+              ])
+            ) {
+              finalModel = normalized.model;
+            } else {
+              console.warn(
+                `[decode] Normalizer model "${normalized.model}" rejected — extends decoded nameplate "${merged.model}" with a token no decoder produced (kept "${finalModel}")`,
+              );
+            }
+          }
           // Round 8 (batch-10): accept the LLM's trim only when it overlaps the
           // decode evidence — the unconditional override stored a Lariat F-150
           // as "FX4 SuperCrew" and a 745Li as "745i" (trims no decoder produced).
@@ -535,8 +593,9 @@ export const processVin = internalAction({
               );
             }
           }
-          if (normalized.engine_code && !vdbCode && !isSyntheticEngineCode(normalized.engine_code)) {
-            finalEngineCode = normalized.engine_code;
+          if (normalized.engine_code && !vdbCodeOk && !isSyntheticEngineCode(normalized.engine_code)) {
+            const accepted = gateEngineCode(normalized.engine_code, "normalizer");
+            if (accepted) finalEngineCode = accepted;
           }
           if (normalized.drivetrain_type) drivetrainType = normalized.drivetrain_type;
         }
@@ -559,6 +618,23 @@ export const processVin = internalAction({
           `[decode] Halo variant promoted: model "${finalModel}" → "${halo.promotedModel}" (rule=${halo.ruleId}, trim="${finalTrim}")`
         );
         finalModel = halo.promotedModel;
+      }
+
+      // ── Deterministic year-pinned engine code (round 3, Aug 2026) ──
+      // The generation-aware rule ("the 2019+ Altima 2.5 is PR25DD, not the
+      // older QR25DE") existed only as advice inside the search prompt below.
+      // The 2022 Outlander resolved NO code at all and shipped the descriptor
+      // "2.5l_4cyl", though its engine IS that same Nissan-shared PR25DD.
+      // Where make+model+year+displacement pin the engine as a public fact,
+      // answer from the table and skip the search entirely.
+      if (!finalEngineCode || isSyntheticEngineCode(finalEngineCode)) {
+        const known = lookupKnownEngineCode(merged.make, finalModel, merged.year, decodedEngine);
+        if (known) {
+          console.log(
+            `[decode] Engine code from year-pinned table: "${known.code}" (${known.note}) — was "${finalEngineCode}"`,
+          );
+          finalEngineCode = known.code;
+        }
       }
 
       // Web search + Haiku fallback when still no real engine code
@@ -609,8 +685,13 @@ export const processVin = internalAction({
               code.length >= 2 &&
               code.length <= 20
             ) {
-              console.log(`[decode] Search + Haiku resolved engine code: ${code} (was "${finalEngineCode}")`);
-              finalEngineCode = code;
+              // Search can surface the right-format code for the wrong sibling
+              // engine (the S/GTS V6 on a base four). Physical facts decide.
+              const accepted = gateEngineCode(code, "search+haiku");
+              if (accepted) {
+                console.log(`[decode] Search + Haiku resolved engine code: ${code} (was "${finalEngineCode}")`);
+                finalEngineCode = accepted;
+              }
             } else if (code && DESCRIPTOR_ANSWERS.has(code.toLowerCase())) {
               console.log(`[decode] Search + Haiku returned descriptor "${code}", not an engine code — ignored`);
             }

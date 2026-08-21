@@ -7,10 +7,16 @@ import { enqueueNotificationOutbox } from "../bookings";
 import { recomputeLaborForConfigService } from "../lib/labor_aggregation";
 import { isLaborOnlyService } from "../lib/servicePartsReference";
 import { partFitsConfigMake } from "../partSelector";
-import { makesSameFamily, sanitizePartNumber } from "./contentSanitization";
+import {
+  makesSameFamily,
+  salvageForMakeFormat,
+  sanitizePartNumber,
+} from "./contentSanitization";
 import { normalizeOemNumber } from "./priceParser";
 import { checkRoleIdentity } from "./roleIdentity";
 import { isMarketplaceDomain, isMarketplaceUrl } from "./sourceRegistry";
+import { normalizeFluidPrice } from "../lib/fluidPackSize";
+import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import type { ExistenceVerdict } from "./partIndex";
 import { isRunStale, RUN_IN_PROGRESS_STATUSES, stripVerifiedFields } from "./runFence";
 import { WEAR_ITEM_SERVICE_SLUGS, parseFrontWiperSizes } from "./types";
@@ -977,6 +983,34 @@ export const upsertPartAndFitment = internalMutation({
       cleanNumber = sanitizePartNumber(args.oem_part_number, args.build_source_make);
     }
     if (!cleanNumber) {
+      // Hyphenation salvage. Catalog sources publish OEM numbers with the
+      // separators already stripped ("M2GZ1125A" for M2GZ-1125-A), and several
+      // make formats REQUIRE those separators — so a genuine number can fail
+      // its own make's pattern at the write even after the sourcing rung
+      // format-gated it (live: the Nautilus rotor cleared the RockAuto rung's
+      // gate + the fitment verifier and then died HERE as invalid_number).
+      // Identity below is the NORMALIZED number, so separators never affect
+      // what a part IS — the salvage only asks whether some legitimate
+      // spelling has the make's shape, and stores the source's own form.
+      for (const mk of [
+        badgeMake,
+        args.build_source_make &&
+        args.build_source_make.toLowerCase() !== (badgeMake ?? "").toLowerCase()
+          ? args.build_source_make
+          : null,
+      ]) {
+        if (!mk) continue;
+        const salvaged = salvageForMakeFormat(args.oem_part_number, mk, sanitizePartNumber);
+        if (salvaged) {
+          console.log(
+            `[v8-parts] format gate passed via hyphenation salvage: "${args.oem_part_number}" (${args.subcategory}) for make=${mk}`,
+          );
+          cleanNumber = salvaged;
+          break;
+        }
+      }
+    }
+    if (!cleanNumber) {
       console.log(
         `[v8-parts] REJECTED part number at write: "${args.oem_part_number}" (${args.subcategory}) failed sanitization for make=${badgeMake ?? "?"}${args.build_source_make ? `/${args.build_source_make}` : ""}`,
       );
@@ -1277,6 +1311,51 @@ export const upsertPartPrice = internalMutation({
 
     const now = Date.now();
 
+    // ── Fluid container gate (Aug 2026) ───────────────────────────────────
+    // Fluids bill per quart x capacity, so a 5-quart JUG price stored in the
+    // per-unit column over-quotes by the pack size (a $36 jug on a 6-quart
+    // car = $216 of oil). The absolute price bands cannot catch it — that $36
+    // sits inside engine_oil's [4, 40]. Only the listing title distinguishes
+    // a dear bottle from a cheap jug. Audited live: 57 of 382 usable fluid
+    // rows read as container prices, and 20 parts had NO usable per-unit row
+    // at all, so the median could not save them.
+    //
+    // Normalize when the size is stated (a jug is legitimate evidence once
+    // divided); when it is not stated and the figure is implausible per unit,
+    // keep the row for audit but type it `unverified` — the poison list then
+    // excludes it from customer-facing math, exactly as a band violation.
+    let effectivePrice = args.price;
+    let effectivePriceType = args.price_type;
+    let effectivePackQuarts: number | undefined;
+    try {
+      const pricedPart: any = await ctx.db.get(args.part_id);
+      if (pricedPart) {
+        const verdict = normalizeFluidPrice({
+          subcategory: pricedPart.subcategory ?? null,
+          price: args.price,
+          title: pricedPart.scraped_name ?? pricedPart.name ?? null,
+        });
+        if (verdict.action === "normalized") {
+          console.log(
+            `[upsertPartPrice] fluid pack normalized: ${pricedPart.oem_part_number} ` +
+              `$${args.price} / ${verdict.packQuarts}qt → $${verdict.price}/qt`,
+          );
+          effectivePrice = verdict.price;
+          effectivePackQuarts = verdict.packQuarts ?? undefined;
+        } else if (verdict.action === "suspect_unpriceable") {
+          console.warn(
+            `[upsertPartPrice] fluid price $${args.price} for ${pricedPart.oem_part_number} ` +
+              `(${pricedPart.subcategory}) reads as a container price with no stated size — ` +
+              `storing as ${UNVERIFIED_PRICE_TYPE}`,
+          );
+          effectivePriceType = UNVERIFIED_PRICE_TYPE;
+        }
+      }
+    } catch (e) {
+      // Never let the gate cost us a price row.
+      console.warn("[upsertPartPrice] fluid pack gate failed (non-fatal):", e);
+    }
+
     // Wave-2 "source with the data": the director's source_registry surface
     // fills from sources we ACTUALLY used, not a speculative discovery pass.
     // Evidence-producing domains auto-register in sourceScoring; price-only
@@ -1314,20 +1393,22 @@ export const upsertPartPrice = internalMutation({
 
     if (existing) {
       await ctx.db.patch(existing._id, {
-        price: args.price,
-        price_type: args.price_type,
+        price: effectivePrice,
+        price_type: effectivePriceType,
         source_url: args.source_url,
         msrp: args.msrp,
         discount: args.discount,
         refreshed_at: now,
+        ...(effectivePackQuarts != null ? { pack_quarts: effectivePackQuarts } : {}),
       });
       return existing._id;
     }
 
     return await ctx.db.insert("part_prices", {
       part_id: args.part_id,
-      price: args.price,
-      price_type: args.price_type,
+      price: effectivePrice,
+      price_type: effectivePriceType,
+      ...(effectivePackQuarts != null ? { pack_quarts: effectivePackQuarts } : {}),
       source_url: args.source_url,
       source_domain: args.source_domain,
       msrp: args.msrp,

@@ -223,8 +223,13 @@ export const getAvailabilityByShopAndMonth = query({
     cutoffTime: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const start = new Date(args.year, args.month, 1);
-    const end = new Date(args.year, args.month + 1, 0);
+    // `month` arrives 1-based from the client (1 = January). JS Date months are
+    // 0-based, so subtract 1 for the first-of-month and use `month` as the
+    // exclusive-next-month sentinel (day 0 = last day of the requested month).
+    // Without this the whole scan runs one month ahead, painting the NEXT
+    // month's open/closed pattern onto this month's date chips.
+    const start = new Date(args.year, args.month - 1, 1);
+    const end = new Date(args.year, args.month, 0);
     const startStr = start.toISOString().slice(0, 10);
     const endStr = end.toISOString().slice(0, 10);
     const availableDates = new Set<string>();

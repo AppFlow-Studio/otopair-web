@@ -3446,10 +3446,22 @@ function PartsStep({
   // parts list below. `tireLines` mirrors the is_tire rows in `parts`; writing
   // back replaces just that subset so non-tire rows (multi-service jobs) keep
   // their positions and index-based edit handlers stay correct.
-  const tireLines = useMemo<TireLine[]>(
-    () => tireLinesFromParts(parts.filter((p) => isTirePartRow(p))),
-    [parts],
+  // The editor's working set. Kept in local state (not derived from `parts`)
+  // so a freshly-added, still-blank axle line survives — blank lines are
+  // filtered out when they're written back to `parts` for persistence, which
+  // would otherwise make "Add front/rear tires" appear to do nothing.
+  const [tireLines, setTireLinesState] = useState<TireLine[]>(() =>
+    tireLinesFromParts(parts.filter((p) => isTirePartRow(p))),
   );
+  // Adopt tire rows that arrive from an external source (the prejob seed in the
+  // parent, or a walk-in's priced snapshot) — but only as the initial fill, so
+  // it never clobbers in-progress blank lines the mechanic is editing.
+  useEffect(() => {
+    const fromParts = tireLinesFromParts(parts.filter((p) => isTirePartRow(p)));
+    setTireLinesState((cur) =>
+      cur.length === 0 && fromParts.length > 0 ? fromParts : cur,
+    );
+  }, [parts]);
   // Where tire lines attribute: a booked catalog tire service (service_id) wins;
   // otherwise a mid-job "found work" line named tire replacement (custom
   // line → custom_service_name). Preserves whatever existing tire rows already
@@ -3479,6 +3491,11 @@ function PartsStep({
     };
   }, [parts, partsRequiredServices, customPartLines]);
   function setTireLines(next: TireLine[]) {
+    // Keep every line (including blank ones the mechanic is still filling in)
+    // in the editor's working set...
+    setTireLinesState(next);
+    // ...but only persist filled lines onto `parts` (tireLinesToPartPayloads
+    // drops blanks) so the booking snapshot never carries an empty tire row.
     const payloads = tireLinesToPartPayloads(next, tireAttribution.serviceId).map(
       (p) => ({
         ...p,

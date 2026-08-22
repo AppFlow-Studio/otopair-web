@@ -320,6 +320,7 @@ export default function MechanicDashboard() {
   async function handleCompleteAction(
     payload: PostJobSurveyPayload,
     customJobOutcomes?: CustomJobOutcome[],
+    resolvedPriorRecommendationIds?: string[],
   ) {
     if (!workflowBookingId) return;
 
@@ -331,6 +332,11 @@ export default function MechanicDashboard() {
         customJobOutcomes:
           customJobOutcomes && customJobOutcomes.length > 0
             ? customJobOutcomes
+            : undefined,
+        resolvedPriorRecommendationIds:
+          resolvedPriorRecommendationIds &&
+          resolvedPriorRecommendationIds.length > 0
+            ? (resolvedPriorRecommendationIds as Id<"job_recommendations">[])
             : undefined,
       });
       setToast("Booking completed");
@@ -791,20 +797,31 @@ export default function MechanicDashboard() {
         }
         onClose={closeWorkflowDialog}
         onSubmit={handleCompleteAction}
-        layoverNotes={
-          (selectedWorkflowBooking?.jobActuals as any)?.inProgressNotes ?? ""
-        }
+        layoverNotes={[
+          (selectedWorkflowBooking?.jobActuals as any)?.inProgressNotes ?? "",
+          // "Why the added scope / why this adjustment" reasons for agreed
+          // changes — folded in so they seed the findings and appear in the
+          // "From the active job" context instead of being retyped.
+          ...(((selectedWorkflowBooking as any)?.scopeReasons ?? []) as string[]),
+        ]
+          .filter((line: string) => String(line).trim())
+          .join("\n")}
         layoverPhotos={
-          ((selectedWorkflowBooking?.jobActuals as any)?.inProgressPhotos ?? []).map(
-            (p: any) => ({
-              id: p.storageId,
-              storageId: p.storageId,
-              previewUrl: p.url ?? "",
-              caption: p.caption ?? "",
-              status: "ready" as const,
-              takenAt: p.takenAt ?? undefined,
-            }),
-          )
+          [
+            ...((selectedWorkflowBooking?.jobActuals as any)?.inProgressPhotos ??
+              []),
+            // Evidence attached to agreed mid/pre-job changes rides in on the
+            // same read-only stream so it's carried into (and sent with) the
+            // final report.
+            ...((selectedWorkflowBooking as any)?.scopePhotos ?? []),
+          ].map((p: any) => ({
+            id: p.storageId,
+            storageId: p.storageId,
+            previewUrl: p.url ?? "",
+            caption: p.caption ?? "",
+            status: "ready" as const,
+            takenAt: p.takenAt ?? undefined,
+          }))
         }
         lockBilling={!workflowLockedQuote.isWalkIn}
         quotedParts={workflowLockedQuote.lockedQuoteParts}

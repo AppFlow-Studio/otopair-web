@@ -308,6 +308,37 @@ describe("opening and resolving", () => {
     expect(audiences).toEqual(["in_app", "sms"]);
   });
 
+  it("carries the car and mechanic on every audience's payload", async () => {
+    // The whole point of the enrichment: an alert that says which car, whose
+    // bay, and why. Car resolves by VIN even without a vehicle_id.
+    const t = makeT();
+    const base = await seed(t);
+    await t.run(async (ctx: any) =>
+      ctx.db.insert("vehicles", {
+        vin: "VINBLK0001",
+        metadata: { make: "Toyota", model: "Camry" },
+        year: 2020,
+      } as any),
+    );
+
+    await t.withIdentity(identityFor(STAFF)).mutation(api.jobBlockers.openBlocker, {
+      bookingId: base.bookingId,
+      kind: "parts_delay",
+      note: "Wrong pump in the box",
+    });
+
+    const outbox = await t.run(async (ctx: any) =>
+      ctx.db.query("notification_outbox").collect(),
+    );
+    expect(outbox).toHaveLength(2);
+    for (const row of outbox) {
+      // Seed mechanic is "Mike R"; the by_vin lookup yields "2020 Toyota Camry".
+      expect(row.payload.vehicleLabel).toBe("2020 Toyota Camry");
+      expect(row.payload.mechanicName).toBe("Mike R");
+      expect(row.payload.label).toBe(KIND_POLICY.parts_delay.label);
+    }
+  });
+
   it("damage notifies the owner only", async () => {
     const t = makeT();
     const base = await seed(t);

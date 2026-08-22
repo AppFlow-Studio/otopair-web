@@ -17,6 +17,7 @@ import { ArrowRight, Bell, Car, Clock, Ellipsis, Loader2, MessageSquare, User, X
 import { useEntityLabel } from "@/lib/use-entity-label";
 import OverrunExtendCard from "@/components/mechanic/overrun-extend-card";
 import InvoiceNumberField from "@/components/invoice-number-field";
+import ExtraWorkStatus from "@/components/booking/extra-work-status";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import PostjobReportSection from "@/components/booking/postjob-report-section";
 import SendReceiptCard from "@/components/booking/send-receipt-card";
@@ -307,6 +308,7 @@ function AwaitingHoldConfirmation({
   priorHoldCents,
   sentLabel,
   slaLabel,
+  addedServiceNames,
   onWithdraw,
 }: {
   cycle: ApprovalCycle;
@@ -315,6 +317,10 @@ function AwaitingHoldConfirmation({
   priorHoldCents: number | null;
   sentLabel: string | null;
   slaLabel: string | null;
+  /** Mid-job only: the services this pending request is asking the customer to
+   *  approve, so the banner names *what* is waiting rather than a bare "added
+   *  scope". Empty/undefined for the pre-job and re-auth cycles. */
+  addedServiceNames?: string[];
   onWithdraw: () => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
@@ -345,6 +351,13 @@ function AwaitingHoldConfirmation({
         />
         <div className="min-w-0 flex-1">
           <p className="text-[13px] font-semibold leading-snug">{title}</p>
+          {cycle === "mid_job" &&
+            addedServiceNames &&
+            addedServiceNames.length > 0 && (
+              <p className="mt-0.5 text-[12px] leading-snug text-amber-800">
+                Added: {addedServiceNames.join(", ")}
+              </p>
+            )}
           {newHoldCents != null && (
             <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2 text-[13px]">
               <span className="font-semibold tabular-nums">
@@ -712,6 +725,18 @@ export interface JobDetailData {
       url?: string | null;
     }>;
   } | null;
+  // Evidence photos from agreed mid/pre-job changes ("Why the added scope?"),
+  // resolved to URLs by getJobDetail. Carried into the post-job report the same
+  // way layover photos are. Top-level so it resolves without a job_actuals row.
+  scopePhotos?: Array<{
+    storageId: string;
+    caption?: string | null;
+    takenAt?: number;
+    url?: string | null;
+  }>;
+  // The mechanic's "why the added scope / why this adjustment" reasons for those
+  // same agreed changes — folded into the post-job findings seed.
+  scopeReasons?: string[];
   customerLateMonitor?: {
     pushEnqueuedAtMs: number | null;
     smsEnqueuedAtMs: number | null;
@@ -954,6 +979,18 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     // they must confirm the new hold on their card next). Both block work.
     const holdAwaitingReauth = holdApproval.isReauthRequired;
     const awaitingHold = holdApproval.isPending || holdAwaitingReauth;
+    // For a mid-job hold, name the pending services in the banner. Same source
+    // the Extra work card reads below — Convex dedupes the identical
+    // subscription, so this isn't a second network round-trip.
+    const midJobScopeChanges = useQuery(
+      api.booking_approvals.getMidJobScopeChanges,
+      job && awaitingHold && approvalPendingCycle === "mid_job"
+        ? { bookingId: job._id }
+        : "skip",
+    ) as Array<{ state: string; addedServiceNames: string[] }> | undefined;
+    const pendingAddedServiceNames = (midJobScopeChanges ?? [])
+      .filter((c) => c.state === "pending")
+      .flatMap((c) => c.addedServiceNames ?? []);
     const activityLog = useQuery(
       (api as any).booking_activity.getBookingActivityLog,
       job ? { bookingId: job._id } : "skip"
@@ -1459,6 +1496,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     async function handleCompleteWithPostjob(
       payload: PostJobSurveyPayload,
       customJobOutcomes?: CustomJobOutcome[],
+      resolvedPriorRecommendationIds?: string[],
     ) {
       if (!job?._id) return;
       setActionError("");
@@ -1470,6 +1508,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           customJobOutcomes:
             customJobOutcomes && customJobOutcomes.length > 0
               ? customJobOutcomes
+              : undefined,
+          resolvedPriorRecommendationIds:
+            resolvedPriorRecommendationIds &&
+            resolvedPriorRecommendationIds.length > 0
+              ? (resolvedPriorRecommendationIds as Id<"job_recommendations">[])
               : undefined,
         });
         setShowPostjobDialog(false);
@@ -2139,6 +2182,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     }
                     sentLabel={holdApproval.relativeSentLabel}
                     slaLabel={holdApproval.slaCountdownLabel}
+                    addedServiceNames={pendingAddedServiceNames}
                     onWithdraw={holdApproval.onWithdraw}
                   />
                 ) : null}
@@ -2201,6 +2245,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     variant="orange"
                   />
                 )}
+
+                {/* Mid-job extra-work confirmation state — waiting on the
+                    customer, approved, or declined (kept for the record, not
+                    charged). Renders nothing when there's no extra work. */}
+                <ExtraWorkStatus bookingId={job._id as Id<"bookings">} />
 
                 <InvoiceNumberField
                   bookingId={job._id as Id<"bookings">}
@@ -2656,8 +2705,22 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           isSubmitting={isSubmittingPostjob}
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
-          layoverNotes={job?.jobActuals?.inProgressNotes ?? ""}
-          layoverPhotos={(job?.jobActuals?.inProgressPhotos ?? []).map((p) => ({
+          layoverNotes={[
+            job?.jobActuals?.inProgressNotes ?? "",
+            // The "why the added scope / why this adjustment" reasons the
+            // mechanic already gave for agreed changes — folded in so they seed
+            // the findings and show in the "From the active job" context.
+            ...((job?.scopeReasons ?? []) as string[]),
+          ]
+            .filter((line) => line.trim())
+            .join("\n")}
+          layoverPhotos={[
+            ...(job?.jobActuals?.inProgressPhotos ?? []),
+            // Evidence attached to agreed mid/pre-job changes rides in on the
+            // same read-only stream so it's carried into (and sent with) the
+            // final report.
+            ...(job?.scopePhotos ?? []),
+          ].map((p) => ({
             id: p.storageId,
             storageId: p.storageId,
             previewUrl: p.url ?? "",

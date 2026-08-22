@@ -50,7 +50,7 @@ export default function PartnerClient() {
   return (
     <div className="w-full">
       {/* Same floating glass pill nav as the flagship home hero. */}
-      <PillNav links={NAV_LINKS} cta={NAV_CTA} />
+      <PillNav links={NAV_LINKS} cta={NAV_CTA} shopSignIn={null} />
 
       {/* ---------- Hero ---------- */}
       {/* Cool blue → white wash, matching the home hero, so the glass nav reads

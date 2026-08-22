@@ -36,6 +36,26 @@ function roleLabel(role: string): string {
   return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// Decode the role claim straight out of a Clerk session JWT so we can tell,
+// deterministically, when the freshly-granted shop_owner role has landed in the
+// token that middleware will read on the next navigation.
+function readRoleFromJwt(jwt: string | null | undefined): string | undefined {
+  if (!jwt) return undefined;
+  const parts = jwt.split(".");
+  if (parts.length < 2) return undefined;
+  try {
+    const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
+    const claims = JSON.parse(atob(b64 + pad)) as {
+      metadata?: { role?: string };
+      public_metadata?: { role?: string };
+    };
+    return claims?.metadata?.role ?? claims?.public_metadata?.role;
+  } catch {
+    return undefined;
+  }
+}
+
 function InviteCard() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -94,14 +114,27 @@ function InviteCard() {
       if (res.ok && data?.success) {
         // The accept route just PATCHed our Clerk role server-side, but the
         // active session JWT still carries the pre-claim metadata — a role-gated
-        // route (/shop) would bounce to /shop-only. Reload the user and mint a
-        // fresh token (with the new shop_owner claim), then hard-navigate so
-        // middleware re-reads the updated session.
+        // route (/shop) would bounce to /shop-only. Reload the user, then POLL a
+        // fresh (uncached) token until the new shop_owner claim is actually live
+        // before the full-page nav. A single refresh isn't enough: the
+        // metadata→JWT propagation lags, and navigating early is exactly what
+        // made brand-new owners "spin" and land back on /shop-only. Mirrors the
+        // mechanic accept-invite flow. The 12s cap still navigates on timeout so
+        // we never hang.
         try {
           await user?.reload();
-          await getToken({ skipCache: true });
         } catch {
-          /* refresh best-effort — worst case the portal refreshes the token itself */
+          /* refresh best-effort */
+        }
+        const deadline = Date.now() + 12000;
+        while (Date.now() < deadline) {
+          try {
+            const jwt = await getToken({ skipCache: true });
+            if (readRoleFromJwt(jwt)) break;
+          } catch {
+            /* keep polling */
+          }
+          await new Promise((r) => setTimeout(r, 500));
         }
         window.location.assign(data.redirectTo ?? "/shop/setup");
       } else {

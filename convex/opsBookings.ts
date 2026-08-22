@@ -823,30 +823,54 @@ export const moneyDetail = query({
       .withIndex("by_booking_and_cycle", (q) => q.eq("booking_id", id))
       .collect();
     approvalRows.sort((a, b) => a.submitted_at_ms - b.submitted_at_ms);
+    // Off-catalog lines, so each mid-job approval cycle can name the extra work
+    // it carried — and, for a declined/expired cycle, the parts that were
+    // denied (kept on the row for audit, never charged).
+    const customJobRows = await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q) => q.eq("booking_id", id))
+      .collect();
     const approvals = await Promise.all(
-      approvalRows.map(async (a) => ({
-        cycle: a.cycle,
-        submittedAtMs: a.submitted_at_ms,
-        submittedBy: a.submitted_by_user_id
-          ? userDisplayName(await ctx.db.get(a.submitted_by_user_id))
-          : null,
-        mechanicSetPrice: centsToDollars(a.mechanic_set_price_cents),
-        priorCeiling: centsToDollars(a.prior_ceiling_cents),
-        over: a.mechanic_set_price_cents > a.prior_ceiling_cents,
-        parts: centsToDollars(a.parts_subtotal_cents),
-        labor: centsToDollars(a.labor_cents),
-        tax: centsToDollars(a.tax_cents),
-        serviceFee: centsToDollars(a.service_fee_cents),
-        decision: a.decision ?? null,
-        decidedAtMs: a.decided_at_ms ?? null,
-        decidedBy: a.decided_by_user_id
-          ? userDisplayName(await ctx.db.get(a.decided_by_user_id))
-          : a.decision_actor ?? null,
-        ceilingAfter: centsToDollars(a.ceiling_after_decision_cents),
-        slaExpiresAtMs: a.sla_expires_at_ms ?? null,
-        stripeAction: a.stripe_action ?? null,
-        notes: a.notes ?? null,
-      })),
+      approvalRows.map(async (a) => {
+        const introduced = customJobRows.filter(
+          (c) => String(c.introduced_by_approval_id ?? "") === String(a._id),
+        );
+        const isDenied =
+          a.decision === "declined" || a.decision === "sla_expired";
+        return {
+          cycle: a.cycle,
+          submittedAtMs: a.submitted_at_ms,
+          submittedBy: a.submitted_by_user_id
+            ? userDisplayName(await ctx.db.get(a.submitted_by_user_id))
+            : null,
+          mechanicSetPrice: centsToDollars(a.mechanic_set_price_cents),
+          priorCeiling: centsToDollars(a.prior_ceiling_cents),
+          over: a.mechanic_set_price_cents > a.prior_ceiling_cents,
+          parts: centsToDollars(a.parts_subtotal_cents),
+          labor: centsToDollars(a.labor_cents),
+          tax: centsToDollars(a.tax_cents),
+          serviceFee: centsToDollars(a.service_fee_cents),
+          decision: a.decision ?? null,
+          decidedAtMs: a.decided_at_ms ?? null,
+          decidedBy: a.decided_by_user_id
+            ? userDisplayName(await ctx.db.get(a.decided_by_user_id))
+            : a.decision_actor ?? null,
+          ceilingAfter: centsToDollars(a.ceiling_after_decision_cents),
+          slaExpiresAtMs: a.sla_expires_at_ms ?? null,
+          stripeAction: a.stripe_action ?? null,
+          notes: a.notes ?? null,
+          addedServices: introduced.map((c) => c.name),
+          deniedParts: isDenied
+            ? introduced.flatMap((c) =>
+                (c.parts ?? []).map((p) => ({
+                  name: p.part_name,
+                  quantity: p.quantity ?? 1,
+                  lineCents: p.line_total_cents ?? null,
+                })),
+              )
+            : [],
+        };
+      }),
     );
 
     const [bDisputes, pDisputes, tireRows, rotorRows, dismissalRows] = await Promise.all([

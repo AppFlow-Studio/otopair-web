@@ -979,6 +979,49 @@ export async function closeRecForCompletedBooking(
 }
 
 /**
+ * Mechanic resolves prior open recommendations they addressed during THIS
+ * booking, from the post-job survey ("Still open from last visit" → Mark done).
+ * Same completed transition as `confirmFromPreJob`, but driven at close-out
+ * instead of the next visit's pre-job. Complements `closeMatchingRecsForCompletedBooking`
+ * (which only auto-closes recs whose service_id matches a delivered catalog
+ * service) by covering freeform recs, non-matching services, and mid-job extra.
+ *
+ * Idempotent (skips anything already closed) and scoped: only open/acknowledged
+ * recs on this shop + this vehicle are touched, so a client can't close another
+ * shop's or vehicle's rec.
+ */
+export async function resolvePriorRecommendationsForBooking(
+  ctx: any,
+  args: {
+    booking: { _id: Id<"bookings">; shop_id?: Id<"shops">; vin: string };
+    recommendationIds: Id<"job_recommendations">[];
+    now: number;
+  },
+) {
+  const { booking, recommendationIds, now } = args;
+  const touchedVins = new Set<string>();
+  for (const id of recommendationIds) {
+    const rec = await ctx.db.get(id);
+    if (!rec) continue;
+    if (rec.status !== "open" && rec.status !== "acknowledged") continue;
+    // Shop + vehicle scope guard — a mechanic can only close this shop's recs
+    // for the car in front of them.
+    if (String(rec.shop_id) !== String(booking.shop_id)) continue;
+    if (String(rec.vehicle_vin) !== String(booking.vin)) continue;
+    await ctx.db.patch(rec._id, {
+      status: "completed",
+      completed_via_booking_id: booking._id,
+      updated_at: now,
+    });
+    await cancelLinkedFollowUp(ctx, rec.followup_id, "completed_via_booking");
+    touchedVins.add(rec.vehicle_vin);
+  }
+  for (const vin of touchedVins) {
+    await recomputeRecPenaltyForVehicle(ctx, { vin, now });
+  }
+}
+
+/**
  * Closes every open / acknowledged / driver-hidden rec for the booking's
  * vehicle whose `recommended_service_id` matches a service the booking just
  * delivered — at *any* shop. Companion to `closeRecForCompletedBooking`,

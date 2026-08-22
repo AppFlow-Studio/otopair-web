@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -159,6 +159,7 @@ function OwnerDashboardPage({
 }) {
   const { user } = useUser();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const dashboard = useQuery(api.bookings.getMyOwnerDashboard, {
     localDate: new Date().toLocaleDateString("en-CA"),
   });
@@ -252,15 +253,38 @@ function OwnerDashboardPage({
 
   // Pop the post-job dialog inside BookingDetailPanel once it's mounted
   // for the booking the owner just hit Mark complete on from the overlay.
+  // The panel only exists once `dashboard` has loaded (the page renders a
+  // skeleton until then), yet `selectedJob` — a lighter single-booking query —
+  // often resolves first. So gate on `dashboard` too, and don't burn the
+  // pending flag unless we actually drove the panel; otherwise the one-shot
+  // fires into a null ref and the flow silently never opens (the exact symptom
+  // when Mark complete is pressed from the header active-job overlay, which
+  // routes here via ?postjob and re-mounts the dashboard).
   useEffect(() => {
     if (!pendingMarkCompleteFor) return;
+    if (dashboard === undefined) return;
     if (!selectedJob || String(selectedJob._id) !== pendingMarkCompleteFor) return;
     const frame = requestAnimationFrame(() => {
-      jobDetailRef.current?.showMarkCompleted();
+      const handle = jobDetailRef.current;
+      if (!handle) return; // panel not mounted yet — a later re-run retries
+      handle.showMarkCompleted();
       setPendingMarkCompleteFor(null);
     });
     return () => cancelAnimationFrame(frame);
-  }, [pendingMarkCompleteFor, selectedJob]);
+  }, [pendingMarkCompleteFor, selectedJob, dashboard]);
+
+  // The header active-jobs overlay's "Mark complete" routes owners here with
+  // ?postjob=<id> (the same way it routes mechanics to their post-job dialog).
+  // Open that booking's detail drawer and pop the completion flow — reusing the
+  // in-page overlay's own path — then strip the param so it can't re-fire.
+  useEffect(() => {
+    const postjobId = searchParams.get("postjob");
+    if (!postjobId) return;
+    setSelectedJobId(postjobId as Id<"bookings">);
+    setPendingMarkCompleteFor(postjobId);
+    router.replace("/dashboard");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {

@@ -1200,6 +1200,18 @@ function PostJobSurveyDialogBody({
     api.customJobs.listForBooking,
     open && bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
   );
+  // Tire replacement can arrive as mid-job "found work" (an extra job added via
+  // Flag Issue) rather than a booked service, so it won't be in prefillData /
+  // parts_required_services. Detect it from the custom-job lines too, otherwise
+  // the parts step falls back to the generic OEM editor for a tire line.
+  const foundWorkHasTire = useMemo(
+    () =>
+      (customJobs ?? []).some(
+        (j) => j.name && isTireReplacementService(j.name),
+      ),
+    [customJobs],
+  );
+  const tireServiceActive = isTireService || foundWorkHasTire;
   // Part rows for anything already saved against an extra-work line. Without
   // this the Parts step only knew each extra job's NAME, so an approved part
   // reappeared as a blank "Add part for X" row after a refresh — the mechanic's
@@ -1352,23 +1364,31 @@ function PostJobSurveyDialogBody({
       return;
     }
     if (readOnlyBillingMode) return;
-    if (!isTireService) return;
+    if (!tireServiceActive) return;
     if (seededTiresForOpenRef.current) return;
     const prejobLines = tireLinesFromPrejob(prefillData?.prejobTires);
     if (prejobLines.length === 0) return;
     seededTiresForOpenRef.current = true;
     setParts((current) => {
       if (current.some((p) => p.is_tire)) return current;
-      const payloads = tireLinesToPartPayloads(
-        prejobLines,
-        prefillData?.serviceId ?? null,
-      );
+      // Attribute to a mid-job "found work" tire line if that's how it was
+      // added; otherwise to the booked tire service.
+      const tireCustomName =
+        (customJobs ?? []).find(
+          (j) => j.name && isTireReplacementService(j.name),
+        )?.name ?? null;
+      const svcId = tireCustomName ? null : prefillData?.serviceId ?? null;
+      const payloads = tireLinesToPartPayloads(prejobLines, svcId).map((p) => ({
+        ...p,
+        service_id: svcId,
+        custom_service_name: tireCustomName,
+      }));
       return [...current, ...buildPartRows(payloads)];
     });
   }, [
     open,
     readOnlyBillingMode,
-    isTireService,
+    tireServiceActive,
     prefillData?.prejobTires,
     prefillData?.serviceId,
   ]);
@@ -2425,7 +2445,7 @@ function PostJobSurveyDialogBody({
             laborRateCents={effectiveLaborRateCents}
             liveTotals={liveTotals}
             quotedBaselineTotalCents={quotedBaselineTotalCents}
-            isTireService={isTireService || parts.some((p) => isTirePartRow(p))}
+            isTireService={tireServiceActive || parts.some((p) => isTirePartRow(p))}
             tireOemSizes={tireOemSizes}
             tirePrefill={prefillData?.prejobTires ?? null}
           />
@@ -3430,18 +3450,42 @@ function PartsStep({
     () => tireLinesFromParts(parts.filter((p) => isTirePartRow(p))),
     [parts],
   );
-  const tireServiceId = useMemo(
-    () =>
-      parts.find((p) => p.is_tire && p.service_id)?.service_id ??
-      partsRequiredServices.find((s) =>
-        isTireReplacementService(s.name),
-      )?._id ??
-      partsRequiredServices[0]?._id ??
-      null,
-    [parts, partsRequiredServices],
-  );
+  // Where tire lines attribute: a booked catalog tire service (service_id) wins;
+  // otherwise a mid-job "found work" line named tire replacement (custom
+  // line → custom_service_name). Preserves whatever existing tire rows already
+  // carry so re-opening the dialog keeps the attribution.
+  const tireAttribution = useMemo<{
+    serviceId: string | null;
+    customName: string | null;
+  }>(() => {
+    const existing = parts.find((p) => isTirePartRow(p));
+    if (existing?.service_id) {
+      return { serviceId: existing.service_id, customName: null };
+    }
+    if (existing?.custom_service_name) {
+      return { serviceId: null, customName: existing.custom_service_name };
+    }
+    const svc = partsRequiredServices.find((s) =>
+      isTireReplacementService(s.name),
+    );
+    if (svc) return { serviceId: svc._id, customName: null };
+    const custom = (customPartLines ?? []).find((l) =>
+      isTireReplacementService(l.name),
+    );
+    if (custom) return { serviceId: null, customName: custom.name };
+    return {
+      serviceId: partsRequiredServices[0]?._id ?? null,
+      customName: null,
+    };
+  }, [parts, partsRequiredServices, customPartLines]);
   function setTireLines(next: TireLine[]) {
-    const payloads = tireLinesToPartPayloads(next, tireServiceId);
+    const payloads = tireLinesToPartPayloads(next, tireAttribution.serviceId).map(
+      (p) => ({
+        ...p,
+        service_id: tireAttribution.serviceId ?? null,
+        custom_service_name: tireAttribution.customName ?? null,
+      }),
+    );
     setParts((current) => [
       ...current.filter((p) => !isTirePartRow(p)),
       ...buildPartRows(payloads),

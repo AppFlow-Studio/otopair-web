@@ -228,7 +228,7 @@ export const getMyUnreadCount = query({
 // Shop-staff notification feed (new bookings, quote requests)
 // ============================================================================
 
-const STAFF_CATEGORIES = ["new_booking", "new_quote_request", "booking_never_started", "settlement_shortfall", "hold_expiring"] as const;
+const STAFF_CATEGORIES = ["new_booking", "new_quote_request", "booking_never_started", "settlement_shortfall", "hold_expiring", "booking_mid_job_accepted", "booking_mid_job_declined", "booking_mid_job_expired"] as const;
 
 /**
  * Alerts that used to be written with `channel: "slack"` and then sat pending
@@ -350,6 +350,7 @@ export const getShopStaffNotifications = query({
       sorted.map(async (row: any) => {
         let customerName: string | null = null;
         let vehicleLabel: string | null = null;
+        let mechanicName: string | null = null;
         let shortHandle: string | null = null;
         let scheduledDate: string | null = null;
         let scheduledTime: string | null = null;
@@ -359,6 +360,14 @@ export const getShopStaffNotifications = query({
           if (booking) {
             scheduledDate = booking.scheduled_date ?? null;
             scheduledTime = booking.scheduled_time ?? null;
+            if (booking.mechanic_id) {
+              const mech: any = await ctx.db.get(booking.mechanic_id);
+              const mn = [mech?.first_name, mech?.last_name]
+                .filter(Boolean)
+                .join(" ")
+                .trim();
+              mechanicName = mn.length > 0 ? mn : null;
+            }
             const inv = (booking.invoice_number ?? "").trim();
             shortHandle = inv
               ? inv.startsWith("#")
@@ -396,9 +405,21 @@ export const getShopStaffNotifications = query({
           }
         }
 
+        // Blocker rows carry the pause reason in their payload; surface it so
+        // the staff feed can read car · shop · mechanic · reason at a glance.
+        const isBlockerRow =
+          typeof row.category === "string" &&
+          row.category.startsWith("job_blocked_") &&
+          !row.category.endsWith("_driver");
+        const reasonLabel = isBlockerRow ? (row.payload?.label ?? null) : null;
+        const reasonNote = isBlockerRow ? (row.payload?.note ?? null) : null;
+
         return {
           _id: row._id,
           category: row.category as string,
+          mechanicName,
+          reasonLabel,
+          reasonNote,
           booking_id: row.booking_id ?? null,
           shop_id: row.shop_id ?? null,
           created_at: row.created_at,
@@ -463,6 +484,7 @@ export const getShopStaffNotificationHistory = query({
       sorted.map(async (row: any) => {
         let customerName: string | null = null;
         let vehicleLabel: string | null = null;
+        let mechanicName: string | null = null;
         let shortHandle: string | null = null;
         let scheduledDate: string | null = null;
         let scheduledTime: string | null = null;
@@ -472,6 +494,14 @@ export const getShopStaffNotificationHistory = query({
           if (booking) {
             scheduledDate = booking.scheduled_date ?? null;
             scheduledTime = booking.scheduled_time ?? null;
+            if (booking.mechanic_id) {
+              const mech: any = await ctx.db.get(booking.mechanic_id);
+              const mn = [mech?.first_name, mech?.last_name]
+                .filter(Boolean)
+                .join(" ")
+                .trim();
+              mechanicName = mn.length > 0 ? mn : null;
+            }
             const inv = (booking.invoice_number ?? "").trim();
             shortHandle = inv
               ? inv.startsWith("#")
@@ -509,9 +539,21 @@ export const getShopStaffNotificationHistory = query({
           }
         }
 
+        // Blocker rows carry the pause reason in their payload; surface it so
+        // the staff feed can read car · shop · mechanic · reason at a glance.
+        const isBlockerRow =
+          typeof row.category === "string" &&
+          row.category.startsWith("job_blocked_") &&
+          !row.category.endsWith("_driver");
+        const reasonLabel = isBlockerRow ? (row.payload?.label ?? null) : null;
+        const reasonNote = isBlockerRow ? (row.payload?.note ?? null) : null;
+
         return {
           _id: row._id,
           category: row.category as string,
+          mechanicName,
+          reasonLabel,
+          reasonNote,
           channel: row.channel as string,
           booking_id: row.booking_id ?? null,
           shop_id: row.shop_id ?? null,

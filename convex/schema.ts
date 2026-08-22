@@ -4842,7 +4842,18 @@ export default defineSchema({
       v.literal("planned"),
       v.literal("completed"),
       v.literal("cancelled"),
+      // Customer declined (or let expire) the mid-job scope change that
+      // introduced this line. The row is KEPT for audit/logging — it records
+      // what was offered and turned down, including the parts that were denied
+      // — but it must never reach the completed job, the receipt, or the price.
+      v.literal("declined"),
     ),
+    // The mid-job booking_approvals cycle that introduced this line. Set when
+    // the mechanic submits the mid-job change (stampMidJobCustomJobs); it's the
+    // reliable join that lets a customer decline revert exactly the lines that
+    // cycle added and nothing from a prior approved cycle. Null on rows added
+    // outside a mid-job cycle (source "booking"/"post_job"/"recommendation").
+    introduced_by_approval_id: v.optional(v.id("booking_approvals")),
     created_at: v.number(),
     updated_at: v.optional(v.number()),
   })
@@ -5929,6 +5940,11 @@ export default defineSchema({
     labor_hours: v.optional(v.number()),
     labor_rate_cents: v.optional(v.number()),
     notes: v.optional(v.string()),
+    // Optional photos the mechanic attached to justify the change (e.g. a shot
+    // of the seized caliper behind the added scope). Storage ids; the
+    // customer-facing approval query resolves them to URLs. Shown alongside
+    // `notes` on the "An update from your mechanic" approval screen.
+    scope_photo_ids: v.optional(v.array(v.id("_storage"))),
     inspection_snapshot: v.optional(customerInspectionSnapshotValidator),
 
     // Gating context: the ceiling the submission was evaluated against.

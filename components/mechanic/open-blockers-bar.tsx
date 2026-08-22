@@ -68,14 +68,14 @@ export default function OpenBlockersBar({
                 <span className="min-w-0">
                   <span className="block truncate text-[13px] font-medium text-foreground">
                     {b.label}
-                    {b.vin ? (
-                      <span className="ml-1.5 font-mono text-[11px] text-muted-foreground">
-                        {b.vin.slice(-6)}
+                    {b.vehicleLabel || b.vin ? (
+                      <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
+                        {b.vehicleLabel ?? `VIN ${b.vin.slice(-6)}`}
                       </span>
                     ) : null}
                   </span>
                   <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-                    {b.note}
+                    {[b.mechanicName, b.note].filter(Boolean).join(" · ")}
                   </span>
                 </span>
                 {/* Age leads, and goes red once it's been sitting long enough

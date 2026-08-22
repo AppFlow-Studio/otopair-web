@@ -24,19 +24,26 @@ const HOME_LINKS: PillLink[] = [
 ];
 const HOME_CTA: PillCta = { label: "Get Oto", href: "#get-oto" };
 
+// Returning shop owners/staff sign in here. `/shop` is role-gated, so middleware
+// funnels signed-out visitors through Clerk sign-in first, then into the portal.
+const HOME_SHOP_SIGN_IN: PillLink = { label: "Shop sign-in", href: "/shop" };
+
 /**
  * Floating glass pill nav — fixed, hides on scroll-down, reveals on scroll-up.
  *
  * Reused across the flagship pages: pass `links`/`cta` to retarget it (the
  * partner page carries its own sections + an "Apply" CTA); defaults render the
- * home nav.
+ * home nav. `shopSignIn` renders a secondary text link beside the CTA; pass
+ * `null` to omit it (e.g. the partner funnel).
  */
 export default function PillNav({
   links = HOME_LINKS,
   cta = HOME_CTA,
+  shopSignIn = HOME_SHOP_SIGN_IN,
 }: {
   links?: PillLink[];
   cta?: PillCta;
+  shopSignIn?: PillLink | null;
 }) {
   const { scrollY } = useScroll();
   const [hidden, setHidden] = useState(false);
@@ -118,15 +125,25 @@ export default function PillNav({
           ))}
         </ul>
 
-        {cta.href.startsWith("#") ? (
-          <motion.a href={cta.href} {...ctaMotion} className={ctaClass}>
-            {ctaInner}
-          </motion.a>
-        ) : (
-          <MotionLink href={cta.href} {...ctaMotion} className={ctaClass}>
-            {ctaInner}
-          </MotionLink>
-        )}
+        <div className="flex items-center gap-4">
+          {shopSignIn && (
+            <UnderlineLink
+              href={shopSignIn.href}
+              className="hidden whitespace-nowrap text-[15px] leading-[28px] text-[#1a1a1a] transition-colors hover:text-[#1a1a1a]/70 sm:inline-block"
+            >
+              {shopSignIn.label}
+            </UnderlineLink>
+          )}
+          {cta.href.startsWith("#") ? (
+            <motion.a href={cta.href} {...ctaMotion} className={ctaClass}>
+              {ctaInner}
+            </motion.a>
+          ) : (
+            <MotionLink href={cta.href} {...ctaMotion} className={ctaClass}>
+              {ctaInner}
+            </MotionLink>
+          )}
+        </div>
       </nav>
     </motion.header>
   );

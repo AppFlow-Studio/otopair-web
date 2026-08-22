@@ -851,6 +851,24 @@ const MoneyApprovalsTab = ({ token, id }: { token: string; id: Id<'bookings'> })
                   {a.ceilingAfter != null && ` · new ceiling ${money(a.ceilingAfter, { cents: true })}`}
                   {a.stripeAction && ` · ${a.stripeAction.replace(/_/g, ' ')}`}
                 </div>
+                {a.addedServices && a.addedServices.length > 0 && (
+                  <div style={{ marginTop:4, fontSize:11, color:'var(--slate-500)' }}>
+                    Added: {a.addedServices.join(', ')}
+                  </div>
+                )}
+                {a.deniedParts && a.deniedParts.length > 0 && (
+                  <div style={{ marginTop:4, borderRadius:6, background:'var(--red-50)', border:'1px solid #FECACA', padding:'6px 10px' }}>
+                    <div style={{ fontSize:10, fontWeight:600, color:'var(--red-700)', textTransform:'uppercase', letterSpacing:'0.04em', marginBottom:2 }}>
+                      Denied parts — not charged
+                    </div>
+                    {a.deniedParts.map((p, pi: number) => (
+                      <div key={pi} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:12, color:'var(--slate-600)' }}>
+                        <span>{p.quantity > 1 ? `${p.quantity} × ` : ''}{p.name}</span>
+                        {p.lineCents != null && <span className="mono" style={{ textDecoration:'line-through' }}>{money(p.lineCents, { cents: true })}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {a.notes && <div style={{ marginTop:4, fontSize:12, color:'var(--slate-600)' }}>{a.notes}</div>}
               </div>
             ))}

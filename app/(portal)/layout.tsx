@@ -38,6 +38,7 @@ import { PortalSidebarContext } from "./portal-context";
 import CustomerSchedulingAlerts from "@/components/customer-scheduling-alerts";
 import NotificationBell from "@/components/notification-bell";
 import ActiveJobStrip from "@/components/active-job-strip";
+import MechanicPickupAlert from "@/components/mechanic/pickup-alert";
 
 const ownerManagerLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
@@ -851,6 +852,10 @@ export default function PortalLayout({
           </main>
         </div>
       </div>
+      {/* Mechanic-scoped, self-gating: full-screen takeover → persistent banner
+          when a customer requests their car back. Renders null for everyone
+          else. */}
+      {!isOnboarding ? <MechanicPickupAlert /> : null}
       <KeyboardShortcutsModal open={showShortcuts} onClose={() => setShowShortcuts(false)} />
     </PortalSidebarContext.Provider>
   );

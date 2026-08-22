@@ -166,6 +166,7 @@ import {
   closeRecForCompletedBooking,
   closeMatchingRecsForCompletedBooking,
   submitRecommendationsForBooking,
+  resolvePriorRecommendationsForBooking,
 } from "./jobRecommendations";
 import {
   templateForSystem,
@@ -746,6 +747,40 @@ export const requestCancellationAtShop = mutation({
         requestedAtMs: now,
       },
     });
+
+    // Alert the assigned mechanic directly. They physically have the car and
+    // won't be watching the front-desk feed mid-job, so a request that only
+    // reaches the desk gets missed. SMS lands on any phone (mechanics may not
+    // run the mobile app). Front desk is still notified above.
+    if (booking.mechanic_id) {
+      const mechanicUserId = await resolveMechanicUserId(
+        ctx,
+        booking.shop_id,
+        booking.mechanic_id,
+      );
+      if (mechanicUserId) {
+        const vehicle = booking.vin
+          ? await resolveVehicleLabel(ctx, booking.vin)
+          : null;
+        const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+        await enqueueNotificationOutbox(ctx, {
+          shopId: booking.shop_id,
+          bookingId: booking._id,
+          userId: mechanicUserId,
+          channel: "sms",
+          category: "mechanic_pickup_request",
+          // Timestamped so a re-request re-sends: sent SMS rows settle to
+          // status "resolved" WITHOUT a resolved_at, so a stable key would
+          // dedupe against the prior send indefinitely.
+          dedupeKey: `mechanic-pickup:${String(booking._id)}:${now}`,
+          payload: {
+            vehicleLabel: vehicle?.full ?? vehicle?.short ?? null,
+            customerName: formatCustomerName(user),
+            shopName: (shop as any)?.name ?? null,
+          },
+        });
+      }
+    }
 
     return { requested: true };
   },
@@ -4416,6 +4451,29 @@ export async function enqueueNotificationOutbox(
     created_at: now,
     updated_at: now,
   });
+}
+
+/**
+ * Map a booking's assigned mechanic (a `mechanics` row) to the platform user
+ * behind it, via the shop_users link — the only path to a reachable phone/push,
+ * since the `mechanics` table has no contact fields. Returns null when the
+ * mechanic isn't linked to a user yet (invite unaccepted). Mirrors the
+ * `shopUserByMechanicId` map the owner dashboard builds.
+ */
+async function resolveMechanicUserId(
+  ctx: any,
+  shopId: any,
+  mechanicId: any,
+): Promise<Id<"users"> | null> {
+  if (!shopId || !mechanicId) return null;
+  const shopUsers = await ctx.db
+    .query("shop_users")
+    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
+    .collect();
+  const match = shopUsers.find(
+    (su: any) => String(su.mechanic_id ?? "") === String(mechanicId),
+  );
+  return (match?.user_id as Id<"users">) ?? null;
 }
 
 // Categories whose in-app card is an ACTION the customer takes on a live
@@ -10491,6 +10549,49 @@ export const getJobDetail = query({
         ? hoursToMinutes(agreedApproval.labor_hours)
         : booking.estimated_labor_minutes ?? null;
 
+    // Scope-justification photos the mechanic attached when submitting a change
+    // that was AGREED (mid/pre-job "Why the added scope?"). Surface them in the
+    // post-job form the same way layover photos are — read-only context that
+    // also merges into the final report — so evidence captured mid-job isn't
+    // lost at closeout. Only agreed rows: a declined/withdrawn change was
+    // reverted, so its photos don't belong on the completed job. Deduped across
+    // approvals by storage id.
+    const seenScopePhotoIds = new Set<string>();
+    const agreedScopePhotoIds: Id<"_storage">[] = [];
+    // The mechanic's "Why the added scope? / Why this adjustment?" reason for
+    // each AGREED change. Same rationale as the photos: it's the mechanic's own
+    // account of what was found, so it seeds the post-job "What did you find or
+    // do?" instead of making them retype it. Deduped, order preserved.
+    const seenScopeReasons = new Set<string>();
+    const agreedScopeReasons: string[] = [];
+    for (const a of jobDetailApprovals) {
+      if (!AGREED_DECISIONS.has((a as any).decision ?? "")) continue;
+      const reason = (a as any).notes;
+      if (typeof reason === "string" && reason.trim()) {
+        const trimmed = reason.trim();
+        if (!seenScopeReasons.has(trimmed)) {
+          seenScopeReasons.add(trimmed);
+          agreedScopeReasons.push(trimmed);
+        }
+      }
+      for (const sid of (((a as any).scope_photo_ids ?? []) as Id<"_storage">[])) {
+        const key = String(sid);
+        if (seenScopePhotoIds.has(key)) continue;
+        seenScopePhotoIds.add(key);
+        agreedScopePhotoIds.push(sid);
+      }
+    }
+    const scopePhotosResolved = (
+      await Promise.all(
+        agreedScopePhotoIds.map(async (storageId) => ({
+          storageId,
+          caption: null as string | null,
+          takenAt: undefined as number | undefined,
+          url: await ctx.storage.getUrl(storageId),
+        })),
+      )
+    ).filter((entry) => entry.url !== null);
+
     return {
       _id: booking._id,
       _creationTime: booking._creationTime,
@@ -10566,6 +10667,14 @@ export const getJobDetail = query({
             inProgressPhotos: inProgressPhotosResolved,
           }
         : null,
+      // Evidence photos from agreed mid/pre-job changes. Kept at the top level
+      // (not under jobActuals) so they resolve even when no job_actuals row
+      // exists yet. Carried into the post-job form alongside layover photos.
+      scopePhotos: scopePhotosResolved,
+      // The "why the added scope / why this adjustment" reasons for those same
+      // agreed changes — carried into the post-job findings so the mechanic
+      // doesn't re-explain what they already justified to the customer.
+      scopeReasons: agreedScopeReasons,
       history,
       previousScheduledDate: booking.previous_scheduled_date ?? null,
       previousScheduledTime: booking.previous_scheduled_time ?? null,
@@ -11065,6 +11174,14 @@ export const completeWithPostjob = mutation({
         }),
       ),
     ),
+    // Prior open recommendations the mechanic resolved during this booking
+    // ("Still open from last visit" → Mark done). Separate arg for the same
+    // reason as customJobOutcomes — postjobReportValidator is shared and
+    // wouldn't consume this. Optional; each id is marked completed against
+    // this booking, scoped to this shop + vehicle server-side.
+    resolvedPriorRecommendationIds: v.optional(
+      v.array(v.id("job_recommendations")),
+    ),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
@@ -11160,6 +11277,20 @@ export const completeWithPostjob = mutation({
         jobActualId: jobActual._id,
         mechanicId: booking.mechanic_id,
         recommendations: args.postjob.recommendations,
+        now,
+      });
+    }
+
+    // Close out any prior recommendations the mechanic marked done this visit.
+    // Complements the service-match auto-close in runCompletionSideEffects for
+    // freeform / non-matching / mid-job-extra recs the mechanic resolved by hand.
+    if (
+      args.resolvedPriorRecommendationIds &&
+      args.resolvedPriorRecommendationIds.length > 0
+    ) {
+      await resolvePriorRecommendationsForBooking(ctx, {
+        booking,
+        recommendationIds: args.resolvedPriorRecommendationIds,
         now,
       });
     }
@@ -16648,6 +16779,21 @@ export const getReceipt = query({
       })
       .pop();
 
+    // Custom jobs on this booking — the structured record behind the
+    // `custom_services` display copy. Used two ways below: to drop declined
+    // lines from the charged line items (defense-in-depth on top of the
+    // decline-time strip of `custom_services`), and to build the
+    // "Declined — not charged" audit block.
+    const customJobRows = await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", booking._id))
+      .collect();
+    const declinedMatchKeys = new Set<string>(
+      customJobRows
+        .filter((c: any) => c.status === "declined")
+        .map((c: any) => c.match_key ?? serviceMatchKey(String(c.name))),
+    );
+
     const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
     const mechanic = booking.mechanic_id
       ? await ctx.db.get(booking.mechanic_id)
@@ -16709,6 +16855,11 @@ export const getReceipt = query({
       for (const c of (booking as any).custom_services) {
         const name = typeof c?.name === "string" ? c.name.trim() : "";
         if (!name) continue;
+        // Declined mid-job lines are reverted off `custom_services` at decline
+        // time; this is the belt-and-suspenders guard so a declined line can
+        // never become a charged receipt row (or steal labor apportionment)
+        // even on a legacy/edge booking where the strip didn't run.
+        if (declinedMatchKeys.has(serviceMatchKey(name))) continue;
         const mins =
           typeof c?.duration_minutes === "number" && c.duration_minutes > 0
             ? c.duration_minutes
@@ -16902,6 +17053,42 @@ export const getReceipt = query({
       line_items: [...serviceLines, ...partLines] as Array<
         ServiceLine | PartLine
       >,
+      // Work the customer was offered mid-job and turned down (or let expire).
+      // Kept here for the record — "Declined — not charged" — so the receipt
+      // shows what was proposed and denied, including the parts, without any of
+      // it touching the totals above.
+      declined_work: customJobRows
+        .filter((c: any) => c.status === "declined")
+        .map((c: any) => ({
+          name: c.name as string,
+          amount:
+            typeof c.quoted_price_cents === "number"
+              ? c.quoted_price_cents / 100
+              : null,
+          parts: ((c.parts ?? []) as any[]).map((p: any) => {
+            const qty = Math.max(
+              1,
+              typeof p.quantity === "number" ? p.quantity : 1,
+            );
+            const unit =
+              typeof p.unit_price_cents === "number"
+                ? p.unit_price_cents / 100
+                : null;
+            const line =
+              typeof p.line_total_cents === "number"
+                ? p.line_total_cents / 100
+                : unit != null
+                  ? Math.round(unit * qty * 100) / 100
+                  : null;
+            return {
+              name: (p.part_name ?? "Part") as string,
+              oem_number: (p.oem_number ?? null) as string | null,
+              quantity: qty,
+              unit_cost: unit,
+              cost: line,
+            };
+          }),
+        })),
       totals: {
         labor_subtotal: laborSubtotal,
         parts_subtotal: partsSubtotalActual,

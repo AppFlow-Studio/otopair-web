@@ -29,6 +29,7 @@ import ElapsedTimer from "./elapsed-timer";
 import FlagIssueSheet from "./flag-issue-sheet";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import OverrunExtendCard from "./overrun-extend-card";
+import ExtraWorkStatus from "@/components/booking/extra-work-status";
 
 type DraftPhoto = {
   id: string;
@@ -75,6 +76,10 @@ function formatMoney(value: number | null | undefined) {
   }).format(value);
 }
 
+const normServiceName = (s: string) => s.trim().toLowerCase();
+
+type ServiceStatus = "confirmed" | "pending" | "declined" | "draft";
+
 const MAX_PHOTOS = 6;
 const NOTES_DEBOUNCE_MS = 800;
 
@@ -112,6 +117,70 @@ export function NowWorkingPane({
   const clockPausedByBlocker = Boolean(
     blockers?.blockers.some((b) => b.resolved_at == null && b.stops_clock),
   );
+
+  /* Mid-job extra-work state — drives the per-service status dots in the work
+     order. Same query the EXTRA WORK card (top-right) uses; Convex shares the
+     subscription so this isn't a second network read. */
+  const scopeChanges = useQuery(api.booking_approvals.getMidJobScopeChanges, {
+    bookingId,
+  }) as
+    | Array<{
+        state: "pending" | "accepted" | "auto_confirmed" | "declined";
+        addedServiceNames: string[];
+      }>
+    | undefined;
+
+  // Off-catalog lines on this booking (drafts + agreed extras). A line the
+  // mechanic just added but hasn't sent for confirmation has no scope change
+  // yet — that's a draft, and it should read gray in the work order, not the
+  // green of agreed work.
+  const customJobsList = useQuery(api.customJobs.listForBooking, {
+    bookingId,
+  }) as Array<{ name: string }> | undefined;
+
+  const serviceStatusList = useMemo(() => {
+    const changes = scopeChanges ?? [];
+    const pending = new Set<string>();
+    // Every name carried by a *submitted* scope change, whatever its state.
+    // A custom line absent from this set was never sent to the customer.
+    const submitted = new Set<string>();
+    for (const c of changes) {
+      for (const n of c.addedServiceNames ?? []) submitted.add(normServiceName(n));
+      if (c.state !== "pending") continue;
+      for (const n of c.addedServiceNames ?? []) pending.add(normServiceName(n));
+    }
+    // Draft = an off-catalog line the mechanic added mid-job that hasn't been
+    // submitted for approval yet.
+    const draft = new Set<string>();
+    for (const cj of customJobsList ?? []) {
+      const n = normServiceName(cj.name);
+      if (!submitted.has(n)) draft.add(n);
+    }
+    const baseNames: string[] = job?.serviceNames ?? [];
+    const list: Array<{ name: string; status: ServiceStatus }> = baseNames.map(
+      (name) => {
+        const n = normServiceName(name);
+        const status: ServiceStatus = pending.has(n)
+          ? "pending"
+          : draft.has(n)
+            ? "draft"
+            : "confirmed";
+        return { name, status };
+      },
+    );
+    // Declined lines are stripped from the booking's services, so re-add them
+    // as red/struck entries — the work order should still show what was turned
+    // down, not silently drop it.
+    for (const c of changes) {
+      if (c.state !== "declined") continue;
+      for (const n of c.addedServiceNames ?? []) {
+        if (!list.some((x) => normServiceName(x.name) === normServiceName(n))) {
+          list.push({ name: n, status: "declined" });
+        }
+      }
+    }
+    return list;
+  }, [scopeChanges, customJobsList, job?.serviceNames]);
 
   const serverNotes = job?.jobActuals?.inProgressNotes ?? "";
   const serverPhotos = useMemo(
@@ -331,8 +400,8 @@ export function NowWorkingPane({
     ? "font-mono text-5xl font-semibold tracking-tight text-white tabular-nums"
     : "font-mono text-6xl font-semibold tracking-tight text-white tabular-nums";
   const summarySectionClass = dense
-    ? "flex flex-col items-start gap-2 border-b border-white/10 py-5"
-    : "flex flex-col items-start gap-2 border-b border-white/10 py-8";
+    ? "flex flex-col items-start gap-4 border-b border-white/10 py-5"
+    : "flex items-start justify-between gap-6 border-b border-white/10 py-8";
 
   return (
     <div className={containerClass}>
@@ -439,31 +508,44 @@ export function NowWorkingPane({
       ) : (
         <>
           <section className={summarySectionClass}>
-            <p className="text-sm text-slate-400">Elapsed</p>
-            <ElapsedTimer
-              startedAtMs={startedAt}
-              // Stop on a clock-stopping blocker too, so the pane doesn't
-              // contradict the worked-minutes figure the server records.
-              paused={paused || clockPausedByBlocker}
-              className={elapsedTimerClass}
-            />
-            <p className="text-sm text-slate-400">
-              {startedAt != null
-                ? `Started ${formatClockTime(startedAt)}`
-                : "Not started yet"}
-              {etaMs != null ? ` · ETA ${formatClockTime(etaMs)}` : ""}
-              {clockPausedByBlocker
-                ? " · Paused (blocked)"
-                : paused
-                  ? " · Paused"
-                  : ""}
-            </p>
-            <p className="mt-2 text-lg font-medium text-slate-100">
-              {job.vehicle}
-            </p>
-            <p className="text-sm text-slate-400">
-              {job.serviceNames.join(" · ")}
-            </p>
+            <div className="flex min-w-0 flex-col items-start gap-2">
+              <p className="text-sm text-slate-400">Elapsed</p>
+              <ElapsedTimer
+                startedAtMs={startedAt}
+                // Stop on a clock-stopping blocker too, so the pane doesn't
+                // contradict the worked-minutes figure the server records.
+                paused={paused || clockPausedByBlocker}
+                className={elapsedTimerClass}
+              />
+              <p className="text-sm text-slate-400">
+                {startedAt != null
+                  ? `Started ${formatClockTime(startedAt)}`
+                  : "Not started yet"}
+                {etaMs != null ? ` · ETA ${formatClockTime(etaMs)}` : ""}
+                {clockPausedByBlocker
+                  ? " · Paused (blocked)"
+                  : paused
+                    ? " · Paused"
+                    : ""}
+              </p>
+              <p className="mt-2 text-lg font-medium text-slate-100">
+                {job.vehicle}
+              </p>
+              <p className="text-sm text-slate-400">
+                {job.serviceNames.join(" · ")}
+              </p>
+            </div>
+
+            {/* Extra work sits across from the timer — full detail lives here:
+                waiting / approved / declined, the price delta, the SLA, and any
+                denied parts. Empty state keeps the space intentional. */}
+            <div className={dense ? "w-full" : "w-[360px] shrink-0"}>
+              <ExtraWorkStatus
+                bookingId={bookingId}
+                variant="dark"
+                showWhenEmpty
+              />
+            </div>
           </section>
 
           {job.status === "in_progress" && (
@@ -534,18 +616,66 @@ export function NowWorkingPane({
                 Work order
               </h3>
               <ul className="mt-3 space-y-2">
-                {job.serviceNames.length === 0 ? (
+                {serviceStatusList.length === 0 ? (
                   <li className="text-sm text-slate-500">No services listed.</li>
                 ) : (
-                  job.serviceNames.map((name: string, index: number) => (
-                    <li
-                      key={`${name}-${index}`}
-                      className="flex items-start gap-2 text-sm text-slate-100"
-                    >
-                      <span className="mt-1 inline-flex h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
-                      <span>{name}</span>
-                    </li>
-                  ))
+                  serviceStatusList.map((svc, index) => {
+                    // Dot mirrors the service's approval state: green when it's
+                    // agreed (base booking or approved extra), yellow while the
+                    // customer hasn't confirmed submitted work, gray for a draft
+                    // the mechanic hasn't sent yet, red when declined.
+                    const dotClass =
+                      svc.status === "pending"
+                        ? "bg-amber-400"
+                        : svc.status === "declined"
+                          ? "bg-red-400"
+                          : svc.status === "draft"
+                            ? "bg-slate-500"
+                            : "bg-emerald-400";
+                    return (
+                      <li
+                        key={`${svc.name}-${index}`}
+                        className="flex items-start gap-2 text-sm text-slate-100"
+                      >
+                        <span
+                          className={`mt-1.5 inline-flex h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`}
+                          title={
+                            svc.status === "pending"
+                              ? "Awaiting customer confirmation"
+                              : svc.status === "declined"
+                                ? "Declined by customer"
+                                : svc.status === "draft"
+                                  ? "Draft — not submitted yet"
+                                  : "Confirmed"
+                          }
+                        />
+                        <span
+                          className={
+                            svc.status === "declined"
+                              ? "text-slate-500 line-through"
+                              : svc.status === "draft"
+                                ? "text-slate-400"
+                                : ""
+                          }
+                        >
+                          {svc.name}
+                        </span>
+                        {svc.status === "pending" ? (
+                          <span className="ml-1 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-amber-200">
+                            Pending
+                          </span>
+                        ) : svc.status === "declined" ? (
+                          <span className="ml-1 rounded bg-red-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-red-200">
+                            Declined
+                          </span>
+                        ) : svc.status === "draft" ? (
+                          <span className="ml-1 rounded bg-slate-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-300">
+                            Draft
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })
                 )}
               </ul>
               <div className="mt-5 flex items-center justify-between border-t border-white/10 pt-4">

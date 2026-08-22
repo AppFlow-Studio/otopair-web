@@ -12,8 +12,10 @@ import {
   buildCatalogPath,
   classifyPositionText,
   encodeSegment,
+  hyphenationCandidates,
   isMakeAttestedNumber,
   MIN_BRAND_CORROBORATION,
+  salvageForMakeFormat,
   parseCatalogNodes,
   parsePositionedListings,
   pickEngineNode,
@@ -241,6 +243,21 @@ describe("role → catalogue location", () => {
   it("returns null when nothing matches", () => {
     expect(pickNodeByPatterns([], ROCKAUTO_ROLE_LOCATION.front_rotor.partType)).toBeNull();
   });
+
+  it("air filter prefers Fuel & Air and falls back to Engine", () => {
+    // Live 2021 Nautilus: the "engine" category carries 40 part types and no
+    // air filter — the filter lives under "Fuel & Air". Older trees file it
+    // under Engine, so that stays as the fallback.
+    const parent = "/en/catalog/lincoln,2021,nautilus,2.0l+l4+turbocharged,3449176";
+    const both = parseCatalogNodes(
+      `<a href="${parent},engine,120">Engine</a>
+       <a href="${parent},fuel+&amp;+air,400">Fuel &amp; Air</a>`,
+      parent,
+    );
+    expect(pickNodeByPatterns(both, ROCKAUTO_ROLE_LOCATION.air_filter.category)?.id).toBe(400);
+    const engineOnly = parseCatalogNodes(`<a href="${parent},engine,120">Engine</a>`, parent);
+    expect(pickNodeByPatterns(engineOnly, ROCKAUTO_ROLE_LOCATION.air_filter.category)?.id).toBe(120);
+  });
 });
 
 describe("isMakeAttestedNumber — the gate corroboration cannot provide", () => {
@@ -276,5 +293,86 @@ describe("isMakeAttestedNumber — the gate corroboration cannot provide", () =>
 
   it("rejects a number too short to key", () => {
     expect(isMakeAttestedNumber("26", KIA)).toBe(false);
+  });
+});
+
+describe("family-widened vocabulary — bootstrap without reopening contamination", () => {
+  // Measured live Aug 2026 at the gate's real 3-char length.
+  //   Lincoln alone      : 2 prefixes   → the rung could never pass anything
+  //   Lincoln + Ford     : 253 prefixes → the rung has a real chance
+  //   Kia + Hyundai/Gen  : includes 263 (its own filter family), excludes 152
+  const LINCOLN_ALONE = ["3W43", "9L34"];
+  const LINCOLN_FAMILY = ["BC3Z", "HC3Z", "PC3Z", "FL3Z", "9L34", "3W43"];
+  const KIA_FAMILY = [
+    "002", "173", "188", "215", "252", "255", "256", "263", "264",
+    "273", "281", "282", "283", "284", "314", "371", "452", "517",
+  ];
+
+  it("a make-only vocabulary starves the rung on thin makes", () => {
+    // The 2021 Nautilus had five unquotable services and a rung built to fill
+    // them, and this is why nothing was ever attempted.
+    expect(isMakeAttestedNumber("HC3Z-1125-A", LINCOLN_ALONE)).toBe(false);
+  });
+
+  it("the family vocabulary lets a badge inherit its parent's numbering", () => {
+    // Lincoln IS Ford — the source registry already routes it to Ford's
+    // storefront for exactly this reason.
+    expect(isMakeAttestedNumber("HC3Z-1125-A", LINCOLN_FAMILY)).toBe(true);
+  });
+
+  it("STILL rejects the cross-family number the gate was built for", () => {
+    // Subaru shares no family with Hyundai/Kia/Genesis, so widening cannot
+    // reintroduce 15208AA030 for a Kia.
+    expect(isMakeAttestedNumber("15208AA030", KIA_FAMILY)).toBe(false);
+  });
+
+  it("and admits the genuine one it used to reject", () => {
+    expect(isMakeAttestedNumber("2630035504", KIA_FAMILY)).toBe(true);
+  });
+});
+
+describe("separator salvage — RockAuto strips the hyphens its sources print", () => {
+  // RockAuto publishes interchange numbers already normalized (45022T0AA00,
+  // not 45022-T0A-A00). Ford/Lincoln's pattern REQUIRES separators, so every
+  // Ford-family number was unpassable by construction — live on the 2021
+  // Nautilus that showed as shape_ok=0 with a correct number in the list.
+  const gate = (v: string, make?: string) => {
+    // Stand-in for sanitizePartNumber's Ford-family rule.
+    if ((make ?? "").toLowerCase() === "lincoln" || (make ?? "").toLowerCase() === "ford") {
+      return /^[A-Z0-9]{2,4}-[A-Z0-9]{1,7}(?:-[A-Z0-9]{1,4})?$/i.test(v) ? v : null;
+    }
+    return /^[A-Z0-9]{5,}$/i.test(v) ? v : null;
+  };
+
+  it("admits a Ford-family number that arrived without separators", () => {
+    expect(salvageForMakeFormat("M2GZ1125A", "Lincoln", gate)).toBe("M2GZ1125A");
+  });
+
+  it("stores the SOURCE form, never an invented hyphenation", () => {
+    // The first passing split is "M2-GZ1125A" — valid to the pattern, and not
+    // a number any parts counter would recognise. A stored OEM number is what
+    // somebody orders against.
+    const out = salvageForMakeFormat("M2GZ1125A", "Lincoln", gate);
+    expect(out).not.toContain("-");
+  });
+
+  it("returns the gate's own output when the value passes as written", () => {
+    expect(salvageForMakeFormat("HC3Z-1125-A", "Ford", gate)).toBe("HC3Z-1125-A");
+  });
+
+  it("still refuses a value no spelling can rescue", () => {
+    expect(salvageForMakeFormat("X", "Ford", gate)).toBeNull();
+  });
+
+  it("leaves an already-separated value alone", () => {
+    expect(hyphenationCandidates("45022-T0A-A00")).toEqual(["45022-T0A-A00"]);
+  });
+
+  it("is bounded and deterministic", () => {
+    const a = hyphenationCandidates("M2GZ1125A");
+    const b = hyphenationCandidates("M2GZ1125A");
+    expect(a).toEqual(b);
+    expect(a.length).toBeLessThanOrEqual(40);
+    expect(a[0]).toBe("M2GZ1125A");
   });
 });

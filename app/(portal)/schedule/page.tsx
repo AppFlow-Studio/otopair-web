@@ -1258,6 +1258,7 @@ export default function SchedulePage() {
           scheduleChangeMode: b.scheduleChangeMode,
           customerCanRestoreOriginal: b.customerCanRestoreOriginal,
           customerNote: (b as any).customerNote ?? null,
+          paymentApprovalState: (b as any).paymentApprovalState ?? null,
           recommendationState: (b as any).recommendationState ?? null,
           diagnosticFollowupState: (b as any).diagnosticFollowupState ?? null,
           backfilledAtMs: (b as any).backfilledAtMs ?? null,

@@ -403,6 +403,11 @@ export async function completeCustomJobsForBooking(
   for (const outcome of args.outcomes) {
     const row = byKey.get(serviceMatchKey(outcome.name));
     if (!row) continue;
+    // A line the customer declined (or let expire) mid-job is kept for audit
+    // but must never complete or reach the receipt. If the survey still carries
+    // an outcome for it (the mechanic opened the survey before the decline
+    // landed), skip it — the row stays "declined".
+    if (row.status === "declined") continue;
     const actualMinutes = outcome.actual_minutes ?? row.actual_minutes;
     const fitted = partsFor(row.match_key);
     await ctx.db.patch(row._id, {
@@ -457,6 +462,116 @@ export async function completeCustomJobsForBooking(
   }
 
   return touched;
+}
+
+/**
+ * Stamp the custom_jobs a mid-job cycle just introduced with that cycle's
+ * approval id, so a later customer decline can revert exactly those lines and
+ * nothing from a prior approved cycle.
+ *
+ * Called from performSubmission right after the booking_approvals row is
+ * inserted, only for the mid-job cycle. Stamps only rows that are still
+ * "planned", off-catalog and added mid-job, and not already bound to a LIVE
+ * approval. A row whose stamp points at an approval that was withdrawn, expired
+ * or declined is re-stampable — that's how a withdraw+resubmit re-binds only the
+ * lines the new cycle carries.
+ */
+export async function stampMidJobCustomJobs(
+  ctx: any,
+  args: {
+    bookingId: Id<"bookings">;
+    approvalId: Id<"booking_approvals">;
+    now: number;
+  },
+): Promise<number> {
+  const rows = await ctx.db
+    .query("custom_jobs")
+    .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+    .collect();
+
+  // An existing stamp only "holds" a row while its approval is still live
+  // (open, or approved). One that was withdrawn/expired/declined no longer owns
+  // the line, so a fresh cycle may re-bind it.
+  const stampStillHolds = async (approvalId: Id<"booking_approvals"> | undefined) => {
+    if (!approvalId) return false;
+    const prior: any = await ctx.db.get(approvalId);
+    if (!prior) return false;
+    const d = prior.decision as string | undefined;
+    return d !== "declined" && d !== "withdrawn" && d !== "sla_expired";
+  };
+
+  let stamped = 0;
+  for (const row of rows) {
+    if (row.source !== "mid_job") continue;
+    if (row.status !== "planned") continue;
+    if (await stampStillHolds(row.introduced_by_approval_id)) continue;
+    await ctx.db.patch(row._id, {
+      introduced_by_approval_id: args.approvalId,
+      updated_at: args.now,
+    });
+    stamped += 1;
+  }
+  return stamped;
+}
+
+/**
+ * Revert the mid-job scope a customer declined (or let expire).
+ *
+ * Keeps the custom_jobs row for audit/logging — marked "declined", with its
+ * parts/complaint intact so the denied parts are still recorded — but drops the
+ * line from the booking's scheduling copy (`custom_services`) so it never
+ * reaches the completed job, the receipt, or the price. Idempotent: only
+ * touches rows still "planned" and bound to this exact approval cycle.
+ *
+ * Returns the number of lines reverted.
+ */
+export async function revertDeclinedMidJobWork(
+  ctx: any,
+  args: {
+    bookingId: Id<"bookings">;
+    approvalId: Id<"booking_approvals">;
+    now: number;
+  },
+): Promise<number> {
+  const booking: any = await ctx.db.get(args.bookingId);
+  if (!booking) return 0;
+
+  const rows = await ctx.db
+    .query("custom_jobs")
+    .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+    .collect();
+
+  const declinedKeys = new Set<string>();
+  let reverted = 0;
+  for (const row of rows) {
+    if (String(row.introduced_by_approval_id ?? "") !== String(args.approvalId)) {
+      continue;
+    }
+    if (row.status !== "planned") continue;
+    await ctx.db.patch(row._id, {
+      status: "declined",
+      updated_at: args.now,
+    });
+    declinedKeys.add(row.match_key ?? serviceMatchKey(row.name));
+    reverted += 1;
+  }
+
+  if (declinedKeys.size > 0) {
+    const lines = Array.isArray(booking.custom_services)
+      ? booking.custom_services
+      : [];
+    const nextLines = lines.filter(
+      (c: any) => !declinedKeys.has(serviceMatchKey(String(c.name))),
+    );
+    if (nextLines.length !== lines.length) {
+      await ctx.db.patch(args.bookingId, {
+        custom_services: nextLines,
+        updated_at: args.now,
+      });
+    }
+  }
+
+  return reverted;
 }
 
 /**
@@ -778,10 +893,16 @@ export const removeMidJobCustomService = mutation({
 export const listForBooking = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
-    const rows = await ctx.db
-      .query("custom_jobs")
-      .withIndex("by_booking", (q) => q.eq("booking_id", args.bookingId))
-      .collect();
+    const rows = (
+      await ctx.db
+        .query("custom_jobs")
+        .withIndex("by_booking", (q) => q.eq("booking_id", args.bookingId))
+        .collect()
+    )
+      // Declined mid-job lines are kept for audit but must not be surfaced to
+      // the post-job survey — the mechanic isn't reporting an outcome on work
+      // the customer turned down.
+      .filter((r) => r.status !== "declined");
     rows.sort((a, b) => a.created_at - b.created_at);
     return rows.map((r) => ({
       _id: r._id,

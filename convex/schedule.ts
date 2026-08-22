@@ -416,6 +416,11 @@ export const getBookingsForRange = query({
           customerNote: booking.customer_notes ?? null,
           recommendationState: booking.recommendation_state ?? null,
           diagnosticFollowupState: booking.diagnostic_followup_state ?? null,
+          // Out-of-range estimate awaiting the customer's confirmation of the
+          // new hold — surfaced on the day-lane block as a "Confirming new
+          // hold" badge (the block status stays vehicle_at_shop/in_progress).
+          paymentApprovalState:
+            (booking as any).payment_approval_state ?? null,
         };
       })
     );

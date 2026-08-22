@@ -509,6 +509,13 @@ export default defineSchema({
     // budget goes to winnable ones; cleared on any successful price write.
     price_discovery_outcome: v.optional(v.string()),
     price_discovery_at: v.optional(v.number()),
+    /** Consecutive failed discovery attempts. One failure backs off HOURS,
+     *  repeat failures back off the full per-outcome window — a single
+     *  transient miss seconds after the part is written must not freeze
+     *  pricing for weeks (Aug 20 2026: two Nautilus parts with abundant
+     *  dealer listings sat unpriced behind first-attempt stamps). Cleared
+     *  when a price lands. */
+    price_discovery_strikes: v.optional(v.number()),
   })
     .index("by_part_number", ["oem_part_number"])
     .index("by_part_number_normalized", ["oem_part_number_normalized"])
@@ -2882,6 +2889,9 @@ export default defineSchema({
           oem_number: v.string(),
           part_name: v.string(),
           brand: v.optional(v.string()),
+          // Optional provenance link the mechanic pasted in the parts editor
+          // (where they sourced this part/price). Free-form, unvalidated.
+          source_url: v.optional(v.string()),
           part_tier: v.optional(v.string()),
           quantity: v.number(),
           unit_price_cents: v.number(),
@@ -2911,6 +2921,15 @@ export default defineSchema({
           // it. Reversible + auditable, mirroring fitmentQuarantine's
           // data_quality stamp.
           integrity_flag: v.optional(v.string()),
+          // Mechanic-entered tire-replacement line (mid-job / walk-in). Tires
+          // carry no OEM number, so identity lives in these structured fields
+          // while oem_number holds the `TIRE-{size}` sentinel. tire_position is
+          // a free string ("front" / "rear") for staggered / aftermarket cases.
+          is_tire: v.optional(v.boolean()),
+          tire_size: v.optional(v.string()),
+          tire_brand: v.optional(v.string()),
+          tire_model: v.optional(v.string()),
+          tire_position: v.optional(v.string()),
         })
       )
     ),
@@ -4789,7 +4808,18 @@ export default defineSchema({
       v.literal("planned"),
       v.literal("completed"),
       v.literal("cancelled"),
+      // Customer declined (or let expire) the mid-job scope change that
+      // introduced this line. The row is KEPT for audit/logging — it records
+      // what was offered and turned down, including the parts that were denied
+      // — but it must never reach the completed job, the receipt, or the price.
+      v.literal("declined"),
     ),
+    // The mid-job booking_approvals cycle that introduced this line. Set when
+    // the mechanic submits the mid-job change (stampMidJobCustomJobs); it's the
+    // reliable join that lets a customer decline revert exactly the lines that
+    // cycle added and nothing from a prior approved cycle. Null on rows added
+    // outside a mid-job cycle (source "booking"/"post_job"/"recommendation").
+    introduced_by_approval_id: v.optional(v.id("booking_approvals")),
     created_at: v.number(),
     updated_at: v.optional(v.number()),
   })
@@ -5876,6 +5906,11 @@ export default defineSchema({
     labor_hours: v.optional(v.number()),
     labor_rate_cents: v.optional(v.number()),
     notes: v.optional(v.string()),
+    // Optional photos the mechanic attached to justify the change (e.g. a shot
+    // of the seized caliper behind the added scope). Storage ids; the
+    // customer-facing approval query resolves them to URLs. Shown alongside
+    // `notes` on the "An update from your mechanic" approval screen.
+    scope_photo_ids: v.optional(v.array(v.id("_storage"))),
     inspection_snapshot: v.optional(customerInspectionSnapshotValidator),
 
     // Gating context: the ceiling the submission was evaluated against.

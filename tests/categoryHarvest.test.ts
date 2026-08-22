@@ -6,6 +6,7 @@ import {
   extractVehicleSlugPath,
   interchangeCandidates,
   pickVehicleSlug,
+  verdictNote,
 } from "../convex/vehicleEnrichment/categoryHarvest";
 
 const SLUG = "/v-2020-mercedes-benz-glc43-amg--4matic--3-0l-v6-gas";
@@ -255,5 +256,29 @@ describe("interchangeCandidates", () => {
       exclude: new Set(["0004213000"]),
     });
     expect(out.map((n) => n.replace(/[^0-9A-Z]/gi, ""))).toEqual(["0004204904"]);
+  });
+});
+
+describe("verdictNote — verdicts carry the verifier's reason", () => {
+  // The 2021 Nautilus's `front_rotor:M2GZ1125A:x2:refuted` was unadjudicable
+  // after the fact: the refute turned out to be FALSE (the rotor's fitment
+  // table lists 2021-2023 Nautilus) but nothing recorded why the verifier
+  // thought otherwise. Non-confirmed verdicts now carry the reason inline.
+  it("appends the reason to refuted and uncertain", () => {
+    expect(
+      verdictNote({ verdict: "refuted", reason: "fits 2021-2024 Edge only" }),
+    ).toBe("refuted[fits 2021-2024 Edge only]");
+    expect(verdictNote({ verdict: "uncertain", reason: "no listing found" })).toBe(
+      "uncertain[no listing found]",
+    );
+  });
+  it("keeps confirmed bare and tolerates missing verdict/reason", () => {
+    expect(verdictNote({ verdict: "confirmed", reason: "exact fitment row" })).toBe("confirmed");
+    expect(verdictNote(undefined)).toBe("uncertain");
+    expect(verdictNote({ verdict: "refuted" })).toBe("refuted");
+  });
+  it("caps runaway reasons", () => {
+    const long = verdictNote({ verdict: "refuted", reason: "x".repeat(500) });
+    expect(long.length).toBeLessThanOrEqual("refuted[]".length + 160);
   });
 });

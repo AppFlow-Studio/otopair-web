@@ -144,10 +144,36 @@ function unparsedRetryMs(): number {
  * back off on their own clocks. Any unrecognised verdict suppresses nothing,
  * so an older row or a future value can only ever cost a retry.
  */
-function isDiscoveryDead(part: { price_discovery_outcome?: string; price_discovery_at?: number }): boolean {
+/** How long ONE failed attempt suppresses re-discovery. Hours, not days:
+ *  the heal-tail leg fires seconds after a part is written, and a single
+ *  transient miss there (search racing the write, a throttled SERP) used to
+ *  inherit the full no_listing/unparsed window — the Aug 20 2026 Nautilus had
+ *  two parts with abundant dealer listings frozen for what would have been
+ *  weeks, and the completion gate had nothing to promote on. The full windows
+ *  now require a SECOND consecutive failure, hours later, when the miss is no
+ *  longer plausibly a race. */
+function firstFailureRetryMs(): number {
+  return Number(process.env.PARTS_PRICE_FIRST_RETRY_HOURS ?? "6") * 60 * 60 * 1000;
+}
+
+/** Pure core of the suppression check (exported for tests). Rows stamped
+ *  before the strikes column existed read as one strike — the short window —
+ *  so every pre-existing frozen transient melts on the next nightly leg
+ *  without a migration. */
+export function discoveryDeadNow(
+  part: {
+    price_discovery_outcome?: string;
+    price_discovery_at?: number;
+    price_discovery_strikes?: number;
+  },
+  now: number,
+): boolean {
   const at = part.price_discovery_at;
   if (typeof at !== "number") return false;
-  const age = Date.now() - at;
+  const age = now - at;
+  const strikes =
+    typeof part.price_discovery_strikes === "number" ? part.price_discovery_strikes : 1;
+  if (strikes <= 1) return age < firstFailureRetryMs();
   switch (part.price_discovery_outcome) {
     case "no_listing":
       return age < noListingRetryMs();
@@ -156,6 +182,14 @@ function isDiscoveryDead(part: { price_discovery_outcome?: string; price_discove
     default:
       return false;
   }
+}
+
+function isDiscoveryDead(part: {
+  price_discovery_outcome?: string;
+  price_discovery_at?: number;
+  price_discovery_strikes?: number;
+}): boolean {
+  return discoveryDeadNow(part, Date.now());
 }
 
 /** Durable per-part discovery verdict — the answer to the canary's open
@@ -167,9 +201,24 @@ export const markPriceDiscoveryOutcome = internalMutation({
     outcome: v.union(v.literal("no_listing"), v.literal("unparsed"), v.null()),
   },
   handler: async (ctx, args) => {
+    if (args.outcome === null) {
+      await ctx.db.patch(args.part_id, {
+        price_discovery_outcome: undefined,
+        price_discovery_at: undefined,
+        price_discovery_strikes: undefined,
+      });
+      return;
+    }
+    // Strikes escalate the backoff: the first failure suppresses for hours
+    // (it may be a race with the part's own write), a repeat failure earns
+    // the full per-outcome window. See discoveryDeadNow.
+    const part: any = await ctx.db.get(args.part_id);
+    const strikes =
+      (typeof part?.price_discovery_strikes === "number" ? part.price_discovery_strikes : 0) + 1;
     await ctx.db.patch(args.part_id, {
-      price_discovery_outcome: args.outcome ?? undefined,
-      price_discovery_at: args.outcome ? Date.now() : undefined,
+      price_discovery_outcome: args.outcome,
+      price_discovery_at: Date.now(),
+      price_discovery_strikes: strikes,
     });
   },
 });
@@ -288,6 +337,11 @@ export const refreshStalePrices = internalAction({
     // re-chains up to maxChainDepth times before falling to the nightly sweep.
     chainDepth: v.optional(v.float64()),
     maxChainDepth: v.optional(v.float64()),
+    /** Ignore no_listing/unparsed suppression for this run — the operator's
+     *  targeted melt (replaces the zero-the-env-vars hack). Intended for
+     *  per-config runs; a fleet-wide forceRetry re-spends budget on genuinely
+     *  dead parts, so pair it with vehicleConfigId. */
+    forceRetry: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const budget = args.budget ?? Number(process.env.PARTS_PRICE_REFRESH_BUDGET ?? "0");
@@ -408,11 +462,16 @@ export const refreshStalePrices = internalAction({
           if (page.isDone) break;
         }
       }
-      const skippedDead = zeroTargets.filter((t) => t.discovery_dead).length;
-      const targets = zeroTargets.filter((t) => !t.discovery_dead).slice(0, backfillBudget);
+      const skippedDead = args.forceRetry
+        ? 0
+        : zeroTargets.filter((t) => t.discovery_dead).length;
+      const targets = zeroTargets
+        .filter((t) => args.forceRetry === true || !t.discovery_dead)
+        .slice(0, backfillBudget);
       console.log(
         `[price-refresh] ${targets.length} zero-price parts selected (backfill budget ${backfillBudget}` +
-          (skippedDead > 0 ? `, ${skippedDead} skipped as no_listing/unparsed` : "") + `)`,
+          (skippedDead > 0 ? `, ${skippedDead} skipped as no_listing/unparsed` : "") +
+          (args.forceRetry ? `, forceRetry` : "") + `)`,
       );
 
       for (const t of targets) {

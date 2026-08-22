@@ -14,6 +14,8 @@ import type { Id } from "@/convex/_generated/dataModel";
 import {
   Camera,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Flag,
   Loader2,
   MessageSquare,
@@ -27,6 +29,7 @@ import ElapsedTimer from "./elapsed-timer";
 import FlagIssueSheet from "./flag-issue-sheet";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import OverrunExtendCard from "./overrun-extend-card";
+import ExtraWorkStatus from "@/components/booking/extra-work-status";
 
 type DraftPhoto = {
   id: string;
@@ -73,17 +76,24 @@ function formatMoney(value: number | null | undefined) {
   }).format(value);
 }
 
+const normServiceName = (s: string) => s.trim().toLowerCase();
+
+type ServiceStatus = "confirmed" | "pending" | "declined" | "draft";
+
 const MAX_PHOTOS = 6;
 const NOTES_DEBOUNCE_MS = 800;
 
 export function NowWorkingPane({
   bookingId,
+  onBack,
   onClose,
   onMarkComplete,
   onToast,
   dense = false,
 }: {
   bookingId: Id<"bookings">;
+  /** When present, renders a "‹ All jobs" control that returns to the picker. */
+  onBack?: () => void;
   onClose: () => void;
   onMarkComplete: (bookingId: Id<"bookings">) => void;
   onToast?: (message: string) => void;
@@ -107,6 +117,70 @@ export function NowWorkingPane({
   const clockPausedByBlocker = Boolean(
     blockers?.blockers.some((b) => b.resolved_at == null && b.stops_clock),
   );
+
+  /* Mid-job extra-work state — drives the per-service status dots in the work
+     order. Same query the EXTRA WORK card (top-right) uses; Convex shares the
+     subscription so this isn't a second network read. */
+  const scopeChanges = useQuery(api.booking_approvals.getMidJobScopeChanges, {
+    bookingId,
+  }) as
+    | Array<{
+        state: "pending" | "accepted" | "auto_confirmed" | "declined";
+        addedServiceNames: string[];
+      }>
+    | undefined;
+
+  // Off-catalog lines on this booking (drafts + agreed extras). A line the
+  // mechanic just added but hasn't sent for confirmation has no scope change
+  // yet — that's a draft, and it should read gray in the work order, not the
+  // green of agreed work.
+  const customJobsList = useQuery(api.customJobs.listForBooking, {
+    bookingId,
+  }) as Array<{ name: string }> | undefined;
+
+  const serviceStatusList = useMemo(() => {
+    const changes = scopeChanges ?? [];
+    const pending = new Set<string>();
+    // Every name carried by a *submitted* scope change, whatever its state.
+    // A custom line absent from this set was never sent to the customer.
+    const submitted = new Set<string>();
+    for (const c of changes) {
+      for (const n of c.addedServiceNames ?? []) submitted.add(normServiceName(n));
+      if (c.state !== "pending") continue;
+      for (const n of c.addedServiceNames ?? []) pending.add(normServiceName(n));
+    }
+    // Draft = an off-catalog line the mechanic added mid-job that hasn't been
+    // submitted for approval yet.
+    const draft = new Set<string>();
+    for (const cj of customJobsList ?? []) {
+      const n = normServiceName(cj.name);
+      if (!submitted.has(n)) draft.add(n);
+    }
+    const baseNames: string[] = job?.serviceNames ?? [];
+    const list: Array<{ name: string; status: ServiceStatus }> = baseNames.map(
+      (name) => {
+        const n = normServiceName(name);
+        const status: ServiceStatus = pending.has(n)
+          ? "pending"
+          : draft.has(n)
+            ? "draft"
+            : "confirmed";
+        return { name, status };
+      },
+    );
+    // Declined lines are stripped from the booking's services, so re-add them
+    // as red/struck entries — the work order should still show what was turned
+    // down, not silently drop it.
+    for (const c of changes) {
+      if (c.state !== "declined") continue;
+      for (const n of c.addedServiceNames ?? []) {
+        if (!list.some((x) => normServiceName(x.name) === normServiceName(n))) {
+          list.push({ name: n, status: "declined" });
+        }
+      }
+    }
+    return list;
+  }, [scopeChanges, customJobsList, job?.serviceNames]);
 
   const serverNotes = job?.jobActuals?.inProgressNotes ?? "";
   const serverPhotos = useMemo(
@@ -326,13 +400,22 @@ export function NowWorkingPane({
     ? "font-mono text-5xl font-semibold tracking-tight text-white tabular-nums"
     : "font-mono text-6xl font-semibold tracking-tight text-white tabular-nums";
   const summarySectionClass = dense
-    ? "flex flex-col items-start gap-2 border-b border-white/10 py-5"
-    : "flex flex-col items-start gap-2 border-b border-white/10 py-8";
+    ? "flex flex-col items-start gap-4 border-b border-white/10 py-5"
+    : "flex items-start justify-between gap-6 border-b border-white/10 py-8";
 
   return (
     <div className={containerClass}>
       <header className="flex items-center justify-between border-b border-white/10 pb-5">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          {onBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 py-2 pl-2 pr-3 text-sm font-medium text-slate-100 transition-colors hover:bg-white/10"
+            >
+              <ChevronLeft className="h-4 w-4" /> All jobs
+            </button>
+          ) : null}
           <span className="inline-flex h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400" />
           <p className="text-sm font-medium uppercase tracking-[0.2em] text-emerald-300/80">
             Now working
@@ -425,31 +508,44 @@ export function NowWorkingPane({
       ) : (
         <>
           <section className={summarySectionClass}>
-            <p className="text-sm text-slate-400">Elapsed</p>
-            <ElapsedTimer
-              startedAtMs={startedAt}
-              // Stop on a clock-stopping blocker too, so the pane doesn't
-              // contradict the worked-minutes figure the server records.
-              paused={paused || clockPausedByBlocker}
-              className={elapsedTimerClass}
-            />
-            <p className="text-sm text-slate-400">
-              {startedAt != null
-                ? `Started ${formatClockTime(startedAt)}`
-                : "Not started yet"}
-              {etaMs != null ? ` · ETA ${formatClockTime(etaMs)}` : ""}
-              {clockPausedByBlocker
-                ? " · Paused (blocked)"
-                : paused
-                  ? " · Paused"
-                  : ""}
-            </p>
-            <p className="mt-2 text-lg font-medium text-slate-100">
-              {job.vehicle}
-            </p>
-            <p className="text-sm text-slate-400">
-              {job.serviceNames.join(" · ")}
-            </p>
+            <div className="flex min-w-0 flex-col items-start gap-2">
+              <p className="text-sm text-slate-400">Elapsed</p>
+              <ElapsedTimer
+                startedAtMs={startedAt}
+                // Stop on a clock-stopping blocker too, so the pane doesn't
+                // contradict the worked-minutes figure the server records.
+                paused={paused || clockPausedByBlocker}
+                className={elapsedTimerClass}
+              />
+              <p className="text-sm text-slate-400">
+                {startedAt != null
+                  ? `Started ${formatClockTime(startedAt)}`
+                  : "Not started yet"}
+                {etaMs != null ? ` · ETA ${formatClockTime(etaMs)}` : ""}
+                {clockPausedByBlocker
+                  ? " · Paused (blocked)"
+                  : paused
+                    ? " · Paused"
+                    : ""}
+              </p>
+              <p className="mt-2 text-lg font-medium text-slate-100">
+                {job.vehicle}
+              </p>
+              <p className="text-sm text-slate-400">
+                {job.serviceNames.join(" · ")}
+              </p>
+            </div>
+
+            {/* Extra work sits across from the timer — full detail lives here:
+                waiting / approved / declined, the price delta, the SLA, and any
+                denied parts. Empty state keeps the space intentional. */}
+            <div className={dense ? "w-full" : "w-[360px] shrink-0"}>
+              <ExtraWorkStatus
+                bookingId={bookingId}
+                variant="dark"
+                showWhenEmpty
+              />
+            </div>
           </section>
 
           {job.status === "in_progress" && (
@@ -520,18 +616,66 @@ export function NowWorkingPane({
                 Work order
               </h3>
               <ul className="mt-3 space-y-2">
-                {job.serviceNames.length === 0 ? (
+                {serviceStatusList.length === 0 ? (
                   <li className="text-sm text-slate-500">No services listed.</li>
                 ) : (
-                  job.serviceNames.map((name: string, index: number) => (
-                    <li
-                      key={`${name}-${index}`}
-                      className="flex items-start gap-2 text-sm text-slate-100"
-                    >
-                      <span className="mt-1 inline-flex h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
-                      <span>{name}</span>
-                    </li>
-                  ))
+                  serviceStatusList.map((svc, index) => {
+                    // Dot mirrors the service's approval state: green when it's
+                    // agreed (base booking or approved extra), yellow while the
+                    // customer hasn't confirmed submitted work, gray for a draft
+                    // the mechanic hasn't sent yet, red when declined.
+                    const dotClass =
+                      svc.status === "pending"
+                        ? "bg-amber-400"
+                        : svc.status === "declined"
+                          ? "bg-red-400"
+                          : svc.status === "draft"
+                            ? "bg-slate-500"
+                            : "bg-emerald-400";
+                    return (
+                      <li
+                        key={`${svc.name}-${index}`}
+                        className="flex items-start gap-2 text-sm text-slate-100"
+                      >
+                        <span
+                          className={`mt-1.5 inline-flex h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`}
+                          title={
+                            svc.status === "pending"
+                              ? "Awaiting customer confirmation"
+                              : svc.status === "declined"
+                                ? "Declined by customer"
+                                : svc.status === "draft"
+                                  ? "Draft — not submitted yet"
+                                  : "Confirmed"
+                          }
+                        />
+                        <span
+                          className={
+                            svc.status === "declined"
+                              ? "text-slate-500 line-through"
+                              : svc.status === "draft"
+                                ? "text-slate-400"
+                                : ""
+                          }
+                        >
+                          {svc.name}
+                        </span>
+                        {svc.status === "pending" ? (
+                          <span className="ml-1 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-amber-200">
+                            Pending
+                          </span>
+                        ) : svc.status === "declined" ? (
+                          <span className="ml-1 rounded bg-red-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-red-200">
+                            Declined
+                          </span>
+                        ) : svc.status === "draft" ? (
+                          <span className="ml-1 rounded bg-slate-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-300">
+                            Draft
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })
                 )}
               </ul>
               <div className="mt-5 flex items-center justify-between border-t border-white/10 pt-4">
@@ -744,56 +888,195 @@ export function NowWorkingPane({
   );
 }
 
-export default function NowWorkingOverlay({
-  bookingIds,
+/** One active-in-the-bay job, as the picker needs to render it. */
+export type ActiveJobRow = {
+  bookingId: Id<"bookings">;
+  mechanicName: string;
+  vehicle: string;
+  serviceSummary: string;
+  startedAt: number | null;
+  /** YYYY-MM-DD the job was scheduled for; anything but today reads as overrun. */
+  scheduledDate: string | null;
+};
+
+function localTodayString() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+/**
+ * The picker a busy front desk lands on: every car in the bay, one tap to focus.
+ * Timers keep ticking for all of them — you're choosing which one to drive, not
+ * pausing the rest.
+ */
+function ActiveJobsList({
+  jobs,
+  onSelect,
   onClose,
-  onClosePane,
+}: {
+  jobs: ActiveJobRow[];
+  onSelect: (bookingId: Id<"bookings">) => void;
+  onClose: () => void;
+}) {
+  const today = localTodayString();
+
+  return (
+    <div className="mx-auto flex h-full max-w-3xl flex-col px-6 py-6">
+      <header className="flex items-center justify-between border-b border-white/10 pb-5">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400" />
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-emerald-300/80">
+            Active jobs
+          </p>
+          <span className="rounded-md border border-white/15 bg-white/5 px-2 py-0.5 text-xs font-mono text-slate-300">
+            {jobs.length} in the bay
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="inline-flex items-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-white/10"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </header>
+
+      <p className="mt-4 text-sm text-slate-400">
+        Pick a car to focus on — the clock keeps running for every job in the bay.
+      </p>
+
+      <div className="mt-4 flex-1 space-y-3 overflow-y-auto pb-6">
+        {jobs.length === 0 ? (
+          <div className="flex h-full items-center justify-center text-slate-400">
+            Nothing in the bay right now.
+          </div>
+        ) : (
+          jobs.map((job) => {
+            const overrun =
+              !!job.scheduledDate && job.scheduledDate !== today;
+            return (
+              <button
+                key={String(job.bookingId)}
+                type="button"
+                onClick={() => onSelect(job.bookingId)}
+                className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 text-left transition-colors hover:border-emerald-400/40 hover:bg-white/[0.06]"
+              >
+                <span className="inline-flex h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-base font-semibold text-slate-100">
+                    {[job.mechanicName, job.vehicle].filter(Boolean).join(" · ")}
+                  </p>
+                  <p className="mt-0.5 truncate text-sm text-slate-400">
+                    {job.serviceSummary || "No services listed"}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <ElapsedTimer
+                    startedAtMs={job.startedAt}
+                    className="font-mono text-lg font-semibold tabular-nums text-emerald-300"
+                  />
+                  {overrun ? (
+                    <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                      from {job.scheduledDate}
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-slate-500">in progress</span>
+                  )}
+                </div>
+                <ChevronRight className="h-5 w-5 shrink-0 text-slate-500" />
+              </button>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+export default function NowWorkingOverlay({
+  open,
+  jobs,
+  onClose,
   onMarkComplete,
   onToast,
 }: {
-  bookingIds: Array<Id<"bookings">>;
+  open: boolean;
+  jobs: ActiveJobRow[];
   onClose: () => void;
-  onClosePane: (bookingId: Id<"bookings">) => void;
   onMarkComplete: (bookingId: Id<"bookings">) => void;
   onToast?: (message: string) => void;
 }) {
+  const [selectedId, setSelectedId] = useState<Id<"bookings"> | null>(null);
+  const multiple = jobs.length > 1;
+
+  // On open, land straight in the focus view when there's a single car in the
+  // bay; otherwise show the picker. On close, forget the selection so the next
+  // open re-decides.
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (bookingIds.length === 0) return;
+    if (open && !wasOpenRef.current) {
+      wasOpenRef.current = true;
+      setSelectedId(jobs.length === 1 ? jobs[0].bookingId : null);
+    } else if (!open && wasOpenRef.current) {
+      wasOpenRef.current = false;
+      setSelectedId(null);
+    }
+  }, [open, jobs]);
+
+  // If the focused job leaves the bay (completed elsewhere, reassigned), drop
+  // back to the picker instead of rendering a pane for a stale booking.
+  useEffect(() => {
+    if (
+      selectedId &&
+      !jobs.some((job) => String(job.bookingId) === String(selectedId))
+    ) {
+      setSelectedId(null);
+    }
+  }, [jobs, selectedId]);
+
+  useEffect(() => {
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Let a focused input/textarea keep its own Escape (clearing a field).
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      // Step back one level: focus → picker → closed.
+      if (selectedId && multiple) {
+        setSelectedId(null);
+      } else {
+        onClose();
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [bookingIds.length, onClose]);
+  }, [open, selectedId, multiple, onClose]);
 
-  if (bookingIds.length === 0 || typeof document === "undefined") return null;
-
-  const dense = bookingIds.length === 2;
+  if (!open || typeof document === "undefined") return null;
 
   return createPortal(
     <div className="fixed inset-0 z-[60] bg-slate-950/95 text-slate-50">
-      <div className="flex h-full w-full flex-col md:flex-row">
-        {bookingIds.map((id, index) => (
-          <div
-            key={String(id)}
-            className={
-              dense
-                ? `h-1/2 w-full overflow-hidden md:h-full md:w-1/2 ${
-                    index === 0 ? "border-b border-white/10 md:border-b-0 md:border-r" : ""
-                  }`
-                : "h-full w-full overflow-hidden"
-            }
-          >
-            <NowWorkingPane
-              bookingId={id}
-              onClose={() => onClosePane(id)}
-              onMarkComplete={onMarkComplete}
-              onToast={onToast}
-              dense={dense}
-            />
-          </div>
-        ))}
-      </div>
+      {selectedId ? (
+        <div className="h-full w-full overflow-hidden">
+          <NowWorkingPane
+            bookingId={selectedId}
+            onBack={multiple ? () => setSelectedId(null) : undefined}
+            onClose={onClose}
+            onMarkComplete={onMarkComplete}
+            onToast={onToast}
+          />
+        </div>
+      ) : (
+        <ActiveJobsList
+          jobs={jobs}
+          onSelect={(id) => setSelectedId(id)}
+          onClose={onClose}
+        />
+      )}
     </div>,
     document.body,
   );

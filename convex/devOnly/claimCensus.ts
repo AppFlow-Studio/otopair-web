@@ -10,6 +10,7 @@
  */
 import { v } from "convex/values";
 import { internalQuery } from "../_generated/server";
+import { makesSameFamily } from "../vehicleEnrichment/contentSanitization";
 
 export const byAdapter = internalQuery({
   args: { limit: v.optional(v.float64()) },
@@ -56,10 +57,18 @@ export const prefixes = internalQuery({
       (m) => String((m as any).name ?? "").trim().toLowerCase() === args.make.trim().toLowerCase(),
     );
     if (!row) return { error: `make_not_found:${args.make}` };
-    const parts = await ctx.db
-      .query("oem_parts")
-      .withIndex("by_make_category", (q) => q.eq("make_id", row._id))
-      .take(2000);
+    // Same family widening as v3queries.getOemPrefixesForMake, so this probe
+    // measures what the gate actually sees.
+    const ids = [row._id];
+    for (const m of makes) {
+      if (m._id === row._id) continue;
+      if (makesSameFamily(String((row as any).name), String((m as any).name ?? ""))) ids.push(m._id);
+    }
+    const parts: any[] = [];
+    for (const id of ids) {
+      parts.push(...(await ctx.db.query("oem_parts")
+        .withIndex("by_make_category", (q) => q.eq("make_id", id)).take(2000)));
+    }
     const pre = new Set<string>();
     for (const r of parts) {
       const raw = String((r as any).oem_part_number_normalized ?? (r as any).oem_part_number ?? "")

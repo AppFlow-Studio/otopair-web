@@ -46,6 +46,13 @@ type SuggestedPart = {
   // "Used last time on this car" (vin) vs "Shop default" (shop) vs catalog
   // fallback. Absent for legacy paths that pre-date the layered cascade.
   learned_from?: "vin" | "shop" | "config" | "catalog";
+  // Tire-replacement suggestion — identity lives in these structured fields
+  // (tires have no OEM number). oem_number carries the `TIRE-{size}` sentinel.
+  is_tire?: boolean;
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+  tire_position?: string | null;
 };
 
 // Mirror of SHOP_DEMOTE_DELTA in shop_part_preferences.ts so the cascade
@@ -645,8 +652,15 @@ export const getPrefillData = query({
               ? `Tires — ${brandModel} (x${qty})`
               : `Tires (x${qty})`,
             oem_number: tireOem(booking.tire_specs?.size),
-            cost: (acceptedQuote.per_tire_price ?? 0) * qty,
+            // Per-unit cost + real quantity so the parts step (which bills
+            // cost × quantity) shows the true count instead of a single line.
+            cost: acceptedQuote.per_tire_price ?? 0,
+            quantity: qty,
             service_id: sid,
+            is_tire: true,
+            tire_size: booking.tire_specs?.size ?? null,
+            tire_brand: acceptedQuote.tire_brand ?? null,
+            tire_model: acceptedQuote.tire_model ?? null,
           });
         } else if (booking.tire_specs) {
           const qty = booking.tire_specs.quantity ?? 4;
@@ -654,7 +668,10 @@ export const getPrefillData = query({
             part_name: `Tires — ${booking.tire_specs.tier} ${booking.tire_specs.type} (x${qty})`,
             oem_number: tireOem(booking.tire_specs.size),
             cost: 0,
+            quantity: qty,
             service_id: sid,
+            is_tire: true,
+            tire_size: booking.tire_specs.size ?? null,
           });
         }
       }
@@ -904,6 +921,34 @@ export const getPrefillData = query({
           )
       : [];
 
+    // Prejob inspection tire findings — surfaced so the mid-job / walk-in tire
+    // editor can prefill the sizes (and brand/model) recorded per corner during
+    // the multi-point inspection. Front axle takes front_left else front_right;
+    // rear axle takes rear_left else rear_right (sizes are synced per axle).
+    const latestActual = await getLatestJobActualForBooking(ctx, args.bookingId);
+    const prejob = (latestActual?.prejob_report ?? null) as any;
+    const td = prejob?.tire_details ?? null;
+    const pickCorner = (a: any, b: any) =>
+      (a ?? null) || (b ?? null) || null;
+    const prejobTires = prejob
+      ? {
+          tire_size_front: prejob.tire_size_front ?? null,
+          tire_size_rear: prejob.tire_size_rear ?? null,
+          front: td
+            ? {
+                brand: pickCorner(td.front_left?.brand, td.front_right?.brand),
+                model: pickCorner(td.front_left?.model, td.front_right?.model),
+              }
+            : null,
+          rear: td
+            ? {
+                brand: pickCorner(td.rear_left?.brand, td.rear_right?.brand),
+                model: pickCorner(td.rear_left?.model, td.rear_right?.model),
+              }
+            : null,
+        }
+      : null;
+
     return {
       vehicleLabel,
       serviceName: service?.name ?? "",
@@ -918,6 +963,7 @@ export const getPrefillData = query({
       priorOpenRecommendations,
       confirmedThisVisit,
       suggestedFromInspection,
+      prejobTires,
     };
   },
 });

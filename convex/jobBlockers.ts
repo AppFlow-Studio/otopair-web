@@ -37,6 +37,38 @@ import { postjobPhotoValidator } from "./lib/vehicle_passports";
 
 const MINUTE_MS = 60_000;
 
+/**
+ * Human car label for a booking — "2011 Acura TL", VIN-tail fallback. Mirrors
+ * the resolution the staff notification feed uses (`notifications.ts`) so the
+ * car reads the same on the alert and in the feed. Kept local to avoid pulling
+ * the heavy VIN-based resolver (and its module graph) out of bookings.ts.
+ */
+async function vehicleLabelForBooking(
+  ctx: any,
+  booking: any,
+): Promise<string | null> {
+  // vehicle_id first; bookings always carry the VIN, so fall back to a by_vin
+  // lookup when vehicle_id is missing/dangling (keeps the real car on the alert,
+  // not a VIN tail).
+  let veh: any = booking?.vehicle_id
+    ? await ctx.db.get(booking.vehicle_id)
+    : null;
+  if (!veh && typeof booking?.vin === "string" && booking.vin) {
+    veh = await ctx.db
+      .query("vehicles")
+      .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
+      .first();
+  }
+  if (veh) {
+    const meta = veh.metadata ?? {};
+    const parts = [veh.year ?? meta.year, meta.make, meta.model].filter(Boolean);
+    if (parts.length > 0) return parts.join(" ");
+    if (veh.vin) return `VIN …${String(veh.vin).slice(-6)}`;
+  }
+  if (booking?.vin) return `VIN …${String(booking.vin).slice(-6)}`;
+  return null;
+}
+
 export type BlockerKind =
   | "parts_delay"
   | "vehicle_condition"
@@ -259,6 +291,18 @@ export const openBlocker = mutation({
     const shopName = booking.shop_id
       ? ((await ctx.db.get(booking.shop_id)) as any)?.name ?? null
       : null;
+    // Car + mechanic so every alert can say which vehicle, whose bay, and why —
+    // staff reads all four; the customer copy below uses car + shop + reason.
+    const vehicleLabel = await vehicleLabelForBooking(ctx, booking);
+    let mechanicName: string | null = null;
+    if (booking.mechanic_id) {
+      const mech: any = await ctx.db.get(booking.mechanic_id);
+      const mn = [mech?.first_name, mech?.last_name]
+        .filter(Boolean)
+        .join(" ")
+        .trim();
+      mechanicName = mn.length > 0 ? mn : null;
+    }
 
     const blockerId = await ctx.db.insert("job_blockers", {
       booking_id: args.bookingId,
@@ -288,26 +332,29 @@ export const openBlocker = mutation({
        payload.title / payload.body and falls back to a bare "Otopair" — a
        notification that buzzes a phone and says nothing. One line per kind so
        the driver knows whether this needs them before they open the app. */
+    // Customer-facing: car + shop + reason (softened — no mechanic name).
+    const carPhrase = vehicleLabel ?? "your vehicle";
+    const shopPhrase = shopName ?? "your shop";
     const PUSH_COPY: Record<string, { title: string; body: string }> = {
       parts_delay: {
         title: "Your service is paused",
-        body: `${shopName ?? "Your shop"} is waiting on a part. They'll pick it back up as soon as it arrives.`,
+        body: `Your ${carPhrase} at ${shopPhrase} is paused — waiting on a part. They'll pick it back up as soon as it arrives.`,
       },
       vehicle_condition: {
         title: "Your mechanic found something",
-        body: `${shopName ?? "Your shop"} hit something that needs sorting before they can finish.`,
+        body: `${shopPhrase} hit something on your ${carPhrase} that needs sorting before they can finish.`,
       },
       needs_specialist: {
         title: "Your service is paused",
-        body: `${shopName ?? "Your shop"} needs a tool or specialist they don't have on site.`,
+        body: `Your ${carPhrase} at ${shopPhrase} is paused — they need a tool or specialist they don't have on site.`,
       },
       customer_unreachable: {
         title: "Your shop is trying to reach you",
-        body: `${shopName ?? "Your shop"} can't continue until they speak to you. Tap to see the details.`,
+        body: `${shopPhrase} can't continue on your ${carPhrase} until they speak to you. Tap to see the details.`,
       },
       safety_hold: {
         title: "Don't drive your vehicle",
-        body: `${shopName ?? "Your shop"} advises against driving it. Speak to them before collecting.`,
+        body: `${shopPhrase} advises against driving your ${carPhrase}. Speak to them before collecting.`,
       },
     };
 
@@ -350,6 +397,12 @@ export const openBlocker = mutation({
           note,
           eta_ms: args.etaMs ?? null,
           vin: booking.vin,
+          // Car (year/make/model) + mechanic so the alert states which vehicle,
+          // whose bay, and why. Driver templates print car + shop; staff feed
+          // reads mechanicName too. Without vehicleLabel every message had to
+          // fall back to "your vehicle".
+          vehicleLabel: vehicleLabel ?? null,
+          mechanicName: mechanicName ?? null,
           // Needed by the driver SMS templates — without it every message had
           // to say "your shop".
           shopName: shopName ?? null,
@@ -437,10 +490,25 @@ export const openForShop = query({
     return await Promise.all(
       rows.map(async (r) => {
         const booking = await ctx.db.get(r.booking_id);
+        const vehicleLabel = await vehicleLabelForBooking(ctx, booking);
+        // Whose bay is it now — current assignment, falling back to the
+        // blocker's snapshot if the booking was since unassigned.
+        const mechId = (booking as any)?.mechanic_id ?? r.mechanic_id ?? null;
+        let mechanicName: string | null = null;
+        if (mechId) {
+          const mech: any = await ctx.db.get(mechId);
+          const mn = [mech?.first_name, mech?.last_name]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+          mechanicName = mn.length > 0 ? mn : null;
+        }
         return {
           _id: r._id,
           booking_id: r.booking_id,
           vin: (booking as any)?.vin ?? null,
+          vehicleLabel,
+          mechanicName,
           kind: r.kind,
           label: KIND_POLICY[r.kind as BlockerKind]?.label ?? r.kind,
           note: r.note,

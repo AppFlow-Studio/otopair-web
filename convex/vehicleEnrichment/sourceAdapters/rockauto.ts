@@ -220,6 +220,51 @@ export function parseInterchangeNumbers(
   }
 }
 
+/**
+ * Interchange numbers WITH their verbatim form preserved.
+ *
+ * `parseInterchangeNumbers` above normalizes (uppercase, alphanumeric only),
+ * which is right for CLUSTERING — "5Q0 698 451 A" and "5Q0698451A" must land
+ * in one bucket. It is wrong for the FORMAT GATE, and the difference is not
+ * cosmetic: several makes' patterns require the separators that normalizing
+ * removes. Ford/Lincoln's is `^[A-Z0-9]{2,4}-[A-Z0-9]{1,7}(-[A-Z0-9]{1,4})?$`,
+ * so a genuine `M2GZ-1125-A` arrives as `M2GZ1125A` and
+ * `sanitizePartNumber(..., "Lincoln")` rejects it — every Ford-family
+ * interchange number was unpassable by construction (observed live on the 2021
+ * Nautilus: shape_ok=0 with a correct number in hand).
+ *
+ * So: cluster on `normalized`, gate on `raw`. Same discipline as the verbatim
+ * string fields that survive parseField.
+ */
+export function parseInterchangeNumbersDetailed(
+  html: string | null | undefined,
+): Array<{ raw: string; normalized: string }> {
+  try {
+    if (!html) return [];
+    const m = /OEM\s*\/\s*Interchange\s*Numbers:\s*([\s\S]*?)<\/section>/i.exec(html);
+    if (!m) return [];
+    const text = stripTags(m[1])
+      .replace(/\.\.\.\s*Show All/gi, " ")
+      .replace(/Show Fewer/gi, " ");
+    const out: Array<{ raw: string; normalized: string }> = [];
+    const seen = new Set<string>();
+    // Split on whitespace/commas ONLY — hyphens and spaces inside a number are
+    // part of it, which is the whole point of keeping the raw form.
+    for (const rawTok of text.split(/[,\s]{1,}/)) {
+      const raw = rawTok.trim().replace(/[.;:]+$/, "");
+      if (!raw) continue;
+      const normalized = normalizeOemNumber(raw);
+      if (normalized.length < 5 || !/\d/.test(normalized)) continue;
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      out.push({ raw, normalized });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 /** "More Information for WAGNER EC1521" → the verbatim product identity. */
 export function parseMoreInfoTitle(html: string | null | undefined): string | null {
   try {

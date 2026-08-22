@@ -373,6 +373,19 @@ const CORPORATE_FAMILIES: Array<Set<string>> = [
 
 // Single-source identity key — see lib/makeKey.ts (imported at top).
 
+/** All make KEYS in `makeName`'s corporate family, own key first — so callers
+ *  that prefer own-make rows can rely on the order. A make outside every
+ *  family returns just its own key. Serves the thin-make lanes that store
+ *  family-shared truth under one badge's key (genuine fluid seeds: Motorcraft
+ *  coolant rows curated under "ford" must serve a Lincoln config — the same
+ *  widening the attestation vocabulary got in v3queries.getOemPrefixesForMake). */
+export function familyMakeKeys(makeName: string | null | undefined): string[] {
+  const key = makeKeyOf(String(makeName ?? ""));
+  if (!key) return [];
+  const fam = CORPORATE_FAMILIES.find((f) => f.has(key));
+  return fam ? [key, ...[...fam].filter((k) => k !== key)] : [key];
+}
+
 /** True when two make NAMES belong to the same corporate part-sharing family
  *  (or are the same make). */
 export function makesSameFamily(
@@ -743,4 +756,89 @@ export function sanitizeUrl(val: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * Hyphenations of a separator-less OEM number, for makes whose format pattern
+ * REQUIRES separators.
+ *
+ * WHY. RockAuto publishes interchange numbers with the separators already
+ * stripped — its own page prints `45022T0AA00`, not `45022-T0A-A00` (see the
+ * fetch-path notes in rockauto.ts). Several makes' patterns demand those
+ * separators: Ford/Lincoln's is
+ * `^[A-Z0-9]{2,4}-[A-Z0-9]{1,7}(-[A-Z0-9]{1,4})?$`, so a perfectly genuine
+ * `M2GZ-1125-A` arrives as `M2GZ1125A` and `sanitizePartNumber` rejects it.
+ * Live on the 2021 Nautilus that read `shape_ok=0` while a correct Ford number
+ * sat in the candidate list — the gate rejecting the very thing it exists to
+ * admit.
+ *
+ * The alphanumeric content is what identifies a make; the punctuation is
+ * presentation. So rather than weaken the gate — `sanitizePartNumber` guards
+ * every write path in the pipeline and must not be loosened for one source —
+ * this offers the gate the small set of forms the number could legitimately
+ * take, and the CALLER accepts only if one of them passes unmodified.
+ *
+ * Bounded and deterministic: two- and three-group splits with a minimum group
+ * length, longest-first so the most plausible shape is tried before the rest.
+ * A value that already contains a separator is returned unchanged — there is
+ * nothing to guess.
+ */
+export function hyphenationCandidates(oem: string, maxOut = 40): string[] {
+  const raw = String(oem ?? "").trim();
+  if (!raw) return [];
+  if (/[^A-Za-z0-9]/.test(raw)) return [raw];
+  const n = raw.length;
+  if (n < 5 || n > 20) return [raw];
+
+  const out: string[] = [raw];
+  const MIN = 2;
+  // Two groups: A-B
+  for (let i = MIN; i <= n - MIN; i++) {
+    out.push(`${raw.slice(0, i)}-${raw.slice(i)}`);
+  }
+  // Three groups: A-B-C
+  for (let i = MIN; i <= n - 2 * MIN; i++) {
+    for (let j = i + MIN; j <= n - MIN; j++) {
+      out.push(`${raw.slice(0, i)}-${raw.slice(i, j)}-${raw.slice(j)}`);
+    }
+  }
+  return [...new Set(out)].slice(0, maxOut);
+}
+
+/**
+ * Does SOME legitimate spelling of `oem` satisfy the make's format gate?
+ *
+ * Returns the value to STORE, which is deliberately the source's own form —
+ * never an invented hyphenation. The distinction matters: the first passing
+ * candidate for `M2GZ1125A` is `M2-GZ1125A`, split after two characters, and
+ * the real number is `M2GZ-1125-A`. Both satisfy Ford's pattern; only one is a
+ * number a parts counter would recognise, and a stored OEM number is what
+ * somebody orders against. Guessing where the hyphens go would trade a
+ * false-negative for a subtler false-positive.
+ *
+ * So the hyphenations are used ONLY as evidence that the digits are of the
+ * right shape for this make. What comes back is the unmodified source form,
+ * whose alphanumeric content is identical and which `normalizeOemNumber`
+ * canonicalises downstream anyway.
+ *
+ * `gate` is `sanitizePartNumber` injected, so this module stays pure and the
+ * rule it defers to is the same one every other write path uses — the gate is
+ * never bypassed or weakened, only asked about alternative spellings.
+ */
+export function salvageForMakeFormat(
+  oem: string,
+  make: string,
+  gate: (value: string, makeName?: string) => string | null,
+): string | null {
+  const raw = String(oem ?? "").trim();
+  if (!raw) return null;
+  // Already acceptable as written — nothing to salvage, and the gate's own
+  // cleaned output is the right value.
+  const direct = gate(raw, make);
+  if (direct) return direct;
+  for (const candidate of hyphenationCandidates(raw)) {
+    if (candidate === raw) continue;
+    if (gate(candidate, make)) return raw; // shape confirmed; store the source form
+  }
+  return null;
 }

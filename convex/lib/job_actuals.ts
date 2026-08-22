@@ -44,10 +44,18 @@ export type JobActualPartInput = {
   quantity?: number;
   supplied_by?: string;
   part_tier?: string;
-  service_id?: Id<"services">;
+  service_id?: Id<"services"> | null;
   source?: "catalog" | "manual";
   swap_from_oem_number?: string;
   not_used?: boolean;
+  // Mechanic-entered tire-replacement line (mid-job / walk-in). See
+  // postjobPartValidator for the full rationale; oem_number carries the
+  // `TIRE-{size}` sentinel while identity lives in these fields.
+  is_tire?: boolean;
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+  tire_position?: string | null;
 };
 
 export type JobActualInput = {

@@ -114,9 +114,11 @@ export function NowWorkingPane({
      stalled job is visibly stalled rather than looking like it's being worked. */
   const blockers = useQuery(api.jobBlockers.listForBooking, { bookingId });
   const resolveBlocker = useMutation(api.jobBlockers.resolveBlocker);
-  const clockPausedByBlocker = Boolean(
-    blockers?.blockers.some((b) => b.resolved_at == null && b.stops_clock),
-  );
+  /* Server-derived: covers clock-stopping blockers AND a mid-job re-quote the
+     customer hasn't answered. Don't recompute this from `blockers[]` here —
+     that predicate missed the re-quote case and drifted between surfaces. */
+  const clockPaused = Boolean(blockers?.clockPaused);
+  const blockedMs = (blockers?.blockedMinutes ?? 0) * 60_000;
 
   /* Mid-job extra-work state — drives the per-service status dots in the work
      order. Same query the EXTRA WORK card (top-right) uses; Convex shares the
@@ -512,9 +514,11 @@ export function NowWorkingPane({
               <p className="text-sm text-slate-400">Elapsed</p>
               <ElapsedTimer
                 startedAtMs={startedAt}
-                // Stop on a clock-stopping blocker too, so the pane doesn't
-                // contradict the worked-minutes figure the server records.
-                paused={paused || clockPausedByBlocker}
+                // Stopped time is excluded by blockedMs, not by `paused` —
+                // `paused` only freezes the tick. This is the worked-minutes
+                // figure the server records, so the two can't contradict.
+                paused={paused || clockPaused}
+                blockedMs={blockedMs}
                 className={elapsedTimerClass}
               />
               <p className="text-sm text-slate-400">
@@ -522,7 +526,7 @@ export function NowWorkingPane({
                   ? `Started ${formatClockTime(startedAt)}`
                   : "Not started yet"}
                 {etaMs != null ? ` · ETA ${formatClockTime(etaMs)}` : ""}
-                {clockPausedByBlocker
+                {clockPaused
                   ? " · Paused (blocked)"
                   : paused
                     ? " · Paused"
@@ -897,6 +901,10 @@ export type ActiveJobRow = {
   startedAt: number | null;
   /** YYYY-MM-DD the job was scheduled for; anything but today reads as overrun. */
   scheduledDate: string | null;
+  /** Minutes the work clock was stopped — excluded from the row's timer. */
+  blockedMinutes?: number;
+  /** Whether the clock is stopped right now (blocker or unanswered re-quote). */
+  clockPaused?: boolean;
 };
 
 function localTodayString() {
@@ -976,12 +984,16 @@ function ActiveJobsList({
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <ElapsedTimer
                     startedAtMs={job.startedAt}
+                    paused={job.clockPaused}
+                    blockedMs={(job.blockedMinutes ?? 0) * 60_000}
                     className="font-mono text-lg font-semibold tabular-nums text-emerald-300"
                   />
                   {overrun ? (
                     <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
                       from {job.scheduledDate}
                     </span>
+                  ) : job.clockPaused ? (
+                    <span className="text-[11px] text-amber-300">paused</span>
                   ) : (
                     <span className="text-[11px] text-slate-500">in progress</span>
                   )}

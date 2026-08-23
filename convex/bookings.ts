@@ -45,7 +45,10 @@ import {
   evaluateRescheduleLimit,
 } from "./lib/cancellation_policy";
 import { mintClaimToken } from "./walkin_claims";
-import { blockedMinutesForBooking } from "./jobBlockers";
+import {
+  blockedMinutesForBooking,
+  isClockPausedForBooking,
+} from "./jobBlockers";
 import {
   recordCustomJobsForBooking,
   customPartsFromSnapshot,
@@ -2899,6 +2902,7 @@ export const getActiveJobsForHeader = query({
     // Enriched rows so the header "View" can open the active-jobs picker
     // (mechanic · car, service, and a live elapsed timer) rather than a bare
     // set of ids. Same order as the pill count (most recently touched first).
+    const nowMs = Date.now();
     const activeJobs = await Promise.all(
       inProgress.map(async (b: any) => {
         const mechanic: any = b.mechanic_id
@@ -2921,6 +2925,11 @@ export const getActiveJobsForHeader = query({
           serviceSummary: serviceNames.join(" · "),
           startedAt: jobActual?.started_at ?? null,
           scheduledDate: b.scheduled_date ?? null,
+          // The picker renders a live timer per row, so it needs the same
+          // stopped-clock figures the focused pane gets. Without them a blocked
+          // job keeps ticking here while reading "paused" one screen over.
+          blockedMinutes: await blockedMinutesForBooking(ctx, b._id, nowMs),
+          clockPaused: await isClockPausedForBooking(ctx, b._id, nowMs),
         };
       }),
     );

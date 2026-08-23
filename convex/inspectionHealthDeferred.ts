@@ -29,6 +29,10 @@ import {
 } from "./lib/warningLightsMerge";
 import { logKnownIssueEvents } from "./lib/knownIssueEvents";
 import { recomputeRecPenaltyForVehicle } from "./jobRecommendations";
+import {
+  collectPerformedWork,
+  recommendationWasPerformed,
+} from "./lib/performedWork";
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
@@ -162,12 +166,34 @@ export const applyDeferredInspectionHealth = internalMutation({
     // resetting `created_at` so the Open-recs 30-day ramp starts from the
     // moment the driver can actually see it, not from the mechanic's
     // silent pre-job confirmation.
+    //
+    // ...unless the visit actually did the work. This delay was built so "a
+    // problem fixed in the same visit never surfaces a stale recommendation"
+    // (see the header), but it only ever deferred the reveal — it never
+    // re-checked. So a wiper blade replaced during the job still reached the
+    // customer report as "wiper blade replacement — soon". By now the booking
+    // is closed and every signal needed is on the record, so evaluate rather
+    // than reveal blindly. `collectPerformedWork` returns nothing unless the
+    // booking COMPLETED, and treats a declined line as not performed.
+    const performed = await collectPerformedWork(ctx, booking);
     const recs = await ctx.db
       .query("job_recommendations")
       .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
       .collect();
     for (const rec of recs) {
       if ((rec as any).source !== "inspection" || rec.visible_to_driver) continue;
+      if (recommendationWasPerformed(rec as any, performed)) {
+        // Closed, not deleted: the finding was real, and "raised and resolved
+        // in the same visit" is worth keeping on the record. Same shape the
+        // other completion paths write, so this reads identically to a rec
+        // closed out by a later booking.
+        await ctx.db.patch(rec._id, {
+          status: "completed",
+          completed_via_booking_id: args.bookingId,
+          updated_at: now,
+        } as any);
+        continue;
+      }
       await ctx.db.patch(rec._id, { visible_to_driver: true, created_at: now });
     }
 

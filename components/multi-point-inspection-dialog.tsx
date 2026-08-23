@@ -125,6 +125,7 @@ import type {
   PreJobSurveyPayload,
   VehiclePassportData,
 } from "@/lib/vehicle-passport";
+import { serviceMatchKey } from "@/convex/lib/serviceMatch";
 import {
   AFFECTED_SYSTEMS,
   servicesForSystems,
@@ -886,6 +887,24 @@ function MultiPointInspectionDialogBody({
     });
   }, [state, services]);
 
+  // Drop anything this booking is already doing. Suggesting "tire replacement
+  // — soon" on the job that is replacing the tires reads as the system not
+  // following along, and it costs the mechanic a decision every time. Compared
+  // on the same normalised token key the server uses so "Oil Change" and
+  // "Oil Change Service" don't slip past each other.
+  const bookedMatchKeys = useMemo(
+    () => new Set(bookingServices.map((name) => serviceMatchKey(name))),
+    [bookingServices],
+  );
+  const openSuggestedRecs = useMemo(
+    () =>
+      suggestedRecs.filter(
+        (s) =>
+          !bookedMatchKeys.has(serviceMatchKey(s.serviceName ?? s.label)),
+      ),
+    [suggestedRecs, bookedMatchKeys],
+  );
+
   // Keyed by suggestion key, not a single flag — grading another zone after
   // an initial submit surfaces new suggestions, and those must stay
   // addable/undoable independently of what was already submitted.
@@ -1599,7 +1618,7 @@ function MultiPointInspectionDialogBody({
             downloading={downloading}
             onBack={() => setShowResults(false)}
             onDownload={handleDownloadPdf}
-            suggestions={suggestedRecs}
+            suggestions={openSuggestedRecs}
             canRecommend={!!bookingId}
             recsBusy={recsBusy}
             submittedRecs={submittedRecs}

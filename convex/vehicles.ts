@@ -1157,7 +1157,17 @@ export const updateMileage = mutation({
       throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
     
-    await ctx.db.patch(ownership._id, { mileage: args.mileage });
+    // Stamp provenance alongside the value. `mileage_updated_at` is not
+    // decoration: vehicleTruth sizes the plausibility ceiling from how long
+    // ago the last reading was taken (yearsElapsed -> computeMaxDelta), and a
+    // null timestamp makes it fall back to the loosest 25k floor. Writing the
+    // value without the timestamp left every app-side update invisible to that
+    // guard. Mirrors what applyTruth already does on the Oto-chat path.
+    await ctx.db.patch(ownership._id, {
+      mileage: args.mileage,
+      mileage_source: "app_self_reported",
+      mileage_updated_at: Date.now(),
+    } as any);
   },
 });
 

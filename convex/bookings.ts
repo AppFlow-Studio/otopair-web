@@ -78,9 +78,13 @@ import {
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
-import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
+import {
+  minorRecordTypeForServiceSlug,
+  recordTypeForServiceSlug,
+} from "./lib/serviceRecordType";
 import { symptomForRecordType } from "./lib/serviceSymptoms";
 import { logPrejobMechanicVerification } from "./lib/mechanic_verification_logging";
+import { logKnownIssueEvents } from "./lib/knownIssueEvents";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   addMinutesToHHMM,
@@ -866,6 +870,64 @@ export const respondToPickupRequest = mutation({
     });
 
     return { responded: true };
+  },
+});
+
+/**
+ * QUERY: getPendingPickupRequests
+ * Bookings at THIS shop where the customer has tapped "request pickup" and
+ * no shop-side answer has landed yet (or the customer re-requested after a
+ * stale response). Powers the web dashboard alert card. Reactive — pings the
+ * mechanic surface as soon as a fresh request lands.
+ *
+ * Response shape is tuned for the alert-card UX: enough to render the row
+ * without a second round-trip (vehicle label, customer name, minutes since
+ * requested), and the booking id so the Ack / Bringing out / Decline
+ * buttons can call `respondToPickupRequest` in place.
+ */
+export const getPendingPickupRequests = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return [];
+
+    const atShop = await ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q: any) => q.eq("status", "vehicle_at_shop"))
+      .collect();
+
+    const forShop = atShop.filter(
+      (b: any) =>
+        String(b.shop_id) === String(primary.shopId) && b.cancel_requested_at_ms,
+    );
+
+    return await Promise.all(
+      forShop.map(async (b: any) => {
+        const customer = b.user_id ? await ctx.db.get(b.user_id) : null;
+        const vehicle = b.vin ? await resolveVehicleLabel(ctx, b.vin) : null;
+        const mechanic = b.mechanic_id ? await ctx.db.get(b.mechanic_id) : null;
+        return {
+          _id: b._id,
+          bookingId: b._id,
+          customerName: customer ? formatCustomerName(customer) : null,
+          vehicle: vehicle?.short ?? vehicle?.full ?? null,
+          mechanicName: mechanic
+            ? `${(mechanic as any).first_name ?? ""} ${(mechanic as any).last_name ?? ""}`.trim() ||
+              null
+            : null,
+          requestedAtMs: b.cancel_requested_at_ms as number,
+          requestReason: b.cancel_request_reason ?? null,
+          pickupResponse: (b.pickup_response ?? null) as
+            | "acknowledged"
+            | "bringing_out"
+            | "declined"
+            | null,
+          pickupRespondedAtMs: b.pickup_responded_at_ms ?? null,
+        };
+      }),
+    );
   },
 });
 
@@ -8958,14 +9020,11 @@ export async function runCompletionSideEffects(ctx: any, booking: any) {
         // (mirrors maintenance.upsertRecord / vehicleTruth's add). Patched once
         // after the loop so a multi-service booking clears all of them together.
         const clearedCodes = new Set<string>();
-        for (const serviceId of serviceIds) {
-          const service = await ctx.db.get(serviceId as any);
-          if (!service) continue;
-          // #90: services.slug is snake_case — resolve via the canonical map.
-          const recordType = recordTypeForServiceSlug((service as any).slug);
-          if (!recordType || typesUpdated.has(recordType)) continue;
-          typesUpdated.add(recordType);
 
+        /** Upsert one maintenance_records row, stamping it serviced now.
+         *  Shared by the aggregate write and the Consolidated-model
+         *  minor-item write below — same shape, different `type`. */
+        const markServiced = async (recordType: string) => {
           const existing = await ctx.db
             .query("maintenance_records")
             .withIndex("by_vehicle_and_type", (q: any) =>
@@ -8992,6 +9051,32 @@ export async function runCompletionSideEffects(ctx: any, booking: any) {
               createdAt: now,
             });
           }
+        };
+
+        for (const serviceId of serviceIds) {
+          const service = await ctx.db.get(serviceId as any);
+          if (!service) continue;
+          const slug = (service as any).slug;
+
+          // Consolidated Upkeep model: the per-field `minor_*` row this
+          // service actually resolves. Handled BEFORE the aggregate dedup
+          // below — several distinct minor services collapse onto the same
+          // aggregate type ("fluids"), so dedup'ing on the aggregate would
+          // silently skip the second one's own minor row. Advancing
+          // lastServiceDate here is what lets isMechanicGradeStale
+          // (utils/maintenanceStatus.ts) retire the finding.
+          const minorType = minorRecordTypeForServiceSlug(slug);
+          if (minorType && !typesUpdated.has(minorType)) {
+            typesUpdated.add(minorType);
+            await markServiced(minorType);
+          }
+
+          // #90: services.slug is snake_case — resolve via the canonical map.
+          const recordType = recordTypeForServiceSlug(slug);
+          if (!recordType || typesUpdated.has(recordType)) continue;
+          typesUpdated.add(recordType);
+
+          await markServiced(recordType);
 
           const code = symptomForRecordType(recordType);
           if (code) clearedCodes.add(code);
@@ -9000,11 +9085,18 @@ export async function runCompletionSideEffects(ctx: any, booking: any) {
         // Service done → clear its warning-light code(s) so the pipeline stops
         // flagging it. Single patch; only writes when something actually clears.
         if (clearedCodes.size > 0 && Array.isArray(vehicleOwner.knownIssues)) {
-          const next = (vehicleOwner.knownIssues as string[]).filter(
-            (x) => !clearedCodes.has(x)
-          );
-          if (next.length !== vehicleOwner.knownIssues.length) {
+          const beforeIssues = vehicleOwner.knownIssues as string[];
+          const next = beforeIssues.filter((x) => !clearedCodes.has(x));
+          if (next.length !== beforeIssues.length) {
             await ctx.db.patch(vehicleOwner._id, { knownIssues: next } as any);
+            await logKnownIssueEvents(ctx, {
+              vehicleOwnerId: vehicleOwner._id,
+              before: beforeIssues,
+              after: next,
+              source: "service_completion",
+              sourceDetail: String(booking._id),
+              now: Date.now(),
+            });
           }
         }
       }
@@ -16706,6 +16798,22 @@ export const getReceipt = query({
     if (!user || user._id !== booking.user_id) return null;
 
     const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
+    // Photos the mechanic attached while the job was open. Storage ids are
+    // useless to the client, so they resolve to signed URLs here — same shape
+    // and resolution as getJobDetail's inProgressPhotos. Entries whose file
+    // has since been deleted are dropped rather than rendered broken.
+    const mechanicPhotos = jobActual?.in_progress_photos
+      ? (
+          await Promise.all(
+            jobActual.in_progress_photos.map(async (photo: any) => ({
+              storageId: photo.storage_id,
+              caption: photo.caption ?? null,
+              takenAt: photo.taken_at,
+              url: await ctx.storage.getUrl(photo.storage_id),
+            })),
+          )
+        ).filter((entry) => entry.url !== null)
+      : [];
     const payment = await ctx.db
       .query("payments")
       .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
@@ -17014,6 +17122,7 @@ export const getReceipt = query({
       service_notes: {
         customer_concern: booking.customer_notes ?? "",
         mechanic_findings: jobActual?.mechanic_findings ?? "",
+        mechanic_photos: mechanicPhotos,
       },
       adjustments,
       line_items: [...serviceLines, ...partLines] as Array<

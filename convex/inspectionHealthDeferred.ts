@@ -24,10 +24,10 @@ import {
 import { mergeMechanicGradeIntoRecord } from "./maintenance";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
 import {
-  toCanonicalLight,
-  type CanonicalWarningLight,
-} from "../lib/warningLightVocab";
-import { WARNING_LIGHT_CLEAR_SET } from "../lib/inspection-template";
+  knownIssuesChanged,
+  resolveKnownIssues,
+} from "./lib/warningLightsMerge";
+import { logKnownIssueEvents } from "./lib/knownIssueEvents";
 import { recomputeRecPenaltyForVehicle } from "./jobRecommendations";
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
@@ -78,6 +78,15 @@ export const applyDeferredInspectionHealth = internalMutation({
       const state = hydrateTieredInspectionState(inspection);
       const result = deriveCoreGrades(state, shopLabel, now, { previousBfLevel });
 
+      // The real finding time — when the mechanic actually made this call,
+      // not when this deferred job happens to run 2 hours later. Feeds both
+      // the "flagged by [shop], [date]" audit copy and the staleness check
+      // in utils/maintenanceStatus.ts's applyMechanicGrade: a grade is only
+      // read as current when it postdates the record's lastServiceDate, so
+      // a same-visit fix (e.g. oil changed after being flagged red) can't
+      // resurrect a stale finding once this job finally applies it.
+      const gradedAt = inspection.submitted_at ?? now;
+
       if (owner) {
         for (const [type, g] of Object.entries(result.core) as Array<[CoreType, typeof result.core[CoreType]]>) {
           if (!g) continue;
@@ -87,7 +96,7 @@ export const applyDeferredInspectionHealth = internalMutation({
             grade: g.grade,
             gradeReason: g.reason,
             gradeSource: shopLabel,
-            gradedAt: now,
+            gradedAt,
             rawScore: g.rawScore,
           });
         }
@@ -99,45 +108,50 @@ export const applyDeferredInspectionHealth = internalMutation({
             grade: g.grade,
             gradeReason: g.reason,
             gradeSource: shopLabel,
-            gradedAt: now,
+            gradedAt,
           });
         }
 
-        // Dashboard warning lights — same merge/clear the driver's own
-        // quarterly check-in already uses. "None" (the sole entry) clears
-        // every canonical light; any real selection merges on top. Reuses
-        // the full 9-light CANONICAL set (not check-in's narrower 7), since
-        // this is a mechanic's deliberate, real visual check. See
+        // Dashboard warning lights — the pre-job picker's add/clear-all,
+        // then the post-job "still on?" clears on top, so a light this same
+        // visit both found AND resolved nets out to nothing (never flickers
+        // onto the driver's screen). Shared with getPrefillData's projection
+        // via convex/lib/warningLightsMerge.ts so the list the mechanic is
+        // offered and the write that actually lands can't drift apart. See
         // "Dashboard warning lights."
-        const lightEntries = state.zones.ENG?.statuses.warning_lights
-          ? []
-          : state.zones.ENG?.lights.warning_lights ?? [];
-        const answered = lightEntries.filter((e) => !!e.light);
-        if (answered.length > 0) {
-          const isNoneOnly = answered.length === 1 && answered[0].light === "none";
-          const existingIssues = Array.isArray(owner.knownIssues)
-            ? (owner.knownIssues as string[])
-            : [];
-          let nextIssues: string[];
-          if (isNoneOnly) {
-            nextIssues = existingIssues.filter(
-              (code) => !WARNING_LIGHT_CLEAR_SET.includes(toCanonicalLight(code) as CanonicalWarningLight),
-            );
-          } else {
-            const merged = new Set(existingIssues);
-            for (const entry of answered) {
-              if (entry.light === "none") continue;
-              const canonical = entry.light === "other" ? "not_sure_which" : entry.light;
-              merged.add(canonical);
-            }
-            nextIssues = [...merged];
-          }
-          if (
-            nextIssues.length !== existingIssues.length ||
-            nextIssues.some((v, i) => v !== existingIssues[i])
-          ) {
-            await ctx.db.patch(owner._id, { knownIssues: nextIssues } as any);
-          }
+        const latestJobActual = (
+          await ctx.db
+            .query("job_actuals")
+            .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+            .collect()
+        ).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0];
+
+        const existingIssues = Array.isArray(owner.knownIssues)
+          ? (owner.knownIssues as string[])
+          : [];
+        const nextIssues = resolveKnownIssues({
+          knownIssues: existingIssues,
+          pickerEntries: state.zones.ENG?.statuses.warning_lights
+            ? []
+            : state.zones.ENG?.lights.warning_lights,
+          clearedLights: latestJobActual?.postjob_report?.cleared_warning_lights,
+        });
+
+        if (knownIssuesChanged(existingIssues, nextIssues)) {
+          await ctx.db.patch(owner._id, { knownIssues: nextIssues } as any);
+          // Same log the other three knownIssues sources write to (see
+          // convex/lib/knownIssueEvents.ts) — this duplicates what's already
+          // traceable via this inspection's own zones data, deliberately, so
+          // "this vehicle's warning-light history" is one consistent query
+          // regardless of which of the four sources touched it.
+          await logKnownIssueEvents(ctx, {
+            vehicleOwnerId: owner._id,
+            before: existingIssues,
+            after: nextIssues,
+            source: "mechanic_inspection",
+            sourceDetail: shopLabel,
+            now,
+          });
         }
       }
     }
@@ -157,6 +171,13 @@ export const applyDeferredInspectionHealth = internalMutation({
       await ctx.db.patch(rec._id, { visible_to_driver: true, created_at: now });
     }
 
+    // This job has now run — drop the pending-job pointer so a later
+    // terminal transition schedules cleanly instead of trying to cancel a
+    // job that's already finished.
+    if (booking.deferred_health_job_id) {
+      await ctx.db.patch(args.bookingId, { deferred_health_job_id: undefined });
+    }
+
     if (owner) {
       await recomputeRecPenaltyForVehicle(ctx, { vin: booking.vin, now });
       // Deferred writes have landed — stop showing the mobile "processing" state.
@@ -173,7 +194,13 @@ export const applyDeferredInspectionHealth = internalMutation({
 
 /** Called from `applyBookingStatusTransition` when a booking transitions to
  *  a terminal state. Schedules the deferred write 2 hours out and marks the
- *  vehicle owner as "processing" for that same window. */
+ *  vehicle owner as "processing" for that same window.
+ *
+ *  A booking can hit a terminal state more than once (completed → reopened
+ *  by support → completed again, dispute resolution, …). Each pass cancels
+ *  the previous pending job first, so exactly one is ever in flight —
+ *  otherwise an older job could fire after a newer one and replay a stale
+ *  version of the picker/clear answers over the fresh result. */
 export async function scheduleDeferredInspectionHealth(
   ctx: any,
   bookingId: any,
@@ -181,11 +208,20 @@ export async function scheduleDeferredInspectionHealth(
   userId: any,
 ): Promise<void> {
   const now = Date.now();
-  await ctx.scheduler.runAfter(
+
+  const booking = await ctx.db.get(bookingId);
+  if (booking?.deferred_health_job_id) {
+    // cancel() is a no-op once the job has already run — safe unconditionally.
+    await ctx.scheduler.cancel(booking.deferred_health_job_id);
+  }
+
+  const jobId = await ctx.scheduler.runAfter(
     TWO_HOURS_MS,
     internal.inspectionHealthDeferred.applyDeferredInspectionHealth,
     { bookingId },
   );
+  await ctx.db.patch(bookingId, { deferred_health_job_id: jobId });
+
   const owner = await ctx.db
     .query("vehicle_owners")
     .withIndex("by_vin_user", (q: any) => q.eq("vin", vin).eq("user_id", userId))

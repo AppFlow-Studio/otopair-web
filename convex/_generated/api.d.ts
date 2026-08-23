@@ -164,6 +164,7 @@ import type * as invoices_node from "../invoices_node.js";
 import type * as jobBlockers from "../jobBlockers.js";
 import type * as jobRecommendations from "../jobRecommendations.js";
 import type * as job_actuals from "../job_actuals.js";
+import type * as knownIssueEvents from "../knownIssueEvents.js";
 import type * as laborTimes from "../laborTimes.js";
 import type * as labor_quote_snapshots from "../labor_quote_snapshots.js";
 import type * as landing from "../landing.js";
@@ -188,6 +189,7 @@ import type * as lib_hydrateInspectionState from "../lib/hydrateInspectionState.
 import type * as lib_inspectionHealth from "../lib/inspectionHealth.js";
 import type * as lib_intervals from "../lib/intervals.js";
 import type * as lib_job_actuals from "../lib/job_actuals.js";
+import type * as lib_knownIssueEvents from "../lib/knownIssueEvents.js";
 import type * as lib_laborBands from "../lib/laborBands.js";
 import type * as lib_laborConstants from "../lib/laborConstants.js";
 import type * as lib_laborFallback from "../lib/laborFallback.js";
@@ -239,6 +241,7 @@ import type * as lib_vehicle_image from "../lib/vehicle_image.js";
 import type * as lib_vehicle_passports from "../lib/vehicle_passports.js";
 import type * as lib_vinIdentity from "../lib/vinIdentity.js";
 import type * as lib_walmartTireScraper from "../lib/walmartTireScraper.js";
+import type * as lib_warningLightsMerge from "../lib/warningLightsMerge.js";
 import type * as maintenance from "../maintenance.js";
 import type * as maintenance_pipeline from "../maintenance_pipeline.js";
 import type * as makes from "../makes.js";
@@ -761,6 +764,7 @@ declare const fullApi: ApiFromModules<{
   jobBlockers: typeof jobBlockers;
   jobRecommendations: typeof jobRecommendations;
   job_actuals: typeof job_actuals;
+  knownIssueEvents: typeof knownIssueEvents;
   laborTimes: typeof laborTimes;
   labor_quote_snapshots: typeof labor_quote_snapshots;
   landing: typeof landing;
@@ -785,6 +789,7 @@ declare const fullApi: ApiFromModules<{
   "lib/inspectionHealth": typeof lib_inspectionHealth;
   "lib/intervals": typeof lib_intervals;
   "lib/job_actuals": typeof lib_job_actuals;
+  "lib/knownIssueEvents": typeof lib_knownIssueEvents;
   "lib/laborBands": typeof lib_laborBands;
   "lib/laborConstants": typeof lib_laborConstants;
   "lib/laborFallback": typeof lib_laborFallback;
@@ -836,6 +841,7 @@ declare const fullApi: ApiFromModules<{
   "lib/vehicle_passports": typeof lib_vehicle_passports;
   "lib/vinIdentity": typeof lib_vinIdentity;
   "lib/walmartTireScraper": typeof lib_walmartTireScraper;
+  "lib/warningLightsMerge": typeof lib_warningLightsMerge;
   maintenance: typeof maintenance;
   maintenance_pipeline: typeof maintenance_pipeline;
   makes: typeof makes;

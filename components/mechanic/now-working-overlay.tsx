@@ -108,6 +108,7 @@ export function NowWorkingPane({
   const [paused, setPaused] = useState(false);
   const [flagOpen, setFlagOpen] = useState(false);
   const [scopeOpen, setScopeOpen] = useState(false);
+  const [addingFinding, setAddingFinding] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   /* Open blockers on this job (Flag Issue spec, §5). Rendered as a banner so a
@@ -119,6 +120,14 @@ export function NowWorkingPane({
      that predicate missed the re-quote case and drifted between surfaces. */
   const clockPaused = Boolean(blockers?.clockPaused);
   const blockedMs = (blockers?.blockedMinutes ?? 0) * 60_000;
+
+  /* Inspection findings nothing has acted on yet — see the "Flagged, not
+     addressed" block below. The query owns the four exclusion paths. */
+  const unaddressedFindings = useQuery(
+    api.inspections.getUnaddressedFindingsForBooking,
+    { bookingId },
+  );
+  const addToJob = useMutation(api.customJobs.addMidJobCustomService);
 
   /* Mid-job extra-work state — drives the per-service status dots in the work
      order. Same query the EXTRA WORK card (top-right) uses; Convex shares the
@@ -496,6 +505,63 @@ export function NowWorkingPane({
                 </button>
               </div>
             ))}
+        </div>
+      ) : null}
+
+      {/* Findings the inspection flagged that nothing has acted on yet. Without
+          this, a mechanic who notices the wipers mid-job has to retype the
+          finding they already recorded — through Flag Issue → Extra work — to
+          get it onto the bill (Aug 20 session, decision D1). Tapping one seeds
+          the same scope dialog that button opens, so the customer still
+          confirms before any of it becomes billable. */}
+      {unaddressedFindings && unaddressedFindings.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+            Flagged, not addressed
+          </p>
+          <div className="mt-2 space-y-2">
+            {unaddressedFindings.map((f) => (
+              <div
+                key={f.key}
+                className="flex flex-wrap items-start justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-[13px] font-medium text-slate-100">
+                    {f.serviceName ?? f.label}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-slate-400">
+                    {f.reasons.join(" · ")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setAddingFinding(f.key);
+                    try {
+                      await addToJob({
+                        bookingId,
+                        name: f.serviceName ?? f.label,
+                        complaint: f.reasons.join("; ") || undefined,
+                      });
+                      setScopeOpen(true);
+                    } catch (err: unknown) {
+                      onToast?.(
+                        err instanceof Error
+                          ? err.message
+                          : "Could not add that to the job",
+                      );
+                    } finally {
+                      setAddingFinding(null);
+                    }
+                  }}
+                  disabled={addingFinding !== null}
+                  className="shrink-0 rounded-lg border border-emerald-400/40 bg-emerald-400/10 px-3 py-1.5 text-[12px] font-semibold text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:opacity-50"
+                >
+                  {addingFinding === f.key ? "Adding…" : "Add to this job"}
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       ) : null}
 

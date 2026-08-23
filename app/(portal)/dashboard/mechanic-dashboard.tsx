@@ -713,6 +713,7 @@ export default function MechanicDashboard() {
             : ""
         }
         bookingServices={selectedWorkflowBooking?.serviceNames ?? []}
+        jobInProgress={selectedWorkflowBooking?.status === "in_progress"}
         tireReplacementPositions={
           selectedWorkflowBooking?.tireSpecs?.positions ?? []
         }

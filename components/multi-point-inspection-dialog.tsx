@@ -27,6 +27,7 @@ import {
   Plus,
   RotateCcw,
   Trash2,
+  Wrench,
 } from "lucide-react";
 import { useMutation, useQuery, useAction } from "convex/react";
 import { makeFunctionReference } from "convex/server";
@@ -358,6 +359,9 @@ export default function MultiPointInspectionDialog(props: {
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
+  /** True once the booking is in_progress. Gates "Add to this job" —
+   *  addMidJobCustomService refuses work on a job that isn't running. */
+  jobInProgress?: boolean;
   tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
@@ -388,6 +392,7 @@ function MultiPointInspectionDialogBody({
   bookingLabel,
   bookingSubLabel,
   bookingServices = [],
+  jobInProgress = false,
   tireReplacementPositions = [],
   passportData,
   prefillData,
@@ -401,6 +406,9 @@ function MultiPointInspectionDialogBody({
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
+  /** True once the booking is in_progress. Gates "Add to this job" —
+   *  addMidJobCustomService refuses work on a job that isn't running. */
+  jobInProgress?: boolean;
   tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
@@ -444,6 +452,7 @@ function MultiPointInspectionDialogBody({
     api.inspections.submitInspectionRecommendations,
   );
   const undoInspectionRec = useMutation(api.jobRecommendations.confirmFromPreJob);
+  const addToJob = useMutation(api.customJobs.addMidJobCustomService);
 
   // Mechanic parts fill-in: parts the OEM-strict pipeline left MISSING or
   // LOW_CONFIDENCE that the mechanic must confirm/fill before starting work.
@@ -913,6 +922,8 @@ function MultiPointInspectionDialogBody({
   >({});
   const [recsBusy, setRecsBusy] = useState(false);
   const [undoingKey, setUndoingKey] = useState<string | null>(null);
+  const [addedToJob, setAddedToJob] = useState<Record<string, boolean>>({});
+  const [addingToJobKey, setAddingToJobKey] = useState<string | null>(null);
 
   const buildPayloads = useCallback((): {
     prejob: PreJobSurveyPayload;
@@ -1436,6 +1447,43 @@ function MultiPointInspectionDialogBody({
     }
   }
 
+  /**
+   * Promote a flagged finding into work on THIS job (Decision D1).
+   *
+   * Appends an off-catalog line to the booking and nothing more.
+   * `addMidJobCustomService` deliberately doesn't re-quote or move money — the
+   * mechanic still prices it in the scope step and the customer still confirms
+   * through the normal mid-job approval cycle. So this is a shortcut past
+   * retyping the finding, not past the approval gate.
+   *
+   * Before this, a wiper flagged red here had to be re-entered from scratch via
+   * Flag Issue → "Extra work needed now", which is exactly what Abdul had to do
+   * on Aug 20 after the inspection didn't carry it forward.
+   */
+  async function handleAddToJob(key: string) {
+    const suggestion = suggestedRecs.find((s) => s.key === key);
+    if (!bookingId || !suggestion || addingToJobKey) return;
+    setAddingToJobKey(key);
+    setError("");
+    try {
+      // Persist first, same as the recommendation path — the line should never
+      // exist against an inspection that was never saved.
+      await persistOwnerAnswers();
+      const { prejob, inspection } = buildPayloads();
+      if (onSaveDraft) await onSaveDraft(prejob, inspection);
+      await addToJob({
+        bookingId: bookingId as Id<"bookings">,
+        name: suggestion.serviceName ?? suggestion.label,
+        complaint: suggestion.reasons.join("; ") || undefined,
+      });
+      setAddedToJob((prev) => ({ ...prev, [key]: true }));
+    } catch (err) {
+      setError(userFacingInspectionError(err, "Could not add that to the job."));
+    } finally {
+      setAddingToJobKey(null);
+    }
+  }
+
   async function handleUndoRecommendation(key: string) {
     const recId = submittedRecs[key];
     if (!bookingId || !recId || undoingKey) return;
@@ -1626,6 +1674,10 @@ function MultiPointInspectionDialogBody({
             onUndoRecommendation={handleUndoRecommendation}
             undoingKey={undoingKey}
             error={error}
+            canAddToJob={!!bookingId && jobInProgress}
+            onAddToJob={handleAddToJob}
+            addedToJob={addedToJob}
+            addingToJobKey={addingToJobKey}
           />
         </div>
       ) : (
@@ -4122,6 +4174,10 @@ function ResultsScreen({
   onUndoRecommendation,
   undoingKey,
   error,
+  canAddToJob,
+  onAddToJob,
+  addedToJob,
+  addingToJobKey,
 }: {
   findings: { attention: { label: string; zone: string }[]; monitor: { label: string; zone: string }[] };
   totalLogged: number;
@@ -4137,6 +4193,11 @@ function ResultsScreen({
   onUndoRecommendation: (key: string) => void;
   undoingKey: string | null;
   error: string;
+  /** Only true once the job is running — see onAddToJob. */
+  canAddToJob: boolean;
+  onAddToJob: (key: string) => void;
+  addedToJob: Record<string, boolean>;
+  addingToJobKey: string | null;
 }) {
   // Default-select the urgent ("soon") suggestions; mechanic can toggle.
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
@@ -4213,33 +4274,69 @@ function ResultsScreen({
                     Undo
                   </button>
                 </div>
-              ) : (
-                <label
+              ) : addedToJob[s.key] ? (
+                <div
                   key={s.key}
-                  className="flex cursor-pointer items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
+                  className="flex items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
                 >
-                  <input
-                    type="checkbox"
-                    checked={!!selected[s.key]}
-                    onChange={(e) =>
-                      setSelected((prev) => ({ ...prev, [s.key]: e.target.checked }))
-                    }
-                    className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-                  />
+                  <Wrench className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
                   <span className="flex-1">
                     <span className="text-[13px] font-medium text-foreground">
                       {s.serviceName ?? s.label}
                     </span>
-                    {!s.serviceId ? (
-                      <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
-                        not in catalog
-                      </span>
-                    ) : null}
-                    <span className="block text-[11px] text-muted-foreground">
-                      {s.reasons.join(" · ")} · {URGENCY_LABEL[s.urgency]}
+                    <span className="block text-[11px] text-primary">
+                      Added to this job. Price it in the scope step — the
+                      customer confirms before you start it.
                     </span>
                   </span>
-                </label>
+                </div>
+              ) : (
+                <div
+                  key={s.key}
+                  className="flex items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
+                >
+                  <label className="flex flex-1 cursor-pointer items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={!!selected[s.key]}
+                      onChange={(e) =>
+                        setSelected((prev) => ({ ...prev, [s.key]: e.target.checked }))
+                      }
+                      className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
+                    />
+                    <span className="flex-1">
+                      <span className="text-[13px] font-medium text-foreground">
+                        {s.serviceName ?? s.label}
+                      </span>
+                      {!s.serviceId ? (
+                        <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                          not in catalog
+                        </span>
+                      ) : null}
+                      <span className="block text-[11px] text-muted-foreground">
+                        {s.reasons.join(" · ")} · {URGENCY_LABEL[s.urgency]}
+                      </span>
+                    </span>
+                  </label>
+                  {/* The second door. Without it a finding flagged here has to
+                      be retyped from scratch through Flag Issue → Extra work,
+                      which is exactly what Abdul had to do for the wipers. */}
+                  {canAddToJob ? (
+                    <button
+                      type="button"
+                      onClick={() => onAddToJob(s.key)}
+                      disabled={addingToJobKey !== null}
+                      className="mt-0.5 inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10 disabled:opacity-50"
+                    >
+                      {addingToJobKey === s.key ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Wrench className="h-3 w-3" />
+                      )}
+                      Add to this job
+                    </button>
+                  ) : null}
+                </div>
               ),
             )}
           </div>

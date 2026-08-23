@@ -1742,6 +1742,12 @@ export default defineSchema({
       v.object({
         zone_id: v.string(),
         done: v.boolean(),
+        // When this zone was first marked complete. Abdul, Aug 20: "I wish you
+        // did checkpoints — how quick I'm spending on each section." Successive
+        // values give per-section durations, which feed labor calibration.
+        // Write-once: re-opening a zone to fix a reading shouldn't restart its
+        // clock, or a correction would read as time spent inspecting.
+        completed_at: v.optional(v.number()),
         // Free-form per-field maps keyed by the template field keys. `v.any()`
         // because the template owns the shape and it evolves with the template
         // version (recorded above) rather than the schema.

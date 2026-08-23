@@ -6239,6 +6239,12 @@ async function upsertInspectionRecord(
   // Photo associations and tags are server-owned. Upload/delete mutations are
   // the only allowed way to change them; a draft/final payload cannot attach an
   // arbitrary storage object or relabel a general photo as rotor evidence.
+  //
+  // `completed_at` is server-owned for the same reason plus one more: it feeds
+  // labor calibration, so a client-supplied timestamp would be both unreliable
+  // and gameable. Stamped the first time a zone arrives done and never moved
+  // after — re-opening a zone to correct a reading shouldn't restart its clock,
+  // or the correction would read as time spent inspecting.
   const existingZones = new Map(
     (existing?.zones ?? []).map((zone: any) => [zone.zone_id, zone]),
   );
@@ -6248,6 +6254,8 @@ async function upsertInspectionRecord(
       ...zone,
       photo_ids: saved?.photo_ids ?? [],
       photo_tags: saved?.photo_tags ?? {},
+      completed_at:
+        saved?.completed_at ?? (zone.done === true ? now : undefined),
     };
   });
 

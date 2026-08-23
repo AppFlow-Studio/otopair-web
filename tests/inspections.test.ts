@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { api } from "../convex/_generated/api";
 import { identityFor, makeT, seedConfirmedBooking } from "./helpers";
+import { INSPECTION_TEMPLATE_VERSION } from "../lib/inspection-template";
 
 const deleteInspectionPhoto = makeFunctionReference<"mutation">(
   "inspections:deleteInspectionPhoto",
@@ -127,5 +128,78 @@ describe("inspection photos", () => {
       storageId,
     });
     expect(await t.run((ctx) => ctx.storage.getUrl(storageId))).toBeNull();
+  });
+});
+
+describe("zone checkpoints", () => {
+  // Abdul, Aug 20: "I wish you did checkpoints — how quick I'm spending on each
+  // section." Successive completed_at values are what make that measurable.
+  const prejob = {
+    mileage: 42_000,
+    front_tire_condition: null,
+    rear_tire_condition: null,
+  } as any;
+
+  function inspectionWith(done: boolean) {
+    return {
+      template_version: INSPECTION_TEMPLATE_VERSION,
+      odometer: 42_000,
+      zones: [
+        {
+          zone_id: "FL",
+          done,
+          measures: { tread: "8", psi: "35" },
+          tri: { wear: "g", brake_visual: "g" },
+          text: { tire_brand: "Michelin", tire_model: "Defender", tire_size: "225/45R17" },
+          select: { run_flat: "no", tire_type: "All-Season" },
+        },
+      ],
+      findings_attention: [],
+      findings_monitor: [],
+    } as any;
+  }
+
+  async function readCompletedAt(t: ReturnType<typeof makeT>, bookingId: any) {
+    return t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("vehicle_inspections")
+        .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
+        .first();
+      return (row?.zones ?? []).find((z: any) => z.zone_id === "FL")
+        ?.completed_at as number | undefined;
+    });
+  }
+
+  it("stamps a zone the first time it is marked done and never moves it after", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, { status: "vehicle_at_shop" });
+    const owner = t.withIdentity(identityFor(seed.ownerClerkId));
+
+    // Draft with the zone still open — nothing to stamp yet.
+    await owner.mutation(api.bookings.savePrejob, {
+      bookingId: seed.bookingId,
+      prejob,
+      inspection: inspectionWith(false),
+    });
+    // Convex serialises undefined to null across the t.run boundary.
+    expect(await readCompletedAt(t, seed.bookingId)).toBeFalsy();
+
+    // Marked complete — stamped.
+    await owner.mutation(api.bookings.savePrejob, {
+      bookingId: seed.bookingId,
+      prejob,
+      inspection: inspectionWith(true),
+    });
+    const first = await readCompletedAt(t, seed.bookingId);
+    expect(typeof first).toBe("number");
+
+    // Re-saved (mechanic reopened the zone to fix a reading). The clock must
+    // not restart, or a correction reads as time spent inspecting.
+    await owner.mutation(api.bookings.savePrejob, {
+      bookingId: seed.bookingId,
+      prejob,
+      inspection: inspectionWith(true),
+    });
+    expect(await readCompletedAt(t, seed.bookingId)).toBe(first);
   });
 });

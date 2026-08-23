@@ -2026,7 +2026,10 @@ function PostJobSurveyDialogBody({
               : r.freeform_service_name.trim() || null,
             urgency: r.urgency,
             reason: r.reason.trim() || null,
-            visible_to_driver: r.visible_to_driver,
+            // Always visible — the per-row toggle is gone. Forced here rather
+            // than trusting the row state so a draft restored from a row saved
+            // while the toggle still existed can't submit as hidden.
+            visible_to_driver: true,
             target_mileage:
               r.target_mileage.trim() && Number.isFinite(mileage) && mileage > 0
                 ? mileage
@@ -5530,53 +5533,16 @@ function RecommendationsStep({
                   </div>
                 </div>
 
-                <div className="mt-2.5 flex items-center justify-end gap-2 border-t border-primary/10 pt-2.5">
-                  <label className="inline-flex cursor-pointer items-center gap-2 select-none">
-                    <span className="text-[11px] text-muted-foreground">
-                      Visible to driver
-                    </span>
-                    <span
-                      role="switch"
-                      aria-checked={rec.visible_to_driver}
-                      tabIndex={0}
-                      onClick={() =>
-                        updateRec(index, {
-                          visible_to_driver: !rec.visible_to_driver,
-                        })
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === " " || e.key === "Enter") {
-                          e.preventDefault();
-                          updateRec(index, {
-                            visible_to_driver: !rec.visible_to_driver,
-                          });
-                        }
-                      }}
-                      className={cn(
-                        "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
-                        rec.visible_to_driver ? "bg-primary" : "bg-muted",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "inline-block h-4 w-4 transform rounded-full bg-background shadow-sm transition-transform",
-                          rec.visible_to_driver
-                            ? "translate-x-4"
-                            : "translate-x-0.5",
-                        )}
-                      />
-                    </span>
-                  </label>
-                </div>
+                {/* Preview (Off-Catalog Work spec, §6): off-catalog advice is
+                    shown to the mechanic exactly as the driver will read it —
+                    attributed to them, with no price and no booking. Nobody
+                    should find out after the fact that their recommendation was
+                    presented as an opinion.
 
-                {/* Preview gate (Off-Catalog Work spec, §6): the moment a
-                    mechanic makes off-catalog advice driver-visible, show them
-                    exactly how it will be framed — attributed to them, with no
-                    price and no booking. Nobody should find out after the fact
-                    that their recommendation was presented as an opinion. */}
+                    No longer gated on a visibility toggle: every recommendation
+                    reaches the driver now, so the preview always applies. */}
                 {!rec.recommended_service_id &&
-                rec.freeform_service_name.trim() &&
-                rec.visible_to_driver ? (
+                rec.freeform_service_name.trim() ? (
                   <AdvisoryPreview
                     name={rec.freeform_service_name.trim()}
                     reason={rec.reason}

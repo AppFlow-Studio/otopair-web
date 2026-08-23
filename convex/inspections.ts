@@ -27,11 +27,16 @@ import {
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import {
+  deriveSuggestedRecommendations,
   formatZonesForPdf,
   INSPECTION_TEMPLATE_VERSION,
 } from "../lib/inspection-template";
+import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
+import { serviceMatchKey } from "./lib/serviceMatch";
+import type { Id } from "./_generated/dataModel";
 import { OWNER_PROFILE_QUESTIONS } from "../lib/owner-profile-questions";
 import { jobRecommendationInputValidator } from "./lib/vehicle_passports";
+import { resolveVehicleMileage } from "./lib/mileage";
 import { submitRecommendationsForBooking } from "./jobRecommendations";
 
 // ---------------------------------------------------------------------------
@@ -665,8 +670,15 @@ export const _assembleInspectionData = internalQuery({
       inspectionId: inspection._id,
       vehicleLabel,
       vin: booking.vin,
+      // This is THIS visit's report, so the reading the mechanic physically
+      // took off the dash wins — it was loaded above and used to be ignored
+      // entirely in favour of the passport. Falls back to the newer of the
+      // passport / driver figures, which used to be passport-only and could
+      // print a stale number on a customer-facing document.
       odometer:
-        typeof passport?.mileage === "number" ? passport.mileage : null,
+        typeof inspection.odometer === "number"
+          ? inspection.odometer
+          : resolveVehicleMileage(passport, owner).mileage,
       shopName: shop?.name ?? null,
       mechanicName,
       generatedAtMs: Date.now(),
@@ -688,5 +700,112 @@ export const _patchInspectionPdf = internalMutation({
       pdf_storage_id: args.pdfStorageId,
       updated_at: Date.now(),
     });
+  },
+});
+
+/**
+ * Findings this inspection flagged that nothing has acted on yet — the list the
+ * mechanic overlay offers "Add to this job" from.
+ *
+ * A finding can already be handled four different ways by the time the job is
+ * running, and re-offering one that was is how the system starts reading as if
+ * it isn't following along:
+ *
+ *   1. It's one of the booking's own catalog services (already scheduled work).
+ *   2. It was promoted during the inspection — an off-catalog line now exists.
+ *   3. It was typed in by hand via Flag Issue → "Extra work needed now".
+ *   4. It was filed as a future-visit recommendation instead — a deliberate
+ *      defer, not an oversight.
+ *
+ * A DECLINED custom line does not count as handled: the customer turned it
+ * down, so the finding is still live and still theirs to hear about.
+ */
+export const getUnaddressedFindingsForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    // Same shape as getByBooking above, but returning [] rather than throwing —
+    // this feeds a panel that renders alongside other content, so an
+    // unauthorized read should be empty, not fatal to the whole overlay.
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return [];
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q: any) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .unique();
+    if (!user) return [];
+
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return [];
+    try {
+      await requireShopStaff(ctx, user._id, booking.shop_id);
+    } catch {
+      return [];
+    }
+
+    const inspection = await ctx.db
+      .query("vehicle_inspections")
+      .withIndex("by_booking", (q) => q.eq("booking_id", args.bookingId))
+      .first();
+    if (!inspection) return [];
+
+    const services = booking.shop_id
+      ? await ctx.db.query("services").collect()
+      : [];
+    const state = hydrateTieredInspectionState(inspection);
+
+    // 1 — already on the booking as a catalog service.
+    const handledServiceIds = new Set(
+      ((booking.service_ids ?? []) as any[]).map((id: any) => String(id)),
+    );
+    const handledMatchKeys = new Set<string>();
+    for (const serviceId of (booking.service_ids ?? []) as any[]) {
+      const svc = (await ctx.db.get(serviceId)) as any;
+      if (svc?.name) handledMatchKeys.add(serviceMatchKey(String(svc.name)));
+    }
+
+    // 2 + 3 — an off-catalog line exists, however it got there. Declined and
+    // cancelled lines are NOT handled.
+    for (const job of await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+      .collect()) {
+      if (job.status === "declined" || job.status === "cancelled") continue;
+      if (job.name) handledMatchKeys.add(serviceMatchKey(String(job.name)));
+    }
+
+    // 4 — already filed as a recommendation for a future visit.
+    for (const rec of await ctx.db
+      .query("job_recommendations")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect()) {
+      if (rec.status !== "open" && rec.status !== "acknowledged") continue;
+      if (rec.recommended_service_id) {
+        handledServiceIds.add(String(rec.recommended_service_id));
+      } else if (rec.freeform_text) {
+        handledMatchKeys.add(serviceMatchKey(rec.freeform_text));
+      }
+    }
+
+    return deriveSuggestedRecommendations(state, { onlyCompletedZones: true })
+      .map((s) => {
+        const found = services.find((svc: any) =>
+          svc.slug ? s.match.includes(svc.slug) : false,
+        );
+        return {
+          key: s.key,
+          label: s.label,
+          urgency: s.urgency,
+          reasons: s.reasons,
+          serviceId: (found?._id ?? null) as Id<"services"> | null,
+          serviceName: found?.name ?? null,
+        };
+      })
+      .filter((s) =>
+        s.serviceId
+          ? !handledServiceIds.has(String(s.serviceId))
+          : !handledMatchKeys.has(serviceMatchKey(s.serviceName ?? s.label)),
+      );
   },
 });

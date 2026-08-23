@@ -23,6 +23,7 @@ import {
 import { ensureWalkInCashPayment } from "./bookings";
 import { partFitsConfigMake } from "./partSelector";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
+import { serviceMatchKey } from "./lib/serviceMatch";
 import { resolveSparkPlugQuantity } from "./lib/sparkPlugs";
 import { deriveSuggestedRecommendations } from "../lib/inspection-template";
 import { canonicalWarningLights } from "../lib/warningLightVocab";
@@ -905,6 +906,33 @@ export const getPrefillData = query({
       .first();
     const allServices = booking.shop_id ? await ctx.db.query("services").collect() : [];
     const inspectionState = inspection ? hydrateTieredInspectionState(inspection) : null;
+
+    // Work that's already ON this job — don't offer it as a "for next time"
+    // suggestion. Abdul hit this from the other side: he added a tire
+    // replacement as extra work, did it, and the post-job still offered "tire
+    // replacement — soon". The deferred reveal now catches anything that slips
+    // through (see inspectionHealthDeferred), but not offering it in the first
+    // place is what stops the mechanic having to notice and un-tick it.
+    //
+    // "On the job" rather than "performed" here: the booking is still open at
+    // this point, so completion status isn't decided yet. A DECLINED custom
+    // line is excluded — the customer turned it down, so it still belongs in
+    // the recommendations.
+    const onJobServiceIds = new Set(
+      ((booking.service_ids ?? []) as any[]).map((id: any) => String(id)),
+    );
+    const onJobMatchKeys = new Set<string>(
+      (
+        await ctx.db
+          .query("custom_jobs")
+          .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+          .collect()
+      )
+        .filter((job: any) => job.status !== "declined" && job.status !== "cancelled")
+        .map((job: any) => serviceMatchKey(String(job.name ?? "")))
+        .filter((key: string) => key.length > 0),
+    );
+
     const suggestedFromInspection = inspectionState
       ? deriveSuggestedRecommendations(inspectionState, {
           onlyCompletedZones: true,
@@ -926,6 +954,11 @@ export const getPrefillData = query({
             s.serviceId
               ? !confirmedServiceIds.has(String(s.serviceId))
               : !confirmedFreeformLabels.has(s.label.trim().toLowerCase()),
+          )
+          .filter((s) =>
+            s.serviceId
+              ? !onJobServiceIds.has(String(s.serviceId))
+              : !onJobMatchKeys.has(serviceMatchKey(s.label)),
           )
       : [];
 

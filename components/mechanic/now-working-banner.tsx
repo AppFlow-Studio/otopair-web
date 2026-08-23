@@ -20,12 +20,13 @@ export default function NowWorkingBanner({
   const job = useQuery(api.bookings.getJobDetail, { bookingId });
   const startedAt = job?.jobActuals?.startedAt ?? null;
 
-  // A clock-stopping blocker (e.g. "waiting on a part") pauses the job. Reflect
-  // it here so this banner doesn't keep ticking about a car nobody is touching.
+  // A stopped clock (a blocker like "waiting on a part", or a mid-job re-quote
+  // sitting with the customer) pauses the job. Reflect it here so this banner
+  // doesn't keep ticking about a car nobody is touching. Both the flag and the
+  // excluded span are server-derived — see jobBlockers.listForBooking.
   const blockers = useQuery(api.jobBlockers.listForBooking, { bookingId });
-  const paused = Boolean(
-    blockers?.blockers.some((b) => b.resolved_at == null && b.stops_clock),
-  );
+  const paused = Boolean(blockers?.clockPaused);
+  const blockedMs = (blockers?.blockedMinutes ?? 0) * 60_000;
 
   return (
     <section
@@ -74,6 +75,7 @@ export default function NowWorkingBanner({
             <ElapsedTimer
               startedAtMs={startedAt}
               paused={paused}
+              blockedMs={blockedMs}
               className={`font-mono text-2xl font-semibold tabular-nums ${
                 paused ? "text-amber-200" : "text-white"
               }`}

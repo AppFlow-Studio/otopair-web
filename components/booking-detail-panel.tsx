@@ -954,11 +954,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       api.jobBlockers.listForBooking,
       job ? { bookingId: job._id } : "skip"
     );
-    const jobPaused = Boolean(
-      jobBlockers?.blockers.some(
-        (b) => b.resolved_at == null && b.stops_clock
-      )
-    );
+    const jobPaused = Boolean(jobBlockers?.clockPaused);
     // Out-of-range estimate sitting with the customer. Subscribe to the live
     // approval state so the panel can render the "awaiting hold confirmation"
     // treatment (new hold amount, SLA countdown, withdraw). getBookingApprovalState
@@ -2616,6 +2612,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               : ""
           }
           bookingServices={job?.serviceNames ?? []}
+          jobInProgress={job?.status === "in_progress"}
           tireReplacementPositions={job?.tireSpecs?.positions ?? []}
           passportData={vehiclePassport ?? null}
           prefillData={job?.jobActuals?.prejobReport ?? null}

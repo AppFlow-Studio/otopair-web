@@ -53,9 +53,8 @@ export default function ActiveJobStrip() {
     api.jobBlockers.listForBooking,
     mechanicBookingId ? { bookingId: mechanicBookingId } : "skip",
   );
-  const jobPaused = Boolean(
-    pauseBlockers?.blockers.some((b) => b.resolved_at == null && b.stops_clock),
-  );
+  const jobPaused = Boolean(pauseBlockers?.clockPaused);
+  const jobBlockedMs = (pauseBlockers?.blockedMinutes ?? 0) * 60_000;
 
   useEffect(() => {
     if (!toast) return;
@@ -103,6 +102,7 @@ export default function ActiveJobStrip() {
           <ElapsedTimer
             startedAtMs={job.startedAtMs}
             paused={jobPaused}
+            blockedMs={jobBlockedMs}
             className={`font-mono text-sm font-semibold tabular-nums ${
               jobPaused ? "text-amber-200" : "text-white"
             }`}
@@ -163,6 +163,7 @@ export default function ActiveJobStrip() {
                 <ElapsedTimer
                   startedAtMs={job.startedAtMs}
                   paused={jobPaused}
+                  blockedMs={jobBlockedMs}
                   className={`font-mono text-lg font-semibold tabular-nums ${
                     jobPaused ? "text-amber-200" : "text-white"
                   }`}
@@ -233,6 +234,8 @@ export default function ActiveJobStrip() {
     serviceSummary: j.serviceSummary ?? "",
     startedAt: j.startedAt ?? null,
     scheduledDate: j.scheduledDate ?? null,
+    blockedMinutes: j.blockedMinutes ?? 0,
+    clockPaused: j.clockPaused ?? false,
   }));
 
   return (

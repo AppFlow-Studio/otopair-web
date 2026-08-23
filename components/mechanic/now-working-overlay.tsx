@@ -108,15 +108,26 @@ export function NowWorkingPane({
   const [paused, setPaused] = useState(false);
   const [flagOpen, setFlagOpen] = useState(false);
   const [scopeOpen, setScopeOpen] = useState(false);
+  const [addingFinding, setAddingFinding] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   /* Open blockers on this job (Flag Issue spec, §5). Rendered as a banner so a
      stalled job is visibly stalled rather than looking like it's being worked. */
   const blockers = useQuery(api.jobBlockers.listForBooking, { bookingId });
   const resolveBlocker = useMutation(api.jobBlockers.resolveBlocker);
-  const clockPausedByBlocker = Boolean(
-    blockers?.blockers.some((b) => b.resolved_at == null && b.stops_clock),
+  /* Server-derived: covers clock-stopping blockers AND a mid-job re-quote the
+     customer hasn't answered. Don't recompute this from `blockers[]` here —
+     that predicate missed the re-quote case and drifted between surfaces. */
+  const clockPaused = Boolean(blockers?.clockPaused);
+  const blockedMs = (blockers?.blockedMinutes ?? 0) * 60_000;
+
+  /* Inspection findings nothing has acted on yet — see the "Flagged, not
+     addressed" block below. The query owns the four exclusion paths. */
+  const unaddressedFindings = useQuery(
+    api.inspections.getUnaddressedFindingsForBooking,
+    { bookingId },
   );
+  const addToJob = useMutation(api.customJobs.addMidJobCustomService);
 
   /* Mid-job extra-work state — drives the per-service status dots in the work
      order. Same query the EXTRA WORK card (top-right) uses; Convex shares the
@@ -497,6 +508,63 @@ export function NowWorkingPane({
         </div>
       ) : null}
 
+      {/* Findings the inspection flagged that nothing has acted on yet. Without
+          this, a mechanic who notices the wipers mid-job has to retype the
+          finding they already recorded — through Flag Issue → Extra work — to
+          get it onto the bill (Aug 20 session, decision D1). Tapping one seeds
+          the same scope dialog that button opens, so the customer still
+          confirms before any of it becomes billable. */}
+      {unaddressedFindings && unaddressedFindings.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+            Flagged, not addressed
+          </p>
+          <div className="mt-2 space-y-2">
+            {unaddressedFindings.map((f) => (
+              <div
+                key={f.key}
+                className="flex flex-wrap items-start justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-[13px] font-medium text-slate-100">
+                    {f.serviceName ?? f.label}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-slate-400">
+                    {f.reasons.join(" · ")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setAddingFinding(f.key);
+                    try {
+                      await addToJob({
+                        bookingId,
+                        name: f.serviceName ?? f.label,
+                        complaint: f.reasons.join("; ") || undefined,
+                      });
+                      setScopeOpen(true);
+                    } catch (err: unknown) {
+                      onToast?.(
+                        err instanceof Error
+                          ? err.message
+                          : "Could not add that to the job",
+                      );
+                    } finally {
+                      setAddingFinding(null);
+                    }
+                  }}
+                  disabled={addingFinding !== null}
+                  className="shrink-0 rounded-lg border border-emerald-400/40 bg-emerald-400/10 px-3 py-1.5 text-[12px] font-semibold text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:opacity-50"
+                >
+                  {addingFinding === f.key ? "Adding…" : "Add to this job"}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {job === undefined ? (
         <div className="flex flex-1 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
@@ -512,9 +580,11 @@ export function NowWorkingPane({
               <p className="text-sm text-slate-400">Elapsed</p>
               <ElapsedTimer
                 startedAtMs={startedAt}
-                // Stop on a clock-stopping blocker too, so the pane doesn't
-                // contradict the worked-minutes figure the server records.
-                paused={paused || clockPausedByBlocker}
+                // Stopped time is excluded by blockedMs, not by `paused` —
+                // `paused` only freezes the tick. This is the worked-minutes
+                // figure the server records, so the two can't contradict.
+                paused={paused || clockPaused}
+                blockedMs={blockedMs}
                 className={elapsedTimerClass}
               />
               <p className="text-sm text-slate-400">
@@ -522,7 +592,7 @@ export function NowWorkingPane({
                   ? `Started ${formatClockTime(startedAt)}`
                   : "Not started yet"}
                 {etaMs != null ? ` · ETA ${formatClockTime(etaMs)}` : ""}
-                {clockPausedByBlocker
+                {clockPaused
                   ? " · Paused (blocked)"
                   : paused
                     ? " · Paused"
@@ -897,6 +967,10 @@ export type ActiveJobRow = {
   startedAt: number | null;
   /** YYYY-MM-DD the job was scheduled for; anything but today reads as overrun. */
   scheduledDate: string | null;
+  /** Minutes the work clock was stopped — excluded from the row's timer. */
+  blockedMinutes?: number;
+  /** Whether the clock is stopped right now (blocker or unanswered re-quote). */
+  clockPaused?: boolean;
 };
 
 function localTodayString() {
@@ -976,12 +1050,16 @@ function ActiveJobsList({
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <ElapsedTimer
                     startedAtMs={job.startedAt}
+                    paused={job.clockPaused}
+                    blockedMs={(job.blockedMinutes ?? 0) * 60_000}
                     className="font-mono text-lg font-semibold tabular-nums text-emerald-300"
                   />
                   {overrun ? (
                     <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
                       from {job.scheduledDate}
                     </span>
+                  ) : job.clockPaused ? (
+                    <span className="text-[11px] text-amber-300">paused</span>
                   ) : (
                     <span className="text-[11px] text-slate-500">in progress</span>
                   )}

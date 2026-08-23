@@ -45,7 +45,11 @@ import {
   evaluateRescheduleLimit,
 } from "./lib/cancellation_policy";
 import { mintClaimToken } from "./walkin_claims";
-import { blockedMinutesForBooking } from "./jobBlockers";
+import {
+  blockedMinutesForBooking,
+  isClockPausedForBooking,
+} from "./jobBlockers";
+import { mileageSourceTag, resolveVehicleMileage } from "./lib/mileage";
 import {
   recordCustomJobsForBooking,
   customPartsFromSnapshot,
@@ -2957,6 +2961,7 @@ export const getActiveJobsForHeader = query({
     // Enriched rows so the header "View" can open the active-jobs picker
     // (mechanic · car, service, and a live elapsed timer) rather than a bare
     // set of ids. Same order as the pill count (most recently touched first).
+    const nowMs = Date.now();
     const activeJobs = await Promise.all(
       inProgress.map(async (b: any) => {
         const mechanic: any = b.mechanic_id
@@ -2979,6 +2984,11 @@ export const getActiveJobsForHeader = query({
           serviceSummary: serviceNames.join(" · "),
           startedAt: jobActual?.started_at ?? null,
           scheduledDate: b.scheduled_date ?? null,
+          // The picker renders a live timer per row, so it needs the same
+          // stopped-clock figures the focused pane gets. Without them a blocked
+          // job keeps ticking here while reading "paused" one screen over.
+          blockedMinutes: await blockedMinutesForBooking(ctx, b._id, nowMs),
+          clockPaused: await isClockPausedForBooking(ctx, b._id, nowMs),
         };
       }),
     );
@@ -5049,6 +5059,7 @@ function firstDefinedNumber(...values: unknown[]) {
   return null;
 }
 
+
 function firstDefinedString(...values: unknown[]) {
   for (const value of values) {
     if (hasText(value)) {
@@ -5635,7 +5646,8 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
   );
   const ownerOwnership = determineOwnershipLabel(preferredOwner);
 
-  const mileage = firstDefinedNumber(passportRecord?.mileage, preferredOwner?.mileage);
+  const resolvedMileage = resolveVehicleMileage(passportRecord, preferredOwner);
+  const mileage = resolvedMileage.mileage;
   const mileageVelocity = firstDefinedNumber(
     passportRecord?.mileage_velocity,
     typeof preferredOwner?.annual_mileage_rate === "number"
@@ -5731,7 +5743,10 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
   };
 
   const sources = {
-    mileage: buildSourceTag(passportRecord?.mileage, preferredOwner?.mileage, "user_reported"),
+    // Follows whichever value actually won above. Tagging the driver's
+    // self-reported number "verified" — or a shop reading "user_reported" —
+    // misattributes it on every surface that renders the badge.
+    mileage: mileageSourceTag(resolvedMileage.from),
     "tires.brand": buildSourceTag(passportRecord?.tires?.brand, null, "oem_default"),
     "tires.model": buildSourceTag(passportRecord?.tires?.model, null, "oem_default"),
     "tires.size_front": buildSourceTag(
@@ -6288,6 +6303,12 @@ async function upsertInspectionRecord(
   // Photo associations and tags are server-owned. Upload/delete mutations are
   // the only allowed way to change them; a draft/final payload cannot attach an
   // arbitrary storage object or relabel a general photo as rotor evidence.
+  //
+  // `completed_at` is server-owned for the same reason plus one more: it feeds
+  // labor calibration, so a client-supplied timestamp would be both unreliable
+  // and gameable. Stamped the first time a zone arrives done and never moved
+  // after — re-opening a zone to correct a reading shouldn't restart its clock,
+  // or the correction would read as time spent inspecting.
   const existingZones = new Map(
     (existing?.zones ?? []).map((zone: any) => [zone.zone_id, zone]),
   );
@@ -6297,6 +6318,8 @@ async function upsertInspectionRecord(
       ...zone,
       photo_ids: saved?.photo_ids ?? [],
       photo_tags: saved?.photo_tags ?? {},
+      completed_at:
+        saved?.completed_at ?? (zone.done === true ? now : undefined),
     };
   });
 

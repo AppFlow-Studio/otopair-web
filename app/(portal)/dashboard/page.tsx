@@ -705,6 +705,8 @@ function OwnerDashboardPage({
     serviceSummary: (row.booking.serviceNames ?? []).join(" · "),
     startedAt: row.booking.startedAt ?? null,
     scheduledDate: row.booking.scheduledDate ?? null,
+    blockedMinutes: row.blockedMinutes ?? 0,
+    clockPaused: row.clockPaused ?? false,
   }));
   // Compact "who's on what" preview for the entry card's second line.
   const activeJobsPreview =

@@ -71,8 +71,14 @@ export const tireTreadMeasurementsValidator = v.object({
 export const tireIdentityValidator = v.object({
   brand: v.optional(nullableStringValidator),
   model: v.optional(nullableStringValidator),
+  // Vestigial: the MPI stopped collecting DOT codes in PR #60 (Abdul — not
+  // relevant to standard repair). Kept optional so historical rows still read.
   dot_code: v.optional(nullableStringValidator),
   run_flat: v.optional(nullableBooleanValidator),
+  // Season / construction category, vocabulary shared with the tire catalog
+  // (convex/lib/tireBrands.ts mapTireType) so a reading here can join to a
+  // scraped listing for automated re-booking.
+  tire_type: v.optional(nullableStringValidator),
 });
 
 export const tireIdentityByPositionValidator = v.object({

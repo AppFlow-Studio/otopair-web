@@ -192,38 +192,66 @@ async function requireShopStaffForBooking(ctx: any, bookingId: Id<"bookings">) {
 }
 
 /**
- * Total minutes this booking spent blocked, counting an unresolved blocker up to
- * `now`.
+ * Every wall-clock span during which this booking's work clock was stopped.
  *
- * Only clock-stopping kinds count. A safety hold or a damage report doesn't pause
- * anything — the mechanic keeps working — so counting them would under-report
- * labour, which is the same class of error in the other direction.
+ * Two sources, deliberately merged into one list:
  *
- * Overlapping blockers are merged rather than summed. Two parts on back-order at
- * once is one stoppage, and adding the spans would subtract the same wall-clock
- * hour twice.
+ *  1. Clock-stopping blockers. Only those kinds count — a safety hold or a
+ *     damage report doesn't pause anything (the mechanic keeps working), so
+ *     counting them would under-report labour, the same class of error in the
+ *     other direction.
+ *
+ *  2. Mid-job re-quotes waiting on the customer. From the moment the mechanic
+ *     submits extra scope until the customer answers, the mechanic is doing
+ *     admin or standing still — Abdul, Aug 20: "stop the countdown because now
+ *     we're eating up from this 60-minute labor." Only `mid_job` rows: a
+ *     pre-job estimate is priced before the clock starts, and a post-job
+ *     re-approval happens after it stops, so neither overlaps worked time.
  */
-export async function blockedMinutesForBooking(
+async function clockStoppedSpans(
   ctx: any,
   bookingId: Id<"bookings">,
   now: number,
-): Promise<number> {
-  const rows = await ctx.db
-    .query("job_blockers")
-    .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
-    .collect();
+): Promise<Array<{ start: number; end: number }>> {
+  const [blockers, approvals] = await Promise.all([
+    ctx.db
+      .query("job_blockers")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
+      .collect(),
+    ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", bookingId),
+      )
+      .collect(),
+  ]);
 
-  const spans = rows
+  const blockerSpans = blockers
     .filter((r: any) => r.stops_clock)
     .map((r: any) => ({
       start: r.opened_at,
       end: Math.max(r.opened_at, r.resolved_at ?? now),
-    }))
-    .sort((a: any, b: any) => a.start - b.start);
+    }));
 
+  const approvalSpans = approvals
+    .filter((r: any) => r.cycle === "mid_job" && r.submitted_at_ms != null)
+    .map((r: any) => ({
+      start: r.submitted_at_ms,
+      end: Math.max(r.submitted_at_ms, r.decided_at_ms ?? now),
+    }));
+
+  return [...blockerSpans, ...approvalSpans];
+}
+
+/** Merge overlapping spans and total them. Overlaps are merged rather than
+ *  summed: two parts on back-order at once is one stoppage, and a re-quote sent
+ *  while already blocked is not a second pause — adding them would subtract the
+ *  same wall-clock hour twice. */
+function mergedSpanMinutes(spans: Array<{ start: number; end: number }>): number {
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
   let total = 0;
   let cursor = -1;
-  for (const span of spans) {
+  for (const span of sorted) {
     const start = Math.max(span.start, cursor);
     if (span.end > start) {
       total += span.end - start;
@@ -231,6 +259,31 @@ export async function blockedMinutesForBooking(
     }
   }
   return Math.round(total / MINUTE_MS);
+}
+
+/**
+ * Total minutes this booking spent with the work clock stopped, counting an
+ * unresolved blocker or an unanswered mid-job re-quote up to `now`.
+ */
+export async function blockedMinutesForBooking(
+  ctx: any,
+  bookingId: Id<"bookings">,
+  now: number,
+): Promise<number> {
+  return mergedSpanMinutes(await clockStoppedSpans(ctx, bookingId, now));
+}
+
+/** Whether the work clock is stopped right now — an unresolved clock-stopping
+ *  blocker, or a mid-job re-quote the customer hasn't answered. Derived here so
+ *  every surface reads one answer instead of recomputing the predicate. */
+export async function isClockPausedForBooking(
+  ctx: any,
+  bookingId: Id<"bookings">,
+  now: number,
+): Promise<boolean> {
+  return (await clockStoppedSpans(ctx, bookingId, now)).some(
+    (span) => span.end >= now,
+  );
 }
 
 /** Open a blocker. */
@@ -467,6 +520,12 @@ export const listForBooking = query({
       })),
       openCount: rows.filter((r) => r.resolved_at == null).length,
       blockedMinutes: await blockedMinutesForBooking(ctx, args.bookingId, now),
+      // Derived server-side so the four surfaces that show a running clock
+      // (overlay, overlay's multi-job picker, header pill, now-working banner)
+      // can't disagree — and so a new pause source is added in one place
+      // instead of four. Covers mid-job re-quotes as well as blockers, which
+      // the old client-side `blockers.some(...)` predicate never did.
+      clockPaused: await isClockPausedForBooking(ctx, args.bookingId, now),
     };
   },
 });

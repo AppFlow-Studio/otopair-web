@@ -12,6 +12,7 @@ import {
   vehicleUpdateValuesValidator,
 } from "./vehicle_passports";
 import { recomputeLaborForConfigService } from "./labor_aggregation";
+import { blockedMinutesForBooking } from "../jobBlockers";
 
 export const jobActualPartValidator = postjobPartValidator;
 
@@ -128,17 +129,29 @@ function getJobActualMechanicId(booking: any, mechanicId?: any) {
   return resolvedMechanicId;
 }
 
+/**
+ * Auto-derived labour when the mechanic didn't type a number themselves.
+ *
+ * `blockedMinutes` is subtracted from the wall-clock span, because
+ * `started_at` runs straight through a parts wait or a mid-job re-quote. Left
+ * in, a three-hour back-order would be billed as three hours of labour and
+ * would also pollute the variance stats we derive shop shortcuts from. This
+ * matches what the mechanic sees: the on-screen timer excludes the same spans.
+ */
 export function getAutoActualLaborMinutes({
   jobActual,
   fallbackMinutes,
   now,
+  blockedMinutes = 0,
 }: {
   jobActual?: any;
   fallbackMinutes?: number | null;
   now: number;
+  blockedMinutes?: number;
 }) {
   if (jobActual?.started_at != null) {
-    return Math.max(0, Math.round((now - jobActual.started_at) / 60000));
+    const elapsed = Math.round((now - jobActual.started_at) / 60000);
+    return Math.max(0, elapsed - Math.max(0, blockedMinutes));
   }
   if (jobActual?.actual_labor_minutes != null) {
     return jobActual.actual_labor_minutes;
@@ -469,13 +482,15 @@ export async function saveJobActualDraft(
     !hasOwn(actuals, "actual_labor_minutes") &&
     patch.actual_labor_minutes === undefined
   ) {
+    const autoAt = completedAtMs ?? now;
     patch.actual_labor_minutes = getAutoActualLaborMinutes({
       jobActual: {
         ...existing,
         ...patch,
       },
       fallbackMinutes: booking.estimated_labor_minutes ?? null,
-      now: completedAtMs ?? now,
+      now: autoAt,
+      blockedMinutes: await blockedMinutesForBooking(ctx, booking._id, autoAt),
     });
   }
 

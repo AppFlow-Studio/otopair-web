@@ -32,6 +32,7 @@ import {
 } from "../lib/inspection-template";
 import { OWNER_PROFILE_QUESTIONS } from "../lib/owner-profile-questions";
 import { jobRecommendationInputValidator } from "./lib/vehicle_passports";
+import { resolveVehicleMileage } from "./lib/mileage";
 import { submitRecommendationsForBooking } from "./jobRecommendations";
 
 // ---------------------------------------------------------------------------
@@ -665,8 +666,15 @@ export const _assembleInspectionData = internalQuery({
       inspectionId: inspection._id,
       vehicleLabel,
       vin: booking.vin,
+      // This is THIS visit's report, so the reading the mechanic physically
+      // took off the dash wins — it was loaded above and used to be ignored
+      // entirely in favour of the passport. Falls back to the newer of the
+      // passport / driver figures, which used to be passport-only and could
+      // print a stale number on a customer-facing document.
       odometer:
-        typeof passport?.mileage === "number" ? passport.mileage : null,
+        typeof inspection.odometer === "number"
+          ? inspection.odometer
+          : resolveVehicleMileage(passport, owner).mileage,
       shopName: shop?.name ?? null,
       mechanicName,
       generatedAtMs: Date.now(),

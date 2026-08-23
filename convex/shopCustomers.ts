@@ -17,6 +17,7 @@
 
 import { query } from "./_generated/server";
 import { v } from "convex/values";
+import { resolveVehicleMileage } from "./lib/mileage";
 import type { Id } from "./_generated/dataModel";
 import { customServiceNames } from "./lib/customServiceNames";
 
@@ -289,7 +290,6 @@ export const listShopVehicles = query({
 
         // Prefer the active vehicle_owner; fall back to the latest-booking user.
         let ownerUserId: Id<"users"> | null = null;
-        let ownerMileage: number | null = null;
         const activeOwner = await ctx.db
           .query("vehicle_owners")
           .withIndex("by_vin", (q) => q.eq("vin", agg.vin))
@@ -297,12 +297,21 @@ export const listShopVehicles = query({
           .first();
         if (activeOwner) {
           ownerUserId = activeOwner.user_id as Id<"users">;
-          if (typeof activeOwner.mileage === "number") {
-            ownerMileage = activeOwner.mileage;
-          }
         } else {
           ownerUserId = agg.latestUserId;
         }
+
+        // Mileage came from the owner row alone, while the job panel read the
+        // passport — so the same car could show two different odometers on two
+        // pages. Both now resolve the pair by recency.
+        const passportRow = await ctx.db
+          .query("vehicle_passports")
+          .withIndex("by_vin", (q) => q.eq("vin", agg.vin))
+          .first();
+        const ownerMileage = resolveVehicleMileage(
+          passportRow,
+          activeOwner,
+        ).mileage;
 
         const ownerUser = ownerUserId ? await ctx.db.get(ownerUserId) : null;
 
@@ -462,6 +471,11 @@ export const getShopVehicleDetail = query({
       .filter((q) => q.eq(q.field("status"), "active"))
       .first();
     const ownerUser = activeOwner ? await ctx.db.get(activeOwner.user_id) : null;
+    // Same pairing as the vehicle list above — read by recency, not by side.
+    const vehiclePassport = await ctx.db
+      .query("vehicle_passports")
+      .withIndex("by_vin", (q) => q.eq("vin", vehicle.vin))
+      .first();
 
     const jobs = await Promise.all(
       vehicleBookings
@@ -500,7 +514,7 @@ export const getShopVehicleDetail = query({
       model: summary.model,
       trim: summary.trim,
       imageUrl: summary.imageUrl,
-      mileage: typeof activeOwner?.mileage === "number" ? activeOwner.mileage : null,
+      mileage: resolveVehicleMileage(vehiclePassport, activeOwner).mileage,
       nickname: activeOwner?.nickname ?? null,
       ownerId: ownerUser ? String(ownerUser._id) : null,
       ownerName: formatCustomerName(ownerUser),

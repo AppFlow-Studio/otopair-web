@@ -49,6 +49,7 @@ import {
   blockedMinutesForBooking,
   isClockPausedForBooking,
 } from "./jobBlockers";
+import { mileageSourceTag, resolveVehicleMileage } from "./lib/mileage";
 import {
   recordCustomJobsForBooking,
   customPartsFromSnapshot,
@@ -5000,6 +5001,7 @@ function firstDefinedNumber(...values: unknown[]) {
   return null;
 }
 
+
 function firstDefinedString(...values: unknown[]) {
   for (const value of values) {
     if (hasText(value)) {
@@ -5586,7 +5588,8 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
   );
   const ownerOwnership = determineOwnershipLabel(preferredOwner);
 
-  const mileage = firstDefinedNumber(passportRecord?.mileage, preferredOwner?.mileage);
+  const resolvedMileage = resolveVehicleMileage(passportRecord, preferredOwner);
+  const mileage = resolvedMileage.mileage;
   const mileageVelocity = firstDefinedNumber(
     passportRecord?.mileage_velocity,
     typeof preferredOwner?.annual_mileage_rate === "number"
@@ -5682,7 +5685,10 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
   };
 
   const sources = {
-    mileage: buildSourceTag(passportRecord?.mileage, preferredOwner?.mileage, "user_reported"),
+    // Follows whichever value actually won above. Tagging the driver's
+    // self-reported number "verified" — or a shop reading "user_reported" —
+    // misattributes it on every surface that renders the badge.
+    mileage: mileageSourceTag(resolvedMileage.from),
     "tires.brand": buildSourceTag(passportRecord?.tires?.brand, null, "oem_default"),
     "tires.model": buildSourceTag(passportRecord?.tires?.model, null, "oem_default"),
     "tires.size_front": buildSourceTag(

@@ -1,0 +1,56 @@
+# Otopair Web — .claudeignore
+# Prevents Claude/Codex from wasting tokens on large/irrelevant files
+
+# Dependencies
+node_modules/
+
+# Next.js build artifacts
+.next/
+out/
+build/
+
+# Convex auto-generated (never edit these)
+convex/_generated/
+
+# Test/tooling output
+playwright-report/
+test-results/
+reports/
+proof/
+tmp/
+
+# Reference/data dumps
+Reference_Files/
+data/
+
+# Assets (binary files)
+public/**/*.png
+public/**/*.jpg
+public/**/*.jpeg
+public/**/*.gif
+public/**/*.svg
+public/**/*.ico
+
+# PDFs (generated/reference docs)
+*.pdf
+
+# IDE / OS
+.vscode/
+.cursor/
+*.swp
+.DS_Store
+
+# Environment
+.env
+.env.local
+.env.production
+
+# Lock files
+package-lock.json
+
+# Seed data
+*.jsonl
+
+# Cache
+__pycache__/
+*.pyc

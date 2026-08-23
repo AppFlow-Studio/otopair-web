@@ -25,6 +25,7 @@ import {
   EyeOff,
   Loader2,
   Plus,
+  RotateCcw,
   Trash2,
 } from "lucide-react";
 import { useMutation, useQuery, useAction } from "convex/react";
@@ -440,6 +441,7 @@ function MultiPointInspectionDialogBody({
   const submitInspectionRecs = useMutation(
     api.inspections.submitInspectionRecommendations,
   );
+  const undoInspectionRec = useMutation(api.jobRecommendations.confirmFromPreJob);
 
   // Mechanic parts fill-in: parts the OEM-strict pipeline left MISSING or
   // LOW_CONFIDENCE that the mechanic must confirm/fill before starting work.
@@ -682,7 +684,17 @@ function MultiPointInspectionDialogBody({
           methods: { ...base.methods, ...(z.methods ?? {}) },
           photoIds: Array.isArray(z.photo_ids) ? [...z.photo_ids] : [],
           photoTags: { ...base.photoTags, ...(z.photo_tags ?? {}) },
-          lights: { ...base.lights, ...(z.lights ?? {}) },
+          lights: {
+            ...base.lights,
+            ...Object.fromEntries(
+              Object.entries((z.lights ?? {}) as Record<string, any[]>).map(
+                ([key, entries]) => [
+                  key,
+                  entries.map((e) => ({ light: e.light, otherText: e.other_text })),
+                ],
+              ),
+            ),
+          },
         };
       }
       const pf = prefillData;
@@ -868,8 +880,14 @@ function MultiPointInspectionDialogBody({
     });
   }, [state, services]);
 
-  const [recsSubmitted, setRecsSubmitted] = useState(false);
+  // Keyed by suggestion key, not a single flag — grading another zone after
+  // an initial submit surfaces new suggestions, and those must stay
+  // addable/undoable independently of what was already submitted.
+  const [submittedRecs, setSubmittedRecs] = useState<
+    Record<string, Id<"job_recommendations">>
+  >({});
   const [recsBusy, setRecsBusy] = useState(false);
+  const [undoingKey, setUndoingKey] = useState<string | null>(null);
 
   const buildPayloads = useCallback((): {
     prejob: PreJobSurveyPayload;
@@ -1375,15 +1393,49 @@ function MultiPointInspectionDialogBody({
         reason: s.reasons.join("; "),
         visible_to_driver: true,
       }));
-      await submitInspectionRecs({
+      const insertedIds = await submitInspectionRecs({
         bookingId: bookingId as Id<"bookings">,
         recommendations,
       });
-      setRecsSubmitted(true);
+      setSubmittedRecs((prev) => {
+        const next = { ...prev };
+        chosen.forEach((s, i) => {
+          if (insertedIds?.[i]) next[s.key] = insertedIds[i];
+        });
+        return next;
+      });
     } catch (err) {
       setError(userFacingInspectionError(err, "Could not add recommendations."));
     } finally {
       setRecsBusy(false);
+    }
+  }
+
+  async function handleUndoRecommendation(key: string) {
+    const recId = submittedRecs[key];
+    if (!bookingId || !recId || undoingKey) return;
+    setUndoingKey(key);
+    setError("");
+    try {
+      await undoInspectionRec({
+        bookingId: bookingId as Id<"bookings">,
+        confirmations: [
+          {
+            recommendation_id: recId,
+            outcome: "dismissed",
+            dismissed_reason: "mistake",
+          },
+        ],
+      });
+      setSubmittedRecs((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    } catch (err) {
+      setError(userFacingInspectionError(err, "Could not undo that recommendation."));
+    } finally {
+      setUndoingKey(null);
     }
   }
 
@@ -1544,8 +1596,10 @@ function MultiPointInspectionDialogBody({
             suggestions={suggestedRecs}
             canRecommend={!!bookingId}
             recsBusy={recsBusy}
-            recsSubmitted={recsSubmitted}
+            submittedRecs={submittedRecs}
             onAddRecommendations={handleAddRecommendations}
+            onUndoRecommendation={handleUndoRecommendation}
+            undoingKey={undoingKey}
             error={error}
           />
         </div>
@@ -4035,8 +4089,10 @@ function ResultsScreen({
   suggestions,
   canRecommend,
   recsBusy,
-  recsSubmitted,
+  submittedRecs,
   onAddRecommendations,
+  onUndoRecommendation,
+  undoingKey,
   error,
 }: {
   findings: { attention: { label: string; zone: string }[]; monitor: { label: string; zone: string }[] };
@@ -4048,15 +4104,20 @@ function ResultsScreen({
   suggestions: ResolvedSuggestion[];
   canRecommend: boolean;
   recsBusy: boolean;
-  recsSubmitted: boolean;
+  submittedRecs: Record<string, Id<"job_recommendations">>;
   onAddRecommendations: (keys: string[]) => void;
+  onUndoRecommendation: (key: string) => void;
+  undoingKey: string | null;
   error: string;
 }) {
   // Default-select the urgent ("soon") suggestions; mechanic can toggle.
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(suggestions.map((s) => [s.key, s.urgency === "soon"])),
   );
-  const selectedKeys = suggestions.filter((s) => selected[s.key]).map((s) => s.key);
+  const selectableSuggestions = suggestions.filter((s) => !submittedRecs[s.key]);
+  const selectedKeys = selectableSuggestions
+    .filter((s) => selected[s.key])
+    .map((s) => s.key);
 
   return (
     <div className="space-y-4">
@@ -4094,54 +4155,78 @@ function ResultsScreen({
             recommendations — attributed to this shop&apos;s inspection, and
             lowers their Vehicle Health Score until resolved.
           </p>
-          {recsSubmitted ? (
-            <p className="rounded-lg bg-emerald-50 px-3 py-2 text-[12px] font-medium text-emerald-700">
-              ✓ Recommendations added.
-            </p>
-          ) : (
-            <>
-              <div className="space-y-1">
-                {suggestions.map((s) => (
-                  <label
-                    key={s.key}
-                    className="flex cursor-pointer items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={!!selected[s.key]}
-                      onChange={(e) =>
-                        setSelected((prev) => ({ ...prev, [s.key]: e.target.checked }))
-                      }
-                      className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
-                    />
-                    <span className="flex-1">
-                      <span className="text-[13px] font-medium text-foreground">
-                        {s.serviceName ?? s.label}
-                      </span>
-                      {!s.serviceId ? (
-                        <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
-                          not in catalog
-                        </span>
-                      ) : null}
-                      <span className="block text-[11px] text-muted-foreground">
-                        {s.reasons.join(" · ")} · {URGENCY_LABEL[s.urgency]}
-                      </span>
+          <div className="space-y-1">
+            {suggestions.map((s) =>
+              submittedRecs[s.key] ? (
+                <div
+                  key={s.key}
+                  className="flex items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
+                >
+                  <Check className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />
+                  <span className="flex-1">
+                    <span className="text-[13px] font-medium text-foreground">
+                      {s.serviceName ?? s.label}
                     </span>
-                  </label>
-                ))}
-              </div>
-              <button
-                type="button"
-                disabled={!canRecommend || recsBusy || selectedKeys.length === 0}
-                onClick={() => onAddRecommendations(selectedKeys)}
-                className="mt-2 inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-card px-3 py-1.5 text-[12px] font-semibold text-primary hover:bg-primary/10 disabled:opacity-50"
-              >
-                {recsBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                Add {selectedKeys.length || ""} recommendation
-                {selectedKeys.length === 1 ? "" : "s"}
-              </button>
-            </>
-          )}
+                    <span className="block text-[11px] text-emerald-700">
+                      Added to customer&apos;s recommendations.
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onUndoRecommendation(s.key)}
+                    disabled={undoingKey !== null}
+                    className="flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition hover:bg-emerald-100 hover:text-emerald-800 disabled:opacity-50"
+                  >
+                    {undoingKey === s.key ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3 w-3" />
+                    )}
+                    Undo
+                  </button>
+                </div>
+              ) : (
+                <label
+                  key={s.key}
+                  className="flex cursor-pointer items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
+                >
+                  <input
+                    type="checkbox"
+                    checked={!!selected[s.key]}
+                    onChange={(e) =>
+                      setSelected((prev) => ({ ...prev, [s.key]: e.target.checked }))
+                    }
+                    className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
+                  />
+                  <span className="flex-1">
+                    <span className="text-[13px] font-medium text-foreground">
+                      {s.serviceName ?? s.label}
+                    </span>
+                    {!s.serviceId ? (
+                      <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-semibold text-amber-700">
+                        not in catalog
+                      </span>
+                    ) : null}
+                    <span className="block text-[11px] text-muted-foreground">
+                      {s.reasons.join(" · ")} · {URGENCY_LABEL[s.urgency]}
+                    </span>
+                  </span>
+                </label>
+              ),
+            )}
+          </div>
+          {selectableSuggestions.length > 0 ? (
+            <button
+              type="button"
+              disabled={!canRecommend || recsBusy || selectedKeys.length === 0}
+              onClick={() => onAddRecommendations(selectedKeys)}
+              className="mt-2 inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-card px-3 py-1.5 text-[12px] font-semibold text-primary hover:bg-primary/10 disabled:opacity-50"
+            >
+              {recsBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Add {selectedKeys.length || ""} recommendation
+              {selectedKeys.length === 1 ? "" : "s"}
+            </button>
+          ) : null}
         </div>
       ) : null}
 

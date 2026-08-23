@@ -355,6 +355,9 @@ export type PostJobSurveyPayload = {
   time_variance_reason?: TimeVarianceReason | null;
   time_variance_note?: string | null;
   recommendations?: JobRecommendationInput[];
+  /** Canonical warning-light codes the mechanic confirmed are no longer on
+   *  the dashboard. See "Dashboard warning lights." */
+  cleared_warning_lights?: string[];
 };
 
 /**

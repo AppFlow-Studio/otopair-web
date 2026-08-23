@@ -16858,6 +16858,20 @@ export const getReceipt = query({
       mid_job: 2,
       post_job: 3,
     };
+    // A frozen breakdown is only "agreed" — and therefore chargeable and
+    // printable as the customer's receipt — when they actually accepted it:
+    // explicitly ("approved") or by auto-accept within the pre-authorized
+    // range ("auto_approved_within_range"). EVERY other decision is a
+    // non-agreement and must not drive the receipt: "declined"/"withdrawn",
+    // and also "sla_expired" (an estimate offered mid-job and never answered),
+    // "reauth_required", or a still-"pending"/null row. The old blocklist only
+    // dropped declined/withdrawn, so an expired upsell the customer let lapse —
+    // e.g. a "tires were worn" mid-job estimate — was picked as the final
+    // breakdown and billed onto the receipt as if the work had happened.
+    // Mirrors customJobs.ts's is-agreed predicate, which already excludes
+    // sla_expired.
+    const isAgreedDecision = (d: string | null | undefined) =>
+      d === "approved" || d === "auto_approved_within_range";
     const finalApproval = approvalRows
       .filter(
         (a) =>
@@ -16865,8 +16879,7 @@ export const getReceipt = query({
           a.labor_cents != null &&
           a.tax_cents != null &&
           a.service_fee_cents != null &&
-          a.decision !== "declined" &&
-          a.decision !== "withdrawn",
+          isAgreedDecision(a.decision),
       )
       .sort((a, b) => {
         const byCycle =
@@ -17087,8 +17100,7 @@ export const getReceipt = query({
         (a) =>
           typeof a.notes === "string" &&
           a.notes.trim().length > 0 &&
-          a.decision !== "declined" &&
-          a.decision !== "withdrawn",
+          isAgreedDecision(a.decision),
       )
       .sort((a, b) => a.submitted_at_ms - b.submitted_at_ms)
       .map((a) => ({

@@ -706,6 +706,151 @@ export const requestCancellationAtShop = mutation({
   },
 });
 
+// Customer-facing push copy for each shop response to a pickup request. Kept
+// beside the mutation so the wording is easy to tune next to the state it maps.
+const PICKUP_RESPONSE_PUSH_COPY: Record<
+  "acknowledged" | "bringing_out" | "declined",
+  { title: string; body: string }
+> = {
+  acknowledged: {
+    title: "Pickup request received",
+    body: "The shop got your request and is preparing your vehicle.",
+  },
+  bringing_out: {
+    title: "Your vehicle is on its way out",
+    body: "The shop is bringing your car out now.",
+  },
+  declined: {
+    title: "About your pickup request",
+    body: "The shop can't release your vehicle just yet — please contact them.",
+  },
+};
+
+/**
+ * Shop/mechanic answer to a customer's "request pickup" (the vehicle_at_shop
+ * path above). Records the response on the booking — which the customer's
+ * booking card reads reactively — and pushes the update to the customer.
+ * Does NOT flip booking status: releasing the car / settling any fee still
+ * runs through the shop's existing cancel flow. Visible to the assigned
+ * mechanic and front desk via the live-alert scope.
+ */
+export const respondToPickupRequest = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    response: v.union(
+      v.literal("acknowledged"),
+      v.literal("bringing_out"),
+      v.literal("declined"),
+    ),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ responded: boolean }> => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) {
+      throw new Error("We couldn't find that booking. It may have already been removed.");
+    }
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (booking.status !== "vehicle_at_shop") {
+      throw new Error("This car isn't at the shop, so there's no pickup request to answer.");
+    }
+    if (!booking.cancel_requested_at_ms) {
+      throw new Error("The customer hasn't requested pickup for this booking.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(args.bookingId, {
+      pickup_response: args.response,
+      pickup_responded_at_ms: now,
+      pickup_response_by: user._id,
+      pickup_response_note: args.note,
+      updated_at: now,
+    } as any);
+
+    // Fresh outbox row per distinct response so a follow-up (e.g. "bringing_out"
+    // after "acknowledged") pushes again — the response is baked into the key.
+    const copy = PICKUP_RESPONSE_PUSH_COPY[args.response];
+    await enqueueNotificationOutbox(ctx, {
+      userId: booking.user_id,
+      bookingId: booking._id,
+      shopId: booking.shop_id,
+      channel: "push",
+      category: "pickup_request_response",
+      dedupeKey: `pickup-response:${String(booking._id)}:${args.response}`,
+      payload: {
+        title: copy.title,
+        body: copy.body,
+        response: args.response,
+        note: args.note ?? null,
+        data: {
+          deepLink: `otopair://booking/${String(booking._id)}`,
+          bookingId: String(booking._id),
+        },
+      },
+    });
+
+    return { responded: true };
+  },
+});
+
+/**
+ * QUERY: getPendingPickupRequests
+ * Bookings at THIS shop where the customer has tapped "request pickup" and
+ * no shop-side answer has landed yet (or the customer re-requested after a
+ * stale response). Powers the dashboard alert card. Reactive — pings the
+ * mechanic surface as soon as a fresh request lands.
+ *
+ * Response shape is tuned for the alert-card UX: enough to render the row
+ * without a second round-trip (vehicle label, customer name, minutes since
+ * requested), and the booking id so the Ack / Bringing out / Decline
+ * buttons can call `respondToPickupRequest` in place.
+ */
+export const getPendingPickupRequests = query({
+  args: {},
+  handler: async (ctx) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
+    const primary = await getPrimaryAuthorizedShop(ctx, user._id);
+    if (!primary) return [];
+
+    const atShop = await ctx.db
+      .query("bookings")
+      .withIndex("by_status", (q: any) => q.eq("status", "vehicle_at_shop"))
+      .collect();
+
+    const forShop = atShop.filter(
+      (b: any) =>
+        String(b.shop_id) === String(primary.shopId) && b.cancel_requested_at_ms,
+    );
+
+    return await Promise.all(
+      forShop.map(async (b: any) => {
+        const customer = b.user_id ? await ctx.db.get(b.user_id) : null;
+        const vehicle = b.vin ? await resolveVehicleLabel(ctx, b.vin) : null;
+        const mechanic = b.mechanic_id ? await ctx.db.get(b.mechanic_id) : null;
+        return {
+          _id: b._id,
+          bookingId: b._id,
+          customerName: customer ? formatCustomerName(customer) : null,
+          vehicle: vehicle?.short ?? vehicle?.full ?? null,
+          mechanicName: mechanic
+            ? `${(mechanic as any).first_name ?? ""} ${(mechanic as any).last_name ?? ""}`.trim() ||
+              null
+            : null,
+          requestedAtMs: b.cancel_requested_at_ms as number,
+          requestReason: b.cancel_request_reason ?? null,
+          pickupResponse: (b.pickup_response ?? null) as
+            | "acknowledged"
+            | "bringing_out"
+            | "declined"
+            | null,
+          pickupRespondedAtMs: b.pickup_responded_at_ms ?? null,
+        };
+      }),
+    );
+  },
+});
+
 /**
  * Single source of truth for what the customer may do to a booking right now
  * and what it would cost. The app renders Cancel/Reschedule buttons + fee

@@ -32,6 +32,7 @@ import {
   type Tone,
 } from "@/components/dashboard/command-deck";
 import RevenueSection from "@/components/dashboard/revenue-section";
+import PickupRequestAlerts from "@/components/dashboard/pickup-request-alerts";
 
 const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
 
@@ -687,6 +688,10 @@ function OwnerDashboardPage({
             name={user?.firstName}
             dateLabel={todayLabel}
             subtitle={dashboard.shop.name}
+          />
+
+          <PickupRequestAlerts
+            onOpenBooking={(bookingId) => setSelectedJobId(bookingId)}
           />
 
           <MetricRow>

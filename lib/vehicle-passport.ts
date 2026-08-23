@@ -62,6 +62,7 @@ export type VehiclePassportTires = {
         model?: string | null;
         dot_code?: string | null;
         run_flat?: boolean | null;
+        tire_type?: string | null;
       }
     >
   > | null;
@@ -245,6 +246,7 @@ export type PreJobSurveyPayload = {
         model?: string | null;
         dot_code?: string | null;
         run_flat?: boolean | null;
+        tire_type?: string | null;
       }
     >
   > | null;

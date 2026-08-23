@@ -239,6 +239,7 @@ const ALWAYS_VISIBLE_FIELDS = new Set([
   "tire_model",
   "tire_size",
   "run_flat",
+  "tire_type",
   "pad_inner",
   "pad_outer",
   "rotor_applicable",
@@ -707,7 +708,12 @@ function MultiPointInspectionDialogBody({
         setLiftStatus(savedInspection.lift_status);
       }
       if (pf?.inspection?.status) setInspectionStatus(pf.inspection.status);
-      if (pf?.inspection?.expires_at) setInspectionExpires(pf.inspection.expires_at);
+      // Trim to YYYY-MM: rows written before the sticker field became month-only
+      // carry a full YYYY-MM-DD, which a `type="month"` input rejects outright
+      // and renders as blank — silently losing the stored expiry on next save.
+      if (pf?.inspection?.expires_at) {
+        setInspectionExpires(pf.inspection.expires_at.slice(0, 7));
+      }
       if (pf?.modifications?.has_mods) setModAftermarket(true);
       if (pf?.modifications?.notes) setModNotes(pf.modifications.notes);
       setModAffectedSystems(pf?.modifications?.affected_systems ?? []);
@@ -3491,7 +3497,10 @@ function InspectionStickerFields({
       </Row>
       <Row label="Expires">
         <input
-          type="date"
+          // Month + year only — a state inspection sticker is punched to the
+          // month, so the day input was asking for precision that doesn't
+          // exist (Abdul, Aug 20 session).
+          type="month"
           value={expires}
           onChange={(e) => onExpires(e.target.value)}
           className="rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"

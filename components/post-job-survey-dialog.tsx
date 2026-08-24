@@ -167,6 +167,19 @@ type PriorOpenRecommendation = {
   urgency: RecommendationUrgency;
   reason: string | null;
   created_at: number;
+  /** Work added to THIS job resolves this prior rec (matched server-side on the
+   *  clustering key). The step pre-checks these as Done; the mechanic can still
+   *  un-check one that wasn't actually fixed. */
+  matchedByThisVisit?: boolean;
+};
+
+// Off-catalog work added to THIS job beyond the original booking scope (the
+// pre-job "add to job" flow + mid-job additions), shown resolved in the
+// post-job "Fixed this visit" strip. From custom_jobs, keyed by its _id.
+type ResolvedThisVisitWork = {
+  _id: string;
+  service_name: string;
+  reason: string | null;
 };
 
 // A recommendation the mechanic already confirmed at pre-job, from this
@@ -202,6 +215,7 @@ type PostJobPrefillData = {
   priorOpenRecommendations?: PriorOpenRecommendation[];
   confirmedThisVisit?: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection?: SuggestedFromInspection[];
+  resolvedThisVisit?: ResolvedThisVisitWork[];
   /** Canonical warning-light codes currently on file for this vehicle, any
    *  source. Offered as a "still on?" clear list — see "Dashboard warning
    *  lights." */
@@ -1528,6 +1542,30 @@ function PostJobSurveyDialogBody({
   const toggleResolvedPriorRec = (id: string) =>
     setResolvedPriorRecIds((current) => ({ ...current, [id]: !current[id] }));
 
+  // Pre-check prior recs that work added to THIS job resolves (matched
+  // server-side on the clustering key). The mechanic opens the step with them
+  // already marked Done — the link that was missing before — and can un-check
+  // any that weren't actually fixed. Seeded once per booking so a later
+  // un-check isn't clobbered on re-render; mirrors the mid-job flag seeding.
+  const seededPriorRecMatchesRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open || !bookingId || !prefillData) return;
+    const key = String(bookingId);
+    if (seededPriorRecMatchesRef.current === key) return;
+    seededPriorRecMatchesRef.current = key;
+    const matched = (prefillData.priorOpenRecommendations ?? []).filter(
+      (r) => r.matchedByThisVisit,
+    );
+    if (matched.length === 0) return;
+    setResolvedPriorRecIds((current) => {
+      const next = { ...current };
+      for (const r of matched) {
+        if (next[r._id] === undefined) next[r._id] = true;
+      }
+      return next;
+    });
+  }, [open, bookingId, prefillData]);
+
   /* ── Mid-job flags seed the survey (Flag Issue spec, §4) ────────────────────
      Anything the mechanic flagged from the active-job overlay is already a
      job_recommendations row. Asking again at completion would be asking the same
@@ -2484,6 +2522,7 @@ function PostJobSurveyDialogBody({
             toggleResolvedPriorRec={toggleResolvedPriorRec}
             confirmedThisVisit={prefillData?.confirmedThisVisit ?? []}
             suggestedFromInspection={prefillData?.suggestedFromInspection ?? []}
+            resolvedThisVisit={prefillData?.resolvedThisVisit ?? []}
             currentWarningLights={prefillData?.currentWarningLights ?? []}
             clearedWarningLights={clearedWarningLights}
             setClearedWarningLights={setClearedWarningLights}
@@ -2787,6 +2826,7 @@ function StepContent(props: {
   toggleResolvedPriorRec: (id: string) => void;
   confirmedThisVisit: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection: SuggestedFromInspection[];
+  resolvedThisVisit: ResolvedThisVisitWork[];
   currentWarningLights: string[];
   clearedWarningLights: string[];
   setClearedWarningLights: React.Dispatch<React.SetStateAction<string[]>>;
@@ -3231,6 +3271,7 @@ function StepContent(props: {
           toggleResolvedPriorRec={props.toggleResolvedPriorRec}
           confirmedThisVisit={props.confirmedThisVisit}
           suggestedFromInspection={props.suggestedFromInspection}
+          resolvedThisVisit={props.resolvedThisVisit}
           bookingId={props.bookingId}
           currentWarningLights={props.currentWarningLights}
           clearedWarningLights={props.clearedWarningLights}
@@ -5073,6 +5114,7 @@ function RecommendationsStep({
   toggleResolvedPriorRec,
   confirmedThisVisit,
   suggestedFromInspection,
+  resolvedThisVisit,
   bookingId,
   currentWarningLights,
   clearedWarningLights,
@@ -5090,6 +5132,7 @@ function RecommendationsStep({
   toggleResolvedPriorRec: (id: string) => void;
   confirmedThisVisit: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection: SuggestedFromInspection[];
+  resolvedThisVisit: ResolvedThisVisitWork[];
   bookingId: string | null;
   currentWarningLights: string[];
   clearedWarningLights: string[];
@@ -5246,6 +5289,11 @@ function RecommendationsStep({
                         — {rec.reason}
                       </span>
                     ) : null}
+                    {rec.matchedByThisVisit ? (
+                      <span className="ml-1.5 rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] font-semibold text-emerald-700">
+                        added to job
+                      </span>
+                    ) : null}
                   </span>
                   <button
                     type="button"
@@ -5274,6 +5322,37 @@ function RecommendationsStep({
           <p className="mt-2 text-[10px] text-muted-foreground">
             Did any of these this visit? Mark them done — the rest you&apos;ll
             confirm on the next pre-job survey.
+          </p>
+        </div>
+      ) : null}
+
+      {resolvedThisVisit.length > 0 ? (
+        <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50/50 px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-emerald-700">
+            Fixed this visit
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {resolvedThisVisit.map((work) => (
+              <li
+                key={work._id}
+                className="flex items-start gap-2 text-[12px] text-foreground/80"
+              >
+                <Check className="mt-0.5 h-3 w-3 flex-shrink-0 text-emerald-600" />
+                <span className="min-w-0 flex-1">
+                  <span className="font-medium">{work.service_name}</span>
+                  {work.reason ? (
+                    <span className="text-muted-foreground">
+                      {" "}
+                      — {work.reason}
+                    </span>
+                  ) : null}
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            Work you added to this job from the inspection — recorded as done and
+            billed on this visit.
           </p>
         </div>
       ) : null}

@@ -812,6 +812,34 @@ export const getPrefillData = query({
       }
     }
 
+    // Work added to THIS job beyond the original booking scope — the pre-job
+    // "add to job" flow (issues caught during the inspection) and any mid-job
+    // additions. Non-declined custom_jobs whose source isn't the original
+    // create-booking drawer. Used two ways below: the "Fixed this visit" strip
+    // in the post-job step, and auto-connecting a prior recommendation this work
+    // resolves (matched on the clustering key, the same one custom_jobs cluster
+    // on). Read once here and reused for onJobMatchKeys further down.
+    const customJobsOnBooking = await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    const activeCustomJobs = customJobsOnBooking.filter(
+      (job: any) => job.status !== "declined" && job.status !== "cancelled",
+    );
+    const addedWorkJobs = activeCustomJobs
+      .filter((job: any) => job.source !== "booking")
+      .sort((a: any, b: any) => a.created_at - b.created_at);
+    const addedWorkMatchKeys = new Set<string>(
+      addedWorkJobs
+        .map((job: any) => job.match_key || serviceMatchKey(String(job.name ?? "")))
+        .filter((key: string) => key.length > 0),
+    );
+    const resolvedThisVisit = addedWorkJobs.map((job: any) => ({
+      _id: job._id,
+      service_name: job.name,
+      reason: job.complaint ?? null,
+    }));
+
     // Prior open recommendations for the same VIN (shop-scoped). Surfaced as
     // a muted "last visit said…" strip at the top of the post-job step so
     // the mechanic has memory aids — actual confirmation happens in pre-job.
@@ -833,6 +861,9 @@ export const getPrefillData = query({
         const svc = rec.recommended_service_id
           ? await ctx.db.get(rec.recommended_service_id)
           : null;
+        const recMatchKey = serviceMatchKey(
+          String(svc?.name ?? rec.freeform_text ?? ""),
+        );
         return {
           _id: rec._id,
           service_name: svc?.name ?? rec.freeform_text ?? "Unspecified",
@@ -840,6 +871,13 @@ export const getPrefillData = query({
           urgency: rec.urgency,
           reason: rec.reason ?? null,
           created_at: rec.created_at,
+          // True when work added to THIS job resolves this open rec (matched on
+          // the clustering key). The post-job step pre-checks these as Done and
+          // closes them on completion; the mechanic can still un-check one that
+          // wasn't actually fixed. This is the link that was missing — an added
+          // service never touched the prior rec it obviously resolved.
+          matchedByThisVisit:
+            recMatchKey.length > 0 && addedWorkMatchKeys.has(recMatchKey),
         };
       }),
     );
@@ -922,13 +960,7 @@ export const getPrefillData = query({
       ((booking.service_ids ?? []) as any[]).map((id: any) => String(id)),
     );
     const onJobMatchKeys = new Set<string>(
-      (
-        await ctx.db
-          .query("custom_jobs")
-          .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
-          .collect()
-      )
-        .filter((job: any) => job.status !== "declined" && job.status !== "cancelled")
+      activeCustomJobs
         .map((job: any) => serviceMatchKey(String(job.name ?? "")))
         .filter((key: string) => key.length > 0),
     );
@@ -1025,6 +1057,7 @@ export const getPrefillData = query({
       priorOpenRecommendations,
       confirmedThisVisit,
       suggestedFromInspection,
+      resolvedThisVisit,
       currentWarningLights,
       prejobTires,
     };

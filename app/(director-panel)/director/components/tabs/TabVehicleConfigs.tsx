@@ -1049,7 +1049,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                       : undefined}
                   />
                   <div style={{ border:'1px solid var(--slate-200)', borderRadius:8, overflow:'hidden' }}>
-                    <div style={{ display:'grid', gridTemplateColumns:'1.6fr 90px 90px 100px 80px', padding:'8px 12px', background:'var(--slate-25)', borderBottom:'1px solid var(--slate-200)', fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
+                    <div style={{ display:'grid', gridTemplateColumns:'minmax(120px, 1.6fr) 76px 68px 66px 58px', padding:'8px 12px', background:'var(--slate-25)', borderBottom:'1px solid var(--slate-200)', fontSize:11, fontWeight:600, color:'var(--slate-500)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
                       <span>Service</span>
                       <span style={{ textAlign:'right' }}>Miles</span>
                       <span style={{ textAlign:'right' }}>Months</span>
@@ -1058,15 +1058,15 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                     </div>
                     {(detail.serviceIntervals as ServiceIntervalRow[]).map((r, i) => (
                       <div key={i} style={{
-                        display:'grid', gridTemplateColumns:'1.6fr 90px 90px 100px 80px',
+                        display:'grid', gridTemplateColumns:'minmax(120px, 1.6fr) 76px 68px 66px 58px',
                         padding:'8px 12px', alignItems:'center',
                         borderBottom: i < detail.serviceIntervals.length - 1 ? '1px solid var(--slate-100)' : 'none',
                         fontSize:12, color:'var(--slate-700)',
                       }}>
                         <span style={{ fontWeight:500, color:'var(--slate-900)', display:'flex', alignItems:'center', gap:6, minWidth:0 }}>
-                          <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.serviceName}</span>
+                          <span style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.serviceName}</span>
                           {fromManual(r) && (
-                            <span title={r.dataQuality === 'oem_manual'
+                            <span style={{ flexShrink:0 }} title={r.dataQuality === 'oem_manual'
                               ? 'Extracted from the OEM manual PDF'
                               : 'Months interval extracted from the OEM manual PDF'}>
                               <Badge tone="indigo">manual</Badge>

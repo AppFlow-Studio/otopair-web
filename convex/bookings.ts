@@ -4528,7 +4528,7 @@ export async function enqueueNotificationOutbox(
  * mechanic isn't linked to a user yet (invite unaccepted). Mirrors the
  * `shopUserByMechanicId` map the owner dashboard builds.
  */
-async function resolveMechanicUserId(
+export async function resolveMechanicUserId(
   ctx: any,
   shopId: any,
   mechanicId: any,
@@ -4576,7 +4576,7 @@ const CUSTOMER_LATE_NOTIFICATION_CATEGORIES = [
  * reason: "user_action" (customer/shop acted) | "superseded" (booking state
  * moved on) | "expired" (proposal TTL lapsed).
  */
-async function resolveBookingNotifications(
+export async function resolveBookingNotifications(
   ctx: any,
   bookingId: any,
   opts?: { categories?: string[]; reason?: string },
@@ -16903,6 +16903,25 @@ export const getReceipt = query({
         .filter((c: any) => c.status === "declined")
         .map((c: any) => c.match_key ?? serviceMatchKey(String(c.name))),
     );
+    // Labor-time fallback per custom line. An added line's duration lives on
+    // `custom_services.duration_minutes`, but a line added before that was
+    // persisted at add-time (or via a path that never set it) carries the
+    // estimate only on the `custom_jobs` row. Read through to it so the split
+    // below can still attribute labor to the line instead of dumping the whole
+    // labor subtotal onto the original service's row. Keyed on the same
+    // match_key the display copy dedupes on.
+    const customJobMinutesByKey = new Map<string, number>();
+    for (const c of customJobRows) {
+      if (c.status === "declined") continue;
+      const key = c.match_key ?? serviceMatchKey(String(c.name));
+      const mins =
+        typeof c.estimated_minutes === "number" && c.estimated_minutes > 0
+          ? c.estimated_minutes
+          : null;
+      if (mins != null && !customJobMinutesByKey.has(key)) {
+        customJobMinutesByKey.set(key, mins);
+      }
+    }
 
     const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
     const mechanic = booking.mechanic_id
@@ -16973,7 +16992,7 @@ export const getReceipt = query({
         const mins =
           typeof c?.duration_minutes === "number" && c.duration_minutes > 0
             ? c.duration_minutes
-            : null;
+            : (customJobMinutesByKey.get(serviceMatchKey(name)) ?? null);
         const hours = mins != null ? mins / 60 : null;
         if (hours != null) totalHours += hours;
         rawServices.push({ name, hours });

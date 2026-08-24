@@ -845,6 +845,17 @@ async function addCustomServiceForBooking(
   if (!name) throw new Error("A name is required");
 
   const now = Date.now();
+
+  // Resolve which catalog service this line IS, so its OEM parts and labor can
+  // be seeded. Prefer the id the caller passed (the inspection knows it), but
+  // fall back to matching the line's NAME against the catalog on the same key
+  // the catalog dedupes on — so "Oil Change" seeds whether or not the caller
+  // threaded an id. Freeform work that matches nothing stays bare.
+  let catalogServiceId = args.catalogServiceId ?? null;
+  if (!catalogServiceId) {
+    catalogServiceId = await resolveCatalogServiceIdByName(ctx, name);
+  }
+
   const existingLines = Array.isArray((booking as any).custom_services)
     ? [...(booking as any).custom_services]
     : [];
@@ -853,25 +864,36 @@ async function addCustomServiceForBooking(
     (c: any) => serviceMatchKey(String(c.name)) === matchKey,
   );
 
+  // Labor minutes for the line. The mechanic's explicit value wins; otherwise,
+  // for a CATALOG service, fall back to the OEM labor ladder — the same time a
+  // booked instance would carry — so the line reaches BOTH the estimate's labor
+  // step and the receipt's per-service split with a real number instead of 0.
+  // Without this, custom_services.duration_minutes stayed null: getReceipt
+  // couldn't attribute any labor to the added line (it rendered "—") and instead
+  // dumped the whole labor subtotal onto the original service's row. Only
+  // computed for a NEW line, so a re-add never clobbers a time edited by hand.
+  let estimatedMinutes = args.estimatedMinutes ?? null;
+  if (
+    estimatedMinutes == null &&
+    !alreadyThere &&
+    catalogServiceId &&
+    booking.vin
+  ) {
+    estimatedMinutes = await oemLaborMinutesForServiceOnVehicle(ctx, {
+      vin: booking.vin,
+      serviceId: catalogServiceId,
+    });
+  }
+
   if (!alreadyThere) {
     existingLines.push({
       name,
-      duration_minutes: args.estimatedMinutes ?? undefined,
+      duration_minutes: estimatedMinutes ?? undefined,
     });
     await ctx.db.patch(args.bookingId, {
       custom_services: existingLines,
       updated_at: now,
     });
-  }
-
-  // Resolve which catalog service this line IS, so its OEM parts can be seeded.
-  // Prefer the id the caller passed (the inspection knows it), but fall back to
-  // matching the line's NAME against the catalog on the same key the catalog
-  // dedupes on — so "Oil Change" seeds its parts whether or not the caller
-  // threaded an id. Freeform work that matches nothing stays parts-less.
-  let catalogServiceId = args.catalogServiceId ?? null;
-  if (!catalogServiceId) {
-    catalogServiceId = await resolveCatalogServiceIdByName(ctx, name);
   }
 
   // Catalog service? Seed the line's parts from the OEM catalog/enrichment so
@@ -899,7 +921,7 @@ async function addCustomServiceForBooking(
         system_tags: args.systemTags ?? null,
         work_type: args.workType ?? null,
         complaint: args.complaint ?? null,
-        estimated_minutes: args.estimatedMinutes ?? null,
+        estimated_minutes: estimatedMinutes,
         shop_custom_service_id: args.shopCustomServiceId ?? null,
         parts: seededParts,
       },

@@ -35,6 +35,7 @@ import { postjobPartValidator } from "./lib/vehicle_passports";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
+import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
   buildCustomerInspectionSnapshot,
   type CustomerInspectionSnapshot,
@@ -780,6 +781,14 @@ export const applyApprovalDecision = mutation({
           dedupeSuffix: `accepted:${open._id}`,
         });
       }
+      // Message Shop: mark any open "request_approval" ticket action accepted
+      // and resolve the ticket.
+      await syncTicketActionStatus(ctx, {
+        bookingId: args.bookingId,
+        kind: "request_approval",
+        status: "accepted",
+        autoResolve: true,
+      });
       return { ok: true, state: "approved", ceilingCents: newCeiling };
     }
 
@@ -836,6 +845,12 @@ export const applyApprovalDecision = mutation({
         dedupeSuffix: `declined:${open._id}`,
       });
     }
+    // Message Shop: mark any open "request_approval" ticket action declined.
+    await syncTicketActionStatus(ctx, {
+      bookingId: args.bookingId,
+      kind: "request_approval",
+      status: "declined",
+    });
     return { ok: true, state: declinedState };
   },
 });

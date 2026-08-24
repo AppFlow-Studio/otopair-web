@@ -3805,6 +3805,83 @@ export default defineSchema({
     .index("by_role", ["role"])
     .index("by_timestamp", ["timestamp"]),
 
+  // ── Message Shop (v9) ──────────────────────────────────────────────────
+  // Customer↔shop support tickets, scoped to a booking. NEW tables (the ai_*
+  // chat above is user↔AI only) but they deliberately mirror its
+  // container→messages shape. A ticket is the "controlled flow": category +
+  // status + booking context, with a message thread inside it as the
+  // open-chat fallback so it's never a dead end. Read-tracking is
+  // denormalized here (per-side counters + last_read) rather than a separate
+  // table — same inline pattern as notification_outbox.read_at. Shop responds
+  // from otopair-web; these are portable (no mobile-only deps) so the mirror
+  // synced into the mobile repo stays identical.
+  shop_tickets: defineTable({
+    booking_id: v.id("bookings"), // v1: every ticket attaches to a booking
+    user_id: v.id("users"), // the customer (booking.user_id)
+    shop_id: v.id("shops"), // denormalized from booking for the inbox index
+    mechanic_id: v.optional(v.id("mechanics")), // pre-assigned = booking.mechanic_id
+
+    // Loose strings (like ai_messages.role) so the taxonomy/lifecycle can grow
+    // without a migration. Vocab lives in convex/lib/shopTicketConstants.ts.
+    category: v.string(), // running_late | when_ready | open_chat | …
+    status: v.string(), // open | shop_responded | resolved | closed
+
+    // Denormalized preview + counters so the web inbox and the mobile ticket
+    // list render without loading the whole thread (cf. ai_conversations
+    // message_count / arc_summary).
+    subject: v.optional(v.string()),
+    last_message_preview: v.optional(v.string()),
+    last_message_at: v.optional(v.number()),
+    last_sender_role: v.optional(v.string()),
+    message_count: v.optional(v.number()),
+
+    // Two-sided unread tracking. customer_* = unread shop messages for the
+    // customer; shop_* = unread customer messages for any shop staff.
+    customer_unread_count: v.optional(v.number()),
+    shop_unread_count: v.optional(v.number()),
+    customer_last_read_at: v.optional(v.number()),
+    shop_last_read_at: v.optional(v.number()),
+
+    started_at: v.number(),
+    updated_at: v.optional(v.number()),
+    resolved_at: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+  })
+    .index("by_booking_id", ["booking_id"]) // user: my tickets for a booking
+    .index("by_user_id", ["user_id"]) // user: all my tickets
+    .index("by_shop_and_status", ["shop_id", "status"]) // web inbox queue
+    .index("by_shop_and_updated", ["shop_id", "updated_at"]) // web inbox sort
+    .index("by_mechanic_id", ["mechanic_id"]), // web "assigned to me"
+
+  // One message in a shop_tickets thread. Mirrors ai_messages 1:1 (role
+  // string, content, timestamp, metadata/render as v.any()). `action` is the
+  // shop-side rider recording which existing app flow a structured reply drove
+  // (reschedule / approval / pickup / eta) so the thread renders it inline and
+  // the sync hook keeps its status truthful.
+  shop_ticket_messages: defineTable({
+    ticket_id: v.id("shop_tickets"),
+    booking_id: v.id("bookings"), // denormalized for cross-ticket audit
+    sender_role: v.string(), // customer | shop | mechanic | system
+    author_user_id: v.optional(v.id("users")),
+    content: v.string(),
+    // UI envelope, same role as ai_messages.render (quick-reply echo, cards).
+    render: v.optional(v.any()),
+    action: v.optional(
+      v.object({
+        kind: v.string(), // propose_reschedule | request_approval | send_eta | pickup_response
+        status: v.optional(v.string()), // pending | accepted | declined | applied | expired
+        booking_approval_id: v.optional(v.id("booking_approvals")),
+        params: v.optional(v.any()),
+        resolved_at: v.optional(v.number()),
+      }),
+    ),
+    metadata: v.optional(v.any()),
+    timestamp: v.number(),
+  })
+    .index("by_ticket_id", ["ticket_id"]) // the thread read (both sides)
+    .index("by_booking_id", ["booking_id"]) // all messages across a booking
+    .index("by_sender_role", ["sender_role"]), // parity w/ ai_messages.by_role
+
   // [I] Sprint 4 — per-message AI feedback. Captured via the thumbs-up /
   // thumbs-down buttons on each AI bubble (those buttons open the feedback
   // modal — they no longer toggle silently). The owner reviews entries to

@@ -82,6 +82,7 @@ import {
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
+import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
   minorRecordTypeForServiceSlug,
   recordTypeForServiceSlug,
@@ -13883,6 +13884,15 @@ export const customerApproveReschedule = mutation({
       "customer_approved_reschedule"
     );
 
+    // Message Shop: mark any open "propose_reschedule" ticket action accepted
+    // and resolve the ticket, so the thread reflects the customer's decision.
+    await syncTicketActionStatus(ctx, {
+      bookingId: booking._id,
+      kind: "propose_reschedule",
+      status: "accepted",
+      autoResolve: true,
+    });
+
     await syncBookingAssignments(ctx, [
       {
         shopId: booking.shop_id,
@@ -14116,6 +14126,14 @@ export const customerDeclineReschedule = mutation({
       booking.user_id,
       "customer_declined_reschedule"
     );
+
+    // Message Shop: mark any open "propose_reschedule" ticket action declined.
+    // Leave the ticket open so the customer/shop can keep talking.
+    await syncTicketActionStatus(ctx, {
+      bookingId: booking._id,
+      kind: "propose_reschedule",
+      status: "declined",
+    });
 
     await syncBookingAssignments(ctx, [
       {
@@ -15590,6 +15608,13 @@ export const revertExpiredReschedules = internalMutation({
         booking.user_id,
         "reschedule_auto_reverted_24h"
       );
+
+      // Message Shop: the proposal lapsed — mark the ticket action expired.
+      await syncTicketActionStatus(ctx, {
+        bookingId: booking._id,
+        kind: "propose_reschedule",
+        status: "expired",
+      });
 
       await syncBookingAssignments(ctx, [
         {

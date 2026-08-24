@@ -165,8 +165,8 @@ describe("blocker SMS templates", () => {
  * one moment trust is most expensive: the customer isn't at the shop, the car
  * is on a lift, and declining is awkward.
  */
-describe("mid-job additions for the customer", () => {
-  it("returns off-catalog work added after the job started, and nothing else", async () => {
+describe("added services for the customer", () => {
+  it("returns off-catalog work added before and during the job, and nothing booked at the counter", async () => {
     const { makeT } = await import("./helpers");
     const { api } = await import("../convex/_generated/api");
     const { recordCustomJobsForBooking } = await import("../convex/customJobs");
@@ -215,21 +215,25 @@ describe("mid-job additions for the customer", () => {
       );
 
     await write("Booked at the counter", "booking");
+    await write("Cabin filter — found on inspection", "pre_job");
     await write("Power window switch replacement", "mid_job");
 
     const out: any[] = await t
       .withIdentity({ subject: "clerk_midjob_customer" })
-      .query(api.customJobs.listMidJobAdditionsForCustomer, {
+      .query(api.customJobs.listAddedServicesForCustomer, {
         bookingId: base.bookingId,
       });
 
-    // Only what was added mid-job. Work booked at the counter was already
-    // agreed and priced — re-announcing it as a surprise would be the lie
-    // inverted.
-    expect(out).toHaveLength(1);
-    expect(out[0].name).toBe("Power window switch replacement");
-    expect(out[0].complaint).toBe("Switch dead on the driver's door");
-    expect(out[0].parts[0].oem_number).toBe("83071AN00B");
+    // Both the pre-job and mid-job additions surface, each tagged by source so
+    // the approval screen shows the cycle it's rendering. Work booked at the
+    // counter was already agreed and priced — re-announcing it as a surprise
+    // would be the lie inverted.
+    expect(out).toHaveLength(2);
+    expect(out.map((r) => r.source).sort()).toEqual(["mid_job", "pre_job"]);
+    const midJob = out.find((r) => r.source === "mid_job");
+    expect(midJob.name).toBe("Power window switch replacement");
+    expect(midJob.complaint).toBe("Switch dead on the driver's door");
+    expect(midJob.parts[0].oem_number).toBe("83071AN00B");
   });
 
   it("shows nothing to anyone who isn't the booking's customer", async () => {
@@ -261,11 +265,11 @@ describe("mid-job additions for the customer", () => {
     expect(
       await t
         .withIdentity({ subject: "clerk_midjob_stranger" })
-        .query(api.customJobs.listMidJobAdditionsForCustomer, { bookingId }),
+        .query(api.customJobs.listAddedServicesForCustomer, { bookingId }),
     ).toEqual([]);
     // Anonymous too — this is somebody's repair history.
     expect(
-      await t.query(api.customJobs.listMidJobAdditionsForCustomer, { bookingId }),
+      await t.query(api.customJobs.listAddedServicesForCustomer, { bookingId }),
     ).toEqual([]);
   });
 });

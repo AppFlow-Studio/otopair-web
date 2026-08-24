@@ -1464,8 +1464,9 @@ function dominantName(jobs: Array<{ name: string }>): string | null {
 }
 
 /**
- * What the mechanic added to this job after work started, for the customer's
- * mid-job approval screen.
+ * The off-catalog work a mechanic added to this job, for the customer's
+ * approval screen — both the pre-job case ("found more during inspection,
+ * before work begins") and the mid-job case ("found more while working").
  *
  * ─── WHY ────────────────────────────────────────────────────────────────────
  * The approval screen showed a price and a delta — "$472.84", "$220.08 above
@@ -1474,15 +1475,18 @@ function dominantName(jobs: Array<{ name: string }>): string | null {
  * number on trust, which is the exact moment trust is most expensive: they're
  * not at the shop, the car is on a lift, and declining is awkward.
  *
- * `source: "mid_job"` is what makes this answerable. Work added while the job
- * was running is stamped with it at write time, so this is a read of what
- * actually happened rather than a diff of two snapshots that may not exist.
+ * `source` is what makes this answerable. Work added before the job (the
+ * pre-job estimate) is stamped "pre_job"; work added while it was running is
+ * stamped "mid_job" — each at write time, so this is a read of what actually
+ * happened rather than a diff of two snapshots that may not exist. Every row
+ * carries its `source` so the caller renders the additions for the cycle being
+ * approved, and only those.
  *
- * Returns the off-catalog additions only. A catalog service added mid-job
- * lands on `booking.service_ids` and already renders by name through the
+ * Returns the off-catalog additions only. A catalog service added to either
+ * cycle lands on `booking.service_ids` and already renders by name through the
  * receipt's service lines; it's this half that had no route to the customer.
  */
-export const listMidJobAdditionsForCustomer = query({
+export const listAddedServicesForCustomer = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
@@ -1507,11 +1511,19 @@ export const listMidJobAdditionsForCustomer = query({
       .collect();
 
     return rows
-      .filter((r: any) => r.source === "mid_job" && r.status !== "cancelled")
+      .filter(
+        (r: any) =>
+          (r.source === "mid_job" || r.source === "pre_job") &&
+          r.status !== "cancelled",
+      )
       .sort((a: any, b: any) => a.created_at - b.created_at)
       .map((r: any) => ({
         _id: r._id,
         name: r.name,
+        // Which cycle added the line. The caller shows only the additions for
+        // the approval it's rendering — pre-job on the pre-job estimate, mid-job
+        // on the mid-job change — so a prior cycle's work doesn't resurface.
+        source: r.source as "pre_job" | "mid_job",
         // The mechanic's own words for what they found. This is the sentence
         // that makes the number make sense, so it leads on the card.
         complaint: r.complaint ?? null,

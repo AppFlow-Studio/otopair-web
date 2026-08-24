@@ -1239,7 +1239,10 @@ function PostJobSurveyDialogBody({
           part_name: p.part_name,
           brand: p.brand ?? "",
           oem_number: p.oem_number ?? "",
-          cost: unitCents > 0 ? formatFixedCentCurrency(unitCents) : "0.00",
+          // `cost` is a DOLLAR string and formatFixedCentCurrency expects dollars
+          // (it multiplies by 100 internally), but unitCents is CENTS — so divide
+          // first. Passing cents straight in rendered $4.68 as $468.
+          cost: unitCents > 0 ? formatFixedCentCurrency(unitCents / 100) : "0.00",
           quantity: qty,
           supplied_by: "shop",
           part_tier: "oem",
@@ -1462,6 +1465,40 @@ function PostJobSurveyDialogBody({
   const [laborAllocations, setLaborAllocations] = useState<
     Record<string, string>
   >({});
+  // Every labor line must resolve to a real time before the mechanic can leave
+  // the labor step — a line still at 0 (no estimate, nothing typed) would quote
+  // free labor. Mirrors LaborStep's per-line rule: the explicit entry wins,
+  // otherwise the line's estimate (base = estimatedLaborMinutes; each added line
+  // = its estimated_minutes). A catalog service we enrich for arrives with an
+  // estimate, so this only blocks lines that genuinely have none.
+  const laborStepValid = useMemo(() => {
+    const lineDefs: Array<{ key: string; defMin: number }> = [
+      {
+        key: "base",
+        defMin:
+          typeof estimatedLaborMinutes === "number" && estimatedLaborMinutes > 0
+            ? estimatedLaborMinutes
+            : 0,
+      },
+      ...(customJobs ?? []).map((j) => ({
+        key: String(j._id),
+        defMin:
+          typeof j.estimated_minutes === "number" && j.estimated_minutes > 0
+            ? j.estimated_minutes
+            : 0,
+      })),
+    ];
+    return lineDefs.every((l) => {
+      const raw = laborAllocations[l.key];
+      const hours =
+        raw !== undefined
+          ? Number(raw) || 0
+          : l.defMin > 0
+            ? l.defMin / 60
+            : 0;
+      return hours > 0;
+    });
+  }, [estimatedLaborMinutes, customJobs, laborAllocations]);
   const [actualPartsCost, setActualPartsCost] = useState("");
   const [difficultyRating, setDifficultyRating] = useState("");
   const [partsAccuracyStatus, setPartsAccuracyStatus] =
@@ -2188,8 +2225,12 @@ function PostJobSurveyDialogBody({
   // skippable like the rest of the optional tail.
   const REQUIRED_STEPS: StepKey[] = ["mileage", "parts", "parts_accuracy"];
   // The gate owns its own Yes/No buttons, so suppress the top-right Skip there.
+  // Labor also can't be skipped — a skipped labor line quotes free labor, which
+  // is the whole point of gating Continue on it.
   const skipHiddenForStep =
-    REQUIRED_STEPS.includes(currentStep) || currentStep === "more_gate";
+    REQUIRED_STEPS.includes(currentStep) ||
+    currentStep === "more_gate" ||
+    currentStep === "labor";
 
   const stepHeader = (
     <div className="flex items-center justify-between gap-2 px-4 pt-3 sm:px-6">
@@ -2576,6 +2617,7 @@ function PostJobSurveyDialogBody({
                             (Number(p.cost) || 0) <= 0,
                         ).length,
                   recommendations,
+                  laborStepValid,
                 })}
                 className={cn(
                   drawerPrimaryButtonClassName,
@@ -2609,8 +2651,13 @@ function canAdvance(
     // since prices aren't editable there.
     unpricedBlockingCount: number;
     recommendations: RecRowState[];
+    laborStepValid: boolean;
   }
 ) {
+  if (step === "labor") {
+    // Can't leave labor with any line at 0 — that would quote free labor.
+    return state.laborStepValid;
+  }
   if (step === "recommendations") {
     // Every rec for a has_options service must carry a pick.
     return state.recommendations.every((r) => {

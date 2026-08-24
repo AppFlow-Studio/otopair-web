@@ -4653,6 +4653,34 @@ export default defineSchema({
     .index("by_kind", ["kind"])
     .index("by_opened_at", ["opened_at"]),
 
+  // Admin time inside the "Flag issue" flow — the mechanic writing up extra
+  // scope (the flag sheet and the mid-job scope dialog it opens) rather than
+  // turning a wrench. Recorded as closed spans so it drops out of worked labour
+  // the same way a clock-stopping blocker does: jobBlockers.clockStoppedSpans
+  // merges both, and mergedSpanMinutes de-overlaps them so a span opened during
+  // a blocker isn't subtracted twice.
+  //
+  // WHY CLOSED SPANS, WRITTEN ON CLOSE: a modal being "open" is far more
+  // transient than a blocker, and an open-ended row (opened, never closed) would
+  // pause the clock forever if the tab were closed mid-sheet. Writing only the
+  // completed span, on close, means an abandoned/crashed sheet is simply not
+  // credited — the safe direction (bills the customer, never over-credits).
+  //
+  // Unlike job_blockers this never reports "currently paused": the span is
+  // already closed by the time it lands, so isClockPausedForBooking (which looks
+  // for a span still open at `now`) skips it. The live, on-screen pause is a
+  // client concern (see NowWorkingPane); this table is the durable record that
+  // keeps blocked_minutes and the auto-derived labour honest.
+  job_admin_pauses: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.optional(v.id("shops")),
+    mechanic_id: v.optional(v.id("mechanics")),
+    recorded_by_user_id: v.id("users"),
+    opened_at: v.number(),
+    closed_at: v.number(),
+    created_at: v.number(),
+  }).index("by_booking", ["booking_id"]),
+
   // Audit trail for pseudo-VIN → real-VIN re-keys (Off-Catalog Work spec, §5).
   //
   // A walk-in entered without a valid VIN gets a placeholder, and every row about

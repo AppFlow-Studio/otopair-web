@@ -170,6 +170,9 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
         <span className="mono" style={{ fontSize:13, fontWeight:600, color:'var(--blue-700)' }}>
           {detail.invoiceNumber ?? String(detail.id).slice(-8)}
         </span>
+        <Badge tone={detail.origin === 'walk_in' ? 'orange' : 'blue'}>
+          {detail.origin === 'walk_in' ? 'Walk-in' : 'App'}
+        </Badge>
         {detail.liveStage && <Badge tone="blue">{detail.liveStage}</Badge>}
         {detail.refundReason && <Badge tone="purple">Refund tagged</Badge>}
       </>}
@@ -292,10 +295,14 @@ const OverviewTab = ({ detail, bookingId }: { detail: any; bookingId: Id<'bookin
                     )
                   : null
               return (
-                <div key={String(s.id)} style={{ background:'#fff', border:`1px solid ${isCatch ? '#FED7AA' : isCorrected ? '#A7F3D0' : 'var(--slate-200)'}`, borderRadius:8, padding:'8px 12px' }}>
+                <div key={String(s.id)} style={{ background:'#fff', border:`1px solid ${isCatch ? '#FED7AA' : isCorrected ? '#A7F3D0' : s.isCustom ? '#99F6E4' : 'var(--slate-200)'}`, borderRadius:8, padding:'8px 12px' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexWrap:'wrap' }}>
                     <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
                       <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{s.name}</span>
+                      {s.isCustom && <Badge tone="teal">Custom</Badge>}
+                      {s.isCustom && s.customSource && s.customSource !== 'booking' && (
+                        <Badge tone="slate">{String(s.customSource).replace(/_/g, ' ')}</Badge>
+                      )}
                       {isCatch && <Badge tone="orange">⚠ Fallback catch</Badge>}
                       {isCorrected && <Badge tone="green">✓ Engine corrected</Badge>}
                       {isRefused && <Badge tone="red">Engine refused</Badge>}

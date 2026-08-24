@@ -30,6 +30,7 @@ import FlagIssueSheet from "./flag-issue-sheet";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import OverrunExtendCard from "./overrun-extend-card";
 import ExtraWorkStatus from "@/components/booking/extra-work-status";
+import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
 
 type DraftPhoto = {
   id: string;
@@ -80,6 +81,20 @@ const normServiceName = (s: string) => s.trim().toLowerCase();
 
 type ServiceStatus = "confirmed" | "pending" | "declined" | "draft";
 
+/** A flagged inspection finding the "Flagged, not addressed" list can promote.
+ *  Mirrors getUnaddressedFindingsForBooking's return; systemTags / workType are
+ *  the catalog-derived taxonomy, null for a freeform finding. */
+type UnaddressedFinding = {
+  key: string;
+  label: string;
+  urgency: string;
+  reasons: string[];
+  serviceId: string | null;
+  serviceName: string | null;
+  systemTags: string[] | null;
+  workType: string | null;
+};
+
 const MAX_PHOTOS = 6;
 const NOTES_DEBOUNCE_MS = 800;
 
@@ -109,25 +124,97 @@ export function NowWorkingPane({
   const [flagOpen, setFlagOpen] = useState(false);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [addingFinding, setAddingFinding] = useState<string | null>(null);
+  // A freeform finding waiting on a taxonomy before it can be added — see the
+  // "Flagged, not addressed" block. Null for a finding that resolved to a
+  // catalog service, which carries its own taxonomy and adds in one tap.
+  const [pendingFinding, setPendingFinding] =
+    useState<UnaddressedFinding | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  /* The "Flag issue" flow — the sheet and the mid-job scope dialog it opens — is
+     the mechanic writing up extra scope, not turning a wrench. That admin time
+     shouldn't land on the customer's bill, so the clock stops while any of it is
+     open. (Waiting for the customer to then CONFIRM that scope no longer pauses
+     anything — that wait is open-ended and outside the shop's control; see
+     jobBlockers.clockStoppedSpans.) */
+  const flagFlowOpen = flagOpen || scopeOpen;
+  /* When the flag flow opened. On close we send the completed span to the server
+     (recordFlagAdminPause), which folds it into the same blocked-minutes figure
+     every surface reads — so the pause is durable, not just a number on this
+     screen. Nothing is persisted while it's open; an abandoned sheet is simply
+     never credited, which bills the customer rather than over-crediting them. */
+  const flagOpenedAtRef = useRef<number | null>(null);
 
   /* Open blockers on this job (Flag Issue spec, §5). Rendered as a banner so a
      stalled job is visibly stalled rather than looking like it's being worked. */
   const blockers = useQuery(api.jobBlockers.listForBooking, { bookingId });
   const resolveBlocker = useMutation(api.jobBlockers.resolveBlocker);
-  /* Server-derived: covers clock-stopping blockers AND a mid-job re-quote the
-     customer hasn't answered. Don't recompute this from `blockers[]` here —
-     that predicate missed the re-quote case and drifted between surfaces. */
+  /* Optimistically bump this booking's blockedMinutes the instant the flag flow
+     closes, so the timer resumes where it paused instead of jumping up for the
+     round-trip. The real query result (with the recorded span merged in) then
+     replaces it seamlessly; if the write fails, Convex rolls the bump back and
+     the timer honestly reflects that the span wasn't credited. */
+  const recordFlagAdminPause = useMutation(
+    api.jobBlockers.recordFlagAdminPause,
+  ).withOptimisticUpdate((localStore, args) => {
+    const cur = localStore.getQuery(api.jobBlockers.listForBooking, {
+      bookingId: args.bookingId,
+    });
+    if (!cur) return;
+    const addMinutes = Math.round(
+      Math.max(0, args.closedAt - args.openedAt) / 60_000,
+    );
+    if (addMinutes <= 0) return;
+    localStore.setQuery(
+      api.jobBlockers.listForBooking,
+      { bookingId: args.bookingId },
+      { ...cur, blockedMinutes: (cur.blockedMinutes ?? 0) + addMinutes },
+    );
+  });
+  /* Server-derived and now the single source of truth for stopped time — clock-
+     stopping blockers AND recorded flag-issue admin pauses, folded together in
+     jobBlockers.clockStoppedSpans. Don't recompute from `blockers[]` here; that
+     predicate drifted between surfaces. */
   const clockPaused = Boolean(blockers?.clockPaused);
   const blockedMs = (blockers?.blockedMinutes ?? 0) * 60_000;
 
   /* Inspection findings nothing has acted on yet — see the "Flagged, not
-     addressed" block below. The query owns the four exclusion paths. */
+     addressed" block below. The query owns the four exclusion paths, and derives
+     a taxonomy for findings that resolved to a catalog service (systemTags /
+     workType non-null); freeform findings leave those null and need the picker. */
   const unaddressedFindings = useQuery(
     api.inspections.getUnaddressedFindingsForBooking,
     { bookingId },
-  );
+  ) as UnaddressedFinding[] | undefined;
   const addToJob = useMutation(api.customJobs.addMidJobCustomService);
+
+  /* Send a flagged finding to the bill. A catalog service passes its derived
+     taxonomy straight through; a freeform one arrives here only after the picker
+     has supplied one. Either way it lands as a mid-job custom line and opens the
+     scope dialog — the customer still confirms it, no money has moved yet. */
+  const commitFinding = async (
+    f: UnaddressedFinding,
+    taxonomy: { systemTags: string[]; workType: string },
+  ) => {
+    setAddingFinding(f.key);
+    try {
+      await addToJob({
+        bookingId,
+        name: f.serviceName ?? f.label,
+        complaint: f.reasons.join("; ") || undefined,
+        systemTags: taxonomy.systemTags,
+        workType: taxonomy.workType,
+      });
+      setPendingFinding(null);
+      setScopeOpen(true);
+    } catch (err: unknown) {
+      onToast?.(
+        err instanceof Error ? err.message : "Could not add that to the job",
+      );
+    } finally {
+      setAddingFinding(null);
+    }
+  };
 
   /* Mid-job extra-work state — drives the per-service status dots in the work
      order. Same query the EXTRA WORK card (top-right) uses; Convex shares the
@@ -214,8 +301,41 @@ export function NowWorkingPane({
       seededForBookingRef.current = id;
       setNotes(serverNotes);
       setTransientPhotos([]);
+      // Any half-open flag span belongs to the car we're leaving; drop it so it
+      // can't be recorded against the next booking the pane is reused for.
+      flagOpenedAtRef.current = null;
     }
   }, [bookingId, serverNotes]);
+
+  /* Record flag-flow time. On open, mark the start — unless a blocker is already
+     stopping the clock (the server merges spans, so a window inside a blocker
+     wouldn't double-count, but there's no point writing a row that adds nothing).
+     On close, send the completed span to the server. */
+  useEffect(() => {
+    if (flagFlowOpen) {
+      if (flagOpenedAtRef.current == null && !clockPaused) {
+        flagOpenedAtRef.current = Date.now();
+      }
+      return;
+    }
+    if (flagOpenedAtRef.current != null) {
+      const openedAt = flagOpenedAtRef.current;
+      flagOpenedAtRef.current = null;
+      const closedAt = Date.now();
+      // Sub-second is a mis-fire; the server drops it too, but skip the round-trip.
+      if (closedAt - openedAt >= 1_000) {
+        void recordFlagAdminPause({ bookingId, openedAt, closedAt }).catch(
+          () => {
+            // A failed write just means this span isn't credited; the optimistic
+            // bump rolls back, so the timer stays honest. Nothing to surface.
+          },
+        );
+      }
+    }
+    // recordFlagAdminPause is recreated each render by withOptimisticUpdate; the
+    // open→close logic is idempotent (guarded by the ref), so it's safe to omit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flagFlowOpen, clockPaused, bookingId]);
 
   const notesRef = useRef(notes);
   notesRef.current = notes;
@@ -535,23 +655,16 @@ export function NowWorkingPane({
                 </div>
                 <button
                   type="button"
-                  onClick={async () => {
-                    setAddingFinding(f.key);
-                    try {
-                      await addToJob({
-                        bookingId,
-                        name: f.serviceName ?? f.label,
-                        complaint: f.reasons.join("; ") || undefined,
+                  onClick={() => {
+                    // A catalog service carries its taxonomy — add it straight
+                    // away. A freeform finding has none, so collect one first.
+                    if (f.systemTags && f.workType) {
+                      void commitFinding(f, {
+                        systemTags: f.systemTags,
+                        workType: f.workType,
                       });
-                      setScopeOpen(true);
-                    } catch (err: unknown) {
-                      onToast?.(
-                        err instanceof Error
-                          ? err.message
-                          : "Could not add that to the job",
-                      );
-                    } finally {
-                      setAddingFinding(null);
+                    } else {
+                      setPendingFinding(f);
                     }
                   }}
                   disabled={addingFinding !== null}
@@ -581,9 +694,11 @@ export function NowWorkingPane({
               <ElapsedTimer
                 startedAtMs={startedAt}
                 // Stopped time is excluded by blockedMs, not by `paused` —
-                // `paused` only freezes the tick. This is the worked-minutes
-                // figure the server records, so the two can't contradict.
-                paused={paused || clockPaused}
+                // `paused` only freezes the tick. blockedMs is server-derived
+                // (blocker spans + recorded flag-issue admin pauses); freezing
+                // while the flag flow is open just holds the display until the
+                // close writes the span, so it resumes where it paused.
+                paused={paused || clockPaused || flagFlowOpen}
                 blockedMs={blockedMs}
                 className={elapsedTimerClass}
               />
@@ -952,6 +1067,18 @@ export function NowWorkingPane({
         onSubmitted={(msg) => {
           setScopeOpen(false);
           onToast?.(msg);
+        }}
+      />
+
+      {/* Only for a freeform flagged finding — a catalog service never reaches
+          here, it adds in one tap with its derived taxonomy. */}
+      <FindingTaxonomyDialog
+        open={pendingFinding !== null}
+        findingName={pendingFinding?.serviceName ?? pendingFinding?.label ?? ""}
+        busy={addingFinding !== null}
+        onCancel={() => setPendingFinding(null)}
+        onConfirm={(taxonomy) => {
+          if (pendingFinding) void commitFinding(pendingFinding, taxonomy);
         }}
       />
     </div>

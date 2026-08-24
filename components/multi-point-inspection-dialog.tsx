@@ -34,8 +34,12 @@ import { makeFunctionReference } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
+import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
+import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
+import PreJobScopeDialog from "@/components/booking/pre-job-scope-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
+import MonthPicker from "@/components/ui/month-picker";
 import { TireSizeInput } from "@/components/ui/tire-size-input";
 import {
   Select,
@@ -55,6 +59,7 @@ import {
   deriveSuggestedRecommendations,
   gatherFindings,
   getDirtyIncompleteZones,
+  inspectionSlugTaxonomy,
   INSPECTION_NAV_ZONE_IDS,
   deriveTierInspectionScope,
   isBrakeDetailFieldRelevant,
@@ -171,6 +176,11 @@ type ResolvedSuggestion = {
   reasons: string[];
   serviceId: Id<"services"> | null;
   serviceName: string | null;
+  // Taxonomy the catalog slug implies (inspectionSlugTaxonomy), so promoting a
+  // known service into mid-job work is one tap. Null for a freeform finding,
+  // which opens the picker instead — see handleAddToJob.
+  systemTags: string[] | null;
+  workType: string | null;
 };
 
 const prepareInspectionPhotoUploadRef = makeFunctionReference<"mutation">(
@@ -453,6 +463,23 @@ function MultiPointInspectionDialogBody({
   );
   const undoInspectionRec = useMutation(api.jobRecommendations.confirmFromPreJob);
   const addToJob = useMutation(api.customJobs.addMidJobCustomService);
+  // Pre-start sibling of addToJob: appends the same line to a booking that
+  // hasn't been started, to be sent as a PRE-job estimate the customer confirms
+  // before work begins. Which one runs is decided by jobInProgress.
+  const addToJobPreStart = useMutation(api.customJobs.addPreJobCustomService);
+  const removeFromJob = useMutation(api.customJobs.removeMidJobCustomService);
+  const removeFromJobPreStart = useMutation(
+    api.customJobs.removePreJobCustomService,
+  );
+  // Work already on the booking (added via "Add to this job" or elsewhere). Read
+  // from the server so the "Added to this job" list survives a refresh — the
+  // local addedToJob flags don't — and so each line can be removed the same way
+  // it was added, which the ephemeral flags never allowed.
+  const addedJobs = useQuery(
+    api.customJobs.listForBooking,
+    bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
+  ) as Array<{ _id: Id<"custom_jobs">; name: string }> | undefined;
+  const [removingJobId, setRemovingJobId] = useState<string | null>(null);
 
   // Mechanic parts fill-in: parts the OEM-strict pipeline left MISSING or
   // LOW_CONFIDENCE that the mechanic must confirm/fill before starting work.
@@ -888,10 +915,13 @@ function MultiPointInspectionDialogBody({
       ).find((svc) =>
         svc.slug ? s.match.includes(svc.slug) : false,
       );
+      const taxonomy = inspectionSlugTaxonomy(s.match);
       return {
         ...s,
         serviceId: found?._id ?? null,
         serviceName: found?.name ?? null,
+        systemTags: taxonomy?.system_tags ?? null,
+        workType: taxonomy?.work_type ?? null,
       };
     });
   }, [state, services]);
@@ -924,6 +954,23 @@ function MultiPointInspectionDialogBody({
   const [undoingKey, setUndoingKey] = useState<string | null>(null);
   const [addedToJob, setAddedToJob] = useState<Record<string, boolean>>({});
   const [addingToJobKey, setAddingToJobKey] = useState<string | null>(null);
+  // A freeform finding awaiting a taxonomy before it can be added to the job.
+  // Null for a catalog service, which adds in one tap. See handleAddToJob.
+  const [pendingJobSuggestion, setPendingJobSuggestion] =
+    useState<ResolvedSuggestion | null>(null);
+  // The mid-job scope dialog (price it, say why, add parts, send for the
+  // customer's confirmation) — the SAME flow the active-job overlay opens. Adding
+  // a finding to the job opens it right here so the mechanic never has to reopen
+  // it later in the overlay and re-do the send. See commitAddToJob.
+  const [scopeOpen, setScopeOpen] = useState(false);
+  // The pre-job estimate dialog — same "price it, add parts, send" flow, but for
+  // a booking that hasn't started (routes through the pre_job approval cycle so
+  // the customer confirms the added scope BEFORE work begins). Only one of
+  // scopeOpen / preScopeOpen is ever true, picked by jobInProgress.
+  const [preScopeOpen, setPreScopeOpen] = useState(false);
+  const [scopeSubmittedNote, setScopeSubmittedNote] = useState<string | null>(
+    null,
+  );
 
   const buildPayloads = useCallback((): {
     prejob: PreJobSurveyPayload;
@@ -1450,20 +1497,25 @@ function MultiPointInspectionDialogBody({
   /**
    * Promote a flagged finding into work on THIS job (Decision D1).
    *
-   * Appends an off-catalog line to the booking and nothing more.
-   * `addMidJobCustomService` deliberately doesn't re-quote or move money — the
-   * mechanic still prices it in the scope step and the customer still confirms
-   * through the normal mid-job approval cycle. So this is a shortcut past
-   * retyping the finding, not past the approval gate.
+   * Appends an off-catalog line to the booking, then opens the scope dialog —
+   * the same "price it, say why, add parts, send for confirmation" flow — routed
+   * by whether the job is running: in progress → mid-job change; not started yet
+   * (the usual pre-job inspection case) → pre-job estimate. Neither add re-quotes
+   * or moves money; the money and consent live in that dialog, gated behind the
+   * customer's approval. So the mechanic goes straight from the finding into
+   * pricing-and-sending it, instead of adding it here and having to reopen the
+   * scope step in the overlay and confirm all over again.
    *
    * Before this, a wiper flagged red here had to be re-entered from scratch via
    * Flag Issue → "Extra work needed now", which is exactly what Abdul had to do
    * on Aug 20 after the inspection didn't carry it forward.
    */
-  async function handleAddToJob(key: string) {
-    const suggestion = suggestedRecs.find((s) => s.key === key);
-    if (!bookingId || !suggestion || addingToJobKey) return;
-    setAddingToJobKey(key);
+  async function commitAddToJob(
+    suggestion: ResolvedSuggestion,
+    taxonomy: { systemTags: string[]; workType: string },
+  ) {
+    if (!bookingId || addingToJobKey) return;
+    setAddingToJobKey(suggestion.key);
     setError("");
     try {
       // Persist first, same as the recommendation path — the line should never
@@ -1471,16 +1523,68 @@ function MultiPointInspectionDialogBody({
       await persistOwnerAnswers();
       const { prejob, inspection } = buildPayloads();
       if (onSaveDraft) await onSaveDraft(prejob, inspection);
-      await addToJob({
+      // Which cycle depends on whether the job is already running. In progress →
+      // mid-job change; not started yet (the usual case for a pre-job inspection)
+      // → pre-job estimate. Both append the same line; only the approval cycle
+      // and the dialog opened below differ.
+      const add = jobInProgress ? addToJob : addToJobPreStart;
+      await add({
         bookingId: bookingId as Id<"bookings">,
         name: suggestion.serviceName ?? suggestion.label,
         complaint: suggestion.reasons.join("; ") || undefined,
+        systemTags: taxonomy.systemTags,
+        workType: taxonomy.workType,
+        // Catalog match → seed the line's parts from our OEM catalog/enrichment
+        // so the scope dialog lists them instead of an empty "Add part for X".
+        // Null for a freeform finding (nothing to look up).
+        catalogServiceId: suggestion.serviceId ?? undefined,
       });
-      setAddedToJob((prev) => ({ ...prev, [key]: true }));
+      setAddedToJob((prev) => ({ ...prev, [suggestion.key]: true }));
+      setPendingJobSuggestion(null);
+      setScopeSubmittedNote(null);
+      // Straight into pricing + send-for-confirmation. The dialog reads the
+      // booking's now-updated scope (the line just appended), so it opens with
+      // this finding already on it. A new re-quote cleared any prior note.
+      if (jobInProgress) setScopeOpen(true);
+      else setPreScopeOpen(true);
     } catch (err) {
       setError(userFacingInspectionError(err, "Could not add that to the job."));
     } finally {
       setAddingToJobKey(null);
+    }
+  }
+
+  function handleAddToJob(key: string) {
+    const suggestion = suggestedRecs.find((s) => s.key === key);
+    if (!bookingId || !suggestion || addingToJobKey) return;
+    // A catalog service carries its own taxonomy (derived from the slug) — add
+    // it in one tap. A freeform finding has none, so collect one via the picker.
+    if (suggestion.systemTags && suggestion.workType) {
+      void commitAddToJob(suggestion, {
+        systemTags: suggestion.systemTags,
+        workType: suggestion.workType,
+      });
+    } else {
+      setPendingJobSuggestion(suggestion);
+    }
+  }
+
+  // Pull a line back off the job — the undo for "Add to this job". Routes to the
+  // pre- or mid-job remove by status, mirroring the add. Nothing is charged
+  // until the customer approves, so this just deletes the not-yet-agreed line.
+  async function handleRemoveAddedJob(customJobId: Id<"custom_jobs">) {
+    if (!bookingId || removingJobId) return;
+    setRemovingJobId(String(customJobId));
+    setError("");
+    try {
+      const remove = jobInProgress ? removeFromJob : removeFromJobPreStart;
+      await remove({ bookingId: bookingId as Id<"bookings">, customJobId });
+    } catch (err) {
+      setError(
+        userFacingInspectionError(err, "Could not remove that from the job."),
+      );
+    } finally {
+      setRemovingJobId(null);
     }
   }
 
@@ -1674,10 +1778,17 @@ function MultiPointInspectionDialogBody({
             onUndoRecommendation={handleUndoRecommendation}
             undoingKey={undoingKey}
             error={error}
-            canAddToJob={!!bookingId && jobInProgress}
+            canAddToJob={!!bookingId}
             onAddToJob={handleAddToJob}
             addedToJob={addedToJob}
             addingToJobKey={addingToJobKey}
+            addedJobs={addedJobs ?? []}
+            onRemoveAddedJob={handleRemoveAddedJob}
+            removingJobId={removingJobId}
+            onOpenScope={() =>
+              jobInProgress ? setScopeOpen(true) : setPreScopeOpen(true)
+            }
+            scopeSubmittedNote={scopeSubmittedNote}
           />
         </div>
       ) : (
@@ -2003,6 +2114,48 @@ function MultiPointInspectionDialogBody({
             setPhotoToRemove(null);
             void handleRemovePhoto(target.zoneId, target.storageId);
           },
+        }}
+      />
+
+      {/* Only for a freeform flagged finding — a catalog service adds in one tap
+          with its derived taxonomy and never opens this. */}
+      <FindingTaxonomyDialog
+        open={pendingJobSuggestion !== null}
+        findingName={
+          pendingJobSuggestion?.serviceName ?? pendingJobSuggestion?.label ?? ""
+        }
+        busy={addingToJobKey !== null}
+        onCancel={() => setPendingJobSuggestion(null)}
+        onConfirm={(taxonomy) => {
+          if (pendingJobSuggestion)
+            void commitAddToJob(pendingJobSuggestion, taxonomy);
+        }}
+      />
+
+      {/* Price it, say why, add parts, send for the customer's confirmation —
+          opened straight after a finding is added to the job (commitAddToJob) so
+          the whole thing happens here, not later in the active-job overlay. The
+          in-progress job re-quotes through the mid-job cycle; a not-yet-started
+          job sends a pre-job estimate the customer confirms before work begins.
+          Only one is ever open (commitAddToJob picks by jobInProgress). */}
+      <MidJobScopeDialog
+        open={scopeOpen}
+        bookingId={bookingId ? (bookingId as Id<"bookings">) : null}
+        onClose={() => setScopeOpen(false)}
+        onSubmitted={() => {
+          setScopeOpen(false);
+          setScopeSubmittedNote("Extra work sent to the customer for confirmation.");
+        }}
+      />
+      <PreJobScopeDialog
+        open={preScopeOpen}
+        bookingId={bookingId ? (bookingId as Id<"bookings">) : null}
+        onClose={() => setPreScopeOpen(false)}
+        onSubmitted={() => {
+          setPreScopeOpen(false);
+          setScopeSubmittedNote(
+            "Estimate sent to the customer for confirmation.",
+          );
         }}
       />
     </>
@@ -3567,14 +3720,16 @@ function InspectionStickerFields({
         />
       </Row>
       <Row label="Expires">
-        <input
+        <MonthPicker
           // Month + year only — a state inspection sticker is punched to the
           // month, so the day input was asking for precision that doesn't
-          // exist (Abdul, Aug 20 session).
-          type="month"
+          // exist (Abdul, Aug 20 session). Custom Otopair-themed picker instead
+          // of the browser's default `type="month"` popup.
+          aria-label="Inspection sticker expiration"
           value={expires}
-          onChange={(e) => onExpires(e.target.value)}
-          className="rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+          onChange={onExpires}
+          placeholder="—"
+          className="w-40"
         />
       </Row>
     </div>
@@ -4178,6 +4333,11 @@ function ResultsScreen({
   onAddToJob,
   addedToJob,
   addingToJobKey,
+  addedJobs,
+  onRemoveAddedJob,
+  removingJobId,
+  onOpenScope,
+  scopeSubmittedNote,
 }: {
   findings: { attention: { label: string; zone: string }[]; monitor: { label: string; zone: string }[] };
   totalLogged: number;
@@ -4198,6 +4358,16 @@ function ResultsScreen({
   onAddToJob: (key: string) => void;
   addedToJob: Record<string, boolean>;
   addingToJobKey: string | null;
+  /** Work already on the booking — the persistent, server-derived "added to this
+   *  job" list (survives refresh, unlike addedToJob). */
+  addedJobs: Array<{ _id: Id<"custom_jobs">; name: string }>;
+  /** Pull a line back off the job. */
+  onRemoveAddedJob: (customJobId: Id<"custom_jobs">) => void;
+  removingJobId: string | null;
+  /** Re-open the scope dialog for a line already added to the job. */
+  onOpenScope: () => void;
+  /** Set once the scope dialog sends the extra work for confirmation. */
+  scopeSubmittedNote: string | null;
 }) {
   // Default-select the urgent ("soon") suggestions; mechanic can toggle.
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
@@ -4231,6 +4401,63 @@ function ResultsScreen({
       ) : null}
       {findings.monitor.length ? (
         <FindingList title="Monitor" tone="text-amber-600" dot="bg-amber-500" items={findings.monitor} />
+      ) : null}
+
+      {/* Work added to this job. Server-derived so it survives a refresh (the
+          per-suggestion "added" flags don't) and so each line can be pulled back
+          off the same way it went on — the undo the ephemeral flags never had.
+          Once here, the line drops out of "Suggested follow-ups" above (it's now
+          on the booking), so this is where you act on it. */}
+      {addedJobs.length ? (
+        <div className="rounded-xl border border-primary/15 bg-primary/[0.03] p-3">
+          <div className="mb-1 flex items-center gap-1.5 text-[12px] font-semibold text-foreground">
+            <Wrench className="h-3.5 w-3.5 text-primary" />
+            Added to this job
+          </div>
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            Price it, add parts, and send for the customer&apos;s confirmation —
+            or remove it if you added it by mistake.
+          </p>
+          {scopeSubmittedNote ? (
+            <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-700">
+              <Check className="h-3.5 w-3.5 flex-shrink-0" />
+              {scopeSubmittedNote}
+            </p>
+          ) : null}
+          <div className="space-y-1">
+            {addedJobs.map((job) => (
+              <div
+                key={String(job._id)}
+                className="flex items-center gap-2 border-b border-primary/10 py-2 last:border-b-0"
+              >
+                <span className="flex-1 text-[13px] font-medium text-foreground">
+                  {job.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={onOpenScope}
+                  className="inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10"
+                >
+                  Price &amp; send
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRemoveAddedJob(job._id)}
+                  disabled={removingJobId !== null}
+                  aria-label={`Remove ${job.name}`}
+                  className="inline-flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition hover:bg-red-100 hover:text-red-700 disabled:opacity-50"
+                >
+                  {removingJobId === String(job._id) ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3 w-3" />
+                  )}
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
       ) : null}
 
       {/* Suggested follow-ups derived from the measurements */}
@@ -4285,10 +4512,19 @@ function ResultsScreen({
                       {s.serviceName ?? s.label}
                     </span>
                     <span className="block text-[11px] text-primary">
-                      Added to this job. Price it in the scope step — the
-                      customer confirms before you start it.
+                      Added to this job — price it, add parts, and send for the
+                      customer&apos;s confirmation.
                     </span>
                   </span>
+                  {/* Re-open the same scope dialog that popped on add, for when
+                      the mechanic closed it to add more findings first. */}
+                  <button
+                    type="button"
+                    onClick={onOpenScope}
+                    className="mt-0.5 inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10"
+                  >
+                    Price &amp; send
+                  </button>
                 </div>
               ) : (
                 <div

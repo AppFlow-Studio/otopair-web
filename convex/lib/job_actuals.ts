@@ -133,10 +133,11 @@ function getJobActualMechanicId(booking: any, mechanicId?: any) {
  * Auto-derived labour when the mechanic didn't type a number themselves.
  *
  * `blockedMinutes` is subtracted from the wall-clock span, because
- * `started_at` runs straight through a parts wait or a mid-job re-quote. Left
- * in, a three-hour back-order would be billed as three hours of labour and
- * would also pollute the variance stats we derive shop shortcuts from. This
- * matches what the mechanic sees: the on-screen timer excludes the same spans.
+ * `started_at` runs straight through a clock-stopping blocker like a parts wait
+ * or a flag-issue admin pause. Left in, a three-hour back-order would be billed
+ * as three hours of labour and would also pollute the variance stats we derive
+ * shop shortcuts from. This matches what the mechanic sees: the on-screen timer
+ * excludes the same spans.
  */
 export function getAutoActualLaborMinutes({
   jobActual,

@@ -321,4 +321,72 @@ describe("unaddressed findings", () => {
     const out = await findingsFor(t, seed);
     expect(out.map((f: any) => f.label)).not.toContain("Wiper Blade Replacement");
   });
+
+  it("carries a catalog-derived taxonomy for a service we offer", async () => {
+    // An oil-condition flag resolves to the Oil Change catalog slug, so the
+    // overlay can add it in one tap — the mechanic never re-classifies a service
+    // we already offer. Without this the add throws "Pick at least one system".
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("vehicle_inspections", {
+        booking_id: seed.bookingId,
+        vin: "1HGCM82633A004352",
+        shop_id: seed.shopId,
+        mechanic_id: seed.mechanicId,
+        template_version: INSPECTION_TEMPLATE_VERSION,
+        zones: [{ zone_id: "ENG", done: true, tri: { oil_condition: "r" } }],
+        findings_attention: [],
+        findings_monitor: [],
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any);
+    });
+
+    const out = await findingsFor(t, seed);
+    const oil = out.find((f: any) => f.label === "Oil Change");
+    expect(oil).toBeTruthy();
+    expect(oil.systemTags).toEqual(["engine"]);
+    expect(oil.workType).toBe("service");
+  });
+
+  it("leaves taxonomy null for a freeform finding (picker path)", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    await seedFlaggedWipers(t, seed);
+
+    const out = await findingsFor(t, seed);
+    const wipers = out.find((f: any) => f.label === "Wiper Blade Replacement");
+    expect(wipers).toBeTruthy();
+    expect(wipers.systemTags).toBeNull();
+    expect(wipers.workType).toBeNull();
+  });
+});
+
+describe("promoting a finding into mid-job work", () => {
+  // The mutation round-trip the "Add to this job" button depends on. It went
+  // untested when the button shipped, so the missing-taxonomy crash reached a
+  // partner's screen — the button always called this without a taxonomy.
+  it("needs a taxonomy: throws without one, succeeds with the derived one", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, { status: "in_progress" });
+    const owner = t.withIdentity(identityFor(seed.ownerClerkId));
+
+    // The exact crash the overlay hit before findings carried a taxonomy.
+    await expect(
+      owner.mutation(api.customJobs.addMidJobCustomService, {
+        bookingId: seed.bookingId,
+        name: "Oil Change",
+      }),
+    ).rejects.toThrow(/pick at least one system/i);
+
+    // The one-tap catalog path: the taxonomy inspectionSlugTaxonomy derived.
+    const res = await owner.mutation(api.customJobs.addMidJobCustomService, {
+      bookingId: seed.bookingId,
+      name: "Oil Change",
+      systemTags: ["engine"],
+      workType: "service",
+    });
+    expect(res.ok).toBe(true);
+  });
 });

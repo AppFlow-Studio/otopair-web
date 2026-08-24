@@ -3,8 +3,25 @@ import { v } from "convex/values";
 import { effectiveBookingTotalDollars } from "../lib/booking-total";
 import { requireDirector } from "./directorGate";
 import { metaMakeModel } from "./lib/bookingEnrichment";
+import { describeCustomJobTaxonomy } from "../lib/custom-job-taxonomy";
 
 // All queries for the director panel. Token-gated server-side via requireDirector.
+
+/**
+ * How the booking got created, collapsed to the two buckets a director cares
+ * about in the bookings list. `mechanic_walk_in`/`mechanic_backfill` are shop-
+ * side walk-ins (see enqueueWalkinClientUpdate in convex/bookings.ts, which
+ * keys the same two values); everything else — `customer_self_serve`, the
+ * tire/rotor quote flows, follow-ups, and legacy rows with no source — was
+ * booked by the customer through the app.
+ */
+export function bookingOrigin(
+  source: string | null | undefined,
+): "walk_in" | "app" {
+  return source === "mechanic_walk_in" || source === "mechanic_backfill"
+    ? "walk_in"
+    : "app";
+}
 
 export const sidebarCounts = query({
   args: { token: v.string() },
@@ -468,6 +485,17 @@ export const recentBookingsList = query({
       const services = await Promise.all(
         b.service_ids.map(async (sid) => { const s = await ctx.db.get(sid); return s?.name ?? "—"; })
       );
+      // Off-catalog custom jobs on this booking — invisible when reading only
+      // service_ids, which is why a pure walk-in shows no service. Declined
+      // mid-job lines are audit-only and excluded (matches the receipt).
+      const customJobs = await ctx.db
+        .query("custom_jobs")
+        .withIndex("by_booking", (q) => q.eq("booking_id", b._id))
+        .collect();
+      const customServices = customJobs
+        .filter((j) => j.status !== "declined")
+        .sort((a, b) => a.created_at - b.created_at)
+        .map((j) => j.name);
       // Pricing v2 fallback summary — mirrors the per-service classification
       // BookingDetailModal already does, so list + modal stay in sync without
       // a second round-trip when the director scans the table. Fixed-price
@@ -504,6 +532,10 @@ export const recentBookingsList = query({
         user:      user ? `${user.first_name ?? ""} ${user.last_name ?? ""}`.trim() || user.email || "Unknown" : "Unknown",
         shop:      shop?.name ?? "—",
         services,
+        customServices,
+        // Walk-in (shop-created) vs app (customer self-serve). See bookingOrigin.
+        origin:    bookingOrigin(b.source),
+        source:    b.source ?? null,
         scheduled: b.scheduled_date ?? "—",
         time:      b.scheduled_time ?? "—",
         status:    b.status,
@@ -574,9 +606,44 @@ export const bookingDetail = query({
               }
             : null,
           bookingLinePartsCost: flagRow?.booking_line_parts_cost ?? null,
+          isCustom: false as const,
+          customSource: null as string | null,
         };
       })
     );
+
+    // Off-catalog custom jobs on this booking. A booking made up entirely of
+    // mechanic-typed work (e.g. "TailLight Replacement") has an empty
+    // service_ids, so reading only catalog services showed "Services (0)".
+    // Surface them as service rows flagged isCustom. Declined mid-job lines are
+    // kept for audit but excluded here to match the receipt (see
+    // customJobs.listForBooking).
+    const customJobRows = await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q) => q.eq("booking_id", id))
+      .collect();
+    const customServices = customJobRows
+      .filter((j) => j.status !== "declined")
+      .sort((a, b) => a.created_at - b.created_at)
+      .map((j) => {
+        const taxonomy = describeCustomJobTaxonomy(j.system_tags, j.work_type);
+        const category = taxonomy === "Uncategorised" ? undefined : taxonomy;
+        return {
+          id:          String(j._id),
+          name:        j.name,
+          slug:        undefined,
+          description: j.complaint ?? j.resolution ?? undefined,
+          category,
+          quoteFlags:  [] as string[],
+          engineBand:  null,
+          bookingLinePartsCost: null,
+          isCustom:    true as const,
+          // Where the line was entered: booking / mid_job / post_job /
+          // recommendation. Lets the modal say a bit more than just "custom".
+          customSource: j.source as string | null,
+        };
+      });
+    const allServices = [...services, ...customServices];
 
     // Resolve recommended-service name if the mechanic recommended something.
     let recommendedService: string | null = null;
@@ -658,7 +725,10 @@ export const bookingDetail = query({
       shopAddress: shop?.address,
       shopPhone:   shop?.phone,
       shopEmail:   shop?.email,
-      services,
+      services:  allServices,
+      // Walk-in (shop-created) vs app (customer self-serve). See bookingOrigin.
+      origin:    bookingOrigin(booking.source),
+      source:    booking.source ?? null,
       scheduled: booking.scheduled_date ?? "—",
       time:      booking.scheduled_time ?? "—",
       status:    booking.status,

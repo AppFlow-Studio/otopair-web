@@ -29,6 +29,7 @@ import { internal } from "./_generated/api";
 import {
   deriveSuggestedRecommendations,
   formatZonesForPdf,
+  inspectionSlugTaxonomy,
   INSPECTION_TEMPLATE_VERSION,
 } from "../lib/inspection-template";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
@@ -793,6 +794,11 @@ export const getUnaddressedFindingsForBooking = query({
         const found = services.find((svc: any) =>
           svc.slug ? s.match.includes(svc.slug) : false,
         );
+        // Taxonomy the catalog slug implies, so the overlay can add a known
+        // service in one tap without re-classifying it. Null for a freeform
+        // finding — the overlay pops the picker for those. See
+        // inspectionSlugTaxonomy for why a mid-job add needs a taxonomy at all.
+        const taxonomy = inspectionSlugTaxonomy(s.match);
         return {
           key: s.key,
           label: s.label,
@@ -800,6 +806,8 @@ export const getUnaddressedFindingsForBooking = query({
           reasons: s.reasons,
           serviceId: (found?._id ?? null) as Id<"services"> | null,
           serviceName: found?.name ?? null,
+          systemTags: taxonomy?.system_tags ?? null,
+          workType: taxonomy?.work_type ?? null,
         };
       })
       .filter((s) =>

@@ -13,7 +13,9 @@ function formatElapsed(ms: number) {
 
 /**
  * Worked time on a job — wall clock since `startedAtMs`, minus any span the
- * clock was stopped for (`blockedMs`: parts waits, mid-job re-quotes).
+ * clock was stopped for (`blockedMs`, server-derived): clock-stopping blockers
+ * like parts waits, plus the time the mechanic spent in the Flag Issue flow
+ * (recorded as spans on close — see jobBlockers.clockStoppedSpans).
  *
  * `paused` only stops the re-render loop. It is NOT what excludes stopped time
  * — that's `blockedMs`. Freezing alone used to be the whole mechanism, which
@@ -38,6 +40,10 @@ export default function ElapsedTimer({
 
   useEffect(() => {
     if (paused || startedAtMs == null) return;
+    // Resync on (re)start so unpausing lands on the real time immediately rather
+    // than showing a stale `now` — with a freshly grown blockedMs that would
+    // read as a one-second dip until the first tick.
+    setNow(Date.now());
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [paused, startedAtMs]);

@@ -145,7 +145,17 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         email_address: email,
         public_metadata: {
-          // role is intentionally omitted - it is only granted after the invite token is used
+          // Grant the role here on the INVITATION. Clerk copies an invitation's
+          // public_metadata onto the user only when that user actually accepts
+          // THIS invitation (creates their account via the ticket) — so the role
+          // is present in their very first session token, and a bare/un-invited
+          // sign-up still gets no role. This is the accept-time grant the flow
+          // always intended; doing it here (instead of only via the client-side
+          // /accept-invite → finalize-invite call) removes the public_metadata →
+          // session-JWT propagation race that left new mechanics stuck on the
+          // "Setting up your account…" spinner or bounced to /shop-only.
+          role,
+          is_active: true,
           shop_id: shopId,
           invitation_token: invitationToken,
           ...(resolvedMechanicId ? { mechanic_id: resolvedMechanicId } : {}),

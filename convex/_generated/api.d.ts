@@ -298,10 +298,10 @@ import type * as oto_migrations_vehicleFactsReconciliation from "../oto/migratio
 import type * as oto_migrations_verifiedFactsSeed from "../oto/migrations/verifiedFactsSeed.js";
 import type * as oto_migrations_wave3Backfill from "../oto/migrations/wave3Backfill.js";
 import type * as oto_moodMap from "../oto/moodMap.js";
-import type * as oto_promptChangelog from "../oto/promptChangelog.js";
 import type * as oto_prompt_index from "../oto/prompt/index.js";
 import type * as oto_prompt_stable from "../oto/prompt/stable.js";
 import type * as oto_prompt_volatile from "../oto/prompt/volatile.js";
+import type * as oto_promptChangelog from "../oto/promptChangelog.js";
 import type * as oto_queryMoat from "../oto/queryMoat.js";
 import type * as oto_recordConfirmation from "../oto/recordConfirmation.js";
 import type * as oto_reliability from "../oto/reliability.js";
@@ -900,10 +900,10 @@ declare const fullApi: ApiFromModules<{
   "oto/migrations/verifiedFactsSeed": typeof oto_migrations_verifiedFactsSeed;
   "oto/migrations/wave3Backfill": typeof oto_migrations_wave3Backfill;
   "oto/moodMap": typeof oto_moodMap;
-  "oto/promptChangelog": typeof oto_promptChangelog;
   "oto/prompt/index": typeof oto_prompt_index;
   "oto/prompt/stable": typeof oto_prompt_stable;
   "oto/prompt/volatile": typeof oto_prompt_volatile;
+  "oto/promptChangelog": typeof oto_promptChangelog;
   "oto/queryMoat": typeof oto_queryMoat;
   "oto/recordConfirmation": typeof oto_recordConfirmation;
   "oto/reliability": typeof oto_reliability;

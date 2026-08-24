@@ -1669,6 +1669,61 @@ export const SERVICE_SLUGS = {
   filter: "filter_replacement",
 } as const;
 
+/**
+ * The custom-job taxonomy (lib/custom-job-taxonomy.ts) each known inspection
+ * service implies — "where on the car" + "what was done".
+ *
+ * WHY THIS EXISTS: a mid-job addition has to be a `custom_jobs` row to flow
+ * through the approval cycle (the status dots and the customer's "waiting for
+ * confirmation" state read from custom_jobs, not booking.service_ids), and every
+ * custom_jobs write is gated on a taxonomy by requireCustomJobTaxonomy. When a
+ * flagged finding is a service we already offer — an oil change — asking the
+ * mechanic to re-classify it into `engine · service` is exactly the retyping
+ * "Add to this job" exists to remove. So we derive it from the catalog slug the
+ * suggestion already resolved to. Freeform findings have no slug here and fall
+ * through to the picker, which is the only case that still needs a human.
+ *
+ * The slugs are validated downstream by requireCustomJobTaxonomy, so they live
+ * as plain strings rather than importing the taxonomy enums into this file (kept
+ * dependency-free for both client and convex).
+ */
+const INSPECTION_SLUG_TAXONOMY: Record<
+  string,
+  { system_tags: string[]; work_type: string }
+> = {
+  [SERVICE_SLUGS.oil]: { system_tags: ["engine"], work_type: "service" },
+  [SERVICE_SLUGS.brakePads]: { system_tags: ["brakes"], work_type: "replace" },
+  [SERVICE_SLUGS.rotors]: { system_tags: ["brakes"], work_type: "replace" },
+  [SERVICE_SLUGS.tires]: { system_tags: ["wheels_tires"], work_type: "replace" },
+  [SERVICE_SLUGS.battery]: { system_tags: ["electrical"], work_type: "replace" },
+  [SERVICE_SLUGS.brakeFluid]: { system_tags: ["brakes"], work_type: "service" },
+  [SERVICE_SLUGS.coolant]: { system_tags: ["engine"], work_type: "service" },
+  [SERVICE_SLUGS.transmission]: {
+    system_tags: ["drivetrain"],
+    work_type: "service",
+  },
+  [SERVICE_SLUGS.powerSteering]: {
+    system_tags: ["suspension_steering"],
+    work_type: "service",
+  },
+  [SERVICE_SLUGS.filter]: { system_tags: ["engine"], work_type: "replace" },
+};
+
+/**
+ * The taxonomy implied by a suggestion's catalog slug(s), or null when the
+ * finding is freeform and the mechanic has to pick one. First slug that maps
+ * wins, mirroring how `match` is resolved to a service (first hit wins).
+ */
+export function inspectionSlugTaxonomy(
+  slugs: readonly string[],
+): { system_tags: string[]; work_type: string } | null {
+  for (const slug of slugs) {
+    const t = INSPECTION_SLUG_TAXONOMY[slug];
+    if (t) return { system_tags: [...t.system_tags], work_type: t.work_type };
+  }
+  return null;
+}
+
 function measuresAcrossCorners(
   state: InspectionState,
   key: string,

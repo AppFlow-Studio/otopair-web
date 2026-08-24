@@ -10,6 +10,7 @@ import {
   gatherFindings,
   getDirtyIncompleteZones,
   INSPECTION_ZONES_BY_ID,
+  isFieldApplicableToZone,
   isFieldRequiredForZone,
   patchInspectionZone,
   patchSharedInspectionText,
@@ -128,19 +129,44 @@ describe("multi-point inspection requirements", () => {
       priorTreadReadings: { FL: 6 },
       inspectionState: state,
     };
-    for (const field of ["tire_brand", "tire_model", "tire_size", "run_flat"]) {
+    for (const field of ["tire_size", "run_flat"]) {
       expect(isFieldRequiredForZone("FL", field, laterContext)).toBe(true);
     }
     expect(
-      isFieldRequiredForZone("FR", "tire_brand", {
+      isFieldRequiredForZone("FR", "tire_size", {
         ...laterContext,
         isFirstShopVisit: true,
       }),
     ).toBe(true);
-    expect(isFieldRequiredForZone("FR", "tire_brand", laterContext)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "tire_size", laterContext)).toBe(false);
 
     state.zones.FL!.statuses.tread = "not_visible";
-    expect(isFieldRequiredForZone("FL", "tire_brand", laterContext)).toBe(false);
+    expect(isFieldRequiredForZone("FL", "tire_size", laterContext)).toBe(false);
+  });
+
+  it("offers brand, model and type on a Tier 5 corner without requiring them", () => {
+    // Decision D3 — mechanics don't record brand/model unless the car is
+    // high-end, and many shops fit no-name stock. They stay visible so the data
+    // can be captured, but never block zone completion.
+    const state = createInspectionState();
+    state.zones.FL!.measures.tread = "8";
+    const tier5Context = {
+      serviceNames: ["Oil Change"],
+      brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      isFirstShopVisit: true,
+      inspectionState: state,
+    };
+    for (const field of ["tire_brand", "tire_model", "tire_type"]) {
+      expect(isFieldApplicableToZone("FL", field, tier5Context)).toBe(true);
+      expect(isFieldRequiredForZone("FL", field, tier5Context)).toBe(false);
+    }
+    // The fitment-defining half is still mandatory.
+    expect(isFieldRequiredForZone("FL", "tire_size", tier5Context)).toBe(true);
+
+    // And the optional fields disappear with the rest of the block when the
+    // Tier 5 gate is shut — "not required" must not mean "always rendered".
+    const noTier5 = { ...tier5Context, isFirstShopVisit: false };
+    expect(isFieldApplicableToZone("FL", "tire_brand", noTier5)).toBe(false);
   });
 
   it("requires a tagged rotor-stamp photo only until permanent corner evidence exists", () => {
@@ -299,7 +325,8 @@ describe("multi-point inspection requirements", () => {
 
     expect(isFieldRequiredForZone("FR", "tire_brand", oilContext)).toBe(false);
     expect(isFieldRequiredForZone("FR", "tire_size", oilContext)).toBe(false);
-    expect(isFieldRequiredForZone("FR", "tire_brand", tireContext)).toBe(true);
+    // tire_size, not tire_brand — brand is optional identity since D3.
+    expect(isFieldRequiredForZone("FR", "tire_size", tireContext)).toBe(true);
     expect(isFieldRequiredForZone("FR", "psi", tireContext)).toBe(true);
     expect(isFieldRequiredForZone("FR", "pad_inner", oilContext)).toBe(false);
     expect(isFieldRequiredForZone("FR", "pad_inner", frontBrakeContext)).toBe(true);
@@ -611,6 +638,7 @@ describe("multi-point inspection requirements", () => {
         "tire_model",
         "tire_size",
         "run_flat",
+        "tire_type",
         "brake_visual",
         "pad_inner",
         "pad_outer",
@@ -844,6 +872,28 @@ describe("multi-point inspection payload derivation", () => {
     expect(
       derivePrejobFromInspection(state, { mileage: 45_000 }).filters,
     ).toEqual({ engine_air_filter: "not_checked", cabin_air_filter: null });
+  });
+
+  it("never recommends courtesy fluid top-offs, but still flags oil and brake fluid", () => {
+    // Coolant + washer top-offs are shop protocol and free — recommending them
+    // manufactures a service suggestion we did not earn. Oil is not a courtesy
+    // fluid (low oil is a real finding), and brake fluid is explicitly excluded
+    // because low brake fluid means pads or a leak.
+    const state = createInspectionState();
+    state.zones.ENG!.done = true;
+    state.zones.ENG!.tri.cool_level = "r";
+    state.zones.ENG!.tri.washer = "r";
+    state.zones.ENG!.tri.oil_level = "r";
+    state.zones.ENG!.tri.bf_condition = "r";
+
+    const labels = deriveSuggestedRecommendations(state, {
+      onlyCompletedZones: true,
+    }).map((recommendation) => recommendation.label);
+
+    expect(labels).not.toContain("Coolant Top-Off");
+    expect(labels).not.toContain("Washer Fluid Top-Off");
+    expect(labels).toContain("Oil Top-Off");
+    expect(labels).toContain("Brake Fluid Flush");
   });
 });
 

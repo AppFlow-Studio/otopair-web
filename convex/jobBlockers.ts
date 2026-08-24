@@ -37,6 +37,11 @@ import { postjobPhotoValidator } from "./lib/vehicle_passports";
 
 const MINUTE_MS = 60_000;
 
+/** A single flag-issue admin pause longer than this is treated as a stuck sheet
+ *  or a skewed client clock and clamped — a mechanic isn't writing up scope for
+ *  an hour, and one runaway span shouldn't be able to zero out a job's labour. */
+const MAX_ADMIN_PAUSE_MS = 60 * MINUTE_MS;
+
 /**
  * Human car label for a booking — "2011 Acura TL", VIN-tail fallback. Mirrors
  * the resolution the staff notification feed uses (`notifications.ts`) so the
@@ -192,38 +197,69 @@ async function requireShopStaffForBooking(ctx: any, bookingId: Id<"bookings">) {
 }
 
 /**
- * Total minutes this booking spent blocked, counting an unresolved blocker up to
- * `now`.
+ * Every wall-clock span during which this booking's work clock was stopped.
  *
- * Only clock-stopping kinds count. A safety hold or a damage report doesn't pause
- * anything — the mechanic keeps working — so counting them would under-report
- * labour, which is the same class of error in the other direction.
+ * Two sources, merged into one list (mergedSpanMinutes de-overlaps them, so an
+ * admin pause opened during a blocker is never subtracted twice):
  *
- * Overlapping blockers are merged rather than summed. Two parts on back-order at
- * once is one stoppage, and adding the spans would subtract the same wall-clock
- * hour twice.
+ *  1. Clock-stopping blockers. Only those kinds count — a safety hold or a
+ *     damage report doesn't pause anything (the mechanic keeps working), so
+ *     counting them would under-report labour, the same error in the other
+ *     direction.
+ *
+ *  2. Flag-issue admin pauses. Time the mechanic spent in the Flag Issue flow —
+ *     writing up extra scope in the sheet and the mid-job scope dialog — rather
+ *     than turning a wrench. Recorded as closed spans on `job_admin_pauses` by
+ *     NowWorkingPane when the flow closes.
+ *
+ * NOTE — a mid-job re-quote *waiting on the customer* used to be source 2, on
+ * the theory that the mechanic was idle until the customer answered (Abdul,
+ * Aug 20). It was pulled (Temur, Aug 23): that wait is open-ended and outside
+ * the shop's control, and a mechanic with a car on the lift rarely stands still
+ * for it — they move to other work, so stopping the clock for the whole wait
+ * under-billed real labour. The narrower, genuinely-idle admin window above
+ * replaced it.
  */
-export async function blockedMinutesForBooking(
+async function clockStoppedSpans(
   ctx: any,
   bookingId: Id<"bookings">,
   now: number,
-): Promise<number> {
-  const rows = await ctx.db
-    .query("job_blockers")
-    .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
-    .collect();
+): Promise<Array<{ start: number; end: number }>> {
+  const [blockers, adminPauses] = await Promise.all([
+    ctx.db
+      .query("job_blockers")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
+      .collect(),
+    ctx.db
+      .query("job_admin_pauses")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
+      .collect(),
+  ]);
 
-  const spans = rows
+  const blockerSpans = blockers
     .filter((r: any) => r.stops_clock)
     .map((r: any) => ({
       start: r.opened_at,
       end: Math.max(r.opened_at, r.resolved_at ?? now),
-    }))
-    .sort((a: any, b: any) => a.start - b.start);
+    }));
 
+  const adminSpans = adminPauses.map((r: any) => ({
+    start: r.opened_at,
+    end: Math.max(r.opened_at, r.closed_at),
+  }));
+
+  return [...blockerSpans, ...adminSpans];
+}
+
+/** Merge overlapping spans and total them. Overlaps are merged rather than
+ *  summed: two parts on back-order at once is one stoppage, not two — and a flag
+ *  sheet opened while already blocked is not a second pause. Adding them would
+ *  subtract the same wall-clock hour twice. */
+function mergedSpanMinutes(spans: Array<{ start: number; end: number }>): number {
+  const sorted = [...spans].sort((a, b) => a.start - b.start);
   let total = 0;
   let cursor = -1;
-  for (const span of spans) {
+  for (const span of sorted) {
     const start = Math.max(span.start, cursor);
     if (span.end > start) {
       total += span.end - start;
@@ -231,6 +267,34 @@ export async function blockedMinutesForBooking(
     }
   }
   return Math.round(total / MINUTE_MS);
+}
+
+/**
+ * Total minutes this booking spent with the work clock stopped — unresolved
+ * clock-stopping blockers (counted up to `now`) plus recorded flag-issue admin
+ * pauses.
+ */
+export async function blockedMinutesForBooking(
+  ctx: any,
+  bookingId: Id<"bookings">,
+  now: number,
+): Promise<number> {
+  return mergedSpanMinutes(await clockStoppedSpans(ctx, bookingId, now));
+}
+
+/** Whether the work clock is stopped right now — an unresolved clock-stopping
+ *  blocker. (Flag-issue admin pauses are recorded as already-closed spans, so
+ *  they never read as "currently paused" here; the live pause while the flag
+ *  flow is open is a client-screen concern.) Derived here so every surface reads
+ *  one answer instead of recomputing the predicate. */
+export async function isClockPausedForBooking(
+  ctx: any,
+  bookingId: Id<"bookings">,
+  now: number,
+): Promise<boolean> {
+  return (await clockStoppedSpans(ctx, bookingId, now)).some(
+    (span) => span.end >= now,
+  );
 }
 
 /** Open a blocker. */
@@ -442,6 +506,53 @@ export const resolveBlocker = mutation({
   },
 });
 
+/**
+ * Record a completed flag-issue admin pause — a span the mechanic spent in the
+ * Flag Issue flow (the sheet + the mid-job scope dialog) instead of working.
+ *
+ * Called by NowWorkingPane when the flow closes, so only ever a finished span.
+ * The client's opened_at/closed_at are treated as hints and clamped: the end
+ * can't be in the future, the span is bounded (MAX_ADMIN_PAUSE_MS), and a span
+ * under a second is dropped as a mis-fire. This is what makes the on-screen
+ * pause durable — folded into clockStoppedSpans, it reaches blocked_minutes and
+ * the auto-derived labour, not just the one screen it happened on.
+ */
+export const recordFlagAdminPause = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    openedAt: v.number(),
+    closedAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { user, booking } = await requireShopStaffForBooking(
+      ctx,
+      args.bookingId,
+    );
+    const now = Date.now();
+
+    // Clamp to a sane, non-future, bounded span before trusting it.
+    const closedAt = Math.min(args.closedAt, now);
+    const openedAt = Math.min(
+      Math.max(args.openedAt, closedAt - MAX_ADMIN_PAUSE_MS),
+      closedAt,
+    );
+    if (closedAt - openedAt < 1_000) {
+      return { ok: true, recorded: false as const };
+    }
+
+    const id = await ctx.db.insert("job_admin_pauses", {
+      booking_id: args.bookingId,
+      shop_id: booking.shop_id ?? undefined,
+      mechanic_id: booking.mechanic_id ?? undefined,
+      recorded_by_user_id: user._id,
+      opened_at: openedAt,
+      closed_at: closedAt,
+      created_at: now,
+    });
+    return { ok: true, recorded: true as const, id };
+  },
+});
+
 /** Blockers on one booking, with the derived clock impact. */
 export const listForBooking = query({
   args: { bookingId: v.id("bookings") },
@@ -467,6 +578,11 @@ export const listForBooking = query({
       })),
       openCount: rows.filter((r) => r.resolved_at == null).length,
       blockedMinutes: await blockedMinutesForBooking(ctx, args.bookingId, now),
+      // Derived server-side so the four surfaces that show a running clock
+      // (overlay, overlay's multi-job picker, header pill, now-working banner)
+      // can't disagree — and so a new pause source is added in one place
+      // instead of four.
+      clockPaused: await isClockPausedForBooking(ctx, args.bookingId, now),
     };
   },
 });

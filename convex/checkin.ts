@@ -16,6 +16,7 @@ import {
   getQuestionVisibility,
 } from "./lib/checkin_questions";
 import type { VehicleMode } from "./lib/checkin_questions";
+import { logKnownIssueEvents } from "./lib/knownIssueEvents";
 
 // ============================================================================
 // QUERIES
@@ -271,6 +272,14 @@ export const completeCheckin = mutation({
         updated.some((v, i) => v !== existingIssues[i])
       ) {
         await ctx.db.patch(args.vehicleOwnerId, { knownIssues: updated });
+        await logKnownIssueEvents(ctx, {
+          vehicleOwnerId: args.vehicleOwnerId,
+          before: existingIssues,
+          after: updated,
+          source: "check_in",
+          sourceDetail: String(args.checkinId),
+          now,
+        });
       }
     }
 
@@ -378,8 +387,15 @@ export const completeCheckin = mutation({
       const existingIssues = (owner?.knownIssues as string[] | undefined) ?? [];
       const batteryFlag = q6Answer === "no_start" ? "battery_no_start" : "battery_hesitate";
       if (!existingIssues.includes(batteryFlag)) {
-        await ctx.db.patch(args.vehicleOwnerId, {
-          knownIssues: [...existingIssues, batteryFlag],
+        const updated = [...existingIssues, batteryFlag];
+        await ctx.db.patch(args.vehicleOwnerId, { knownIssues: updated });
+        await logKnownIssueEvents(ctx, {
+          vehicleOwnerId: args.vehicleOwnerId,
+          before: existingIssues,
+          after: updated,
+          source: "check_in",
+          sourceDetail: String(args.checkinId),
+          now,
         });
       }
     }
@@ -450,6 +466,14 @@ export const completeCheckin = mutation({
         );
         if (cleaned.length !== currentIssues.length) {
           await ctx.db.patch(args.vehicleOwnerId, { knownIssues: cleaned });
+          await logKnownIssueEvents(ctx, {
+            vehicleOwnerId: args.vehicleOwnerId,
+            before: currentIssues,
+            after: cleaned,
+            source: "check_in",
+            sourceDetail: String(args.checkinId),
+            now,
+          });
         }
       }
     }

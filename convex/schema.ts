@@ -1609,6 +1609,34 @@ export default defineSchema({
     .index("by_vin_user", ["vin", "user_id"])
     .index("by_user_status", ["user_id", "status"]),
 
+  // Provenance log for vehicle_owners.knownIssues. That field stays a flat
+  // string[] — every scoring/display reader keeps working unchanged — but
+  // its writes carry no source or timestamp of their own, so "did the driver
+  // report this at check-in, or did Oto?" was unanswerable. This is an
+  // append-only, additive log: every write site diffs its before/after
+  // knownIssues array and inserts one row per code added or cleared here,
+  // via convex/lib/knownIssueEvents.ts's logKnownIssueEvents. Never read for
+  // scoring — knownIssues itself remains the single fast/current-state read.
+  known_issue_events: defineTable({
+    vehicle_owner_id: v.id("vehicle_owners"),
+    // Canonical light code where one applies (see lib/warningLightVocab.ts);
+    // a raw legacy/symptom code otherwise (e.g. "alignment"). Stored as
+    // written, not canonicalized, so the log reflects exactly what each
+    // source wrote.
+    code: v.string(),
+    action: v.union(v.literal("added"), v.literal("cleared")),
+    source: v.union(
+      v.literal("check_in"),
+      v.literal("oto"),
+      v.literal("mechanic_inspection"),
+      v.literal("service_completion"),
+    ),
+    // Free-form, source-specific pointer: a checkin id, a shop name, a
+    // booking id. Optional — not every source has something to attach.
+    source_detail: v.optional(v.string()),
+    created_at: v.float64(),
+  }).index("by_vehicle_owner_id", ["vehicle_owner_id", "created_at"]),
+
   // [U-W] Owner-specific hardware facts about THIS car.
   // Resolves which package-tagged part_fitments apply at booking time.
   // See docs/PACKAGE_AWARE_PARTS.md.
@@ -1714,6 +1742,12 @@ export default defineSchema({
       v.object({
         zone_id: v.string(),
         done: v.boolean(),
+        // When this zone was first marked complete. Abdul, Aug 20: "I wish you
+        // did checkpoints — how quick I'm spending on each section." Successive
+        // values give per-section durations, which feed labor calibration.
+        // Write-once: re-opening a zone to fix a reading shouldn't restart its
+        // clock, or a correction would read as time spent inspecting.
+        completed_at: v.optional(v.number()),
         // Free-form per-field maps keyed by the template field keys. `v.any()`
         // because the template owns the shape and it evolves with the template
         // version (recorded above) rather than the schema.
@@ -3055,6 +3089,12 @@ export default defineSchema({
         }),
       ),
     ),
+    // Pending 2-hour deferred inspection-health job for this booking (see
+    // convex/inspectionHealthDeferred.ts). Stored so a booking that
+    // re-enters a terminal state (completed → reopened → completed again,
+    // dispute resolution, etc.) cancels its previous job instead of
+    // stacking a second one that could later replay stale picker data.
+    deferred_health_job_id: v.optional(v.id("_scheduled_functions")),
   })
     .index("by_user_id", ["user_id"])
     .index("by_shop_id", ["shop_id"])
@@ -4612,6 +4652,34 @@ export default defineSchema({
     .index("by_shop_open", ["shop_id", "resolved_at"])
     .index("by_kind", ["kind"])
     .index("by_opened_at", ["opened_at"]),
+
+  // Admin time inside the "Flag issue" flow — the mechanic writing up extra
+  // scope (the flag sheet and the mid-job scope dialog it opens) rather than
+  // turning a wrench. Recorded as closed spans so it drops out of worked labour
+  // the same way a clock-stopping blocker does: jobBlockers.clockStoppedSpans
+  // merges both, and mergedSpanMinutes de-overlaps them so a span opened during
+  // a blocker isn't subtracted twice.
+  //
+  // WHY CLOSED SPANS, WRITTEN ON CLOSE: a modal being "open" is far more
+  // transient than a blocker, and an open-ended row (opened, never closed) would
+  // pause the clock forever if the tab were closed mid-sheet. Writing only the
+  // completed span, on close, means an abandoned/crashed sheet is simply not
+  // credited — the safe direction (bills the customer, never over-credits).
+  //
+  // Unlike job_blockers this never reports "currently paused": the span is
+  // already closed by the time it lands, so isClockPausedForBooking (which looks
+  // for a span still open at `now`) skips it. The live, on-screen pause is a
+  // client concern (see NowWorkingPane); this table is the durable record that
+  // keeps blocked_minutes and the auto-derived labour honest.
+  job_admin_pauses: defineTable({
+    booking_id: v.id("bookings"),
+    shop_id: v.optional(v.id("shops")),
+    mechanic_id: v.optional(v.id("mechanics")),
+    recorded_by_user_id: v.id("users"),
+    opened_at: v.number(),
+    closed_at: v.number(),
+    created_at: v.number(),
+  }).index("by_booking", ["booking_id"]),
 
   // Audit trail for pseudo-VIN → real-VIN re-keys (Off-Catalog Work spec, §5).
   //

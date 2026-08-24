@@ -12,6 +12,7 @@ import { paginationOptsValidator } from "convex/server";
 import { query, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireDirector } from "./directorGate";
+import { bookingOrigin } from "./director";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { resolveVehicleDisplay, userDisplayName } from "./lib/bookingEnrichment";
@@ -50,6 +51,17 @@ async function bookingRow(ctx: QueryCtx, b: Doc<"bookings">) {
       return s?.name ?? "—";
     }),
   );
+  // Off-catalog custom jobs — a walk-in often has no catalog service_ids, so
+  // without these the card reads "Service TBD" for real work. Declined mid-job
+  // lines are audit-only and excluded (matches the receipt).
+  const customJobs = await ctx.db
+    .query("custom_jobs")
+    .withIndex("by_booking", (q) => q.eq("booking_id", b._id))
+    .collect();
+  const customServices = customJobs
+    .filter((j) => j.status !== "declined")
+    .sort((a, c) => a.created_at - c.created_at)
+    .map((j) => j.name);
   return {
     id: b._id,
     userId: b.user_id,
@@ -61,6 +73,10 @@ async function bookingRow(ctx: QueryCtx, b: Doc<"bookings">) {
     vin: b.vin,
     vehicleYmm: vehicle.ymm,
     services: serviceNames,
+    customServices,
+    // Walk-in (shop-created) vs app (customer self-serve). See bookingOrigin.
+    origin: bookingOrigin(b.source),
+    source: b.source ?? null,
     scheduledDate: b.scheduled_date ?? null,
     scheduledTime: b.scheduled_time ?? null,
     createdAt: b.created_at ?? b._creationTime,

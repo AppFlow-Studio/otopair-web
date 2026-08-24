@@ -25,6 +25,7 @@ import { makeT, identityFor } from "./helpers";
 import { api } from "../convex/_generated/api";
 import {
   blockedMinutesForBooking,
+  isClockPausedForBooking,
   KIND_POLICY,
 } from "../convex/jobBlockers";
 import { runCompletionSideEffects } from "../convex/bookings";
@@ -86,6 +87,33 @@ async function span(
       stops_clock: (KIND_POLICY as any)[kind].stopsClock,
       opened_at: openedAt,
       resolved_at: resolvedAt ?? undefined,
+    } as any),
+  );
+}
+
+/** Insert an approval row directly, to test the re-quote half of the arithmetic. */
+async function approval(
+  t: ReturnType<typeof makeT>,
+  base: any,
+  cycle: "pre_job" | "mid_job" | "post_job",
+  submittedAt: number,
+  decidedAt: number | null,
+) {
+  return t.run(async (ctx: any) =>
+    ctx.db.insert("booking_approvals", {
+      booking_id: base.bookingId,
+      cycle,
+      mechanic_set_price_cents: 20_000,
+      parts_subtotal_cents: 0,
+      labor_cents: 20_000,
+      tax_cents: 0,
+      service_fee_cents: 0,
+      parts_snapshot: [],
+      prior_ceiling_cents: 15_000,
+      submitted_at_ms: submittedAt,
+      ...(decidedAt != null
+        ? { decided_at_ms: decidedAt, decision: "approved" }
+        : {}),
     } as any),
   );
 }
@@ -195,6 +223,78 @@ describe("blocked-minutes arithmetic", () => {
       blockedMinutesForBooking(ctx, base.bookingId, t0 + 6 * HOUR),
     );
     expect(mins).toBe(120);
+  });
+
+  it("counts a mid-job re-quote waiting on the customer as stopped time", async () => {
+    // Abdul, Aug 20: "stop the countdown because now we're eating up from this
+    // 60-minute labor." From submit until the customer answers, the mechanic is
+    // doing admin — that time isn't labour on the car.
+    const t = makeT();
+    const base = await seed(t);
+    const t0 = 1_700_000_000_000;
+    await approval(t, base, "mid_job", t0, t0 + 2 * HOUR);
+
+    const mins = await t.run(async (ctx: any) =>
+      blockedMinutesForBooking(ctx, base.bookingId, t0 + 5 * HOUR),
+    );
+    expect(mins).toBe(120);
+  });
+
+  it("counts an unanswered re-quote up to now, and pauses the clock", async () => {
+    const t = makeT();
+    const base = await seed(t);
+    const t0 = 1_700_000_000_000;
+    await approval(t, base, "mid_job", t0, null);
+
+    const [mins, paused] = await t.run(async (ctx: any) => [
+      await blockedMinutesForBooking(ctx, base.bookingId, t0 + 45 * MIN),
+      await isClockPausedForBooking(ctx, base.bookingId, t0 + 45 * MIN),
+    ]);
+    expect(mins).toBe(45);
+    expect(paused).toBe(true);
+  });
+
+  it("ignores pre-job and post-job approval cycles", async () => {
+    // A pre-job estimate is priced before the clock starts and a post-job
+    // re-approval happens after it stops, so neither overlaps worked time.
+    const t = makeT();
+    const base = await seed(t);
+    const t0 = 1_700_000_000_000;
+    await approval(t, base, "pre_job", t0, t0 + 2 * HOUR);
+    await approval(t, base, "post_job", t0 + 3 * HOUR, t0 + 4 * HOUR);
+
+    const mins = await t.run(async (ctx: any) =>
+      blockedMinutesForBooking(ctx, base.bookingId, t0 + 6 * HOUR),
+    );
+    expect(mins).toBe(0);
+  });
+
+  it("merges a re-quote that overlaps a blocker", async () => {
+    // Sending a re-quote while already waiting on a part is not a second pause.
+    const t = makeT();
+    const base = await seed(t);
+    const t0 = 1_700_000_000_000;
+    await span(t, base, "parts_delay", t0, t0 + 2 * HOUR);
+    await approval(t, base, "mid_job", t0 + HOUR, t0 + 3 * HOUR);
+
+    const mins = await t.run(async (ctx: any) =>
+      blockedMinutesForBooking(ctx, base.bookingId, t0 + 5 * HOUR),
+    );
+    // Union is t0 → t0+3h, not 2h + 2h.
+    expect(mins).toBe(180);
+  });
+
+  it("reports the clock running once everything is resolved", async () => {
+    const t = makeT();
+    const base = await seed(t);
+    const t0 = 1_700_000_000_000;
+    await span(t, base, "parts_delay", t0, t0 + HOUR);
+    await approval(t, base, "mid_job", t0 + HOUR, t0 + 2 * HOUR);
+
+    const paused = await t.run(async (ctx: any) =>
+      isClockPausedForBooking(ctx, base.bookingId, t0 + 3 * HOUR),
+    );
+    expect(paused).toBe(false);
   });
 
   it("is zero when nothing was ever blocked", async () => {

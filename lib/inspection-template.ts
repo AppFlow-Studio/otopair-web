@@ -271,6 +271,28 @@ export function classifyInspectionMeasure(
 // live in the dialog via optionsForInspectionField, same as pad_brand.
 // ---------------------------------------------------------------------------
 
+/**
+ * Tire construction/season category, entered per corner. Values mirror
+ * `mapTireType` in convex/lib/tireBrands.ts exactly — the same vocabulary the
+ * tire scrapers normalise listings into and `priced_parts_snapshot.tire_type`
+ * stores. Keeping them identical is what lets an MPI reading join to the tire
+ * catalog for automated re-booking; do not add a value here without adding the
+ * matching branch there.
+ *
+ * Deliberately separate from `run_flat`: run-flat is a construction attribute
+ * orthogonal to season (a run-flat all-season is a normal product), and
+ * `run_flat` already feeds vehicle_passports.tires.run_flat as a boolean.
+ */
+export const TIRE_TYPE_OPTIONS: SelectOption[] = [
+  { value: "All-Season", label: "All-Season" },
+  { value: "All-Weather", label: "All-Weather" },
+  { value: "All-Terrain", label: "All-Terrain" },
+  { value: "Winter", label: "Winter" },
+  { value: "Summer", label: "Summer" },
+  { value: "Performance", label: "Performance" },
+  { value: "Touring", label: "Touring" },
+];
+
 function cornerFields(opts: {
   rotorRef: number;
   axle: "front" | "rear";
@@ -333,6 +355,13 @@ function cornerFields(opts: {
         { value: "yes", label: "Yes" },
         { value: "no", label: "No" },
       ],
+      section: "Tire",
+    },
+    {
+      type: "select",
+      key: "tire_type",
+      label: "Tire type",
+      options: TIRE_TYPE_OPTIONS,
       section: "Tire",
     },
     {
@@ -798,6 +827,20 @@ export function deriveTierInspectionScope(
   };
 }
 
+/** Fitment-defining identity — mandatory whenever the tier-5 gate opens.
+ *  `tire_size` IS the fitment (automated re-booking is impossible without it);
+ *  `run_flat` is legible at a glance off the sidewall. */
+const TIRE_IDENTITY_REQUIRED_FIELDS = ["tire_size", "run_flat"];
+
+/** Offered on the same tier-5 corner but never blocking — see Decision D3. */
+const TIRE_IDENTITY_OPTIONAL_FIELDS = ["tire_brand", "tire_model", "tire_type"];
+
+/** Everything the tier-5 identity block renders, required or not. */
+const TIRE_IDENTITY_FIELDS = [
+  ...TIRE_IDENTITY_REQUIRED_FIELDS,
+  ...TIRE_IDENTITY_OPTIONAL_FIELDS,
+];
+
 function requiresTier5Identity(
   zoneId: CornerZoneId,
   context: ZoneCompletionContext,
@@ -884,7 +927,15 @@ export function isFieldRequiredForZone(
       );
     if (["tread", "psi", "wear"].includes(fieldKey)) return !isReplacementTire;
     if (fieldKey === "brake_visual") return true;
-    if (["tire_brand", "tire_model", "tire_size", "run_flat"].includes(fieldKey)) {
+    // Decision D3: the tier-5 identity block is shown as a unit, but only the
+    // fitment-defining fields are mandatory. Abdul: mechanics don't record brand
+    // and model unless the car is high-end, and many shops fit no-name stock —
+    // so requiring them turns the MPI into data entry instead of an inspection.
+    // Size stays required (it IS the fitment, and re-booking can't happen
+    // without it); run_flat stays required because it's legible at a glance off
+    // the sidewall. Brand / model / type are optional identity enrichment.
+    if (TIRE_IDENTITY_OPTIONAL_FIELDS.includes(fieldKey)) return false;
+    if (TIRE_IDENTITY_REQUIRED_FIELDS.includes(fieldKey)) {
       return requiresTier5Identity(zoneId as CornerZoneId, context);
     }
     const scope = deriveTierInspectionScope(context);
@@ -950,8 +1001,12 @@ export function isFieldApplicableToZone(
   context: ZoneCompletionContext,
 ): boolean {
   if (!CORNER_IDS.includes(zoneId as CornerZoneId)) return true;
-  if (["tire_brand", "tire_model", "tire_size", "run_flat"].includes(fieldKey)) {
-    return isFieldRequiredForZone(zoneId, fieldKey, context);
+  // The whole identity block appears together on a tier-5 corner. Applicability
+  // can't delegate to isFieldRequiredForZone any more: since D3 the optional
+  // members return false there, and reusing that answer would hide the very
+  // fields we want offered-but-not-forced.
+  if (TIRE_IDENTITY_FIELDS.includes(fieldKey)) {
+    return requiresTier5Identity(zoneId as CornerZoneId, context);
   }
   if (
     [
@@ -1482,10 +1537,15 @@ export function derivePrejobFromInspection(
       !applies(zoneId, "run_flat") || zone.statuses.run_flat
         ? ""
         : zone.select.run_flat;
+    const tireType =
+      !applies(zoneId, "tire_type") || zone.statuses.tire_type
+        ? ""
+        : zone.select.tire_type;
     if (
       (!brand || brand === OTHER_INSPECTION_OPTION) &&
       (!model || model === OTHER_INSPECTION_OPTION) &&
-      !runFlat
+      !runFlat &&
+      !tireType
     ) {
       continue;
     }
@@ -1493,6 +1553,7 @@ export function derivePrejobFromInspection(
       ...(brand && brand !== OTHER_INSPECTION_OPTION ? { brand } : {}),
       ...(model && model !== OTHER_INSPECTION_OPTION ? { model } : {}),
       ...(runFlat ? { run_flat: runFlat === "yes" } : {}),
+      ...(tireType ? { tire_type: String(tireType) } : {}),
     };
   }
 
@@ -1607,6 +1668,61 @@ export const SERVICE_SLUGS = {
   powerSteering: "power_steering_flush",
   filter: "filter_replacement",
 } as const;
+
+/**
+ * The custom-job taxonomy (lib/custom-job-taxonomy.ts) each known inspection
+ * service implies — "where on the car" + "what was done".
+ *
+ * WHY THIS EXISTS: a mid-job addition has to be a `custom_jobs` row to flow
+ * through the approval cycle (the status dots and the customer's "waiting for
+ * confirmation" state read from custom_jobs, not booking.service_ids), and every
+ * custom_jobs write is gated on a taxonomy by requireCustomJobTaxonomy. When a
+ * flagged finding is a service we already offer — an oil change — asking the
+ * mechanic to re-classify it into `engine · service` is exactly the retyping
+ * "Add to this job" exists to remove. So we derive it from the catalog slug the
+ * suggestion already resolved to. Freeform findings have no slug here and fall
+ * through to the picker, which is the only case that still needs a human.
+ *
+ * The slugs are validated downstream by requireCustomJobTaxonomy, so they live
+ * as plain strings rather than importing the taxonomy enums into this file (kept
+ * dependency-free for both client and convex).
+ */
+const INSPECTION_SLUG_TAXONOMY: Record<
+  string,
+  { system_tags: string[]; work_type: string }
+> = {
+  [SERVICE_SLUGS.oil]: { system_tags: ["engine"], work_type: "service" },
+  [SERVICE_SLUGS.brakePads]: { system_tags: ["brakes"], work_type: "replace" },
+  [SERVICE_SLUGS.rotors]: { system_tags: ["brakes"], work_type: "replace" },
+  [SERVICE_SLUGS.tires]: { system_tags: ["wheels_tires"], work_type: "replace" },
+  [SERVICE_SLUGS.battery]: { system_tags: ["electrical"], work_type: "replace" },
+  [SERVICE_SLUGS.brakeFluid]: { system_tags: ["brakes"], work_type: "service" },
+  [SERVICE_SLUGS.coolant]: { system_tags: ["engine"], work_type: "service" },
+  [SERVICE_SLUGS.transmission]: {
+    system_tags: ["drivetrain"],
+    work_type: "service",
+  },
+  [SERVICE_SLUGS.powerSteering]: {
+    system_tags: ["suspension_steering"],
+    work_type: "service",
+  },
+  [SERVICE_SLUGS.filter]: { system_tags: ["engine"], work_type: "replace" },
+};
+
+/**
+ * The taxonomy implied by a suggestion's catalog slug(s), or null when the
+ * finding is freeform and the mechanic has to pick one. First slug that maps
+ * wins, mirroring how `match` is resolved to a service (first hit wins).
+ */
+export function inspectionSlugTaxonomy(
+  slugs: readonly string[],
+): { system_tags: string[]; work_type: string } | null {
+  for (const slug of slugs) {
+    const t = INSPECTION_SLUG_TAXONOMY[slug];
+    if (t) return { system_tags: [...t.system_tags], work_type: t.work_type };
+  }
+  return null;
+}
 
 function measuresAcrossCorners(
   state: InspectionState,
@@ -1869,10 +1985,18 @@ export function deriveSuggestedRecommendations(
       });
     };
     engTriRec("oil_condition", SERVICE_SLUGS.oil, "Oil Change");
+    // Oil top-off stays: unlike the courtesy fluids below, low oil is a real
+    // finding worth telling the driver about. It's cleared instead at
+    // suppression time when this visit performed an oil change — see
+    // convex/inspectionHealthDeferred.ts. Never recommend both.
     engTriRec("oil_level", null, "Oil Top-Off");
     engTriRec("cool_condition", SERVICE_SLUGS.coolant, "Coolant Flush");
-    engTriRec("cool_level", null, "Coolant Top-Off");
-    engTriRec("washer", null, "Washer Fluid Top-Off");
+    // Coolant + washer top-offs deliberately generate NO recommendation. Both
+    // are shop protocol and free — a shop that flushes coolant topped it off in
+    // the same motion, and washer fluid gets filled for anyone who walks in. A
+    // recommendation here manufactures a service suggestion we did not earn
+    // (Yassin, Aug 20 session). Brake fluid is NOT in this category and keeps
+    // its own flags below — low brake fluid means pads or a leak.
     engTriRec("trans", SERVICE_SLUGS.transmission, "Transmission Service");
     engTriRec("ps", SERVICE_SLUGS.powerSteering, "Power Steering Flush");
     engTriRec("term", null, "Battery Terminal Service");

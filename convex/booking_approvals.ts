@@ -311,6 +311,36 @@ async function performSubmission(
     }
   }
 
+  // One pending ask at a time. `post_job` has its own idempotent reuse above;
+  // `pre_job` and `mid_job` had no duplicate protection at all, and the "you
+  // can't act while an approval is pending" rule was enforced only in the UI
+  // (the detail panel greys its buttons out). Anything reaching the mutation
+  // without that UI — the overlay's own scope dialog, a stale tab, a retry —
+  // inserted a SECOND open row, overwrote payment_approval_state, and left two
+  // live SLA timers. The expiry sweeper then reverts a ceiling per row, so the
+  // first could roll back a ceiling the customer had already approved past on
+  // the second.
+  //
+  // Withdraw is the way out and already ships: withdrawPendingApproval closes
+  // the open row and reverts state so the booking "can accept a fresh
+  // submission". Withdraw-then-resubmit was always the intended protocol; it
+  // just wasn't enforced.
+  if (args.cycle === "pre_job" || args.cycle === "mid_job") {
+    const openRow = (
+      await ctx.db
+        .query("booking_approvals")
+        .withIndex("by_booking_and_cycle", (q: any) =>
+          q.eq("booking_id", args.bookingId),
+        )
+        .collect()
+    ).find((r: any) => r.decision == null);
+    if (openRow) {
+      throw new Error(
+        "There's already a change waiting on the customer. Withdraw it first, then send the updated one.",
+      );
+    }
+  }
+
   const inRange = priced.total_cents <= ceiling;
   const now = Date.now();
 

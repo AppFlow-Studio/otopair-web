@@ -25,15 +25,21 @@ import {
   EyeOff,
   Loader2,
   Plus,
+  RotateCcw,
   Trash2,
+  Wrench,
 } from "lucide-react";
 import { useMutation, useQuery, useAction } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
+import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
+import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
+import PreJobScopeDialog from "@/components/booking/pre-job-scope-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
+import MonthPicker from "@/components/ui/month-picker";
 import { TireSizeInput } from "@/components/ui/tire-size-input";
 import {
   Select,
@@ -53,6 +59,7 @@ import {
   deriveSuggestedRecommendations,
   gatherFindings,
   getDirtyIncompleteZones,
+  inspectionSlugTaxonomy,
   INSPECTION_NAV_ZONE_IDS,
   deriveTierInspectionScope,
   isBrakeDetailFieldRelevant,
@@ -124,6 +131,7 @@ import type {
   PreJobSurveyPayload,
   VehiclePassportData,
 } from "@/lib/vehicle-passport";
+import { serviceMatchKey } from "@/convex/lib/serviceMatch";
 import {
   AFFECTED_SYSTEMS,
   servicesForSystems,
@@ -168,6 +176,11 @@ type ResolvedSuggestion = {
   reasons: string[];
   serviceId: Id<"services"> | null;
   serviceName: string | null;
+  // Taxonomy the catalog slug implies (inspectionSlugTaxonomy), so promoting a
+  // known service into mid-job work is one tap. Null for a freeform finding,
+  // which opens the picker instead — see handleAddToJob.
+  systemTags: string[] | null;
+  workType: string | null;
 };
 
 const prepareInspectionPhotoUploadRef = makeFunctionReference<"mutation">(
@@ -238,6 +251,7 @@ const ALWAYS_VISIBLE_FIELDS = new Set([
   "tire_model",
   "tire_size",
   "run_flat",
+  "tire_type",
   "pad_inner",
   "pad_outer",
   "rotor_applicable",
@@ -355,6 +369,9 @@ export default function MultiPointInspectionDialog(props: {
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
+  /** True once the booking is in_progress. Gates "Add to this job" —
+   *  addMidJobCustomService refuses work on a job that isn't running. */
+  jobInProgress?: boolean;
   tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
@@ -385,6 +402,7 @@ function MultiPointInspectionDialogBody({
   bookingLabel,
   bookingSubLabel,
   bookingServices = [],
+  jobInProgress = false,
   tireReplacementPositions = [],
   passportData,
   prefillData,
@@ -398,6 +416,9 @@ function MultiPointInspectionDialogBody({
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
+  /** True once the booking is in_progress. Gates "Add to this job" —
+   *  addMidJobCustomService refuses work on a job that isn't running. */
+  jobInProgress?: boolean;
   tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
@@ -440,6 +461,25 @@ function MultiPointInspectionDialogBody({
   const submitInspectionRecs = useMutation(
     api.inspections.submitInspectionRecommendations,
   );
+  const undoInspectionRec = useMutation(api.jobRecommendations.confirmFromPreJob);
+  const addToJob = useMutation(api.customJobs.addMidJobCustomService);
+  // Pre-start sibling of addToJob: appends the same line to a booking that
+  // hasn't been started, to be sent as a PRE-job estimate the customer confirms
+  // before work begins. Which one runs is decided by jobInProgress.
+  const addToJobPreStart = useMutation(api.customJobs.addPreJobCustomService);
+  const removeFromJob = useMutation(api.customJobs.removeMidJobCustomService);
+  const removeFromJobPreStart = useMutation(
+    api.customJobs.removePreJobCustomService,
+  );
+  // Work already on the booking (added via "Add to this job" or elsewhere). Read
+  // from the server so the "Added to this job" list survives a refresh — the
+  // local addedToJob flags don't — and so each line can be removed the same way
+  // it was added, which the ephemeral flags never allowed.
+  const addedJobs = useQuery(
+    api.customJobs.listForBooking,
+    bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
+  ) as Array<{ _id: Id<"custom_jobs">; name: string }> | undefined;
+  const [removingJobId, setRemovingJobId] = useState<string | null>(null);
 
   // Mechanic parts fill-in: parts the OEM-strict pipeline left MISSING or
   // LOW_CONFIDENCE that the mechanic must confirm/fill before starting work.
@@ -682,7 +722,17 @@ function MultiPointInspectionDialogBody({
           methods: { ...base.methods, ...(z.methods ?? {}) },
           photoIds: Array.isArray(z.photo_ids) ? [...z.photo_ids] : [],
           photoTags: { ...base.photoTags, ...(z.photo_tags ?? {}) },
-          lights: { ...base.lights, ...(z.lights ?? {}) },
+          lights: {
+            ...base.lights,
+            ...Object.fromEntries(
+              Object.entries((z.lights ?? {}) as Record<string, any[]>).map(
+                ([key, entries]) => [
+                  key,
+                  entries.map((e) => ({ light: e.light, otherText: e.other_text })),
+                ],
+              ),
+            ),
+          },
         };
       }
       const pf = prefillData;
@@ -695,7 +745,12 @@ function MultiPointInspectionDialogBody({
         setLiftStatus(savedInspection.lift_status);
       }
       if (pf?.inspection?.status) setInspectionStatus(pf.inspection.status);
-      if (pf?.inspection?.expires_at) setInspectionExpires(pf.inspection.expires_at);
+      // Trim to YYYY-MM: rows written before the sticker field became month-only
+      // carry a full YYYY-MM-DD, which a `type="month"` input rejects outright
+      // and renders as blank — silently losing the stored expiry on next save.
+      if (pf?.inspection?.expires_at) {
+        setInspectionExpires(pf.inspection.expires_at.slice(0, 7));
+      }
       if (pf?.modifications?.has_mods) setModAftermarket(true);
       if (pf?.modifications?.notes) setModNotes(pf.modifications.notes);
       setModAffectedSystems(pf?.modifications?.affected_systems ?? []);
@@ -860,16 +915,62 @@ function MultiPointInspectionDialogBody({
       ).find((svc) =>
         svc.slug ? s.match.includes(svc.slug) : false,
       );
+      const taxonomy = inspectionSlugTaxonomy(s.match);
       return {
         ...s,
         serviceId: found?._id ?? null,
         serviceName: found?.name ?? null,
+        systemTags: taxonomy?.system_tags ?? null,
+        workType: taxonomy?.work_type ?? null,
       };
     });
   }, [state, services]);
 
-  const [recsSubmitted, setRecsSubmitted] = useState(false);
+  // Drop anything this booking is already doing. Suggesting "tire replacement
+  // — soon" on the job that is replacing the tires reads as the system not
+  // following along, and it costs the mechanic a decision every time. Compared
+  // on the same normalised token key the server uses so "Oil Change" and
+  // "Oil Change Service" don't slip past each other.
+  const bookedMatchKeys = useMemo(
+    () => new Set(bookingServices.map((name) => serviceMatchKey(name))),
+    [bookingServices],
+  );
+  const openSuggestedRecs = useMemo(
+    () =>
+      suggestedRecs.filter(
+        (s) =>
+          !bookedMatchKeys.has(serviceMatchKey(s.serviceName ?? s.label)),
+      ),
+    [suggestedRecs, bookedMatchKeys],
+  );
+
+  // Keyed by suggestion key, not a single flag — grading another zone after
+  // an initial submit surfaces new suggestions, and those must stay
+  // addable/undoable independently of what was already submitted.
+  const [submittedRecs, setSubmittedRecs] = useState<
+    Record<string, Id<"job_recommendations">>
+  >({});
   const [recsBusy, setRecsBusy] = useState(false);
+  const [undoingKey, setUndoingKey] = useState<string | null>(null);
+  const [addedToJob, setAddedToJob] = useState<Record<string, boolean>>({});
+  const [addingToJobKey, setAddingToJobKey] = useState<string | null>(null);
+  // A freeform finding awaiting a taxonomy before it can be added to the job.
+  // Null for a catalog service, which adds in one tap. See handleAddToJob.
+  const [pendingJobSuggestion, setPendingJobSuggestion] =
+    useState<ResolvedSuggestion | null>(null);
+  // The mid-job scope dialog (price it, say why, add parts, send for the
+  // customer's confirmation) — the SAME flow the active-job overlay opens. Adding
+  // a finding to the job opens it right here so the mechanic never has to reopen
+  // it later in the overlay and re-do the send. See commitAddToJob.
+  const [scopeOpen, setScopeOpen] = useState(false);
+  // The pre-job estimate dialog — same "price it, add parts, send" flow, but for
+  // a booking that hasn't started (routes through the pre_job approval cycle so
+  // the customer confirms the added scope BEFORE work begins). Only one of
+  // scopeOpen / preScopeOpen is ever true, picked by jobInProgress.
+  const [preScopeOpen, setPreScopeOpen] = useState(false);
+  const [scopeSubmittedNote, setScopeSubmittedNote] = useState<string | null>(
+    null,
+  );
 
   const buildPayloads = useCallback((): {
     prejob: PreJobSurveyPayload;
@@ -1375,15 +1476,143 @@ function MultiPointInspectionDialogBody({
         reason: s.reasons.join("; "),
         visible_to_driver: true,
       }));
-      await submitInspectionRecs({
+      const insertedIds = await submitInspectionRecs({
         bookingId: bookingId as Id<"bookings">,
         recommendations,
       });
-      setRecsSubmitted(true);
+      setSubmittedRecs((prev) => {
+        const next = { ...prev };
+        chosen.forEach((s, i) => {
+          if (insertedIds?.[i]) next[s.key] = insertedIds[i];
+        });
+        return next;
+      });
     } catch (err) {
       setError(userFacingInspectionError(err, "Could not add recommendations."));
     } finally {
       setRecsBusy(false);
+    }
+  }
+
+  /**
+   * Promote a flagged finding into work on THIS job (Decision D1).
+   *
+   * Appends an off-catalog line to the booking, then opens the scope dialog —
+   * the same "price it, say why, add parts, send for confirmation" flow — routed
+   * by whether the job is running: in progress → mid-job change; not started yet
+   * (the usual pre-job inspection case) → pre-job estimate. Neither add re-quotes
+   * or moves money; the money and consent live in that dialog, gated behind the
+   * customer's approval. So the mechanic goes straight from the finding into
+   * pricing-and-sending it, instead of adding it here and having to reopen the
+   * scope step in the overlay and confirm all over again.
+   *
+   * Before this, a wiper flagged red here had to be re-entered from scratch via
+   * Flag Issue → "Extra work needed now", which is exactly what Abdul had to do
+   * on Aug 20 after the inspection didn't carry it forward.
+   */
+  async function commitAddToJob(
+    suggestion: ResolvedSuggestion,
+    taxonomy: { systemTags: string[]; workType: string },
+  ) {
+    if (!bookingId || addingToJobKey) return;
+    setAddingToJobKey(suggestion.key);
+    setError("");
+    try {
+      // Persist first, same as the recommendation path — the line should never
+      // exist against an inspection that was never saved.
+      await persistOwnerAnswers();
+      const { prejob, inspection } = buildPayloads();
+      if (onSaveDraft) await onSaveDraft(prejob, inspection);
+      // Which cycle depends on whether the job is already running. In progress →
+      // mid-job change; not started yet (the usual case for a pre-job inspection)
+      // → pre-job estimate. Both append the same line; only the approval cycle
+      // and the dialog opened below differ.
+      const add = jobInProgress ? addToJob : addToJobPreStart;
+      await add({
+        bookingId: bookingId as Id<"bookings">,
+        name: suggestion.serviceName ?? suggestion.label,
+        complaint: suggestion.reasons.join("; ") || undefined,
+        systemTags: taxonomy.systemTags,
+        workType: taxonomy.workType,
+        // Catalog match → seed the line's parts from our OEM catalog/enrichment
+        // so the scope dialog lists them instead of an empty "Add part for X".
+        // Null for a freeform finding (nothing to look up).
+        catalogServiceId: suggestion.serviceId ?? undefined,
+      });
+      setAddedToJob((prev) => ({ ...prev, [suggestion.key]: true }));
+      setPendingJobSuggestion(null);
+      setScopeSubmittedNote(null);
+      // Straight into pricing + send-for-confirmation. The dialog reads the
+      // booking's now-updated scope (the line just appended), so it opens with
+      // this finding already on it. A new re-quote cleared any prior note.
+      if (jobInProgress) setScopeOpen(true);
+      else setPreScopeOpen(true);
+    } catch (err) {
+      setError(userFacingInspectionError(err, "Could not add that to the job."));
+    } finally {
+      setAddingToJobKey(null);
+    }
+  }
+
+  function handleAddToJob(key: string) {
+    const suggestion = suggestedRecs.find((s) => s.key === key);
+    if (!bookingId || !suggestion || addingToJobKey) return;
+    // A catalog service carries its own taxonomy (derived from the slug) — add
+    // it in one tap. A freeform finding has none, so collect one via the picker.
+    if (suggestion.systemTags && suggestion.workType) {
+      void commitAddToJob(suggestion, {
+        systemTags: suggestion.systemTags,
+        workType: suggestion.workType,
+      });
+    } else {
+      setPendingJobSuggestion(suggestion);
+    }
+  }
+
+  // Pull a line back off the job — the undo for "Add to this job". Routes to the
+  // pre- or mid-job remove by status, mirroring the add. Nothing is charged
+  // until the customer approves, so this just deletes the not-yet-agreed line.
+  async function handleRemoveAddedJob(customJobId: Id<"custom_jobs">) {
+    if (!bookingId || removingJobId) return;
+    setRemovingJobId(String(customJobId));
+    setError("");
+    try {
+      const remove = jobInProgress ? removeFromJob : removeFromJobPreStart;
+      await remove({ bookingId: bookingId as Id<"bookings">, customJobId });
+    } catch (err) {
+      setError(
+        userFacingInspectionError(err, "Could not remove that from the job."),
+      );
+    } finally {
+      setRemovingJobId(null);
+    }
+  }
+
+  async function handleUndoRecommendation(key: string) {
+    const recId = submittedRecs[key];
+    if (!bookingId || !recId || undoingKey) return;
+    setUndoingKey(key);
+    setError("");
+    try {
+      await undoInspectionRec({
+        bookingId: bookingId as Id<"bookings">,
+        confirmations: [
+          {
+            recommendation_id: recId,
+            outcome: "dismissed",
+            dismissed_reason: "mistake",
+          },
+        ],
+      });
+      setSubmittedRecs((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    } catch (err) {
+      setError(userFacingInspectionError(err, "Could not undo that recommendation."));
+    } finally {
+      setUndoingKey(null);
     }
   }
 
@@ -1541,12 +1770,25 @@ function MultiPointInspectionDialogBody({
             downloading={downloading}
             onBack={() => setShowResults(false)}
             onDownload={handleDownloadPdf}
-            suggestions={suggestedRecs}
+            suggestions={openSuggestedRecs}
             canRecommend={!!bookingId}
             recsBusy={recsBusy}
-            recsSubmitted={recsSubmitted}
+            submittedRecs={submittedRecs}
             onAddRecommendations={handleAddRecommendations}
+            onUndoRecommendation={handleUndoRecommendation}
+            undoingKey={undoingKey}
             error={error}
+            canAddToJob={!!bookingId}
+            onAddToJob={handleAddToJob}
+            addedToJob={addedToJob}
+            addingToJobKey={addingToJobKey}
+            addedJobs={addedJobs ?? []}
+            onRemoveAddedJob={handleRemoveAddedJob}
+            removingJobId={removingJobId}
+            onOpenScope={() =>
+              jobInProgress ? setScopeOpen(true) : setPreScopeOpen(true)
+            }
+            scopeSubmittedNote={scopeSubmittedNote}
           />
         </div>
       ) : (
@@ -1872,6 +2114,48 @@ function MultiPointInspectionDialogBody({
             setPhotoToRemove(null);
             void handleRemovePhoto(target.zoneId, target.storageId);
           },
+        }}
+      />
+
+      {/* Only for a freeform flagged finding — a catalog service adds in one tap
+          with its derived taxonomy and never opens this. */}
+      <FindingTaxonomyDialog
+        open={pendingJobSuggestion !== null}
+        findingName={
+          pendingJobSuggestion?.serviceName ?? pendingJobSuggestion?.label ?? ""
+        }
+        busy={addingToJobKey !== null}
+        onCancel={() => setPendingJobSuggestion(null)}
+        onConfirm={(taxonomy) => {
+          if (pendingJobSuggestion)
+            void commitAddToJob(pendingJobSuggestion, taxonomy);
+        }}
+      />
+
+      {/* Price it, say why, add parts, send for the customer's confirmation —
+          opened straight after a finding is added to the job (commitAddToJob) so
+          the whole thing happens here, not later in the active-job overlay. The
+          in-progress job re-quotes through the mid-job cycle; a not-yet-started
+          job sends a pre-job estimate the customer confirms before work begins.
+          Only one is ever open (commitAddToJob picks by jobInProgress). */}
+      <MidJobScopeDialog
+        open={scopeOpen}
+        bookingId={bookingId ? (bookingId as Id<"bookings">) : null}
+        onClose={() => setScopeOpen(false)}
+        onSubmitted={() => {
+          setScopeOpen(false);
+          setScopeSubmittedNote("Extra work sent to the customer for confirmation.");
+        }}
+      />
+      <PreJobScopeDialog
+        open={preScopeOpen}
+        bookingId={bookingId ? (bookingId as Id<"bookings">) : null}
+        onClose={() => setPreScopeOpen(false)}
+        onSubmitted={() => {
+          setPreScopeOpen(false);
+          setScopeSubmittedNote(
+            "Estimate sent to the customer for confirmation.",
+          );
         }}
       />
     </>
@@ -3436,11 +3720,16 @@ function InspectionStickerFields({
         />
       </Row>
       <Row label="Expires">
-        <input
-          type="date"
+        <MonthPicker
+          // Month + year only — a state inspection sticker is punched to the
+          // month, so the day input was asking for precision that doesn't
+          // exist (Abdul, Aug 20 session). Custom Otopair-themed picker instead
+          // of the browser's default `type="month"` popup.
+          aria-label="Inspection sticker expiration"
           value={expires}
-          onChange={(e) => onExpires(e.target.value)}
-          className="rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+          onChange={onExpires}
+          placeholder="—"
+          className="w-40"
         />
       </Row>
     </div>
@@ -4035,9 +4324,20 @@ function ResultsScreen({
   suggestions,
   canRecommend,
   recsBusy,
-  recsSubmitted,
+  submittedRecs,
   onAddRecommendations,
+  onUndoRecommendation,
+  undoingKey,
   error,
+  canAddToJob,
+  onAddToJob,
+  addedToJob,
+  addingToJobKey,
+  addedJobs,
+  onRemoveAddedJob,
+  removingJobId,
+  onOpenScope,
+  scopeSubmittedNote,
 }: {
   findings: { attention: { label: string; zone: string }[]; monitor: { label: string; zone: string }[] };
   totalLogged: number;
@@ -4048,15 +4348,35 @@ function ResultsScreen({
   suggestions: ResolvedSuggestion[];
   canRecommend: boolean;
   recsBusy: boolean;
-  recsSubmitted: boolean;
+  submittedRecs: Record<string, Id<"job_recommendations">>;
   onAddRecommendations: (keys: string[]) => void;
+  onUndoRecommendation: (key: string) => void;
+  undoingKey: string | null;
   error: string;
+  /** Only true once the job is running — see onAddToJob. */
+  canAddToJob: boolean;
+  onAddToJob: (key: string) => void;
+  addedToJob: Record<string, boolean>;
+  addingToJobKey: string | null;
+  /** Work already on the booking — the persistent, server-derived "added to this
+   *  job" list (survives refresh, unlike addedToJob). */
+  addedJobs: Array<{ _id: Id<"custom_jobs">; name: string }>;
+  /** Pull a line back off the job. */
+  onRemoveAddedJob: (customJobId: Id<"custom_jobs">) => void;
+  removingJobId: string | null;
+  /** Re-open the scope dialog for a line already added to the job. */
+  onOpenScope: () => void;
+  /** Set once the scope dialog sends the extra work for confirmation. */
+  scopeSubmittedNote: string | null;
 }) {
   // Default-select the urgent ("soon") suggestions; mechanic can toggle.
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(suggestions.map((s) => [s.key, s.urgency === "soon"])),
   );
-  const selectedKeys = suggestions.filter((s) => selected[s.key]).map((s) => s.key);
+  const selectableSuggestions = suggestions.filter((s) => !submittedRecs[s.key]);
+  const selectedKeys = selectableSuggestions
+    .filter((s) => selected[s.key])
+    .map((s) => s.key);
 
   return (
     <div className="space-y-4">
@@ -4083,6 +4403,63 @@ function ResultsScreen({
         <FindingList title="Monitor" tone="text-amber-600" dot="bg-amber-500" items={findings.monitor} />
       ) : null}
 
+      {/* Work added to this job. Server-derived so it survives a refresh (the
+          per-suggestion "added" flags don't) and so each line can be pulled back
+          off the same way it went on — the undo the ephemeral flags never had.
+          Once here, the line drops out of "Suggested follow-ups" above (it's now
+          on the booking), so this is where you act on it. */}
+      {addedJobs.length ? (
+        <div className="rounded-xl border border-primary/15 bg-primary/[0.03] p-3">
+          <div className="mb-1 flex items-center gap-1.5 text-[12px] font-semibold text-foreground">
+            <Wrench className="h-3.5 w-3.5 text-primary" />
+            Added to this job
+          </div>
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            Price it, add parts, and send for the customer&apos;s confirmation —
+            or remove it if you added it by mistake.
+          </p>
+          {scopeSubmittedNote ? (
+            <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-700">
+              <Check className="h-3.5 w-3.5 flex-shrink-0" />
+              {scopeSubmittedNote}
+            </p>
+          ) : null}
+          <div className="space-y-1">
+            {addedJobs.map((job) => (
+              <div
+                key={String(job._id)}
+                className="flex items-center gap-2 border-b border-primary/10 py-2 last:border-b-0"
+              >
+                <span className="flex-1 text-[13px] font-medium text-foreground">
+                  {job.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={onOpenScope}
+                  className="inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10"
+                >
+                  Price &amp; send
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRemoveAddedJob(job._id)}
+                  disabled={removingJobId !== null}
+                  aria-label={`Remove ${job.name}`}
+                  className="inline-flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition hover:bg-red-100 hover:text-red-700 disabled:opacity-50"
+                >
+                  {removingJobId === String(job._id) ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3 w-3" />
+                  )}
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {/* Suggested follow-ups derived from the measurements */}
       {suggestions.length ? (
         <div className="rounded-xl border border-primary/15 bg-primary/[0.03] p-3">
@@ -4094,18 +4471,67 @@ function ResultsScreen({
             recommendations — attributed to this shop&apos;s inspection, and
             lowers their Vehicle Health Score until resolved.
           </p>
-          {recsSubmitted ? (
-            <p className="rounded-lg bg-emerald-50 px-3 py-2 text-[12px] font-medium text-emerald-700">
-              ✓ Recommendations added.
-            </p>
-          ) : (
-            <>
-              <div className="space-y-1">
-                {suggestions.map((s) => (
-                  <label
-                    key={s.key}
-                    className="flex cursor-pointer items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
+          <div className="space-y-1">
+            {suggestions.map((s) =>
+              submittedRecs[s.key] ? (
+                <div
+                  key={s.key}
+                  className="flex items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
+                >
+                  <Check className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-600" />
+                  <span className="flex-1">
+                    <span className="text-[13px] font-medium text-foreground">
+                      {s.serviceName ?? s.label}
+                    </span>
+                    <span className="block text-[11px] text-emerald-700">
+                      Added to customer&apos;s recommendations.
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onUndoRecommendation(s.key)}
+                    disabled={undoingKey !== null}
+                    className="flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition hover:bg-emerald-100 hover:text-emerald-800 disabled:opacity-50"
                   >
+                    {undoingKey === s.key ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3 w-3" />
+                    )}
+                    Undo
+                  </button>
+                </div>
+              ) : addedToJob[s.key] ? (
+                <div
+                  key={s.key}
+                  className="flex items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
+                >
+                  <Wrench className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
+                  <span className="flex-1">
+                    <span className="text-[13px] font-medium text-foreground">
+                      {s.serviceName ?? s.label}
+                    </span>
+                    <span className="block text-[11px] text-primary">
+                      Added to this job — price it, add parts, and send for the
+                      customer&apos;s confirmation.
+                    </span>
+                  </span>
+                  {/* Re-open the same scope dialog that popped on add, for when
+                      the mechanic closed it to add more findings first. */}
+                  <button
+                    type="button"
+                    onClick={onOpenScope}
+                    className="mt-0.5 inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10"
+                  >
+                    Price &amp; send
+                  </button>
+                </div>
+              ) : (
+                <div
+                  key={s.key}
+                  className="flex items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
+                >
+                  <label className="flex flex-1 cursor-pointer items-start gap-2">
                     <input
                       type="checkbox"
                       checked={!!selected[s.key]}
@@ -4128,20 +4554,40 @@ function ResultsScreen({
                       </span>
                     </span>
                   </label>
-                ))}
-              </div>
-              <button
-                type="button"
-                disabled={!canRecommend || recsBusy || selectedKeys.length === 0}
-                onClick={() => onAddRecommendations(selectedKeys)}
-                className="mt-2 inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-card px-3 py-1.5 text-[12px] font-semibold text-primary hover:bg-primary/10 disabled:opacity-50"
-              >
-                {recsBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                Add {selectedKeys.length || ""} recommendation
-                {selectedKeys.length === 1 ? "" : "s"}
-              </button>
-            </>
-          )}
+                  {/* The second door. Without it a finding flagged here has to
+                      be retyped from scratch through Flag Issue → Extra work,
+                      which is exactly what Abdul had to do for the wipers. */}
+                  {canAddToJob ? (
+                    <button
+                      type="button"
+                      onClick={() => onAddToJob(s.key)}
+                      disabled={addingToJobKey !== null}
+                      className="mt-0.5 inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10 disabled:opacity-50"
+                    >
+                      {addingToJobKey === s.key ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Wrench className="h-3 w-3" />
+                      )}
+                      Add to this job
+                    </button>
+                  ) : null}
+                </div>
+              ),
+            )}
+          </div>
+          {selectableSuggestions.length > 0 ? (
+            <button
+              type="button"
+              disabled={!canRecommend || recsBusy || selectedKeys.length === 0}
+              onClick={() => onAddRecommendations(selectedKeys)}
+              className="mt-2 inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-card px-3 py-1.5 text-[12px] font-semibold text-primary hover:bg-primary/10 disabled:opacity-50"
+            >
+              {recsBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              Add {selectedKeys.length || ""} recommendation
+              {selectedKeys.length === 1 ? "" : "s"}
+            </button>
+          ) : null}
         </div>
       ) : null}
 

@@ -116,7 +116,6 @@ export default function FlagIssueSheet({
   const [laterUrgency, setLaterUrgency] = useState<
     "next_visit" | "within_3_months" | "soon"
   >("next_visit");
-  const [laterVisible, setLaterVisible] = useState(true);
   /* Set only when the mechanic picks a catalog match in the picker. Left null,
      the typed text is filed as an advisory — the typed text is always a valid
      answer, never something to be talked out of. */
@@ -200,7 +199,10 @@ export default function FlagIssueSheet({
         freeformName: pickedService ? undefined : name,
         urgency: laterUrgency,
         reason: laterReason.trim() || undefined,
-        visibleToDriver: laterVisible,
+        // Always visible. The mechanic used to choose here, but there was never
+        // a good reason to hide a finding from the driver — and the deferred
+        // reveal job flipped it true two hours after close anyway.
+        visibleToDriver: true,
       });
       onToast?.("Flagged for next time");
       onClose();
@@ -385,17 +387,6 @@ export default function FlagIssueSheet({
                 ))}
               </div>
 
-              <label className="flex cursor-pointer items-center gap-2 select-none">
-                <input
-                  type="checkbox"
-                  checked={laterVisible}
-                  onChange={(e) => setLaterVisible(e.target.checked)}
-                  className="h-3.5 w-3.5 rounded accent-emerald-500"
-                />
-                <span className="text-[12px] text-slate-400">
-                  Show the customer
-                </span>
-              </label>
             </div>
           ) : null}
 

@@ -32,6 +32,9 @@ import {
   recordShortcutUse,
   recordShortcutActual,
 } from "./shopCustomServices";
+import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
+import { partFitsConfigMake } from "./partSelector";
+import { detectTier, resolveLaborHours } from "./lib/quoteEngine";
 
 /**
  * Bump (or open) the cross-shop dedupe ledger row for a proposed service name.
@@ -638,114 +641,327 @@ async function authorizeMidJobEdit(
  * already owns re-quoting, the customer's approval, and the payment ceiling.
  * Duplicating any of that here would give us two sources of truth for a total.
  */
-export const addMidJobCustomService = mutation({
-  args: {
-    bookingId: v.id("bookings"),
-    name: v.string(),
-    complaint: v.optional(v.string()),
-    // Required in practice — recordCustomJobsForBooking throws without them.
-    // Left as plain strings here so the taxonomy can gain a slug without a
-    // schema migration; the shared validator is the source of truth.
-    systemTags: v.optional(v.array(v.string())),
-    workType: v.optional(v.string()),
-    estimatedMinutes: v.optional(v.number()),
-    shopCustomServiceId: v.optional(v.id("shop_custom_services")),
-  },
-  handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Not authenticated");
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkUserId", (q: any) =>
-        q.eq("clerkUserId", identity.subject),
-      )
-      .unique();
-    if (!user) throw new Error("User not found");
+/**
+ * OEM catalog/enrichment parts for a catalog service on this vehicle, in the
+ * shape custom_jobs.parts stores.
+ *
+ * Mirrors the oemRecommendations builder in job_actuals.getPrefillData (base
+ * part_fitments by config+service slug, the I1 make guard, the canonical
+ * median/average unit price) so that when a CATALOG service is added to a job —
+ * an "Oil Change" promoted straight from the inspection, say — the scope dialog
+ * opens with its OEM parts already listed instead of a blank "Add part for X".
+ * A freeform (non-catalog) add has no serviceId and skips this entirely.
+ *
+ * Best-effort: returns null on any gap (no config, no slug, no fitments) so the
+ * add still succeeds — the mechanic just fills the parts in by hand as before.
+ */
+async function oemPartsForServiceOnVehicle(
+  ctx: any,
+  args: { vin: string; serviceId: Id<"services"> },
+): Promise<NonNullable<CustomJobInput["parts"]> | null> {
+  const service: any = await ctx.db.get(args.serviceId);
+  if (!service?.slug) return null;
 
-    const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("Booking not found");
-    if (!booking.shop_id) throw new Error("Booking has no shop");
+  // .first() not .unique(): a duplicate-VIN row (rare, but they exist) would
+  // otherwise throw and break the read this runs inside.
+  const vehicle: any = await ctx.db
+    .query("vehicles")
+    .withIndex("by_vin", (q: any) => q.eq("vin", args.vin))
+    .first();
+  const configId = vehicle?.vehicle_config_id;
+  if (!configId) return null;
+  const config: any = await ctx.db.get(configId);
 
-    const shopUser = await ctx.db
-      .query("shop_users")
-      .withIndex("by_user_and_shop", (q: any) =>
-        q.eq("user_id", user._id).eq("shop_id", booking.shop_id),
-      )
-      .first();
-    if (!shopUser?.is_active) {
-      const owned = await ctx.db
-        .query("shops")
-        .withIndex("by_owner_user_id", (q: any) =>
-          q.eq("owner_user_id", user._id),
-        )
-        .filter((q: any) => q.eq(q.field("_id"), booking.shop_id))
-        .first();
-      if (!owned) throw new Error("Not authorized for this shop");
-    }
+  const fitments = await ctx.db
+    .query("part_fitments")
+    .withIndex("by_config_service", (q: any) =>
+      q.eq("vehicle_config_id", configId).eq("service_type", service.slug),
+    )
+    .collect();
 
-    // Same gate the mid-job approval cycle enforces — adding work to a job that
-    // isn't running would land money on a booking nobody is standing at.
-    if (booking.status !== "in_progress") {
-      throw new Error(
-        "Work can only be added while the booking is in progress.",
-      );
-    }
-
-    const name = args.name.trim();
-    if (!name) throw new Error("A name is required");
-
-    const now = Date.now();
-    const existingLines = Array.isArray((booking as any).custom_services)
-      ? [...(booking as any).custom_services]
-      : [];
-    const matchKey = serviceMatchKey(name);
-    const alreadyThere = existingLines.some(
-      (c: any) => serviceMatchKey(String(c.name)) === matchKey,
+  const out: NonNullable<CustomJobInput["parts"]> = [];
+  for (const f of fitments) {
+    // Base parts only — package-gated rows need the customer's package answers,
+    // which this add path doesn't collect.
+    if (f.package_code != null) continue;
+    const part: any = await ctx.db.get(f.part_id);
+    if (!part) continue;
+    // I1 make guard: never list a cross-make contaminant part.
+    if (!partFitsConfigMake(part.make_id, config?.make_id)) continue;
+    const price = await summarizePartPrices(ctx, f.part_id);
+    // summarizePartPrices returns DOLLARS (2dp); custom_jobs.parts stores cents.
+    const unitCents = Math.round(
+      quoteUnitPrice({
+        average: price.average,
+        median: price.median,
+        sample_size: price.sample_size,
+      }) * 100,
     );
-
-    if (!alreadyThere) {
-      existingLines.push({
-        name,
-        duration_minutes: args.estimatedMinutes ?? undefined,
-      });
-      await ctx.db.patch(args.bookingId, {
-        custom_services: existingLines,
-        updated_at: now,
-      });
-    }
-
-    // recordCustomJobsForBooking is idempotent per (booking, match_key), so a
-    // double-tap patches the existing row instead of duplicating it.
-    const ids = await recordCustomJobsForBooking(ctx, {
-      booking: {
-        _id: args.bookingId,
-        shop_id: booking.shop_id,
-        vin: booking.vin,
-      },
-      mechanicId: booking.mechanic_id ?? undefined,
-      customJobs: [
-        {
-          name,
-          system_tags: args.systemTags ?? null,
-          work_type: args.workType ?? null,
-          complaint: args.complaint ?? null,
-          estimated_minutes: args.estimatedMinutes ?? null,
-          shop_custom_service_id: args.shopCustomServiceId ?? null,
-        },
-      ],
-      source: "mid_job",
-      now,
+    out.push({
+      part_name: part.name,
+      oem_number: part.oem_part_number,
+      brand: part.brand ?? undefined,
+      quantity:
+        f.quantity_needed && f.quantity_needed > 0 ? f.quantity_needed : 1,
+      unit_price_cents: unitCents > 0 ? unitCents : undefined,
     });
+  }
+  return out.length > 0 ? out : null;
+}
 
-    return {
-      ok: true,
-      customJobId: ids[0] ?? null,
-      addedLine: !alreadyThere,
-      // The caller still has to send the mid-job change for approval — nothing
-      // about the booking's money has moved yet.
-      requiresApproval: true,
-    };
+/**
+ * Labor minutes we'd quote for a catalog service on this vehicle — the internal
+ * labor ladder (resolveLaborHours), car- and tier-aware, the same estimate a
+ * BOOKED instance of the service would carry. Lets an added catalog service open
+ * the labor step pre-filled with a real time instead of 0. Best-effort: null on
+ * any gap (no config, no tier, ladder refuses) so the mechanic just types it.
+ */
+async function oemLaborMinutesForServiceOnVehicle(
+  ctx: any,
+  args: { vin: string; serviceId: Id<"services"> },
+): Promise<number | null> {
+  const vehicle: any = await ctx.db
+    .query("vehicles")
+    .withIndex("by_vin", (q: any) => q.eq("vin", args.vin))
+    .first();
+  const configId = vehicle?.vehicle_config_id;
+  if (!configId) return null;
+  const config: any = await ctx.db.get(configId);
+  if (!config) return null;
+  const tier = await detectTier(ctx, config);
+  if (!tier) return null;
+  const res = await resolveLaborHours(ctx, {
+    vehicle_config_id: configId,
+    service_id: args.serviceId,
+    vehicle_tier: tier,
+  });
+  if (!res.ok || !(res.hours > 0)) return null;
+  return Math.round(res.hours * 60);
+}
+
+/**
+ * Resolve a free-text line name to a catalog service, on the same match key the
+ * catalog dedupes on (so "Oil Change" → the oil_change service). The slug is
+ * also tried, with -/_ normalized to spaces. Returns null for genuinely
+ * off-catalog work. Pass `services` to avoid re-collecting the (small) table.
+ */
+async function resolveCatalogServiceIdByName(
+  ctx: any,
+  name: string,
+  services?: any[],
+): Promise<Id<"services"> | null> {
+  const key = serviceMatchKey(name);
+  if (!key) return null;
+  const list = services ?? (await ctx.db.query("services").collect());
+  const matched = list.find(
+    (s: any) =>
+      serviceMatchKey(s.name) === key ||
+      (s.slug && serviceMatchKey(String(s.slug).replace(/[-_]/g, " ")) === key),
+  );
+  return matched?._id ?? null;
+}
+
+// Shared arg shape for the two "add a custom service to a booking" entry points
+// (pre-job estimate vs mid-job change). Inputs are identical; the mutations
+// differ only in which booking status they accept and the `source` they stamp.
+const customServiceAddArgs = {
+  bookingId: v.id("bookings"),
+  name: v.string(),
+  complaint: v.optional(v.string()),
+  // Required in practice — recordCustomJobsForBooking throws without them.
+  // Left as plain strings here so the taxonomy can gain a slug without a
+  // schema migration; the shared validator is the source of truth.
+  systemTags: v.optional(v.array(v.string())),
+  workType: v.optional(v.string()),
+  estimatedMinutes: v.optional(v.number()),
+  shopCustomServiceId: v.optional(v.id("shop_custom_services")),
+  // Set when the added line resolves to a REAL catalog service (e.g. an
+  // inspection follow-up that matched "Oil Change"). Lets the add seed the
+  // line's parts from the OEM catalog/enrichment so the scope dialog shows them
+  // instead of an empty "Add part for X". Omitted for freeform work.
+  catalogServiceId: v.optional(v.id("services")),
+} as const;
+
+/**
+ * Shared body for adding an off-catalog line to a booking. Appends it to
+ * custom_services (idempotent by match_key) and records the structured
+ * custom_jobs row. Deliberately does NOT re-quote or move money — the caller
+ * sends the change through the appropriate approval cycle (pre_job estimate or
+ * mid_job change), which owns the quote, the customer's approval and the ceiling.
+ *
+ * `assertStatus` is the ONE place the two entry points diverge: mid-job insists
+ * the job is running (money would otherwise land on a booking nobody is standing
+ * at); pre-job insists it is NOT yet running (an in-progress job takes the
+ * mid-job path) and not closed.
+ */
+async function addCustomServiceForBooking(
+  ctx: any,
+  args: {
+    bookingId: Id<"bookings">;
+    name: string;
+    complaint?: string;
+    systemTags?: string[];
+    workType?: string;
+    estimatedMinutes?: number;
+    shopCustomServiceId?: Id<"shop_custom_services">;
+    catalogServiceId?: Id<"services">;
   },
+  opts: { source: string; assertStatus: (status: string) => void },
+) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Not authenticated");
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q: any) =>
+      q.eq("clerkUserId", identity.subject),
+    )
+    .unique();
+  if (!user) throw new Error("User not found");
+
+  const booking = await ctx.db.get(args.bookingId);
+  if (!booking) throw new Error("Booking not found");
+  if (!booking.shop_id) throw new Error("Booking has no shop");
+
+  const shopUser = await ctx.db
+    .query("shop_users")
+    .withIndex("by_user_and_shop", (q: any) =>
+      q.eq("user_id", user._id).eq("shop_id", booking.shop_id),
+    )
+    .first();
+  if (!shopUser?.is_active) {
+    const owned = await ctx.db
+      .query("shops")
+      .withIndex("by_owner_user_id", (q: any) =>
+        q.eq("owner_user_id", user._id),
+      )
+      .filter((q: any) => q.eq(q.field("_id"), booking.shop_id))
+      .first();
+    if (!owned) throw new Error("Not authorized for this shop");
+  }
+
+  opts.assertStatus(booking.status);
+
+  const name = args.name.trim();
+  if (!name) throw new Error("A name is required");
+
+  const now = Date.now();
+  const existingLines = Array.isArray((booking as any).custom_services)
+    ? [...(booking as any).custom_services]
+    : [];
+  const matchKey = serviceMatchKey(name);
+  const alreadyThere = existingLines.some(
+    (c: any) => serviceMatchKey(String(c.name)) === matchKey,
+  );
+
+  if (!alreadyThere) {
+    existingLines.push({
+      name,
+      duration_minutes: args.estimatedMinutes ?? undefined,
+    });
+    await ctx.db.patch(args.bookingId, {
+      custom_services: existingLines,
+      updated_at: now,
+    });
+  }
+
+  // Resolve which catalog service this line IS, so its OEM parts can be seeded.
+  // Prefer the id the caller passed (the inspection knows it), but fall back to
+  // matching the line's NAME against the catalog on the same key the catalog
+  // dedupes on — so "Oil Change" seeds its parts whether or not the caller
+  // threaded an id. Freeform work that matches nothing stays parts-less.
+  let catalogServiceId = args.catalogServiceId ?? null;
+  if (!catalogServiceId) {
+    catalogServiceId = await resolveCatalogServiceIdByName(ctx, name);
+  }
+
+  // Catalog service? Seed the line's parts from the OEM catalog/enrichment so
+  // the scope dialog opens with them listed. Best-effort — a gap just means the
+  // mechanic fills them in by hand, exactly as before.
+  const seededParts = catalogServiceId
+    ? await oemPartsForServiceOnVehicle(ctx, {
+        vin: booking.vin,
+        serviceId: catalogServiceId,
+      })
+    : null;
+
+  // recordCustomJobsForBooking is idempotent per (booking, match_key), so a
+  // double-tap patches the existing row instead of duplicating it.
+  const ids = await recordCustomJobsForBooking(ctx, {
+    booking: {
+      _id: args.bookingId,
+      shop_id: booking.shop_id,
+      vin: booking.vin,
+    },
+    mechanicId: booking.mechanic_id ?? undefined,
+    customJobs: [
+      {
+        name,
+        system_tags: args.systemTags ?? null,
+        work_type: args.workType ?? null,
+        complaint: args.complaint ?? null,
+        estimated_minutes: args.estimatedMinutes ?? null,
+        shop_custom_service_id: args.shopCustomServiceId ?? null,
+        parts: seededParts,
+      },
+    ],
+    source: opts.source,
+    now,
+  });
+
+  return {
+    ok: true,
+    customJobId: ids[0] ?? null,
+    addedLine: !alreadyThere,
+    // The caller still has to send the change for approval — nothing about the
+    // booking's money has moved yet.
+    requiresApproval: true,
+  };
+}
+
+export const addMidJobCustomService = mutation({
+  args: customServiceAddArgs,
+  handler: (ctx, args) =>
+    addCustomServiceForBooking(ctx, args, {
+      source: "mid_job",
+      assertStatus: (status) => {
+        // Same gate the mid-job approval cycle enforces — adding work to a job
+        // that isn't running lands money on a booking nobody is standing at.
+        if (status !== "in_progress") {
+          throw new Error(
+            "Work can only be added while the booking is in progress.",
+          );
+        }
+      },
+    }),
+});
+
+/**
+ * Add work discovered during the pre-job inspection to a booking that hasn't
+ * started yet. Same append-and-record as the mid-job path, but the mechanic then
+ * sends it through the PRE-job estimate (booking_approvals.submitPreJobEstimate)
+ * so the customer confirms the added scope before any work begins — instead of
+ * re-discovering and re-adding it once the job is running.
+ */
+export const addPreJobCustomService = mutation({
+  args: customServiceAddArgs,
+  handler: (ctx, args) =>
+    addCustomServiceForBooking(ctx, args, {
+      source: "pre_job",
+      assertStatus: (status) => {
+        if (status === "in_progress") {
+          throw new Error(
+            "This job is already in progress — add it as a mid-job change instead.",
+          );
+        }
+        if (
+          status === "completed" ||
+          status === "cancelled" ||
+          status === "canceled"
+        ) {
+          throw new Error("This booking is closed — nothing more can be added.");
+        }
+      },
+    }),
 });
 
 /**
@@ -887,6 +1103,94 @@ export const removeMidJobCustomService = mutation({
 });
 
 /**
+ * Pull a line off a booking that hasn't started yet — the pre-job twin of
+ * removeMidJobCustomService.
+ *
+ * A service added to the pre-job estimate (e.g. an inspection follow-up promoted
+ * with "Add to this job") must be removable the same way it was added, before
+ * the estimate is approved. authorizeMidJobEdit insists the job is in progress,
+ * which would trap a pre-start add with no way to undo it — this allows the
+ * removal while the booking is still pre-start (and not closed). No money has
+ * moved (the pre-job estimate isn't approved), so there's nothing to reverse.
+ */
+export const removePreJobCustomService = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    customJobId: v.id("custom_jobs"),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q: any) =>
+        q.eq("clerkUserId", identity.subject),
+      )
+      .unique();
+    if (!user) throw new Error("User not found");
+
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+    if (!booking.shop_id) throw new Error("Booking has no shop");
+
+    const shopUser = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_and_shop", (q: any) =>
+        q.eq("user_id", user._id).eq("shop_id", booking.shop_id),
+      )
+      .first();
+    if (!shopUser?.is_active) {
+      const owned = await ctx.db
+        .query("shops")
+        .withIndex("by_owner_user_id", (q: any) =>
+          q.eq("owner_user_id", user._id),
+        )
+        .filter((q: any) => q.eq(q.field("_id"), booking.shop_id))
+        .first();
+      if (!owned) throw new Error("Not authorized for this shop");
+    }
+
+    if (booking.status === "in_progress") {
+      throw new Error(
+        "This job is in progress — remove it as a mid-job change instead.",
+      );
+    }
+    if (
+      booking.status === "completed" ||
+      booking.status === "cancelled" ||
+      booking.status === "canceled"
+    ) {
+      throw new Error("This booking is closed.");
+    }
+
+    const row = await ctx.db.get(args.customJobId);
+    if (!row) throw new Error("That work is no longer on the job.");
+    if (row.booking_id !== args.bookingId) {
+      throw new Error("That work belongs to a different booking.");
+    }
+
+    // Drop the scheduling copy on the booking, matched on the same key the row
+    // is keyed on so an edited name still lines up.
+    const matchKey = row.match_key ?? serviceMatchKey(row.name);
+    const lines = Array.isArray((booking as any).custom_services)
+      ? (booking as any).custom_services
+      : [];
+    const nextLines = lines.filter(
+      (c: any) => serviceMatchKey(String(c.name)) !== matchKey,
+    );
+    if (nextLines.length !== lines.length) {
+      await ctx.db.patch(args.bookingId, {
+        custom_services: nextLines,
+        updated_at: Date.now(),
+      });
+    }
+
+    await ctx.db.delete(args.customJobId);
+    return { ok: true };
+  },
+});
+
+/**
  * Mechanic-facing: the custom jobs on a booking, so the post-job survey can ask
  * for an outcome per line without re-deriving them from the booking array.
  */
@@ -904,28 +1208,83 @@ export const listForBooking = query({
       // the customer turned down.
       .filter((r) => r.status !== "declined");
     rows.sort((a, b) => a.created_at - b.created_at);
-    return rows.map((r) => ({
-      _id: r._id,
-      name: r.name,
-      system_tags: (r.system_tags ?? []) as string[],
-      work_type: (r.work_type ?? null) as string | null,
-      parts: (r.parts ?? []) as Array<{
+
+    // Read-time part fill: a line that resolves to a catalog service we enrich
+    // for (e.g. "Oil Change") but carries no stored parts gets the OEM catalog
+    // parts for THIS vehicle listed here — the same parts a booked instance of
+    // that service shows. This is what makes an added catalog service open with
+    // its parts even when they were never seeded at add-time (older lines, or a
+    // resolution miss). Stored parts always win; freeform lines resolve to no
+    // service and stay parts-less. Services collected once, only when needed.
+    const booking = await ctx.db.get(args.bookingId);
+    const vin =
+      booking && typeof (booking as any).vin === "string"
+        ? (booking as any).vin
+        : null;
+    let servicesCache: any[] | null = null;
+
+    const out = [];
+    for (const r of rows) {
+      let parts = (r.parts ?? []) as Array<{
         part_name: string;
         oem_number?: string;
         brand?: string;
         quantity: number;
         unit_price_cents?: number;
         line_total_cents?: number;
-      }>,
-      quoted_parts_cents: (r.quoted_parts_cents ?? null) as number | null,
-      category_id: r.category_id ?? null,
-      complaint: r.complaint ?? null,
-      resolution: r.resolution ?? null,
-      resolved_complaint: r.resolved_complaint ?? null,
-      estimated_minutes: r.estimated_minutes ?? null,
-      actual_minutes: r.actual_minutes ?? null,
-      status: r.status,
-    }));
+      }>;
+      let estimatedMinutes = (r.estimated_minutes ?? null) as number | null;
+
+      const needsParts = parts.length === 0;
+      const needsLabor = !(
+        typeof estimatedMinutes === "number" && estimatedMinutes > 0
+      );
+      // Fill parts AND labor from the catalog for a line we enrich for but that
+      // carries neither yet — so an added catalog service opens with the parts
+      // and the labor time a booked instance would show. Never overwrites stored
+      // values, skips completed lines, and leaves freeform work untouched.
+      if ((needsParts || needsLabor) && vin && r.status !== "completed") {
+        if (!servicesCache) servicesCache = await ctx.db.query("services").collect();
+        const serviceId = await resolveCatalogServiceIdByName(
+          ctx,
+          r.name,
+          servicesCache,
+        );
+        if (serviceId) {
+          if (needsParts) {
+            const seeded = await oemPartsForServiceOnVehicle(ctx, {
+              vin,
+              serviceId,
+            });
+            if (seeded) parts = seeded;
+          }
+          if (needsLabor) {
+            const mins = await oemLaborMinutesForServiceOnVehicle(ctx, {
+              vin,
+              serviceId,
+            });
+            if (mins) estimatedMinutes = mins;
+          }
+        }
+      }
+
+      out.push({
+        _id: r._id,
+        name: r.name,
+        system_tags: (r.system_tags ?? []) as string[],
+        work_type: (r.work_type ?? null) as string | null,
+        parts,
+        quoted_parts_cents: (r.quoted_parts_cents ?? null) as number | null,
+        category_id: r.category_id ?? null,
+        complaint: r.complaint ?? null,
+        resolution: r.resolution ?? null,
+        resolved_complaint: r.resolved_complaint ?? null,
+        estimated_minutes: estimatedMinutes,
+        actual_minutes: r.actual_minutes ?? null,
+        status: r.status,
+      });
+    }
+    return out;
   },
 });
 

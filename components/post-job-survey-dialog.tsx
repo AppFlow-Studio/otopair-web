@@ -24,6 +24,7 @@ import {
   Minus,
   Pencil,
   Plus,
+  RotateCcw,
   Search,
   CalendarClock,
   Gauge,
@@ -90,6 +91,7 @@ import {
   TIRE_SIZE_OPTIONS,
 } from "@/lib/inspection-options";
 import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
+import { LIGHT_LABELS } from "@/lib/warningLightItems";
 import {
   CustomJobTaxonomyPicker,
   isCustomJobTaxonomyComplete,
@@ -200,6 +202,10 @@ type PostJobPrefillData = {
   priorOpenRecommendations?: PriorOpenRecommendation[];
   confirmedThisVisit?: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection?: SuggestedFromInspection[];
+  /** Canonical warning-light codes currently on file for this vehicle, any
+   *  source. Offered as a "still on?" clear list — see "Dashboard warning
+   *  lights." */
+  currentWarningLights?: string[];
   // Prejob inspection tire findings (per axle) — seeds the custom tire editor
   // when tire replacement is added mid-job. From getPrefillData.prejobTires.
   prejobTires?: {
@@ -1233,7 +1239,10 @@ function PostJobSurveyDialogBody({
           part_name: p.part_name,
           brand: p.brand ?? "",
           oem_number: p.oem_number ?? "",
-          cost: unitCents > 0 ? formatFixedCentCurrency(unitCents) : "0.00",
+          // `cost` is a DOLLAR string and formatFixedCentCurrency expects dollars
+          // (it multiplies by 100 internally), but unitCents is CENTS — so divide
+          // first. Passing cents straight in rendered $4.68 as $468.
+          cost: unitCents > 0 ? formatFixedCentCurrency(unitCents / 100) : "0.00",
           quantity: qty,
           supplied_by: "shop",
           part_tier: "oem",
@@ -1456,6 +1465,40 @@ function PostJobSurveyDialogBody({
   const [laborAllocations, setLaborAllocations] = useState<
     Record<string, string>
   >({});
+  // Every labor line must resolve to a real time before the mechanic can leave
+  // the labor step — a line still at 0 (no estimate, nothing typed) would quote
+  // free labor. Mirrors LaborStep's per-line rule: the explicit entry wins,
+  // otherwise the line's estimate (base = estimatedLaborMinutes; each added line
+  // = its estimated_minutes). A catalog service we enrich for arrives with an
+  // estimate, so this only blocks lines that genuinely have none.
+  const laborStepValid = useMemo(() => {
+    const lineDefs: Array<{ key: string; defMin: number }> = [
+      {
+        key: "base",
+        defMin:
+          typeof estimatedLaborMinutes === "number" && estimatedLaborMinutes > 0
+            ? estimatedLaborMinutes
+            : 0,
+      },
+      ...(customJobs ?? []).map((j) => ({
+        key: String(j._id),
+        defMin:
+          typeof j.estimated_minutes === "number" && j.estimated_minutes > 0
+            ? j.estimated_minutes
+            : 0,
+      })),
+    ];
+    return lineDefs.every((l) => {
+      const raw = laborAllocations[l.key];
+      const hours =
+        raw !== undefined
+          ? Number(raw) || 0
+          : l.defMin > 0
+            ? l.defMin / 60
+            : 0;
+      return hours > 0;
+    });
+  }, [estimatedLaborMinutes, customJobs, laborAllocations]);
   const [actualPartsCost, setActualPartsCost] = useState("");
   const [difficultyRating, setDifficultyRating] = useState("");
   const [partsAccuracyStatus, setPartsAccuracyStatus] =
@@ -1473,6 +1516,9 @@ function PostJobSurveyDialogBody({
     Record<string, { resolution: string; resolved: boolean | null }>
   >({});
   const [recommendations, setRecommendations] = useState<RecRowState[]>([]);
+  // Canonical light codes the mechanic confirmed are no longer on the
+  // dashboard — see "Dashboard warning lights."
+  const [clearedWarningLights, setClearedWarningLights] = useState<string[]>([]);
   // Prior open recommendations the mechanic marks done this visit, keyed by the
   // job_recommendations _id. Sent as a separate arg to completeWithPostjob to
   // close them out (status → completed, follow-up cancelled).
@@ -2017,7 +2063,10 @@ function PostJobSurveyDialogBody({
               : r.freeform_service_name.trim() || null,
             urgency: r.urgency,
             reason: r.reason.trim() || null,
-            visible_to_driver: r.visible_to_driver,
+            // Always visible — the per-row toggle is gone. Forced here rather
+            // than trusting the row state so a draft restored from a row saved
+            // while the toggle still existed can't submit as hidden.
+            visible_to_driver: true,
             target_mileage:
               r.target_mileage.trim() && Number.isFinite(mileage) && mileage > 0
                 ? mileage
@@ -2034,6 +2083,8 @@ function PostJobSurveyDialogBody({
             tire_specs: r.tire_specs ?? null,
           };
         }),
+      cleared_warning_lights:
+        clearedWarningLights.length > 0 ? clearedWarningLights : undefined,
       },
       // Only send lines the mechanic actually reported on. An untouched line
       // still closes server-side, but as "completed, no outcome recorded" —
@@ -2174,8 +2225,12 @@ function PostJobSurveyDialogBody({
   // skippable like the rest of the optional tail.
   const REQUIRED_STEPS: StepKey[] = ["mileage", "parts", "parts_accuracy"];
   // The gate owns its own Yes/No buttons, so suppress the top-right Skip there.
+  // Labor also can't be skipped — a skipped labor line quotes free labor, which
+  // is the whole point of gating Continue on it.
   const skipHiddenForStep =
-    REQUIRED_STEPS.includes(currentStep) || currentStep === "more_gate";
+    REQUIRED_STEPS.includes(currentStep) ||
+    currentStep === "more_gate" ||
+    currentStep === "labor";
 
   const stepHeader = (
     <div className="flex items-center justify-between gap-2 px-4 pt-3 sm:px-6">
@@ -2429,6 +2484,9 @@ function PostJobSurveyDialogBody({
             toggleResolvedPriorRec={toggleResolvedPriorRec}
             confirmedThisVisit={prefillData?.confirmedThisVisit ?? []}
             suggestedFromInspection={prefillData?.suggestedFromInspection ?? []}
+            currentWarningLights={prefillData?.currentWarningLights ?? []}
+            clearedWarningLights={clearedWarningLights}
+            setClearedWarningLights={setClearedWarningLights}
             actualPartsCost={actualPartsCost}
             setActualPartsCost={setActualPartsCost}
             partsCostSum={sumJobActualParts(normalizeParts())}
@@ -2559,6 +2617,7 @@ function PostJobSurveyDialogBody({
                             (Number(p.cost) || 0) <= 0,
                         ).length,
                   recommendations,
+                  laborStepValid,
                 })}
                 className={cn(
                   drawerPrimaryButtonClassName,
@@ -2592,8 +2651,13 @@ function canAdvance(
     // since prices aren't editable there.
     unpricedBlockingCount: number;
     recommendations: RecRowState[];
+    laborStepValid: boolean;
   }
 ) {
+  if (step === "labor") {
+    // Can't leave labor with any line at 0 — that would quote free labor.
+    return state.laborStepValid;
+  }
   if (step === "recommendations") {
     // Every rec for a has_options service must carry a pick.
     return state.recommendations.every((r) => {
@@ -2723,6 +2787,9 @@ function StepContent(props: {
   toggleResolvedPriorRec: (id: string) => void;
   confirmedThisVisit: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection: SuggestedFromInspection[];
+  currentWarningLights: string[];
+  clearedWarningLights: string[];
+  setClearedWarningLights: React.Dispatch<React.SetStateAction<string[]>>;
   actualPartsCost: string;
   setActualPartsCost: (value: string) => void;
   partsCostSum: number;
@@ -3164,6 +3231,10 @@ function StepContent(props: {
           toggleResolvedPriorRec={props.toggleResolvedPriorRec}
           confirmedThisVisit={props.confirmedThisVisit}
           suggestedFromInspection={props.suggestedFromInspection}
+          bookingId={props.bookingId}
+          currentWarningLights={props.currentWarningLights}
+          clearedWarningLights={props.clearedWarningLights}
+          setClearedWarningLights={props.setClearedWarningLights}
           additionalObservations={props.additionalObservations}
           setAdditionalObservations={props.setAdditionalObservations}
           completionMileage={props.completionMileage}
@@ -5002,6 +5073,10 @@ function RecommendationsStep({
   toggleResolvedPriorRec,
   confirmedThisVisit,
   suggestedFromInspection,
+  bookingId,
+  currentWarningLights,
+  clearedWarningLights,
+  setClearedWarningLights,
   additionalObservations,
   setAdditionalObservations,
   completionMileage,
@@ -5015,6 +5090,10 @@ function RecommendationsStep({
   toggleResolvedPriorRec: (id: string) => void;
   confirmedThisVisit: ConfirmedThisVisitRecommendation[];
   suggestedFromInspection: SuggestedFromInspection[];
+  bookingId: string | null;
+  currentWarningLights: string[];
+  clearedWarningLights: string[];
+  setClearedWarningLights: React.Dispatch<React.SetStateAction<string[]>>;
   additionalObservations: string;
   setAdditionalObservations: (value: string) => void;
   completionMileage: string;
@@ -5024,6 +5103,28 @@ function RecommendationsStep({
   const [optionPickerIndex, setOptionPickerIndex] = useState<number | null>(null);
   const [tirePickerIndex, setTirePickerIndex] = useState<number | null>(null);
   const currentMileage = Number(completionMileage);
+
+  const confirmFromPreJob = useMutation(api.jobRecommendations.confirmFromPreJob);
+  const [undoingId, setUndoingId] = useState<string | null>(null);
+
+  async function handleUndoConfirmed(recId: string) {
+    if (!bookingId || undoingId) return;
+    setUndoingId(recId);
+    try {
+      await confirmFromPreJob({
+        bookingId: bookingId as Id<"bookings">,
+        confirmations: [
+          {
+            recommendation_id: recId as Id<"job_recommendations">,
+            outcome: "dismissed",
+            dismissed_reason: "mistake",
+          },
+        ],
+      });
+    } finally {
+      setUndoingId(null);
+    }
+  }
 
   function updateRec(index: number, patch: Partial<RecRowState>) {
     setRecommendations((current) =>
@@ -5093,6 +5194,14 @@ function RecommendationsStep({
         },
       ];
     });
+  }
+
+  function toggleClearedLight(code: string) {
+    setClearedWarningLights((current) =>
+      current.includes(code)
+        ? current.filter((c) => c !== code)
+        : [...current, code],
+    );
   }
 
   return (
@@ -5191,11 +5300,24 @@ function RecommendationsStep({
                     <span className="text-muted-foreground"> — {rec.reason}</span>
                   ) : null}
                 </span>
+                <button
+                  type="button"
+                  onClick={() => handleUndoConfirmed(rec._id)}
+                  disabled={!bookingId || undoingId !== null}
+                  className="flex flex-shrink-0 items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition hover:bg-emerald-100 hover:text-emerald-800 disabled:opacity-50"
+                >
+                  {undoingId === rec._id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <RotateCcw className="h-3 w-3" />
+                  )}
+                  Undo
+                </button>
               </li>
             ))}
           </ul>
           <p className="mt-2 text-[10px] text-muted-foreground">
-            Already confirmed at pre-job — no action needed.
+            Already confirmed at pre-job — changed your mind or fixed it during the job? Undo it.
           </p>
         </div>
       ) : null}
@@ -5240,6 +5362,51 @@ function RecommendationsStep({
           <p className="mt-2 text-[10px] text-muted-foreground">
             Skipped at pre-job — check any you still want to recommend.
           </p>
+        </div>
+      ) : null}
+
+      {currentWarningLights.length > 0 ? (
+        <div className="mb-4 rounded-xl border border-primary/10 bg-muted/30 px-3 py-2.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            Dashboard lights on file for this car
+          </p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Still on? Clear any you resolved this visit.
+          </p>
+          <ul className="mt-1.5 space-y-1">
+            {currentWarningLights.map((code) => {
+              const cleared = clearedWarningLights.includes(code);
+              return (
+                <li
+                  key={code}
+                  className="flex items-center justify-between gap-2 py-1"
+                >
+                  <span
+                    className={cn(
+                      "text-[12px]",
+                      cleared
+                        ? "text-muted-foreground line-through"
+                        : "font-medium text-foreground",
+                    )}
+                  >
+                    {LIGHT_LABELS[code as keyof typeof LIGHT_LABELS] ?? code}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleClearedLight(code)}
+                    className={cn(
+                      "flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition-colors",
+                      cleared
+                        ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                        : "border-primary/25 bg-card text-muted-foreground hover:bg-primary/5",
+                    )}
+                  >
+                    {cleared ? "✓ Cleared" : "Clear"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       ) : null}
 
@@ -5413,53 +5580,16 @@ function RecommendationsStep({
                   </div>
                 </div>
 
-                <div className="mt-2.5 flex items-center justify-end gap-2 border-t border-primary/10 pt-2.5">
-                  <label className="inline-flex cursor-pointer items-center gap-2 select-none">
-                    <span className="text-[11px] text-muted-foreground">
-                      Visible to driver
-                    </span>
-                    <span
-                      role="switch"
-                      aria-checked={rec.visible_to_driver}
-                      tabIndex={0}
-                      onClick={() =>
-                        updateRec(index, {
-                          visible_to_driver: !rec.visible_to_driver,
-                        })
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === " " || e.key === "Enter") {
-                          e.preventDefault();
-                          updateRec(index, {
-                            visible_to_driver: !rec.visible_to_driver,
-                          });
-                        }
-                      }}
-                      className={cn(
-                        "relative inline-flex h-5 w-9 items-center rounded-full transition-colors",
-                        rec.visible_to_driver ? "bg-primary" : "bg-muted",
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "inline-block h-4 w-4 transform rounded-full bg-background shadow-sm transition-transform",
-                          rec.visible_to_driver
-                            ? "translate-x-4"
-                            : "translate-x-0.5",
-                        )}
-                      />
-                    </span>
-                  </label>
-                </div>
+                {/* Preview (Off-Catalog Work spec, §6): off-catalog advice is
+                    shown to the mechanic exactly as the driver will read it —
+                    attributed to them, with no price and no booking. Nobody
+                    should find out after the fact that their recommendation was
+                    presented as an opinion.
 
-                {/* Preview gate (Off-Catalog Work spec, §6): the moment a
-                    mechanic makes off-catalog advice driver-visible, show them
-                    exactly how it will be framed — attributed to them, with no
-                    price and no booking. Nobody should find out after the fact
-                    that their recommendation was presented as an opinion. */}
+                    No longer gated on a visibility toggle: every recommendation
+                    reaches the driver now, so the preview always applies. */}
                 {!rec.recommended_service_id &&
-                rec.freeform_service_name.trim() &&
-                rec.visible_to_driver ? (
+                rec.freeform_service_name.trim() ? (
                   <AdvisoryPreview
                     name={rec.freeform_service_name.trim()}
                     reason={rec.reason}

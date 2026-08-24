@@ -1,7 +1,13 @@
 "use client";
 
+/*
+ * ARCHIVED 2026-08-24 — "Built to understand your car" editorial three-up.
+ * Replaced on the landing page by listens-section.tsx (the V2 photo split-card,
+ * Figma 354:738) per the designer feedback doc, item 5.
+ */
+
 import Image from "next/image";
-import { Reveal, Seq, SeqPop, SeqRule, Sequence, serif, serifDisplay } from "./reveal";
+import { Reveal, Seq, SeqPop, SeqRule, Sequence, serif, serifDisplay } from "../reveal";
 
 /* Each column runs the same internal beat — number, rule drawing itself in,
    title, body, then its mock — staggered by LEAD so the three read as one

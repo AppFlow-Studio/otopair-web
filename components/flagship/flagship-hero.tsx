@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { ConversationProvider } from "@elevenlabs/react";
 import {
   AnimatePresence,
@@ -102,6 +102,15 @@ function HeroInner() {
     oto.messages.length > 0 ||
     oto.connected;
   const orbActive = oto.isSpeaking || oto.thinking || oto.status === "connecting";
+
+  // Sections further down the page (PathSection's Voice Intake card) can hand
+  // the visitor to the live hero conversation: they scroll up and fire this
+  // event, and the hero opens the mic exactly as if VoiceBar's mic was tapped.
+  useEffect(() => {
+    const onTalk = () => oto.startVoice();
+    window.addEventListener("otopair:talk", onTalk);
+    return () => window.removeEventListener("otopair:talk", onTalk);
+  }, [oto]);
 
   // Live audio level (0..1) sampled from the conversation — drives orb reactivity.
   const getOrbLevel = useCallback(() => {

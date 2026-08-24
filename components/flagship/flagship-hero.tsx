@@ -285,7 +285,7 @@ function HeroInner() {
             <motion.div
               animate={{ scale: active ? 1.18 : 1 }}
               transition={{ type: "spring", stiffness: 140, damping: 20 }}
-              className="h-[280px] w-[280px] sm:h-[340px] sm:w-[360px]"
+              className="h-[260px] w-[260px] sm:h-[300px] sm:w-[300px]"
             >
               <OtoOrb
                 active={orbActive}
@@ -305,7 +305,7 @@ function HeroInner() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -14, transition: { duration: 0.25 } }}
                   transition={{ duration: 0.5, delay: 0.1 }}
-                  className="mt-8 flex w-full flex-col items-center"
+                  className="mt-4 flex w-full flex-col items-center"
                 >
                   <VoiceBar
                     onSend={oto.sendText}

@@ -10,6 +10,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/phone";
+import { sanitizeVinInput } from "@/lib/vin";
 
 function todayIso(): string {
   const d = new Date();
@@ -86,6 +87,13 @@ export default function WalkInNewPage() {
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [vin, setVin] = useState("");
+  // What the VIN field last auto-fixed, surfaced so O→0 / I→1 corrections and
+  // dropped characters aren't silent (a silently-dropped O left the VIN 16 chars
+  // long, which skipped the decode-on-submit enrichment entirely).
+  const [vinCorrection, setVinCorrection] = useState<{
+    correctedOI: boolean;
+    droppedInvalid: boolean;
+  } | null>(null);
   const [showManualVehicle, setShowManualVehicle] = useState(false);
   const [year, setYear] = useState("");
   const [make, setMake] = useState("");
@@ -396,9 +404,19 @@ export default function WalkInNewPage() {
                 <div className="relative">
                   <TextInput
                     value={vin}
-                    onChange={(v) =>
-                      setVin(v.toUpperCase().replace(/[^A-HJ-NPR-Z0-9]/g, "").slice(0, 17))
-                    }
+                    onChange={(v) => {
+                      // Auto-correct O→0 / I→1 (not just strip them) so a VIN
+                      // typed with an "O" stays 17 chars and the decode-on-submit
+                      // enrichment still runs.
+                      const { value, correctedOI, droppedInvalid } =
+                        sanitizeVinInput(v);
+                      setVin(value);
+                      setVinCorrection(
+                        correctedOI || droppedInvalid
+                          ? { correctedOI, droppedInvalid }
+                          : null,
+                      );
+                    }}
                     placeholder="1HGBH41JXMN109186"
                   />
                   <button
@@ -410,6 +428,15 @@ export default function WalkInNewPage() {
                     {showManualVehicle ? "Hide details" : "Enter details"}
                   </button>
                 </div>
+                {vinCorrection && (
+                  <p className="mt-1.5 text-xs text-amber-600">
+                    {vinCorrection.correctedOI && vinCorrection.droppedInvalid
+                      ? "Fixed that VIN — read O/I as 0/1 and dropped characters a VIN can't contain (no I, O or Q)."
+                      : vinCorrection.correctedOI
+                        ? "VINs never use the letters O or I — read those as 0 and 1."
+                        : "Dropped a character a VIN can't contain (no I, O or Q)."}
+                  </p>
+                )}
               </FieldGroup>
               {/* Vehicle preview / manual entry */}
               {(showManualVehicle || year || make || model) && (

@@ -42,6 +42,7 @@ import {
   isCustomJobTaxonomyComplete,
 } from "@/components/custom-job-taxonomy-picker";
 import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
+import { sanitizeVinInput } from "@/lib/vin";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -271,6 +272,12 @@ export default function CreateBookingDrawer({
   const [vinImageUrl, setVinImageUrl] = useState<string | null>(null);
   const [vinImageLoading, setVinImageLoading] = useState(false);
   const [vinConfirmOpen, setVinConfirmOpen] = useState(false);
+  // What the field last auto-fixed on the most recent keystroke, so the change
+  // is surfaced rather than silent. Cleared once a keystroke needs no fixing.
+  const [vinCorrection, setVinCorrection] = useState<{
+    correctedOI: boolean;
+    droppedInvalid: boolean;
+  } | null>(null);
   const lastDecodedVinRef = useRef<string>("");
 
   type OwnerInfo = { userId: string; firstName: string | null; lastName: string | null; email: string | null; phone: string | null };
@@ -2075,7 +2082,20 @@ export default function CreateBookingDrawer({
                   type="text"
                   placeholder="17-digit code"
                   value={vin}
-                  onChange={(e) => setVin(e.target.value.toUpperCase())}
+                  onChange={(e) => {
+                    // Auto-correct the ISO ambiguous typos (O→0, I→1) and strip
+                    // anything a VIN can't contain BEFORE it reaches state, so a
+                    // VIN entered with an "O" still hits the 17-char check and
+                    // fires enrichment instead of silently stalling one char shy.
+                    const { value, correctedOI, droppedInvalid } =
+                      sanitizeVinInput(e.target.value);
+                    setVin(value);
+                    setVinCorrection(
+                      correctedOI || droppedInvalid
+                        ? { correctedOI, droppedInvalid }
+                        : null,
+                    );
+                  }}
                   maxLength={17}
                   className={`${drawerInputClassName} font-mono uppercase pr-9`}
                 />
@@ -2083,6 +2103,24 @@ export default function CreateBookingDrawer({
                   <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground animate-spin" />
                 )}
               </div>
+              {/* Tell the mechanic what we just fixed, so an auto-correct never
+                  changes their input behind their back. */}
+              {vinCorrection && (
+                <p className="mt-1 text-xs text-amber-600">
+                  {vinCorrection.correctedOI && vinCorrection.droppedInvalid
+                    ? "Fixed that VIN — read O/I as 0/1 and dropped characters a VIN can't contain (no I, O or Q)."
+                    : vinCorrection.correctedOI
+                      ? "VINs never use the letters O or I — read those as 0 and 1."
+                      : "Dropped a character a VIN can't contain (no I, O or Q)."}
+                </p>
+              )}
+              {/* Live length feedback while the VIN is partial — the "can't take
+                  it yet" state, surfaced at the field instead of at submit. */}
+              {vin.length > 0 && vin.length < 17 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {vin.length}/17 characters
+                </p>
+              )}
               {vinLookupState === "error" && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   Couldn&apos;t decode VIN. Enter make/model manually.

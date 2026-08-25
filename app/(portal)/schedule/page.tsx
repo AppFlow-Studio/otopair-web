@@ -66,6 +66,8 @@ import WeekSwimLanes from "./week-swim-lanes";
 import WeekSingleMechanicLanes from "./week-single-mechanic-lanes";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import NoShowNotificationBanner from "@/components/no-show-notification-banner";
+import NotificationBell from "@/components/notification-bell";
+import ActiveJobStrip from "@/components/active-job-strip";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import {
@@ -1755,6 +1757,13 @@ export default function SchedulePage() {
                 </div>
               )}
             </div>
+
+            {/* Notification bell — folded into the toolbar here; shown only at
+                lg+, where this page hides the portal's top header (which used to
+                carry it). Below lg the mobile top header still shows the bell. */}
+            <div className="hidden lg:block">
+              <NotificationBell />
+            </div>
           </div>
 
           {/* Mobile-only "More" menu: Today + view switcher + legend */}
@@ -1817,13 +1826,16 @@ export default function SchedulePage() {
 
       {/* Flex row: calendar + drawers */}
       <div className="flex items-start">
-      {/* Main content */}
-      <div className="flex-1 min-w-0">
+      {/* Main content — pinned to the drawer's full height so the calendar card
+          (flex-1) fills whatever the active-jobs strip below it doesn't use:
+          full height when there's no active job, ~48px shorter when the pill
+          shows. */}
+      <div className="flex-1 min-w-0 flex flex-col h-[calc(100vh-100px)] min-h-[500px]">
 
       {/* Calendar */}
-      <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar relative">
+      <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar relative flex flex-col flex-1 min-h-0">
         {bookings === undefined ? (
-          <div className="flex items-center justify-center" style={{ height: "calc(100vh - 180px)", minHeight: 500 }}>
+          <div className="flex flex-1 min-h-0 items-center justify-center">
             <Loader2 className="w-6 h-6 text-primary animate-spin" />
           </div>
         ) : null}
@@ -1987,7 +1999,8 @@ export default function SchedulePage() {
             getNow={() => new Date(nowTimestamp)}
             step={30}
             timeslots={2}
-            style={{ height: "calc(100vh - 180px)", minHeight: 500 }}
+            className="flex-1 min-h-0"
+            style={{ height: "100%" }}
             onSelectEvent={(event) => {
               const ev = event as CalendarEvent;
               if (ev.id.startsWith("month-summary-")) {
@@ -2021,6 +2034,15 @@ export default function SchedulePage() {
         )}
       </div>
 
+      {/* Active jobs — relocated here from the (now-hidden) top header on this
+          view; shown only at lg+, matching where that header was removed (the
+          mobile header still carries it below lg). The inner wrapper collapses
+          when there's no active job, so idle days show no empty gap. */}
+      <div className="hidden lg:block shrink-0">
+        <div className="mt-3 [&:empty]:hidden">
+          <ActiveJobStrip />
+        </div>
+      </div>
 
       </div>{/* end main content */}
 
@@ -2030,7 +2052,7 @@ export default function SchedulePage() {
           drawerOpen ? "w-[552px]" : "w-0"
         }`}
       >
-        <div className="w-[528px] ml-6 flex h-[calc(100vh-180px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
+        <div className="w-[528px] ml-6 flex h-[calc(100vh-124px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
           {blockTimeDrawer && (
             <div className="flex flex-col h-full">
               {/* Header */}
@@ -2370,7 +2392,7 @@ export default function SchedulePage() {
 
       {/* Job detail drawer (or reschedule panel when in reschedule mode) */}
       <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${(selectedBookingId || manualReschedule) ? "w-[552px]" : "w-0"}`}>
-        <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-180px)] min-h-[500px]">
+        <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-124px)] min-h-[500px]">
           {manualReschedule ? (() => {
             const m = manualReschedule;
             const hasDateTime = Boolean(m.date && m.time);
@@ -2607,7 +2629,7 @@ export default function SchedulePage() {
 
       {/* Create booking drawer */}
       {createBookingDrawer && (
-        <div className="flex-shrink-0 w-[552px] h-[calc(100vh-180px)] min-h-[500px]">
+        <div className="flex-shrink-0 w-[552px]  h-[calc(100vh-100px)] min-h-[500px]">
           <div className="w-[528px] ml-6 flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card">
             <CreateBookingDrawer
               date={createBookingDrawer.date}

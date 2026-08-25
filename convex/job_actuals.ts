@@ -21,7 +21,7 @@ import {
   type AxlePosition,
 } from "./lib/brakeScope";
 import { ensureWalkInCashPayment } from "./bookings";
-import { partFitsConfigMake } from "./partSelector";
+import { passesI1ReadGuardNamed, makeNameCached } from "./lib/makeIdentity";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
 import { serviceMatchKey } from "./lib/serviceMatch";
 import { resolveSparkPlugQuantity } from "./lib/sparkPlugs";
@@ -706,6 +706,7 @@ export const getPrefillData = query({
 
     if (vehicle.vehicle_config_id) {
       const recConfig = await ctx.db.get(vehicle.vehicle_config_id);
+      const recConfigMakeName = await makeNameCached(ctx, recConfig?.make_id);
       for (const sid of booking.service_ids ?? []) {
         const svc = await ctx.db.get(sid);
         if (!svc?.slug) continue;
@@ -725,8 +726,26 @@ export const getPrefillData = query({
           if (f.package_code != null) continue;
           const part = await ctx.db.get(f.part_id);
           if (!part) continue;
-          // I1 make guard: drop cross-make contaminant parts
-          if (!partFitsConfigMake(part.make_id, recConfig?.make_id)) continue;
+          // I1 read guard — NAME-aware, matching the canonical resolver
+          // (serviceParts.resolveWinningPartForService). The strict id-only
+          // partFitsConfigMake dropped parts stamped under a corporate-family
+          // sibling make (or a duplicate make row): a CR-V's coolant-flush
+          // part OL999-9011 is stamped "Acura" — Honda's parts-sharing family —
+          // so Review & Pay priced it but this post-job survey read "no parts
+          // on file for Coolant Flush". The foreign-brand signature backstop
+          // still fires on the escape path, and PARTS_I1_FAMILY_READ=off
+          // restores strict behavior.
+          if (
+            !passesI1ReadGuardNamed({
+              partMakeId: part.make_id,
+              configMakeId: recConfig?.make_id,
+              oemPartNumber: part.oem_part_number,
+              configMakeName: recConfigMakeName,
+              partMakeName: await makeNameCached(ctx, part.make_id),
+              mechanicVerified: f.mechanic_verified === true,
+            })
+          )
+            continue;
           // Scope to the booked axle — position-neutral parts (hardware,
           // grease) survive a single-axle filter.
           if (!fitmentMatchesPosition(f.position, part.subcategory, recPosition)) {
@@ -812,6 +831,34 @@ export const getPrefillData = query({
       }
     }
 
+    // Work added to THIS job beyond the original booking scope — the pre-job
+    // "add to job" flow (issues caught during the inspection) and any mid-job
+    // additions. Non-declined custom_jobs whose source isn't the original
+    // create-booking drawer. Used two ways below: the "Fixed this visit" strip
+    // in the post-job step, and auto-connecting a prior recommendation this work
+    // resolves (matched on the clustering key, the same one custom_jobs cluster
+    // on). Read once here and reused for onJobMatchKeys further down.
+    const customJobsOnBooking = await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    const activeCustomJobs = customJobsOnBooking.filter(
+      (job: any) => job.status !== "declined" && job.status !== "cancelled",
+    );
+    const addedWorkJobs = activeCustomJobs
+      .filter((job: any) => job.source !== "booking")
+      .sort((a: any, b: any) => a.created_at - b.created_at);
+    const addedWorkMatchKeys = new Set<string>(
+      addedWorkJobs
+        .map((job: any) => job.match_key || serviceMatchKey(String(job.name ?? "")))
+        .filter((key: string) => key.length > 0),
+    );
+    const resolvedThisVisit = addedWorkJobs.map((job: any) => ({
+      _id: job._id,
+      service_name: job.name,
+      reason: job.complaint ?? null,
+    }));
+
     // Prior open recommendations for the same VIN (shop-scoped). Surfaced as
     // a muted "last visit said…" strip at the top of the post-job step so
     // the mechanic has memory aids — actual confirmation happens in pre-job.
@@ -833,6 +880,9 @@ export const getPrefillData = query({
         const svc = rec.recommended_service_id
           ? await ctx.db.get(rec.recommended_service_id)
           : null;
+        const recMatchKey = serviceMatchKey(
+          String(svc?.name ?? rec.freeform_text ?? ""),
+        );
         return {
           _id: rec._id,
           service_name: svc?.name ?? rec.freeform_text ?? "Unspecified",
@@ -840,6 +890,13 @@ export const getPrefillData = query({
           urgency: rec.urgency,
           reason: rec.reason ?? null,
           created_at: rec.created_at,
+          // True when work added to THIS job resolves this open rec (matched on
+          // the clustering key). The post-job step pre-checks these as Done and
+          // closes them on completion; the mechanic can still un-check one that
+          // wasn't actually fixed. This is the link that was missing — an added
+          // service never touched the prior rec it obviously resolved.
+          matchedByThisVisit:
+            recMatchKey.length > 0 && addedWorkMatchKeys.has(recMatchKey),
         };
       }),
     );
@@ -922,13 +979,7 @@ export const getPrefillData = query({
       ((booking.service_ids ?? []) as any[]).map((id: any) => String(id)),
     );
     const onJobMatchKeys = new Set<string>(
-      (
-        await ctx.db
-          .query("custom_jobs")
-          .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
-          .collect()
-      )
-        .filter((job: any) => job.status !== "declined" && job.status !== "cancelled")
+      activeCustomJobs
         .map((job: any) => serviceMatchKey(String(job.name ?? "")))
         .filter((key: string) => key.length > 0),
     );
@@ -955,11 +1006,20 @@ export const getPrefillData = query({
               ? !confirmedServiceIds.has(String(s.serviceId))
               : !confirmedFreeformLabels.has(s.label.trim().toLowerCase()),
           )
-          .filter((s) =>
-            s.serviceId
-              ? !onJobServiceIds.has(String(s.serviceId))
-              : !onJobMatchKeys.has(serviceMatchKey(s.label)),
-          )
+          .filter((s) => {
+            // Already ON this job — don't re-offer it. Check BOTH id-spaces
+            // regardless of whether the finding resolved to a catalog service:
+            // a mid-job "Add to this job" lands as a custom_jobs row recorded
+            // by NAME only (onJobMatchKeys) and never enters booking.service_ids
+            // (onJobServiceIds). Without the name check a catalog finding added
+            // mid-job (e.g. Coolant Flush) shows in both "Fixed this visit" and
+            // "Also flagged during today's inspection."
+            if (s.serviceId && onJobServiceIds.has(String(s.serviceId)))
+              return false;
+            if (onJobMatchKeys.has(serviceMatchKey(s.serviceName ?? s.label)))
+              return false;
+            return true;
+          })
       : [];
 
     // Dashboard lights to offer in the post-job "still on?" list. This is
@@ -1025,6 +1085,7 @@ export const getPrefillData = query({
       priorOpenRecommendations,
       confirmedThisVisit,
       suggestedFromInspection,
+      resolvedThisVisit,
       currentWarningLights,
       prejobTires,
     };

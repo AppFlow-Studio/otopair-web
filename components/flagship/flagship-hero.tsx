@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { ConversationProvider } from "@elevenlabs/react";
 import {
   AnimatePresence,
@@ -102,6 +102,15 @@ function HeroInner() {
     oto.messages.length > 0 ||
     oto.connected;
   const orbActive = oto.isSpeaking || oto.thinking || oto.status === "connecting";
+
+  // Sections further down the page (PathSection's Voice Intake card) can hand
+  // the visitor to the live hero conversation: they scroll up and fire this
+  // event, and the hero opens the mic exactly as if VoiceBar's mic was tapped.
+  useEffect(() => {
+    const onTalk = () => oto.startVoice();
+    window.addEventListener("otopair:talk", onTalk);
+    return () => window.removeEventListener("otopair:talk", onTalk);
+  }, [oto]);
 
   // Live audio level (0..1) sampled from the conversation — drives orb reactivity.
   const getOrbLevel = useCallback(() => {
@@ -285,7 +294,7 @@ function HeroInner() {
             <motion.div
               animate={{ scale: active ? 1.18 : 1 }}
               transition={{ type: "spring", stiffness: 140, damping: 20 }}
-              className="h-[280px] w-[280px] sm:h-[340px] sm:w-[360px]"
+              className="h-[260px] w-[260px] sm:h-[300px] sm:w-[300px]"
             >
               <OtoOrb
                 active={orbActive}
@@ -305,7 +314,7 @@ function HeroInner() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -14, transition: { duration: 0.25 } }}
                   transition={{ duration: 0.5, delay: 0.1 }}
-                  className="mt-8 flex w-full flex-col items-center"
+                  className="mt-4 flex w-full flex-col items-center"
                 >
                   <VoiceBar
                     onSend={oto.sendText}

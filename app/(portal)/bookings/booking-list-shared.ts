@@ -1,5 +1,6 @@
 export type JobStatusFilter =
   | "all"
+  | "walkin"
   | "pending_shop_acceptance"
   | "pending_customer_acceptance"
   | "confirmed"
@@ -9,8 +10,11 @@ export type JobStatusFilter =
   | "cancelled"
   | "no_show";
 
+// "Walk-in" is a source, not a status — it lives in the tab strip anyway
+// because that's where the shop expects to slice its list by cohort.
 export const STATUS_TABS: { key: JobStatusFilter; label: string }[] = [
   { key: "all", label: "All" },
+  { key: "walkin", label: "Walk-in" },
   { key: "pending_shop_acceptance", label: "Pending Shop" },
   { key: "pending_customer_acceptance", label: "Pending Customer" },
   { key: "confirmed", label: "Confirmed" },

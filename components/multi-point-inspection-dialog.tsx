@@ -36,7 +36,6 @@ import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
-import PreJobScopeDialog from "@/components/booking/pre-job-scope-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
 import MonthPicker from "@/components/ui/month-picker";
@@ -892,6 +891,20 @@ function MultiPointInspectionDialogBody({
     [requiredZones, state],
   );
 
+  // Every required zone graded, with no zone left holding un-saved readings.
+  // Gates "Price & send" for staged extra work: the pre-job estimate goes to the
+  // customer only when the whole check is done. Sending it early parks the
+  // booking in "awaiting hold" (payment_approval_state pre_job_pending), which
+  // clears canStartJob in the booking panel and locks the mechanic out of
+  // reopening the inspection to finish it — the trap the user hit.
+  const inspectionComplete = useMemo(
+    () =>
+      requiredZones.length > 0 &&
+      requiredZones.every((id) => state.zones[id]?.done) &&
+      getDirtyIncompleteZones(state).length === 0,
+    [requiredZones, state],
+  );
+
   // Findings + suggestions are evaluated from COMPLETED zones only, so a finding
   // surfaces the moment its zone is marked complete (not after the whole
   // inspection) and never counts un-confirmed scratch input.
@@ -958,16 +971,11 @@ function MultiPointInspectionDialogBody({
   // Null for a catalog service, which adds in one tap. See handleAddToJob.
   const [pendingJobSuggestion, setPendingJobSuggestion] =
     useState<ResolvedSuggestion | null>(null);
-  // The mid-job scope dialog (price it, say why, add parts, send for the
-  // customer's confirmation) — the SAME flow the active-job overlay opens. Adding
-  // a finding to the job opens it right here so the mechanic never has to reopen
-  // it later in the overlay and re-do the send. See commitAddToJob.
+  // The MID-JOB scope dialog (price it, say why, add parts, send for the
+  // customer's confirmation) — the SAME flow the active-job overlay opens. Only
+  // reachable while the job is running; a pre-job inspection sends its added
+  // scope through the inspection submit instead. See onOpenScope / ResultsScreen.
   const [scopeOpen, setScopeOpen] = useState(false);
-  // The pre-job estimate dialog — same "price it, add parts, send" flow, but for
-  // a booking that hasn't started (routes through the pre_job approval cycle so
-  // the customer confirms the added scope BEFORE work begins). Only one of
-  // scopeOpen / preScopeOpen is ever true, picked by jobInProgress.
-  const [preScopeOpen, setPreScopeOpen] = useState(false);
   const [scopeSubmittedNote, setScopeSubmittedNote] = useState<string | null>(
     null,
   );
@@ -1497,18 +1505,25 @@ function MultiPointInspectionDialogBody({
   /**
    * Promote a flagged finding into work on THIS job (Decision D1).
    *
-   * Appends an off-catalog line to the booking, then opens the scope dialog —
-   * the same "price it, say why, add parts, send for confirmation" flow — routed
-   * by whether the job is running: in progress → mid-job change; not started yet
-   * (the usual pre-job inspection case) → pre-job estimate. Neither add re-quotes
-   * or moves money; the money and consent live in that dialog, gated behind the
-   * customer's approval. So the mechanic goes straight from the finding into
-   * pricing-and-sending it, instead of adding it here and having to reopen the
-   * scope step in the overlay and confirm all over again.
+   * STAGES an off-catalog line: it appears in "Added to this job" and nothing is
+   * sent, no money moves, and the customer isn't notified. How it later reaches
+   * the customer depends on whether the job is running:
+   *   - pre-job (the usual inspection case): the added scope goes out as part of
+   *     "Submit → Vehicle Health" — commitInspectionAndAwaitEstimate opens the
+   *     pre-job estimate in the booking panel. There is NO send button here.
+   *   - mid-job: the running job has no such submit step, so each line keeps its
+   *     own "Price & send" → mid-job change.
    *
-   * Before this, a wiper flagged red here had to be re-entered from scratch via
-   * Flag Issue → "Extra work needed now", which is exactly what Abdul had to do
-   * on Aug 20 after the inspection didn't carry it forward.
+   * This intentionally does NOT open a send dialog. It used to, which marched the
+   * mechanic straight into "Send for confirmation" mid-inspection — before the
+   * remaining zones were done — reading as the whole inspection being submitted
+   * early. Staging preserves the intended order:
+   * inspect → add → finish the inspection → send on submit.
+   *
+   * Before "Add to this job" existed, a wiper flagged red here had to be
+   * re-entered from scratch via Flag Issue → "Extra work needed now", which is
+   * exactly what Abdul had to do on Aug 20 after the inspection didn't carry it
+   * forward.
    */
   async function commitAddToJob(
     suggestion: ResolvedSuggestion,
@@ -1525,8 +1540,8 @@ function MultiPointInspectionDialogBody({
       if (onSaveDraft) await onSaveDraft(prejob, inspection);
       // Which cycle depends on whether the job is already running. In progress →
       // mid-job change; not started yet (the usual case for a pre-job inspection)
-      // → pre-job estimate. Both append the same line; only the approval cycle
-      // and the dialog opened below differ.
+      // → pre-job estimate. Both append the same line; only where it's later sent
+      // from differs (mid-job "Price & send" vs the pre-job inspection submit).
       const add = jobInProgress ? addToJob : addToJobPreStart;
       await add({
         bookingId: bookingId as Id<"bookings">,
@@ -1542,11 +1557,10 @@ function MultiPointInspectionDialogBody({
       setAddedToJob((prev) => ({ ...prev, [suggestion.key]: true }));
       setPendingJobSuggestion(null);
       setScopeSubmittedNote(null);
-      // Straight into pricing + send-for-confirmation. The dialog reads the
-      // booking's now-updated scope (the line just appended), so it opens with
-      // this finding already on it. A new re-quote cleared any prior note.
-      if (jobInProgress) setScopeOpen(true);
-      else setPreScopeOpen(true);
+      // Staged only — NO auto-send. The line now shows in "Added to this job".
+      // Pre-job: it goes out when the mechanic submits the inspection. Mid-job:
+      // via that line's "Price & send". Auto-opening a send dialog here is what
+      // jumped the mechanic into "Send for confirmation" mid-inspection.
     } catch (err) {
       setError(userFacingInspectionError(err, "Could not add that to the job."));
     } finally {
@@ -1579,6 +1593,29 @@ function MultiPointInspectionDialogBody({
     try {
       const remove = jobInProgress ? removeFromJob : removeFromJobPreStart;
       await remove({ bookingId: bookingId as Id<"bookings">, customJobId });
+      // Clear the optimistic "added to this job" flag for the matching
+      // suggestion(s). That ephemeral flag — not the reactive addedJobs list —
+      // is what renders a suggestion as "Added to this job" in Suggested
+      // follow-ups, and the server delete doesn't touch it. Without this the
+      // removed line keeps showing as applied even though it's off the booking.
+      // Matched on the name the line was added under (serviceName ?? label),
+      // normalised the same way booked-service de-duping is.
+      const removed = (addedJobs ?? []).find(
+        (j) => String(j._id) === String(customJobId),
+      );
+      if (removed) {
+        const removedKey = serviceMatchKey(removed.name);
+        const staleKeys = suggestedRecs
+          .filter((s) => serviceMatchKey(s.serviceName ?? s.label) === removedKey)
+          .map((s) => s.key);
+        if (staleKeys.length) {
+          setAddedToJob((prev) => {
+            const next = { ...prev };
+            for (const k of staleKeys) delete next[k];
+            return next;
+          });
+        }
+      }
     } catch (err) {
       setError(
         userFacingInspectionError(err, "Could not remove that from the job."),
@@ -1785,9 +1822,9 @@ function MultiPointInspectionDialogBody({
             addedJobs={addedJobs ?? []}
             onRemoveAddedJob={handleRemoveAddedJob}
             removingJobId={removingJobId}
-            onOpenScope={() =>
-              jobInProgress ? setScopeOpen(true) : setPreScopeOpen(true)
-            }
+            onOpenScope={() => setScopeOpen(true)}
+            jobInProgress={jobInProgress}
+            inspectionComplete={inspectionComplete}
             scopeSubmittedNote={scopeSubmittedNote}
           />
         </div>
@@ -2132,12 +2169,13 @@ function MultiPointInspectionDialogBody({
         }}
       />
 
-      {/* Price it, say why, add parts, send for the customer's confirmation —
-          opened straight after a finding is added to the job (commitAddToJob) so
-          the whole thing happens here, not later in the active-job overlay. The
-          in-progress job re-quotes through the mid-job cycle; a not-yet-started
-          job sends a pre-job estimate the customer confirms before work begins.
-          Only one is ever open (commitAddToJob picks by jobInProgress). */}
+      {/* MID-JOB ONLY: price it, say why, add parts, send the added scope for
+          the customer's confirmation. Opened from "Price & send" in the "Added
+          to this job" box while the job is running (there's no inspection-submit
+          step then to carry the estimate). A PRE-job inspection has no scope
+          dialog here at all — its added scope rides the "Submit → Vehicle Health"
+          flow (commitInspectionAndAwaitEstimate opens the pre-job estimate in the
+          booking panel), so the mechanic can't send before the check is done. */}
       <MidJobScopeDialog
         open={scopeOpen}
         bookingId={bookingId ? (bookingId as Id<"bookings">) : null}
@@ -2145,17 +2183,6 @@ function MultiPointInspectionDialogBody({
         onSubmitted={() => {
           setScopeOpen(false);
           setScopeSubmittedNote("Extra work sent to the customer for confirmation.");
-        }}
-      />
-      <PreJobScopeDialog
-        open={preScopeOpen}
-        bookingId={bookingId ? (bookingId as Id<"bookings">) : null}
-        onClose={() => setPreScopeOpen(false)}
-        onSubmitted={() => {
-          setPreScopeOpen(false);
-          setScopeSubmittedNote(
-            "Estimate sent to the customer for confirmation.",
-          );
         }}
       />
     </>
@@ -3100,10 +3127,38 @@ function FieldRow({
     // Verbatim OEM value that maps to no canonical option (odd coolant/trans
     // brand strings, or a pre-filled passport value): inject it so the enriched
     // spec still shows + stays picked.
-    const isKnown = value === "" || field.options.some((o) => o.value === value);
-    const selectOptions = isKnown
-      ? field.options
-      : [...field.options, { value, label: value }];
+    //
+    // `tire_type` additionally gets an "Other…" escape hatch so a mechanic can
+    // record a season/type not in the controlled catalog vocabulary. The typed
+    // value is stored verbatim in the same `select` bucket; it simply won't join
+    // the tire catalog for auto-rebooking (mapTireType returns undefined), which
+    // is the intended graceful fallback. We deliberately do NOT add "Other" to
+    // TIRE_TYPE_OPTIONS (that list is the join vocabulary); the affordance is
+    // UI-only, and the transient sentinel is filtered out of the passport read
+    // in lib/inspection-template.ts.
+    const allowOther = field.key === "tire_type";
+    const matchesOption = field.options.some((o) => o.value === value);
+    const isKnown = value === "" || matchesOption;
+    const isOtherMode = allowOther && value !== "" && !matchesOption;
+    const selectOptions = allowOther
+      ? [...field.options, { value: OTHER_INSPECTION_OPTION, label: "Other…" }]
+      : isKnown
+        ? field.options
+        : [...field.options, { value, label: value }];
+    const writeSelect = (next: string) => {
+      if (prefill) onSpecEdited?.();
+      onPatch(
+        isMeasurementMethod
+          ? {
+              methods: { ...zs.methods, [field.key]: next },
+              statuses: clearUnavailable(),
+            }
+          : {
+              select: { ...zs.select, [field.key]: next },
+              statuses: clearUnavailable(),
+            },
+      );
+    };
     const showPrefillTag = !!prefill && value === prefill.value;
     return (
       <div className="border-b border-primary/10">
@@ -3112,25 +3167,22 @@ function FieldRow({
             <CompactSelect
               id={`inspection-${zoneId}-${field.key}`}
               ariaLabel={field.label}
-              value={value}
+              value={isOtherMode ? OTHER_INSPECTION_OPTION : value}
               options={selectOptions}
               className="w-44"
               isDisabled={measurementNotTaken}
-              onChange={(next) => {
-                if (prefill) onSpecEdited?.();
-                onPatch(
-                  isMeasurementMethod
-                    ? {
-                        methods: { ...zs.methods, [field.key]: next },
-                        statuses: clearUnavailable(),
-                      }
-                    : {
-                        select: { ...zs.select, [field.key]: next },
-                        statuses: clearUnavailable(),
-                      },
-                );
-              }}
+              onChange={writeSelect}
             />
+            {isOtherMode ? (
+              <input
+                id={`inspection-${zoneId}-${field.key}-other`}
+                aria-label={`Custom ${field.label.toLowerCase()}`}
+                value={value === OTHER_INSPECTION_OPTION ? "" : value}
+                placeholder={`Enter ${field.label.toLowerCase()}`}
+                onChange={(event) => writeSelect(event.target.value)}
+                className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+              />
+            ) : null}
             {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
           </div>
           {isMeasurementMethod || field.key === "rotor_applicable"
@@ -3365,9 +3417,22 @@ function MeasureField({
       active={unavailable}
       onToggle={() => {
         const statuses = { ...zs.statuses };
-        if (unavailable) delete statuses[field.key];
-        else statuses[field.key] = "not_applicable";
-        onPatch({ statuses });
+        if (unavailable) {
+          delete statuses[field.key];
+          onPatch({ statuses });
+          return;
+        }
+        // Marking not visible / not available is mutually exclusive with a
+        // reading: clear any typed measurement so a stale number (and its
+        // auto-classified grade) can't linger behind the toggle.
+        statuses[field.key] = "not_applicable";
+        const measures = { ...zs.measures, [field.key]: "" };
+        if (field.key === "tread") {
+          measures.tread_inner = "";
+          measures.tread_center = "";
+          measures.tread_outer = "";
+        }
+        onPatch({ statuses, measures });
       }}
     />
   );
@@ -4337,6 +4402,8 @@ function ResultsScreen({
   onRemoveAddedJob,
   removingJobId,
   onOpenScope,
+  jobInProgress,
+  inspectionComplete,
   scopeSubmittedNote,
 }: {
   findings: { attention: { label: string; zone: string }[]; monitor: { label: string; zone: string }[] };
@@ -4364,16 +4431,42 @@ function ResultsScreen({
   /** Pull a line back off the job. */
   onRemoveAddedJob: (customJobId: Id<"custom_jobs">) => void;
   removingJobId: string | null;
-  /** Re-open the scope dialog for a line already added to the job. */
+  /** Open the mid-job scope dialog for a line already added to the job. Only
+   *  used when jobInProgress — a pre-job inspection sends its added scope through
+   *  the inspection SUBMIT, not a button here. */
   onOpenScope: () => void;
-  /** Set once the scope dialog sends the extra work for confirmation. */
+  /** The booking is already running. Pre-job (false): the added scope is sent as
+   *  part of "Submit → Vehicle Health" (commitInspectionAndAwaitEstimate opens
+   *  the estimate), so there's NO "Price & send" here — just a note that submit
+   *  will prompt it. Mid-job (true): the job's underway with no such submit step,
+   *  so the line keeps its own "Price & send" → mid-job change. */
+  jobInProgress: boolean;
+  /** All required zones are graded, with no zone left holding unsaved readings.
+   *  Gates the mid-job "Price & send" and flips the pre-job note to "ready". */
+  inspectionComplete: boolean;
+  /** Set once the (mid-job) scope dialog sends the extra work for confirmation. */
   scopeSubmittedNote: string | null;
 }) {
   // Default-select the urgent ("soon") suggestions; mechanic can toggle.
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(suggestions.map((s) => [s.key, s.urgency === "soon"])),
   );
-  const selectableSuggestions = suggestions.filter((s) => !submittedRecs[s.key]);
+  // A suggestion already added to this job lives in the "Added to this job" box
+  // above — drop it from the follow-ups list so it isn't shown and actionable
+  // in two places at once. Keep it if it was ALSO submitted as a recommendation
+  // so that Undo state still renders. addedToJob is the optimistic flag (the
+  // add→server-catch-up window); addedJobs is the reactive server truth (it
+  // survives a refresh), matched on the name the line was added under.
+  const addedJobKeys = new Set(addedJobs.map((j) => serviceMatchKey(j.name)));
+  const visibleSuggestions = suggestions.filter(
+    (s) =>
+      !!submittedRecs[s.key] ||
+      (!addedToJob[s.key] &&
+        !addedJobKeys.has(serviceMatchKey(s.serviceName ?? s.label))),
+  );
+  const selectableSuggestions = visibleSuggestions.filter(
+    (s) => !submittedRecs[s.key],
+  );
   const selectedKeys = selectableSuggestions
     .filter((s) => selected[s.key])
     .map((s) => s.key);
@@ -4415,13 +4508,32 @@ function ResultsScreen({
             Added to this job
           </div>
           <p className="mb-2 text-[11px] text-muted-foreground">
-            Price it, add parts, and send for the customer&apos;s confirmation —
-            or remove it if you added it by mistake.
+            {jobInProgress
+              ? "Price it, add parts, and send for the customer's confirmation — or remove it if you added it by mistake."
+              : "Staged for this vehicle. You'll price it and send for the customer's confirmation when you submit the inspection — or remove it if you added it by mistake."}
           </p>
           {scopeSubmittedNote ? (
             <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-700">
               <Check className="h-3.5 w-3.5 flex-shrink-0" />
               {scopeSubmittedNote}
+            </p>
+          ) : !inspectionComplete ? (
+            // The estimate must wait for a finished inspection. Sending it early
+            // parks the booking in "awaiting hold", which blocks reopening the
+            // check — the exact trap this guards against.
+            <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-700">
+              Finish every zone first{jobInProgress
+                ? " — then send this for confirmation."
+                : ", then submit the inspection to price and send this for the customer's confirmation."}
+            </p>
+          ) : !jobInProgress ? (
+            // All zones done — the pre-job estimate goes out as part of the
+            // inspection submit (commitInspectionAndAwaitEstimate), so tell the
+            // mechanic that's where it happens. No standalone send button.
+            <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-primary">
+              <Wrench className="h-3.5 w-3.5 flex-shrink-0" />
+              Ready — &ldquo;Submit → Vehicle Health&rdquo; will prompt you to
+              price and send this added scope for the customer&apos;s confirmation.
             </p>
           ) : null}
           <div className="space-y-1">
@@ -4433,13 +4545,24 @@ function ResultsScreen({
                 <span className="flex-1 text-[13px] font-medium text-foreground">
                   {job.name}
                 </span>
-                <button
-                  type="button"
-                  onClick={onOpenScope}
-                  className="inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10"
-                >
-                  Price &amp; send
-                </button>
+                {/* Mid-job only: the running job has no inspection-submit step to
+                    carry the estimate, so each line keeps its own send. A pre-job
+                    inspection sends everything through "Submit → Vehicle Health". */}
+                {jobInProgress ? (
+                  <button
+                    type="button"
+                    onClick={onOpenScope}
+                    disabled={!inspectionComplete}
+                    title={
+                      inspectionComplete
+                        ? undefined
+                        : "Finish the inspection before sending for confirmation"
+                    }
+                    className="inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                  >
+                    Price &amp; send
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => onRemoveAddedJob(job._id)}
@@ -4460,8 +4583,9 @@ function ResultsScreen({
         </div>
       ) : null}
 
-      {/* Suggested follow-ups derived from the measurements */}
-      {suggestions.length ? (
+      {/* Suggested follow-ups derived from the measurements. Anything already
+          added to this job is filtered out — it shows in the box above. */}
+      {visibleSuggestions.length ? (
         <div className="rounded-xl border border-primary/15 bg-primary/[0.03] p-3">
           <div className="mb-1 text-[12px] font-semibold text-foreground">
             Suggested follow-ups
@@ -4472,7 +4596,7 @@ function ResultsScreen({
             lowers their Vehicle Health Score until resolved.
           </p>
           <div className="space-y-1">
-            {suggestions.map((s) =>
+            {visibleSuggestions.map((s) =>
               submittedRecs[s.key] ? (
                 <div
                   key={s.key}
@@ -4499,31 +4623,6 @@ function ResultsScreen({
                       <RotateCcw className="h-3 w-3" />
                     )}
                     Undo
-                  </button>
-                </div>
-              ) : addedToJob[s.key] ? (
-                <div
-                  key={s.key}
-                  className="flex items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
-                >
-                  <Wrench className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
-                  <span className="flex-1">
-                    <span className="text-[13px] font-medium text-foreground">
-                      {s.serviceName ?? s.label}
-                    </span>
-                    <span className="block text-[11px] text-primary">
-                      Added to this job — price it, add parts, and send for the
-                      customer&apos;s confirmation.
-                    </span>
-                  </span>
-                  {/* Re-open the same scope dialog that popped on add, for when
-                      the mechanic closed it to add more findings first. */}
-                  <button
-                    type="button"
-                    onClick={onOpenScope}
-                    className="mt-0.5 inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10"
-                  >
-                    Price &amp; send
                   </button>
                 </div>
               ) : (

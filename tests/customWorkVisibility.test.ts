@@ -13,6 +13,8 @@ import { describe, it, expect } from "vitest";
 import { customServiceNames } from "../convex/lib/customServiceNames";
 import { KIND_POLICY } from "../convex/jobBlockers";
 import { SMS_BODY_TEMPLATES } from "../convex/sms_dispatcher";
+import { computeBookingTax } from "../lib/tax";
+import { computePlatformFeeDollars } from "../lib/platformFee";
 
 describe("customServiceNames", () => {
   it("pulls names out of a booking's custom_services", () => {
@@ -93,6 +95,154 @@ describe("receipt labour split", () => {
   });
 });
 
+/**
+ * Fixed-price bookings + added scope. A flat-rate service (e.g. a $60 fixed
+ * oil change) stays locked, but when the mechanic adds a NEW service the
+ * customer must confirm the flat base PLUS the added work. This mirrors the
+ * composition in `performSubmission` (convex/booking_approvals.ts): the base is
+ * pinned to a STABLE `fixed_contract_base_cents`, and only parts tagged with a
+ * `custom_service_name` (plus the added labor hours) are priced on top — using
+ * the same real tax + platform-fee helpers the server uses. The point of the
+ * stable base is that re-pricing never reads the already-grown running total as
+ * the base and double-counts a prior addition.
+ */
+type PricePart = {
+  cost: number;
+  quantity?: number;
+  supplied_by?: string;
+  not_used?: boolean;
+  custom_service_name?: string | null;
+  service_id?: string;
+};
+
+// partsSubtotalCents, mirrored: customer-supplied and not-used rows never bill.
+function partsSubtotalCents(parts: PricePart[]): number {
+  return parts.reduce((total, p) => {
+    if (p.not_used) return total;
+    if (p.supplied_by === "customer") return total;
+    return total + Math.round((p.cost ?? 0) * Math.max(0, p.quantity ?? 1) * 100);
+  }, 0);
+}
+
+function priceFixedWithAddedScope(opts: {
+  fixedBaseCents: number;
+  parts: PricePart[];
+  addedLaborHours: number;
+  laborRateCents: number;
+  state?: string | null;
+  zip?: string | null;
+}): number {
+  // Only ADDED-service parts are billed on top of the locked base.
+  const addedParts = opts.parts.filter(
+    (p) => (p.custom_service_name ?? "").trim() !== "",
+  );
+  const addedPartsCents = partsSubtotalCents(addedParts);
+  const addedLaborCents = Math.round(opts.addedLaborHours * opts.laborRateCents);
+  const subtotalCents = addedPartsCents + addedLaborCents;
+  const taxCents = Math.round(
+    (computeBookingTax({
+      laborDollars: addedLaborCents / 100,
+      partsDollars: addedPartsCents / 100,
+      state: opts.state ?? null,
+      zip: opts.zip ?? null,
+    }).taxDollars ?? 0) * 100,
+  );
+  const feeCents = Math.max(
+    0,
+    Math.round(computePlatformFeeDollars(subtotalCents / 100) * 100),
+  );
+  return opts.fixedBaseCents + subtotalCents + taxCents + feeCents;
+}
+
+describe("fixed-price added-scope pricing", () => {
+  const RATE = 12500; // $125/hr
+
+  it("bills the locked base PLUS the added service, never less", () => {
+    const base = 6000; // $60 fixed oil change
+    const total = priceFixedWithAddedScope({
+      fixedBaseCents: base,
+      parts: [
+        // Added service's part.
+        { cost: 45, quantity: 1, custom_service_name: "Serpentine belt" },
+      ],
+      addedLaborHours: 0.8,
+      laborRateCents: RATE,
+    });
+    // $60 base + $45 part + 0.8h × $125 ($100) + tax/fee (≥ 0).
+    expect(total).toBeGreaterThanOrEqual(base + 4500 + 10000);
+    expect(total).toBeGreaterThan(base);
+  });
+
+  it("ignores base-service parts — only custom_service_name lines bill", () => {
+    const base = 6000;
+    // A fixed-price booking's base parts (tagged with a catalog service_id) are
+    // locked and must NOT be re-billed; only the added line moves the price.
+    const withBaseParts = priceFixedWithAddedScope({
+      fixedBaseCents: base,
+      parts: [
+        { cost: 30, quantity: 1, service_id: "svc_oil" }, // base — ignored
+        { cost: 45, quantity: 1, custom_service_name: "Serpentine belt" },
+      ],
+      addedLaborHours: 0,
+      laborRateCents: RATE,
+    });
+    const withoutBaseParts = priceFixedWithAddedScope({
+      fixedBaseCents: base,
+      parts: [{ cost: 45, quantity: 1, custom_service_name: "Serpentine belt" }],
+      addedLaborHours: 0,
+      laborRateCents: RATE,
+    });
+    expect(withBaseParts).toBe(withoutBaseParts);
+  });
+
+  it("excludes customer-supplied and not-used added parts", () => {
+    const base = 6000;
+    const total = priceFixedWithAddedScope({
+      fixedBaseCents: base,
+      parts: [
+        { cost: 45, quantity: 1, custom_service_name: "Belt", supplied_by: "customer" },
+        { cost: 20, quantity: 1, custom_service_name: "Belt", not_used: true },
+      ],
+      addedLaborHours: 0,
+      laborRateCents: RATE,
+    });
+    // Both excluded and no labor → nothing bills on top of the flat base.
+    expect(total).toBe(base);
+  });
+
+  it("bills a labor-only added service (no parts)", () => {
+    const base = 6000;
+    const total = priceFixedWithAddedScope({
+      fixedBaseCents: base,
+      parts: [],
+      addedLaborHours: 1,
+      laborRateCents: RATE,
+    });
+    expect(total).toBeGreaterThanOrEqual(base + 12500);
+  });
+
+  it("is idempotent, and the STABLE base is what prevents double-counting", () => {
+    const base = 6000;
+    const added = {
+      parts: [{ cost: 45, quantity: 1, custom_service_name: "Belt" }],
+      addedLaborHours: 0.8,
+      laborRateCents: RATE,
+    };
+    const first = priceFixedWithAddedScope({ fixedBaseCents: base, ...added });
+    // Re-pricing the same added scope off the SAME stable base is idempotent.
+    const again = priceFixedWithAddedScope({ fixedBaseCents: base, ...added });
+    expect(again).toBe(first);
+    // If the running total were (wrongly) used as the base on resubmit, the
+    // added work would be counted twice — a strictly larger number. This is
+    // exactly what `fixed_contract_base_cents` exists to prevent.
+    const doubleCounted = priceFixedWithAddedScope({
+      fixedBaseCents: first,
+      ...added,
+    });
+    expect(doubleCounted).toBeGreaterThan(first);
+  });
+});
+
 describe("blocker notification routing", () => {
   it("writes an owner alert for every kind that notifies the owner", () => {
     // These used to be written with channel "slack", which nothing drains, so
@@ -165,8 +315,8 @@ describe("blocker SMS templates", () => {
  * one moment trust is most expensive: the customer isn't at the shop, the car
  * is on a lift, and declining is awkward.
  */
-describe("mid-job additions for the customer", () => {
-  it("returns off-catalog work added after the job started, and nothing else", async () => {
+describe("added services for the customer", () => {
+  it("returns off-catalog work added before and during the job, and nothing booked at the counter", async () => {
     const { makeT } = await import("./helpers");
     const { api } = await import("../convex/_generated/api");
     const { recordCustomJobsForBooking } = await import("../convex/customJobs");
@@ -215,21 +365,25 @@ describe("mid-job additions for the customer", () => {
       );
 
     await write("Booked at the counter", "booking");
+    await write("Cabin filter — found on inspection", "pre_job");
     await write("Power window switch replacement", "mid_job");
 
     const out: any[] = await t
       .withIdentity({ subject: "clerk_midjob_customer" })
-      .query(api.customJobs.listMidJobAdditionsForCustomer, {
+      .query(api.customJobs.listAddedServicesForCustomer, {
         bookingId: base.bookingId,
       });
 
-    // Only what was added mid-job. Work booked at the counter was already
-    // agreed and priced — re-announcing it as a surprise would be the lie
-    // inverted.
-    expect(out).toHaveLength(1);
-    expect(out[0].name).toBe("Power window switch replacement");
-    expect(out[0].complaint).toBe("Switch dead on the driver's door");
-    expect(out[0].parts[0].oem_number).toBe("83071AN00B");
+    // Both the pre-job and mid-job additions surface, each tagged by source so
+    // the approval screen shows the cycle it's rendering. Work booked at the
+    // counter was already agreed and priced — re-announcing it as a surprise
+    // would be the lie inverted.
+    expect(out).toHaveLength(2);
+    expect(out.map((r) => r.source).sort()).toEqual(["mid_job", "pre_job"]);
+    const midJob = out.find((r) => r.source === "mid_job");
+    expect(midJob.name).toBe("Power window switch replacement");
+    expect(midJob.complaint).toBe("Switch dead on the driver's door");
+    expect(midJob.parts[0].oem_number).toBe("83071AN00B");
   });
 
   it("shows nothing to anyone who isn't the booking's customer", async () => {
@@ -261,11 +415,11 @@ describe("mid-job additions for the customer", () => {
     expect(
       await t
         .withIdentity({ subject: "clerk_midjob_stranger" })
-        .query(api.customJobs.listMidJobAdditionsForCustomer, { bookingId }),
+        .query(api.customJobs.listAddedServicesForCustomer, { bookingId }),
     ).toEqual([]);
     // Anonymous too — this is somebody's repair history.
     expect(
-      await t.query(api.customJobs.listMidJobAdditionsForCustomer, { bookingId }),
+      await t.query(api.customJobs.listAddedServicesForCustomer, { bookingId }),
     ).toEqual([]);
   });
 });

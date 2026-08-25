@@ -32,6 +32,26 @@ import {
 import { makeKeyOf } from "./makeKey";
 import { makesSameFamily } from "../vehicleEnrichment/contentSanitization";
 
+/** Cached make-name lookup for the named guards below. Module-level cache is
+ *  safe: make names are effectively immutable reference rows, and the guards
+ *  only compare them case-insensitively. One db.get per distinct make id per
+ *  isolate. Mirrors serviceParts.partMakeNameCached so read paths outside that
+ *  module (post-job prefill, add-catalog-service) can call the named guard the
+ *  same way the canonical resolver does. */
+const _makeNameCache = new Map<string, string | null>();
+export async function makeNameCached(
+  ctx: { db: { get: (id: any) => Promise<any> } },
+  id: unknown,
+): Promise<string | null> {
+  if (id == null) return null;
+  const k = String(id);
+  const hit = _makeNameCache.get(k);
+  if (hit !== undefined) return hit;
+  const name = ((await ctx.db.get(id as any)) as any)?.name ?? null;
+  _makeNameCache.set(k, name);
+  return name;
+}
+
 /** Case/hyphen/space-insensitive make-name identity ("MERCEDES-BENZ" ≡
  *  "Mercedes-Benz") — same makeKeyOf the write-side guard and the
  *  corporate-family map use. */

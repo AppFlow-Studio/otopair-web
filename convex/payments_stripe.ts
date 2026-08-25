@@ -2244,6 +2244,23 @@ export const finalizeAndChargeForBooking = internalAction({
       );
     }
 
+    // Fixed price: the customer pays the agreed flat total (base + any approved
+    // added scope), full stop — never a reconciliation against actual parts/
+    // labor. Reconciling would UNDER-charge when actuals land below the flat
+    // rate (its whole point is the shop eats that spread) and needlessly probe a
+    // re-approval when they land above. Capture the agreed amount, exactly like
+    // the over-actuals branch below already does for every booking.
+    if (booking.is_fixed_price === true) {
+      return await captureAtAmount(
+        ctx,
+        args.bookingId,
+        mechanicSet,
+        mechanicSet,
+        partsSnapshot,
+        feeCents,
+      );
+    }
+
     // Tolerance: tax/fee recompute can drift by a cent due to Math.round, and
     // legacy approval rows without frozen labor_cents fall back to
     // booking.labor_cost which may diverge from the submitted labor inputs.

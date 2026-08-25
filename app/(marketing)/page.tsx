@@ -3,7 +3,7 @@ import WhyOtoSection from "@/components/flagship/landing/why-oto-section";
 import PriceLockSection from "@/components/flagship/landing/price-lock-section";
 import PayoutSection from "@/components/flagship/landing/payout-section";
 import CoverageSection from "@/components/flagship/landing/coverage-section";
-import BuiltSection from "@/components/flagship/landing/built-section";
+import ListensSection from "@/components/flagship/landing/listens-section";
 import PathSection from "@/components/flagship/landing/path-section";
 import FooterCta from "@/components/flagship/landing/footer-cta";
 
@@ -16,7 +16,7 @@ export default function Home() {
         <PriceLockSection />
         <PayoutSection />
         <CoverageSection />
-        <BuiltSection />
+        <ListensSection />
         <PathSection />
         <FooterCta />
       </div>

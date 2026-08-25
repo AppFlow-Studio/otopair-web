@@ -402,6 +402,23 @@ export const postjobPartValidator = v.object({
   tire_position: v.optional(nullableStringValidator),
 });
 
+/**
+ * Per-line labor breakdown behind the single `labor_hours` scalar an approval
+ * carries. Mirrors `parts_snapshot` — a per-line record, not a lump. Keyed the
+ * same way the Labor step is: `"base"` for the original booked service(s) plus
+ * one entry per custom-job id. Recording it lets the post-job Labor step seed
+ * each line with the labor that was AGREED for it, instead of treating the
+ * whole-approval total as the BASE service's time — which folded every custom
+ * job's hours into the base line and then double-counted them when the step
+ * re-listed each custom job. `hours` is decimal labor hours; `label` is a
+ * human tag for provenance only.
+ */
+export const laborAllocationValidator = v.object({
+  line_key: v.string(),
+  label: v.optional(nullableStringValidator),
+  hours: v.float64(),
+});
+
 export const postjobPhotoValidator = v.object({
   storage_id: v.id("_storage"),
   caption: v.optional(nullableStringValidator),

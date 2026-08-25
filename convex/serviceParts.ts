@@ -1370,6 +1370,12 @@ export type PricedPartsForService = {
   secondaryWinner?: PricedFitment | null;
   /** Losers from the second-axle resolver pass (mirrors `losers`). */
   secondaryLosers?: PricedFitment[];
+  /** True when this service inherently bills no parts (labor-only by design:
+   *  Diagnostic, Wheel Alignment, or parts handled by a dedicated flow). Lets
+   *  the client distinguish "no parts ever" (State 1, no disclosure) from
+   *  "needs parts, none priced for this vehicle" (State 2, Labor-Only
+   *  disclosure) — a `winner === null` row alone can't tell them apart. */
+  laborOnlyByDesign: boolean;
 };
 
 // ─── Shared resolver: from (vin, config, service) → role winners + trace ────
@@ -2154,6 +2160,15 @@ export const getPricedPartsForServices = query({
       const service = await ctx.db.get(serviceId);
       if (!service?.slug) continue;
 
+      // Labor-only by design: the same signal `resolveWinningPartForService`
+      // uses to short-circuit (spec.laborOnly / handledByDedicatedFlow), plus
+      // the catalog flag. Surfaced so the client can tell "no parts ever" apart
+      // from "needs parts, none priced for this vehicle".
+      const spec = getServicePartsSpec(normalizeServiceSlug(service.slug));
+      const laborOnlyByDesign =
+        !!(spec?.laborOnly || spec?.handledByDedicatedFlow) ||
+        service.is_labor_only === true;
+
       const position = positionByServiceId.get(String(serviceId));
 
       // "both" → two passes (front + rear) so the breakdown carries both
@@ -2203,6 +2218,7 @@ export const getPricedPartsForServices = query({
           parts: [...front.parts, ...rear.parts],
           secondaryWinner: rearWinner,
           secondaryLosers: rearRes.losers.map((c) => toPricedFitment(c)),
+          laborOnlyByDesign,
         });
         continue;
       }
@@ -2236,6 +2252,7 @@ export const getPricedPartsForServices = query({
         partsTotal: lines.lockedTotal,
         asNeededTotal: lines.asNeededTotal,
         parts: lines.parts,
+        laborOnlyByDesign,
       });
     }
 

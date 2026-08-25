@@ -12,6 +12,7 @@ import {
   Bell,
   Briefcase,
   Calendar,
+  MessageSquare,
   CreditCard,
   Users,
   Settings,
@@ -45,6 +46,7 @@ const ownerManagerLinks = [
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/previous-bookings", label: "Previous Bookings", icon: History },
   { href: "/team", label: "Team", icon: Users },
+  { href: "/messages", label: "Messages", icon: MessageSquare },
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/payouts", label: "Payments", icon: CreditCard },
   { href: "/settings", label: "Settings", icon: Settings },
@@ -55,6 +57,7 @@ const frontDeskLinks = [
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/previous-bookings", label: "Previous Bookings", icon: History },
   { href: "/team", label: "Team", icon: Users },
+  { href: "/messages", label: "Messages", icon: MessageSquare },
   { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
@@ -63,6 +66,7 @@ const mechanicLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/previous-bookings", label: "Previous Bookings", icon: History },
+  { href: "/messages", label: "Messages", icon: MessageSquare },
   { href: "/notifications", label: "Notifications", icon: Bell },
 ];
 
@@ -305,6 +309,8 @@ export default function PortalLayout({
   const unconfirmedBookingCount = useQuery(api.schedule.getUnconfirmedBookingCount) ?? 0;
   const notificationUnreadCount =
     useQuery(api.mechanicNotifications.getFeed)?.unreadCount ?? 0;
+  const messagesUnreadCount =
+    useQuery(api.shop_tickets_web.countShopInboxUnread, {}) ?? 0;
   const seedBookings = useMutation(api.seed.seedDashboardBookings);
   const clearDashboardBookingsBatch = useMutation(api.seed.clearDashboardBookingsBatch);
   const seedLateStartReviewScenario = useMutation(api.seed.seedLateStartReviewScenario);
@@ -660,7 +666,9 @@ export default function PortalLayout({
                   ? unconfirmedBookingCount
                   : link.href === "/notifications"
                     ? notificationUnreadCount
-                    : 0;
+                    : link.href === "/messages"
+                      ? messagesUnreadCount
+                      : 0;
               const showUnconfirmedBadge = badgeCount > 0;
               const badgeLabel = badgeCount > 99 ? "99+" : String(badgeCount);
               return (
@@ -682,7 +690,7 @@ export default function PortalLayout({
                     {showUnconfirmedBadge && sidebarCompact && (
                       <span
                         className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[16px] items-center justify-center rounded-full bg-blue-600 px-1 text-[10px] font-semibold leading-none text-white"
-                        aria-label={`${badgeCount} ${link.href === "/notifications" ? "unread notifications" : "unconfirmed bookings"}`}
+                        aria-label={`${badgeCount} ${link.href === "/notifications" ? "unread notifications" : link.href === "/messages" ? "unread messages" : "unconfirmed bookings"}`}
                       >
                         {badgeLabel}
                       </span>
@@ -834,17 +842,22 @@ export default function PortalLayout({
             </div>
           </header>
 
-          {/* Desktop top header — active-job pill on the left, notifications on the right */}
-          <header className="sticky top-0 z-40 hidden lg:flex items-center gap-3 px-6 py-3 bg-white border-b border-gray-200">
-            {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
-              <>
-                <ActiveJobStrip />
-                <div className="ml-auto">
-                  <NotificationBell />
-                </div>
-              </>
-            )}
-          </header>
+          {/* Desktop top header — active-job pill on the left, notifications on
+              the right. Suppressed on /schedule, which reclaims this row's height
+              and re-hosts both widgets itself (the bell folds into the toolbar;
+              the active-jobs pill sits under the calendar). */}
+          {pathname !== "/schedule" && (
+            <header className="sticky top-0 z-40 hidden lg:flex items-center gap-3 px-6 py-3 bg-white border-b border-gray-200">
+              {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
+                <>
+                  <ActiveJobStrip />
+                  <div className="ml-auto">
+                    <NotificationBell />
+                  </div>
+                </>
+              )}
+            </header>
+          )}
 
           <main className="flex-1 px-6 pt-6 pb-0">
             <CustomerSchedulingAlerts />

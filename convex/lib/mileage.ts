@@ -76,3 +76,76 @@ export function mileageSourceTag(
   if (from === "owner") return "user_reported";
   return "empty";
 }
+
+/**
+ * Which of a VIN's owner rows to believe. Active + primary wins, then any active
+ * row, then whatever exists. Shared so every "current mileage" reader picks the
+ * same owner the shop surfaces do. (Canonical copy — `bookings.ts` re-exports.)
+ */
+// `any` return (not a narrowed generic): `bookings.ts` reads many owner fields
+// off the result (usagePattern, mileage, annual_mileage_rate…), matching the
+// loose local helper this replaced.
+export function pickPreferredOwner(owners: any[]): any {
+  return (
+    owners.find((o) => o.status === "active" && o.is_primary) ??
+    owners.find((o) => o.status === "active") ??
+    owners[0] ??
+    null
+  );
+}
+
+function normalizeVin(vin: unknown): string {
+  return typeof vin === "string" ? vin.toUpperCase().trim() : "";
+}
+
+/**
+ * THE read for "what is this vehicle's odometer right now". Loads both stores
+ * for a VIN and returns the recency-resolved pair, so the intervals engine, VHS,
+ * Oto facts and check-in all see the number a shop surface does.
+ *
+ * NOT for point-in-time snapshots (`job_actuals.completion_mileage`,
+ * `vehicle_inspections.odometer`) — those record the reading at one specific
+ * visit and must stay verbatim.
+ */
+export async function getResolvedMileageForVin(
+  ctx: { db: any },
+  vin: string,
+): Promise<ResolvedMileage> {
+  const canonicalVin = normalizeVin(vin);
+  if (!canonicalVin) return { mileage: null, from: null };
+
+  const [passportRecord, owners] = await Promise.all([
+    ctx.db
+      .query("vehicle_passports")
+      .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+      .first(),
+    ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+      .collect(),
+  ]);
+
+  return resolveVehicleMileage(passportRecord, pickPreferredOwner(owners ?? []));
+}
+
+/**
+ * Same recency resolve, but against an owner row the caller already loaded (the
+ * common case in the maintenance pipeline / vehicle health, which operate on one
+ * `vehicleOwnerId`). Loads only the passport, so the owner-of-interest — not
+ * whichever `pickPreferredOwner` would choose — is the one compared.
+ */
+export async function resolveMileageForOwner(
+  ctx: { db: any },
+  owner:
+    | { vin?: unknown; mileage?: unknown; mileage_updated_at?: unknown }
+    | null
+    | undefined,
+): Promise<ResolvedMileage> {
+  const canonicalVin = normalizeVin(owner?.vin);
+  if (!canonicalVin) return resolveVehicleMileage(null, owner);
+  const passportRecord = await ctx.db
+    .query("vehicle_passports")
+    .withIndex("by_vin", (q: any) => q.eq("vin", canonicalVin))
+    .first();
+  return resolveVehicleMileage(passportRecord, owner);
+}

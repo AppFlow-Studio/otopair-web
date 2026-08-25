@@ -42,6 +42,12 @@ import {
   isCustomJobTaxonomyComplete,
 } from "@/components/custom-job-taxonomy-picker";
 import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
+import { sanitizeVinInput } from "@/lib/vin";
+import {
+  resolveCombinedLabor,
+  type CombinedLaborServiceInput,
+} from "@/convex/lib/combinedLabor";
+import { parseAxlePosition } from "@/convex/lib/brakeScope";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -173,7 +179,7 @@ function CollapsibleSection({
         type="button"
         onClick={() => onToggle(sectionKey)}
         aria-expanded={open}
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
+        className="flex w-full items-center gap-3 px-4 py-2.5 text-left"
       >
         <DrawerCardSectionHeader
           icon={Icon}
@@ -186,7 +192,7 @@ function CollapsibleSection({
           className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`}
         />
       </button>
-      {open ? <div className="px-4 pb-4">{children}</div> : null}
+      {open ? <div className="px-4 pb-3.5">{children}</div> : null}
     </section>
   );
 }
@@ -271,6 +277,12 @@ export default function CreateBookingDrawer({
   const [vinImageUrl, setVinImageUrl] = useState<string | null>(null);
   const [vinImageLoading, setVinImageLoading] = useState(false);
   const [vinConfirmOpen, setVinConfirmOpen] = useState(false);
+  // What the field last auto-fixed on the most recent keystroke, so the change
+  // is surfaced rather than silent. Cleared once a keystroke needs no fixing.
+  const [vinCorrection, setVinCorrection] = useState<{
+    correctedOI: boolean;
+    droppedInvalid: boolean;
+  } | null>(null);
   const lastDecodedVinRef = useRef<string>("");
 
   type OwnerInfo = { userId: string; firstName: string | null; lastName: string | null; email: string | null; phone: string | null };
@@ -616,10 +628,31 @@ export default function CreateBookingDrawer({
   // walk-in part defaults to the vehicle's make (OEM), but stays free-form so
   // supplier brands (Denso, Bosch…) or custom values can still be typed.
   const makesList = useQuery(api.makes.list);
-  const makeOptions = useMemo(
-    () => (makesList ?? []).map((m) => ({ value: m.name, label: m.name })),
-    [makesList],
-  );
+  // The shop's remembered custom brands (Bosch, Denso, a one-off supplier…),
+  // added by an explicit "Add … as custom" tap on a prior booking. Surfaced
+  // first in the picker so a shop reaches for what it used last.
+  const customBrandList = useQuery(
+    (api as any).shopCustomPartBrands.listForShop,
+    shopData?.shopId ? { shopId: shopData.shopId } : "skip",
+  ) as { _id: string; name: string }[] | undefined;
+  const addCustomBrand = useMutation((api as any).shopCustomPartBrands.add);
+  const makeOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const opts: { value: string; label: string }[] = [];
+    for (const b of customBrandList ?? []) {
+      const key = b.name.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      opts.push({ value: b.name, label: b.name });
+    }
+    for (const m of makesList ?? []) {
+      const key = m.name.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      opts.push({ value: m.name, label: m.name });
+    }
+    return opts;
+  }, [customBrandList, makesList]);
   const createBooking = useMutation(api.bookings.createByShop);
   const backfillBooking = useMutation((api as any).bookings.backfillCompletedBooking);
 
@@ -681,6 +714,92 @@ export default function CreateBookingDrawer({
   const TIRE_PART_PREFIX = "Tires — ";
 
   const categories = useMemo(() => shopData?.categories ?? [], [shopData?.categories]);
+
+  // Per-vehicle labor times — the SAME ladder the customer app books through
+  // (empirical → book/VDB → sibling chassis → Camry×tier "Yassin fallback" →
+  // catalog default), resolved by VIN for every catalog service so the list
+  // badges + running estimate reflect THIS vehicle instead of a flat default.
+  const allCatalogServiceIds = useMemo(
+    () =>
+      categories.flatMap((c: any) =>
+        (c.services as any[]).map((s) => s._id as Id<"services">),
+      ),
+    [categories],
+  );
+  const vehicleLaborTimes = useQuery(
+    api.laborTimes.getLaborHoursForServicesByVin,
+    validVin && allCatalogServiceIds.length > 0
+      ? { vin: validVin, serviceIds: allCatalogServiceIds }
+      : "skip",
+  );
+  // serviceId → per-service labor for O(1) badge lookup + combine input.
+  // `isEstimate` true for the tier fallback / catalog default (app renders an
+  // "est." pill); `unroundedHours`/`slug`/`source` feed the combined-labor pass.
+  const vehicleLaborByServiceId = useMemo(() => {
+    const m = new Map<
+      string,
+      { minutes: number; isEstimate: boolean; unroundedHours: number; slug: string; source: string }
+    >();
+    for (const r of vehicleLaborTimes ?? []) {
+      m.set(String(r.serviceId), {
+        minutes: Math.round(r.hours * 60),
+        isEstimate: r.source === "default",
+        unroundedHours: r.unroundedHours ?? r.hours,
+        slug: r.serviceSlug,
+        source: r.source,
+      });
+    }
+    return m;
+  }, [vehicleLaborTimes]);
+  const hasVehicleLabor = vehicleLaborByServiceId.size > 0;
+
+  // Combined labor operations (honest overlap deduction), gated by the director
+  // flag. Runs the SAME pure resolver the quote engine uses so the drawer's
+  // estimate matches what the customer would be quoted.
+  const directorSettings = useQuery(api.directorSettings.getGlobal, {});
+  const combinedLaborEnabled = directorSettings?.combined_labor_enabled === true;
+  const roundLaborTo15 = directorSettings?.round_labor_times_to_15min ?? true;
+  // Axle position per selected service (brakes), from the option picker.
+  const positionByServiceId = useMemo(() => {
+    const m = new Map<string, "front" | "rear" | "both">();
+    for (const o of selectedServiceOptions) {
+      const pos = parseAxlePosition(o.option_label);
+      if (pos) m.set(String(o.service_id), pos);
+    }
+    return m;
+  }, [selectedServiceOptions]);
+  // { combinedMinutes, savedMinutes, notes } for the SELECTED services. Falls
+  // back to a naive sum when the flag is off or nothing shares teardown.
+  const combinedLabor = useMemo(() => {
+    const inputs = Array.from(selectedIds)
+      .map((sid) => {
+        const l = vehicleLaborByServiceId.get(String(sid));
+        if (!l) return null;
+        return {
+          serviceId: String(sid),
+          slug: l.slug,
+          standaloneHours: l.unroundedHours,
+          position: positionByServiceId.get(String(sid)) ?? null,
+          source: l.source,
+        };
+      })
+      .filter(Boolean) as CombinedLaborServiceInput[];
+    const res = resolveCombinedLabor(inputs, {
+      enabled: combinedLaborEnabled && inputs.length >= 2,
+    });
+    // Round the combined total (and the naive baseline) to 15 min ONCE, then
+    // derive the saving as the difference so `saved + combined = naive` holds.
+    const ceil15 = (h: number) =>
+      roundLaborTo15 ? Math.ceil((h * 60) / 15) * 15 : Math.round(h * 60);
+    const combinedMinutes = ceil15(res.combinedHours);
+    const naiveMinutes = ceil15(res.combinedHours + res.savedHours);
+    return {
+      combinedMinutes,
+      savedMinutes: Math.max(0, naiveMinutes - combinedMinutes),
+      notes: res.notes,
+      applied: res.savedHours > 0,
+    };
+  }, [selectedIds, vehicleLaborByServiceId, positionByServiceId, combinedLaborEnabled, roundLaborTo15]);
 
   // Reactive OEM-catalog prefill for the parts editor (seeds the "Add parts"
   // rows for the chosen services + options).
@@ -1100,13 +1219,18 @@ export default function CreateBookingDrawer({
       (sum: number, c) => sum + (c.durationMinutes ?? 0),
       0,
     );
-    return (
-      selected.reduce(
-        (sum: number, s: any) => sum + (s.defaultLaborHours ?? 0) * 60,
-        0,
-      ) + customMins
-    );
-  }, [categories, selectedIds, customServices]);
+    const naive =
+      selected.reduce((sum: number, s: any) => {
+        // Vehicle-specific labor (the customer-app ladder) wins once the VIN
+        // resolves; otherwise the flat catalog default. Keeps the running
+        // estimate — end time, slot hold, suggested price — car-aware too.
+        const vehicleMins = vehicleLaborByServiceId.get(String(s._id))?.minutes;
+        return sum + (vehicleMins ?? (s.defaultLaborHours ?? 0) * 60);
+      }, 0) + customMins;
+    // Honest overlap: shave the shared teardown once (custom + non-vehicle
+    // lines still count fully — the saving only covers the combineable set).
+    return Math.max(0, naive - (combinedLaborEnabled ? combinedLabor.savedMinutes : 0));
+  }, [categories, selectedIds, customServices, vehicleLaborByServiceId, combinedLaborEnabled, combinedLabor]);
 
   // Mechanic override wins when present; otherwise fall back to catalog sum.
   const effectiveEstimateMinutes = useMemo(
@@ -1636,6 +1760,16 @@ export default function CreateBookingDrawer({
         source: "mechanic_walk_in",
         mechanicEstimatedMinutes: mechanicEstimateMinutes ?? undefined,
         catalogEstimatedMinutes: catalogMinutes,
+        // Honest overlap deduction (director flag). Persisted so the booking
+        // detail / receipt can show the shared-labor saving.
+        combinedLaborSavedMinutes:
+          combinedLaborEnabled && combinedLabor.applied
+            ? combinedLabor.savedMinutes
+            : undefined,
+        combinedLaborNotes:
+          combinedLaborEnabled && combinedLabor.applied && combinedLabor.notes.length > 0
+            ? combinedLabor.notes
+            : undefined,
         mechanicQuotedPrice: mechanicQuotedPrice ?? undefined,
         catalogQuotedPrice: 0,
         mechanicPartEntries:
@@ -1901,7 +2035,7 @@ export default function CreateBookingDrawer({
     <div className="flex flex-col h-full">
       {/* Header — scheduling lives here so date, time, and assignment are
           always visible and editable without scrolling. */}
-      <div className="shrink-0 border-b border-border px-5 py-4">
+      <div className="shrink-0 border-b border-border px-5 py-3">
         <div className="flex items-center justify-between">
           <h2 className="text-base font-semibold text-foreground">Create booking</h2>
           <div className="flex items-center gap-2">
@@ -2010,7 +2144,7 @@ export default function CreateBookingDrawer({
       </div>
 
       {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4">
+      <div className="flex-1 overflow-y-auto px-5 pt-4 pb-3 space-y-3">
 
         {isBackfill && (
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -2075,7 +2209,20 @@ export default function CreateBookingDrawer({
                   type="text"
                   placeholder="17-digit code"
                   value={vin}
-                  onChange={(e) => setVin(e.target.value.toUpperCase())}
+                  onChange={(e) => {
+                    // Auto-correct the ISO ambiguous typos (O→0, I→1) and strip
+                    // anything a VIN can't contain BEFORE it reaches state, so a
+                    // VIN entered with an "O" still hits the 17-char check and
+                    // fires enrichment instead of silently stalling one char shy.
+                    const { value, correctedOI, droppedInvalid } =
+                      sanitizeVinInput(e.target.value);
+                    setVin(value);
+                    setVinCorrection(
+                      correctedOI || droppedInvalid
+                        ? { correctedOI, droppedInvalid }
+                        : null,
+                    );
+                  }}
                   maxLength={17}
                   className={`${drawerInputClassName} font-mono uppercase pr-9`}
                 />
@@ -2083,6 +2230,24 @@ export default function CreateBookingDrawer({
                   <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground animate-spin" />
                 )}
               </div>
+              {/* Tell the mechanic what we just fixed, so an auto-correct never
+                  changes their input behind their back. */}
+              {vinCorrection && (
+                <p className="mt-1 text-xs text-amber-600">
+                  {vinCorrection.correctedOI && vinCorrection.droppedInvalid
+                    ? "Fixed that VIN — read O/I as 0/1 and dropped characters a VIN can't contain (no I, O or Q)."
+                    : vinCorrection.correctedOI
+                      ? "VINs never use the letters O or I — read those as 0 and 1."
+                      : "Dropped a character a VIN can't contain (no I, O or Q)."}
+                </p>
+              )}
+              {/* Live length feedback while the VIN is partial — the "can't take
+                  it yet" state, surfaced at the field instead of at submit. */}
+              {vin.length > 0 && vin.length < 17 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {vin.length}/17 characters
+                </p>
+              )}
               {vinLookupState === "error" && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   Couldn&apos;t decode VIN. Enter make/model manually.
@@ -2167,10 +2332,28 @@ export default function CreateBookingDrawer({
                   }
                   className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-medium hover:bg-amber-200 transition-colors"
                 >
-                  <span>{c.name}{c.durationMinutes ? ` · ${c.durationMinutes}m` : ""}</span>
+                  <span>{c.name}{c.durationMinutes ? ` · ${formatHoursValue(c.durationMinutes)}h` : ""}</span>
                   <X className="w-3 h-3" />
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* Combined labor savings — the honest overlap deduction. Only shows
+              when the director flag is on AND co-booked services shared teardown. */}
+          {combinedLaborEnabled && combinedLabor.applied && combinedLabor.savedMinutes > 0 && (
+            <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50/70 p-2.5 text-xs text-emerald-900">
+              <div className="flex items-center gap-1.5 font-semibold">
+                <Check className="h-3.5 w-3.5" />
+                Combined labor savings · −{formatHoursValue(combinedLabor.savedMinutes)}h
+              </div>
+              {combinedLabor.notes.length > 0 && (
+                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-emerald-800/90">
+                  {combinedLabor.notes.map((n, i) => (
+                    <li key={i}>{n}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
 
@@ -2234,6 +2417,17 @@ export default function CreateBookingDrawer({
             />
           </div>
 
+          {hasVehicleLabor && (
+            <p className="mb-2 text-[11px] text-muted-foreground">
+              Labor times shown for{" "}
+              <span className="font-medium text-foreground">
+                {[year, make, model].filter(Boolean).join(" ") || "this vehicle"}
+              </span>
+              {" · "}
+              <span className="tabular-nums">~</span> = tier estimate
+            </p>
+          )}
+
           {shopData === undefined ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-5 h-5 text-primary animate-spin" />
@@ -2266,7 +2460,15 @@ export default function CreateBookingDrawer({
                       <div className="divide-y divide-border/60">
                         {cat.services.map((s: any) => {
                           const checked = selectedIds.has(s._id);
-                          const mins = Math.round((s.defaultLaborHours ?? 0) * 60);
+                          // Prefer the per-vehicle labor time once a VIN
+                          // resolves; else the flat catalog default. `~` +
+                          // muted tone flags a tier/default estimate (the
+                          // "Yassin fallback"), matching the app's Estimate pill.
+                          const vehicleLabor = vehicleLaborByServiceId.get(String(s._id));
+                          const mins = vehicleLabor
+                            ? vehicleLabor.minutes
+                            : Math.round((s.defaultLaborHours ?? 0) * 60);
+                          const isEstimate = vehicleLabor?.isEstimate ?? false;
                           return (
                             <label
                               key={s._id}
@@ -2282,9 +2484,21 @@ export default function CreateBookingDrawer({
                               />
                               <span className="flex-1 text-sm text-foreground truncate">{s.name}</span>
                               {mins > 0 && (
-                                <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground tabular-nums shrink-0">
+                                <span
+                                  className={cn(
+                                    "inline-flex items-center gap-1 text-[11px] tabular-nums shrink-0",
+                                    isEstimate ? "text-muted-foreground/70" : "text-muted-foreground",
+                                  )}
+                                  title={
+                                    vehicleLabor
+                                      ? isEstimate
+                                        ? "Estimated from vehicle tier"
+                                        : "Based on this vehicle"
+                                      : undefined
+                                  }
+                                >
                                   <Clock className="w-3 h-3" />
-                                  {mins}m
+                                  {isEstimate ? "~" : ""}{formatHoursValue(mins)}h
                                 </span>
                               )}
                             </label>
@@ -3032,10 +3246,10 @@ export default function CreateBookingDrawer({
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                               <div>
-                                <DrawerFieldLabel>OEM #</DrawerFieldLabel>
+                                <DrawerFieldLabel>Part Number</DrawerFieldLabel>
                                 <input
                                   type="text"
-                                  placeholder="OEM #"
+                                  placeholder="Part number"
                                   value={p.oem_number}
                                   onChange={(e) =>
                                     setCatalogPartField(sid, idx, "oem_number", e.target.value)
@@ -3055,14 +3269,27 @@ export default function CreateBookingDrawer({
                                 <DrawerFieldLabel>Brand</DrawerFieldLabel>
                                 <Combobox
                                   ariaLabel="Brand"
-                                  placeholder="Brand"
+                                  placeholder="Search or type a brand…"
                                   value={p.brand ?? ""}
                                   onChange={(value) =>
                                     setCatalogPartField(sid, idx, "brand", value)
                                   }
                                   options={makeOptions}
                                   loading={makesList === undefined}
-                                  emptyText="No matching make — type to add a custom brand"
+                                  emptyText="No matching brand — type one, then tap Add"
+                                  onAddCustom={(value) => {
+                                    // Select it on this part now…
+                                    setCatalogPartField(sid, idx, "brand", value);
+                                    // …and remember it for this shop's future
+                                    // bookings. Fire-and-forget: a failed save must
+                                    // never cost the mechanic the brand they typed.
+                                    if (shopData?.shopId) {
+                                      addCustomBrand({
+                                        shopId: shopData.shopId as Id<"shops">,
+                                        name: value,
+                                      }).catch(() => {});
+                                    }
+                                  }}
                                   inputClassName={drawerInputClassName}
                                 />
                               </div>
@@ -3254,7 +3481,7 @@ export default function CreateBookingDrawer({
       </div>
 
       {/* Footer */}
-      <div className="px-5 py-4 border-t border-border shrink-0">
+      <div className="px-5 py-3 border-t border-border shrink-0">
         <button
           onClick={() => {
             void handleSubmit();

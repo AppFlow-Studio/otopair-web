@@ -69,8 +69,8 @@ const LANES: Array<{
   {
     lane: "blocked",
     icon: PauseCircle,
-    title: "Can't finish this job",
-    sub: "Pauses the clock and tells the front desk",
+    title: "Something's holding up the job",
+    sub: "Pauses the clock and lets the front desk know",
   },
 ];
 
@@ -239,7 +239,7 @@ export default function FlagIssueSheet({
               : lane === "later"
                 ? "For next time"
                 : lane === "blocked"
-                  ? "Can't finish"
+                  ? "Holding up the job"
                   : "Vehicle identity"}
         </p>
       </div>

@@ -182,7 +182,18 @@ export const applyDeferredInspectionHealth = internalMutation({
       .collect();
     for (const rec of recs) {
       if ((rec as any).source !== "inspection" || rec.visible_to_driver) continue;
-      if (recommendationWasPerformed(rec as any, performed)) {
+      // Resolve the catalog name so a rec satisfied by an off-catalog mid-job
+      // line (recorded by name, never as a service_id) still counts as done.
+      const recSvc = rec.recommended_service_id
+        ? await ctx.db.get(rec.recommended_service_id)
+        : null;
+      if (
+        recommendationWasPerformed(
+          rec as any,
+          performed,
+          (recSvc as any)?.name ?? null,
+        )
+      ) {
         // Closed, not deleted: the finding was real, and "raised and resolved
         // in the same visit" is worth keeping on the record. Same shape the
         // other completion paths write, so this reads identically to a rec

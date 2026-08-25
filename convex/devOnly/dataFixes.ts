@@ -12,6 +12,8 @@
 import { internalMutation, internalQuery } from "../_generated/server";
 import { v } from "convex/values";
 import { isMarketplaceDomain, isMarketplaceUrl } from "../vehicleEnrichment/sourceRegistry";
+import { ASSIGNMENT_RULES, matchRule } from "../seeds/seedPricing";
+import { VehicleTier } from "../lib/vehicleTiers";
 
 /**
  * READ-ONLY spot-check sweep: every vehicle_config with its engine's
@@ -390,5 +392,96 @@ export const fixLegacyPassportModifications = internalMutation({
       patched++;
     }
     return { ok: true as const, dry_run: dryRun, patched };
+  },
+});
+
+/**
+ * Re-tier BMW configs mis-stamped `T3b` by the old part5_seed, which put the
+ * full M-cars (M2/M3/M4/M5/M8 + X3 M…X6 M) into T3b — contradicting both the
+ * trim-aware ASSIGNMENT_RULES AND the canonical tier labels (T3a = "Performance
+ * — BMW M, AMG, Audi RS/S"; T3b = "911, Cayman, AMG GT, R8"). Under the
+ * reconciled model NO BMW is T3b, so any BMW currently at T3b is a mis-stamp.
+ * Recompute each via the trim-aware rules: base M → T3a, CS/CSL/Competition
+ * flagships → T4. Scoping on `pricing_tier === "T3b"` keeps this surgical —
+ * correctly-tiered BMWs (T2c/T3a/T4) are never touched, so a right rule that
+ * happens not to re-match (e.g. an M-Performance trim) can't regress them.
+ *
+ * The live symptom this fixes: a 2022 M3 Competition stamped T3b was quoted a
+ * whole band high ($275/hr) and tripped LABOR_COST_TIER_MISMATCH at booking.
+ *
+ * Preserves manual overrides. Dry-run first. Run per deployment.
+ *   npx convex run devOnly/dataFixes:retierBmwMCars '{"dry_run":true}'
+ *   npx convex run devOnly/dataFixes:retierBmwMCars
+ */
+export const retierBmwMCars = internalMutation({
+  args: { dry_run: v.optional(v.boolean()), force_manual: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dry_run ?? false;
+    const now = Date.now();
+    const configs = (await ctx.db.query("vehicle_configs").collect()) as any[];
+    const changes: any[] = [];
+    let skippedManual = 0;
+    let unresolved = 0;
+
+    for (const cfg of configs) {
+      if (cfg.pricing_tier !== "T3b") continue;
+      const make = cfg.make_id ? ((await ctx.db.get(cfg.make_id)) as any) : null;
+      if (!make || String(make.name ?? "").toLowerCase() !== "bmw") continue;
+      if (cfg.pricing_tier_source === "manual" && !args.force_manual) {
+        skippedManual++;
+        continue;
+      }
+      const model = cfg.model_id ? ((await ctx.db.get(cfg.model_id)) as any) : null;
+      const matchCtx = {
+        make: make.name as string,
+        model: (model?.name ?? "") as string,
+        trim: (cfg.trim_name ?? "") as string,
+        year: cfg.year as number,
+      };
+      let matched: VehicleTier | null = null;
+      for (const rule of ASSIGNMENT_RULES) {
+        if (matchRule(rule, matchCtx)) {
+          matched = rule.tier;
+          break;
+        }
+      }
+      // No rule matched, or the rules somehow still say T3b — don't guess.
+      if (!matched || matched === "T3b") {
+        unresolved++;
+        continue;
+      }
+      changes.push({
+        config_key: cfg.config_key,
+        model: matchCtx.model,
+        trim: matchCtx.trim,
+        from: "T3b",
+        to: matched,
+      });
+      if (!dryRun) {
+        await ctx.db.patch(cfg._id, {
+          pricing_tier: matched,
+          pricing_tier_source: "rules_engine",
+          pricing_tier_set_at: now,
+        });
+        await ctx.db.insert("audit_log", {
+          entity_type: "vehicle_config",
+          entity_id: String(cfg._id),
+          action: "data_fix",
+          actor: "CLI data fix",
+          detail:
+            `pricing_tier: T3b → ${matched} (BMW M-car re-tier via trim-aware ` +
+            `ASSIGNMENT_RULES; model="${matchCtx.model}" trim="${matchCtx.trim}")`,
+          created_at: now,
+        });
+      }
+    }
+    return {
+      ok: true as const,
+      dry_run: dryRun,
+      retiered: changes.length,
+      skippedManual,
+      unresolved,
+      changes,
+    };
   },
 });

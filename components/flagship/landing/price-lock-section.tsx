@@ -1,7 +1,13 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, useInView } from "motion/react";
+import {
+  AnimatePresence,
+  motion,
+  useInView,
+  useMotionValueEvent,
+  useScroll,
+} from "motion/react";
 import { useReducedMotionSafe } from "../shared";
 import { Reveal, serif, serifDisplay } from "./reveal";
 import DriversPanel from "./drivers-panel";
@@ -78,7 +84,7 @@ const SHOP_CAPTIONS: Record<ShopBeat, string> = {
 };
 
 /* Restart time for the full story loop — mirrored in STORY_MS. */
-const SHOPS_LOOP_MS = 35400;
+const SHOPS_LOOP_MS = 33800;
 
 /* The cast on the board, exactly as the Figma frames name them. */
 const MECHS = ["Twunna S.", "Temur S.", "Abubeckr E."] as const;
@@ -261,24 +267,29 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
       later(reduce ? "complete" : "off", 0);
       return () => timers.forEach((t) => window.clearTimeout(t));
     }
-    // Beat spacing doubles as caption pacing — every caption below holds
-    // its line for at least ~3s of read time.
+    // Only the calendar's initial load was too slow (design feedback
+    // 2026-08-24, item 3: "takes about 5 seconds to fully populate with all
+    // the time slots and mechanics"). So the four board-assembly beats moved
+    // up and their transitions got quicker — the grid is now up in ~2.5s.
+    // Everything from `land` on keeps its original spacing, just shifted
+    // earlier by the time the faster load saved; the rest of the story was
+    // never the problem and is not retimed.
     const SEQ: [ShopBeat, number][] = [
       ["off", 0],
-      ["date", 300],
-      ["time", 1000],
-      ["cols", 1450],
-      ["rows", 3000],
-      ["land", 7300],
-      ["press", 10800],   // block click…
-      ["job1", 11600],    // …opens the sheet 0.8s later
-      ["job2", 14600],
-      ["ready", 18400],
-      ["start", 21400],   // START SERVICE press…
-      ["step3", 22200],   // …advances the stepper 0.8s later
-      ["step4", 26000],
-      ["alldone", 29400], // COMPLETE press + all checks…
-      ["complete", 30600],// …collapse into the ✓ card
+      ["date", 200],
+      ["time", 650],
+      ["cols", 1000],
+      ["rows", 1900],
+      ["land", 5700],
+      ["press", 9200],    // block click…
+      ["job1", 10000],    // …opens the sheet 0.8s later
+      ["job2", 13000],
+      ["ready", 16800],
+      ["start", 19800],   // START SERVICE press…
+      ["step3", 20600],   // …advances the stepper 0.8s later
+      ["step4", 24400],
+      ["alldone", 27800], // COMPLETE press + all checks…
+      ["complete", 29000],// …collapse into the ✓ card
     ];
     const run = () => {
       for (const [b, t] of SEQ) later(b, t);
@@ -294,12 +305,14 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
   const view = at("complete") ? "done" : at("job1") ? "job" : "board";
   const jobStep: 1 | 2 | 3 | 4 = at("step4") ? 4 : at("step3") ? 3 : at("job2") ? 2 : 1;
 
+  /* 0.34s per element, not 0.5 — the populate animation itself had to get
+     faster (design feedback 2026-08-24, item 3), not just start earlier. */
   const rise = (on: boolean, delay = 0) => ({
     initial: false as const,
     animate: reduce
       ? { opacity: on ? 1 : 0 }
       : { opacity: on ? 1 : 0, y: on ? 0 : 14 },
-    transition: { duration: 0.5, ease: EASE, delay: on ? delay : 0 },
+    transition: { duration: 0.34, ease: EASE, delay: on ? delay : 0 },
   });
 
   return (
@@ -363,7 +376,7 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                     <motion.div
                       key={name}
                       className="flex h-[56px] flex-col items-center justify-center bg-white/55 sm:h-[74px]"
-                      {...rise(at("cols"), i * 0.28)}
+                      {...rise(at("cols"), i * 0.13)}
                     >
                       <span className="text-[11px] font-semibold tracking-[-0.01em] text-[#1a1a1a] sm:text-[14px]">
                         {name}
@@ -393,7 +406,7 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                     <motion.div
                       key={h}
                       className="relative flex h-[38px] items-center sm:h-[49px]"
-                      {...rise(at("rows"), i * 0.12)}
+                      {...rise(at("rows"), i * 0.05)}
                     >
                       {i > 0 && <span className="absolute inset-x-0 top-0 h-px bg-white/60" />}
                       <span className="pl-2 text-[10.5px] tracking-[0.02em] text-[#33383b] sm:pl-[22px] sm:text-[14px]">
@@ -597,9 +610,40 @@ export default function PriceLockSection() {
   const listRef = useRef<HTMLDivElement>(null);
   const listInView = useInView(listRef, { amount: 0.35 });
 
+  // ── Pinned scroll-through (design feedback 2026-08-24, item 2) ──
+  // On desktop the card pins inside a 320vh runway and the visitor's scroll
+  // steps 01 → 02 → 03 (a third of the runway each), so nobody misses two of
+  // the three roles behind a hover they never perform. Hover/tap still swaps
+  // instantly between threshold crossings. Mobile and tablet keep the
+  // stacked layout with the auto-advancing reel.
+  const [pinnedMode, setPinnedMode] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const sync = () => setPinnedMode(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  const runwayRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: runwayRef,
+    offset: ["start start", "end end"],
+  });
+  useMotionValueEvent(scrollYProgress, "change", (p) => {
+    if (!pinnedMode) return;
+    const zone = p < 1 / 3 ? 0 : p < 2 / 3 ? 1 : 2;
+    setActive((a) => {
+      if (a === zone) return a;
+      // Scroll is the desktop driver — it also retires the auto reel.
+      engaged.current = true;
+      return zone;
+    });
+  });
+
   // Full loop length of each role's story, minus a beat so we hand off just
   // before the loop restarts. MUST track the SEQ restart times in
-  // DriversPanel (24400), ShopsPanel (SHOPS_LOOP_MS, 38600) and OtoPanel
+  // DriversPanel (24400), ShopsPanel (SHOPS_LOOP_MS) and OtoPanel
   // (OTO_LOOP_MS, 37700).
   const STORY_MS = [24100, SHOPS_LOOP_MS - 300, 37400];
 
@@ -608,16 +652,17 @@ export default function PriceLockSection() {
   }, [listInView]);
 
   // The reel: an untouched visitor sees Drivers → Shops → Oto, each story
-  // playing to completion before the next takes the stage.
+  // playing to completion before the next takes the stage. Only off-desktop —
+  // when the section pins, scroll position is the driver instead.
   useEffect(() => {
-    if (reduce || !listInView || resetToken === 0) return;
+    if (pinnedMode || reduce || !listInView || resetToken === 0) return;
     if (engaged.current) return;
     const t = window.setTimeout(() => {
       if (!engaged.current) setActive((a) => (a + 1) % ROLES.length);
     }, STORY_MS[active]);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, listInView, reduce, resetToken]);
+  }, [active, listInView, pinnedMode, reduce, resetToken]);
 
   const select = (i: number) => {
     touched.current = true;
@@ -660,9 +705,17 @@ export default function PriceLockSection() {
           in from the card's left edge, the demo stage fills the right — V1's
           arrangement (rail x160, UI x726 on the page). On mobile the stage
           still stacks first, so the DOM order is stage → list and the swap
-          happens with order utilities at lg. */}
+          happens with order utilities at lg.
+
+          On lg the card lives inside a 320vh runway and pins (sticky, centered
+          in the viewport when it fits) while scroll steps the three roles;
+          past the runway it releases and the page continues. */}
+      <div ref={runwayRef} className="lg:h-[320vh]">
+        <div className="lg:sticky lg:top-[max(16px,calc(50vh-430px))]">
       <div className="mx-auto mt-16 w-full max-w-[1269px] overflow-clip rounded-[28px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] sm:mt-24 sm:rounded-[40px]">
-        <div className="grid grid-cols-1 gap-12 px-5 py-10 sm:px-10 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:py-0 lg:pl-[76px] lg:pr-[27px]">
+        {/* pb keeps the phone mock + caption chips off the card's bottom edge
+            on every step (design feedback 2026-08-24, item 4). */}
+        <div className="grid grid-cols-1 gap-12 px-5 pt-10 pb-16 sm:px-10 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:pt-5 lg:pb-20 lg:pl-[76px] lg:pr-[27px]">
         {/* The story stage */}
         <div className="lg:order-2">
           <PriceLockCard active={active} reduce={reduce} resetToken={resetToken} />
@@ -732,6 +785,8 @@ export default function PriceLockSection() {
             );
           })}
         </div>
+        </div>
+      </div>
         </div>
       </div>
     </section>

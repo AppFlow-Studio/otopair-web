@@ -810,10 +810,18 @@ export const getUnaddressedFindingsForBooking = query({
           workType: taxonomy?.work_type ?? null,
         };
       })
-      .filter((s) =>
-        s.serviceId
-          ? !handledServiceIds.has(String(s.serviceId))
-          : !handledMatchKeys.has(serviceMatchKey(s.serviceName ?? s.label)),
-      );
+      .filter((s) => {
+        // A finding is handled if EITHER it maps to a catalog service already
+        // on the booking / recommended (handledServiceIds), OR a line matching
+        // its name exists (handledMatchKeys). Both must be checked even when the
+        // finding resolves to a serviceId: a mid-job extra (e.g. Coolant Flush
+        // added via "Add to this job") lands as a custom_jobs row recorded by
+        // NAME only — it never enters handledServiceIds — so a catalog finding
+        // added mid-job would otherwise never clear from this list.
+        if (s.serviceId && handledServiceIds.has(String(s.serviceId))) return false;
+        if (handledMatchKeys.has(serviceMatchKey(s.serviceName ?? s.label)))
+          return false;
+        return true;
+      });
   },
 });

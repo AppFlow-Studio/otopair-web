@@ -26,6 +26,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
   customerInspectionSnapshotValidator,
+  laborAllocationValidator,
   postjobPartValidator,
   postjobPhotoValidator,
   postjobReportValidator,
@@ -2013,6 +2014,15 @@ export default defineSchema({
      *  was originally v.number() but every writer (checkin, bookings)
      *  uses string labels — the validator was the side that drifted. */
     confidence: v.optional(v.string()),
+    /** The booking whose completion last serviced this anchor. Stamped by
+     *  bookings.ts runCompletionSideEffects → markServiced (both originally-
+     *  booked services and mid-job-added catalog services). Drives the Cars-tab
+     *  "Resolved by [shop] →" card + its deep-link to the past-service detail. */
+    lastServiceBookingId: v.optional(v.id("bookings")),
+    /** When the driver tapped the resolved card (opening the closing service).
+     *  The card shows only while resolutionAckedAt < lastServiceDate, so a fresh
+     *  completion re-surfaces it even if a prior resolution was already acked. */
+    resolutionAckedAt: v.optional(v.number()),
     createdAt: v.optional(v.number()),
     updatedAt: v.optional(v.number()),
   })
@@ -2847,6 +2857,14 @@ export default defineSchema({
         v.object({
           name: v.string(),
           duration_minutes: v.optional(v.float64()),
+          // True while this off-catalog line is STAGED but not yet confirmed by
+          // the customer — i.e. added mid-inspection ("Add to this job") / as
+          // unforeseen scope, and awaiting approval of the pre_job / mid_job
+          // estimate that carries it. Shop-facing surfaces still show it (the
+          // mechanic priced and sent it); customer-facing reads hide it until
+          // approval clears this flag. Absent = confirmed/booked work (the
+          // pre-existing default), so old rows read as confirmed.
+          pending_confirmation: v.optional(v.boolean()),
         })
       )
     ),
@@ -3036,6 +3054,13 @@ export default defineSchema({
     running_approved_ceiling_cents: v.optional(v.number()),
     // Mechanic's current target (singular). Set on submitPreJobEstimate.
     mechanic_set_price_cents: v.optional(v.number()),
+    // Fixed-price bookings only. The ORIGINAL contracted flat price (in cents),
+    // captured once the first added service is billed on top of it. Stays put
+    // even as `mechanic_set_price_cents`/`total_cost` grow with added scope, so
+    // every added-scope estimate recomputes total = fixed_contract_base_cents +
+    // Σ(added services). Without this stable anchor, re-pricing would read the
+    // already-grown running total as the "base" and double-count prior additions.
+    fixed_contract_base_cents: v.optional(v.number()),
     estimate_approved_at_ms: v.optional(v.number()),
     estimate_decided_by_user_id: v.optional(v.id("users")),
 
@@ -3804,6 +3829,83 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_role", ["role"])
     .index("by_timestamp", ["timestamp"]),
+
+  // ── Message Shop (v9) ──────────────────────────────────────────────────
+  // Customer↔shop support tickets, scoped to a booking. NEW tables (the ai_*
+  // chat above is user↔AI only) but they deliberately mirror its
+  // container→messages shape. A ticket is the "controlled flow": category +
+  // status + booking context, with a message thread inside it as the
+  // open-chat fallback so it's never a dead end. Read-tracking is
+  // denormalized here (per-side counters + last_read) rather than a separate
+  // table — same inline pattern as notification_outbox.read_at. Shop responds
+  // from otopair-web; these are portable (no mobile-only deps) so the mirror
+  // synced into the mobile repo stays identical.
+  shop_tickets: defineTable({
+    booking_id: v.id("bookings"), // v1: every ticket attaches to a booking
+    user_id: v.id("users"), // the customer (booking.user_id)
+    shop_id: v.id("shops"), // denormalized from booking for the inbox index
+    mechanic_id: v.optional(v.id("mechanics")), // pre-assigned = booking.mechanic_id
+
+    // Loose strings (like ai_messages.role) so the taxonomy/lifecycle can grow
+    // without a migration. Vocab lives in convex/lib/shopTicketConstants.ts.
+    category: v.string(), // running_late | when_ready | open_chat | …
+    status: v.string(), // open | shop_responded | resolved | closed
+
+    // Denormalized preview + counters so the web inbox and the mobile ticket
+    // list render without loading the whole thread (cf. ai_conversations
+    // message_count / arc_summary).
+    subject: v.optional(v.string()),
+    last_message_preview: v.optional(v.string()),
+    last_message_at: v.optional(v.number()),
+    last_sender_role: v.optional(v.string()),
+    message_count: v.optional(v.number()),
+
+    // Two-sided unread tracking. customer_* = unread shop messages for the
+    // customer; shop_* = unread customer messages for any shop staff.
+    customer_unread_count: v.optional(v.number()),
+    shop_unread_count: v.optional(v.number()),
+    customer_last_read_at: v.optional(v.number()),
+    shop_last_read_at: v.optional(v.number()),
+
+    started_at: v.number(),
+    updated_at: v.optional(v.number()),
+    resolved_at: v.optional(v.number()),
+    resolved_by_user_id: v.optional(v.id("users")),
+  })
+    .index("by_booking_id", ["booking_id"]) // user: my tickets for a booking
+    .index("by_user_id", ["user_id"]) // user: all my tickets
+    .index("by_shop_and_status", ["shop_id", "status"]) // web inbox queue
+    .index("by_shop_and_updated", ["shop_id", "updated_at"]) // web inbox sort
+    .index("by_mechanic_id", ["mechanic_id"]), // web "assigned to me"
+
+  // One message in a shop_tickets thread. Mirrors ai_messages 1:1 (role
+  // string, content, timestamp, metadata/render as v.any()). `action` is the
+  // shop-side rider recording which existing app flow a structured reply drove
+  // (reschedule / approval / pickup / eta) so the thread renders it inline and
+  // the sync hook keeps its status truthful.
+  shop_ticket_messages: defineTable({
+    ticket_id: v.id("shop_tickets"),
+    booking_id: v.id("bookings"), // denormalized for cross-ticket audit
+    sender_role: v.string(), // customer | shop | mechanic | system
+    author_user_id: v.optional(v.id("users")),
+    content: v.string(),
+    // UI envelope, same role as ai_messages.render (quick-reply echo, cards).
+    render: v.optional(v.any()),
+    action: v.optional(
+      v.object({
+        kind: v.string(), // propose_reschedule | request_approval | send_eta | pickup_response
+        status: v.optional(v.string()), // pending | accepted | declined | applied | expired
+        booking_approval_id: v.optional(v.id("booking_approvals")),
+        params: v.optional(v.any()),
+        resolved_at: v.optional(v.number()),
+      }),
+    ),
+    metadata: v.optional(v.any()),
+    timestamp: v.number(),
+  })
+    .index("by_ticket_id", ["ticket_id"]) // the thread read (both sides)
+    .index("by_booking_id", ["booking_id"]) // all messages across a booking
+    .index("by_sender_role", ["sender_role"]), // parity w/ ai_messages.by_role
 
   // [I] Sprint 4 — per-message AI feedback. Captured via the thumbs-up /
   // thumbs-down buttons on each AI bubble (those buttons open the feedback
@@ -4775,6 +4877,25 @@ export default defineSchema({
     .index("by_shop_and_match_key", ["shop_id", "match_key"])
     .index("by_match_key", ["match_key"]),
 
+  // A shop's remembered custom PART brands — supplier brands (Bosch, Denso…) or
+  // any one-off brand a mechanic sourced externally for a part on a walk-in
+  // booking. The parts Brand picker is seeded from the vehicle `makes` catalog,
+  // but that table is vehicle makes only (guarded by getOrCreateMake); part
+  // brands would pollute it. So, exactly like shop_custom_services, these are
+  // shop-scoped "autocomplete with a memory" — added only by an explicit
+  // "Add … as custom" tap, never driver-facing or bookable.
+  shop_custom_part_brands: defineTable({
+    shop_id: v.id("shops"),
+    name: v.string(),
+    // Trimmed + lowercased identity key for an idempotent upsert per shop.
+    name_key: v.string(),
+    use_count: v.number(),
+    last_used_at: v.number(),
+    created_at: v.number(),
+  })
+    .index("by_shop", ["shop_id"])
+    .index("by_shop_and_key", ["shop_id", "name_key"]),
+
   // One structured record per piece of off-catalog work (Off-Catalog Work
   // spec, §7). `bookings.custom_services[]` stays as the lightweight display
   // and scheduling copy — this table is the extraction spine.
@@ -4822,6 +4943,15 @@ export default defineSchema({
     // this is the field that filed a window-switch replacement under
     // "Inspections". No longer collected; kept so historical rows resolve.
     category_id: v.optional(v.id("service_categories")),
+    // The canonical catalog service this line resolved to at entry, when the
+    // mechanic added a real bookable service mid-job (addCustomServiceForBooking
+    // resolves it to seed OEM parts/labor). This is the ONE discriminator the
+    // CUSTOM JOB INVARIANT turns on: a row WITH catalog_service_id is an added
+    // *catalog* service and DOES move maintenance health on completion (via
+    // bookings.ts runCompletionSideEffects), exactly like an originally-booked
+    // service; a row WITHOUT it is genuine off-catalog work and stays isolated.
+    // Null on all pre-existing rows and on every truly off-catalog job.
+    catalog_service_id: v.optional(v.id("services")),
 
     // The reasoning. `complaint` is why the work happened, `resolution` is what
     // was actually done, `resolved_complaint` is whether it worked.
@@ -5973,6 +6103,12 @@ export default defineSchema({
     parts_snapshot: v.array(postjobPartValidator),
     labor_hours: v.optional(v.number()),
     labor_rate_cents: v.optional(v.number()),
+    // Per-line breakdown behind `labor_hours` (the scalar total). Keyed "base"
+    // + custom-job ids; lets the post-job Labor step seed each line with its
+    // agreed labor instead of treating the whole-approval total as the base
+    // service's time (which double-counted custom-job labor). Optional —
+    // legacy rows predate it and fall back to the booking's base estimate.
+    labor_allocations: v.optional(v.array(laborAllocationValidator)),
     notes: v.optional(v.string()),
     // Optional photos the mechanic attached to justify the change (e.g. a shot
     // of the seized caliper behind the added scope). Storage ids; the

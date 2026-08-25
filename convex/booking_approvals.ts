@@ -31,10 +31,14 @@ import {
 } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { postjobPartValidator } from "./lib/vehicle_passports";
+import {
+  laborAllocationValidator,
+  postjobPartValidator,
+} from "./lib/vehicle_passports";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
+import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
   buildCustomerInspectionSnapshot,
   type CustomerInspectionSnapshot,
@@ -42,9 +46,16 @@ import {
 import {
   stampMidJobCustomJobs,
   revertDeclinedMidJobWork,
+  confirmStagedCustomServices,
 } from "./customJobs";
 
 const SLA_MS = 24 * 60 * 60 * 1000;
+
+// Last-resort labor rate ($125/hr) when a submission arrives without one — the
+// same industry default the estimate dialog falls back to, so a fixed-price
+// added-scope price computed here matches what the mechanic saw. In practice
+// the client always sends the shop's rate.
+const DEFAULT_LABOR_RATE_CENTS = 12500;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Auth helpers (local copies — mirror convex/bookings.ts pattern)
@@ -105,6 +116,10 @@ type SubmittedPart = {
   supplied_by?: string;
   part_tier?: string;
   service_id?: Id<"services">;
+  /** Off-catalog attribution: set on parts belonging to an ADDED service line
+   *  (which has no catalog `service_id`). Distinguishes added-scope parts from
+   *  the locked base on a fixed-price booking. */
+  custom_service_name?: string | null;
   source?: "catalog" | "manual";
   swap_from_oem_number?: string;
   not_used?: boolean;
@@ -189,6 +204,82 @@ async function computeMechanicSetPrice(
   };
 }
 
+/** Normalize a line name for matching a part's `custom_service_name` to a
+ *  `custom_jobs` row (both hold the same added-line name). */
+function normLineName(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase();
+}
+
+/** Read the booking's ACTIVE added lines that carry a shop FLAT price. Returns
+ *  the set of their (normalized) names — so their parts/labor can be excluded
+ *  from the parts+labor recompute — and the sum of their flat prices (cents),
+ *  which is billed as a pre-tax PARTS-basis component (mirrors booking-create's
+ *  computeDisclosedRange, where a shop_service_fixed_prices line lands in the
+ *  parts basis with tax + fee on top). Re-read server-side rather than trusting
+ *  a client sum, so the flat price can't be tampered with. */
+async function readFlatAddedLines(
+  ctx: any,
+  bookingId: Id<"bookings">,
+): Promise<{ flatNames: Set<string>; flatAddedCents: number }> {
+  const rows = await ctx.db
+    .query("custom_jobs")
+    .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
+    .collect();
+  const flatNames = new Set<string>();
+  let flatAddedCents = 0;
+  for (const r of rows) {
+    if (r.status === "cancelled" || r.status === "declined") continue;
+    const cents = r.quoted_price_cents;
+    if (typeof cents === "number" && cents > 0) {
+      flatNames.add(normLineName(r.name));
+      flatAddedCents += cents;
+    }
+  }
+  return { flatNames, flatAddedCents };
+}
+
+/** Price an all-in amount from raw component cents, treating a flat-price
+ *  service amount as a PARTS-basis pre-tax component (matches booking-create).
+ *  Tax + platform fee are server-authoritative. With flatCents == 0 this is
+ *  identical to computeMechanicSetPrice over the same parts + labor. */
+async function priceWithFlat(
+  ctx: any,
+  booking: any,
+  amounts: { partsCents: number; laborCents: number; flatCents: number },
+): Promise<SetPriceComputed> {
+  const { partsCents, laborCents, flatCents } = amounts;
+  const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+  const shopState =
+    (shop?.address_state as string | undefined) ??
+    (shop?.state as string | undefined) ??
+    null;
+  const shopZip =
+    (shop?.address_zip as string | undefined) ??
+    (shop?.zip as string | undefined) ??
+    null;
+  // A fixed-price service bundles parts + labor into one taxable line, so its
+  // flat amount joins the PARTS basis for tax.
+  const taxResult = computeBookingTax({
+    laborDollars: laborCents / 100,
+    partsDollars: (partsCents + flatCents) / 100,
+    state: shopState,
+    zip: shopZip,
+  });
+  const taxCents = Math.round((taxResult.taxDollars ?? 0) * 100);
+  const subtotalCents = partsCents + laborCents + flatCents;
+  const feeCents = Math.max(
+    0,
+    Math.round(computePlatformFeeDollars(subtotalCents / 100) * 100),
+  );
+  return {
+    parts_subtotal_cents: partsCents + flatCents,
+    labor_cents: laborCents,
+    tax_cents: taxCents,
+    service_fee_cents: feeCents,
+    total_cents: subtotalCents + taxCents + feeCents,
+  };
+}
+
 function ceilingForCycle(booking: any, cycle: string): number {
   if (cycle === "pre_job") {
     return booking.disclosed_range_high_cents ?? 0;
@@ -212,6 +303,18 @@ type SubmitArgs = {
   parts: SubmittedPart[];
   laborHours?: number;
   laborRateCents?: number;
+  /** Labor hours attributable to ADDED services only (custom-job lines),
+   *  excluding the locked base. Used exclusively by the fixed-price + added-
+   *  scope path to price the added labor; ignored otherwise. */
+  addedLaborHours?: number;
+  /** Per-line breakdown behind `laborHours` (the scalar total). Keyed "base" +
+   *  custom-job ids. Persisted so the post-job Labor step can seed the base
+   *  line with base-only labor instead of the whole-approval total. */
+  laborAllocations?: Array<{
+    line_key: string;
+    label?: string | null;
+    hours: number;
+  }>;
   notes?: string;
   /** Optional evidence photos justifying the change, shown to the customer on
    *  the approval screen alongside `notes`. */
@@ -246,42 +349,99 @@ async function performSubmission(
   const booking: any = await ctx.db.get(args.bookingId);
   if (!booking) throw new Error("Booking not found.");
 
-  const priced = await computeMechanicSetPrice(ctx, {
-    booking,
-    parts: args.parts,
-    laborHours: args.laborHours,
-    laborRateCents: args.laborRateCents,
+  // ADDED lines the shop flat-prices (a catalog service with a
+  // shop_service_fixed_prices row at the vehicle's tier) are billed at their
+  // frozen flat price, NOT parts+labor — the same rule a booked fixed-price
+  // service follows. Exclude their parts/labor from the recompute and add the
+  // flat sum as a pre-tax parts-basis component. For a booking with no such
+  // lines, flatNames is empty and this is identical to the old computeMechanic-
+  // SetPrice call. (The client sends laborHours/addedLaborHours already
+  // excluding flat lines' hours, so their labor is never double-counted.)
+  const { flatNames, flatAddedCents } = await readFlatAddedLines(
+    ctx,
+    args.bookingId,
+  );
+  const baseLaborCents =
+    args.laborHours != null && args.laborRateCents != null
+      ? Math.round(args.laborHours * args.laborRateCents)
+      : Math.round((booking.labor_cost ?? 0) * 100);
+  let priced = await priceWithFlat(ctx, booking, {
+    partsCents: partsSubtotalCents(
+      args.parts.filter((p) => !flatNames.has(normLineName(p.custom_service_name))),
+    ),
+    laborCents: baseLaborCents,
+    flatCents: flatAddedCents,
   });
   const inspectionSnapshot = await getInspectionSnapshotForBooking(
     ctx,
     args.bookingId,
   );
 
-  // Fixed-price bookings: parts/labor updates are audit-only. Customer
-  // agreed to a flat price (shop_service_fixed_prices); mechanic edits get
-  // logged on booking_approvals but never alter the booking total, never
-  // trip a Stripe authorization adjust, and never push the customer an
-  // approval prompt. Path returns early after the audit insert.
   const isFixedPrice = booking.is_fixed_price === true;
+  // Fixed-price bookings run the SAME confirm-hold-and-continue flow as any
+  // estimate — the base price just can't be EDITED. The customer authorized a
+  // deposit at booking; the pre-job submit is what raises the hold to the real
+  // amount (silently when it's within the disclosed contract, or via an explicit
+  // customer confirmation when added scope pushes it over). So we do NOT skip
+  // the approval machinery — we only PIN the base:
+  //   - base = the contracted flat price (a fixed booking discloses low==high),
+  //     NOT the parts+labor recompute (which can diverge from what the customer
+  //     agreed to). Frozen in `fixed_contract_base_cents` once added scope grows
+  //     the running total so a resubmit never reads the grown total as the base.
+  //   - added services (parts tagged `custom_service_name` + their labor) are
+  //     priced on top. Editing the BASE service's own parts/labor never moves
+  //     the price — it stays the flat contract.
+  let fixedBaseCents: number | null = null;
   if (isFixedPrice) {
-    return performFixedPriceInformationalSubmission(ctx, {
-      bookingId: args.bookingId,
-      cycle: args.cycle,
-      parts: args.parts,
-      laborHours: args.laborHours,
-      laborRateCents: args.laborRateCents,
-      notes: args.notes,
-      scopePhotoIds: args.scopePhotoIds,
-      submittedByUserId: args.submittedByUserId,
-      priced,
-      inspectionSnapshot,
+    fixedBaseCents =
+      (booking.fixed_contract_base_cents as number | undefined) ??
+      (booking.disclosed_range_high_cents as number | undefined) ??
+      Math.round((booking.total_cost ?? 0) * 100);
+    // Added PARTS+LABOR lines (tagged custom_service_name), EXCLUDING any the
+    // shop flat-prices — those are billed at their frozen flat price via the
+    // flatAddedCents component below, not parts+labor.
+    const addedParts = args.parts.filter(
+      (p) =>
+        (p.custom_service_name ?? "").trim() !== "" &&
+        !flatNames.has(normLineName(p.custom_service_name)),
+    );
+    const addedRateCents =
+      typeof args.laborRateCents === "number" && args.laborRateCents > 0
+        ? args.laborRateCents
+        : DEFAULT_LABOR_RATE_CENTS;
+    // Added-service labor only (base labor is locked, never re-billed). The
+    // client sends this per-line split — already excluding flat-priced lines'
+    // hours; absent → 0, NEVER the base fallback.
+    const addedLaborCents = Math.round(
+      (args.addedLaborHours ?? 0) * addedRateCents,
+    );
+    const addedPriced = await priceWithFlat(ctx, booking, {
+      partsCents: partsSubtotalCents(addedParts),
+      laborCents: addedLaborCents,
+      flatCents: flatAddedCents,
     });
+    priced = {
+      parts_subtotal_cents: addedPriced.parts_subtotal_cents,
+      labor_cents: addedPriced.labor_cents,
+      tax_cents: addedPriced.tax_cents,
+      service_fee_cents: addedPriced.service_fee_cents,
+      total_cents: fixedBaseCents + addedPriced.total_cents,
+    };
   }
 
-  const ceiling = ceilingForCycle(booking, args.cycle);
+  // Gate against the disclosed/approved ceiling, exactly as a normal estimate:
+  // a plain fixed price lands in-range (raise the hold, continue), while added
+  // scope pushes it over and asks the customer. `max(base, …)` also keeps the
+  // pre_job ceiling positive for a fixed booking so it never hits the guard.
+  const ceiling =
+    fixedBaseCents != null
+      ? Math.max(fixedBaseCents, ceilingForCycle(booking, args.cycle))
+      : ceilingForCycle(booking, args.cycle);
   // Pre-feature bookings (no disclosed range): there's no approval contract
   // — fall back to legacy behavior at capture time. Reject submission here.
-  if (args.cycle === "pre_job" && ceiling <= 0) {
+  // (Fixed-price bookings always have a positive base ceiling, so they skip
+  // this — a fixed-price job predates nothing.)
+  if (!isFixedPrice && args.cycle === "pre_job" && ceiling <= 0) {
     throw new Error(
       "This booking pre-dates the pre-job approval flow and cannot be re-estimated.",
     );
@@ -361,6 +521,10 @@ async function performSubmission(
     service_fee_cents: priced.service_fee_cents,
     parts_snapshot: args.parts as any,
     labor_hours: args.laborHours,
+    labor_allocations:
+      args.laborAllocations && args.laborAllocations.length > 0
+        ? args.laborAllocations
+        : undefined,
     labor_rate_cents: args.laborRateCents,
     notes: args.notes,
     scope_photo_ids:
@@ -404,6 +568,12 @@ async function performSubmission(
     mechanic_set_price_cents: priced.total_cents,
     updated_at: now,
   };
+  // Freeze the fixed contract base the first time added scope is billed, so
+  // every later added-scope estimate keeps pricing off the original flat price
+  // rather than the running total it just grew.
+  if (fixedBaseCents != null && booking.fixed_contract_base_cents == null) {
+    bookingPatch.fixed_contract_base_cents = fixedBaseCents;
+  }
   if (inRange) {
     bookingPatch.running_approved_ceiling_cents = priced.total_cents;
     bookingPatch.estimate_approved_at_ms = now;
@@ -413,8 +583,15 @@ async function performSubmission(
     // agreed amount instead of the original estimate. (Out-of-range stays
     // pending; totals are synced on customer approval in applyApprovalDecision.)
     bookingPatch.total_cost = priced.total_cents / 100;
-    bookingPatch.parts_cost = priced.parts_subtotal_cents / 100;
-    bookingPatch.labor_cost = priced.labor_cents / 100;
+    if (fixedBaseCents == null) {
+      // Non-fixed: sync the full breakdown. For fixed+added, `priced` holds the
+      // ADDED delta only (parts/labor), while the base parts/labor stay locked
+      // on the booking — the added breakdown lives on custom_services/custom_
+      // jobs and the receipt attributes it there. Overwriting with the delta
+      // would erase the base line, so move only the all-in total above.
+      bookingPatch.parts_cost = priced.parts_subtotal_cents / 100;
+      bookingPatch.labor_cost = priced.labor_cents / 100;
+    }
   } else {
     bookingPatch.sla_expires_at_ms = now + SLA_MS;
   }
@@ -463,71 +640,6 @@ async function performSubmission(
     state: newState,
     totalCents: priced.total_cents,
     ceilingCents: ceiling,
-  };
-}
-
-/** Fixed-price submission path — log the mechanic's edited parts/labor on
- *  booking_approvals for audit, but do NOT touch the booking total,
- *  payment_approval_state, Stripe authorization, or the customer. The
- *  customer's contracted price came from shop_service_fixed_prices and
- *  stays locked. */
-async function performFixedPriceInformationalSubmission(
-  ctx: any,
-  args: {
-    bookingId: Id<"bookings">;
-    cycle: "pre_job" | "mid_job" | "post_job";
-    parts: SubmittedPart[];
-    laborHours: number | undefined;
-    laborRateCents: number | undefined;
-    notes: string | undefined;
-    scopePhotoIds?: Id<"_storage">[];
-    submittedByUserId: Id<"users"> | undefined;
-    priced: SetPriceComputed;
-    inspectionSnapshot: CustomerInspectionSnapshot | null;
-  },
-): Promise<{
-  approvalId: Id<"booking_approvals">;
-  state: string;
-  totalCents: number;
-  ceilingCents: number;
-}> {
-  const now = Date.now();
-  // Snapshot the customer-locked price as the "ceiling" on the audit row so
-  // the activity log can compare mechanic-computed vs locked side-by-side.
-  const bookingRow: any = await ctx.db.get(args.bookingId);
-  const lockedCents =
-    bookingRow?.mechanic_set_price_cents ??
-    Math.round((bookingRow?.total_cost ?? 0) * 100);
-  const approvalId = await ctx.db.insert("booking_approvals", {
-    booking_id: args.bookingId,
-    cycle: args.cycle,
-    mechanic_set_price_cents: args.priced.total_cents,
-    parts_subtotal_cents: args.priced.parts_subtotal_cents,
-    labor_cents: args.priced.labor_cents,
-    tax_cents: args.priced.tax_cents,
-    service_fee_cents: args.priced.service_fee_cents,
-    parts_snapshot: args.parts as any,
-    labor_hours: args.laborHours,
-    labor_rate_cents: args.laborRateCents,
-    notes: args.notes,
-    scope_photo_ids:
-      args.scopePhotoIds && args.scopePhotoIds.length > 0
-        ? args.scopePhotoIds
-        : undefined,
-    inspection_snapshot: args.inspectionSnapshot ?? undefined,
-    prior_ceiling_cents: lockedCents,
-    ceiling_after_decision_cents: lockedCents,
-    submitted_at_ms: now,
-    submitted_by_user_id: args.submittedByUserId,
-    decision: "fixed_price_informational",
-    decided_at_ms: now,
-    decision_actor: "system",
-  });
-  return {
-    approvalId,
-    state: "fixed_price_locked",
-    totalCents: lockedCents,
-    ceilingCents: lockedCents,
   };
 }
 
@@ -615,6 +727,8 @@ export const submitPreJobEstimate = mutation({
     parts: v.array(postjobPartValidator),
     laborHours: v.optional(v.number()),
     laborRateCents: v.optional(v.number()),
+    addedLaborHours: v.optional(v.number()),
+    laborAllocations: v.optional(v.array(laborAllocationValidator)),
     notes: v.optional(v.string()),
     scopePhotoIds: v.optional(v.array(v.id("_storage"))),
   },
@@ -626,6 +740,8 @@ export const submitPreJobEstimate = mutation({
       parts: args.parts as SubmittedPart[],
       laborHours: args.laborHours,
       laborRateCents: args.laborRateCents,
+      addedLaborHours: args.addedLaborHours,
+      laborAllocations: args.laborAllocations,
       notes: args.notes,
       scopePhotoIds: args.scopePhotoIds,
       submittedByUserId: user._id,
@@ -639,6 +755,8 @@ export const submitMidJobChange = mutation({
     parts: v.array(postjobPartValidator),
     laborHours: v.optional(v.number()),
     laborRateCents: v.optional(v.number()),
+    addedLaborHours: v.optional(v.number()),
+    laborAllocations: v.optional(v.array(laborAllocationValidator)),
     notes: v.optional(v.string()),
     scopePhotoIds: v.optional(v.array(v.id("_storage"))),
   },
@@ -658,6 +776,8 @@ export const submitMidJobChange = mutation({
       parts: args.parts as SubmittedPart[],
       laborHours: args.laborHours,
       laborRateCents: args.laborRateCents,
+      addedLaborHours: args.addedLaborHours,
+      laborAllocations: args.laborAllocations,
       notes: args.notes,
       scopePhotoIds: args.scopePhotoIds,
       submittedByUserId: user._id,
@@ -733,7 +853,7 @@ export const applyApprovalDecision = mutation({
         decided_by_user_id: user._id,
         ceiling_after_decision_cents: newCeiling,
       });
-      await ctx.db.patch(args.bookingId, {
+      const approvedPatch: any = {
         payment_approval_state:
           cycle === "pre_job"
             ? "pre_job_approved"
@@ -748,10 +868,28 @@ export const applyApprovalDecision = mutation({
         // booking's stored totals from the approved breakdown so every surface
         // shows the agreed amount, not the original estimate.
         total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
-        parts_cost: (open.parts_subtotal_cents ?? 0) / 100,
-        labor_cost: (open.labor_cents ?? 0) / 100,
         updated_at: now,
-      });
+      };
+      // For fixed-price bookings the approval row's parts/labor are the ADDED
+      // delta only (the base stays locked), so syncing them onto the booking
+      // would erase the base line. Move only the all-in total; the added
+      // breakdown lives on custom_services/custom_jobs for the receipt.
+      if (booking.is_fixed_price !== true) {
+        approvedPatch.parts_cost = (open.parts_subtotal_cents ?? 0) / 100;
+        approvedPatch.labor_cost = (open.labor_cents ?? 0) / 100;
+      }
+      await ctx.db.patch(args.bookingId, approvedPatch);
+      // The customer just said yes to the (pre/mid-job) estimate → surface any
+      // off-catalog lines it carried on their booking card. They were staged
+      // `pending_confirmation` at add-time so an unapproved line never showed on
+      // the driver's card until this approval. (Declines strip the line instead,
+      // via revertDeclinedMidJobWork.)
+      if (cycle === "pre_job" || cycle === "mid_job") {
+        await confirmStagedCustomServices(ctx, {
+          bookingId: args.bookingId,
+          now,
+        });
+      }
       if (ctx.scheduler?.runAfter) {
         await ctx.scheduler.runAfter(
           0,
@@ -780,6 +918,14 @@ export const applyApprovalDecision = mutation({
           dedupeSuffix: `accepted:${open._id}`,
         });
       }
+      // Message Shop: mark any open "request_approval" ticket action accepted
+      // and resolve the ticket.
+      await syncTicketActionStatus(ctx, {
+        bookingId: args.bookingId,
+        kind: "request_approval",
+        status: "accepted",
+        autoResolve: true,
+      });
       return { ok: true, state: "approved", ceilingCents: newCeiling };
     }
 
@@ -836,6 +982,12 @@ export const applyApprovalDecision = mutation({
         dedupeSuffix: `declined:${open._id}`,
       });
     }
+    // Message Shop: mark any open "request_approval" ticket action declined.
+    await syncTicketActionStatus(ctx, {
+      bookingId: args.bookingId,
+      kind: "request_approval",
+      status: "declined",
+    });
     return { ok: true, state: declinedState };
   },
 });
@@ -882,7 +1034,7 @@ export const _recordApprovalApproved = internalMutation({
       decided_by_user_id: args.userId,
       ceiling_after_decision_cents: newCeiling,
     });
-    await ctx.db.patch(args.bookingId, {
+    const reauthPatch: any = {
       // Customer confirms the new hold on their chosen method next (the caller
       // drives an on-session PI), so we skip the silent auto-adjust.
       payment_approval_state: "reauth_required",
@@ -891,10 +1043,19 @@ export const _recordApprovalApproved = internalMutation({
       estimate_decided_by_user_id: args.userId,
       sla_expires_at_ms: undefined,
       total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
-      parts_cost: (open.parts_subtotal_cents ?? 0) / 100,
-      labor_cost: (open.labor_cents ?? 0) / 100,
       updated_at: now,
-    });
+    };
+    // Fixed-price: the approval row's parts/labor are the added delta only —
+    // don't erase the locked base breakdown. (Mirrors applyApprovalDecision.)
+    if (booking.is_fixed_price !== true) {
+      reauthPatch.parts_cost = (open.parts_subtotal_cents ?? 0) / 100;
+      reauthPatch.labor_cost = (open.labor_cents ?? 0) / 100;
+    }
+    await ctx.db.patch(args.bookingId, reauthPatch);
+    // Customer approved the estimate (the payment re-auth hold is a separate,
+    // following step) → clear the staged flag so the confirmed off-catalog lines
+    // show on their card. `cycle` is already asserted pre_job/mid_job above.
+    await confirmStagedCustomServices(ctx, { bookingId: args.bookingId, now });
     return { ceilingCents: newCeiling, cycle };
   },
 });

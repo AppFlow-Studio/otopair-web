@@ -35,6 +35,12 @@ const isPublicRoute = createRouteMatcher([
   // Walk-in customers without Clerk accounts need to reach the page from
   // the invoice email without being bounced to sign-in.
   "/receipts(.*)",
+  // Walk-in tracker webview + Clerk-signup claim page. Both are token-
+  // capability-gated inside the route (walkin_claims.getTrackerData /
+  // resolveClaimToken); middleware stays open so the customer can reach
+  // the page without a Clerk session.
+  "/t/(.*)",
+  "/claim/(.*)",
   // Public car-data teaser (marketing) — anonymous lookup, layer-gated
   // teaser subset served by convex/dataPublic.teaserLookup.
   "/car-data(.*)",
@@ -52,6 +58,7 @@ const isPortalRoute = createRouteMatcher([
   "/team(.*)",
   "/mechanics(.*)",
   "/notifications(.*)",
+  "/messages(.*)",
   "/settings(.*)",
   "/payouts(.*)",
   "/my-jobs(.*)",

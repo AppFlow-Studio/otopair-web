@@ -43,6 +43,7 @@ import {
 } from "../../utils/mergedMaintenance";
 import { resolveSlugMap } from "../service_intervals_queries";
 import { loadHealthScoreWeights } from "../healthScoreWeights";
+import { resolveMileageForOwner } from "../lib/mileage";
 import type { MaintenanceItem, MaintenanceStatus } from "../../components/cars/MaintenanceTracker";
 
 // -----------------------------------------------------------------------------
@@ -326,7 +327,10 @@ async function loadVehicleContextForUser(
     }
   }
 
-  const odometerMiles = owner.mileage ?? 0;
+  // Resolve across the two stores (shop passport vs this owner row) by recency —
+  // the app card, maintenance tracker and VHS must show the same odometer the
+  // shop does, not just whatever the owner row last held.
+  const odometerMiles = (await resolveMileageForOwner(ctx, owner)).mileage ?? 0;
   const knownIssues = Array.isArray(owner.knownIssues) ? (owner.knownIssues as string[]) : undefined;
   const drivingConditions = owner.drivingConditions ?? undefined;
   const avgMonthlyDriving = owner.avgMonthlyDriving ?? undefined;

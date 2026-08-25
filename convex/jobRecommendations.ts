@@ -1037,6 +1037,22 @@ export async function closeMatchingRecsForCompletedBooking(
   const serviceIds = new Set<string>(
     (booking.service_ids ?? []).map((id: any) => String(id)),
   );
+
+  // Mid-job-added catalog services resolve maintenance the same way an
+  // originally-booked service does, so they must close a matching open rec too
+  // — even when the booking carried no original service_ids. A completed
+  // custom_jobs row with a catalog_service_id IS such a service; off-catalog
+  // rows have no id and are ignored (the CUSTOM JOB INVARIANT — see bookings.ts).
+  const customJobs = await ctx.db
+    .query("custom_jobs")
+    .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+    .collect();
+  for (const job of customJobs) {
+    if (job.status === "completed" && job.catalog_service_id) {
+      serviceIds.add(String(job.catalog_service_id));
+    }
+  }
+
   if (serviceIds.size === 0) return;
 
   const candidates = await ctx.db

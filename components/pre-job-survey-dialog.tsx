@@ -253,6 +253,16 @@ function keepNumericInput(value: string) {
   return rest.length > 0 ? `${whole}.${rest.join("")}` : whole;
 }
 
+// Pull the first numeric token out of a free-text measurement value so an "Other"
+// entry degrades gracefully: "3.5" -> 3.5, "3.5mm" -> 3.5, "10-12" -> 10,
+// "worn to metal" -> null. Guarantees callers never emit NaN.
+function firstFiniteNumber(value: string): number | null {
+  const match = value.match(/-?\d+(\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 type TreadInputState = Record<
   TirePosition,
   {
@@ -904,8 +914,7 @@ function PreJobSurveyDialogBody({
     const normalizedRearTireSize = rearMatchesFront
       ? normalizedFrontTireSize
       : normalizeTireSizeValue(rearTireSize);
-    const parsedOilCapacity =
-      oilCapacity.trim() === "" ? null : Number(oilCapacity);
+    const parsedOilCapacity = firstFiniteNumber(oilCapacity);
     const tireTread = Object.fromEntries(
       TIRE_POSITIONS.flatMap((position) => {
         const reading = buildTreadReading(treadInputs[position]);
@@ -946,8 +955,8 @@ function PreJobSurveyDialogBody({
       rear_tire_condition: rearCondition,
       tire_tread: tireTread,
       brakes: {
-        front_pad_mm: frontPadMm.trim() === "" ? null : Number(frontPadMm),
-        rear_pad_mm: rearPadMm.trim() === "" ? null : Number(rearPadMm),
+        front_pad_mm: firstFiniteNumber(frontPadMm),
+        rear_pad_mm: firstFiniteNumber(rearPadMm),
         rotor_condition:
           rotorCondition === ""
             ? null
@@ -1873,8 +1882,6 @@ function PreJobSurveyDialogBody({
                     options={PAD_THICKNESS_OPTIONS}
                     placeholder="Select mm…"
                     otherPlaceholder="mm"
-                    otherInputMode="decimal"
-                    otherSanitize={keepNumericInput}
                     helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
                   />
                 ) : null}
@@ -1892,8 +1899,6 @@ function PreJobSurveyDialogBody({
                     options={PAD_THICKNESS_OPTIONS}
                     placeholder="Select mm…"
                     otherPlaceholder="mm"
-                    otherInputMode="decimal"
-                    otherSanitize={keepNumericInput}
                     helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
                   />
                 ) : null}
@@ -2052,8 +2057,6 @@ function PreJobSurveyDialogBody({
                   options={OIL_CAPACITY_OPTIONS}
                   placeholder="Select capacity…"
                   otherPlaceholder="qts"
-                  otherInputMode="decimal"
-                  otherSanitize={keepNumericInput}
                 />
                 <SelectableFieldCard
                   label={
@@ -2862,8 +2865,6 @@ function SelectableFieldCard({
   options,
   placeholder = "Select...",
   otherPlaceholder = "Enter value",
-  otherInputMode,
-  otherSanitize,
   helperText,
 }: {
   label: ReactNode;
@@ -2872,8 +2873,6 @@ function SelectableFieldCard({
   options: SelectOption[];
   placeholder?: string;
   otherPlaceholder?: string;
-  otherInputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"];
-  otherSanitize?: (raw: string) => string;
   helperText?: ReactNode;
 }) {
   const matched = resolveOption(value, options);
@@ -2963,12 +2962,8 @@ function SelectableFieldCard({
       {isOther ? (
         <input
           value={value}
-          onChange={(event) => {
-            const next = otherSanitize ? otherSanitize(event.target.value) : event.target.value;
-            onChange(next);
-          }}
+          onChange={(event) => onChange(event.target.value)}
           placeholder={otherPlaceholder}
-          inputMode={otherInputMode}
           className={cn(baseField(), "mt-2 w-full text-left")}
         />
       ) : null}

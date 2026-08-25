@@ -42,10 +42,53 @@ export const getRecordsByVehicle = query({
     vehicleOwnerId: v.id("vehicle_owners"),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const records = await ctx.db
       .query("maintenance_records")
       .withIndex("by_vehicle_owner", (q) => q.eq("vehicleOwnerId", args.vehicleOwnerId))
       .collect();
+
+    // Name the shop that closed each recently-serviced anchor so the Cars-tab
+    // "Resolved by [shop]" card can render it. Only records stamped with a
+    // lastServiceBookingId need the lookup, and rows resolved by the same
+    // booking share one — so this is a handful of reads, not one per record.
+    const shopNameByBooking = new Map<string, string | null>();
+    return await Promise.all(
+      records.map(async (r) => {
+        if (!r.lastServiceBookingId) return r;
+        const key = String(r.lastServiceBookingId);
+        if (!shopNameByBooking.has(key)) {
+          const booking = await ctx.db.get(r.lastServiceBookingId);
+          const shop = booking?.shop_id ? await ctx.db.get(booking.shop_id) : null;
+          shopNameByBooking.set(key, (shop as any)?.name ?? null);
+        }
+        return { ...r, lastServiceShopName: shopNameByBooking.get(key) ?? null };
+      })
+    );
+  },
+});
+
+/**
+ * MUTATION: acknowledgeResolution
+ * Marks a freshly-resolved maintenance anchor as seen. Called when the driver
+ * taps the Cars-tab "Resolved by [shop]" card (which then deep-links to the
+ * closing service). Stamps resolutionAckedAt = now so the card stops surfacing
+ * and the item folds back into the normal Healthy section. Idempotent.
+ */
+export const acknowledgeResolution = mutation({
+  args: {
+    vehicleOwnerId: v.id("vehicle_owners"),
+    type: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("maintenance_records")
+      .withIndex("by_vehicle_and_type", (q) =>
+        q.eq("vehicleOwnerId", args.vehicleOwnerId).eq("type", args.type)
+      )
+      .unique();
+    if (!existing) return { ok: false as const };
+    await ctx.db.patch(existing._id, { resolutionAckedAt: Date.now() });
+    return { ok: true as const };
   },
 });
 

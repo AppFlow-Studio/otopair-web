@@ -23,45 +23,52 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const TIRE_BRANDS = [
-  { value: "goodyear", label: "Goodyear" },
-  { value: "michelin", label: "Michelin" },
-  { value: "bridgestone", label: "Bridgestone" },
-  { value: "firestone", label: "Firestone" },
-  { value: "continental", label: "Continental" },
-  { value: "pirelli", label: "Pirelli" },
-  { value: "cooper", label: "Cooper" },
-  { value: "hankook", label: "Hankook" },
-  { value: "yokohama", label: "Yokohama" },
-  { value: "bfgoodrich", label: "BFGoodrich" },
-  { value: "toyo", label: "Toyo" },
-  { value: "falken", label: "Falken" },
-  { value: "general", label: "General" },
-  { value: "kumho", label: "Kumho" },
-  { value: "dunlop", label: "Dunlop" },
-  { value: "nitto", label: "Nitto" },
-  { value: "nexen", label: "Nexen" },
-  { value: "mastercraft", label: "Mastercraft" },
-  { value: "sumitomo", label: "Sumitomo" },
-];
+// Customer-facing tier vocabulary (from the tire-spec picker) is
+// premium / plus / standard, but the tire_brands catalog is keyed
+// elite / select / standard. Bridge the two here. Tolerant of a value that
+// is already a catalog tier so this keeps working if the vocab is ever unified.
+type CatalogTier = "elite" | "select" | "standard";
+const TIER_TO_CATALOG: Record<string, CatalogTier> = {
+  premium: "elite",
+  plus: "select",
+  standard: "standard",
+  elite: "elite",
+  select: "select",
+};
+const CATALOG_TIER_LABEL: Record<CatalogTier, string> = {
+  elite: "Elite",
+  select: "Select",
+  standard: "Standard",
+};
+
+function toCatalogTier(tier: string | null | undefined): CatalogTier | null {
+  if (!tier) return null;
+  return TIER_TO_CATALOG[tier.trim().toLowerCase()] ?? null;
+}
+
+type BrandOption = { value: string; label: string };
 
 const OTHER_BRAND = "__other__";
 
 function TireBrandSelect({
   value,
   onChange,
+  options,
+  loading = false,
 }: {
   value: string;
   onChange: (v: string) => void;
+  options: BrandOption[];
+  loading?: boolean;
 }) {
-  const matched = TIRE_BRANDS.find((b) => b.value === value);
+  const matched = options.find((b) => b.value === value);
   const isOther = !!value && !matched;
   const selectedKey = matched ? matched.value : isOther ? OTHER_BRAND : "none";
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
   const filtered = normalizedQuery
-    ? TIRE_BRANDS.filter((b) => b.label.toLowerCase().includes(normalizedQuery))
-    : TIRE_BRANDS;
+    ? options.filter((b) => b.label.toLowerCase().includes(normalizedQuery))
+    : options;
 
   return (
     <div className="space-y-2">
@@ -77,7 +84,13 @@ function TireBrandSelect({
       >
         <SelectTrigger className="w-full h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground justify-between">
           <SelectValue>
-            {matched ? matched.label : isOther ? "Other…" : "Select brand…"}
+            {matched
+              ? matched.label
+              : isOther
+                ? "Other…"
+                : loading
+                  ? "Loading brands…"
+                  : "Select brand…"}
           </SelectValue>
         </SelectTrigger>
         <SelectPopover className="rounded-md">
@@ -333,6 +346,23 @@ function QuoteSubmissionDialog({
 }) {
   const submit = useMutation(api.tire_quote_responses.create);
 
+  // Curated, tier-filtered brand list: the mechanic only chooses from brands
+  // that qualify for the tier the customer requested. "Other…" stays available
+  // as the off-list escape hatch (doc Rule 2).
+  const requestedTier = request.tire_specs?.tier ?? null;
+  const catalogTier = toCatalogTier(requestedTier);
+  const tierBrands = useQuery(
+    api.tireBrands.getByTier,
+    catalogTier ? { tier: catalogTier } : "skip",
+  );
+  const brandOptions: BrandOption[] = useMemo(() => {
+    const rows = (tierBrands ?? []) as Array<{ brand: string }>;
+    return rows
+      .map((r) => ({ value: r.brand, label: r.brand }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [tierBrands]);
+  const brandsLoading = catalogTier != null && tierBrands === undefined;
+
   const [durationMinutes, setDurationMinutes] = useState(30);
 
   const [tireBrand, setTireBrand] = useState("");
@@ -521,7 +551,7 @@ function QuoteSubmissionDialog({
       await submit({
         booking_id: request._id,
         shop_id: shopId,
-        tire_brand: (TIRE_BRANDS.find((b) => b.value === tireBrand)?.label ?? tireBrand).trim(),
+        tire_brand: tireBrand.trim(),
         tire_model: tireModel.trim() ? tireModel.trim() : undefined,
         per_tire_price: Number(perTirePrice),
         quantity,
@@ -643,7 +673,31 @@ function QuoteSubmissionDialog({
           <div className="w-80 shrink-0 flex flex-col overflow-y-auto">
             <div className="p-5 space-y-4 flex-1">
               <Field label="Tire brand" required>
-                <TireBrandSelect value={tireBrand} onChange={setTireBrand} />
+                {catalogTier ? (
+                  <p className="mb-1.5 text-[11px] text-muted-foreground">
+                    Customer selected{" "}
+                    <span className="font-medium capitalize text-foreground">
+                      {requestedTier}
+                    </span>
+                    {" — "}showing{" "}
+                    <span className="font-medium text-foreground">
+                      {CATALOG_TIER_LABEL[catalogTier]}
+                    </span>{" "}
+                    tier brands only.
+                  </p>
+                ) : null}
+                <TireBrandSelect
+                  value={tireBrand}
+                  onChange={setTireBrand}
+                  options={brandOptions}
+                  loading={brandsLoading}
+                />
+                {catalogTier && !brandsLoading && brandOptions.length === 0 ? (
+                  <p className="mt-1.5 text-[11px] text-amber-600">
+                    No brands are catalogued for this tier yet — use “Other…” to
+                    enter the brand you’re quoting.
+                  </p>
+                ) : null}
               </Field>
 
               <Field label="Tire model (optional)">

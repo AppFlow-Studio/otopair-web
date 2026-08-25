@@ -27,6 +27,8 @@ import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./laborConstants";
 import { aggregatePartsBand, type PartsRoleInput } from "./partsBand";
 import { resolveRoleQuantity, type VehicleSpecBundle } from "./partRoleQuantity";
 import { roleForSubcategory } from "./servicePartsReference";
+import { resolveCombinedLabor } from "./combinedLabor";
+import type { OverlapFamilyId } from "./serviceLaborReference";
 import { isNonPooledPriceType, isPoisonPriceType, ESTIMATOR_ENDPOINT_PRICE_TYPE } from "./priceTypes";
 import { isPriceDataStale } from "../part_prices";
 import { partFitsConfigMake } from "../partSelector";
@@ -975,6 +977,13 @@ export type QuoteSeries = {
   total_high: number;
   labor_minutes_total: number;
   labor_cost_total: number;
+  /** Combined labor operations (convex/lib/combinedLabor.ts). Present (and > 0)
+   *  only when the director flag is on AND co-booked services shared teardown.
+   *  When set, labor_minutes_total / labor_cost_total ARE the combined values;
+   *  saved_* are naive − combined so `combined + saved = naive` holds exactly. */
+  combined_labor_saved_minutes?: number;
+  combined_labor_saved_cost?: number;
+  combined_labor_notes?: string[];
 };
 
 export async function resolveQuoteSeries(
@@ -994,6 +1003,10 @@ export async function resolveQuoteSeries(
   let total_high = 0;
   let labor_minutes_total = 0;
   let labor_cost_total = 0;
+  // Representative shop+tier labor $/hr (same across services on one vehicle);
+  // used to price the combined labor total in a single multiply.
+  let laborRate = 0;
+  const combineInputs: Parameters<typeof resolveCombinedLabor>[0] = [];
 
   for (const service_id of args.service_ids) {
     const q = await buildQuote(ctx, {
@@ -1009,13 +1022,58 @@ export async function resolveQuoteSeries(
       total_high += q.high;
       labor_minutes_total += q.labor.hours * 60;
       labor_cost_total += q.labor.cost;
+      if (laborRate === 0 && q.labor.rate > 0) laborRate = q.labor.rate;
+      const svcDoc = await ctx.db.get(service_id);
+      combineInputs.push({
+        serviceId: String(service_id),
+        slug: (svcDoc as { slug?: string } | null)?.slug ?? "",
+        standaloneHours: q.labor.hours,
+        position: args.service_positions?.[String(service_id)] ?? null,
+        source: q.labor.hours_source,
+      });
     }
   }
+
+  // Naive totals stay byte-identical to today. Combined labor only overrides
+  // them when the director flag is on AND something actually shared teardown.
+  const naiveMinutes = Math.round(labor_minutes_total);
+  const naiveCost = round2(labor_cost_total);
+  let finalMinutes = naiveMinutes;
+  let finalCost = naiveCost;
+  let combined_labor_saved_minutes: number | undefined;
+  let combined_labor_saved_cost: number | undefined;
+  let combined_labor_notes: string[] | undefined;
+
+  if (combineInputs.length >= 2) {
+    const settings = await ctx.db
+      .query("director_settings")
+      .withIndex("by_key", (qq) => qq.eq("key", "global"))
+      .first();
+    if (settings?.combined_labor_enabled === true) {
+      const res = resolveCombinedLabor(combineInputs, {
+        enabled: true,
+        disabledFamilies: (settings.combined_labor_disabled_families ??
+          []) as OverlapFamilyId[],
+      });
+      if (res.savedHours > 0) {
+        finalMinutes = Math.round(res.combinedHours * 60);
+        finalCost = round2(res.combinedHours * laborRate);
+        // saved = naive − combined so `combined + saved = naive` holds exactly.
+        combined_labor_saved_minutes = naiveMinutes - finalMinutes;
+        combined_labor_saved_cost = round2(naiveCost - finalCost);
+        combined_labor_notes = res.notes;
+      }
+    }
+  }
+
   return {
     quotes,
     total_low: round2(total_low),
     total_high: round2(total_high),
-    labor_minutes_total: Math.round(labor_minutes_total),
-    labor_cost_total: round2(labor_cost_total),
+    labor_minutes_total: finalMinutes,
+    labor_cost_total: finalCost,
+    combined_labor_saved_minutes,
+    combined_labor_saved_cost,
+    combined_labor_notes,
   };
 }

@@ -695,6 +695,8 @@ export interface JobDetailData {
   previousMechanicName?: string | null;
   rescheduleProposedAt?: number | null;
   estimatedLaborMinutes?: number | null;
+  combinedLaborSavedMinutes?: number | null;
+  combinedLaborNotes?: string[] | null;
   scheduleChangeMode?: string | null;
   scheduleChangeSourceBookingId?: Id<"bookings"> | null;
   customerCanRestoreOriginal?: boolean | null;
@@ -2255,6 +2257,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         <span className="text-muted-foreground">
                           {" · est. "}
                           {formatDurationMinutes(job.estimatedLaborMinutes)}
+                        </span>
+                      ) : null}
+                      {job.combinedLaborSavedMinutes != null &&
+                      job.combinedLaborSavedMinutes > 0 ? (
+                        <span
+                          className="ml-2 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800"
+                          title={(job.combinedLaborNotes ?? []).join(" ")}
+                        >
+                          Combined labor · −{formatDurationMinutes(job.combinedLaborSavedMinutes)}
                         </span>
                       ) : null}
                       {job.diagnosticSystem ? (

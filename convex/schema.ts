@@ -3088,6 +3088,12 @@ export default defineSchema({
     quote_flags: v.optional(v.array(v.string())),
     quote_fallback_low: v.optional(v.float64()),
     quote_fallback_high: v.optional(v.float64()),
+    // Combined labor operations (convex/lib/combinedLabor.ts): minutes shaved
+    // off the naive per-service labor sum because co-booked services shared
+    // teardown, plus the human reasons shown to the customer. Set at
+    // createBatch when the director flag is on; absent = no combine applied.
+    combined_labor_saved_minutes: v.optional(v.number()),
+    combined_labor_notes: v.optional(v.array(v.string())),
     // Dollar delta when the customer's labor cost lands above the engine's
     // expected labor cost by more than ±8% — paired with the
     // `labor_cost_above_engine` flag on `quote_flags`. Server still books
@@ -4338,6 +4344,13 @@ export default defineSchema({
     // defaults (enabled, 15-minute TTL).
     slot_hold_enabled: v.optional(v.boolean()),
     slot_hold_ttl_minutes: v.optional(v.number()),
+    // Combined labor operations (convex/lib/combinedLabor.ts). When enabled,
+    // multi-service bookings that share teardown (pads+rotors, wheels-off,
+    // coolant drain) charge the shared labor once. Absent/false → naive sum
+    // (today's behavior). `combined_labor_disabled_families` holds any overlap
+    // family ids the director switched off (see OVERLAP_FAMILIES).
+    combined_labor_enabled: v.optional(v.boolean()),
+    combined_labor_disabled_families: v.optional(v.array(v.string())),
     updated_at: v.number(),
     updated_by_user_id: v.optional(v.id("director_users")),
   }).index("by_key", ["key"]),

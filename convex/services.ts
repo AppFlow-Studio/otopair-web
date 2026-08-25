@@ -485,7 +485,24 @@ export const listBookableForVehicle = query({
         (part) => !part || partFitsConfigMake(part.make_id, config.make_id),
       );
       if (!hasFitment) {
-        out.push({ service_id: service._id, slug, state: "missing_data" });
+        // State 2 — Labor Only (doc: "Labor-Only Pricing State v1"). Enrichment
+        // finished but we have no priced part for this vehicle yet. We do NOT
+        // hide the service: the member books it as labor-only, the shop prices
+        // the parts, and that submission feeds real fitment/price data back for
+        // future cars. Review & Pay discloses the labor-only state and gates the
+        // complete quote behind the member's approval.
+        //
+        // This is only safe when a labor baseline exists. Without one we can't
+        // even quote "From $X" — that's the "unquotable" data defect (State 3),
+        // which stays hidden (missing_data) so we never show "From $0".
+        const hasLaborBaseline =
+          typeof service.default_labor_hours === "number" &&
+          service.default_labor_hours > 0;
+        out.push({
+          service_id: service._id,
+          slug,
+          state: hasLaborBaseline ? "bookable" : "missing_data",
+        });
         continue;
       }
 

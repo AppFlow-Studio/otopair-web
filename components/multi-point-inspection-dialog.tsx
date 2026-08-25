@@ -3417,9 +3417,22 @@ function MeasureField({
       active={unavailable}
       onToggle={() => {
         const statuses = { ...zs.statuses };
-        if (unavailable) delete statuses[field.key];
-        else statuses[field.key] = "not_applicable";
-        onPatch({ statuses });
+        if (unavailable) {
+          delete statuses[field.key];
+          onPatch({ statuses });
+          return;
+        }
+        // Marking not visible / not available is mutually exclusive with a
+        // reading: clear any typed measurement so a stale number (and its
+        // auto-classified grade) can't linger behind the toggle.
+        statuses[field.key] = "not_applicable";
+        const measures = { ...zs.measures, [field.key]: "" };
+        if (field.key === "tread") {
+          measures.tread_inner = "";
+          measures.tread_center = "";
+          measures.tread_outer = "";
+        }
+        onPatch({ statuses, measures });
       }}
     />
   );

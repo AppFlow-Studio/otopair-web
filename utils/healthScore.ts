@@ -58,6 +58,12 @@ export const COMPONENT_WEIGHTS = {
   safetyReserve: 0.15,
 } as const;
 
+/** Default upkeep-vs-warning-lights split (percentage points, sums to 100).
+ *  The warning-lights reserve is (100 − DEFAULT_UPKEEP_SPLIT). Kept as a
+ *  top-level constant so warningLightsReservePct and any UI describing the
+ *  reserve share one number with the score itself. */
+export const DEFAULT_UPKEEP_SPLIT = 85;
+
 /** Open-issue penalty cap. Was 25 (recPenalty) + 20 (mileageRecPenalty);
  *  v1 collapses to a single 0–15 deduction, "upcoming" moves to urgency. */
 export const OPEN_ISSUE_PENALTY_MAX = 15;
@@ -141,12 +147,51 @@ const LIGHT_PENALTY: Record<string, number> = {
  * light never dented the score. Penalty is summed per canonical light, capped
  * at 25 (the reserve floors at 0 regardless).
  */
-function warningLightPenalty(knownIssues?: string[]): number {
+export function warningLightPenalty(knownIssues?: string[]): number {
   let penalty = 0;
   for (const light of canonicalWarningLights(knownIssues)) {
     penalty += LIGHT_PENALTY[light] ?? 6;
   }
   return Math.min(penalty, 25);
+}
+
+/**
+ * How full the Warning Lights reserve still is, 0–100, for ring display.
+ * The reserve starts full and drains by warningLightPenalty; `reserveWeight`
+ * is the director-set Warning Lights budget (default 15) so the ring tracks
+ * the same number the score uses.
+ */
+export function warningLightsReservePct(
+  knownIssues?: string[],
+  reserveWeight: number = 100 - DEFAULT_UPKEEP_SPLIT,
+): number {
+  if (reserveWeight <= 0) return 100;
+  const remaining = Math.max(0, reserveWeight - warningLightPenalty(knownIssues));
+  return Math.round((remaining / reserveWeight) * 100);
+}
+
+/**
+ * Does this maintenance row contribute to the Upkeep term?
+ *
+ * Two kinds of row are shown to the driver but must never move the score:
+ *  - recommendation cards (`sourceRecommendationId`) — the matching core or
+ *    minor tile already scores that finding, and the Open-recs penalty covers
+ *    it a second time.
+ *  - catalog-inference rows (`excludeFromScore`) — derived from an OEM
+ *    interval and an odometer alone, with no record and no mechanic behind
+ *    them. Only the five core tiles score by default.
+ *
+ * Exported so any UI that *describes* the score (the x/y maintenance counter)
+ * filters on exactly the same rule the score itself uses, instead of keeping
+ * a second definition that drifts. Web has no catalog-inference path today —
+ * this is behaviourally a no-op here but mirrored from mobile to keep the
+ * two copies aligned (see §04–§07 of the Vehicle Health handoff).
+ */
+export function isScorableMaintenanceItem(item: {
+  sourceRecommendationId?: string;
+  excludeFromScore?: boolean;
+}): boolean {
+  return !item.sourceRecommendationId && !item.excludeFromScore;
 }
 
 // ============================================================================
@@ -241,7 +286,7 @@ export function computeVehicleHealthScore(
     // real category and falls it to the generic weight-10 "other" bucket —
     // double-counting the same physical problem the matching core/minor
     // tile already scores, on top of a third time via the Open-recs cap.
-    if (item.sourceRecommendationId) continue;
+    if (!isScorableMaintenanceItem(item)) continue;
     const w = categoryWeightForItem(item);
     const score =
       item.rawScore ??
@@ -342,7 +387,7 @@ export function computeHealthScoreFactors(
   // including skipping recommendation-derived cards (Consolidated model:
   // they never create a weighted Upkeep item, only the core/minor tile
   // that already covers the same finding does).
-  const scorableItems = maintenanceItems.filter((i) => !i.sourceRecommendationId);
+  const scorableItems = maintenanceItems.filter(isScorableMaintenanceItem);
   const knownCount = scorableItems.filter((i) => i.status !== "unknown").length;
   let weightTotal = 0;
   for (const item of scorableItems) weightTotal += categoryWeightForItem(item);

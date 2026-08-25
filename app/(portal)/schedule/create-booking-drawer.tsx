@@ -623,10 +623,31 @@ export default function CreateBookingDrawer({
   // walk-in part defaults to the vehicle's make (OEM), but stays free-form so
   // supplier brands (Denso, Bosch…) or custom values can still be typed.
   const makesList = useQuery(api.makes.list);
-  const makeOptions = useMemo(
-    () => (makesList ?? []).map((m) => ({ value: m.name, label: m.name })),
-    [makesList],
-  );
+  // The shop's remembered custom brands (Bosch, Denso, a one-off supplier…),
+  // added by an explicit "Add … as custom" tap on a prior booking. Surfaced
+  // first in the picker so a shop reaches for what it used last.
+  const customBrandList = useQuery(
+    (api as any).shopCustomPartBrands.listForShop,
+    shopData?.shopId ? { shopId: shopData.shopId } : "skip",
+  ) as { _id: string; name: string }[] | undefined;
+  const addCustomBrand = useMutation((api as any).shopCustomPartBrands.add);
+  const makeOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const opts: { value: string; label: string }[] = [];
+    for (const b of customBrandList ?? []) {
+      const key = b.name.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      opts.push({ value: b.name, label: b.name });
+    }
+    for (const m of makesList ?? []) {
+      const key = m.name.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      opts.push({ value: m.name, label: m.name });
+    }
+    return opts;
+  }, [customBrandList, makesList]);
   const createBooking = useMutation(api.bookings.createByShop);
   const backfillBooking = useMutation((api as any).bookings.backfillCompletedBooking);
 
@@ -3070,10 +3091,10 @@ export default function CreateBookingDrawer({
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                               <div>
-                                <DrawerFieldLabel>OEM #</DrawerFieldLabel>
+                                <DrawerFieldLabel>Part Number</DrawerFieldLabel>
                                 <input
                                   type="text"
-                                  placeholder="OEM #"
+                                  placeholder="Part number"
                                   value={p.oem_number}
                                   onChange={(e) =>
                                     setCatalogPartField(sid, idx, "oem_number", e.target.value)
@@ -3093,14 +3114,27 @@ export default function CreateBookingDrawer({
                                 <DrawerFieldLabel>Brand</DrawerFieldLabel>
                                 <Combobox
                                   ariaLabel="Brand"
-                                  placeholder="Brand"
+                                  placeholder="Search or type a brand…"
                                   value={p.brand ?? ""}
                                   onChange={(value) =>
                                     setCatalogPartField(sid, idx, "brand", value)
                                   }
                                   options={makeOptions}
                                   loading={makesList === undefined}
-                                  emptyText="No matching make — type to add a custom brand"
+                                  emptyText="No matching brand — type one, then tap Add"
+                                  onAddCustom={(value) => {
+                                    // Select it on this part now…
+                                    setCatalogPartField(sid, idx, "brand", value);
+                                    // …and remember it for this shop's future
+                                    // bookings. Fire-and-forget: a failed save must
+                                    // never cost the mechanic the brand they typed.
+                                    if (shopData?.shopId) {
+                                      addCustomBrand({
+                                        shopId: shopData.shopId as Id<"shops">,
+                                        name: value,
+                                      }).catch(() => {});
+                                    }
+                                  }}
                                   inputClassName={drawerInputClassName}
                                 />
                               </div>

@@ -1545,7 +1545,7 @@ export function derivePrejobFromInspection(
       (!brand || brand === OTHER_INSPECTION_OPTION) &&
       (!model || model === OTHER_INSPECTION_OPTION) &&
       !runFlat &&
-      !tireType
+      (!tireType || tireType === OTHER_INSPECTION_OPTION)
     ) {
       continue;
     }
@@ -1553,7 +1553,9 @@ export function derivePrejobFromInspection(
       ...(brand && brand !== OTHER_INSPECTION_OPTION ? { brand } : {}),
       ...(model && model !== OTHER_INSPECTION_OPTION ? { model } : {}),
       ...(runFlat ? { run_flat: runFlat === "yes" } : {}),
-      ...(tireType ? { tire_type: String(tireType) } : {}),
+      ...(tireType && tireType !== OTHER_INSPECTION_OPTION
+        ? { tire_type: String(tireType) }
+        : {}),
     };
   }
 

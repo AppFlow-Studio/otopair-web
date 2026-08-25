@@ -122,7 +122,7 @@ export function NotificationPopover({
   const showLivePinnedInAll = activeTab === "all" && liveAlerts.length > 0;
 
   return (
-    <div className="absolute right-0 top-full mt-2 w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg z-50">
+    <div className="fixed inset-x-2 top-16 z-50 flex max-h-[calc(100vh-5rem)] flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:block sm:max-h-none sm:w-[380px] sm:max-w-[calc(100vw-2rem)]">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
         <span className="text-sm font-semibold text-gray-900">
@@ -145,7 +145,7 @@ export function NotificationPopover({
       )}
 
       {/* Tabs */}
-      <div className="flex items-center gap-1 border-b border-gray-100 px-2 py-2">
+      <div className="flex items-center gap-1 overflow-x-auto border-b border-gray-100 px-2 py-2">
         {(
           [
             { id: "all" as const, label: "All" },
@@ -162,7 +162,7 @@ export function NotificationPopover({
               key={tab.id}
               type="button"
               onClick={() => setActiveTab(tab.id)}
-              className={`inline-flex items-center gap-1 rounded-md px-3 py-1 text-xs font-medium transition-colors ${
+              className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-3 py-1 text-xs font-medium transition-colors ${
                 isActive
                   ? "bg-gray-100 text-gray-900"
                   : "text-gray-500 hover:text-gray-900"
@@ -180,7 +180,7 @@ export function NotificationPopover({
       </div>
 
       {/* Body */}
-      <div className="max-h-[70vh] overflow-y-auto">
+      <div className="flex-1 min-h-0 overflow-y-auto sm:max-h-[70vh] sm:flex-none">
         {activeTab === "live" ? (
           liveAlerts.length === 0 ? (
             <div className="px-4 py-8 text-center text-xs text-gray-500">

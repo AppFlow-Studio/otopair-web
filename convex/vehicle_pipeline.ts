@@ -1811,6 +1811,151 @@ export const confirmVehicleForUser = action({
   },
 });
 
+/**
+ * Shop-scoped sibling of confirmVehicleForUser: attaches the decoded vehicle
+ * to a walk-in booking's stub customer, NOT to the caller. Auth is via
+ * shopAuth against the booking's shop, plus a walk-in-source guard. Same
+ * downstream: upsertVehicle → addOwner → dedup/enrichment schedule.
+ *
+ * Called from the shop portal's walkin/new page immediately after
+ * createByShop lands. The customer's Cars page shows the car the moment
+ * they claim the booking, without needing a separate app-side add flow.
+ */
+export const confirmVehicleForShopCustomer = action({
+  args: {
+    bookingId: v.id("bookings"),
+    vin: v.string(),
+    trimId: v.id("trims"),
+    engineId: v.id("engines"),
+    transmissionId: v.optional(v.id("transmissions")),
+    year: v.float64(),
+    make: v.string(),
+    model: v.string(),
+    trim: v.string(),
+    engineCode: v.string(),
+    displacement: v.string(),
+    cylinders: v.float64(),
+    fuelType: v.string(),
+    color: v.optional(v.string()),
+    drivetrain: v.optional(v.string()),
+    nhtsaVinKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<
+    | { success: false; error: string }
+    | {
+        success: true;
+        vehicleOwnerId: Id<"vehicle_owners">;
+        cache_hit: boolean;
+        cache_hit_source: "nhtsa_vin_key" | "config_key" | "none";
+        enrichment_scheduled: boolean;
+      }
+  > => {
+    const { userId }: { userId: Id<"users"> } = await ctx.runQuery(
+      internal.walkin_claims._walkinBookingCustomerForShopStaff,
+      { bookingId: args.bookingId },
+    );
+
+    const vin = args.vin.toUpperCase().trim();
+
+    const vehicle: { _id: Id<"vehicles"> } | null = await ctx.runMutation(api.vehicles.upsertVehicle, {
+      vin,
+      trim_id: args.trimId,
+      engine_id: args.engineId,
+      transmission_id: args.transmissionId,
+      year: args.year,
+      metadata: {
+        make: args.make,
+        model: args.model,
+        color: args.color || "",
+      },
+    });
+
+    const vehicleOwnerId: Id<"vehicle_owners"> = await ctx.runMutation(api.vehicles.addOwner, {
+      vin,
+      userId,
+      nickname: `${args.year} ${args.make} ${args.model}`,
+    });
+
+    let cacheHit = false;
+    let scheduledEnrichment = false;
+    let dedupSource: "nhtsa_vin_key" | "config_key" | "none" = "none";
+
+    if (vehicle?._id) {
+      let existingConfig = null as any;
+
+      if (args.nhtsaVinKey) {
+        existingConfig = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getVehicleConfigByNhtsaVinKey,
+          { nhtsaVinKey: args.nhtsaVinKey },
+        );
+        if (existingConfig) dedupSource = "nhtsa_vin_key";
+      }
+
+      let configKey = "";
+      if (!existingConfig && args.engineCode) {
+        configKey = buildEngineKey({
+          vehicleId: vehicle._id as any,
+          year: args.year,
+          make: args.make,
+          model: args.model,
+          trim: args.trim,
+          engineCode: args.engineCode,
+          displacement: args.displacement,
+        });
+        existingConfig = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getVehicleConfigByKey,
+          { configKey },
+        );
+        if (existingConfig) dedupSource = "config_key";
+      }
+
+      const STALE_MS = 180 * 24 * 60 * 60 * 1000;
+      const status = existingConfig?.enrichment_status;
+      const fresh =
+        existingConfig &&
+        (status === "complete" || status === "verified") &&
+        (existingConfig.last_enriched_at ?? 0) >= Date.now() - STALE_MS;
+
+      if (fresh && existingConfig?._id) {
+        await ctx.runMutation(
+          internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
+          { vehicle_id: vehicle._id, vehicle_config_id: existingConfig._id },
+        );
+        cacheHit = true;
+      } else {
+        await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.v3pipeline.enrichVehicleBatchV3, {
+          vehicleId: vehicle._id,
+          year: args.year,
+          make: args.make,
+          model: args.model,
+          trim: args.trim,
+          engineCode: args.engineCode,
+          displacement: args.displacement,
+          drivetrain: args.drivetrain,
+          nhtsaVinKey: args.nhtsaVinKey,
+        });
+        scheduledEnrichment = true;
+      }
+    }
+
+    await ctx.scheduler.runAfter(0, api.tires.scrapeVehicleTires, {
+      year: args.year,
+      make: args.make,
+      model: args.model,
+      trim: args.trim,
+      displacementL: args.displacement ? parseFloat(args.displacement) : undefined,
+    });
+
+    return {
+      success: true as const,
+      vehicleOwnerId,
+      cache_hit: cacheHit,
+      cache_hit_source: dedupSource,
+      enrichment_scheduled: scheduledEnrichment,
+    };
+  },
+});
+
 // ============================================
 // HELPERS
 // ============================================

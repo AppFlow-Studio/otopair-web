@@ -13,7 +13,7 @@
  */
 
 import { v } from "convex/values";
-import { action, internalQuery, query } from "./_generated/server";
+import { action, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isPseudoVin } from "./lib/vinIdentity";
@@ -57,6 +57,103 @@ export async function mintClaimToken(
   } as any);
   return token;
 }
+
+// Local auth helpers — duplicated from bookings.ts/schedule.ts's pattern to
+// keep this file's dependency footprint small.
+async function currentUser(ctx: any) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) return null;
+  return await ctx.db
+    .query("users")
+    .withIndex("by_clerkUserId", (q: any) => q.eq("clerkUserId", identity.subject))
+    .unique();
+}
+
+async function requireShopStaff(ctx: any, userId: any, shopId: any) {
+  const shopUser = await ctx.db
+    .query("shop_users")
+    .withIndex("by_user_and_shop", (q: any) =>
+      q.eq("user_id", userId).eq("shop_id", shopId),
+    )
+    .first();
+  if (shopUser && shopUser.is_active) return shopUser;
+  const owned = await ctx.db
+    .query("shops")
+    .withIndex("by_owner_user_id", (q: any) => q.eq("owner_user_id", userId))
+    .filter((q: any) => q.eq(q.field("_id"), shopId))
+    .first();
+  if (owned) return { role: "owner", is_active: true };
+  throw new Error("Not authorized for this shop");
+}
+
+/**
+ * Auth helper for vehicle-pipeline's shop-scoped variant. Verifies the caller
+ * is shop staff for the booking's shop AND the booking is a walk-in with a
+ * user_id stub attached. Returns { userId, shopId } for the action to use;
+ * throws otherwise. Kept in walkin_claims.ts because the concern is walk-in
+ * specific — vehicle_pipeline stays vehicle-agnostic.
+ */
+export const _walkinBookingCustomerForShopStaff = internalQuery({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const staff = await currentUser(ctx);
+    if (!staff) throw new Error("Sign in required");
+    const booking = (await ctx.db.get(args.bookingId)) as any;
+    if (!booking) throw new Error("Booking not found");
+    if (!booking.shop_id) throw new Error("Booking has no shop");
+    await requireShopStaff(ctx, staff._id, booking.shop_id);
+    if (booking.source !== "mechanic_walk_in") {
+      throw new Error("Not a walk-in booking");
+    }
+    if (!booking.user_id) throw new Error("Booking has no customer");
+    return {
+      userId: booking.user_id as Id<"users">,
+      shopId: booking.shop_id,
+    };
+  },
+});
+
+/**
+ * Mint (or return) a claim token from a bookingId. Called by the walk-in
+ * intake page right after createByShop lands, so the mechanic can hand the
+ * customer a working /t/[token] URL before Telnyx is wired for SMS.
+ *
+ * Idempotent — returns the same token the next time it's called for the
+ * same user_id, as long as the token hasn't expired.
+ *
+ * Returns { token, expiresAtMs } or throws if unauthorized / no user_id.
+ * Returns { token: null } if the user has already claimed their account
+ * (nothing to hand out).
+ */
+export const mintForBooking = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const staff = await currentUser(ctx);
+    if (!staff) throw new Error("Sign in required");
+
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found");
+    if (!(booking as any).shop_id) throw new Error("Booking has no shop");
+    await requireShopStaff(ctx, staff._id, (booking as any).shop_id);
+
+    const userId = (booking as any).user_id as Id<"users"> | undefined;
+    if (!userId) throw new Error("Booking has no customer user_id");
+
+    const user = (await ctx.db.get(userId)) as Doc<"users"> | null;
+    if (!user) throw new Error("Customer user not found");
+    if ((user as any).walkInClaimedAt) {
+      return { token: null as string | null, expiresAtMs: null as number | null };
+    }
+
+    const token = await mintClaimToken(ctx, userId);
+    if (!token) return { token: null, expiresAtMs: null };
+
+    const refreshed = (await ctx.db.get(userId)) as Doc<"users"> | null;
+    const expiresAtMs =
+      (refreshed as any)?.claim_token_expires_at ?? null;
+    return { token, expiresAtMs };
+  },
+});
 
 export const resolveClaimToken = query({
   args: { token: v.string() },

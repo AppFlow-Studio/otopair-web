@@ -2857,6 +2857,14 @@ export default defineSchema({
         v.object({
           name: v.string(),
           duration_minutes: v.optional(v.float64()),
+          // True while this off-catalog line is STAGED but not yet confirmed by
+          // the customer — i.e. added mid-inspection ("Add to this job") / as
+          // unforeseen scope, and awaiting approval of the pre_job / mid_job
+          // estimate that carries it. Shop-facing surfaces still show it (the
+          // mechanic priced and sent it); customer-facing reads hide it until
+          // approval clears this flag. Absent = confirmed/booked work (the
+          // pre-existing default), so old rows read as confirmed.
+          pending_confirmation: v.optional(v.boolean()),
         })
       )
     ),
@@ -4868,6 +4876,25 @@ export default defineSchema({
     .index("by_shop", ["shop_id"])
     .index("by_shop_and_match_key", ["shop_id", "match_key"])
     .index("by_match_key", ["match_key"]),
+
+  // A shop's remembered custom PART brands — supplier brands (Bosch, Denso…) or
+  // any one-off brand a mechanic sourced externally for a part on a walk-in
+  // booking. The parts Brand picker is seeded from the vehicle `makes` catalog,
+  // but that table is vehicle makes only (guarded by getOrCreateMake); part
+  // brands would pollute it. So, exactly like shop_custom_services, these are
+  // shop-scoped "autocomplete with a memory" — added only by an explicit
+  // "Add … as custom" tap, never driver-facing or bookable.
+  shop_custom_part_brands: defineTable({
+    shop_id: v.id("shops"),
+    name: v.string(),
+    // Trimmed + lowercased identity key for an idempotent upsert per shop.
+    name_key: v.string(),
+    use_count: v.number(),
+    last_used_at: v.number(),
+    created_at: v.number(),
+  })
+    .index("by_shop", ["shop_id"])
+    .index("by_shop_and_key", ["shop_id", "name_key"]),
 
   // One structured record per piece of off-catalog work (Off-Catalog Work
   // spec, §7). `bookings.custom_services[]` stays as the lightweight display

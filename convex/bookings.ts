@@ -466,7 +466,11 @@ export const getByUserIdWithDetails = query({
           })
         ).then((a) => [
           ...a.filter(Boolean),
-          ...customServiceNames(booking.custom_services),
+          // Consumer app's booking list — hide off-catalog lines the customer
+          // hasn't approved yet (staged mid-inspection via "Add to this job").
+          ...customServiceNames(booking.custom_services, {
+            customerVisibleOnly: true,
+          }),
         ]);
 
         const vehicle = await ctx.db
@@ -5015,8 +5019,13 @@ export async function resolveServiceNames(
   /** booking.custom_services — off-catalog lines, appended after the catalog
    *  ones. Without this a custom-only booking renders blank everywhere. */
   customServices?: unknown,
+  /** Pass `{ customerVisibleOnly: true }` from CUSTOMER-facing queries so a
+   *  line still `pending_confirmation` (staged but not yet approved) is hidden
+   *  from the driver's card. Omit everywhere else — shop/ops surfaces show
+   *  staged work. See customServiceNames + confirmStagedCustomServices. */
+  opts?: { customerVisibleOnly?: boolean },
 ) {
-  const custom = customServiceNames(customServices);
+  const custom = customServiceNames(customServices, opts);
   if (!serviceIds || serviceIds.length === 0) return custom;
   const names = await Promise.all(
     serviceIds.map(async (serviceId) => {
@@ -16862,7 +16871,14 @@ export const getBookingByIdForCustomer = query({
       ? await ctx.db.get(booking.previous_mechanic_id)
       : null;
 
-    const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
+    // Customer's booking detail — hide off-catalog lines still awaiting their
+    // approval (staged mid-inspection). Shop surfaces omit this flag and see them.
+    const serviceNames = await resolveServiceNames(
+      ctx,
+      booking.service_ids,
+      booking.custom_services,
+      { customerVisibleOnly: true },
+    );
 
     const vehicle = booking.vin
       ? await ctx.db

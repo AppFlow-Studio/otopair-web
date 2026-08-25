@@ -585,6 +585,48 @@ export async function revertDeclinedMidJobWork(
 }
 
 /**
+ * Confirm the staged off-catalog lines the customer just approved.
+ *
+ * The mirror of revertDeclinedMidJobWork for the APPROVE path: an off-catalog
+ * line is written to `custom_services` with `pending_confirmation: true` at
+ * add-time (addCustomServiceForBooking) so it stays hidden from the customer's
+ * booking card until they say yes. When the customer approves the pre_job /
+ * mid_job estimate that carries it, that flag is cleared here so the line
+ * surfaces on their card as booked work.
+ *
+ * Clears the flag on EVERY still-pending line, because the estimate is a
+ * full-current-scope re-quote and the booking-level approval confirms that whole
+ * scope — the supported flow is stage → send once → approve (a line staged AFTER
+ * the estimate was sent isn't in what the customer approved, but that isn't the
+ * flow the inspection drives). Idempotent: a booking with nothing pending is a
+ * no-op. Returns the number of lines confirmed.
+ */
+export async function confirmStagedCustomServices(
+  ctx: any,
+  args: { bookingId: Id<"bookings">; now: number },
+): Promise<number> {
+  const booking: any = await ctx.db.get(args.bookingId);
+  if (!booking || !Array.isArray(booking.custom_services)) return 0;
+
+  let confirmed = 0;
+  const nextLines = booking.custom_services.map((line: any) => {
+    if (line && line.pending_confirmation === true) {
+      confirmed += 1;
+      const { pending_confirmation, ...rest } = line;
+      return rest;
+    }
+    return line;
+  });
+  if (confirmed > 0) {
+    await ctx.db.patch(args.bookingId, {
+      custom_services: nextLines,
+      updated_at: args.now,
+    });
+  }
+  return confirmed;
+}
+
+/**
  * Shared gate for the mid-job edit surface (add / rename / remove).
  *
  * Same three questions each entry point has to answer before it touches a line:
@@ -995,6 +1037,12 @@ async function addCustomServiceForBooking(
     existingLines.push({
       name,
       duration_minutes: estimatedMinutes ?? undefined,
+      // Staged, NOT yet customer-confirmed. Every add here routes through a
+      // pre_job / mid_job estimate the customer must approve before any money
+      // moves, so the line stays hidden from customer-facing booking reads until
+      // that approval clears the flag (see applyApprovalDecision). Shop-facing
+      // surfaces still show it — the mechanic priced and sent it.
+      pending_confirmation: true,
     });
     await ctx.db.patch(args.bookingId, {
       custom_services: existingLines,

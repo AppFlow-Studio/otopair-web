@@ -707,8 +707,7 @@ export default function DaySwimLanes({
   return (
     <div
       ref={containerRef}
-      className="overflow-auto"
-      style={{ height: "calc(100vh - 180px)", minHeight: 500 }}
+      className="overflow-auto flex-1 min-h-0"
     >
       <div
         className="flex"

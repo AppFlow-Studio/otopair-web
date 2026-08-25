@@ -1,37 +1,32 @@
 "use client";
 
-import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatusPill } from "@/components/status-pill";
-import {
-  JOB_STEP_DESCRIPTIONS,
-  JOB_STEP_LABELS,
-  type JobStep,
-} from "@/lib/booking-status";
+import { type JobStep } from "@/lib/booking-status";
 
 interface JobStepIndicatorProps {
   currentStep: JobStep;
   status: string;
-  /** Slim variant for the sticky-on-scroll header. CSS-driven transitions
-   *  (no motion FLIP) so the wrapper resizes smoothly without the layout
-   *  oscillation that occurs near the scroll threshold. */
+  /** Slim variant for the sticky-on-scroll header — trims the wording to "N/4"
+   *  so the row stays on one line when the header tightens. */
   compact?: boolean;
-  /** The job has an open clock-stopping blocker. Tints the active step and
-   *  swaps the "underway" copy for a paused note so this panel doesn't say a
-   *  job is running while the mechanic has it stopped. */
+  /** The job has an open clock-stopping blocker. Tints the bar amber and shows a
+   *  "Paused" chip so this panel never reads as "running" while it's stopped. */
   paused?: boolean;
-  /** An out-of-range estimate is sitting with the customer. Tints the active
-   *  step amber (like `paused`) and swaps the copy for a "waiting on the
-   *  customer to confirm the new hold" note, so the stepper reflects that work
-   *  can't begin until the customer approves. */
+  /** An out-of-range estimate is sitting with the customer. Tints the bar amber
+   *  and shows an "Awaiting hold" chip — work can't begin until they confirm. */
   awaitingHold?: boolean;
   className?: string;
 }
 
-const STEPS: Array<Exclude<JobStep, "terminal">> = [1, 2, 3, 4];
-const EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
-const DURATION_MS = 220;
+const TOTAL_STEPS = 4;
 
+/**
+ * A single value of progress: one slim fill bar + "Step N of 4", with the status
+ * pill carrying the phase word. Replaces the taller four-dot stepper (per-step
+ * labels + a description sentence) so the drawer header stays compact — the whole
+ * flow still reads at a glance, it just no longer costs ~90px of vertical space.
+ */
 export function JobStepIndicator({
   currentStep,
   status,
@@ -41,140 +36,52 @@ export function JobStepIndicator({
   className,
 }: JobStepIndicatorProps) {
   const isTerminal = currentStep === "terminal";
-  const transition = `${DURATION_MS}ms ${EASE}`;
-  // Both states tint the active step amber; awaiting-hold wins its own copy.
+  const isCompleted = status === "completed";
   const amberActive = paused || awaitingHold;
 
+  // Current step as a fraction of the four phases. Terminal-completed fills the
+  // bar; the other terminals (cancelled / no-show / declined) never reached
+  // "done", so the bar stays empty and only the status pill speaks.
+  const stepNum = isTerminal ? TOTAL_STEPS : (currentStep as number);
+  const pct = isTerminal ? (isCompleted ? 100 : 0) : Math.round((stepNum / TOTAL_STEPS) * 100);
+
+  const barColor = amberActive
+    ? "bg-amber-500"
+    : isCompleted
+      ? "bg-emerald-500"
+      : "bg-primary";
+
   return (
-    <div
-      className={cn(
-        "rounded-2xl border border-border bg-card transition-[padding] duration-200 ease-out",
-        compact ? "px-3 py-2" : "p-4",
-        className,
-      )}
-      style={{ transitionTimingFunction: EASE }}
-    >
-      <div
-        className={cn(
-          "flex items-center justify-between gap-3 transition-[margin] duration-200 ease-out",
-        )}
-        style={{
-          marginBottom: compact ? 0 : 12,
-          transition: `margin ${transition}`,
-        }}
-      >
-        <span
+    <div className={cn("flex items-center gap-3", className)}>
+      <div className="relative h-1.5 min-w-[3rem] flex-1 overflow-hidden rounded-full bg-muted">
+        <div
           className={cn(
-            "font-bold tracking-widest text-muted-foreground transition-[font-size] duration-200",
-            compact ? "text-[9px]" : "text-[10px]",
+            "absolute inset-y-0 left-0 rounded-full transition-[width,background-color] duration-300 ease-out",
+            barColor,
           )}
-        >
-          JOB PROGRESS
-        </span>
-        <div className="flex items-center gap-2">
-          {awaitingHold && !isTerminal ? (
-            <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-              Awaiting hold
-            </span>
-          ) : paused && !isTerminal ? (
-            <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
-              Paused
-            </span>
-          ) : null}
-          <StatusPill status={status} />
-        </div>
+          style={{ width: `${pct}%` }}
+          aria-hidden="true"
+        />
       </div>
 
-      <ol
-        className={cn(
-          "flex items-center transition-[gap,margin-top] duration-200 ease-out",
-          compact ? "mt-1.5 gap-1.5" : "gap-2",
-        )}
-        style={{ transition: `gap ${transition}, margin-top ${transition}` }}
-      >
-        {STEPS.map((step, idx) => {
-          const isActive = !isTerminal && step === currentStep;
-          const isComplete = !isTerminal && step < (currentStep as number);
-          const isUpcoming = !isComplete && !isActive;
+      {!isTerminal ? (
+        <span className="shrink-0 whitespace-nowrap text-xs font-medium tabular-nums text-foreground">
+          {compact ? `${stepNum}/${TOTAL_STEPS}` : `Step ${stepNum} of ${TOTAL_STEPS}`}
+        </span>
+      ) : null}
 
-          return (
-            <li key={step} className="flex flex-1 items-center gap-2">
-              <div
-                className={cn(
-                  "flex shrink-0 items-center justify-center rounded-full border font-semibold",
-                  isActive &&
-                    (amberActive
-                      ? "border-amber-500 bg-amber-500 text-white"
-                      : "border-primary bg-primary text-primary-foreground"),
-                  isComplete &&
-                    "border-emerald-500 bg-emerald-500 text-white",
-                  isUpcoming && "border-border bg-muted text-muted-foreground",
-                )}
-                style={{
-                  width: compact ? 20 : 28,
-                  height: compact ? 20 : 28,
-                  fontSize: compact ? 10 : 11,
-                  transition: `width ${transition}, height ${transition}, font-size ${transition}, background-color 200ms, color 200ms, border-color 200ms`,
-                }}
-                aria-current={isActive ? "step" : undefined}
-              >
-                {isComplete ? (
-                  <Check
-                    className="shrink-0"
-                    style={{
-                      width: compact ? 12 : 14,
-                      height: compact ? 12 : 14,
-                      transition: `width ${transition}, height ${transition}`,
-                    }}
-                    aria-hidden="true"
-                  />
-                ) : (
-                  step
-                )}
-              </div>
-              <span
-                className={cn(
-                  "overflow-hidden whitespace-nowrap text-[11px] font-medium",
-                  isActive ? "text-foreground" : "text-muted-foreground",
-                )}
-                style={{
-                  maxWidth: compact ? 0 : 120,
-                  opacity: compact ? 0 : 1,
-                  transition: `max-width ${transition}, opacity ${transition}`,
-                }}
-              >
-                {JOB_STEP_LABELS[step]}
-              </span>
-              {idx < STEPS.length - 1 && (
-                <div
-                  className={cn(
-                    "ml-auto hidden h-px flex-1 sm:block",
-                    isComplete ? "bg-emerald-500/40" : "bg-border",
-                  )}
-                  aria-hidden="true"
-                />
-              )}
-            </li>
-          );
-        })}
-      </ol>
+      {awaitingHold && !isTerminal ? (
+        <span className="inline-flex shrink-0 items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+          Awaiting hold
+        </span>
+      ) : paused && !isTerminal ? (
+        <span className="inline-flex shrink-0 items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-700">
+          Paused
+        </span>
+      ) : null}
 
-      <div
-        className="overflow-hidden text-xs leading-relaxed text-muted-foreground"
-        style={{
-          maxHeight: compact || isTerminal ? 0 : 64,
-          opacity: compact || isTerminal ? 0 : 1,
-          marginTop: compact || isTerminal ? 0 : 12,
-          transition: `max-height ${transition}, opacity ${transition}, margin-top ${transition}`,
-        }}
-        aria-hidden={compact || isTerminal}
-      >
-        {!isTerminal &&
-          (awaitingHold
-            ? "Waiting for the customer to confirm the new hold — work can't begin until they do."
-            : paused
-              ? "Paused — a blocker is open and the clock is stopped until it's cleared."
-              : JOB_STEP_DESCRIPTIONS[currentStep as Exclude<JobStep, "terminal">])}
+      <div className="shrink-0">
+        <StatusPill status={status} />
       </div>
     </div>
   );

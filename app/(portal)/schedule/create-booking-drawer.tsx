@@ -583,9 +583,11 @@ export default function CreateBookingDrawer({
   const [pendingSubmitOutsideHours, setPendingSubmitOutsideHours] = useState<boolean | null>(null);
 
   /* ---- Parts declaration + editor (walk-in confirmed flow) ----
-     The mechanic declares whether this job has parts. "Add parts" reveals the
-     editor, prefilled from quotes.previewCatalogPartsByVin (OEM catalog) and
-     freely editable / extendable. Declared parts become the booking's
+     The mechanic declares whether this job has parts. "Add parts" reveals an
+     editor they fill themselves; a per-service "Add … catalog parts" button
+     pulls OEM rows from quotes.previewCatalogPartsByVin on demand (never
+     reactively — that used to shift fields under the typing mechanic). Every
+     row stays freely editable / extendable. Declared parts become the booking's
      priced_parts_snapshot + parts_cost — feeding the job scope, pre-job and
      post-job — and are ALSO recorded in parts_quote_snapshots for catalog
      accuracy analytics. */
@@ -620,7 +622,6 @@ export default function CreateBookingDrawer({
   const [partsDeclaration, setPartsDeclaration] = useState<
     "none" | "add" | "skip" | null
   >(null);
-  const dirtyPartKeysRef = useRef<Set<string>>(new Set());
   const addedPartSeqRef = useRef(0);
 
   const shopData = useQuery(api.schedule.getShopServicesWithCategories);
@@ -801,8 +802,11 @@ export default function CreateBookingDrawer({
     };
   }, [selectedIds, vehicleLaborByServiceId, positionByServiceId, combinedLaborEnabled, roundLaborTo15]);
 
-  // Reactive OEM-catalog prefill for the parts editor (seeds the "Add parts"
-  // rows for the chosen services + options).
+  // OEM-catalog preview for the parts editor. Reactive (re-resolves on VIN /
+  // service / option changes) but NEVER auto-applied — it only powers the
+  // per-service "Add … catalog parts" button (count + the pull source) and the
+  // "no catalog match" hint. Applying it reactively used to rebuild every row
+  // under the typing mechanic, shifting the field they were in.
   const catalogPartsPreview = useQuery(
     api.quotes.previewCatalogPartsByVin,
     validVin && selectedIds.size > 0
@@ -821,63 +825,69 @@ export default function CreateBookingDrawer({
       : "skip",
   );
 
-  // Seed editable rows from the catalog preview without clobbering the
-  // mechanic's edits (tracked in dirtyPartKeysRef) or any manually-added rows.
-  // Rebuilds for the currently-selected services so deselected ones drop out.
-  useEffect(() => {
-    if (catalogPartsPreview === undefined) return;
-    const previewBySvc = new Map<string, any>();
-    if (catalogPartsPreview.hasConfig) {
+  // service_id → preview bucket, when the VIN resolved to a config. Shared by
+  // the button's available-count read and the pull action below.
+  const previewBySvc = useMemo(() => {
+    const m = new Map<string, any>();
+    if (catalogPartsPreview?.hasConfig) {
       for (const svc of catalogPartsPreview.services) {
-        previewBySvc.set(String(svc.service_id), svc);
+        m.set(String(svc.service_id), svc);
       }
     }
+    return m;
+  }, [catalogPartsPreview]);
+
+  // How the vehicle is named in button copy ("…for this Corolla"). Falls back
+  // to make, then generic wording when neither is known yet.
+  const vehicleLabel = model.trim() || make.trim() || "";
+
+  // Build one editable row from a catalog preview row. OEM parts are branded by
+  // the make, so a brandless catalog row falls back to the vehicle make; a
+  // price-unknown row seeds "0.00" for the mechanic to fill.
+  const catalogRowFromPreview = (sid: string, r: any): MechanicPartEdit => ({
+    key: r.role_key || r.oem_number || r.part_name,
+    service_id: sid,
+    part_name: r.part_name,
+    oem_number: r.oem_number,
+    brand: (r.brand ?? "").trim() || make.trim() || "",
+    quantity: String(r.quantity),
+    unit_price: r.price_unknown
+      ? "0.00"
+      : formatFixedCentCurrency(r.unit_price_cents / 100),
+    catalog_origin: true,
+    price_unknown: r.price_unknown === true,
+    part_id: r.part_id ?? undefined,
+    role_key: r.role_key ?? undefined,
+    quantity_basis: r.quantity_basis ?? undefined,
+  });
+
+  // Catalog rows available for `sid` that the mechanic hasn't pulled yet —
+  // drives the button's count + visibility (hides once everything is pulled,
+  // reappears when an option change surfaces new rows).
+  const availableCatalogCount = (sid: string): number => {
+    const svc = previewBySvc.get(sid);
+    if (!svc) return 0;
+    const have = new Set((catalogPartEdits[sid] ?? []).map((e) => e.key));
+    return (svc.rows ?? []).filter(
+      (r: any) => !have.has(r.role_key || r.oem_number || r.part_name),
+    ).length;
+  };
+
+  // Explicit, on-demand pull: append only catalog rows not already in the
+  // bucket, leaving every existing (manual or already-pulled/edited) row
+  // untouched. Idempotent — safe to click again after an axle/option change.
+  const pullCatalogPartsForService = (sid: string) =>
     setCatalogPartEdits((prev) => {
-      // Custom-line buckets survive verbatim. This rebuild is driven by the
-      // CATALOG preview and keys off selectedIds, so anything off-catalog would
-      // otherwise be dropped every time the preview re-resolved — silently
-      // deleting parts the mechanic had already typed.
-      const next: Record<string, MechanicPartEdit[]> = {};
-      for (const [bucket, rows] of Object.entries(prev)) {
-        if (bucket.startsWith(CUSTOM_BUCKET_PREFIX)) next[bucket] = rows;
-      }
-      for (const sid of Array.from(selectedIds).map(String)) {
-        const existing = prev[sid] ?? [];
-        const svc = previewBySvc.get(sid);
-        const catalogRows: MechanicPartEdit[] = (svc?.rows ?? []).map(
-          (r: any) => {
-            const key = r.role_key || r.oem_number || r.part_name;
-            const composite = `${sid}::${key}`;
-            if (dirtyPartKeysRef.current.has(composite)) {
-              const edited = existing.find((e) => e.key === key);
-              if (edited) return edited;
-            }
-            return {
-              key,
-              service_id: sid,
-              part_name: r.part_name,
-              oem_number: r.oem_number,
-              // OEM parts are branded by the make — if the catalog row has no
-              // brand, fall back to the vehicle make so Brand is never blank.
-              brand: (r.brand ?? "").trim() || make.trim() || "",
-              quantity: String(r.quantity),
-              unit_price: r.price_unknown
-                ? "0.00"
-                : formatFixedCentCurrency(r.unit_price_cents / 100),
-              catalog_origin: true,
-              price_unknown: r.price_unknown === true,
-              part_id: r.part_id ?? undefined,
-              role_key: r.role_key ?? undefined,
-              quantity_basis: r.quantity_basis ?? undefined,
-            };
-          },
-        );
-        const added = existing.filter((e) => !e.catalog_origin);
-        next[sid] = [...catalogRows, ...added];
-      }
-      return next;
+      const svc = previewBySvc.get(sid);
+      if (!svc) return prev;
+      const existing = prev[sid] ?? [];
+      const have = new Set(existing.map((e) => e.key));
+      const additions = (svc.rows ?? [])
+        .map((r: any) => catalogRowFromPreview(sid, r))
+        .filter((row: MechanicPartEdit) => !have.has(row.key));
+      if (additions.length === 0) return prev;
+      return { ...prev, [sid]: [...existing, ...additions] };
     });
-  }, [catalogPartsPreview, selectedIds]);
 
   // Reset the parts declaration when the booking has no work on it at all.
   // Custom lines count: a booking whose only line is off-catalog still has
@@ -903,8 +913,6 @@ export default function CreateBookingDrawer({
   ) =>
     setCatalogPartEdits((prev) => {
       const rows = prev[sid] ?? [];
-      const row = rows[idx];
-      if (row) dirtyPartKeysRef.current.add(`${sid}::${row.key}`);
       return {
         ...prev,
         [sid]: rows.map((r, i) => (i === idx ? { ...r, [field]: value } : r)),
@@ -915,7 +923,6 @@ export default function CreateBookingDrawer({
     setCatalogPartEdits((prev) => {
       const rows = prev[sid] ?? [];
       const key = `manual-${addedPartSeqRef.current++}`;
-      dirtyPartKeysRef.current.add(`${sid}::${key}`);
       return {
         ...prev,
         [sid]: [
@@ -941,8 +948,6 @@ export default function CreateBookingDrawer({
   const removeCatalogPartRow = (sid: string, idx: number) =>
     setCatalogPartEdits((prev) => {
       const rows = prev[sid] ?? [];
-      const row = rows[idx];
-      if (row) dirtyPartKeysRef.current.delete(`${sid}::${row.key}`);
       return { ...prev, [sid]: rows.filter((_, i) => i !== idx) };
     });
 
@@ -954,7 +959,6 @@ export default function CreateBookingDrawer({
       const rows = prev[sid] ?? [];
       const row = rows[idx];
       if (!row) return prev;
-      dirtyPartKeysRef.current.add(`${sid}::${row.key}`);
       return {
         ...prev,
         [sid]: rows.map((r, i) =>
@@ -3026,9 +3030,10 @@ export default function CreateBookingDrawer({
         </CollapsibleSection>
 
         {/* ── Parts (declaration → editor; feeds the bill + job scope) ──
-            "Add parts" itemizes the parts on this bill (prefilled from the OEM
-            catalog, fully editable). They become priced_parts_snapshot +
-            parts_cost and feed the job scope, pre-job and post-job. */}
+            "Add parts" itemizes the parts on this bill. The mechanic fills the
+            rows; a per-service button pulls matching OEM catalog rows on demand
+            (fully editable). They become priced_parts_snapshot + parts_cost and
+            feed the job scope, pre-job and post-job. */}
         {!isBackfill && (selectedIds.size > 0 || customServices.length > 0) && (
           <CollapsibleSection
             sectionKey="catalog_parts"
@@ -3048,7 +3053,7 @@ export default function CreateBookingDrawer({
             <DrawerFieldLabel>Does this job have parts?</DrawerFieldLabel>
             <div className="space-y-1.5">
               {([
-                { value: "add", label: "Add parts", hint: "List the parts on this bill — prefilled from our catalog" },
+                { value: "add", label: "Add parts", hint: "List the parts on this bill — pull from our catalog or add your own" },
                 { value: "none", label: "No parts", hint: "Labor-only job — nothing to install" },
                 { value: "skip", label: "Skip for now", hint: "Decide later — pre-job will suggest from the catalog" },
               ] as Array<{ value: "add" | "none" | "skip"; label: string; hint: string }>).map((opt) => {
@@ -3103,6 +3108,9 @@ export default function CreateBookingDrawer({
                   )}
                 {catalogPartServices.map(({ service_id: sid, name, custom }) => {
                   const rows = catalogPartEdits[sid] ?? [];
+                  // Un-pulled OEM catalog rows for this service (custom lines
+                  // have none). Drives the empty-state copy + the pull button.
+                  const catalogCount = custom ? 0 : availableCatalogCount(sid);
                   // Tire replacement has no OEM parts — the mechanic enters the
                   // tires directly (size / brand / model / per-tire price).
                   if (tireService != null && sid === String(tireService._id)) {
@@ -3151,7 +3159,9 @@ export default function CreateBookingDrawer({
                           <p className="text-xs text-muted-foreground">
                             {custom
                               ? "Off-catalog work — we have nothing to prefill. Add what you fitted."
-                              : "No catalog parts for this service — add one below."}
+                              : catalogCount > 0
+                                ? "Pull the OEM parts we have for this service, or add your own below."
+                                : "No catalog parts for this service — add one below."}
                           </p>
                         )}
                         {rows.map((p, idx) =>
@@ -3382,14 +3392,28 @@ export default function CreateBookingDrawer({
                           </div>
                           )
                         )}
-                        <button
-                          type="button"
-                          onClick={() => addCatalogPartRow(sid)}
-                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          Add part
-                        </button>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                          {catalogCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => pullCatalogPartsForService(sid)}
+                              className="inline-flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/5 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
+                            >
+                              <Package className="w-3.5 h-3.5" />
+                              {`Add ${catalogCount} catalog part${
+                                catalogCount === 1 ? "" : "s"
+                              }${vehicleLabel ? ` for this ${vehicleLabel}` : ""}`}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => addCatalogPartRow(sid)}
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Add part
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );

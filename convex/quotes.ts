@@ -114,6 +114,15 @@ export const previewForBooking = mutation({
     vin: v.string(),
     service_ids: v.array(v.id("services")),
     shop_id: v.id("shops"),
+    /** Per-service booking positions for per_axle services (brakes). Same
+     *  shape as previewForBookingQuery — a both-axle brake job quotes ~2×
+     *  labor when the per_axle_labor flag is on. Absent → 1 axle. */
+    service_positions: v.optional(
+      v.record(
+        v.string(),
+        v.union(v.literal("front"), v.literal("rear"), v.literal("both")),
+      ),
+    ),
   },
   handler: async (ctx, args) => {
     const cfg = await resolveVehicleConfigFromVin(ctx, args.vin);
@@ -149,6 +158,7 @@ export const previewForBooking = mutation({
       vehicle_config_id: cfg._id,
       service_ids: args.service_ids,
       shop_id: args.shop_id,
+      service_positions: args.service_positions,
     });
     return { ok: true as const, ...series };
   },

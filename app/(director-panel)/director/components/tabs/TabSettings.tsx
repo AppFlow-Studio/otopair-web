@@ -768,6 +768,48 @@ function CombinedLaborSettings({
   )
 }
 
+function PerAxleLaborSettings({
+  isSuperadmin,
+  actorName,
+  actorId,
+}: {
+  isSuperadmin: boolean
+  actorName: string
+  actorId?: Id<'director_users'>
+}) {
+  const cfg = useQuery(api.directorSettings.getGlobal)
+  const save = useMutation(api.directorSettings.setPerAxleLaborEnabled)
+  const enabled = cfg?.per_axle_labor_enabled ?? false
+
+  return (
+    <Card padded={false} style={{ marginBottom: 24 }}>
+      <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--slate-200)' }}>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>Per-axle labor</div>
+        <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 2 }}>
+          Charge labor per axle on jobs that scale by axle (brakes): a “both axles” brake job
+          bills ~2× the labor of a single axle, matching the doubled hands-on work. Off by
+          default; enabling it raises labor on multi-axle bookings. Parts already scale per axle.
+        </div>
+      </div>
+      <div style={{ padding: '14px 18px' }}>
+        <Toggle
+          checked={enabled}
+          onChange={e => {
+            if (!isSuperadmin) return
+            save({ value: e.target.checked, actorName, actorId })
+          }}
+          label="Charge per-axle labor on multi-axle jobs"
+        />
+        {!isSuperadmin && (
+          <div style={{ fontSize: 11, color: 'var(--slate-400)', marginTop: 6 }}>
+            Read-only — contact a superadmin to change this setting.
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
 export const TabSettings = () => {
   const session   = useContext(DirectorSessionCtx)
   const users     = useQuery(api.director_auth.listUsers)
@@ -806,6 +848,8 @@ export const TabSettings = () => {
           )}
         </div>
       </Card>
+
+      <PerAxleLaborSettings isSuperadmin={isSuperadmin} actorName={actorName} actorId={actorId} />
 
       <CombinedLaborSettings isSuperadmin={isSuperadmin} actorName={actorName} actorId={actorId} />
 

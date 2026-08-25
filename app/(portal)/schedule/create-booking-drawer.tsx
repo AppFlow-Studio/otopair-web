@@ -727,10 +727,22 @@ export default function CreateBookingDrawer({
       ),
     [categories],
   );
+  // Axle position per service (brakes), from the option picker. Built before
+  // the labor query so per_axle-scaled services (a "both axles" brake job)
+  // resolve to ~2× labor on the server — the drawer badges + running estimate
+  // then match the quote engine.
+  const positionsArg = useMemo(() => {
+    const rec: Record<string, "front" | "rear" | "both"> = {};
+    for (const o of selectedServiceOptions) {
+      const pos = parseAxlePosition(o.option_label);
+      if (pos) rec[String(o.service_id)] = pos;
+    }
+    return rec;
+  }, [selectedServiceOptions]);
   const vehicleLaborTimes = useQuery(
     api.laborTimes.getLaborHoursForServicesByVin,
     validVin && allCatalogServiceIds.length > 0
-      ? { vin: validVin, serviceIds: allCatalogServiceIds }
+      ? { vin: validVin, serviceIds: allCatalogServiceIds, positions: positionsArg }
       : "skip",
   );
   // serviceId → per-service labor for O(1) badge lookup + combine input.
@@ -760,15 +772,12 @@ export default function CreateBookingDrawer({
   const directorSettings = useQuery(api.directorSettings.getGlobal, {});
   const combinedLaborEnabled = directorSettings?.combined_labor_enabled === true;
   const roundLaborTo15 = directorSettings?.round_labor_times_to_15min ?? true;
-  // Axle position per selected service (brakes), from the option picker.
-  const positionByServiceId = useMemo(() => {
-    const m = new Map<string, "front" | "rear" | "both">();
-    for (const o of selectedServiceOptions) {
-      const pos = parseAxlePosition(o.option_label);
-      if (pos) m.set(String(o.service_id), pos);
-    }
-    return m;
-  }, [selectedServiceOptions]);
+  // Axle position per selected service (brakes) as a Map, for the combined-labor
+  // pass. Same source as `positionsArg` (fed to the labor query above).
+  const positionByServiceId = useMemo(
+    () => new Map<string, "front" | "rear" | "both">(Object.entries(positionsArg)),
+    [positionsArg],
+  );
   // { combinedMinutes, savedMinutes, notes } for the SELECTED services. Falls
   // back to a naive sum when the flag is off or nothing shares teardown.
   const combinedLabor = useMemo(() => {

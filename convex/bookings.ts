@@ -1688,16 +1688,23 @@ async function assertLaborCostMatchesDuration(
     .withIndex("by_key", (q: any) => q.eq("key", "global"))
     .first();
   const roundTo15 = settingsRow?.round_labor_times_to_15min ?? true;
-  const expectedLaborCost = roundTo15
-    ? Math.round(
-        series.quotes.reduce((sum, q) => {
-          if (!q.ok) return sum;
-          const roundedHours =
-            (Math.ceil((q.labor.hours * 60) / 15) * 15) / 60;
-          return sum + roundedHours * q.labor.rate;
-        }, 0) * 100,
-      ) / 100
-    : series.labor_cost_total;
+  // When combined labor fired, series.labor_cost_total IS the deducted total —
+  // use it directly. Re-summing per-service rounded hours here would rebuild the
+  // NAIVE cost and hard-reject a client that (correctly) submitted the lower
+  // combined number.
+  const combinedApplied = (series.combined_labor_saved_minutes ?? 0) > 0;
+  const expectedLaborCost = combinedApplied
+    ? series.labor_cost_total
+    : roundTo15
+      ? Math.round(
+          series.quotes.reduce((sum, q) => {
+            if (!q.ok) return sum;
+            const roundedHours =
+              (Math.ceil((q.labor.hours * 60) / 15) * 15) / 60;
+            return sum + roundedHours * q.labor.rate;
+          }, 0) * 100,
+        ) / 100
+      : series.labor_cost_total;
   if (expectedLaborCost <= 0) return;
   const tolerance = expectedLaborCost * 0.08; // ±8% band per Pricing v2 spec
   const signedDelta = args.laborCostDollars - expectedLaborCost;
@@ -9475,6 +9482,8 @@ async function mapBookingListItem(ctx: any, booking: any) {
     partsCost: booking.parts_cost,
     totalCost: booking.total_cost,
     estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
+    combinedLaborSavedMinutes: booking.combined_labor_saved_minutes ?? null,
+    combinedLaborNotes: booking.combined_labor_notes ?? null,
     mechanicId: booking.mechanic_id ?? null,
     assignmentPreference: normalizeAssignmentPreference(
       booking.assignment_preference,
@@ -9525,6 +9534,8 @@ async function mapMechanicDashboardJob(ctx: any, booking: any) {
     serviceNames,
     vehiclePassportComplete,
     estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
+    combinedLaborSavedMinutes: booking.combined_labor_saved_minutes ?? null,
+    combinedLaborNotes: booking.combined_labor_notes ?? null,
     totalCost: booking.total_cost,
     assignmentPreference: normalizeAssignmentPreference(
       booking.assignment_preference,
@@ -12252,6 +12263,12 @@ export const createByShop = mutation({
     catalogEstimatedMinutes: v.optional(v.float64()),
     mechanicQuotedPrice: v.optional(v.float64()),
     catalogQuotedPrice: v.optional(v.float64()),
+    // Combined labor operations (convex/lib/combinedLabor.ts): minutes the
+    // drawer shaved off the naive per-service sum because co-booked services
+    // shared teardown, plus the customer-facing reasons. Client-computed with
+    // the same pure resolver the quote engine uses.
+    combinedLaborSavedMinutes: v.optional(v.float64()),
+    combinedLaborNotes: v.optional(v.array(v.string())),
     // Optional parts data-gathering: the mechanic's edits to the catalog's
     // parts/price/quantity guess shown in the drawer. Pure analytics — the
     // catalog reference is recomputed server-side, so the client sends ONLY
@@ -12566,6 +12583,14 @@ export const createByShop = mutation({
       // none/skip — pre-job then seeds from the catalog as before.
       priced_parts_snapshot: pricedSnapshot,
       estimated_labor_minutes: args.estimatedLaborMinutes,
+      combined_labor_saved_minutes:
+        args.combinedLaborSavedMinutes && args.combinedLaborSavedMinutes > 0
+          ? args.combinedLaborSavedMinutes
+          : undefined,
+      combined_labor_notes:
+        args.combinedLaborNotes && args.combinedLaborNotes.length > 0
+          ? args.combinedLaborNotes
+          : undefined,
       mechanic_id: resolvedMechanicId,
       scheduled_date: args.scheduledDate,
       scheduled_time: args.scheduledTime,

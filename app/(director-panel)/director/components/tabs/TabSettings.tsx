@@ -8,6 +8,7 @@ import type { Id } from '@/convex/_generated/dataModel'
 import { Badge, Button, Card, Avatar, Input, Select, Toggle } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
+import { OVERLAP_FAMILIES } from '@/convex/lib/serviceLaborReference'
 
 type DirectorUser = {
   _id: Id<'director_users'>
@@ -681,6 +682,92 @@ const InspectionHealthConfigSettings = ({ isSuperadmin, actorName, actorId }: {
   )
 }
 
+function CombinedLaborSettings({
+  isSuperadmin,
+  actorName,
+  actorId,
+}: {
+  isSuperadmin: boolean
+  actorName: string
+  actorId?: Id<'director_users'>
+}) {
+  const cfg = useQuery(api.directorSettings.getGlobal)
+  const save = useMutation(api.directorSettings.setCombinedLaborConfig)
+
+  const enabled = cfg?.combined_labor_enabled ?? false
+  const disabled = new Set<string>(cfg?.combined_labor_disabled_families ?? [])
+
+  const toggleFamily = (id: string, on: boolean) => {
+    if (!isSuperadmin) return
+    const next = new Set(disabled)
+    if (on) next.delete(id)
+    else next.add(id)
+    save({ disabledFamilies: Array.from(next), actorName, actorId })
+  }
+
+  return (
+    <Card padded={false} style={{ marginBottom: 24 }}>
+      <div style={{ padding: '14px 18px', borderBottom: '1px solid var(--slate-200)' }}>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>Combined labor operations</div>
+        <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 2 }}>
+          When two booked services share the same teardown, charge that labor once instead of twice
+          — the honest way multi-service jobs are quoted (Mitchell1 / ALLDATA combined operations).
+          Off by default; enabling it lowers labor on qualifying multi-service bookings.
+        </div>
+      </div>
+      <div style={{ padding: '14px 18px' }}>
+        <Toggle
+          checked={enabled}
+          onChange={e => {
+            if (!isSuperadmin) return
+            save({ enabled: e.target.checked, actorName, actorId })
+          }}
+          label="Enable combined labor deduction"
+        />
+        {!isSuperadmin && (
+          <div style={{ fontSize: 11, color: 'var(--slate-400)', marginTop: 6 }}>
+            Read-only — contact a superadmin to change this setting.
+          </div>
+        )}
+
+        <div style={{ marginTop: 16, opacity: enabled ? 1 : 0.5, pointerEvents: enabled ? 'auto' : 'none' }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-600)', marginBottom: 8 }}>
+            Overlap rules {enabled ? '' : '(enable to configure)'}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {OVERLAP_FAMILIES.map(fam => (
+              <div
+                key={fam.id}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'flex-start',
+                  gap: 16,
+                  padding: '10px 12px',
+                  border: '1px solid var(--slate-200)',
+                  borderRadius: 8,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600 }}>{fam.label}</div>
+                  <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 2 }}>
+                    {fam.description}
+                  </div>
+                </div>
+                <Toggle
+                  checked={!disabled.has(fam.id)}
+                  onChange={e => toggleFamily(fam.id, e.target.checked)}
+                  label=""
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </Card>
+  )
+}
+
 export const TabSettings = () => {
   const session   = useContext(DirectorSessionCtx)
   const users     = useQuery(api.director_auth.listUsers)
@@ -719,6 +806,8 @@ export const TabSettings = () => {
           )}
         </div>
       </Card>
+
+      <CombinedLaborSettings isSuperadmin={isSuperadmin} actorName={actorName} actorId={actorId} />
 
       <BookingExpirySettings isSuperadmin={isSuperadmin} actorName={actorName} actorId={actorId} />
 

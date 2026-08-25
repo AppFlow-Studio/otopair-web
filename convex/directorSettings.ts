@@ -12,8 +12,11 @@
 
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { OVERLAP_FAMILIES } from "./lib/serviceLaborReference";
 
 const SETTINGS_KEY = "global";
+
+const VALID_OVERLAP_FAMILY_IDS = new Set(OVERLAP_FAMILIES.map((f) => f.id));
 
 const DEFAULTS = {
   round_labor_times_to_15min: true,
@@ -28,6 +31,12 @@ const DEFAULTS = {
   // StubHub-style checkout slot holds (see convex/slotHolds.ts).
   slot_hold_enabled: true,
   slot_hold_ttl_minutes: 15,
+  // Combined labor operations (see convex/lib/combinedLabor.ts). Default OFF —
+  // enabling it changes multi-service pricing, so it's an explicit director
+  // opt-in. `disabled_families` lets the director turn off individual overlap
+  // rules while leaving the rest on.
+  combined_labor_enabled: false,
+  combined_labor_disabled_families: [] as string[],
 };
 
 export const getGlobal = query({
@@ -61,6 +70,11 @@ export const getGlobal = query({
         row?.slot_hold_enabled ?? DEFAULTS.slot_hold_enabled,
       slot_hold_ttl_minutes:
         row?.slot_hold_ttl_minutes ?? DEFAULTS.slot_hold_ttl_minutes,
+      combined_labor_enabled:
+        row?.combined_labor_enabled ?? DEFAULTS.combined_labor_enabled,
+      combined_labor_disabled_families:
+        row?.combined_labor_disabled_families ??
+        DEFAULTS.combined_labor_disabled_families,
       updated_at: row?.updated_at ?? null,
     };
   },
@@ -101,6 +115,59 @@ export const setRoundLaborTo15 = mutation({
       detail: `round_labor_times_to_15min set to ${value}`,
       created_at: now,
     });
+  },
+});
+
+// Combined-labor controls (convex/lib/combinedLabor.ts). Sets the master
+// enable and/or the set of overlap families the director switched off. Only
+// provided fields change; unknown family ids are ignored.
+export const setCombinedLaborConfig = mutation({
+  args: {
+    enabled: v.optional(v.boolean()),
+    disabledFamilies: v.optional(v.array(v.string())),
+    actorName: v.optional(v.string()),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, args) => {
+    const patch: Record<string, boolean | string[]> = {};
+    if (typeof args.enabled === "boolean") patch.combined_labor_enabled = args.enabled;
+    if (args.disabledFamilies) {
+      patch.combined_labor_disabled_families = args.disabledFamilies.filter((id) =>
+        VALID_OVERLAP_FAMILY_IDS.has(id as any),
+      );
+    }
+
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("director_settings")
+      .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        ...patch,
+        updated_at: now,
+        updated_by_user_id: args.actorId,
+      });
+    } else {
+      await ctx.db.insert("director_settings", {
+        key: SETTINGS_KEY,
+        round_labor_times_to_15min: DEFAULTS.round_labor_times_to_15min,
+        ...patch,
+        updated_at: now,
+        updated_by_user_id: args.actorId,
+      });
+    }
+
+    await ctx.db.insert("audit_log", {
+      entity_type: "director_settings",
+      entity_id: SETTINGS_KEY,
+      action: "field_edit",
+      actor: args.actorName ?? "Director",
+      actor_id: args.actorId,
+      detail: `combined-labor config updated: ${JSON.stringify(patch)}`,
+      created_at: now,
+    });
+    return { ok: true };
   },
 });
 

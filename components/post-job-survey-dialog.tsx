@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -901,6 +902,7 @@ export default function PostJobSurveyDialog({
   bookingSubLabel,
   passportData,
   estimatedLaborMinutes,
+  customLaborOverridesMinutes,
   prefillData,
   isSubmitting,
   onClose,
@@ -917,6 +919,7 @@ export default function PostJobSurveyDialog({
   quotedParts,
   lockedQuote,
   isFixedPrice,
+  fixedBaseCents,
 }: {
   open: boolean;
   bookingId?: string | null;
@@ -924,6 +927,12 @@ export default function PostJobSurveyDialog({
   bookingSubLabel: string;
   passportData: VehiclePassportData | null | undefined;
   estimatedLaborMinutes?: number | null;
+  /** Per-custom-line agreed labor (minutes), keyed by custom-job id, from
+   *  `getJobDetail.customLaborOverridesMinutes`. Seeds a custom line's labor
+   *  from the AGREED breakdown instead of the (possibly stale) custom_jobs
+   *  estimate — server already guards it to lines untouched since the
+   *  agreement, and the body applies it only in the post-job flow. */
+  customLaborOverridesMinutes?: Record<string, number> | null;
   prefillData: PostJobPrefillData;
   isSubmitting: boolean;
   onClose: () => void;
@@ -948,6 +957,12 @@ export default function PostJobSurveyDialog({
   /** Customer agreed to a shop_service_fixed_prices flat rate. Parts/labor
    *  edits are accepted (audit only) but won't move the customer total. */
   isFixedPrice?: boolean;
+  /** The customer-agreed flat contract price (cents, ALL-IN incl. tax + fee),
+   *  from `getJobDetail.fixedContractBaseCents`. For fixed-price bookings the
+   *  mechanic-facing total is `fixedBaseCents + added scope`, so the dialog
+   *  renders exactly what the customer pays instead of a dynamic parts+labor
+   *  recompute. Null (or unset) for non-fixed bookings. */
+  fixedBaseCents?: number | null;
   /** Shop's labor rate in cents/hour. Drives the running-total bar and the
    *  Labor step for cycle modes. */
   laborRateCents?: number | null;
@@ -987,6 +1002,7 @@ export default function PostJobSurveyDialog({
       bookingSubLabel={bookingSubLabel}
       passportData={passportData ?? null}
       estimatedLaborMinutes={estimatedLaborMinutes ?? null}
+      customLaborOverridesMinutes={customLaborOverridesMinutes ?? null}
       prefillData={prefillData}
       isSubmitting={isSubmitting}
       onClose={onClose}
@@ -1002,6 +1018,7 @@ export default function PostJobSurveyDialog({
       lockBilling={lockBilling ?? false}
       quotedParts={quotedParts ?? null}
       isFixedPrice={isFixedPrice ?? false}
+      fixedBaseCents={fixedBaseCents ?? null}
     />
   );
 }
@@ -1013,6 +1030,7 @@ function PostJobSurveyDialogBody({
   bookingSubLabel,
   passportData,
   estimatedLaborMinutes,
+  customLaborOverridesMinutes,
   prefillData,
   isSubmitting,
   onClose,
@@ -1029,6 +1047,7 @@ function PostJobSurveyDialogBody({
   quotedParts,
   lockedQuote,
   isFixedPrice,
+  fixedBaseCents,
 }: {
   open: boolean;
   bookingId: string | null;
@@ -1036,6 +1055,7 @@ function PostJobSurveyDialogBody({
   bookingSubLabel: string;
   passportData: VehiclePassportData | null;
   estimatedLaborMinutes: number | null;
+  customLaborOverridesMinutes?: Record<string, number> | null;
   prefillData: PostJobPrefillData;
   isSubmitting: boolean;
   onClose: () => void;
@@ -1060,6 +1080,7 @@ function PostJobSurveyDialogBody({
   quotedParts: JobActualPartPayload[] | null;
   lockedQuote: LockedQuote | null;
   isFixedPrice: boolean;
+  fixedBaseCents: number | null;
 }) {
   // Phase 2 — Pre-Job Approval mutation handles (only invoked when cycle is set).
   const submitPreJobEstimate = useMutation(
@@ -1084,8 +1105,19 @@ function PostJobSurveyDialogBody({
   const manualReviseRef = useRef(false);
   // Reset the revise intent whenever the dialog is (re)opened so a fresh open
   // on a still-declined booking correctly shows the status panel, not the form.
+  // On CLOSE, also drop the post-submit panel flag: it's component state that
+  // otherwise survives a close/reopen on the mounted-dialog callers (booking
+  // detail panel, mechanic dashboard), so a booking left at a non-in-flight
+  // state (e.g. a fixed-price audit submit that ended at "none") would resurrect
+  // the status panel forever and never show the pricing form. Clearing it here
+  // lets the re-entry effect below re-derive the correct view from live state.
   useEffect(() => {
-    if (open) manualReviseRef.current = false;
+    if (open) {
+      manualReviseRef.current = false;
+    } else {
+      manualReviseRef.current = false;
+      setSubmittedForApproval(false);
+    }
   }, [open]);
   // Re-entry: if the dialog opens on a booking that already has an in-flight
   // approval for *this* cycle, jump straight to the status panel.
@@ -1479,6 +1511,30 @@ function PostJobSurveyDialogBody({
   const [laborAllocations, setLaborAllocations] = useState<
     Record<string, string>
   >({});
+  // Agreed per-custom-line labor (minutes), applied ONLY in the post-job flow
+  // (`cycle` undefined). In the pre/mid ESTIMATE flow the mechanic is actively
+  // setting labor, so the override isn't wanted — and skipping it there keeps
+  // the fixed-price added-labor memos (which read estimated_minutes) from
+  // diverging from what's shown. The server already guarded these to custom
+  // lines untouched since the agreement, so a later found-work edit still wins.
+  const customLaborOverrides = useMemo(
+    () => (cycle ? {} : customLaborOverridesMinutes ?? {}),
+    [cycle, customLaborOverridesMinutes],
+  );
+  // A custom line's default labor in minutes: the agreed override when present,
+  // else the line's own estimate. Single resolver so the validity gate, the
+  // Labor step, and its total can't drift.
+  const customLineDefMinutes = useCallback(
+    (job: { _id: unknown; estimated_minutes?: number | null }): number => {
+      const override = customLaborOverrides[String(job._id)];
+      if (typeof override === "number" && override > 0) return override;
+      return typeof job.estimated_minutes === "number" &&
+        job.estimated_minutes > 0
+        ? job.estimated_minutes
+        : 0;
+    },
+    [customLaborOverrides],
+  );
   // Every labor line must resolve to a real time before the mechanic can leave
   // the labor step — a line still at 0 (no estimate, nothing typed) would quote
   // free labor. Mirrors LaborStep's per-line rule: the explicit entry wins,
@@ -1496,10 +1552,7 @@ function PostJobSurveyDialogBody({
       },
       ...(customJobs ?? []).map((j) => ({
         key: String(j._id),
-        defMin:
-          typeof j.estimated_minutes === "number" && j.estimated_minutes > 0
-            ? j.estimated_minutes
-            : 0,
+        defMin: customLineDefMinutes(j),
       })),
     ];
     return lineDefs.every((l) => {
@@ -1512,7 +1565,7 @@ function PostJobSurveyDialogBody({
             : 0;
       return hours > 0;
     });
-  }, [estimatedLaborMinutes, customJobs, laborAllocations]);
+  }, [estimatedLaborMinutes, customJobs, laborAllocations, customLineDefMinutes]);
   const [actualPartsCost, setActualPartsCost] = useState("");
   const [difficultyRating, setDifficultyRating] = useState("");
   const [partsAccuracyStatus, setPartsAccuracyStatus] =
@@ -1746,6 +1799,166 @@ function PostJobSurveyDialogBody({
     shopState,
     shopZip,
   ]);
+
+  // ─── Fixed-price total (mechanic sees what the customer pays) ────────────
+  // On a fixed-price booking the customer agreed to a flat contract price
+  // (all-in, incl. tax + fee); only ADDED scope is billed on top. Mirror the
+  // server (booking_approvals.performSubmission): the base is pinned to
+  // `fixedBaseCents`; added scope = parts tagged `custom_service_name` + the
+  // custom-job labor hours, priced parts+labor+tax+fee in ISOLATION, then
+  // total = fixedBaseCents + addedPriced.total_cents. Feeding
+  // computeEstimateTotals only the added subset reproduces the server's
+  // isolated tax/fee basis exactly, so the number shown here == the customer's.
+  const isFixedEstimate = isEstimateCycle && isFixedPrice;
+
+  // ADDED lines the shop flat-prices (a catalog service with a
+  // shop_service_fixed_prices row at the vehicle's tier). Their parts/labor are
+  // NOT billed — the flat price is — so they're excluded from the parts+labor
+  // preview and the flat sum is added on top as a parts-basis pre-tax component
+  // (mirrors the server's priceWithFlat + booking-create). Keyed by the line
+  // name, which is how a part's `custom_service_name` ties back to it.
+  const flatLineNames = useMemo(
+    () =>
+      new Set(
+        (customJobs ?? [])
+          .filter(
+            (j) =>
+              typeof j.quoted_price_cents === "number" &&
+              j.quoted_price_cents > 0,
+          )
+          .map((j) => (j.name ?? "").trim().toLowerCase()),
+      ),
+    [customJobs],
+  );
+  const addedFlatCents = useMemo(
+    () =>
+      (customJobs ?? []).reduce(
+        (s, j) =>
+          s +
+          (typeof j.quoted_price_cents === "number" && j.quoted_price_cents > 0
+            ? j.quoted_price_cents
+            : 0),
+        0,
+      ),
+    [customJobs],
+  );
+
+  // Parts on an ADDED service line (off-catalog / custom-job work), EXCLUDING
+  // flat-priced lines (billed flat, not by parts). Base-service parts carry a
+  // catalog service_id and no custom_service_name.
+  const addedParts = useMemo(
+    () =>
+      parts.filter((p) => {
+        const csn = (p.custom_service_name ?? "").trim();
+        return csn !== "" && !flatLineNames.has(csn.toLowerCase());
+      }),
+    [parts, flatLineNames],
+  );
+
+  // Labor hours for ADDED parts+labor lines only — excludes the locked base AND
+  // flat-priced lines (whose labor is folded into the flat price). Mechanic's
+  // per-line entry wins, else the line's estimate. SINGLE source of truth —
+  // reused by the submit handler so the preview can't drift from what's sent.
+  const addedLaborHours = useMemo(
+    () =>
+      (customJobs ?? []).reduce((sum, job) => {
+        if (
+          typeof job.quoted_price_cents === "number" &&
+          job.quoted_price_cents > 0
+        )
+          return sum;
+        const raw = laborAllocations[String(job._id)];
+        const hrs =
+          raw !== undefined
+            ? Number(raw) || 0
+            : typeof job.estimated_minutes === "number" &&
+                job.estimated_minutes > 0
+              ? job.estimated_minutes / 60
+              : 0;
+        return sum + (hrs > 0 ? hrs : 0);
+      }, 0),
+    [customJobs, laborAllocations],
+  );
+
+  // Labor hours on flat-priced added lines — folded into the flat price, so
+  // subtracted from the submitted base labor to avoid billing them twice (labor
+  // AND flat). Matters for a NON-fixed booking that gains a flat-priced added
+  // catalog line; on a fixed booking the base labor is ignored for pricing.
+  const flatAddedLaborHours = useMemo(
+    () =>
+      (customJobs ?? []).reduce((sum, job) => {
+        if (
+          !(
+            typeof job.quoted_price_cents === "number" &&
+            job.quoted_price_cents > 0
+          )
+        )
+          return sum;
+        const raw = laborAllocations[String(job._id)];
+        const hrs =
+          raw !== undefined
+            ? Number(raw) || 0
+            : typeof job.estimated_minutes === "number" &&
+                job.estimated_minutes > 0
+              ? job.estimated_minutes / 60
+              : 0;
+        return sum + (hrs > 0 ? hrs : 0);
+      }, 0),
+    [customJobs, laborAllocations],
+  );
+
+  // Tax + fee over the ADDED subtotal ALONE — matches the server. A flat-priced
+  // added service joins the PARTS tax basis via a synthetic row (mirrors the
+  // server's priceWithFlat: the flat amount is pre-tax, taxed/fee'd on top).
+  // Never tax the base: `fixedBaseCents` already carries its own tax/fee.
+  const addedTotals = useMemo(() => {
+    if (!isFixedEstimate) return null;
+    const partsForCompute =
+      addedFlatCents > 0
+        ? [
+            ...addedParts,
+            {
+              not_used: false,
+              supplied_by: "shop",
+              cost: addedFlatCents / 100,
+              quantity: 1,
+            } as unknown as PartRowState,
+          ]
+        : addedParts;
+    return computeEstimateTotals({
+      parts: partsForCompute,
+      hours: addedLaborHours,
+      laborRateCents: effectiveLaborRateCents,
+      shopState,
+      shopZip,
+    });
+  }, [
+    isFixedEstimate,
+    addedParts,
+    addedFlatCents,
+    addedLaborHours,
+    effectiveLaborRateCents,
+    shopState,
+    shopZip,
+  ]);
+
+  // The number the mechanic sees = the customer's reality: fixed base + added.
+  const fixedTotals = useMemo(() => {
+    if (!isFixedEstimate || !addedTotals) return null;
+    const base = fixedBaseCents ?? 0;
+    return {
+      baseCents: base,
+      // addedTotals.partsCents includes the synthetic flat row — split it back
+      // out so the summary labels real added parts vs the flat service.
+      addedPartsCents: Math.max(0, addedTotals.partsCents - addedFlatCents),
+      addedFlatCents,
+      addedLaborCents: addedTotals.laborCents,
+      addedTaxCents: addedTotals.taxCents,
+      addedFeeCents: addedTotals.feeCents,
+      addedTotalCents: addedTotals.totalCents, // == server addedPriced.total_cents
+      totalCents: base + addedTotals.totalCents, // == server total_cents
+    };
+  }, [isFixedEstimate, addedTotals, addedFlatCents, fixedBaseCents]);
 
   // The quoted price as the CLIENT computes it — same formula as liveTotals but
   // over the seeded (quoted) parts + estimated labor, i.e. the untouched state
@@ -2002,19 +2215,30 @@ function PostJobSurveyDialogBody({
       }));
       const laborHoursValue =
         actualLaborHours.trim() === "" ? null : Number(actualLaborHours);
+      // Subtract flat-priced added lines' hours — their labor is folded into the
+      // flat price, so billing them as labor too would double-charge (matters on
+      // a non-fixed booking; ignored for pricing on a fixed one).
+      const billableLaborHours =
+        laborHoursValue != null && Number.isFinite(laborHoursValue)
+          ? Math.max(0, laborHoursValue - flatAddedLaborHours)
+          : null;
       const laborHours =
-        laborHoursValue != null &&
-        Number.isFinite(laborHoursValue) &&
-        laborHoursValue > 0
-          ? laborHoursValue
+        billableLaborHours != null && billableLaborHours > 0
+          ? billableLaborHours
           : undefined;
-      // Send the rate alongside hours so the server can multiply directly
-      // instead of falling back to booking.labor_cost. effectiveLaborRateCents
-      // priorities shop.labor_rate, falls back to the booking's quoted rate,
-      // then a $125 default.
-      const laborRateCentsForSubmit = laborHours != null
-        ? effectiveLaborRateCents
-        : undefined;
+      // Send the rate whenever there are billable hours — base OR added scope.
+      // effectiveLaborRateCents prioritizes shop.labor_rate, falls back to the
+      // booking's quoted rate, then a $125 default. The `addedLaborHours > 0`
+      // case matters for fixed-price bookings with 0 base hours: without it the
+      // rate would arrive undefined and the server would fall back to $125,
+      // diverging from the added total the mechanic just previewed.
+      const laborRateCentsForSubmit =
+        laborHours != null || addedLaborHours > 0
+          ? effectiveLaborRateCents
+          : undefined;
+      // `addedLaborHours` is the shared component-scope memo (single source of
+      // truth) — the server prices added scope on a fixed-price booking from it
+      // while the locked base labor is never re-billed.
       // Only fully-uploaded scope photos carry a storage id. Still-uploading or
       // errored ones are dropped rather than blocking the send.
       const scopePhotoIds = scopePhotos
@@ -2022,6 +2246,40 @@ function PostJobSurveyDialogBody({
         .map((p) => p.storageId as Id<"_storage">);
       const scopePhotoIdsForSubmit =
         scopePhotoIds.length > 0 ? scopePhotoIds : undefined;
+      // Per-line labor breakdown behind `laborHours` (the scalar total). Built
+      // from the SAME lines + resolution rule the Labor step sums, so the parts
+      // add up to what was previewed. Persisting it lets the post-job Labor step
+      // seed the BASE line with base-only labor instead of re-deriving it from
+      // the whole-approval total (which double-counted custom-job labor). Keyed
+      // "base" + custom-job ids, matching LaborStep's line keys.
+      const laborBreakdown: Array<{
+        line_key: string;
+        label?: string;
+        hours: number;
+      }> = [
+        {
+          line_key: "base",
+          label: prefillData?.serviceName ?? undefined,
+          hours:
+            laborAllocations["base"] !== undefined
+              ? Number(laborAllocations["base"]) || 0
+              : typeof estimatedLaborMinutes === "number" &&
+                  estimatedLaborMinutes > 0
+                ? estimatedLaborMinutes / 60
+                : 0,
+        },
+        ...(customJobs ?? []).map((job) => ({
+          line_key: String(job._id),
+          label: job.name,
+          hours:
+            laborAllocations[String(job._id)] !== undefined
+              ? Number(laborAllocations[String(job._id)]) || 0
+              : typeof job.estimated_minutes === "number" &&
+                  job.estimated_minutes > 0
+                ? job.estimated_minutes / 60
+                : 0,
+        })),
+      ];
       try {
         let result;
         if (cycle === "pre_job") {
@@ -2030,6 +2288,8 @@ function PostJobSurveyDialogBody({
             parts: partsForApproval as any,
             laborHours,
             laborRateCents: laborRateCentsForSubmit,
+            addedLaborHours,
+            laborAllocations: laborBreakdown,
             notes: technicianNotes.trim() || undefined,
             scopePhotoIds: scopePhotoIdsForSubmit,
           });
@@ -2039,15 +2299,21 @@ function PostJobSurveyDialogBody({
             parts: partsForApproval as any,
             laborHours,
             laborRateCents: laborRateCentsForSubmit,
+            addedLaborHours,
+            laborAllocations: laborBreakdown,
             notes: technicianNotes.trim() || undefined,
             scopePhotoIds: scopePhotoIdsForSubmit,
           });
         }
         if (result) {
-          onApprovalSubmitted?.(result as any);
           // Fresh estimate sent — clear the revise intent so a subsequent
           // decline correctly re-promotes the status panel on re-entry.
           manualReviseRef.current = false;
+          onApprovalSubmitted?.(result as any);
+          // Fixed-price bookings now run the SAME confirm-hold flow as any
+          // estimate (the base is pinned, added scope is priced on top), so
+          // there's no longer a silent "audit-only" close path — every submit
+          // returns a real approval state and routes to the status panel.
           setSubmittedForApproval(true);
         }
         return;
@@ -2435,6 +2701,7 @@ function PostJobSurveyDialogBody({
             vehicleLabel={prefillData?.vehicleLabel ?? null}
             engineCode={prefillData?.engineCode ?? null}
             estimatedLaborMinutes={estimatedLaborMinutes}
+            customLaborOverrides={customLaborOverrides}
             timeVariance={timeVariance}
             setTimeVariance={(value) => {
               setTimeVariance(value);
@@ -2542,6 +2809,9 @@ function PostJobSurveyDialogBody({
             laborRateCents={effectiveLaborRateCents}
             liveTotals={liveTotals}
             quotedBaselineTotalCents={quotedBaselineTotalCents}
+            isFixedPrice={isFixedPrice}
+            fixedTotals={fixedTotals}
+            addedParts={addedParts}
             isTireService={tireServiceActive || parts.some((p) => isTirePartRow(p))}
             tireOemSizes={tireOemSizes}
             tirePrefill={prefillData?.prejobTires ?? null}
@@ -2554,10 +2824,35 @@ function PostJobSurveyDialogBody({
           ) : null}
         </div>
 
-        {/* Running total bar — only when cycle is set. Mirrors server-side
-            computeMechanicSetPrice exactly: parts + labor + tax + 7% fee.
-            Hidden on the summary step (which renders its own full breakdown). */}
-        {isEstimateCycle && liveTotals && currentStep !== "summary" ? (
+        {/* Running total bar — only when cycle is set. Hidden on the summary
+            step (which renders its own full breakdown). Two modes:
+            • Fixed-price booking → show the customer's reality: the flat
+              contract base + any added scope = exactly what the customer pays.
+              A dynamic parts/labor recompute would confuse the mechanic since
+              it isn't the billed number.
+            • Normal booking → mirror the server's computeMechanicSetPrice:
+              parts + labor + tax + 7% fee. */}
+        {isEstimateCycle && currentStep !== "summary" && isFixedPrice && fixedTotals ? (
+          <div className="border-t border-primary/10 bg-primary/[0.025] px-5 py-2.5 sm:px-10 sm:py-3">
+            <div className="mx-auto flex w-full max-w-xl flex-wrap items-center justify-between gap-3 text-[12px]">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
+                <span>Fixed price <span className="font-medium tabular-nums text-foreground">${(fixedTotals.baseCents / 100).toFixed(2)}</span></span>
+                {fixedTotals.addedTotalCents > 0 ? (
+                  <>
+                    <span>·</span>
+                    <span>Added <span className="font-medium tabular-nums text-foreground">${(fixedTotals.addedTotalCents / 100).toFixed(2)}</span></span>
+                  </>
+                ) : null}
+              </div>
+              <div className="text-[13px]">
+                <span className="text-muted-foreground">Your total </span>
+                <span className="font-semibold tabular-nums text-foreground">
+                  ${(fixedTotals.totalCents / 100).toFixed(2)}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : isEstimateCycle && liveTotals && currentStep !== "summary" ? (
           <div className="border-t border-primary/10 bg-primary/[0.025] px-5 py-2.5 sm:px-10 sm:py-3">
             <div className="mx-auto flex w-full max-w-xl flex-wrap items-center justify-between gap-3 text-[12px]">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
@@ -2625,9 +2920,11 @@ function PostJobSurveyDialogBody({
                 {cycle
                   ? cycle === "post_job_reapproval"
                     ? "Confirm final"
-                    : isEstimateCycle && liveTotals
-                      ? `Send for confirmation · $${(liveTotals.totalCents / 100).toFixed(2)}`
-                      : "Send for confirmation"
+                    : isEstimateCycle && isFixedPrice && fixedTotals
+                      ? `Send for confirmation · $${(fixedTotals.totalCents / 100).toFixed(2)}`
+                      : isEstimateCycle && liveTotals
+                        ? `Send for confirmation · $${(liveTotals.totalCents / 100).toFixed(2)}`
+                        : "Send for confirmation"
                   : "Submit report"}
               </button>
             ) : (
@@ -2749,6 +3046,9 @@ function StepContent(props: {
    *  navigating forward, so a typed-but-not-clicked-Save row isn't lost. */
   foundWorkFlushRef?: React.MutableRefObject<(() => Promise<void>) | null>;
   customJobs: CustomJobRow[] | undefined;
+  /** Agreed per-custom-line labor (minutes) keyed by custom-job id; already
+   *  gated to the post-job flow by the body. */
+  customLaborOverrides: Record<string, number>;
   customJobOutcomes: Record<string, { resolution: string; resolved: boolean | null }>;
   setCustomJobOutcomes: (
     next: Record<string, { resolution: string; resolved: boolean | null }>,
@@ -2778,6 +3078,10 @@ function StepContent(props: {
   >;
   parts: PartRowState[];
   setParts: React.Dispatch<React.SetStateAction<PartRowState[]>>;
+  /** ADDED-scope parts only (custom_service_name set), with flat-priced lines
+   *  already excluded — used by the fixed-price summary so the itemized "Added
+   *  parts" list matches the breakdown (flat lines show as one flat line). */
+  addedParts: PartRowState[];
   requiresParts: boolean;
   // List of services on this booking whose catalog row sets requires_parts.
   // Used by PartsStep to render one parts block per service when length > 1.
@@ -2852,6 +3156,20 @@ function StepContent(props: {
   /** The quoted total as the client computes it (cents), for the pre-job
    *  "Why this adjustment?" gate. Null when there's no quote to compare to. */
   quotedBaselineTotalCents: number | null;
+  /** Fixed-price booking: the mechanic-facing numbers must equal the customer's
+   *  reality (flat contract base + added scope), not a dynamic parts/labor
+   *  recompute. `fixedTotals` is null on non-fixed bookings. */
+  isFixedPrice: boolean;
+  fixedTotals: {
+    baseCents: number;
+    addedPartsCents: number;
+    addedFlatCents: number;
+    addedLaborCents: number;
+    addedTaxCents: number;
+    addedFeeCents: number;
+    addedTotalCents: number;
+    totalCents: number;
+  } | null;
   /** True when the booking's service is tire replacement — the parts step
    *  renders the custom TirePartsEditor (size/brand/model/price) for tire
    *  lines instead of the generic OEM part fields. */
@@ -3334,8 +3652,10 @@ function StepContent(props: {
           setTotalHours={props.setActualLaborHours}
           rateCents={props.laborRateCents}
           estimatedLaborMinutes={props.estimatedLaborMinutes}
+          customLaborOverrides={props.customLaborOverrides}
           baseLabel={props.serviceLabel}
           customJobs={props.customJobs}
+          isFixedPrice={props.isFixedPrice}
         />
       );
     case "summary":
@@ -3354,6 +3674,9 @@ function StepContent(props: {
             laborRateCents={props.laborRateCents}
             totals={props.liveTotals}
             quotedTotalCents={props.quotedBaselineTotalCents}
+            isFixedPrice={props.isFixedPrice}
+            fixedTotals={props.fixedTotals}
+            addedParts={props.addedParts}
             technicianNotes={props.technicianNotes}
             setTechnicianNotes={props.setTechnicianNotes}
             scopePhotos={props.scopePhotos}
@@ -5899,6 +6222,42 @@ function FoundWorkStep({
   );
   const midJobLines = (existing ?? []).filter((j) => j.name);
 
+  // When a CATALOG service is picked, fetch what a booked instance would carry
+  // for THIS car at THIS shop: the labor time (to prefill) and any flat price
+  // the shop set for it at the vehicle's tier (to show a "Fixed price" pill and
+  // tell the mechanic parts/labor won't drive this line). Skips freeform work.
+  const addedEstimate = useQuery(
+    (api as any).customJobs.getAddedServiceEstimate,
+    pending?.kind === "service" && pending.id && bookingId
+      ? {
+          bookingId: bookingId as Id<"bookings">,
+          serviceId: pending.id as Id<"services">,
+        }
+      : "skip",
+  ) as {
+    laborHours: number | null;
+    laborRateCents: number | null;
+    fixedPriceCents: number | null;
+    tier: string | null;
+  } | undefined;
+
+  // Prefill the labor time from the estimate — but only while the field is
+  // still empty, so a value the mechanic typed is never clobbered.
+  useEffect(() => {
+    if (
+      pending?.kind === "service" &&
+      addedEstimate?.laborHours != null &&
+      laborHoursInput === ""
+    ) {
+      setLaborHoursInput(
+        formatHoursValue(hoursToMinutes(addedEstimate.laborHours)),
+      );
+    }
+    // Excludes laborHoursInput: re-running on each keystroke would fight the
+    // mechanic's edits; we only seed once per picked service.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addedEstimate?.laborHours, pending?.id, pending?.kind]);
+
   function resetForm() {
     setPending(null);
     setEditingId(null);
@@ -5960,6 +6319,8 @@ function FoundWorkStep({
       } else {
         // Catalog picks land on the booking's service_ids through the normal
         // approval payload; only off-catalog lines need the custom-job record.
+        // Pass the catalog id so the server resolves labor/parts and the shop's
+        // flat price by ID (deterministic) instead of re-matching by name.
         await addMidJob({
           bookingId: bookingId as Id<"bookings">,
           name: pending.name,
@@ -5967,6 +6328,10 @@ function FoundWorkStep({
           systemTags,
           workType: workType ?? undefined,
           estimatedMinutes,
+          catalogServiceId:
+            pending.kind === "service" && pending.id
+              ? (pending.id as Id<"services">)
+              : undefined,
         });
       }
       resetForm();
@@ -6114,6 +6479,22 @@ function FoundWorkStep({
                 <span className="text-[11px] text-muted-foreground">hr</span>
               </div>
             </div>
+            {/* Shop set a flat price for this catalog service at this vehicle's
+                tier — bill it flat, not parts+labor. The time above is still
+                captured for the record but won't move what the customer pays. */}
+            {addedEstimate?.fixedPriceCents != null ? (
+              <p className="mt-2 flex items-center gap-1.5 rounded-lg border border-primary/15 bg-primary/5 px-3 py-2 text-[11px] font-medium text-muted-foreground">
+                <Lock className="h-3 w-3 shrink-0 text-primary/70" />
+                <span>
+                  Fixed price ·{" "}
+                  <span className="font-semibold text-foreground">
+                    ${(addedEstimate.fixedPriceCents / 100).toFixed(2)}
+                  </span>{" "}
+                  — set by your shop. Parts &amp; time won&apos;t change what the
+                  customer pays.
+                </span>
+              </p>
+            ) : null}
             <div className="mt-2 flex justify-end gap-2">
               <button
                 type="button"
@@ -6194,6 +6575,9 @@ type CustomJobRow = {
     line_total_cents?: number;
   }>;
   quoted_parts_cents?: number | null;
+  /** Flat price (cents) the shop set for this added catalog service at the
+   *  vehicle's tier. When present, the line bills flat (parts+labor bypassed). */
+  quoted_price_cents?: number | null;
   estimated_minutes?: number | null;
   complaint: string | null;
   resolution: string | null;
@@ -6590,7 +6974,15 @@ function ApprovalStatusPanel({
     setBusyAction(kind);
     try {
       await fn();
-      if (kind === "start" || kind === "release") onDismiss();
+      if (kind === "start" || kind === "release") {
+        onDismiss();
+      } else if (kind === "withdraw") {
+        // Withdraw reverts the booking to a no-open-approval state, so this
+        // panel has nothing left to render. Drop the mechanic back to the
+        // estimate form to resend (matching the "we'll send an updated one"
+        // customer notice) instead of stranding them on an empty panel.
+        onReviseRequested();
+      }
     } catch (err: any) {
       setActionError(err?.message ?? "Action failed. Try again.");
     } finally {
@@ -6949,6 +7341,39 @@ function ApprovalStatusPanel({
           </div>
         ) : null}
 
+        {/* Safety net: the branches above are gated on live workflow flags, so
+            a state with no branch (e.g. the booking reset to "none" after a
+            withdraw/expiry, or a "captured"/"fixed_price_locked" value that
+            never belongs on this panel) would otherwise render an EMPTY body
+            with no way forward but the top-left ✕. Always give the mechanic a
+            clear message and a Close. */}
+        {!workflow.isInRange &&
+        !workflow.isPending &&
+        !workflow.isApproved &&
+        !workflow.isDeclined &&
+        !workflow.isReauthRequired &&
+        !workflow.isSlaExpired ? (
+          <div className="w-full max-w-md rounded-2xl border border-primary/15 bg-muted/30 px-5 py-5 text-center">
+            <p className="text-[14px] font-semibold text-foreground">
+              Nothing to confirm
+            </p>
+            <p className="mt-1 text-[13px] text-muted-foreground">
+              This estimate is no longer active. Close this and send a new one if
+              the job needs it.
+            </p>
+            <button
+              type="button"
+              onClick={onDismiss}
+              className={cn(
+                drawerSecondaryButtonClassName,
+                "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
+              )}
+            >
+              Close
+            </button>
+          </div>
+        ) : null}
+
         {actionError ? (
           <p className="text-[12px] font-medium text-destructive">{actionError}</p>
         ) : null}
@@ -6981,16 +7406,27 @@ function LaborStep({
   setTotalHours,
   rateCents,
   estimatedLaborMinutes,
+  customLaborOverrides,
   baseLabel,
   customJobs,
+  isFixedPrice,
 }: {
   allocations: Record<string, string>;
   setAllocations: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setTotalHours: (value: string) => void;
   rateCents: number;
   estimatedLaborMinutes: number | null;
+  /** Agreed per-custom-line labor (minutes) keyed by custom-job id. A custom
+   *  line prefers its override over the (possibly stale) custom_jobs estimate.
+   *  Server-guarded to lines untouched since the agreement and body-gated to
+   *  the post-job flow, so a later found-work edit still wins. */
+  customLaborOverrides: Record<string, number>;
   baseLabel: string | null;
   customJobs: CustomJobRow[] | undefined;
+  /** Fixed-price booking: the base service's labor is part of the flat
+   *  contract and never moves the price — it renders locked, and only ADDED
+   *  (custom-job) lines bill by labor. */
+  isFixedPrice: boolean;
 }) {
   const lines = useMemo(() => {
     const rows: Array<{ key: string; label: string; def: number }> = [
@@ -7004,17 +7440,21 @@ function LaborStep({
       },
     ];
     for (const job of customJobs ?? []) {
+      const override = customLaborOverrides[String(job._id)];
       rows.push({
         key: String(job._id),
         label: job.name,
         def:
-          typeof job.estimated_minutes === "number" && job.estimated_minutes > 0
-            ? job.estimated_minutes
-            : 0,
+          typeof override === "number" && override > 0
+            ? override
+            : typeof job.estimated_minutes === "number" &&
+                job.estimated_minutes > 0
+              ? job.estimated_minutes
+              : 0,
       });
     }
     return rows;
-  }, [baseLabel, estimatedLaborMinutes, customJobs]);
+  }, [baseLabel, estimatedLaborMinutes, customJobs, customLaborOverrides]);
 
   // Sum in HOURS. Allocation strings hold hours; a line the mechanic hasn't
   // touched has no entry and falls back to its estimate (`def` is minutes →
@@ -7060,14 +7500,29 @@ function LaborStep({
   const ratePerHourDollars = (rateCents / 100).toFixed(2);
   const multiline = lines.length > 1;
 
+  // Fixed-price: the base service's labor is part of the flat contract and
+  // never bills — only ADDED (custom-job) lines do. Compute the added-only
+  // labor so the TOTAL box shows the billed number, not a base+added figure
+  // that would imply the base is chargeable.
+  const addedHours = lines
+    .filter((l) => l.key !== "base")
+    .reduce((sum, line) => {
+      const raw = allocations[line.key];
+      const value = raw === undefined ? minutesToHours(line.def) : Number(raw) || 0;
+      return sum + (value > 0 ? value : 0);
+    }, 0);
+  const addedLaborDollars = addedHours > 0 ? addedHours * (rateCents / 100) : 0;
+
   return (
     <QuestionScreen
       eyebrow="Labor"
       question="How long will this take?"
       hint={
-        multiline
-          ? `Your shop's labor rate is $${ratePerHourDollars}/hr — set the time for each and we'll add it up.`
-          : `Your shop's labor rate is $${ratePerHourDollars}/hr — we'll calculate from the hours you enter.`
+        isFixedPrice
+          ? "The fixed price covers the original service — set the time only for any work you added on top."
+          : multiline
+            ? `Your shop's labor rate is $${ratePerHourDollars}/hr — set the time for each and we'll add it up.`
+            : `Your shop's labor rate is $${ratePerHourDollars}/hr — we'll calculate from the hours you enter.`
       }
     >
       <div className="mx-auto w-full max-w-md space-y-3">
@@ -7076,6 +7531,11 @@ function LaborStep({
             const lineHours = Number(valueFor(line)) || 0;
             const lineDollars =
               lineHours > 0 ? lineHours * (rateCents / 100) : 0;
+            // The base line on a fixed-price booking is locked: its labor is
+            // part of the flat contract, so we never show a chargeable dollar
+            // or an editable input (that would imply the mechanic's time moves
+            // the price — it doesn't).
+            const baseLocked = isFixedPrice && line.key === "base";
             return (
               <div
                 key={line.key}
@@ -7086,39 +7546,65 @@ function LaborStep({
                     {line.label}
                   </p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
-                    {line.def > 0 ? `Est. ${formatHoursValue(line.def)} hr · ` : ""}$
-                    {lineDollars.toFixed(2)}
+                    {baseLocked
+                      ? "Included in fixed price"
+                      : `${line.def > 0 ? `Est. ${formatHoursValue(line.def)} hr · ` : ""}$${lineDollars.toFixed(2)}`}
                   </p>
                 </div>
-                <div className="flex shrink-0 items-center rounded-lg border border-primary/15 bg-background pr-2.5 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
-                  <input
-                    value={valueFor(line)}
-                    onChange={(e) => updateLine(line.key, e.target.value)}
-                    inputMode="decimal"
-                    placeholder="0"
-                    aria-label={`Labor hours for ${line.label}`}
-                    className="w-16 bg-transparent px-2.5 py-2 text-right text-[16px] font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
-                  />
-                  <span className="text-[11px] text-muted-foreground">hr</span>
-                </div>
+                {baseLocked ? (
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-primary/15 bg-primary/5 px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">
+                    <Lock className="h-3 w-3" />
+                    Fixed
+                  </span>
+                ) : (
+                  <div className="flex shrink-0 items-center rounded-lg border border-primary/15 bg-background pr-2.5 focus-within:border-primary focus-within:ring-4 focus-within:ring-primary/10">
+                    <input
+                      value={valueFor(line)}
+                      onChange={(e) => updateLine(line.key, e.target.value)}
+                      inputMode="decimal"
+                      placeholder="0"
+                      aria-label={`Labor hours for ${line.label}`}
+                      className="w-16 bg-transparent px-2.5 py-2 text-right text-[16px] font-semibold tabular-nums outline-none placeholder:text-muted-foreground/40"
+                    />
+                    <span className="text-[11px] text-muted-foreground">hr</span>
+                  </div>
+                )}
               </div>
             );
           })}
         </div>
 
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-              {multiline ? "Total labor" : "Labor cost"}
-            </p>
-            <p className="mt-0.5 text-[12px] text-muted-foreground tabular-nums">
-              {Number(totalHours.toFixed(2))} hr · ${ratePerHourDollars}/hr
-            </p>
+        {isFixedPrice ? (
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                {addedHours > 0 ? "Added labor" : "Labor"}
+              </p>
+              <p className="mt-0.5 text-[12px] text-muted-foreground tabular-nums">
+                {addedHours > 0
+                  ? `${Number(addedHours.toFixed(2))} hr · $${ratePerHourDollars}/hr`
+                  : "Included in the fixed price"}
+              </p>
+            </div>
+            <span className="text-[22px] font-semibold tabular-nums">
+              ${addedLaborDollars.toFixed(2)}
+            </span>
           </div>
-          <span className="text-[22px] font-semibold tabular-nums">
-            ${laborDollars.toFixed(2)}
-          </span>
-        </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                {multiline ? "Total labor" : "Labor cost"}
+              </p>
+              <p className="mt-0.5 text-[12px] text-muted-foreground tabular-nums">
+                {Number(totalHours.toFixed(2))} hr · ${ratePerHourDollars}/hr
+              </p>
+            </div>
+            <span className="text-[22px] font-semibold tabular-nums">
+              ${laborDollars.toFixed(2)}
+            </span>
+          </div>
+        )}
       </div>
     </QuestionScreen>
   );
@@ -7231,6 +7717,9 @@ function EstimateSummary({
   laborRateCents,
   totals,
   quotedTotalCents,
+  isFixedPrice,
+  fixedTotals,
+  addedParts: addedPartsProp,
   technicianNotes,
   setTechnicianNotes,
   scopePhotos,
@@ -7255,6 +7744,24 @@ function EstimateSummary({
    *  justify an adjustment when the live total rises above this. Null = unknown
    *  baseline (fall back to always asking). */
   quotedTotalCents?: number | null;
+  /** Fixed-price booking + its base/added breakdown. When set, the summary
+   *  shows `fixed base + added scope` = exactly what the customer pays, and the
+   *  reasoning gate fires on added scope (not on base edits). Null = non-fixed. */
+  isFixedPrice?: boolean;
+  fixedTotals?: {
+    baseCents: number;
+    addedPartsCents: number;
+    addedFlatCents: number;
+    addedLaborCents: number;
+    addedTaxCents: number;
+    addedFeeCents: number;
+    addedTotalCents: number;
+    totalCents: number;
+  } | null;
+  /** ADDED-scope parts (flat-priced lines already excluded) for the fixed-price
+   *  itemization, so it matches the breakdown. Falls back to deriving from
+   *  `parts` when absent. */
+  addedParts?: PartRowState[];
   technicianNotes?: string;
   setTechnicianNotes?: (value: string) => void;
   scopePhotos?: PhotoState[];
@@ -7263,6 +7770,21 @@ function EstimateSummary({
   removeScopePhoto?: (id: string) => void;
 }) {
   const canAdjust = typeof setTechnicianNotes === "function";
+  const isFixed = isFixedPrice === true && fixedTotals != null;
+  // Parts belonging to ADDED service lines (off-catalog work). On a fixed-price
+  // booking the base parts are folded into the flat contract and aren't
+  // itemized with dollars; only these move the total. Prefer the parent's
+  // pre-computed set (flat-priced added lines already excluded) so the itemized
+  // list matches the breakdown; fall back to deriving from `parts`.
+  const addedPartRows =
+    addedPartsProp ??
+    parts.filter((p) => (p.custom_service_name ?? "").trim() !== "");
+  // Added labor minutes for the "X hr @ $rate/hr" sub-label, recovered from the
+  // added-labor cents (== round(hours × rate)) so it tracks the billed figure.
+  const addedLaborMins =
+    isFixed && laborRateCents > 0
+      ? (fixedTotals!.addedLaborCents / laborRateCents) * 60
+      : 0;
   // Pre-job: the customer already agreed to their quote, so only ask "Why this
   // adjustment?" when the mechanic's live total rises ABOVE the quoted price —
   // leaving it unchanged (or lowering it) needs no justification. Other cycles
@@ -7272,17 +7794,27 @@ function EstimateSummary({
     cycle === "pre_job" &&
     quotedTotalCents != null &&
     totals.totalCents <= quotedTotalCents;
-  const showReasoning = canAdjust && !isUnjustifiedPreJob;
+  // Fixed-price: justification appears exactly when the customer's total will
+  // RISE — i.e. scope was added on top of the flat contract. Base-only parts/
+  // time edits are audit-only and never gate (bypass the quote comparison).
+  const showReasoning = canAdjust && (
+    isFixed
+      ? (fixedTotals!.addedTotalCents ?? 0) > 0
+      : !isUnjustifiedPreJob
+  );
   const eyebrow = showReasoning ? "Reasoning · review · send" : "Review · send";
   const question = !showReasoning
     ? "Review & send"
+    : isFixed
+      ? "Why the added scope?"
+      : cycle === "post_job_reapproval"
+        ? "Confirm the final billing"
+        : cycle === "mid_job"
+          ? "Why the added scope?"
+          : "Why this adjustment?";
+  const reasoningHint = isFixed
+    ? 'e.g. "Found a seized caliper that needs replacing on top of the fixed-price service."'
     : cycle === "post_job_reapproval"
-      ? "Confirm the final billing"
-      : cycle === "mid_job"
-        ? "Why the added scope?"
-        : "Why this adjustment?";
-  const reasoningHint =
-    cycle === "post_job_reapproval"
       ? "Optional — explain anything the customer should know."
       : cycle === "mid_job"
         ? 'e.g. "Found a seized caliper that needs replacing in addition to the pads."'
@@ -7335,17 +7867,42 @@ function EstimateSummary({
         </div>
       ) : null}
 
-      <div className="mt-6 overflow-hidden rounded-xl border border-primary/10">
-        <div className="bg-primary/[0.025] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-          Parts
+      {/* Fixed-price base — one summary row for the flat contract. Base parts
+          aren't itemized with dollars because they don't move the price. */}
+      {isFixed ? (
+        <div className="mt-6 overflow-hidden rounded-xl border border-primary/10">
+          <div className="bg-primary/[0.025] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+            Fixed price
+          </div>
+          <div className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px]">
+            <div className="min-w-0 flex-1">
+              <div className="truncate font-medium text-foreground">
+                Original service
+              </div>
+              <div className="truncate text-[11px] text-muted-foreground">
+                Flat contract price — parts &amp; time included
+              </div>
+            </div>
+            <div className="font-medium tabular-nums">
+              ${(fixedTotals!.baseCents / 100).toFixed(2)}
+            </div>
+          </div>
         </div>
-        {parts.length === 0 ? (
+      ) : null}
+
+      <div
+        className={`${isFixed ? "mt-4" : "mt-6"} overflow-hidden rounded-xl border border-primary/10`}
+      >
+        <div className="bg-primary/[0.025] px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+          {isFixed ? "Added parts" : "Parts"}
+        </div>
+        {(isFixed ? addedPartRows : parts).length === 0 ? (
           <div className="px-4 py-3 text-[12px] text-muted-foreground">
-            No parts.
+            {isFixed ? "No added parts." : "No parts."}
           </div>
         ) : (
           <ul className="divide-y divide-primary/5">
-            {parts.map((p, idx) => {
+            {(isFixed ? addedPartRows : parts).map((p, idx) => {
               const qty = Math.max(1, Math.round(p.quantity || 1));
               const unit = Number(p.cost) || 0;
               const isCustomer = p.supplied_by === "customer";
@@ -7382,41 +7939,101 @@ function EstimateSummary({
         )}
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-xl border border-primary/10">
-        <ul className="divide-y divide-primary/5">
-          <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px]">
-            <div>
-              <div className="font-medium text-foreground">Labor</div>
-              <div className="text-[11px] text-muted-foreground">
-                {hoursNum > 0
-                  ? `${laborDurationLabel(hoursToMinutes(hoursNum))} @ $${(laborRateCents / 100).toFixed(2)}/hr`
-                  : "—"}
+      {isFixed ? (
+        <div className="mt-4 overflow-hidden rounded-xl border border-primary/10">
+          <ul className="divide-y divide-primary/5">
+            <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px]">
+              <div className="font-medium text-foreground">Fixed price (base)</div>
+              <div className="font-medium tabular-nums">
+                ${(fixedTotals!.baseCents / 100).toFixed(2)}
               </div>
-            </div>
-            <div className="font-medium tabular-nums">
-              ${(totals.laborCents / 100).toFixed(2)}
-            </div>
-          </li>
-          <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px] text-muted-foreground">
-            <div>Tax</div>
-            <div className="tabular-nums">
-              ${(totals.taxCents / 100).toFixed(2)}
-            </div>
-          </li>
-          <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px] text-muted-foreground">
-            <div>Otopair service fee (7%)</div>
-            <div className="tabular-nums">
-              ${(totals.feeCents / 100).toFixed(2)}
-            </div>
-          </li>
-          <li className="flex items-baseline justify-between gap-3 bg-primary/[0.03] px-4 py-3 text-[14px]">
-            <div className="font-semibold text-foreground">Your total</div>
-            <div className="font-semibold tabular-nums text-foreground">
-              ${(totals.totalCents / 100).toFixed(2)}
-            </div>
-          </li>
-        </ul>
-      </div>
+            </li>
+            {fixedTotals!.addedPartsCents > 0 ? (
+              <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px] text-muted-foreground">
+                <div>Added parts</div>
+                <div className="tabular-nums">
+                  ${(fixedTotals!.addedPartsCents / 100).toFixed(2)}
+                </div>
+              </li>
+            ) : null}
+            {fixedTotals!.addedFlatCents > 0 ? (
+              <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px] text-muted-foreground">
+                <div>Added service (fixed price)</div>
+                <div className="tabular-nums">
+                  ${(fixedTotals!.addedFlatCents / 100).toFixed(2)}
+                </div>
+              </li>
+            ) : null}
+            {fixedTotals!.addedLaborCents > 0 ? (
+              <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px]">
+                <div>
+                  <div className="font-medium text-foreground">Added labor</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {`${laborDurationLabel(addedLaborMins)} @ $${(laborRateCents / 100).toFixed(2)}/hr`}
+                  </div>
+                </div>
+                <div className="font-medium tabular-nums">
+                  ${(fixedTotals!.addedLaborCents / 100).toFixed(2)}
+                </div>
+              </li>
+            ) : null}
+            <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px] text-muted-foreground">
+              <div>Tax</div>
+              <div className="tabular-nums">
+                ${(fixedTotals!.addedTaxCents / 100).toFixed(2)}
+              </div>
+            </li>
+            <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px] text-muted-foreground">
+              <div>Otopair service fee (7%)</div>
+              <div className="tabular-nums">
+                ${(fixedTotals!.addedFeeCents / 100).toFixed(2)}
+              </div>
+            </li>
+            <li className="flex items-baseline justify-between gap-3 bg-primary/[0.03] px-4 py-3 text-[14px]">
+              <div className="font-semibold text-foreground">Your total</div>
+              <div className="font-semibold tabular-nums text-foreground">
+                ${(fixedTotals!.totalCents / 100).toFixed(2)}
+              </div>
+            </li>
+          </ul>
+        </div>
+      ) : (
+        <div className="mt-4 overflow-hidden rounded-xl border border-primary/10">
+          <ul className="divide-y divide-primary/5">
+            <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px]">
+              <div>
+                <div className="font-medium text-foreground">Labor</div>
+                <div className="text-[11px] text-muted-foreground">
+                  {hoursNum > 0
+                    ? `${laborDurationLabel(hoursToMinutes(hoursNum))} @ $${(laborRateCents / 100).toFixed(2)}/hr`
+                    : "—"}
+                </div>
+              </div>
+              <div className="font-medium tabular-nums">
+                ${(totals.laborCents / 100).toFixed(2)}
+              </div>
+            </li>
+            <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px] text-muted-foreground">
+              <div>Tax</div>
+              <div className="tabular-nums">
+                ${(totals.taxCents / 100).toFixed(2)}
+              </div>
+            </li>
+            <li className="flex items-baseline justify-between gap-3 px-4 py-2.5 text-[13px] text-muted-foreground">
+              <div>Otopair service fee (7%)</div>
+              <div className="tabular-nums">
+                ${(totals.feeCents / 100).toFixed(2)}
+              </div>
+            </li>
+            <li className="flex items-baseline justify-between gap-3 bg-primary/[0.03] px-4 py-3 text-[14px]">
+              <div className="font-semibold text-foreground">Your total</div>
+              <div className="font-semibold tabular-nums text-foreground">
+                ${(totals.totalCents / 100).toFixed(2)}
+              </div>
+            </li>
+          </ul>
+        </div>
+      )}
 
       <p className="mt-4 text-center text-[11px] text-muted-foreground">
         Tap below to send this for customer confirmation.

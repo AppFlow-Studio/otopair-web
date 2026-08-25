@@ -92,6 +92,7 @@ import type * as devOnly_partResurrectSweep from "../devOnly/partResurrectSweep.
 import type * as devOnly_partsCoverage from "../devOnly/partsCoverage.js";
 import type * as devOnly_purgeEstimatorObs from "../devOnly/purgeEstimatorObs.js";
 import type * as devOnly_reassignShopLogins from "../devOnly/reassignShopLogins.js";
+import type * as devOnly_reconcileMileage from "../devOnly/reconcileMileage.js";
 import type * as devOnly_reductoUsage from "../devOnly/reductoUsage.js";
 import type * as devOnly_repriceJsonProbe from "../devOnly/repriceJsonProbe.js";
 import type * as devOnly_resetEvalFixture from "../devOnly/resetEvalFixture.js";
@@ -247,6 +248,7 @@ import type * as lib_vinIdentity from "../lib/vinIdentity.js";
 import type * as lib_walmartTireScraper from "../lib/walmartTireScraper.js";
 import type * as lib_warningLightsMerge from "../lib/warningLightsMerge.js";
 import type * as maintenance from "../maintenance.js";
+import type * as maintenanceBackfill from "../maintenanceBackfill.js";
 import type * as maintenance_pipeline from "../maintenance_pipeline.js";
 import type * as makes from "../makes.js";
 import type * as makesMerge from "../makesMerge.js";
@@ -698,6 +700,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/partsCoverage": typeof devOnly_partsCoverage;
   "devOnly/purgeEstimatorObs": typeof devOnly_purgeEstimatorObs;
   "devOnly/reassignShopLogins": typeof devOnly_reassignShopLogins;
+  "devOnly/reconcileMileage": typeof devOnly_reconcileMileage;
   "devOnly/reductoUsage": typeof devOnly_reductoUsage;
   "devOnly/repriceJsonProbe": typeof devOnly_repriceJsonProbe;
   "devOnly/resetEvalFixture": typeof devOnly_resetEvalFixture;
@@ -853,6 +856,7 @@ declare const fullApi: ApiFromModules<{
   "lib/walmartTireScraper": typeof lib_walmartTireScraper;
   "lib/warningLightsMerge": typeof lib_warningLightsMerge;
   maintenance: typeof maintenance;
+  maintenanceBackfill: typeof maintenanceBackfill;
   maintenance_pipeline: typeof maintenance_pipeline;
   makes: typeof makes;
   makesMerge: typeof makesMerge;

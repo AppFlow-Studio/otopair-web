@@ -119,7 +119,13 @@ export const updateVehicleMileage = mutation({
       .filter((q) => q.eq(q.field("is_primary"), true))
       .first();
     if (primary) {
-      await ctx.db.patch(primary._id, { mileage: args.mileage });
+      // Stamp the owner write to the SAME `now` as the passport above so the two
+      // stores stay coherent and neither spuriously beats the other by recency.
+      await ctx.db.patch(primary._id, {
+        mileage: args.mileage,
+        mileage_updated_at: now,
+        mileage_source: "director_edit",
+      });
     }
 
     await ctx.db.insert("audit_log", {

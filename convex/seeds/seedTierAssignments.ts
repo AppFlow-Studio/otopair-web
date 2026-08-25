@@ -140,7 +140,16 @@ const PART5_TIERS: ReadonlyArray<Part5Row> = [
   // ══ T3b — High-performance / near-exotic ══
   ...mk("T3b", "Porsche", ["911 Carrera", "911 4S", "718 GTS", "718 GT4",
     "Cayenne Turbo", "Macan GTS", "Macan Turbo", "Panamera"]),
-  ...mk("T3b", "BMW", ["M2", "M3", "M4", "M5", "X3 M", "X4 M", "X5 M", "X6 M", "M8"]),
+  // BMW full-M cars (M2/M3/M4/M5/M8 + X3 M…X6 M) are intentionally NOT seeded
+  // here. This Pass-1 list matches (make, model) EXACTLY and is trim-blind, so
+  // it can't tell an M3 Competition (T3a) from an M3 CS (T4 flagship) — it would
+  // stamp both the same and, worse, contradict the canonical tier labels
+  // (T3a = "Performance — BMW M, AMG, Audi RS/S"; T3b = "911, Cayman, AMG GT, R8").
+  // They're left to the trim-aware Pass-2 ASSIGNMENT_RULES (seedPricing.ts),
+  // which route base M → T3a and the CS/CSL/Competition flagships → T4. This is
+  // the SAME engine detectTier() runs live, so the stored tier can never drift
+  // from what a fresh quote would compute. Regression: an M3 Competition was
+  // stamped T3b here and quoted a whole band high ($275/hr vs T3a).
   ...mk("T3b", "Mercedes-AMG", ["C 63", "E 63", "GT 4-door", "GLC 63", "GLE 63", "G 63"]),
   ...mk("T3b", "Audi", ["RS3", "RS5", "RS6", "RS7", "RS Q8", "TT RS"]),
   ...mk("T3b", "Chevrolet", ["Corvette Z06", "Corvette E-Ray"]),

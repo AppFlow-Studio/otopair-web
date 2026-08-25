@@ -26,6 +26,7 @@ import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import {
   customerInspectionSnapshotValidator,
+  laborAllocationValidator,
   postjobPartValidator,
   postjobPhotoValidator,
   postjobReportValidator,
@@ -2013,6 +2014,15 @@ export default defineSchema({
      *  was originally v.number() but every writer (checkin, bookings)
      *  uses string labels — the validator was the side that drifted. */
     confidence: v.optional(v.string()),
+    /** The booking whose completion last serviced this anchor. Stamped by
+     *  bookings.ts runCompletionSideEffects → markServiced (both originally-
+     *  booked services and mid-job-added catalog services). Drives the Cars-tab
+     *  "Resolved by [shop] →" card + its deep-link to the past-service detail. */
+    lastServiceBookingId: v.optional(v.id("bookings")),
+    /** When the driver tapped the resolved card (opening the closing service).
+     *  The card shows only while resolutionAckedAt < lastServiceDate, so a fresh
+     *  completion re-surfaces it even if a prior resolution was already acked. */
+    resolutionAckedAt: v.optional(v.number()),
     createdAt: v.optional(v.number()),
     updatedAt: v.optional(v.number()),
   })
@@ -3036,6 +3046,13 @@ export default defineSchema({
     running_approved_ceiling_cents: v.optional(v.number()),
     // Mechanic's current target (singular). Set on submitPreJobEstimate.
     mechanic_set_price_cents: v.optional(v.number()),
+    // Fixed-price bookings only. The ORIGINAL contracted flat price (in cents),
+    // captured once the first added service is billed on top of it. Stays put
+    // even as `mechanic_set_price_cents`/`total_cost` grow with added scope, so
+    // every added-scope estimate recomputes total = fixed_contract_base_cents +
+    // Σ(added services). Without this stable anchor, re-pricing would read the
+    // already-grown running total as the "base" and double-count prior additions.
+    fixed_contract_base_cents: v.optional(v.number()),
     estimate_approved_at_ms: v.optional(v.number()),
     estimate_decided_by_user_id: v.optional(v.id("users")),
 
@@ -4899,6 +4916,15 @@ export default defineSchema({
     // this is the field that filed a window-switch replacement under
     // "Inspections". No longer collected; kept so historical rows resolve.
     category_id: v.optional(v.id("service_categories")),
+    // The canonical catalog service this line resolved to at entry, when the
+    // mechanic added a real bookable service mid-job (addCustomServiceForBooking
+    // resolves it to seed OEM parts/labor). This is the ONE discriminator the
+    // CUSTOM JOB INVARIANT turns on: a row WITH catalog_service_id is an added
+    // *catalog* service and DOES move maintenance health on completion (via
+    // bookings.ts runCompletionSideEffects), exactly like an originally-booked
+    // service; a row WITHOUT it is genuine off-catalog work and stays isolated.
+    // Null on all pre-existing rows and on every truly off-catalog job.
+    catalog_service_id: v.optional(v.id("services")),
 
     // The reasoning. `complaint` is why the work happened, `resolution` is what
     // was actually done, `resolved_complaint` is whether it worked.
@@ -6050,6 +6076,12 @@ export default defineSchema({
     parts_snapshot: v.array(postjobPartValidator),
     labor_hours: v.optional(v.number()),
     labor_rate_cents: v.optional(v.number()),
+    // Per-line breakdown behind `labor_hours` (the scalar total). Keyed "base"
+    // + custom-job ids; lets the post-job Labor step seed each line with its
+    // agreed labor instead of treating the whole-approval total as the base
+    // service's time (which double-counted custom-job labor). Optional —
+    // legacy rows predate it and fall back to the booking's base estimate.
+    labor_allocations: v.optional(v.array(laborAllocationValidator)),
     notes: v.optional(v.string()),
     // Optional photos the mechanic attached to justify the change (e.g. a shot
     // of the seized caliper behind the added scope). Storage ids; the

@@ -182,6 +182,7 @@ export default function MidJobScopeDialog({
       shopZip={j.shopZip ?? null}
       quotedParts={lockedQuoteParts}
       isFixedPrice={j.isFixedPrice}
+      fixedBaseCents={j.fixedContractBaseCents ?? null}
     />
   );
 }

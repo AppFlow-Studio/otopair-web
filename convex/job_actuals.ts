@@ -21,7 +21,7 @@ import {
   type AxlePosition,
 } from "./lib/brakeScope";
 import { ensureWalkInCashPayment } from "./bookings";
-import { partFitsConfigMake } from "./partSelector";
+import { passesI1ReadGuardNamed, makeNameCached } from "./lib/makeIdentity";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
 import { serviceMatchKey } from "./lib/serviceMatch";
 import { resolveSparkPlugQuantity } from "./lib/sparkPlugs";
@@ -706,6 +706,7 @@ export const getPrefillData = query({
 
     if (vehicle.vehicle_config_id) {
       const recConfig = await ctx.db.get(vehicle.vehicle_config_id);
+      const recConfigMakeName = await makeNameCached(ctx, recConfig?.make_id);
       for (const sid of booking.service_ids ?? []) {
         const svc = await ctx.db.get(sid);
         if (!svc?.slug) continue;
@@ -725,8 +726,26 @@ export const getPrefillData = query({
           if (f.package_code != null) continue;
           const part = await ctx.db.get(f.part_id);
           if (!part) continue;
-          // I1 make guard: drop cross-make contaminant parts
-          if (!partFitsConfigMake(part.make_id, recConfig?.make_id)) continue;
+          // I1 read guard — NAME-aware, matching the canonical resolver
+          // (serviceParts.resolveWinningPartForService). The strict id-only
+          // partFitsConfigMake dropped parts stamped under a corporate-family
+          // sibling make (or a duplicate make row): a CR-V's coolant-flush
+          // part OL999-9011 is stamped "Acura" — Honda's parts-sharing family —
+          // so Review & Pay priced it but this post-job survey read "no parts
+          // on file for Coolant Flush". The foreign-brand signature backstop
+          // still fires on the escape path, and PARTS_I1_FAMILY_READ=off
+          // restores strict behavior.
+          if (
+            !passesI1ReadGuardNamed({
+              partMakeId: part.make_id,
+              configMakeId: recConfig?.make_id,
+              oemPartNumber: part.oem_part_number,
+              configMakeName: recConfigMakeName,
+              partMakeName: await makeNameCached(ctx, part.make_id),
+              mechanicVerified: f.mechanic_verified === true,
+            })
+          )
+            continue;
           // Scope to the booked axle — position-neutral parts (hardware,
           // grease) survive a single-axle filter.
           if (!fitmentMatchesPosition(f.position, part.subcategory, recPosition)) {
@@ -987,11 +1006,20 @@ export const getPrefillData = query({
               ? !confirmedServiceIds.has(String(s.serviceId))
               : !confirmedFreeformLabels.has(s.label.trim().toLowerCase()),
           )
-          .filter((s) =>
-            s.serviceId
-              ? !onJobServiceIds.has(String(s.serviceId))
-              : !onJobMatchKeys.has(serviceMatchKey(s.label)),
-          )
+          .filter((s) => {
+            // Already ON this job — don't re-offer it. Check BOTH id-spaces
+            // regardless of whether the finding resolved to a catalog service:
+            // a mid-job "Add to this job" lands as a custom_jobs row recorded
+            // by NAME only (onJobMatchKeys) and never enters booking.service_ids
+            // (onJobServiceIds). Without the name check a catalog finding added
+            // mid-job (e.g. Coolant Flush) shows in both "Fixed this visit" and
+            // "Also flagged during today's inspection."
+            if (s.serviceId && onJobServiceIds.has(String(s.serviceId)))
+              return false;
+            if (onJobMatchKeys.has(serviceMatchKey(s.serviceName ?? s.label)))
+              return false;
+            return true;
+          })
       : [];
 
     // Dashboard lights to offer in the post-job "still on?" list. This is

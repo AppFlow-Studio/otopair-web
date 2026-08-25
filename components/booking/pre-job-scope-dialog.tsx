@@ -105,6 +105,7 @@ export default function PreJobScopeDialog({
       shopZip={j.shopZip ?? null}
       quotedParts={scopedQuotedParts}
       isFixedPrice={j.isFixedPrice}
+      fixedBaseCents={j.fixedContractBaseCents ?? null}
     />
   );
 }

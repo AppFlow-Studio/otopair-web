@@ -1156,7 +1156,9 @@ export const updateMileage = mutation({
     if (!ownership) {
       throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
-    
+
+    const prevMileage = ownership.mileage ?? 0;
+
     // Stamp provenance alongside the value. `mileage_updated_at` is not
     // decoration: vehicleTruth sizes the plausibility ceiling from how long
     // ago the last reading was taken (yearsElapsed -> computeMaxDelta), and a
@@ -1168,6 +1170,19 @@ export const updateMileage = mutation({
       mileage_source: "app_self_reported",
       mileage_updated_at: Date.now(),
     } as any);
+
+    // Recompute stored intervals / urgency off the new reading. The live app
+    // maintenance tracker resolves mileage on read, but the pipeline's persisted
+    // service_states (which the alert engine and shop surfaces consume) only
+    // refresh when something schedules a run — smartcar/onboarding/checkin do,
+    // but this manual app entry did not, so intervals stayed stale after an
+    // "Update Info" edit. Same ≥500 mi guard smartcar uses.
+    if (ownership.preOnboardingComplete && Math.abs(args.mileage - prevMileage) >= 500) {
+      await ctx.scheduler.runAfter(0, internal.maintenance_pipeline.runPipeline, {
+        vehicleOwnerId: ownership._id,
+        triggeredBy: "mileage_update",
+      });
+    }
   },
 });
 

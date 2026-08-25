@@ -1128,7 +1128,13 @@ export const updateMileage = internalMutation({
     if (!vo) return;
 
     const prevMileage = vo.mileage ?? 0;
-    await ctx.db.patch(args.vehicleOwnerId, { mileage: args.mileage });
+    // Stamp the write time + source so resolveVehicleMileage can weigh this
+    // reading by recency against the shop passport.
+    await ctx.db.patch(args.vehicleOwnerId, {
+      mileage: args.mileage,
+      mileage_updated_at: Date.now(),
+      mileage_source: "smartcar",
+    });
 
     // Trigger maintenance pipeline recalculation when mileage changes significantly (500+ mi)
     if (vo.preOnboardingComplete && Math.abs(args.mileage - prevMileage) >= 500) {

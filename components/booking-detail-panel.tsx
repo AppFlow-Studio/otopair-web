@@ -23,6 +23,7 @@ import PostjobReportSection from "@/components/booking/postjob-report-section";
 import SendReceiptCard from "@/components/booking/send-receipt-card";
 import VinRepairPrompt from "@/components/booking/vin-repair-prompt";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
+import { BookingMessagesDrawer } from "@/components/messages/booking-messages-drawer";
 import { useLockedQuote } from "@/lib/use-locked-quote";
 import {
   useApprovalWorkflow,
@@ -849,6 +850,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
     const [showEarlyArrivalDialog, setShowEarlyArrivalDialog] = useState(false);
     const [showEndCurrentJobDialog, setShowEndCurrentJobDialog] = useState(false);
+    const [showMessages, setShowMessages] = useState(false);
     // Holds the conflicting booking id parsed from a server-side race error
     // (`MECHANIC_HAS_ACTIVE_JOB:<id>`). Used to render the dialog with the
     // right active-job summary during the small window before reactive
@@ -991,6 +993,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       (api as any).booking_activity.getBookingActivityLog,
       job ? { bookingId: job._id } : "skip"
     ) as ActivityEvent[] | undefined;
+    // Message Shop tickets for this booking — drives the header entry point +
+    // its unread badge, and feeds the in-booking drawer when opened.
+    const bookingTickets = useQuery(
+      api.shop_tickets_web.listShopTicketsForBooking,
+      job ? { bookingId: job._id } : "skip",
+    );
+    const ticketCount = (bookingTickets ?? []).length;
+    const ticketUnread = (bookingTickets ?? []).filter(
+      (t) => (t.shop_unread_count ?? 0) > 0,
+    ).length;
     // Pre-flight check for the start-job flow: if the mechanic already has
     // another booking in_progress, we route through EndCurrentJobConfirmDialog
     // instead of opening the prejob survey directly.
@@ -2149,12 +2161,34 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 </h2>
               )}
             </div>
-            <button
-              onClick={onClose}
-              className="-mt-0.5 p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              {job ? (
+                <button
+                  type="button"
+                  onClick={() => setShowMessages(true)}
+                  className="relative -mt-0.5 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                  title="Customer messages for this booking"
+                >
+                  <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                  Messages
+                  {ticketUnread > 0 ? (
+                    <span className="ml-0.5 inline-flex min-w-[1rem] justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white">
+                      {ticketUnread}
+                    </span>
+                  ) : ticketCount > 0 ? (
+                    <span className="ml-0.5 text-muted-foreground">
+                      {ticketCount}
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
+              <button
+                onClick={onClose}
+                className="-mt-0.5 p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
             </div>
             {job ? (
               <div className="space-y-3 px-5 pb-4">
@@ -2698,6 +2732,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           }
           passportData={vehiclePassport ?? null}
           estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          customLaborOverridesMinutes={
+            (job as any)?.customLaborOverridesMinutes ?? null
+          }
           prefillData={actualsPrefill ?? null}
           isSubmitting={isSubmittingPostjob}
           onClose={() => setShowPostjobDialog(false)}
@@ -2729,6 +2766,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           quotedParts={lockedQuoteParts}
           lockedQuote={lockedQuote}
           isFixedPrice={job?.isFixedPrice}
+          fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
         />
 
         {/* Pre-Job Approval — auto-chained from the inspection dialog. */}
@@ -2762,6 +2800,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           shopZip={(job as any)?.shopZip ?? null}
           quotedParts={scopedQuotedParts}
           isFixedPrice={job?.isFixedPrice}
+          fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
         />
 
         {/* Mid-Job Approval — "Add unforeseen scope" while in_progress.
@@ -2778,6 +2817,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             onSuccess?.(msg);
           }}
         />
+
+        {/* Message Shop — customer support tickets for this booking. */}
+        {job ? (
+          <BookingMessagesDrawer
+            bookingId={job._id as Id<"bookings">}
+            open={showMessages}
+            onClose={() => setShowMessages(false)}
+          />
+        ) : null}
 
         <ConfirmationDialog
           open={showDeclineModal}

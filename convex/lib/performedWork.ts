@@ -98,9 +98,22 @@ const SLUG_CLEARS_FREEFORM: Array<{ slug: string; label: string }> = [
 export function recommendationWasPerformed(
   rec: { recommended_service_id?: unknown; freeform_text?: unknown },
   performed: PerformedWork,
+  /**
+   * Resolved catalog service name for `recommended_service_id`, when the caller
+   * has it. A catalog rec can be satisfied by an off-catalog custom line — a
+   * mid-job "Add to this job" is recorded by NAME only (custom_jobs.name) and
+   * never enters booking.service_ids — so without matching the name a rec the
+   * shop clearly resolved this visit would be re-revealed to the driver instead
+   * of closing as completed. `collectPerformedWork` records custom lines (and
+   * catalog services) by matchKey, so the name check catches both.
+   */
+  serviceName?: string | null,
 ): boolean {
   if (rec.recommended_service_id) {
-    return performed.serviceIds.has(String(rec.recommended_service_id));
+    if (performed.serviceIds.has(String(rec.recommended_service_id))) return true;
+    const nameKey =
+      typeof serviceName === "string" ? serviceMatchKey(serviceName) : "";
+    return nameKey.length > 0 && performed.matchKeys.has(nameKey);
   }
 
   const label = typeof rec.freeform_text === "string" ? rec.freeform_text.trim() : "";

@@ -33,8 +33,9 @@ import {
   recordShortcutActual,
 } from "./shopCustomServices";
 import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
-import { partFitsConfigMake } from "./partSelector";
+import { passesI1ReadGuardNamed, makeNameCached } from "./lib/makeIdentity";
 import { detectTier, resolveLaborHours } from "./lib/quoteEngine";
+import { resolveLaborRate, VehicleTier } from "./lib/vehicleTiers";
 
 /**
  * Bump (or open) the cross-shop dedupe ledger row for a proposed service name.
@@ -123,6 +124,10 @@ export type CustomJobInput = {
   quoted_parts_cents?: number | null;
   /** Legacy catalog category. No longer collected; see schema.ts. */
   category_id?: Id<"service_categories"> | null;
+  /** The canonical service this added line resolved to at entry, when the
+   *  mechanic added a real bookable service mid-job. Its presence is the
+   *  discriminator the CUSTOM JOB INVARIANT keys on — see schema.ts. */
+  catalog_service_id?: Id<"services"> | null;
   complaint?: string | null;
   estimated_minutes?: number | null;
   quoted_price_cents?: number | null;
@@ -243,6 +248,7 @@ export async function recordCustomJobsForBooking(
         quoted_parts_cents:
           input.quoted_parts_cents ?? prior.quoted_parts_cents,
         category_id: input.category_id ?? prior.category_id,
+        catalog_service_id: input.catalog_service_id ?? prior.catalog_service_id,
         complaint: input.complaint?.trim() || prior.complaint,
         estimated_minutes:
           input.estimated_minutes ?? prior.estimated_minutes,
@@ -282,6 +288,7 @@ export async function recordCustomJobsForBooking(
       parts: input.parts && input.parts.length > 0 ? input.parts : undefined,
       quoted_parts_cents: input.quoted_parts_cents ?? undefined,
       category_id: input.category_id ?? undefined,
+      catalog_service_id: input.catalog_service_id ?? undefined,
       complaint: input.complaint?.trim() || undefined,
       estimated_minutes: input.estimated_minutes ?? undefined,
       quoted_price_cents: input.quoted_price_cents ?? undefined,
@@ -671,6 +678,7 @@ async function oemPartsForServiceOnVehicle(
   const configId = vehicle?.vehicle_config_id;
   if (!configId) return null;
   const config: any = await ctx.db.get(configId);
+  const configMakeName = await makeNameCached(ctx, config?.make_id);
 
   const fitments = await ctx.db
     .query("part_fitments")
@@ -686,8 +694,22 @@ async function oemPartsForServiceOnVehicle(
     if (f.package_code != null) continue;
     const part: any = await ctx.db.get(f.part_id);
     if (!part) continue;
-    // I1 make guard: never list a cross-make contaminant part.
-    if (!partFitsConfigMake(part.make_id, config?.make_id)) continue;
+    // I1 read guard — NAME-aware, matching the canonical resolver so an added
+    // catalog service surfaces the same parts Review & Pay would. Strict
+    // id-only matching hid parts stamped under a duplicate make row (two
+    // "Honda" rows) or a corporate-family sibling; the foreign-brand signature
+    // backstop still drops genuine cross-make contaminants.
+    if (
+      !passesI1ReadGuardNamed({
+        partMakeId: part.make_id,
+        configMakeId: config?.make_id,
+        oemPartNumber: part.oem_part_number,
+        configMakeName,
+        partMakeName: await makeNameCached(ctx, part.make_id),
+        mechanicVerified: f.mechanic_verified === true,
+      })
+    )
+      continue;
     const price = await summarizePartPrices(ctx, f.part_id);
     // summarizePartPrices returns DOLLARS (2dp); custom_jobs.parts stores cents.
     const unitCents = Math.round(
@@ -740,12 +762,92 @@ async function oemLaborMinutesForServiceOnVehicle(
 }
 
 /**
+ * Price an ADDED catalog service under the SHOP'S rules — the same rules a
+ * booked instance of the service follows:
+ *   • labor time from the internal ladder (car- and tier-aware),
+ *   • the shop's per-vehicle-tier labor rate,
+ *   • a per-(shop, service, tier) FLAT price override when the shop set one.
+ * Powers both the pick-time estimate query (prefill + "Fixed price" pill) and
+ * the add mutation (which freezes the flat price onto the custom-job row so
+ * performSubmission bills it flat). Best-effort: every field is null on a gap
+ * (no config, no tier, ladder refuses) so the mechanic just types the time.
+ */
+async function resolveAddedServicePricing(
+  ctx: any,
+  args: { booking: any; serviceId: Id<"services"> },
+): Promise<{
+  laborMinutes: number | null;
+  laborRateCents: number | null;
+  fixedPriceCents: number | null;
+  tier: string | null;
+}> {
+  const empty = {
+    laborMinutes: null,
+    laborRateCents: null,
+    fixedPriceCents: null,
+    tier: null,
+  };
+  const vin = args.booking?.vin;
+  if (!vin) return empty;
+  const vehicle: any = await ctx.db
+    .query("vehicles")
+    .withIndex("by_vin", (q: any) => q.eq("vin", vin))
+    .first();
+  const configId = vehicle?.vehicle_config_id;
+  if (!configId) return empty;
+  const config: any = await ctx.db.get(configId);
+  if (!config) return empty;
+  const tier =
+    (config.pricing_tier as VehicleTier | undefined) ??
+    (await detectTier(ctx, config));
+  if (!tier) return empty;
+
+  // Labor time — same ladder a booked instance of the service would carry.
+  let laborMinutes: number | null = null;
+  const laborRes = await resolveLaborHours(ctx, {
+    vehicle_config_id: configId,
+    service_id: args.serviceId,
+    vehicle_tier: tier,
+  });
+  if (laborRes.ok && laborRes.hours > 0) {
+    laborMinutes = Math.round(laborRes.hours * 60);
+  }
+
+  // Shop's per-tier labor rate (dollars/hr → cents).
+  let laborRateCents: number | null = null;
+  const shop = args.booking?.shop_id
+    ? await ctx.db.get(args.booking.shop_id)
+    : null;
+  if (shop) {
+    const rate = resolveLaborRate(shop as any, tier);
+    if (rate.rate != null) laborRateCents = Math.round(rate.rate * 100);
+  }
+
+  // Flat-price override for (shop, service, tier), if the shop set one.
+  let fixedPriceCents: number | null = null;
+  if (args.booking?.shop_id) {
+    const row: any = await ctx.db
+      .query("shop_service_fixed_prices")
+      .withIndex("by_shop_service_tier", (q: any) =>
+        q
+          .eq("shop_id", args.booking.shop_id)
+          .eq("service_id", args.serviceId)
+          .eq("tier", tier),
+      )
+      .unique();
+    if (row) fixedPriceCents = row.price_cents;
+  }
+
+  return { laborMinutes, laborRateCents, fixedPriceCents, tier };
+}
+
+/**
  * Resolve a free-text line name to a catalog service, on the same match key the
  * catalog dedupes on (so "Oil Change" → the oil_change service). The slug is
  * also tried, with -/_ normalized to spaces. Returns null for genuinely
  * off-catalog work. Pass `services` to avoid re-collecting the (small) table.
  */
-async function resolveCatalogServiceIdByName(
+export async function resolveCatalogServiceIdByName(
   ctx: any,
   name: string,
   services?: any[],
@@ -873,16 +975,20 @@ async function addCustomServiceForBooking(
   // dumped the whole labor subtotal onto the original service's row. Only
   // computed for a NEW line, so a re-add never clobbers a time edited by hand.
   let estimatedMinutes = args.estimatedMinutes ?? null;
-  if (
-    estimatedMinutes == null &&
-    !alreadyThere &&
-    catalogServiceId &&
-    booking.vin
-  ) {
-    estimatedMinutes = await oemLaborMinutesForServiceOnVehicle(ctx, {
-      vin: booking.vin,
+  // Flat price (cents) for this catalog service at the vehicle's tier, when the
+  // shop set one. Frozen onto the custom-job row so performSubmission bills the
+  // added line at the flat rate (parts+labor bypassed) — the same rule a booked
+  // fixed-price service follows.
+  let fixedPriceCents: number | null = null;
+  if (!alreadyThere && catalogServiceId && booking.vin) {
+    const pricing = await resolveAddedServicePricing(ctx, {
+      booking,
       serviceId: catalogServiceId,
     });
+    // Mechanic's explicit time wins; otherwise the OEM labor ladder time (same
+    // a booked instance carries) so the labor step opens with a real number.
+    if (estimatedMinutes == null) estimatedMinutes = pricing.laborMinutes;
+    fixedPriceCents = pricing.fixedPriceCents;
   }
 
   if (!alreadyThere) {
@@ -920,8 +1026,13 @@ async function addCustomServiceForBooking(
         name,
         system_tags: args.systemTags ?? null,
         work_type: args.workType ?? null,
+        // Persist the catalog match resolved above. This is what lets booking
+        // completion credit a maintenance anchor for an added *catalog* service
+        // (and only that) — see the CUSTOM JOB INVARIANT in bookings.ts.
+        catalog_service_id: catalogServiceId,
         complaint: args.complaint ?? null,
         estimated_minutes: estimatedMinutes,
+        quoted_price_cents: fixedPriceCents ?? undefined,
         shop_custom_service_id: args.shopCustomServiceId ?? null,
         parts: seededParts,
       },
@@ -939,6 +1050,42 @@ async function addCustomServiceForBooking(
     requiresApproval: true,
   };
 }
+
+/**
+ * Pick-time estimate for an ADDED catalog service: the labor time, the shop's
+ * per-tier labor rate, and any flat price the shop set for it — all for THIS
+ * car at THIS shop. Drives the "What did you find?" labor prefill and the
+ * "Fixed price" pill so the mechanic sees the same numbers a booked instance
+ * would carry, before committing. Returns nulls on any gap.
+ */
+export const getAddedServiceEstimate = query({
+  args: {
+    bookingId: v.id("bookings"),
+    serviceId: v.id("services"),
+  },
+  handler: async (ctx, args) => {
+    const booking: any = await ctx.db.get(args.bookingId);
+    if (!booking) {
+      return {
+        laborHours: null,
+        laborRateCents: null,
+        fixedPriceCents: null,
+        tier: null,
+      };
+    }
+    const pricing = await resolveAddedServicePricing(ctx, {
+      booking,
+      serviceId: args.serviceId,
+    });
+    return {
+      laborHours:
+        pricing.laborMinutes != null ? pricing.laborMinutes / 60 : null,
+      laborRateCents: pricing.laborRateCents,
+      fixedPriceCents: pricing.fixedPriceCents,
+      tier: pricing.tier,
+    };
+  },
+});
 
 export const addMidJobCustomService = mutation({
   args: customServiceAddArgs,
@@ -1297,6 +1444,10 @@ export const listForBooking = query({
         work_type: (r.work_type ?? null) as string | null,
         parts,
         quoted_parts_cents: (r.quoted_parts_cents ?? null) as number | null,
+        // Flat price for an added catalog service the shop set a fixed price
+        // for (at the vehicle's tier). When present, the client shows a "Fixed
+        // price" pill and the server bills the line flat, not parts+labor.
+        quoted_price_cents: (r.quoted_price_cents ?? null) as number | null,
         category_id: r.category_id ?? null,
         complaint: r.complaint ?? null,
         resolution: r.resolution ?? null,

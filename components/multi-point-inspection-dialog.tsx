@@ -1579,6 +1579,29 @@ function MultiPointInspectionDialogBody({
     try {
       const remove = jobInProgress ? removeFromJob : removeFromJobPreStart;
       await remove({ bookingId: bookingId as Id<"bookings">, customJobId });
+      // Clear the optimistic "added to this job" flag for the matching
+      // suggestion(s). That ephemeral flag — not the reactive addedJobs list —
+      // is what renders a suggestion as "Added to this job" in Suggested
+      // follow-ups, and the server delete doesn't touch it. Without this the
+      // removed line keeps showing as applied even though it's off the booking.
+      // Matched on the name the line was added under (serviceName ?? label),
+      // normalised the same way booked-service de-duping is.
+      const removed = (addedJobs ?? []).find(
+        (j) => String(j._id) === String(customJobId),
+      );
+      if (removed) {
+        const removedKey = serviceMatchKey(removed.name);
+        const staleKeys = suggestedRecs
+          .filter((s) => serviceMatchKey(s.serviceName ?? s.label) === removedKey)
+          .map((s) => s.key);
+        if (staleKeys.length) {
+          setAddedToJob((prev) => {
+            const next = { ...prev };
+            for (const k of staleKeys) delete next[k];
+            return next;
+          });
+        }
+      }
     } catch (err) {
       setError(
         userFacingInspectionError(err, "Could not remove that from the job."),
@@ -4373,7 +4396,22 @@ function ResultsScreen({
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(suggestions.map((s) => [s.key, s.urgency === "soon"])),
   );
-  const selectableSuggestions = suggestions.filter((s) => !submittedRecs[s.key]);
+  // A suggestion already added to this job lives in the "Added to this job" box
+  // above — drop it from the follow-ups list so it isn't shown and actionable
+  // in two places at once. Keep it if it was ALSO submitted as a recommendation
+  // so that Undo state still renders. addedToJob is the optimistic flag (the
+  // add→server-catch-up window); addedJobs is the reactive server truth (it
+  // survives a refresh), matched on the name the line was added under.
+  const addedJobKeys = new Set(addedJobs.map((j) => serviceMatchKey(j.name)));
+  const visibleSuggestions = suggestions.filter(
+    (s) =>
+      !!submittedRecs[s.key] ||
+      (!addedToJob[s.key] &&
+        !addedJobKeys.has(serviceMatchKey(s.serviceName ?? s.label))),
+  );
+  const selectableSuggestions = visibleSuggestions.filter(
+    (s) => !submittedRecs[s.key],
+  );
   const selectedKeys = selectableSuggestions
     .filter((s) => selected[s.key])
     .map((s) => s.key);
@@ -4460,8 +4498,9 @@ function ResultsScreen({
         </div>
       ) : null}
 
-      {/* Suggested follow-ups derived from the measurements */}
-      {suggestions.length ? (
+      {/* Suggested follow-ups derived from the measurements. Anything already
+          added to this job is filtered out — it shows in the box above. */}
+      {visibleSuggestions.length ? (
         <div className="rounded-xl border border-primary/15 bg-primary/[0.03] p-3">
           <div className="mb-1 text-[12px] font-semibold text-foreground">
             Suggested follow-ups
@@ -4472,7 +4511,7 @@ function ResultsScreen({
             lowers their Vehicle Health Score until resolved.
           </p>
           <div className="space-y-1">
-            {suggestions.map((s) =>
+            {visibleSuggestions.map((s) =>
               submittedRecs[s.key] ? (
                 <div
                   key={s.key}
@@ -4499,31 +4538,6 @@ function ResultsScreen({
                       <RotateCcw className="h-3 w-3" />
                     )}
                     Undo
-                  </button>
-                </div>
-              ) : addedToJob[s.key] ? (
-                <div
-                  key={s.key}
-                  className="flex items-start gap-2 border-b border-primary/10 py-2 last:border-b-0"
-                >
-                  <Wrench className="mt-0.5 h-4 w-4 flex-shrink-0 text-primary" />
-                  <span className="flex-1">
-                    <span className="text-[13px] font-medium text-foreground">
-                      {s.serviceName ?? s.label}
-                    </span>
-                    <span className="block text-[11px] text-primary">
-                      Added to this job — price it, add parts, and send for the
-                      customer&apos;s confirmation.
-                    </span>
-                  </span>
-                  {/* Re-open the same scope dialog that popped on add, for when
-                      the mechanic closed it to add more findings first. */}
-                  <button
-                    type="button"
-                    onClick={onOpenScope}
-                    className="mt-0.5 inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10"
-                  >
-                    Price &amp; send
                   </button>
                 </div>
               ) : (

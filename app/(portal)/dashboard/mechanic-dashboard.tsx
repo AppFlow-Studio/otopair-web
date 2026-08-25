@@ -791,6 +791,9 @@ export default function MechanicDashboard() {
         }
         passportData={selectedWorkflowPassport ?? null}
         estimatedLaborMinutes={selectedWorkflowBooking?.estimatedLaborMinutes ?? null}
+        customLaborOverridesMinutes={
+          (selectedWorkflowBooking as any)?.customLaborOverridesMinutes ?? null
+        }
         prefillData={workflowPrefill ?? null}
         isSubmitting={
           workflowBookingId !== null &&
@@ -828,6 +831,7 @@ export default function MechanicDashboard() {
         quotedParts={workflowLockedQuote.lockedQuoteParts}
         lockedQuote={workflowLockedQuote.lockedQuote}
         isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
+        fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
       />
 
       {/* Pre-Job Approval — auto-chained from the inspection dialog. Same
@@ -862,6 +866,8 @@ export default function MechanicDashboard() {
         laborCostDollars={(selectedWorkflowBooking as any)?.laborCost ?? null}
         shopState={(selectedWorkflowBooking as any)?.shopState ?? null}
         shopZip={(selectedWorkflowBooking as any)?.shopZip ?? null}
+        isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
+        fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
       />
 
       <JobActualsDialog

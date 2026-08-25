@@ -17,6 +17,7 @@ import {
 } from "./lib/checkin_questions";
 import type { VehicleMode } from "./lib/checkin_questions";
 import { logKnownIssueEvents } from "./lib/knownIssueEvents";
+import { resolveMileageForOwner } from "./lib/mileage";
 
 // ============================================================================
 // QUERIES
@@ -93,7 +94,7 @@ export const getCheckinQuestionSet = query({
 
     // Calculate projected mileage for Q1 prefill
     const annualRate = owner.annual_mileage_rate ?? 12_000;
-    const lastMileage = owner.mileage ?? 0;
+    const lastMileage = (await resolveMileageForOwner(ctx, owner)).mileage ?? 0;
     const lastCheckin = owner.last_checkin_at ?? owner.added_at ?? Date.now();
     const monthsSinceLast = (Date.now() - lastCheckin) / (30.44 * 24 * 60 * 60 * 1000);
     const projectedMileage = Math.round(
@@ -133,7 +134,7 @@ export const startCheckin = mutation({
 
     const mode = (owner.vehicle_mode ?? "owned_active") as VehicleMode;
     const annualRate = owner.annual_mileage_rate ?? 12_000;
-    const lastMileage = owner.mileage ?? 0;
+    const lastMileage = (await resolveMileageForOwner(ctx, owner)).mileage ?? 0;
     const lastCheckin = owner.last_checkin_at ?? owner.added_at ?? Date.now();
     const monthsSinceLast = (Date.now() - lastCheckin) / (30.44 * 24 * 60 * 60 * 1000);
     const projectedMileage = Math.round(

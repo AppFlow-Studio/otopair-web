@@ -24,6 +24,11 @@ import {
   enqueueTicketNotifToCustomer,
   ticketPreview,
 } from "./shop_tickets";
+import {
+  formatCustomerName,
+  resolveVehicleLabel,
+  resolveServiceNames,
+} from "./bookings";
 
 // ---------------------------------------------------------------------------
 // Staff auth (staff-level — mirrors requireShopStaffForBooking membership)
@@ -88,6 +93,43 @@ async function resolveCallerShopId(
   return ownedShop?._id ?? null;
 }
 
+/**
+ * Compact per-ticket booking context for the inbox list rows — customer name,
+ * short vehicle label, and a services summary — so staff can tell chats apart
+ * at a glance. Reuses the same resolvers getJobDetail uses (single source), so
+ * the list labels can't drift from the thread's context bar.
+ */
+async function ticketRowContext(
+  ctx: any,
+  ticket: any,
+): Promise<{
+  customerName: string | null;
+  vehicleLabel: string | null;
+  serviceLabel: string | null;
+}> {
+  const booking = await ctx.db.get(ticket.booking_id);
+  if (!booking) {
+    return { customerName: null, vehicleLabel: null, serviceLabel: null };
+  }
+  const [customer, vehicle, serviceNames] = await Promise.all([
+    booking.user_id ? ctx.db.get(booking.user_id) : null,
+    booking.vin ? resolveVehicleLabel(ctx, booking.vin) : null,
+    resolveServiceNames(ctx, booking.service_ids, booking.custom_services),
+  ]);
+  const services: string[] = serviceNames ?? [];
+  const serviceLabel =
+    services.length === 0
+      ? null
+      : services.length === 1
+        ? services[0]
+        : `${services[0]} +${services.length - 1}`;
+  return {
+    customerName: customer ? formatCustomerName(customer) : null,
+    vehicleLabel: vehicle?.short ?? null,
+    serviceLabel,
+  };
+}
+
 // Action kinds whose triggered rail already notifies the customer — skip the
 // ticket-reply push for these to avoid a double notification.
 const RAIL_NOTIFIES = new Set([
@@ -140,7 +182,12 @@ export const listShopInbox = query({
         (b.last_message_at ?? b.started_at) - (a.last_message_at ?? a.started_at)
       );
     });
-    return tickets;
+    return await Promise.all(
+      tickets.map(async (t: any) => ({
+        ...t,
+        context: await ticketRowContext(ctx, t),
+      })),
+    );
   },
 });
 
@@ -159,6 +206,64 @@ export const getShopTicketThread = query({
       .collect();
     messages.sort((a: any, b: any) => a.timestamp - b.timestamp);
     return { ticket, messages };
+  },
+});
+
+/**
+ * All tickets for ONE booking, shop-side — feeds the in-booking Messages
+ * drawer (JobDetailPanel only has the booking id). Staff-gated on the
+ * booking's shop, unread-first then newest-activity. Mirrors the customer-side
+ * shop_tickets.listMyTicketsForBooking.
+ */
+export const listShopTicketsForBooking = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await currentUser(ctx);
+    if (!user) return [];
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking || !booking.shop_id) return [];
+    const staff = await staffContextForShop(ctx, user, booking.shop_id);
+    if (!staff) return [];
+    const tickets = await ctx.db
+      .query("shop_tickets")
+      .withIndex("by_booking_id", (q: any) => q.eq("booking_id", args.bookingId))
+      .collect();
+    tickets.sort((a: any, b: any) => {
+      const au = (a.shop_unread_count ?? 0) > 0 ? 1 : 0;
+      const bu = (b.shop_unread_count ?? 0) > 0 ? 1 : 0;
+      if (au !== bu) return bu - au;
+      return (
+        (b.last_message_at ?? b.started_at) - (a.last_message_at ?? a.started_at)
+      );
+    });
+    return await Promise.all(
+      tickets.map(async (t: any) => ({
+        ...t,
+        context: await ticketRowContext(ctx, t),
+      })),
+    );
+  },
+});
+
+/**
+ * Shop-wide unread badge count — number of tickets with pending customer
+ * messages for the caller's shop. Cheap: reads the denormalized
+ * shop_unread_count off each ticket (no thread load). Drives the sidebar badge.
+ */
+export const countShopInboxUnread = query({
+  args: { shopId: v.optional(v.id("shops")) },
+  handler: async (ctx, args) => {
+    const user = await currentUser(ctx);
+    if (!user) return 0;
+    const shopId = args.shopId ?? (await resolveCallerShopId(ctx, user));
+    if (!shopId) return 0;
+    const staff = await staffContextForShop(ctx, user, shopId);
+    if (!staff) return 0;
+    const tickets = await ctx.db
+      .query("shop_tickets")
+      .withIndex("by_shop_and_updated", (q: any) => q.eq("shop_id", shopId))
+      .collect();
+    return tickets.filter((t: any) => (t.shop_unread_count ?? 0) > 0).length;
   },
 });
 

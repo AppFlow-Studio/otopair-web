@@ -176,3 +176,31 @@ export const SERVICE_LABOR_REFERENCE: Record<string, ServiceLaborSpec> = {
 export function getServiceLaborSpec(slug: string): ServiceLaborSpec | null {
   return SERVICE_LABOR_REFERENCE[normalizeServiceSlug(slug)] ?? null;
 }
+
+// ─── Labor scaling dimension (per-axle / per-unit labor time) ────────────────
+// The LABOR twin of `services.parts_kind`, but declared INDEPENDENTLY: labor
+// scaling ≠ parts scaling. A brake job's labor doubles for both axles (per
+// axle a mechanic repeats the whole wheels-off → caliper → R&R sequence), yet
+// a tire rotation is one operation regardless of wheel count ("fixed") even
+// though it touches four wheels. So we can't reuse `parts_kind` — each service
+// opts into labor scaling here.
+//
+// The per-vehicle resolver returns a PER-UNIT basis (e.g. 1.5h for one brake
+// axle); the quote engine multiplies by the booked unit count (see
+// `resolveLaborUnitCount` in serviceUnits.ts) BEFORE combined-labor dedup, so a
+// "both axles" job starts at its true 2× size and the teardown fractions then
+// split correctly across both axles.
+//
+// A code map (not a table), same rationale as SERVICE_LABOR_REFERENCE above:
+// adding a scalable service is one line, no migration. Services absent here are
+// implicitly "fixed" → byte-identical to today.
+export type LaborScalingKind = "fixed" | "per_axle" | "per_wheel" | "per_cylinder";
+
+export const SERVICE_LABOR_SCALING: Record<string, LaborScalingKind> = {
+  brake_pad_replacement: "per_axle",
+  rotor_replacement: "per_axle",
+};
+
+export function getServiceLaborScaling(slug: string): LaborScalingKind {
+  return SERVICE_LABOR_SCALING[normalizeServiceSlug(slug)] ?? "fixed";
+}

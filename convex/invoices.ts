@@ -21,6 +21,7 @@ import {
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
 import { customServiceNames } from "./lib/customServiceNames";
+import { axlePositionByServiceId } from "./lib/brakeScope";
 
 const PLATFORM_FEE_BPS = 700;
 const DEFAULT_LABOR_RATE = 120;
@@ -289,6 +290,10 @@ async function assembleInvoiceData(
         vehicle_config_id: cfgForBand._id,
         service_ids: booking.service_ids,
         shop_id: booking.shop_id,
+        // Booked axle per service (brakes) so the band reflects per-axle labor.
+        service_positions: Object.fromEntries(
+          axlePositionByServiceId(booking as any),
+        ),
       });
       if (!series.quotes.some((q) => !q.ok)) {
         for (const q of series.quotes) {

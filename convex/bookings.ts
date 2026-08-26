@@ -1341,6 +1341,12 @@ export const create = mutation({
     // Optional fallback labor hours from the mobile pricing pipeline, used
     // only by `resolveBookingLaborMinutes` when no enrichment row exists.
     labor_hours: v.optional(v.float64()),
+    // Booked axle for a per_axle-scaled service (brakes). When the app sends
+    // the customer's Front/Rear/Both pick, the server's per-axle labor scaling
+    // + guard match what the app displayed. Absent → 1 axle (today's behavior).
+    booking_position: v.optional(
+      v.union(v.literal("front"), v.literal("rear"), v.literal("both")),
+    ),
     session_id: v.optional(v.string()),
     // StubHub-style slot hold acquired during checkout (convex/slotHolds.ts).
     // Verified + consumed atomically with the booking insert below.
@@ -1409,6 +1415,7 @@ export const create = mutation({
         {
           service_id: args.service_id,
           fallback_hours: args.labor_hours ?? null,
+          position: args.booking_position ?? null,
         },
       ],
     });
@@ -1432,6 +1439,9 @@ export const create = mutation({
       serviceIds: [args.service_id],
       laborCostDollars: args.labor_cost,
       expectMinutes: args.displayed_labor_minutes,
+      servicePositions: args.booking_position
+        ? { [String(args.service_id)]: args.booking_position }
+        : undefined,
     });
 
     const durationMinutes =
@@ -1562,6 +1572,8 @@ async function resolveBookingLaborMinutes(
     services: Array<{
       service_id: Id<"services">;
       fallback_hours: number | null;
+      /** Booked axle for per_axle-scaled services (brakes). Absent → 1 axle. */
+      position?: "front" | "rear" | "both" | null;
     }>;
   },
 ): Promise<number> {
@@ -1597,6 +1609,7 @@ async function resolveBookingLaborMinutes(
       vehicle_config_id: args.vehicleConfigId,
       service_id: svc.service_id,
       vehicle_tier: tier,
+      booking_position: svc.position ?? null,
     });
     if (res.ok) {
       totalHours += res.hours;
@@ -1646,6 +1659,10 @@ async function assertLaborCostMatchesDuration(
     serviceIds: Array<Id<"services">>;
     laborCostDollars: number;
     expectMinutes: number | undefined;
+    /** Booked axle per service (brakes) so the recomputed expectation applies
+     *  the SAME per_axle labor scaling the client used — otherwise a valid
+     *  both-axle booking looks "above engine". Absent → 1 axle. */
+    servicePositions?: Record<string, "front" | "rear" | "both">;
   },
 ): Promise<LaborCostCheckResult> {
   if (args.expectMinutes == null || args.expectMinutes <= 0) return undefined;
@@ -1666,6 +1683,7 @@ async function assertLaborCostMatchesDuration(
     vehicle_config_id: cfg._id,
     service_ids: args.serviceIds,
     shop_id: args.shopId,
+    service_positions: args.servicePositions,
   });
 
   // If ANY service was refused (e.g. CCB without absolute pricing, missing
@@ -2031,11 +2049,29 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
     // (the mobile fallback resolves `vehicle_config_id` from an arbitrary
     // vehicle with the same engine, not the customer's own — see
     // `service_vehicle_specs.getByEngineAndService` step 2).
+    // Booked axle per service (brakes), so per_axle labor scaling matches the
+    // drawer's displayed estimate. Prefer explicit client variants; else derive
+    // from the customer's selected_service_options (same source as the parts
+    // snapshot below).
+    const laborPositionByServiceId = new Map<string, "front" | "rear" | "both">();
+    for (const variant of args.service_variants &&
+    args.service_variants.length > 0
+      ? args.service_variants.map((v) => ({
+          serviceId: v.service_id,
+          position: v.position,
+        }))
+      : deriveServiceVariantsFromOptions(args.selected_service_options)) {
+      laborPositionByServiceId.set(
+        String(variant.serviceId),
+        variant.position as "front" | "rear" | "both",
+      );
+    }
     const enrichmentLaborMinutes = await resolveBookingLaborMinutes(ctx, {
       vehicleConfigId: vehicle.vehicle_config_id ?? null,
       services: args.services.map((s) => ({
         service_id: s.service_id,
         fallback_hours: s.labor_hours ?? null,
+        position: laborPositionByServiceId.get(String(s.service_id)) ?? null,
       })),
     });
     const estimated_labor_minutes =
@@ -2058,6 +2094,7 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       serviceIds: args.services.map((s) => s.service_id),
       laborCostDollars: labor_cost,
       expectMinutes: args.displayed_labor_minutes,
+      servicePositions: Object.fromEntries(laborPositionByServiceId),
     });
 
     // ── Pre-Job Approval flow: disclosed range snapshot ──────────────
@@ -2082,6 +2119,7 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       shop_zip: shop?.zip ?? null,
       shop_id: args.shop_id,
       vehicle_config_id: vehicle.vehicle_config_id ?? null,
+      service_positions: Object.fromEntries(laborPositionByServiceId),
     });
 
     // Itemized parts snapshot — same per-unit prices the customer saw on

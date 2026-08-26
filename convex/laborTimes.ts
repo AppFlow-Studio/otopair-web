@@ -88,9 +88,13 @@ async function resolveLaborForServices(
     configId: Id<"vehicle_configs"> | null;
     vehicleTier: VehicleTier | null;
     serviceIds: Id<"services">[];
+    /** serviceId (stringified) → booked axle for per_axle-scaled services.
+     *  Absent → 1 axle (today's flat hours). Drives per-axle labor scaling so
+     *  the drawer's estimate matches the quote engine. */
+    positions?: Record<string, "front" | "rear" | "both">;
   },
 ): Promise<LaborHoursForService[]> {
-  const { configId, vehicleTier, serviceIds } = params;
+  const { configId, vehicleTier, serviceIds, positions } = params;
 
   // Read the director toggle once. Default to true when the singleton row
   // hasn't been written yet (mirrors directorSettings.getGlobal default).
@@ -139,6 +143,7 @@ async function resolveLaborForServices(
         vehicle_config_id: configId,
         service_id: serviceId,
         vehicle_tier: vehicleTier,
+        booking_position: positions?.[String(serviceId)] ?? null,
       });
       if (engineResult.ok) {
         resolvedHours = engineResult.hours;
@@ -256,6 +261,15 @@ export const getLaborHoursForServicesByVin = query({
   args: {
     vin: v.string(),
     serviceIds: v.array(v.id("services")),
+    // serviceId (stringified) → booked axle for per_axle-scaled services. The
+    // create-booking drawer passes the customer's Front/Rear/Both pick so the
+    // running estimate reflects per-axle labor (a both-axle brake job ≈ 2×).
+    positions: v.optional(
+      v.record(
+        v.string(),
+        v.union(v.literal("front"), v.literal("rear"), v.literal("both")),
+      ),
+    ),
   },
   handler: async (ctx, args): Promise<LaborHoursForService[]> => {
     if (args.serviceIds.length === 0) return [];
@@ -271,6 +285,7 @@ export const getLaborHoursForServicesByVin = query({
       configId,
       vehicleTier,
       serviceIds: args.serviceIds,
+      positions: args.positions,
     });
   },
 });

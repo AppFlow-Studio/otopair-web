@@ -4351,6 +4351,13 @@ export default defineSchema({
     // family ids the director switched off (see OVERLAP_FAMILIES).
     combined_labor_enabled: v.optional(v.boolean()),
     combined_labor_disabled_families: v.optional(v.array(v.string())),
+    // Per-axle / per-unit labor scaling (convex/lib/serviceUnits.ts
+    // resolveLaborUnitCount). When enabled, a service that scales per axle
+    // (brakes) bills its labor × the booked axle count — a "both axles" job
+    // ≈ 2× a single axle. Absent/false → flat labor (today's behavior).
+    // Independent of combined_labor: per-axle inflates the job to its true
+    // size; combined_labor then shaves shared teardown.
+    per_axle_labor_enabled: v.optional(v.boolean()),
     updated_at: v.number(),
     updated_by_user_id: v.optional(v.id("director_users")),
   }).index("by_key", ["key"]),

@@ -16,7 +16,11 @@ import { Doc, Id } from "../_generated/dataModel";
 import { QueryCtx } from "../_generated/server";
 import { resolveLaborRate, VehicleTier } from "./vehicleTiers";
 import { ASSIGNMENT_RULES, matchRule } from "../seeds/seedPricing";
-import { resolveServiceUnitCount, unitScale } from "./serviceUnits";
+import {
+  resolveServiceUnitCount,
+  resolveLaborUnitCount,
+  unitScale,
+} from "./serviceUnits";
 
 // Anchor config key + Camry lookup live in laborFallback (shared with the
 // labor aggregator so both compute the same tier floor).
@@ -28,7 +32,10 @@ import { aggregatePartsBand, type PartsRoleInput } from "./partsBand";
 import { resolveRoleQuantity, type VehicleSpecBundle } from "./partRoleQuantity";
 import { roleForSubcategory } from "./servicePartsReference";
 import { resolveCombinedLabor } from "./combinedLabor";
-import type { OverlapFamilyId } from "./serviceLaborReference";
+import {
+  getServiceLaborScaling,
+  type OverlapFamilyId,
+} from "./serviceLaborReference";
 import { isNonPooledPriceType, isPoisonPriceType, ESTIMATOR_ENDPOINT_PRICE_TYPE } from "./priceTypes";
 import { isPriceDataStale } from "../part_prices";
 import { partFitsConfigMake } from "../partSelector";
@@ -114,6 +121,13 @@ export type LaborHoursResult =
       /** True when a real layer returned hours strictly above the Camry ×
        *  tier multiplier floor — informational only, no substitution. */
       above_tier_floor?: boolean;
+      /** Per-axle / per-unit labor multiplier applied to `hours` (1 = none).
+       *  Set by the per-axle labor scaling pass; `hours` is already scaled. */
+      labor_unit_count?: number;
+      /** True when `hours` was multiplied by an axle/unit count (the
+       *  per_axle_labor director flag is on and the service scales). Drives a
+       *  future "×N axles" labor-line badge (parallels unit_count_estimated). */
+      axle_scaled?: boolean;
     }
   | { ok: false; reason: string };
 
@@ -256,7 +270,81 @@ async function computeTierFloor(
   return hours == null ? null : { hours };
 }
 
+/**
+ * Public labor resolver. Resolves the per-unit BASIS hours via the 6-layer
+ * ladder (`resolveBaseLaborHours`), then applies per-axle / per-unit scaling —
+ * multiplying by the booked unit count when the service scales and the
+ * `per_axle_labor_enabled` director flag is on. All three server resolvers
+ * (buildQuote, resolveBookingLaborMinutes, laborTimes.resolveLaborForServices)
+ * route through here, so scaling lives in exactly one place. When the flag is
+ * off or the service is "fixed", the multiplier is 1 → today's behavior.
+ */
 export async function resolveLaborHours(
+  ctx: QueryCtx,
+  args: {
+    vehicle_config_id: Id<"vehicle_configs">;
+    service_id: Id<"services">;
+    vehicle_tier: VehicleTier;
+    /** Booked axle for per_axle-scaled services (brakes). Null/absent → 1
+     *  unit, so callers that don't know the axle get today's flat hours. */
+    booking_position?: "front" | "rear" | "both" | null;
+  },
+): Promise<LaborHoursResult> {
+  const base = await resolveBaseLaborHours(ctx, args);
+  if (!base.ok) return base;
+  return applyLaborUnitScaling(ctx, args, base);
+}
+
+/**
+ * Per-axle / per-unit labor scaling. Reads the service's declared
+ * `LaborScalingKind` and, when the director flag is on, multiplies the
+ * per-unit basis hours by the booked unit count. Flag-off, "fixed" services,
+ * and single-unit bookings all return the base result untouched.
+ */
+async function applyLaborUnitScaling(
+  ctx: QueryCtx,
+  args: {
+    vehicle_config_id: Id<"vehicle_configs">;
+    service_id: Id<"services">;
+    booking_position?: "front" | "rear" | "both" | null;
+  },
+  base: Extract<LaborHoursResult, { ok: true }>,
+): Promise<LaborHoursResult> {
+  const service = await ctx.db.get(args.service_id);
+  const kind = getServiceLaborScaling(service?.slug ?? "");
+  if (kind === "fixed") return base;
+
+  // Dedicated flag, default OFF (single-doc, Convex-cached across the loop).
+  const settings = await ctx.db
+    .query("director_settings")
+    .withIndex("by_key", (q) => q.eq("key", "global"))
+    .first();
+  if (settings?.per_axle_labor_enabled !== true) return base;
+
+  // Only per_cylinder needs the engine; skip the fetch for per_axle/per_wheel.
+  let engine: Doc<"engines"> | null = null;
+  if (kind === "per_cylinder") {
+    const cfg = await ctx.db.get(args.vehicle_config_id);
+    if (cfg?.engine_id) engine = (await ctx.db.get(cfg.engine_id)) ?? null;
+  }
+
+  const count = resolveLaborUnitCount(kind, {
+    engine,
+    bookingPosition: args.booking_position ?? null,
+  });
+  if (count <= 1) {
+    return { ...base, labor_unit_count: count, axle_scaled: false };
+  }
+  return {
+    ...base,
+    hours: base.hours * count,
+    raw_hours: base.raw_hours ?? base.hours,
+    labor_unit_count: count,
+    axle_scaled: true,
+  };
+}
+
+async function resolveBaseLaborHours(
   ctx: QueryCtx,
   args: {
     vehicle_config_id: Id<"vehicle_configs">;
@@ -634,6 +722,11 @@ export type Quote =
         /** True when raw labor exceeded the Camry × tier floor.
          *  Informational only. Emits `labor_above_tier_expected` flag. */
         above_tier_floor?: boolean;
+        /** Per-axle/per-unit labor multiplier applied to `hours` (1 = none). */
+        labor_unit_count?: number;
+        /** True when `hours` was multiplied by an axle/unit count (per_axle
+         *  labor flag on and the service scales). */
+        axle_scaled?: boolean;
       };
       parts: {
         /** Service total parts band (per-unit × unit_count). Drives the
@@ -753,6 +846,9 @@ export async function buildQuote(
     vehicle_config_id: args.vehicle_config_id,
     service_id: args.service_id,
     vehicle_tier: tier,
+    // Per-axle labor scaling: a "both axles" brake job bills ~2× the labor.
+    // Flag-gated inside the resolver; parts already scale via booking_position.
+    booking_position: args.booking_position ?? null,
   });
   if (!hoursRes.ok) return refuse(hoursRes.reason);
 
@@ -883,6 +979,10 @@ export async function buildQuote(
       raw_hours: hoursRes.raw_hours,
       tier_floor_applied: hoursRes.tier_floor_applied,
       above_tier_floor: hoursRes.above_tier_floor,
+      // Per-axle/per-unit labor scaling (per_axle_labor flag). `hours` is
+      // already multiplied; these expose the multiplier for UI/analytics.
+      labor_unit_count: hoursRes.labor_unit_count,
+      axle_scaled: hoursRes.axle_scaled,
     },
     parts: {
       low: round2(scaledPartsLow),

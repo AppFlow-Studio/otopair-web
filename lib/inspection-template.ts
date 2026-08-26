@@ -436,12 +436,6 @@ function cornerFields(opts: {
       section: "Brakes · wheel off",
     },
     {
-      type: "text",
-      key: "rotor_stamp",
-      label: "Exact rotor-stamp text",
-      section: "Brakes · wheel off",
-    },
-    {
       type: "descriptors",
       key: "desc",
       label: "Brake rotor surface issues",
@@ -854,17 +848,19 @@ function requiresTier5Identity(
 }
 
 export function requiresRotorStampPhoto(
-  state: InspectionState,
-  zoneId: CornerZoneId,
-  context: ZoneCompletionContext,
+  _state: InspectionState,
+  _zoneId: CornerZoneId,
+  _context: ZoneCompletionContext,
 ): boolean {
-  if (!deriveTierInspectionScope(context).tier2Corners.includes(zoneId)) return false;
-  if (context.rotorPhotoEvidence?.[zoneId]) return false;
-  const zone = state.zones[zoneId];
-  if (zone?.select.rotor_applicable === "no") return false;
-  return !zone?.photoIds.some(
-    (photoId) => zone.photoTags[photoId] === "rotor_stamp",
-  );
+  // Rotor-stamp text + photo requirement retired. The minimum-thickness stamp
+  // cast into the rotor hat is routinely faded, rusted over, or physically
+  // inaccessible with the caliper on, and technicians don't hunt for it during
+  // a pre-job inspection. The rotor's measured thickness (the `rotor` field,
+  // checked against the reference minimum) is what actually gates brake
+  // findings — the stamp photo added friction without adding signal. Kept as an
+  // always-false stub so existing callers (the dialog's `rotorPhotoRequired`,
+  // which then just offers a plain "Add photo") keep compiling.
+  return false;
 }
 
 export function rotorEvidenceCornersFromSubmission(
@@ -907,7 +903,7 @@ export function isBrakeDetailFieldRelevant(
     if (zoneState?.select.rotor_applicable === "no") return false;
     return wasMeasured("rotor");
   }
-  if (["rotor", "rotor_stamp", "desc"].includes(fieldKey)) {
+  if (["rotor", "desc"].includes(fieldKey)) {
     return zoneState?.select.rotor_applicable === "yes";
   }
   return true;
@@ -950,7 +946,6 @@ export function isFieldRequiredForZone(
         "pad_outer",
         "rotor_applicable",
         "rotor",
-        "rotor_stamp",
         "desc",
         "caliper",
         "brake_hose",
@@ -1016,7 +1011,6 @@ export function isFieldApplicableToZone(
       "rotor_applicable",
       "rotor",
       "rotor_tool",
-      "rotor_stamp",
       "desc",
       "caliper",
       "brake_hose",
@@ -1267,13 +1261,6 @@ export function validateZoneForCompletion(
         return fail(field.key, `${field.label} is required.`);
       }
     }
-  }
-
-  if (
-    CORNER_IDS.includes(zoneId as CornerZoneId) &&
-    requiresRotorStampPhoto(state, zoneId as CornerZoneId, validationContext)
-  ) {
-    return fail("rotor_stamp_photo", "Add a rotor-stamp photo for this wheel-off corner.");
   }
 
   return { valid: true };

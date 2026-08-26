@@ -37,6 +37,10 @@ const DEFAULTS = {
   // rules while leaving the rest on.
   combined_labor_enabled: false,
   combined_labor_disabled_families: [] as string[],
+  // Per-axle / per-unit labor scaling (convex/lib/serviceUnits.ts). Default OFF
+  // — enabling it makes a "both axles" brake job bill ~2× labor, so it's an
+  // explicit director opt-in (verify a few real vehicles, then flip on).
+  per_axle_labor_enabled: false,
 };
 
 export const getGlobal = query({
@@ -75,6 +79,8 @@ export const getGlobal = query({
       combined_labor_disabled_families:
         row?.combined_labor_disabled_families ??
         DEFAULTS.combined_labor_disabled_families,
+      per_axle_labor_enabled:
+        row?.per_axle_labor_enabled ?? DEFAULTS.per_axle_labor_enabled,
       updated_at: row?.updated_at ?? null,
     };
   },
@@ -165,6 +171,48 @@ export const setCombinedLaborConfig = mutation({
       actor: args.actorName ?? "Director",
       actor_id: args.actorId,
       detail: `combined-labor config updated: ${JSON.stringify(patch)}`,
+      created_at: now,
+    });
+    return { ok: true };
+  },
+});
+
+// Per-axle labor scaling control (convex/lib/serviceUnits.ts). Enables billing
+// per-axle labor (a both-axle brake job ≈ 2×). Independent of combined labor.
+export const setPerAxleLaborEnabled = mutation({
+  args: {
+    value: v.boolean(),
+    actorName: v.optional(v.string()),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, { value, actorName, actorId }) => {
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("director_settings")
+      .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        per_axle_labor_enabled: value,
+        updated_at: now,
+        updated_by_user_id: actorId,
+      });
+    } else {
+      await ctx.db.insert("director_settings", {
+        key: SETTINGS_KEY,
+        round_labor_times_to_15min: DEFAULTS.round_labor_times_to_15min,
+        per_axle_labor_enabled: value,
+        updated_at: now,
+        updated_by_user_id: actorId,
+      });
+    }
+    await ctx.db.insert("audit_log", {
+      entity_type: "director_settings",
+      entity_id: SETTINGS_KEY,
+      action: "field_edit",
+      actor: actorName ?? "Director",
+      actor_id: actorId,
+      detail: `per_axle_labor_enabled set to ${value}`,
       created_at: now,
     });
     return { ok: true };

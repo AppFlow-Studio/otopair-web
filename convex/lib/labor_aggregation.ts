@@ -28,6 +28,8 @@ import { STRONG_LABOR_SOURCES, withinGuardrail, withinAgreementBand } from "./la
 import { isEstimatorEndpointSource } from "./sourceNames";
 import { computeLaborTierFloorHours } from "./laborFallback";
 import { detectTier } from "./quoteEngine";
+import { getServiceLaborScaling } from "./serviceLaborReference";
+import { axleForBrakeService } from "./brakeScope";
 
 // Empirical sample-size gates live in a leaf module (laborConstants, no imports)
 // so importing them here can't form a cycle with quoteEngine (which imports
@@ -71,12 +73,26 @@ export function resolveBookHours(
  * bookings only. A booking with N services has ONE total `actual_labor_minutes`
  * that cannot be split per service, so multi-service bookings are excluded to
  * avoid crediting the full duration to every service.
+ *
+ * PER-AXLE NORMALIZATION: for a per_axle-scaled service (brakes), the raw job
+ * minutes cover however many axles that booking booked. We store a PER-AXLE
+ * basis (divide a "both axles" job by 2) so `resolveLaborHours` can multiply
+ * back up by the NEW booking's axle count uniformly — without this, a both-axle
+ * empirical job would be double-counted when re-scaled. Bookings with no axle
+ * signal default to 1 axle (treat the observed time as the per-axle basis).
  */
 async function collectEmpiricalHours(
   ctx: any,
   vehicleConfigId: any,
   serviceId: any,
 ): Promise<number[]> {
+  const service = await ctx.db.get(serviceId);
+  const serviceSlug: string = service?.slug ?? "";
+  // v1: per_axle is the only active, booking-dependent scaling kind. per_wheel /
+  // per_cylinder normalize by a vehicle-constant count and are added when those
+  // services opt into SERVICE_LABOR_SCALING.
+  const perAxle = getServiceLaborScaling(serviceSlug) === "per_axle";
+
   const finalized = (await ctx.db.query("job_actuals").collect()).filter(
     (j: any) => j.finalized_at_ms != null && j.actual_labor_minutes != null,
   );
@@ -107,7 +123,13 @@ async function collectEmpiricalHours(
     if (!vehicle) continue;
     if (String(vehicle.vehicle_config_id ?? "") !== String(vehicleConfigId)) continue;
 
-    hours.push(j.actual_labor_minutes / 60);
+    // Divide by the axle count this job covered → per-axle basis.
+    const axleCount =
+      perAxle &&
+      axleForBrakeService(booking, String(serviceId), serviceSlug) === "both"
+        ? 2
+        : 1;
+    hours.push(j.actual_labor_minutes / 60 / axleCount);
   }
   return hours;
 }

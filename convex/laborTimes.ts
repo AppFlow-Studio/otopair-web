@@ -32,6 +32,7 @@ import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import {
+  ceilHoursTo15,
   detectTier,
   isHighQualityVdb,
   resolveLaborHours,
@@ -64,14 +65,6 @@ export type LaborHoursForService = {
    *  Drives the `labor_above_tier_expected` quote flag downstream. */
   aboveTierFloor?: boolean;
 };
-
-/** Ceil hours up to the nearest 15-minute slot. 0.6h (36m) → 0.75h (45m). */
-function roundUpTo15(hours: number): number {
-  if (!Number.isFinite(hours) || hours <= 0) return hours;
-  const minutes = hours * 60;
-  const rounded = Math.ceil(minutes / 15) * 15;
-  return rounded / 60;
-}
 
 /**
  * Shared per-service resolver. Given a (possibly null) config + tier, walks the
@@ -199,7 +192,7 @@ async function resolveLaborForServices(
       }
     }
 
-    const finalHours = roundTo15 ? roundUpTo15(resolvedHours) : resolvedHours;
+    const finalHours = roundTo15 ? ceilHoursTo15(resolvedHours) : resolvedHours;
 
     out.push({
       ...base,

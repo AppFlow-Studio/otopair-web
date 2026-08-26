@@ -39,7 +39,25 @@ import { getSourceConfig } from "../sourceRegistry";
 import { searchAndFetch } from "../firecrawl";
 import { isStorefrontHomepage } from "../rpCatalog";
 import { normalizeOemNumber, parsePartPrices } from "../priceParser";
-import { MODEL_HAIKU } from "./batchClient";
+import { MODEL_HAIKU, MODEL_SONNET } from "./batchClient";
+
+/**
+ * Which model does Tier-2 role research. Default SONNET since Aug 21 2026:
+ * the 2019 Accord Sport's front pads are one application-table read away
+ * (hondapartsnow lists 45022-TVC-A02 for "4 Door Sport") and the Haiku
+ * researcher returned never_found across three heal passes — the role
+ * dead-ended not because the answer is obscure but because the researcher
+ * couldn't dig it out. This call originates part numbers that ship into
+ * quotes (behind the verifier), so it follows the verifier's Aug-20 rule:
+ * the write path is the wrong place to save pennies.
+ * `PARTS_ROLE_RESEARCH_MODEL=haiku` restores the old economics.
+ */
+function researchModel(): string {
+  const v = (process.env.PARTS_ROLE_RESEARCH_MODEL ?? "").trim().toLowerCase();
+  if (v === "haiku") return MODEL_HAIKU;
+  if (v && v !== "sonnet") return v;
+  return MODEL_SONNET;
+}
 import { positionForRoleKey, verifyPartFitments } from "./partFitmentVerifier";
 
 let _client: Anthropic | null = null;
@@ -194,7 +212,69 @@ export function pageCoversYear(text: string, year: number): boolean {
   return (text.match(/\b(?:19|20)\d{2}\b/g) ?? []).map(Number).includes(year);
 }
 
+/** Roles whose correct part genuinely varies by TRIM level. Brake packages
+ *  are the live case: the 2019 Accord SPORT's pads/rotors differ from
+ *  LX/EX/EX-L, and a trim-blind storefront query surfaces only the volume
+ *  trim's pages — the Sport's own parts were unreachable by Tier 1 and the
+ *  (now trim-aware) verifier rightly refuses the LX-scoped ones, so the role
+ *  dead-ends as never_found (Aug 20 2026). */
+export const TRIM_SENSITIVE_ROLE_KEYS: ReadonlySet<string> = new Set([
+  "front_brake_pad",
+  "rear_brake_pad",
+  "front_rotor",
+  "rear_rotor",
+]);
+
+/** A trim string usable as a SERP token, or null.
+ *
+ *  Real trim names are short badges ("Sport", "GT", "Sport SE", "Limited").
+ *  Decoder-derived trims are body-spec sentences ("3.5 4dr Front-wheel Drive
+ *  Sedan Automatic") that would wreck a site-scoped query, and grade-less
+ *  fillers ("Base", "Standard") add noise without selecting anything — both
+ *  return null, which callers treat as "query without trim". Pure; exported
+ *  for tests. */
+/** Is a researcher's not_applicable reason a POSITIVE absence finding?
+ *
+ *  The N/A escape exists for components the vehicle physically lacks (rear
+ *  drums → no rear rotor; electric steering → no PS fluid), and na_role_keys
+ *  persists it across every future run. A "couldn't confirm within budget"
+ *  answer wearing the not_applicable shape therefore poisons the config
+ *  permanently — observed live Aug 21 2026: front_rotor marked N/A on an
+ *  Accord Sport because the Sport-specific rotor wasn't found in budget.
+ *  Persistence now requires BOTH: no search-failure vocabulary AND explicit
+ *  absence vocabulary. A reason failing this gate demotes to never_found —
+ *  the honest state for "still empty, keep looking". Pure; exported for
+ *  tests. */
+export function isPositiveAbsenceReason(reason: string | null | undefined): boolean {
+  const r = String(reason ?? "").toLowerCase();
+  if (!r) return false;
+  if (
+    /search budget|within (the )?budget|could ?n[o']?t (be )?(confirm|find|locat|verif)|unable to (confirm|find|verify)|no .{0,40}(could|can) be confirmed|not (be )?confirmed|couldn.t/.test(
+      r,
+    )
+  ) {
+    return false;
+  }
+  return /(drum brake|rear drum|drums|not equipped|does not (have|use|come)|has no|no [a-z -]{0,24}(rotor|pad|filter|belt|plug|fluid|battery|steering)|electric (power )?steering|electric vehicle|\bev\b|timing chain|chain[- ]driven|not fitted|physically absent|no scheduled replacement)/.test(
+    r,
+  );
+}
+
+export function trimQueryToken(trim: string | null | undefined): string | null {
+  const t = String(trim ?? "").trim();
+  if (!t) return null;
+  const words = t.split(/\s+/);
+  if (words.length > 2 || t.length > 14) return null;
+  if (/\d\s*(dr|door)\b/i.test(t) || /^\d/.test(t)) return null;
+  if (!/^[A-Za-z0-9][A-Za-z0-9 .\-]*$/.test(t)) return null;
+  const STOP = /\b(base|standard|unknown|drive|sedan|coupe|wagon|automatic|manual)\b/i;
+  if (STOP.test(t)) return null;
+  return t;
+}
+
 const TIER2_SYSTEM = `You are an automotive OEM parts researcher. You are given ONE exact vehicle and a short list of part ROLES that are currently EMPTY in our catalog — or filled only by a number that was FLAGGED as wrong for this vehicle (the role line says so). Search the web and find the CORRECT OEM part number for each role for THIS exact vehicle.
+
+TRIM BINDS for brake components. Sport/performance/heavy-duty packages take different pads and rotors than the volume trims of the same model-year, and dealer application tables say so ("LX, EX, EX-L", "without Sport or Touring", "with 18-inch brakes"). When the vehicle line names a trim, confirm the listing's fitment covers THAT trim; a number whose listings scope it to OTHER trims only is the wrong answer even though model, year and engine match — omit the role instead.
 
 Rules:
 - The part must be confirmed for this exact year + model + engine (and generation). A listing whose year range or engine excludes this vehicle is wrong.
@@ -364,11 +444,22 @@ export async function resourceMissingRoles(
     }
     try {
       // meta.name carries the position word ("Front Brake Rotor") — the same
-      // year-in-query steering the main scrape uses.
-      const serpQuery = `site:${storeHost} ${vehicle.year} ${vehicle.model} ${meta.name}`;
-      const results = await searchAndFetch(serpQuery, 4, true);
+      // year-in-query steering the main scrape uses. For trim-sensitive roles
+      // the trim-qualified query runs FIRST (a Sport's brake pages never rank
+      // for the trimless query — the volume trim's do), with the trimless
+      // form kept as the fallback for storefronts that don't title by trim.
       const pos = positionForRoleKey(role.roleKey);
+      const trimTok = TRIM_SENSITIVE_ROLE_KEYS.has(role.roleKey)
+        ? trimQueryToken(vehicle.trim)
+        : null;
+      const baseQuery = `site:${storeHost} ${vehicle.year} ${vehicle.model} ${meta.name}`;
+      const serpQueries = trimTok
+        ? [`site:${storeHost} ${vehicle.year} ${vehicle.model} ${trimTok} ${meta.name}`, baseQuery]
+        : [baseQuery];
       let written: RoleResourceOutcome | null = null;
+      for (const serpQuery of serpQueries) {
+      if (written) break;
+      const results = await searchAndFetch(serpQuery, 4, true);
       for (const r of results) {
         try {
           const parsed = new URL(r.url);
@@ -424,6 +515,7 @@ export async function resourceMissingRoles(
           1,
         );
         break;
+      }
       }
       if (written) {
         written.kind = kindOf.get(role.roleKey);
@@ -482,7 +574,7 @@ export async function resourceMissingRoles(
   const resolvedTier2 = new Map<string, RoleResourceOutcome>();
   try {
     const resp = await getClient().messages.create({
-      model: MODEL_HAIKU,
+      model: researchModel(),
       max_tokens: 1500,
       temperature: 0,
       system: TIER2_SYSTEM,
@@ -508,6 +600,17 @@ export async function resourceMissingRoles(
     for (const p of Array.isArray(parsed) ? parsed : []) {
       if (!p || typeof p.role !== "string" || !queueKeys.has(p.role) || resolvedTier2.has(p.role)) continue;
       if (typeof p.not_applicable === "string" && p.not_applicable.trim()) {
+        // Persist N/A only on a POSITIVE absence finding — a budget-failure
+        // answer wearing the not_applicable shape demotes to never_found so
+        // the role stays visibly empty instead of leaving the quotability
+        // math forever (see isPositiveAbsenceReason).
+        if (!isPositiveAbsenceReason(p.not_applicable)) {
+          console.warn(
+            `[role-resource] tier2 ${p.role}: not_applicable rejected as non-absence ` +
+              `("${p.not_applicable.trim().slice(0, 120)}") — demoted to never_found`,
+          );
+          continue;
+        }
         resolvedTier2.set(p.role, {
           roleKey: p.role,
           outcome: "not_applicable",

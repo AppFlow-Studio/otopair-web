@@ -154,18 +154,28 @@ export const sweep = internalAction({
         );
         if (!bundle || bundle.candidates.length === 0) continue;
 
-        const verdicts1 = await verifyPartFitments(bundle.vehicle, bundle.candidates);
+        let verdicts1 = await verifyPartFitments(bundle.vehicle, bundle.candidates);
         // Channel-death guard: verifyPartFitments never throws — a dead API
         // key comes back as every part "uncertain" with a channel reason, and
         // "uncertain deletes nothing" quietly turns the whole remaining fleet
         // into zero-refute rows that read as CLEAN (Aug 20 2026: the key ran
         // out of credits at row ~31 and the next 228 configs "passed"). A
         // channel failure aborts the invocation with the SAME cursor.
+        //
+        // One retry after a pause first: `verifier_error` also covers a
+        // TRANSIENT 429 burst (this sweep, the snapshot backfill and a heal
+        // share one key), and aborting a fleet pass over one rate-limit spike
+        // proved as disruptive as the outage it guards against (Aug 21: abort
+        // at the SL-Class while the same key was serving the backfill fine).
         const CHANNEL_REASONS = new Set(["verifier_error", "no_api_key"]);
-        if (
-          verdicts1.length > 0 &&
-          verdicts1.every((x) => x.verdict === "uncertain" && CHANNEL_REASONS.has(x.reason))
-        ) {
+        const channelSuspect = (vs: typeof verdicts1) =>
+          vs.length > 0 &&
+          vs.every((x) => x.verdict === "uncertain" && CHANNEL_REASONS.has(x.reason));
+        if (channelSuspect(verdicts1)) {
+          await new Promise((r) => setTimeout(r, 45_000));
+          verdicts1 = await verifyPartFitments(bundle.vehicle, bundle.candidates);
+        }
+        if (channelSuspect(verdicts1)) {
           console.error(
             `[fitment-reverify] verifier channel down (${verdicts1[0].reason}) at ${bundle.configKey} — aborting invocation`,
           );

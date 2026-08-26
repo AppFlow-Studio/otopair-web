@@ -13,6 +13,7 @@
  */
 
 import type { Doc } from "../_generated/dataModel";
+import type { LaborScalingKind } from "./serviceLaborReference";
 
 export type ServiceUnitResolution = {
   /** How many units the vehicle needs. Drives the SERVICE TOTAL when
@@ -139,4 +140,39 @@ export function resolveServiceUnitCount(args: {
 export function unitScale(res: ServiceUnitResolution): number {
   if (res.baseline <= 0 || res.count <= 0) return 1;
   return res.count / res.baseline;
+}
+
+/**
+ * How many per-unit labor blocks does this service perform on THIS vehicle?
+ *
+ * The LABOR twin of `resolveServiceUnitCount`, keyed off the service's
+ * independently-declared `LaborScalingKind` (see `SERVICE_LABOR_SCALING`) —
+ * NOT `parts_kind`. The per-vehicle labor resolver returns a per-unit basis
+ * (e.g. 1.5h/axle); multiply by this count to get the whole-job hours before
+ * combined-labor dedup. Deliberately mirrors the per_axle / per_wheel /
+ * per_cylinder semantics of the parts counter so labor and parts never tell
+ * different unit-count stories.
+ *
+ * Returns a whole multiplier ≥ 1; "fixed" (and any unmapped kind) → 1, which
+ * keeps every non-scaled service byte-identical to today.
+ */
+export function resolveLaborUnitCount(
+  kind: LaborScalingKind,
+  args: { engine: Doc<"engines"> | null; bookingPosition: AxlePosition },
+): number {
+  switch (kind) {
+    case "per_axle":
+      // "both" repeats the full corner sequence on each axle; front/rear/unset
+      // is one axle.
+      return args.bookingPosition === "both" ? 2 : 1;
+    case "per_wheel":
+      return 4;
+    case "per_cylinder":
+      return (
+        args.engine?.spark_plug_quantity ?? args.engine?.cylinders ?? 1
+      );
+    case "fixed":
+    default:
+      return 1;
+  }
 }

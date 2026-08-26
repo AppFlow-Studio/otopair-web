@@ -216,6 +216,20 @@ crons.weekly(
   {},
 );
 
+// Standing fitment audit (plan P3, Aug 2026): re-adjudicate the configs
+// whose stored fitments have gone longest unexamined — Sonnet verify,
+// double-refute to delete, heal scheduled per removal. The one-time fleet
+// sweep this loop grew out of removed ~69 plausible-but-wrong parts the
+// finalize-time verifier had approved. Freshness-ordered (no cursor state);
+// dark unless PARTS_FITMENT_AUDIT_BUDGET (configs/night) is set > 0. Runs
+// before role repair so reopened holes are re-sourced the same night.
+crons.daily(
+  "fitment-audit-sweep",
+  { hourUTC: 7, minuteUTC: 30 },
+  internal.vehicleEnrichment.fitmentReverify.nightly,
+  {},
+);
+
 // Fleet role repair (Wave 2): nightly census of configs whose latest run
 // shows missing binding core roles, scheduling the batch repair over the
 // worst under PARTS_ROLE_REPAIR_FLEET_BUDGET (0 = census-only, no spend).

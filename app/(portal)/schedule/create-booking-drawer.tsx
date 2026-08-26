@@ -84,6 +84,10 @@ interface CreateBookingDrawerProps {
   /** Per-checkout session id owned by the schedule page (so the grid can
    *  exclude this drawer's own hold from its "On hold" overlay). */
   holdSessionId: string;
+  /** True on the compact (bottom-sheet) layout — phones, iPads, small laptops
+   *  (<xl). Drives where the submit button lives: header top-right when compact
+   *  (to reclaim vertical space), a full-width bottom bar on the desktop panel. */
+  compact: boolean;
   onClose: () => void;
   onToast: (msg: string) => void;
 }
@@ -162,6 +166,8 @@ function CollapsibleSection({
   onToggle,
   required,
   meta,
+  complete,
+  registerRef,
   children,
 }: {
   sectionKey: string;
@@ -171,15 +177,26 @@ function CollapsibleSection({
   onToggle: (key: string) => void;
   required?: boolean;
   meta?: React.ReactNode;
+  /** True once this section's fields are filled — shows a check in the header. */
+  complete?: boolean;
+  /** Callback ref so the drawer can track this section for the sticky nav. */
+  registerRef?: (el: HTMLElement | null) => void;
   children: React.ReactNode;
 }) {
+  // No `overflow-hidden` here — it would trap the `sticky` header inside the
+  // card. The header instead sticks to the top of the scroll body as you pass
+  // it, so the section you're filling always names itself (bg-card keeps the
+  // scrolling content from bleeding through).
   return (
-    <section className={cn(drawerCardClassName, "overflow-hidden")}>
+    <section ref={registerRef} data-section={sectionKey} className={drawerCardClassName}>
       <button
         type="button"
         onClick={() => onToggle(sectionKey)}
         aria-expanded={open}
-        className="flex w-full items-center gap-3 px-4 py-2.5 text-left"
+        className={cn(
+          "sticky top-0 z-10 flex w-full items-center gap-3 rounded-t-2xl bg-card px-4 py-2.5 text-left",
+          open && "border-b border-border/60",
+        )}
       >
         <DrawerCardSectionHeader
           icon={Icon}
@@ -188,11 +205,19 @@ function CollapsibleSection({
           meta={meta}
           className="flex-1"
         />
+        {complete ? (
+          <span
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600"
+            title="Completed"
+          >
+            <Check className="h-3 w-3" strokeWidth={3} />
+          </span>
+        ) : null}
         <ChevronDown
           className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`}
         />
       </button>
-      {open ? <div className="px-4 pb-3.5">{children}</div> : null}
+      {open ? <div className="px-4 pb-3.5 pt-3">{children}</div> : null}
     </section>
   );
 }
@@ -244,6 +269,7 @@ export default function CreateBookingDrawer({
   bookings,
   shopHours,
   holdSessionId,
+  compact,
   onClose,
   onToast,
 }: CreateBookingDrawerProps) {
@@ -2043,15 +2069,210 @@ export default function CreateBookingDrawer({
     await submitBooking(false);
   }
 
+  /* ---- Scroll-aware header + section navigator ------------------------
+     The drawer is tall and, on iPad / laptop, the fixed header ate most of the
+     viewport — you could barely see one field at a time. So: the scheduling
+     controls collapse to a one-line summary once the body scrolls, each section
+     header sticks to the top as you pass it, and a compact chip bar shows which
+     section you're in and jumps to any other. */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const sectionElRefs = useRef<Record<string, HTMLElement | null>>({});
+  const [headerCompact, setHeaderCompact] = useState(false);
+  const [activeSection, setActiveSection] = useState<SectionKey>("customer");
+
+  // Sections in render order, filtered to the ones actually shown, so both the
+  // chip bar and the active-section math stay in sync with the form below.
+  const navSections = useMemo(() => {
+    const partsVisible =
+      !isBackfill && (selectedIds.size > 0 || customServices.length > 0);
+    return (
+      [
+        { key: "customer", label: "Customer", icon: User, visible: true },
+        { key: "vehicle", label: "Vehicle", icon: Car, visible: true },
+        { key: "services", label: "Services", icon: Wrench, visible: true },
+        {
+          key: "mechanic_estimate",
+          label: isBackfill ? "Actuals" : "Estimate",
+          icon: Clock,
+          visible: true,
+        },
+        { key: "catalog_parts", label: "Parts", icon: Package, visible: partsVisible },
+        { key: "diagnostic", label: "Diagnostic", icon: Stethoscope, visible: isDiagnostic },
+        { key: "notes", label: "Notes", icon: MessageSquare, visible: true },
+      ] as Array<{ key: SectionKey; label: string; icon: React.ElementType<{ className?: string }>; visible: boolean }>
+    ).filter((s) => s.visible);
+  }, [isBackfill, selectedIds.size, customServices.length, isDiagnostic]);
+
+  // Per-section "has the user filled what this section needs" — drives the
+  // green check in the section headers and the nav chips. For required sections
+  // it mirrors the submit gate; for optional ones (Vehicle, Notes) it just
+  // reflects "something's entered".
+  const sectionComplete = useMemo<Record<SectionKey, boolean>>(
+    () => ({
+      customer: Boolean(firstName.trim()) && isValidUsPhone(phone),
+      vehicle: validVin.length === 17 || Boolean(make.trim() && model.trim()),
+      services: selectedIds.size > 0 || customServices.length > 0,
+      mechanic_estimate:
+        (mechanicEstimateMinutes ?? 0) > 0 && (mechanicQuotedPrice ?? 0) > 0,
+      catalog_parts: partsDeclaration !== null,
+      diagnostic: diagnosticSystem !== null,
+      notes: Boolean(customerNotes.trim()),
+    }),
+    [
+      firstName,
+      phone,
+      validVin,
+      make,
+      model,
+      selectedIds.size,
+      customServices.length,
+      mechanicEstimateMinutes,
+      mechanicQuotedPrice,
+      partsDeclaration,
+      diagnosticSystem,
+      customerNotes,
+    ],
+  );
+
+  // Required fields still missing before this booking can be submitted — mirrors
+  // the field-level checks in handleSubmit (the interactive pickers for options /
+  // tires / outside-hours still run on click). Drives the header submit button's
+  // disabled state + its "what's left" tooltip.
+  const missingRequired = useMemo(() => {
+    const missing: string[] = [];
+    if (!firstName.trim()) missing.push("customer name");
+    if (!isValidUsPhone(phone)) missing.push("valid phone");
+    if ((mechanicEstimateMinutes ?? 0) <= 0)
+      missing.push(isBackfill ? "actual time" : "time estimate");
+    if ((mechanicQuotedPrice ?? 0) <= 0)
+      missing.push(isBackfill ? "price charged" : "quoted price");
+    if (isBackfill) {
+      if (
+        backfillCompletionMileage == null ||
+        !Number.isFinite(backfillCompletionMileage) ||
+        backfillCompletionMileage < 0
+      )
+        missing.push("completion mileage");
+    } else if (
+      (selectedIds.size > 0 || customServices.length > 0) &&
+      partsDeclaration === null
+    ) {
+      missing.push("parts choice");
+    }
+    return missing;
+  }, [
+    firstName,
+    phone,
+    mechanicEstimateMinutes,
+    mechanicQuotedPrice,
+    isBackfill,
+    backfillCompletionMileage,
+    selectedIds.size,
+    customServices.length,
+    partsDeclaration,
+  ]);
+  const requiredReady = missingRequired.length === 0;
+  const submitTitle = requiredReady
+    ? isBackfill
+      ? "Log completed job"
+      : "Create booking"
+    : `Still needed: ${missingRequired.join(", ")}`;
+
+  // Track scroll: compact the header past a small threshold (with hysteresis so
+  // it doesn't flicker at the boundary) and mark the section under the top edge.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const top = el.scrollTop;
+        setHeaderCompact((prev) => (prev ? top > 6 : top > 16));
+        // Detection line sits just below the scroll top, so the lit chip tracks
+        // whichever section header is currently pinned there.
+        const line = el.getBoundingClientRect().top + 8;
+        let current = navSections[0]?.key ?? "customer";
+        for (const s of navSections) {
+          const node = sectionElRefs.current[s.key];
+          if (!node) continue;
+          if (node.getBoundingClientRect().top - line <= 0) current = s.key;
+        }
+        // Snap to the last section once the body bottoms out, so short trailing
+        // sections still light their chip.
+        if (el.scrollHeight - top - el.clientHeight < 48) {
+          current = navSections[navSections.length - 1]?.key ?? current;
+        }
+        setActiveSection(current);
+      });
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [navSections]);
+
+  const scrollToTop = () =>
+    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+
+  const scrollToSection = (key: SectionKey) => {
+    openSection(key);
+    // Let the section expand first, then bring its (now sticky) header to the top.
+    requestAnimationFrame(() => {
+      const node = sectionElRefs.current[key];
+      const container = scrollRef.current;
+      if (!node || !container) return;
+      const delta =
+        node.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      container.scrollTo({
+        top: container.scrollTop + delta - 4,
+        behavior: "smooth",
+      });
+    });
+  };
+
+  // One-line schedule digest shown in the header once it collapses.
+  const compactScheduleSummary = useMemo(() => {
+    const d = new Date(`${date}T00:00:00`);
+    const shortDate = Number.isFinite(d.getTime())
+      ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+      : date;
+    const timeLabel = TIME_OPTIONS.find((o) => o.value === time)?.label ?? time;
+    const mech =
+      assignmentPreference === "any"
+        ? entityLabel.anyLabel
+        : mechanics.find((m) => m._id === mechanicId)?.name ?? "";
+    return [shortDate, timeLabel, mech].filter(Boolean).join(" · ");
+  }, [date, time, assignmentPreference, mechanicId, mechanics, entityLabel.anyLabel]);
+
   /* ---- Render ---- */
   return (
     <div className="flex flex-col h-full">
       {/* Header — scheduling lives here so date, time, and assignment are
-          always visible and editable without scrolling. */}
-      <div className="shrink-0 border-b border-border px-5 py-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-foreground">Create booking</h2>
-          <div className="flex items-center gap-2">
+          editable without scrolling. Past a small scroll it collapses to a
+          one-line digest to hand the viewport back to the form. */}
+      <div className="shrink-0 border-b border-border px-5 pt-3 pb-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 className="shrink-0 text-base font-semibold text-foreground">
+              {isBackfill ? "Log past job" : "Create booking"}
+            </h2>
+            {/* Collapsed-header digest — tap to jump back up and edit schedule. */}
+            {headerCompact && (
+              <button
+                type="button"
+                onClick={scrollToTop}
+                title="Edit date, time & assignment"
+                className="min-w-0 truncate rounded-md bg-muted/60 px-2 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {compactScheduleSummary}
+              </button>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
             {holdCountdownLabel && (
               <span
                 className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
@@ -2069,8 +2290,37 @@ export default function CreateBookingDrawer({
                 {holdExpired ? "Hold expired" : `Held ${holdCountdownLabel}`}
               </span>
             )}
+            {/* Compact layouts only (laptop / iPad / phone): the primary submit
+                lives here — not a bottom bar — to hand the scarce vertical space
+                back to the form. The desktop side panel keeps its bottom button.
+                Disabled until every required field is filled; the tooltip says
+                what's still missing. */}
+            {compact && (
+              <button
+                type="button"
+                onClick={() => {
+                  void handleSubmit();
+                }}
+                disabled={!requiredReady || isSaving}
+                title={submitTitle}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>{isBackfill ? "Logging…" : "Creating…"}</span>
+                  </>
+                ) : (
+                  <>
+                    <span>{isBackfill ? "Log job" : "Create booking"}</span>
+                    <ArrowRight className="h-4 w-4" />
+                  </>
+                )}
+              </button>
+            )}
             <button
               onClick={onClose}
+              aria-label="Close"
               className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
             >
               <X className="w-5 h-5" />
@@ -2078,68 +2328,79 @@ export default function CreateBookingDrawer({
           </div>
         </div>
 
-        {/* Date + time + end, inline */}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <DatePicker
-            className="w-40"
-            value={date}
-            onChange={(next) => next && setDate(next)}
-          />
-          <Select selectedKey={time} onSelectionChange={(key) => setTime(String(key))}>
-            <SelectTrigger className="h-9 w-32 rounded-lg border-border bg-card text-sm px-3">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectPopover placement="bottom start">
-              <SelectListBox shouldFocusWrap>
-                {filteredTimeOptions.map((o) => (
-                  <SelectItem key={o.value} id={o.value} textValue={o.label}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectListBox>
-            </SelectPopover>
-          </Select>
-          {computedEndLabel ? (
-            <span className="text-xs text-muted-foreground">Ends ~ {computedEndLabel}</span>
-          ) : null}
+        {/* Scheduling controls — collapse away (height + fade) once scrolled. */}
+        <div
+          className={cn(
+            "grid transition-[grid-template-rows,opacity] duration-200 ease-out",
+            headerCompact ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100",
+          )}
+        >
+          <div className={cn("min-h-0 overflow-hidden", headerCompact && "pointer-events-none")}>
+            {/* Date + time + end, inline */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <DatePicker
+                className="w-40"
+                value={date}
+                onChange={(next) => next && setDate(next)}
+              />
+              <Select selectedKey={time} onSelectionChange={(key) => setTime(String(key))}>
+                <SelectTrigger className="h-9 w-32 rounded-lg border-border bg-card text-sm px-3">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopover placement="bottom start">
+                  <SelectListBox shouldFocusWrap>
+                    {filteredTimeOptions.map((o) => (
+                      <SelectItem key={o.value} id={o.value} textValue={o.label}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectListBox>
+                </SelectPopover>
+              </Select>
+              {computedEndLabel ? (
+                <span className="text-xs text-muted-foreground">Ends ~ {computedEndLabel}</span>
+              ) : null}
+            </div>
+
+            {/* Mechanic assignment — small, unboxed, free-flowing */}
+            {mechanics.length > 0 && (
+              <div className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
+                <span>Assigned to</span>
+                <Select
+                  selectedKey={assignmentPreference === "any" ? "any" : mechanicId}
+                  onSelectionChange={(key) => {
+                    if (key === "any") {
+                      setAssignmentPreference("any");
+                      setMechanicId("");
+                      return;
+                    }
+                    setAssignmentPreference("specific_mechanic");
+                    setMechanicId(String(key));
+                  }}
+                >
+                  <SelectTrigger className="inline-flex h-auto w-auto items-center gap-1 rounded-md border-0 bg-transparent px-1.5 py-0.5 text-sm font-medium text-foreground shadow-none ring-offset-0 hover:text-primary">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopover placement="bottom start">
+                    <SelectListBox shouldFocusWrap>
+                      <SelectItem id="any" textValue={entityLabel.anyLabel}>
+                        <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
+                      </SelectItem>
+                      {mechanics.map((m) => (
+                        <SelectItem key={m._id} id={m._id} textValue={m.name}>
+                          {m.name}
+                        </SelectItem>
+                      ))}
+                    </SelectListBox>
+                  </SelectPopover>
+                </Select>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Mechanic assignment — small, unboxed, free-flowing */}
-        {mechanics.length > 0 && (
-          <div className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
-            <span>Assigned to</span>
-            <Select
-              selectedKey={assignmentPreference === "any" ? "any" : mechanicId}
-              onSelectionChange={(key) => {
-                if (key === "any") {
-                  setAssignmentPreference("any");
-                  setMechanicId("");
-                  return;
-                }
-                setAssignmentPreference("specific_mechanic");
-                setMechanicId(String(key));
-              }}
-            >
-              <SelectTrigger className="inline-flex h-auto w-auto items-center gap-1 rounded-md border-0 bg-transparent px-1.5 py-0.5 text-sm font-medium text-foreground shadow-none ring-offset-0 hover:text-primary">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectPopover placement="bottom start">
-                <SelectListBox shouldFocusWrap>
-                  <SelectItem id="any" textValue={entityLabel.anyLabel}>
-                    <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
-                  </SelectItem>
-                  {mechanics.map((m) => (
-                    <SelectItem key={m._id} id={m._id} textValue={m.name}>
-                      {m.name}
-                    </SelectItem>
-                  ))}
-                </SelectListBox>
-              </SelectPopover>
-            </Select>
-          </div>
-        )}
-
-        {/* Scheduling validation */}
+        {/* Scheduling validation — kept out of the collapsing block so a
+            blocking overlap / hours error is never hidden behind the digest. */}
         {(overlapError || blockingHoursError || capacityWarning || outsideHoursWarning) && (
           <div className="mt-2 space-y-1">
             {overlapError && <p className="form-error-text text-xs">{overlapError}</p>}
@@ -2156,8 +2417,47 @@ export default function CreateBookingDrawer({
         )}
       </div>
 
-      {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto px-5 pt-4 pb-3 space-y-3">
+      {/* Section navigator — always-visible chip bar naming the section you're
+          in (highlighted from scroll position) with tap-to-jump. */}
+      <div className="shrink-0 border-b border-border bg-muted/20 px-3 py-1.5">
+        <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+          {navSections.map((s) => {
+            const active = activeSection === s.key;
+            const done = sectionComplete[s.key];
+            // Once a section is complete its icon becomes a check, so the chip
+            // bar doubles as a progress row.
+            const Icon = done ? Check : s.icon;
+            return (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => scrollToSection(s.key)}
+                aria-current={active ? "true" : undefined}
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                  active
+                    ? "bg-primary text-primary-foreground"
+                    : done
+                      ? "text-emerald-600 hover:bg-muted"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                <Icon
+                  className={cn("h-3.5 w-3.5 shrink-0", done && !active && "text-emerald-500")}
+                  {...(done ? { strokeWidth: 3 } : {})}
+                />
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Scrollable body. No top padding — it would offset the `sticky top-0`
+          section headers down and let content peek above them; we want each
+          header to pin flush under the nav bar. `flex-1` keeps it filling the
+          full height between the header and (on desktop) the bottom bar. */}
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-5 pb-3 space-y-3">
 
         {isBackfill && (
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -2178,6 +2478,8 @@ export default function CreateBookingDrawer({
         {/* ── Customer Info ── */}
         <CollapsibleSection
           sectionKey="customer"
+          registerRef={(el) => { sectionElRefs.current.customer = el; }}
+          complete={sectionComplete.customer}
           icon={User}
           label="Customer Info"
           open={openSections.has("customer")}
@@ -2209,6 +2511,8 @@ export default function CreateBookingDrawer({
         {/* ── Vehicle Info ── */}
         <CollapsibleSection
           sectionKey="vehicle"
+          registerRef={(el) => { sectionElRefs.current.vehicle = el; }}
+          complete={sectionComplete.vehicle}
           icon={Car}
           label="Vehicle Info"
           open={openSections.has("vehicle")}
@@ -2309,6 +2613,8 @@ export default function CreateBookingDrawer({
         {/* ── Service Selection ── */}
         <CollapsibleSection
           sectionKey="services"
+          registerRef={(el) => { sectionElRefs.current.services = el; }}
+          complete={sectionComplete.services}
           icon={Wrench}
           label="Service Selection"
           open={openSections.has("services")}
@@ -2752,6 +3058,8 @@ export default function CreateBookingDrawer({
             actual_price_charged on the booking row. */}
         <CollapsibleSection
           sectionKey="mechanic_estimate"
+          registerRef={(el) => { sectionElRefs.current.mechanic_estimate = el; }}
+          complete={sectionComplete.mechanic_estimate}
           icon={Clock}
           label={isBackfill ? "Actuals" : "Mechanic estimate"}
           open={openSections.has("mechanic_estimate")}
@@ -3046,6 +3354,8 @@ export default function CreateBookingDrawer({
         {!isBackfill && (selectedIds.size > 0 || customServices.length > 0) && (
           <CollapsibleSection
             sectionKey="catalog_parts"
+            registerRef={(el) => { sectionElRefs.current.catalog_parts = el; }}
+            complete={sectionComplete.catalog_parts}
             icon={Package}
             label="Parts"
             open={openSections.has("catalog_parts")}
@@ -3436,6 +3746,8 @@ export default function CreateBookingDrawer({
         {isDiagnostic && (
           <CollapsibleSection
             sectionKey="diagnostic"
+            registerRef={(el) => { sectionElRefs.current.diagnostic = el; }}
+            complete={sectionComplete.diagnostic}
             icon={Stethoscope}
             label="Diagnostic system"
             open={openSections.has("diagnostic")}
@@ -3496,6 +3808,8 @@ export default function CreateBookingDrawer({
         {/* ── Customer states ── */}
         <CollapsibleSection
           sectionKey="notes"
+          registerRef={(el) => { sectionElRefs.current.notes = el; }}
+          complete={sectionComplete.notes}
           icon={MessageSquare}
           label="Customer states"
           open={openSections.has("notes")}
@@ -3513,28 +3827,34 @@ export default function CreateBookingDrawer({
 
       </div>
 
-      {/* Footer */}
-      <div className="px-5 py-3 border-t border-border shrink-0">
-        <button
-          onClick={() => {
-            void handleSubmit();
-          }}
-          disabled={!firstName.trim() || !isValidUsPhone(phone) || isSaving}
-          className="w-full py-3 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {isSaving ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span>{isBackfill ? "Logging…" : "Creating…"}</span>
-            </>
-          ) : (
-            <>
-              <span>{isBackfill ? "Log Completed Job" : "Create Booking"}</span>
-              <ArrowRight className="w-4 h-4" />
-            </>
-          )}
-        </button>
-      </div>
+      {/* Bottom bar — desktop side panel only. On compact layouts the submit
+          button lives in the header instead (see above), so there's no footer
+          eating vertical space there. */}
+      {!compact && (
+        <div className="px-5 py-3 border-t border-border shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              void handleSubmit();
+            }}
+            disabled={!requiredReady || isSaving}
+            title={submitTitle}
+            className="w-full py-3 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>{isBackfill ? "Logging…" : "Creating…"}</span>
+              </>
+            ) : (
+              <>
+                <span>{isBackfill ? "Log Completed Job" : "Create Booking"}</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
+          </button>
+        </div>
+      )}
 
       <ConfirmationDialog
         open={vinConfirmOpen && !!vinSuggestion}

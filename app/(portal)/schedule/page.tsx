@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
@@ -18,8 +18,8 @@ import {
   Info,
   Loader2,
   MessageCircle,
-  MoreHorizontal,
   Pen,
+  SlidersHorizontal,
   Tag,
   Trash2,
   User,
@@ -68,6 +68,8 @@ import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/book
 import NoShowNotificationBanner from "@/components/no-show-notification-banner";
 import NotificationBell from "@/components/notification-bell";
 import ActiveJobStrip from "@/components/active-job-strip";
+import { BottomSheet } from "@/components/ui/bottom-sheet";
+import { useIsCompact } from "@/lib/use-media-query";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import {
@@ -242,6 +244,8 @@ const BUILT_IN_TYPES = [
 
 export default function SchedulePage() {
   const entityLabel = useEntityLabel();
+  // <xl (phones + iPads): side panels become slide-up bottom sheets.
+  const compact = useIsCompact();
   const [currentDate, setCurrentDate] = useState(new Date());
   const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("day");
@@ -357,9 +361,8 @@ export default function SchedulePage() {
 
   const [legendOpen, setLegendOpen] = useState(false);
   const legendRef = useRef<HTMLDivElement>(null);
-  // Mobile-only "More" dropdown (folds Today + view switcher + legend)
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
-  const moreMenuRef = useRef<HTMLDivElement>(null);
+  // Compact (<xl) controls sheet: Today + view switcher + mechanic + legend
+  const [controlsOpen, setControlsOpen] = useState(false);
   const context = useQuery(api.schedule.getScheduleContext);
   const portalAccess = useQuery(api.shops.getMyPortalAccess);
   const viewerMechanicId =
@@ -482,17 +485,6 @@ export default function SchedulePage() {
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [legendOpen]);
-
-  // Dismiss mobile "More" menu on click-outside
-  useEffect(() => {
-    if (!moreMenuOpen) return;
-    const onPointerDown = (e: PointerEvent) => {
-      if (moreMenuRef.current?.contains(e.target as Node)) return;
-      setMoreMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => document.removeEventListener("pointerdown", onPointerDown);
-  }, [moreMenuOpen]);
 
   // Keyboard shortcuts for the job detail modal
   useEffect(() => {
@@ -1626,8 +1618,28 @@ export default function SchedulePage() {
     </div>
   );
 
+  // Each side panel is a fixed 552px flex-sibling on desktop and a slide-up
+  // bottom sheet on phones/iPads (<xl). `children` is rendered in exactly one
+  // branch, so the heavy drawer components mount once.
+  const sidePanel = (open: boolean, onClose: () => void, children: ReactNode) =>
+    compact ? (
+      <BottomSheet open={open} onClose={onClose} fullHeight contentClassName="schedule-scope">
+        <div className="flex h-full flex-col overflow-hidden">{children}</div>
+      </BottomSheet>
+    ) : (
+      <div
+        className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
+          open ? "w-[552px]" : "w-0"
+        }`}
+      >
+        <div className="w-[528px] ml-6 flex h-[calc(100dvh-124px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
+          {children}
+        </div>
+      </div>
+    );
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 schedule-scope">
       <NoShowNotificationBanner />
       {/* Flat toolbar — page title + date nav share one line on desktop;
           mobile keeps the essentials (title + date nav + Create booking +
@@ -1642,10 +1654,10 @@ export default function SchedulePage() {
               {` (${context.lateStartTiming.warningLeadMinutes}/${context.lateStartTiming.initialCycleMinutes} min)`}
             </span>
           ) : null}
-          <div className="hidden sm:block h-6 w-px bg-border shrink-0" aria-hidden="true" />
+          <div className="hidden xl:block h-6 w-px bg-border shrink-0" aria-hidden="true" />
           <button
             onClick={goToday}
-            className="hidden sm:inline-flex px-3 py-1.5 text-sm font-medium rounded-lg border border-border hover:bg-muted transition-colors"
+            className="hidden xl:inline-flex px-3 py-1.5 text-sm font-medium rounded-lg border border-border hover:bg-muted transition-colors"
           >
             Today
           </button>
@@ -1699,13 +1711,13 @@ export default function SchedulePage() {
             <span className="hidden sm:inline">Create booking</span>
           </button>
 
-          {/* Mechanic filter */}
+          {/* Mechanic filter — inline on desktop; folded into the controls sheet below xl */}
           {context.mechanics.length > 0 && (
             <Select
               selectedKey={mechanicFilter}
               onSelectionChange={(key) => setMechanicFilter(String(key))}
             >
-              <SelectTrigger className="h-9 rounded-lg border-border bg-card text-sm px-3 min-w-0 max-w-[8.5rem] sm:max-w-none sm:min-w-40">
+              <SelectTrigger className="hidden xl:flex h-9 rounded-lg border-border bg-card text-sm px-3 min-w-0 sm:min-w-40">
                 <SelectValue />
               </SelectTrigger>
               <SelectPopover placement="bottom end">
@@ -1722,8 +1734,8 @@ export default function SchedulePage() {
             </Select>
           )}
 
-          {/* Desktop-only inline options: view switcher + legend */}
-          <div className="hidden sm:flex items-center gap-2 shrink-0">
+          {/* Desktop-only inline options: view switcher + legend (≥xl) */}
+          <div className="hidden xl:flex items-center gap-2 shrink-0">
             {/* View switcher */}
             <div className="flex border border-border rounded-lg overflow-hidden">
               {(["day", "week", "month"] as const).map((view) => (
@@ -1757,65 +1769,23 @@ export default function SchedulePage() {
                 </div>
               )}
             </div>
-
-            {/* Notification bell — folded into the toolbar here; shown only at
-                lg+, where this page hides the portal's top header (which used to
-                carry it). Below lg the mobile top header still shows the bell. */}
-            <div className="hidden lg:block">
-              <NotificationBell />
-            </div>
           </div>
 
-          {/* Mobile-only "More" menu: Today + view switcher + legend */}
-          <div className="sm:hidden relative shrink-0" ref={moreMenuRef}>
-            <button
-              onClick={() => setMoreMenuOpen((o) => !o)}
-              aria-label="More options"
-              className="p-1.5 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
-            >
-              <MoreHorizontal className="w-5 h-5" />
-            </button>
-            {moreMenuOpen && (
-              <div className="absolute top-full right-0 mt-1 z-50 bg-card border border-border rounded-xl shadow-lg p-2 min-w-[240px]">
-                <button
-                  onClick={() => {
-                    goToday();
-                    setMoreMenuOpen(false);
-                  }}
-                  className="w-full text-left px-3 py-2 rounded-lg text-sm font-medium hover:bg-muted transition-colors"
-                >
-                  Today
-                </button>
-
-                <div className="px-1 pt-1.5">
-                  <p className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">View</p>
-                  <div className="flex border border-border rounded-lg overflow-hidden">
-                    {(["day", "week", "month"] as const).map((view) => (
-                      <button
-                        key={view}
-                        onClick={() => {
-                          handleViewChange(view);
-                          setMoreMenuOpen(false);
-                        }}
-                        className={`flex-1 px-3 py-1.5 text-sm font-medium transition-colors ${
-                          currentView === view
-                            ? "bg-primary text-primary-foreground"
-                            : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                        }`}
-                      >
-                        {view.charAt(0).toUpperCase() + view.slice(1)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="mt-1 pt-1.5 px-1 border-t border-border">
-                  <p className="px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Status legend</p>
-                  <div className="px-2 pb-1">{legendContent}</div>
-                </div>
-              </div>
-            )}
+          {/* Notification bell — toolbar owns it at lg+; the portal's mobile top
+              header carries it below lg. The popover becomes a bottom sheet <xl. */}
+          <div className="hidden lg:block">
+            <NotificationBell />
           </div>
+
+          {/* Compact controls (<xl): opens the Today/View/Mechanic/Legend sheet */}
+          <button
+            type="button"
+            onClick={() => setControlsOpen(true)}
+            aria-label="View options"
+            className="xl:hidden shrink-0 p-1.5 rounded-lg border border-border hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+          >
+            <SlidersHorizontal className="w-5 h-5" />
+          </button>
         </div>
       </div>
 
@@ -1830,7 +1800,7 @@ export default function SchedulePage() {
           (flex-1) fills whatever the active-jobs strip below it doesn't use:
           full height when there's no active job, ~48px shorter when the pill
           shows. */}
-      <div className="flex-1 min-w-0 flex flex-col h-[calc(100vh-100px)] min-h-[500px]">
+      <div className="flex-1 min-w-0 flex flex-col h-[calc(100dvh-100px)] min-h-[500px]">
 
       {/* Calendar */}
       <div className="bg-card border border-border rounded-xl overflow-hidden schedule-calendar relative flex flex-col flex-1 min-h-0">
@@ -1872,7 +1842,23 @@ export default function SchedulePage() {
                     );
                     setManualRescheduleError("");
                   }
-                : undefined
+                : compact
+                  ? (info) => {
+                      // Touch has no right-click: tapping an empty slot opens the
+                      // create-booking sheet at that slot (desktop keeps the menu).
+                      if (
+                        bookings &&
+                        overlapsMechanicBooking(info.mechanicId, info.date, info.startTime, info.endTime, bookings)
+                      )
+                        return;
+                      setCreateBookingDrawer({
+                        date: info.date,
+                        time: info.startTime,
+                        mechanicId: info.mechanicId,
+                        durationMinutes: 60,
+                      });
+                    }
+                  : undefined
             }
             onContextMenuCell={(info) => {
               if (
@@ -2046,14 +2032,9 @@ export default function SchedulePage() {
 
       </div>{/* end main content */}
 
-      {/* Blocked time drawer */}
-      <div
-        className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-          drawerOpen ? "w-[552px]" : "w-0"
-        }`}
-      >
-        <div className="w-[528px] ml-6 flex h-[calc(100vh-124px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
-          {blockTimeDrawer && (
+      {/* Blocked time drawer — side panel on desktop, bottom sheet on mobile/iPad */}
+      {sidePanel(drawerOpen, () => setBlockTimeDrawer(null),
+        blockTimeDrawer && (
             <div className="flex flex-col h-full">
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-4 border-b border-border">
@@ -2386,14 +2367,17 @@ export default function SchedulePage() {
                 </button>
               </div>
             </div>
-          )}
-        </div>
-      </div>
+          )
+        )}
 
-      {/* Job detail drawer (or reschedule panel when in reschedule mode) */}
-      <div className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${(selectedBookingId || manualReschedule) ? "w-[552px]" : "w-0"}`}>
-        <div className="w-[528px] ml-6 flex flex-col border border-border bg-card rounded-2xl overflow-hidden h-[calc(100vh-124px)] min-h-[500px]">
-          {manualReschedule ? (() => {
+      {/* Job detail drawer — side panel on desktop, bottom sheet on mobile/iPad */}
+      {sidePanel(
+        Boolean(selectedBookingId || manualReschedule),
+        () => {
+          setSelectedBookingId(null);
+          setManualReschedule(null);
+        },
+        manualReschedule ? (() => {
             const m = manualReschedule;
             const hasDateTime = Boolean(m.date && m.time);
             const outsideHours = hasDateTime
@@ -2623,14 +2607,11 @@ export default function SchedulePage() {
               onSuccess={(msg) => setToast({ msg, key: Date.now() })}
               showBookingsLink
             />
-          )}
-        </div>
-      </div>
+          )
+        )}
 
-      {/* Create booking drawer */}
-      {createBookingDrawer && (
-        <div className="flex-shrink-0 w-[552px]  h-[calc(100vh-100px)] min-h-[500px]">
-          <div className="w-[528px] ml-6 flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-card">
+      {/* Create booking drawer — side panel on desktop, bottom sheet on mobile/iPad */}
+      {createBookingDrawer && sidePanel(true, () => setCreateBookingDrawer(null), (
             <CreateBookingDrawer
               date={createBookingDrawer.date}
               time={createBookingDrawer.time}
@@ -2656,14 +2637,105 @@ export default function SchedulePage() {
               bookings={bookings ?? []}
               shopHours={context?.hours ?? []}
               holdSessionId={bookingHoldSession ?? ""}
+              compact={compact}
               onClose={() => setCreateBookingDrawer(null)}
               onToast={(msg) => setToast({ msg, key: Date.now() })}
             />
-          </div>
-        </div>
-      )}
+      ))}
 
       </div>{/* end flex row */}
+
+      {/* Compact controls sheet (<xl): Today / View / Mechanic / Legend */}
+      <BottomSheet
+        open={controlsOpen}
+        onClose={() => setControlsOpen(false)}
+        title="View options"
+        contentClassName="schedule-scope"
+      >
+        <div className="space-y-6 px-5 py-4">
+          {/* Today */}
+          <button
+            type="button"
+            onClick={() => {
+              goToday();
+              setControlsOpen(false);
+            }}
+            className="w-full rounded-xl border border-border px-4 py-3 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+          >
+            Jump to today
+          </button>
+
+          {/* View */}
+          <div>
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">View</p>
+            <div className="flex border border-border rounded-lg overflow-hidden">
+              {(["day", "week", "month"] as const).map((view) => (
+                <button
+                  key={view}
+                  onClick={() => {
+                    handleViewChange(view);
+                    setControlsOpen(false);
+                  }}
+                  className={`flex-1 px-3 py-2.5 text-sm font-medium transition-colors ${
+                    currentView === view
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  {view.charAt(0).toUpperCase() + view.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Mechanic filter */}
+          {context.mechanics.length > 0 && (
+            <div>
+              <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Show</p>
+              <div className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMechanicFilter("all");
+                    setControlsOpen(false);
+                  }}
+                  className={`w-full text-left rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                    mechanicFilter === "all"
+                      ? "bg-primary/10 text-primary"
+                      : "text-foreground hover:bg-muted"
+                  }`}
+                >
+                  {`All ${entityLabel.plural}`}
+                </button>
+                {context.mechanics.map((m) => (
+                  <button
+                    key={m._id}
+                    type="button"
+                    onClick={() => {
+                      setMechanicFilter(m._id);
+                      setControlsOpen(false);
+                    }}
+                    className={`w-full text-left rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                      mechanicFilter === m._id
+                        ? "bg-primary/10 text-primary"
+                        : "text-foreground hover:bg-muted"
+                    }`}
+                  >
+                    {m.name}
+                    {isMechanicViewer && m._id === viewerMechanicId ? " (you)" : ""}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Status legend */}
+          <div>
+            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Status legend</p>
+            {legendContent}
+          </div>
+        </div>
+      </BottomSheet>
 
       <RescheduleConfirmationDialog
         proposal={rescheduleProposal}

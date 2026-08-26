@@ -109,6 +109,40 @@ export interface FitmentVerdict {
   reason: string;
 }
 
+/** The verdict JSON array from the model's response text, or null.
+ *
+ *  The old `text.match(/\[[\s\S]*\]/)` was a GREEDY grab from the FIRST `[`
+ *  to the LAST `]`. Part lines carry `[listed as: "…"]` titles, and when the
+ *  model's visible reasoning echoes one before emitting its JSON, the grab
+ *  starts at the echoed bracket and JSON.parse dies — deterministically, per
+ *  config, which then read as `verifier_error` and (Aug 26 2026) aborted the
+ *  fleet sweep at the same cursor five times. Same first-bracket disease the
+ *  batch-2 extractor had. The answer array is the LAST thing in the turn per
+ *  the prompt contract, so candidates are tried from the last `[` backwards;
+ *  each candidate runs to the last `]` after it, trimmed back bracket by
+ *  bracket until something parses. Pure; exported for tests. */
+export function extractVerdictArray(text: string): any[] | null {
+  const s = String(text ?? "");
+  const opens: number[] = [];
+  for (let i = 0; i < s.length; i++) if (s[i] === "[") opens.push(i);
+  for (let o = opens.length - 1; o >= 0 && o >= opens.length - 24; o--) {
+    const from = opens[o];
+    let end = s.lastIndexOf("]");
+    let tries = 0;
+    while (end > from && tries < 24) {
+      try {
+        const parsed = JSON.parse(s.slice(from, end + 1));
+        if (Array.isArray(parsed)) return parsed;
+        break; // parsed but not an array — this open bracket is wrong
+      } catch {
+        end = s.lastIndexOf("]", end - 1);
+        tries++;
+      }
+    }
+  }
+  return null;
+}
+
 /** Axle position a role key claims, so the verifier can catch a front part
  *  stored under the rear role (batch-10: a FRONT 7-lug F-150 rotor shipped as
  *  the rear rotor — the part was real and model-correct, only the position was
@@ -250,10 +284,7 @@ export async function verifyPartFitments(
       .map((b) => (b as any).text)
       .join("")
       .trim();
-    const match = text.match(/\[[\s\S]*\]/);
-    if (!match) return uncertainAll("unparseable_response");
-
-    const arr = JSON.parse(match[0]);
+    const arr = extractVerdictArray(text);
     if (!Array.isArray(arr)) return uncertainAll("unparseable_response");
 
     return parts.map((p, i) => {

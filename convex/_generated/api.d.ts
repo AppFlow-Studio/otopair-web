@@ -500,6 +500,7 @@ import type * as vehicleEnrichment_laborWebSearch from "../vehicleEnrichment/lab
 import type * as vehicleEnrichment_lemonLabor from "../vehicleEnrichment/lemonLabor.js";
 import type * as vehicleEnrichment_lemonManuals from "../vehicleEnrichment/lemonManuals.js";
 import type * as vehicleEnrichment_makeCoverage from "../vehicleEnrichment/makeCoverage.js";
+import type * as vehicleEnrichment_manualCompanion from "../vehicleEnrichment/manualCompanion.js";
 import type * as vehicleEnrichment_manualDirectSources from "../vehicleEnrichment/manualDirectSources.js";
 import type * as vehicleEnrichment_manualLibrary from "../vehicleEnrichment/manualLibrary.js";
 import type * as vehicleEnrichment_manualPageIndex from "../vehicleEnrichment/manualPageIndex.js";
@@ -1111,6 +1112,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/lemonLabor": typeof vehicleEnrichment_lemonLabor;
   "vehicleEnrichment/lemonManuals": typeof vehicleEnrichment_lemonManuals;
   "vehicleEnrichment/makeCoverage": typeof vehicleEnrichment_makeCoverage;
+  "vehicleEnrichment/manualCompanion": typeof vehicleEnrichment_manualCompanion;
   "vehicleEnrichment/manualDirectSources": typeof vehicleEnrichment_manualDirectSources;
   "vehicleEnrichment/manualLibrary": typeof vehicleEnrichment_manualLibrary;
   "vehicleEnrichment/manualPageIndex": typeof vehicleEnrichment_manualPageIndex;

@@ -2269,6 +2269,34 @@ export const addNaRoleKeys = internalMutation({
   },
 });
 
+/** Undo a wrongly-persisted N/A role. na_role_keys survives re-runs BY
+ *  DESIGN, which is exactly why a false entry is poisonous: the role leaves
+ *  the quotability math forever and the config looks healthier while hiding a
+ *  real part (Aug 21 2026: a "couldn't confirm within search budget" answer
+ *  was persisted as front_rotor-not-applicable on an Accord Sport — a car
+ *  with, obviously, front rotors). */
+export const removeNaRoleKeys = internalMutation({
+  args: {
+    vehicle_config_id: v.id("vehicle_configs"),
+    role_keys: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const config = await ctx.db.get(args.vehicle_config_id);
+    if (!config) return { removed: 0 };
+    const existing: string[] = ((config as any).na_role_keys ?? []) as string[];
+    const drop = new Set(args.role_keys);
+    const kept = existing.filter((k) => !drop.has(k));
+    const removed = existing.length - kept.length;
+    if (removed > 0) {
+      await ctx.db.patch(args.vehicle_config_id, { na_role_keys: kept });
+      console.log(
+        `[role-resource] na_role_keys -= ${args.role_keys.join(",")} on config ${args.vehicle_config_id}`,
+      );
+    }
+    return { removed };
+  },
+});
+
 // ============================================================================
 // 12b. failEnrichmentRun — terminal failure in ONE transaction
 // ============================================================================

@@ -377,6 +377,11 @@ export default defineSchema({
     // drivetrain, brake_fluid_capacity_oz and ps_fluid_capacity_oz are today.
     // Durable across re-runs, same as na_role_keys above.
     verified_fields: v.optional(v.array(v.string())),
+    /** When this config's fitments last went through the adversarial
+     *  re-verification sweep (fitmentReverify). The nightly audit loop picks
+     *  never/oldest-audited first, so the whole fleet rotates through the
+     *  auditor without any cursor state to lose. */
+    fitment_audited_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
     .index("by_config_key", ["config_key"])

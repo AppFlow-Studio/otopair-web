@@ -27,7 +27,7 @@
  *   npx convex run vehicleEnrichment/fitmentReverify:sweep '{"limit":12,"cursor":"<from prior run>"}'
  */
 import { v } from "convex/values";
-import { internalAction, internalQuery } from "../_generated/server";
+import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { internal } from "../_generated/api";
 import {
   verifyPartFitments,
@@ -125,6 +125,176 @@ export const _candidatesForConfig = internalQuery({
   },
 });
 
+/** Freshness stamp — audited means "went through the loop", including
+ *  configs with nothing to check (otherwise candidate-less configs would sit
+ *  at the front of the stalest-first ordering forever, eating the nightly
+ *  budget on no-ops). */
+export const _stampAudited = internalMutation({
+  args: { vehicleConfigId: v.id("vehicle_configs") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.vehicleConfigId, { fitment_audited_at: Date.now() });
+  },
+});
+
+/** Never-audited first, then oldest audit first. Full-table scan + in-memory
+ *  sort — the fleet is a few hundred configs; give this an index before the
+ *  fleet is tens of thousands. */
+export const _stalestConfigs = internalQuery({
+  args: { limit: v.float64() },
+  handler: async (ctx, args) => {
+    const all = await ctx.db.query("vehicle_configs").collect();
+    return all
+      .map((c: any) => ({ id: c._id, at: c.fitment_audited_at ?? 0 }))
+      .sort((a, b) => a.at - b.at)
+      .slice(0, Math.max(1, Math.trunc(args.limit)))
+      .map((x) => x.id);
+  },
+});
+
+const CHANNEL_REASONS = new Set(["verifier_error", "no_api_key"]);
+
+/** The audit loop both entry points share — one config at a time: candidates
+ *  → Sonnet verify (channel guard with one 429 retry) → double-refute →
+ *  remove + blocklist → staggered heal → freshness stamp. Returns early with
+ *  `aborted` on channel death so callers preserve their position. */
+async function auditConfigs(
+  ctx: any,
+  ids: readonly any[],
+  opts: { dryRun: boolean; heal: boolean },
+): Promise<{ rows: any[]; healsScheduled: number; aborted: string | null }> {
+  const rows: any[] = [];
+  let healsScheduled = 0;
+  for (const configId of ids) {
+    try {
+      const bundle: any = await ctx.runQuery(
+        internal.vehicleEnrichment.fitmentReverify._candidatesForConfig,
+        { vehicleConfigId: configId },
+      );
+      if (!bundle || bundle.candidates.length === 0) {
+        if (!opts.dryRun) {
+          await ctx.runMutation(internal.vehicleEnrichment.fitmentReverify._stampAudited, {
+            vehicleConfigId: configId,
+          });
+        }
+        continue;
+      }
+
+      let verdicts1 = await verifyPartFitments(bundle.vehicle, bundle.candidates);
+      // Channel-death guard: verifyPartFitments never throws — a dead API
+      // key comes back as every part "uncertain" with a channel reason, and
+      // "uncertain deletes nothing" quietly turns the whole remaining fleet
+      // into zero-refute rows that read as CLEAN (Aug 20 2026: the key ran
+      // out of credits at row ~31 and the next 228 configs "passed").
+      //
+      // One retry after a pause first: `verifier_error` also covers a
+      // TRANSIENT 429 burst when several workloads share the key, and
+      // aborting a fleet pass over one rate-limit spike proved as disruptive
+      // as the outage it guards against.
+      const channelSuspect = (vs: typeof verdicts1) =>
+        vs.length > 0 &&
+        vs.every((x) => x.verdict === "uncertain" && CHANNEL_REASONS.has(x.reason));
+      if (channelSuspect(verdicts1)) {
+        await new Promise((r) => setTimeout(r, 45_000));
+        verdicts1 = await verifyPartFitments(bundle.vehicle, bundle.candidates);
+      }
+      if (channelSuspect(verdicts1)) {
+        console.error(
+          `[fitment-reverify] verifier channel down (${verdicts1[0].reason}) at ${bundle.configKey} — aborting`,
+        );
+        return { rows, healsScheduled, aborted: `verifier_channel_down:${verdicts1[0].reason}` };
+      }
+
+      const refuted1 = verdicts1.filter((x) => x.verdict === "refuted");
+      if (refuted1.length === 0) {
+        rows.push({
+          configKey: bundle.configKey,
+          label: bundle.label,
+          checked: bundle.candidates.length,
+          refuted: 0,
+        });
+        if (!opts.dryRun) {
+          await ctx.runMutation(internal.vehicleEnrichment.fitmentReverify._stampAudited, {
+            vehicleConfigId: configId,
+          });
+        }
+        continue;
+      }
+
+      // Second, independent adjudication of only the refuted subset. A part
+      // must lose twice before a fleet audit deletes it.
+      const recheckSet = new Set(refuted1.map((x) => `${x.roleKey}|${x.oem}`));
+      const recheckCandidates = bundle.candidates.filter((c: any) =>
+        recheckSet.has(`${c.roleKey}|${c.oem}`),
+      );
+      const verdicts2 = await verifyPartFitments(bundle.vehicle, recheckCandidates);
+      const refutedTwice = refuted1.filter((r1) =>
+        verdicts2.some(
+          (r2) => r2.roleKey === r1.roleKey && r2.oem === r1.oem && r2.verdict === "refuted",
+        ),
+      );
+      const savedOnRecheck = refuted1.length - refutedTwice.length;
+
+      let removed = 0;
+      if (refutedTwice.length > 0 && !opts.dryRun) {
+        const res: any = await ctx.runMutation(
+          internal.vehicleEnrichment.v3mutations.removeRefutedFitments,
+          {
+            vehicle_config_id: configId,
+            refuted: refutedTwice.map((r) => {
+              const r2 = verdicts2.find((x) => x.roleKey === r.roleKey && x.oem === r.oem);
+              return {
+                oem: r.oem,
+                reason:
+                  `fleet reverify: ${r.reason.slice(0, 200)}` +
+                  (r2?.reason ? ` // recheck: ${r2.reason.slice(0, 200)}` : ""),
+              };
+            }),
+          },
+        );
+        removed = res?.removed ?? 0;
+        if (removed > 0 && opts.heal) {
+          // Stagger so a batch of removals doesn't stampede the heal ladder.
+          await ctx.scheduler.runAfter(
+            healsScheduled * 90_000,
+            internal.vehicleEnrichment.resourceRoles.healAfterRun,
+            { vehicleConfigId: configId },
+          );
+          healsScheduled++;
+        }
+      }
+
+      rows.push({
+        configKey: bundle.configKey,
+        label: bundle.label,
+        checked: bundle.candidates.length,
+        refuted: refuted1.length,
+        savedOnRecheck,
+        refutedTwice: refutedTwice.map((r) => `${r.roleKey}:${r.oem}:${r.reason.slice(0, 140)}`),
+        removed,
+      });
+      if (!opts.dryRun) {
+        await ctx.runMutation(internal.vehicleEnrichment.fitmentReverify._stampAudited, {
+          vehicleConfigId: configId,
+        });
+      }
+    } catch (e) {
+      rows.push({ configId: String(configId), error: String((e as any)?.message ?? e) });
+    }
+  }
+  return { rows, healsScheduled, aborted: null };
+}
+
+function summarize(rows: any[], healsScheduled: number, dryRun: boolean) {
+  return {
+    examined: rows.length,
+    flagged: rows.filter((r) => (r.refuted ?? 0) > 0).length,
+    removedTotal: rows.reduce((n, r) => n + (r.removed ?? 0), 0),
+    healsScheduled,
+    dryRun,
+    rows,
+  };
+}
+
 export const sweep = internalAction({
   args: {
     /** Configs examined this invocation (verify calls are the cost driver;
@@ -143,127 +313,54 @@ export const sweep = internalAction({
       internal.vehicleEnrichment.fitmentReverify._configPage,
       { cursor: args.cursor ?? null, limit },
     );
-
-    const rows: any[] = [];
-    let healsScheduled = 0;
-    for (const configId of page.ids) {
-      try {
-        const bundle: any = await ctx.runQuery(
-          internal.vehicleEnrichment.fitmentReverify._candidatesForConfig,
-          { vehicleConfigId: configId },
-        );
-        if (!bundle || bundle.candidates.length === 0) continue;
-
-        const verdicts1 = await verifyPartFitments(bundle.vehicle, bundle.candidates);
-        // Channel-death guard: verifyPartFitments never throws — a dead API
-        // key comes back as every part "uncertain" with a channel reason, and
-        // "uncertain deletes nothing" quietly turns the whole remaining fleet
-        // into zero-refute rows that read as CLEAN (Aug 20 2026: the key ran
-        // out of credits at row ~31 and the next 228 configs "passed"). A
-        // channel failure aborts the invocation with the SAME cursor.
-        const CHANNEL_REASONS = new Set(["verifier_error", "no_api_key"]);
-        if (
-          verdicts1.length > 0 &&
-          verdicts1.every((x) => x.verdict === "uncertain" && CHANNEL_REASONS.has(x.reason))
-        ) {
-          console.error(
-            `[fitment-reverify] verifier channel down (${verdicts1[0].reason}) at ${bundle.configKey} — aborting invocation`,
-          );
-          return {
-            aborted: `verifier_channel_down:${verdicts1[0].reason}`,
-            examined: rows.length,
-            flagged: rows.filter((r) => (r.refuted ?? 0) > 0).length,
-            removedTotal: rows.reduce((n, r) => n + (r.removed ?? 0), 0),
-            healsScheduled,
-            dryRun: args.dryRun === true,
-            rows,
-            continueCursor: args.cursor ?? null,
-            isDone: false,
-          };
-        }
-        const refuted1 = verdicts1.filter((x) => x.verdict === "refuted");
-        if (refuted1.length === 0) {
-          rows.push({
-            configKey: bundle.configKey,
-            label: bundle.label,
-            checked: bundle.candidates.length,
-            refuted: 0,
-          });
-          continue;
-        }
-
-        // Second, independent adjudication of only the refuted subset. A part
-        // must lose twice before a fleet sweep deletes it.
-        const recheckSet = new Set(refuted1.map((x) => `${x.roleKey}|${x.oem}`));
-        const recheckCandidates = bundle.candidates.filter((c: any) =>
-          recheckSet.has(`${c.roleKey}|${c.oem}`),
-        );
-        const verdicts2 = await verifyPartFitments(bundle.vehicle, recheckCandidates);
-        const refutedTwice = refuted1.filter((r1) =>
-          verdicts2.some(
-            (r2) => r2.roleKey === r1.roleKey && r2.oem === r1.oem && r2.verdict === "refuted",
-          ),
-        );
-        const savedOnRecheck = refuted1.length - refutedTwice.length;
-
-        let removed = 0;
-        if (refutedTwice.length > 0 && args.dryRun !== true) {
-          const res: any = await ctx.runMutation(
-            internal.vehicleEnrichment.v3mutations.removeRefutedFitments,
-            {
-              vehicle_config_id: configId,
-              refuted: refutedTwice.map((r) => {
-                const r2 = verdicts2.find(
-                  (x) => x.roleKey === r.roleKey && x.oem === r.oem,
-                );
-                return {
-                  oem: r.oem,
-                  reason:
-                    `fleet reverify: ${r.reason.slice(0, 200)}` +
-                    (r2?.reason ? ` // recheck: ${r2.reason.slice(0, 200)}` : ""),
-                };
-              }),
-            },
-          );
-          removed = res?.removed ?? 0;
-          if (removed > 0 && args.heal !== false) {
-            // Stagger so a batch of removals doesn't stampede the heal ladder.
-            await ctx.scheduler.runAfter(
-              healsScheduled * 90_000,
-              internal.vehicleEnrichment.resourceRoles.healAfterRun,
-              { vehicleConfigId: configId },
-            );
-            healsScheduled++;
-          }
-        }
-
-        rows.push({
-          configKey: bundle.configKey,
-          label: bundle.label,
-          checked: bundle.candidates.length,
-          refuted: refuted1.length,
-          savedOnRecheck,
-          refutedTwice: refutedTwice.map((r) => `${r.roleKey}:${r.oem}:${r.reason.slice(0, 140)}`),
-          removed,
-        });
-      } catch (e) {
-        rows.push({ configId: String(configId), error: String((e as any)?.message ?? e) });
-      }
-    }
-
-    const summary = {
-      examined: page.ids.length,
-      flagged: rows.filter((r) => (r.refuted ?? 0) > 0).length,
-      removedTotal: rows.reduce((n, r) => n + (r.removed ?? 0), 0),
-      healsScheduled,
+    const { rows, healsScheduled, aborted } = await auditConfigs(ctx, page.ids, {
       dryRun: args.dryRun === true,
-      rows,
-      continueCursor: page.continueCursor,
-      isDone: page.isDone,
+      heal: args.heal !== false,
+    });
+    const summary = {
+      ...summarize(rows, healsScheduled, args.dryRun === true),
+      aborted,
+      // On abort the SAME cursor comes back so a re-run resumes exactly here.
+      continueCursor: aborted ? (args.cursor ?? null) : page.continueCursor,
+      isDone: aborted ? false : page.isDone,
     };
     console.log(
       `[fitment-reverify] ${summary.examined} config(s): ${summary.flagged} flagged, ` +
-        `${summary.removedTotal} removed${summary.dryRun ? " [dry-run]" : ""}`,
+        `${summary.removedTotal} removed${summary.dryRun ? " [dry-run]" : ""}` +
+        (aborted ? ` [${aborted}]` : ""),
+    );
+    return summary;
+  },
+});
+
+/**
+ * The standing audit loop (plan P3): every night, re-adjudicate the configs
+ * whose fitments have gone longest unexamined. Freshness-ordered instead of
+ * cursor-paged, so there is no state to lose and a config edited yesterday
+ * naturally rotates to the back. DARK unless PARTS_FITMENT_AUDIT_BUDGET
+ * (configs per night) is set > 0 — the audit spends Sonnet+search calls.
+ */
+export const nightly = internalAction({
+  args: {},
+  handler: async (ctx): Promise<any> => {
+    const budget = Number(process.env.PARTS_FITMENT_AUDIT_BUDGET ?? "0");
+    if (!Number.isFinite(budget) || budget <= 0) {
+      console.log("[fitment-reverify] PARTS_FITMENT_AUDIT_BUDGET unset/0 — nightly audit dark");
+      return { skipped: true };
+    }
+    const ids: any[] = await ctx.runQuery(
+      internal.vehicleEnrichment.fitmentReverify._stalestConfigs,
+      { limit: budget },
+    );
+    const { rows, healsScheduled, aborted } = await auditConfigs(ctx, ids, {
+      dryRun: false,
+      heal: true,
+    });
+    const summary = { ...summarize(rows, healsScheduled, false), aborted };
+    console.log(
+      `[fitment-reverify] nightly: ${summary.examined}/${budget} audited, ` +
+        `${summary.flagged} flagged, ${summary.removedTotal} removed` +
+        (aborted ? ` [${aborted}]` : ""),
     );
     return summary;
   },

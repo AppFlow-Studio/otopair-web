@@ -1013,6 +1013,19 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * Ceil labor hours up to the nearest 15-minute slot. 0.6h (36m) → 0.75h (45m).
+ * Canonical home for the round-to-15 rule shared by the quote engine (labor
+ * COST) and laborTimes.ts (displayed DURATION) so cost and duration always
+ * agree on the same billed slot. Non-positive / non-finite inputs pass through
+ * untouched (fixed-price overrides have 0 labor hours).
+ */
+export function ceilHoursTo15(hours: number): number {
+  if (!Number.isFinite(hours) || hours <= 0) return hours;
+  const minutes = hours * 60;
+  return (Math.ceil(minutes / 15) * 15) / 60;
+}
+
 function refuse(reason: string): Quote {
   return {
     ok: false,
@@ -1098,6 +1111,19 @@ export async function resolveQuoteSeries(
     service_positions?: Record<string, "front" | "rear" | "both">;
   },
 ): Promise<QuoteSeries> {
+  // Bill labor at the same 15-min-rounded duration the customer sees on every
+  // screen (laborTimes.ts). Without this, previewForBooking returned the RAW
+  // labor cost while the booking validator (assertLaborCostMatchesDuration)
+  // recomputed the rounded-up cost — any vehicle whose labor landed just above
+  // a 15-min boundary tripped LABOR_COST_TIER_MISMATCH at checkout. Default
+  // true, matching directorSettings.getGlobal + laborTimes.
+  const settingsRow = await ctx.db
+    .query("director_settings")
+    .withIndex("by_key", (qq) => qq.eq("key", "global"))
+    .first();
+  const roundTo15 = settingsRow?.round_labor_times_to_15min ?? true;
+  const billHours = (h: number) => (roundTo15 ? ceilHoursTo15(h) : h);
+
   const quotes: Quote[] = [];
   let total_low = 0;
   let total_high = 0;
@@ -1116,26 +1142,45 @@ export async function resolveQuoteSeries(
       booking_position:
         args.service_positions?.[String(service_id)] ?? null,
     });
-    quotes.push(q);
     if (q.ok) {
-      total_low += q.low;
-      total_high += q.high;
-      labor_minutes_total += q.labor.hours * 60;
-      labor_cost_total += q.labor.cost;
+      // Re-price this line's labor at the billed (rounded) duration, keeping
+      // parts untouched, so per-service labor.hours/cost, low/high, and the
+      // series totals all reflect what the customer is charged. Combined labor
+      // below still consumes the RAW standalone hours (rawHours) so shared
+      // teardown isn't double-rounded before the deduction.
+      const rawHours = q.labor.hours;
+      const billedHours = billHours(rawHours);
+      const billedLaborCost = round2(billedHours * q.labor.rate);
+      const partsLow = round2(q.low - q.labor.cost);
+      const partsHigh = round2(q.high - q.labor.cost);
+      const billedQuote: Quote = {
+        ...q,
+        low: round2(partsLow + billedLaborCost),
+        high: round2(partsHigh + billedLaborCost),
+        labor: { ...q.labor, hours: billedHours, cost: billedLaborCost },
+      };
+      quotes.push(billedQuote);
+      total_low += billedQuote.low;
+      total_high += billedQuote.high;
+      labor_minutes_total += billedHours * 60;
+      labor_cost_total += billedLaborCost;
       if (laborRate === 0 && q.labor.rate > 0) laborRate = q.labor.rate;
       const svcDoc = await ctx.db.get(service_id);
       combineInputs.push({
         serviceId: String(service_id),
         slug: (svcDoc as { slug?: string } | null)?.slug ?? "",
-        standaloneHours: q.labor.hours,
+        standaloneHours: rawHours,
         position: args.service_positions?.[String(service_id)] ?? null,
         source: q.labor.hours_source,
       });
+    } else {
+      quotes.push(q);
     }
   }
 
-  // Naive totals stay byte-identical to today. Combined labor only overrides
-  // them when the director flag is on AND something actually shared teardown.
+  // Naive totals now reflect the billed (rounded) per-service labor. Combined
+  // labor only overrides them when the director flag is on AND something
+  // actually shared teardown.
   const naiveMinutes = Math.round(labor_minutes_total);
   const naiveCost = round2(labor_cost_total);
   let finalMinutes = naiveMinutes;
@@ -1144,25 +1189,24 @@ export async function resolveQuoteSeries(
   let combined_labor_saved_cost: number | undefined;
   let combined_labor_notes: string[] | undefined;
 
-  if (combineInputs.length >= 2) {
-    const settings = await ctx.db
-      .query("director_settings")
-      .withIndex("by_key", (qq) => qq.eq("key", "global"))
-      .first();
-    if (settings?.combined_labor_enabled === true) {
-      const res = resolveCombinedLabor(combineInputs, {
-        enabled: true,
-        disabledFamilies: (settings.combined_labor_disabled_families ??
-          []) as OverlapFamilyId[],
-      });
-      if (res.savedHours > 0) {
-        finalMinutes = Math.round(res.combinedHours * 60);
-        finalCost = round2(res.combinedHours * laborRate);
-        // saved = naive − combined so `combined + saved = naive` holds exactly.
-        combined_labor_saved_minutes = naiveMinutes - finalMinutes;
-        combined_labor_saved_cost = round2(naiveCost - finalCost);
-        combined_labor_notes = res.notes;
-      }
+  if (combineInputs.length >= 2 && settingsRow?.combined_labor_enabled === true) {
+    const res = resolveCombinedLabor(combineInputs, {
+      enabled: true,
+      disabledFamilies: (settingsRow.combined_labor_disabled_families ??
+        []) as OverlapFamilyId[],
+    });
+    if (res.savedHours > 0) {
+      // Combine on RAW hours (standaloneHours above), then bill the combined
+      // total at the same rounded slot so the deducted total is charged on the
+      // duration the customer sees — never rounding each line first, which would
+      // re-inflate the shared teardown time.
+      const combinedBilledHours = billHours(res.combinedHours);
+      finalMinutes = Math.round(combinedBilledHours * 60);
+      finalCost = round2(combinedBilledHours * laborRate);
+      // saved = naive − combined so `combined + saved = naive` holds exactly.
+      combined_labor_saved_minutes = naiveMinutes - finalMinutes;
+      combined_labor_saved_cost = round2(naiveCost - finalCost);
+      combined_labor_notes = res.notes;
     }
   }
 

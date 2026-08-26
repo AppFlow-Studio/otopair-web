@@ -8,6 +8,7 @@ import { NotificationCard, type NotificationItem } from "./notification-card";
 import { NotificationEmptyState } from "./notification-empty-state";
 import { LiveAlertCard } from "./live-alert-card";
 import type { LiveAlert } from "./use-live-alerts";
+import { BottomSheet } from "@/components/ui/bottom-sheet";
 
 type Tab = "all" | "live" | "confirm" | "tire" | "rotor";
 
@@ -22,6 +23,8 @@ interface NotificationPopoverProps {
   liveAlerts: LiveAlert[];
   initialTab?: Tab;
   onClose: () => void;
+  /** "popover" (desktop, top-anchored) or "sheet" (mobile/iPad slide-up). */
+  variant?: "popover" | "sheet";
 }
 
 export function NotificationPopover({
@@ -29,6 +32,7 @@ export function NotificationPopover({
   liveAlerts,
   initialTab,
   onClose,
+  variant = "popover",
 }: NotificationPopoverProps) {
   const router = useRouter();
   const markAllRead = useMutation(api.mechanicNotifications.markAllRead);
@@ -121,8 +125,8 @@ export function NotificationPopover({
 
   const showLivePinnedInAll = activeTab === "all" && liveAlerts.length > 0;
 
-  return (
-    <div className="fixed inset-x-2 top-16 z-50 flex max-h-[calc(100vh-5rem)] flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:block sm:max-h-none sm:w-[380px] sm:max-w-[calc(100vw-2rem)]">
+  const panel = (
+    <>
       {/* Header */}
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
         <span className="text-sm font-semibold text-gray-900">
@@ -273,6 +277,20 @@ export function NotificationPopover({
           Notification settings
         </button>
       </div>
+    </>
+  );
+
+  if (variant === "sheet") {
+    return (
+      <BottomSheet open onClose={onClose} ariaLabel="Notifications" contentClassName="flex flex-col">
+        {panel}
+      </BottomSheet>
+    );
+  }
+
+  return (
+    <div className="fixed inset-x-2 top-16 z-50 flex max-h-[calc(100vh-5rem)] flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-2 sm:block sm:max-h-none sm:w-[380px] sm:max-w-[calc(100vw-2rem)]">
+      {panel}
     </div>
   );
 }

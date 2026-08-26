@@ -1697,32 +1697,16 @@ async function assertLaborCostMatchesDuration(
     return;
   }
 
-  // Mirror the client's labor-hours rounding when the director toggle is on
-  // (laborTimes.ts ceil-to-15). Without this mirror the server computes raw
-  // hours (e.g. 0.6h) while the client submits the rounded value (0.75h),
-  // which makes a legitimate ±8% check fail at the boundary.
-  const settingsRow = await ctx.db
-    .query("director_settings")
-    .withIndex("by_key", (q: any) => q.eq("key", "global"))
-    .first();
-  const roundTo15 = settingsRow?.round_labor_times_to_15min ?? true;
-  // When combined labor fired, series.labor_cost_total IS the deducted total —
-  // use it directly. Re-summing per-service rounded hours here would rebuild the
-  // NAIVE cost and hard-reject a client that (correctly) submitted the lower
-  // combined number.
-  const combinedApplied = (series.combined_labor_saved_minutes ?? 0) > 0;
-  const expectedLaborCost = combinedApplied
-    ? series.labor_cost_total
-    : roundTo15
-      ? Math.round(
-          series.quotes.reduce((sum, q) => {
-            if (!q.ok) return sum;
-            const roundedHours =
-              (Math.ceil((q.labor.hours * 60) / 15) * 15) / 60;
-            return sum + roundedHours * q.labor.rate;
-          }, 0) * 100,
-        ) / 100
-      : series.labor_cost_total;
+  // Compare against the engine's OWN labor total — the exact number buildQuote
+  // handed the client (useBookingQuoteFallback submits it verbatim, unrounded).
+  // Re-deriving it here with an extra 15-min ceil rounded a faithful client's
+  // estimate UP and hard-rejected it for the server's own rounding drift — e.g.
+  // a T4 tier-floor of 0.85h: the client bills 0.85h, but the guard re-rounded
+  // to 1.0h and threw LABOR_COST_TIER_MISMATCH. combined-labor already compared
+  // vs labor_cost_total; now every path does, so client and server use one
+  // number. Downward tampering is still caught: a client >8% below
+  // labor_cost_total trips the reject below.
+  const expectedLaborCost = series.labor_cost_total;
   if (expectedLaborCost <= 0) return;
   const tolerance = expectedLaborCost * 0.08; // ±8% band per Pricing v2 spec
   const signedDelta = args.laborCostDollars - expectedLaborCost;

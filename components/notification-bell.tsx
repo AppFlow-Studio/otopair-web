@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import { NotificationPopover } from "./notifications/notification-popover";
 import { useLiveAlerts } from "./notifications/use-live-alerts";
 import DynamicAlertIsland from "./dynamic-alert-island";
+import { useIsCompact } from "@/lib/use-media-query";
 
 export default function NotificationBell() {
   const [open, setOpen] = useState(false);
@@ -14,12 +15,15 @@ export default function NotificationBell() {
     undefined,
   );
   const containerRef = useRef<HTMLDivElement>(null);
+  const compact = useIsCompact();
 
   const feed = useQuery(api.mechanicNotifications.getFeed);
   const { alerts: liveAlerts } = useLiveAlerts();
 
   useEffect(() => {
-    if (!open) return;
+    // On mobile/iPad the popover is a portaled bottom sheet, so a click inside
+    // it registers as "outside" this container — let the sheet backdrop close it.
+    if (!open || compact) return;
     function handler(e: MouseEvent) {
       if (
         containerRef.current &&
@@ -30,7 +34,7 @@ export default function NotificationBell() {
     }
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
+  }, [open, compact]);
 
   function handleIslandClick() {
     setRequestedTab("live");
@@ -72,6 +76,7 @@ export default function NotificationBell() {
           liveAlerts={liveAlerts}
           initialTab={requestedTab}
           onClose={handleClose}
+          variant={compact ? "sheet" : "popover"}
         />
       )}
     </div>

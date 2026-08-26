@@ -1697,14 +1697,16 @@ async function assertLaborCostMatchesDuration(
     return;
   }
 
-  // Compare against the engine's OWN labor total — the exact number buildQuote
-  // handed the client (useBookingQuoteFallback submits it verbatim, unrounded).
-  // Re-deriving it here with an extra 15-min ceil rounded a faithful client's
-  // estimate UP and hard-rejected it for the server's own rounding drift — e.g.
-  // a T4 tier-floor of 0.85h: the client bills 0.85h, but the guard re-rounded
-  // to 1.0h and threw LABOR_COST_TIER_MISMATCH. combined-labor already compared
-  // vs labor_cost_total; now every path does, so client and server use one
-  // number. Downward tampering is still caught: a client >8% below
+  // Compare against the engine's OWN labor total — series.labor_cost_total is
+  // the number buildQuote handed the client (useBookingQuoteFallback submits it
+  // verbatim) AND the 15-min-rounded figure the customer sees on Review & Pay
+  // (quotes.previewForBooking returns this exact value). So the expectation IS
+  // series.labor_cost_total in every case — naive and combined alike.
+  // Re-deriving it here with an extra ceil-to-15 is what let the two drift: it
+  // rounded a faithful client's estimate UP and hard-rejected it for the
+  // server's own rounding — e.g. a T4 tier-floor of 0.85h billed as 0.85h but
+  // re-rounded to 1.0h, throwing LABOR_COST_TIER_MISMATCH. Now every path uses
+  // one number. Downward tampering is still caught: a client >8% below
   // labor_cost_total trips the reject below.
   const expectedLaborCost = series.labor_cost_total;
   if (expectedLaborCost <= 0) return;

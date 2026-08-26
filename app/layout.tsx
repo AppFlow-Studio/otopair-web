@@ -112,6 +112,12 @@ const Jersey20s = Jersey_20({
 export const metadata: Metadata = {
   title: "Otopair",
   description: "",
+  // Emits <meta name="apple-mobile-web-app-capable" content="yes" /> so that,
+  // when launched from an iOS home-screen shortcut, the site opens full-screen
+  // (no Safari address/tool bars) like a standalone app.
+  appleWebApp: {
+    capable: true,
+  },
   icons: {
     icon: "/logo.png",
   },

@@ -8,8 +8,9 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { ActionCtx } from "./_generated/server";
-import type { ApiScope, KeyAuth } from "./dataApi";
+import type { ApiScope, KeyAuth, VehicleResponse } from "./dataApi";
 import { ENRICH_DAILY_QUOTA, IMAGE_LIVE_FETCH_DAILY_CAP } from "./dataApi";
+import { buildOpenApiSpec } from "./openapi";
 import Stripe from "stripe";
 
 const http = httpRouter();
@@ -1317,6 +1318,269 @@ http.route({
   ),
 });
 
+// ════════════════════════════════════════════════════════════════════════════
+// External Data API v1 — the same layer-gated data as v0, decomposed into
+// granular, group-scoped endpoints so a caller wanting just fluids never pays
+// for the parts/labor/history joins. Every /v1 read routes through the SAME
+// dataApi.assembleVehicle path as /v0/vehicle (via its ?include= group filter),
+// so the two can never drift; the granular routes just reshape the slice they
+// asked for. All free-tier under existing read scopes (monetization deferred).
+// ════════════════════════════════════════════════════════════════════════════
+
+type VehicleObject = Extract<NonNullable<VehicleResponse>, { object: "vehicle" }>;
+
+/** Read the config_key | vin | year/make/model[/trim] lookup keys shared by
+ *  every vehicle-scoped endpoint. */
+function readVehicleLookup(params: URLSearchParams): {
+  config_key?: string;
+  vin?: string;
+  year?: number;
+  make?: string;
+  model?: string;
+  trim?: string;
+  hasYmmt: boolean;
+} {
+  const config_key = params.get("config_key") ?? undefined;
+  const vin = params.get("vin") ?? undefined;
+  const yearRaw = params.get("year");
+  const year = yearRaw ? Number(yearRaw) : undefined;
+  const make = params.get("make") ?? undefined;
+  const model = params.get("model") ?? undefined;
+  const trim = params.get("trim") ?? undefined;
+  const hasYmmt = year !== undefined && !Number.isNaN(year) && !!make && !!model;
+  return { config_key, vin, year, make, model, trim, hasYmmt };
+}
+
+/** Resolve a vehicle via assembleVehicle with a group filter, folding the
+ *  shared 400/404/409 handling. On success returns the narrowed vehicle object
+ *  so each granular route can pluck its own slice. */
+async function resolveVehicle(
+  ctx: ActionCtx,
+  params: URLSearchParams,
+  include: string[] | undefined,
+): Promise<
+  | { ok: true; v: VehicleObject; config_key: string | undefined }
+  | { ok: false; status: number; body: unknown; config_key?: string }
+> {
+  const { config_key, vin, year, make, model, trim, hasYmmt } = readVehicleLookup(params);
+  if (!config_key && !vin && !hasYmmt) {
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: "missing_param",
+        message: "Pass ?vin=… OR ?year=&make=&model=[&trim=] OR ?config_key=…",
+      },
+    };
+  }
+  const data = await ctx.runQuery(internal.dataApi.assembleVehicle, {
+    config_key,
+    vin,
+    year: hasYmmt ? year : undefined,
+    make,
+    model,
+    trim,
+    include,
+  });
+  if (!data) {
+    return {
+      ok: false,
+      status: 404,
+      body: { error: "not_found", message: "No enriched vehicle matches that identifier." },
+      config_key,
+    };
+  }
+  if (data.object === "multiple_matches") {
+    return {
+      ok: false,
+      status: 409,
+      body: {
+        error: "multiple_matches",
+        message: "More than one config matches — retry with ?config_key= from the list (or add &trim=).",
+        matches: data.matches,
+      },
+      config_key,
+    };
+  }
+  return { ok: true, v: data, config_key: data.config.config_key ?? config_key };
+}
+
+// ── /v1/vehicle — the full payload, now field-selectable via ?include= ──
+// ?include=fluids,tires (aliases: specs|fluids|attributes|chassis→specs,
+// tires|wheels, intervals|maintenance|schedule, services|parts|labor, history).
+// Absent include → the whole payload (identical to /v0/vehicle).
+http.route({
+  path: "/v1/vehicle",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v1/vehicle", "maintenance:read", async (params) => {
+      const includeRaw = params.get("include");
+      const include =
+        includeRaw != null ? includeRaw.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+      const r = await resolveVehicle(ctx, params, include);
+      if (!r.ok) return { status: r.status, body: r.body, config_key: r.config_key };
+      return { status: 200, body: r.v, config_key: r.config_key };
+    }),
+  ),
+});
+
+// ── /v1/fluids — the flagship depth slice: oil/coolant/trans/brake/PS/diff/
+//    transfer-case fluid types + capacities, layer-tagged. ──
+http.route({
+  path: "/v1/fluids",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v1/fluids", "maintenance:read", async (params) => {
+      const r = await resolveVehicle(ctx, params, ["specs"]);
+      if (!r.ok) return { status: r.status, body: r.body, config_key: r.config_key };
+      return {
+        status: 200,
+        body: {
+          object: "fluids",
+          config: r.v.config,
+          fields: r.v.specs.filter((f) => f.group === "Fluids"),
+          meta: r.v.meta,
+        },
+        config_key: r.config_key,
+      };
+    }),
+  ),
+});
+
+// ── /v1/specs — the full layer-tagged spec sheet (fluids + attributes +
+//    chassis service points), plus the excluded (B-licensed/X) list. ──
+http.route({
+  path: "/v1/specs",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v1/specs", "maintenance:read", async (params) => {
+      const r = await resolveVehicle(ctx, params, ["specs"]);
+      if (!r.ok) return { status: r.status, body: r.body, config_key: r.config_key };
+      return {
+        status: 200,
+        body: {
+          object: "specs",
+          config: r.v.config,
+          fields: r.v.specs,
+          excluded: r.v.excluded,
+          meta: r.v.meta,
+        },
+        config_key: r.config_key,
+      };
+    }),
+  ),
+});
+
+// ── /v1/tires — full OEM tire/wheel fitment package + recommended pressures. ──
+http.route({
+  path: "/v1/tires",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v1/tires", "maintenance:read", async (params) => {
+      const r = await resolveVehicle(ctx, params, ["tires"]);
+      if (!r.ok) return { status: r.status, body: r.body, config_key: r.config_key };
+      return {
+        status: 200,
+        body: { object: "tires", config: r.v.config, tires: r.v.tires, meta: r.v.meta },
+        config_key: r.config_key,
+      };
+    }),
+  ),
+});
+
+// ── /v1/maintenance-schedule — OEM service intervals (miles/months). ──
+http.route({
+  path: "/v1/maintenance-schedule",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v1/maintenance-schedule", "maintenance:read", async (params) => {
+      const r = await resolveVehicle(ctx, params, ["intervals"]);
+      if (!r.ok) return { status: r.status, body: r.body, config_key: r.config_key };
+      return {
+        status: 200,
+        body: { object: "maintenance_schedule", config: r.v.config, intervals: r.v.intervals, meta: r.v.meta },
+        config_key: r.config_key,
+      };
+    }),
+  ),
+});
+
+// ── /v1/parts — OEM parts + live prices + labor, grouped per service. ──
+http.route({
+  path: "/v1/parts",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v1/parts", "maintenance:read", async (params) => {
+      const r = await resolveVehicle(ctx, params, ["services"]);
+      if (!r.ok) return { status: r.status, body: r.body, config_key: r.config_key };
+      return {
+        status: 200,
+        body: { object: "parts", config: r.v.config, services: r.v.services, meta: r.v.meta },
+        config_key: r.config_key,
+      };
+    }),
+  ),
+});
+
+// ── /v1/decode — VIN (or config_key/YMMT) → identity only, no group joins. ──
+http.route({
+  path: "/v1/decode",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v1/decode", "maintenance:read", async (params) => {
+      const r = await resolveVehicle(ctx, params, []); // [] → identity, skip every group
+      if (!r.ok) return { status: r.status, body: r.body, config_key: r.config_key };
+      return { status: 200, body: { object: "decode", config: r.v.config }, config_key: r.config_key };
+    }),
+  ),
+});
+
+// ── /v1/configs — candidate config_keys for a year/make/model[/trim]. ──
+http.route({
+  path: "/v1/configs",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v1/configs", "maintenance:read", async (params) => {
+      const { year, make, model, trim, hasYmmt } = readVehicleLookup(params);
+      if (!hasYmmt) {
+        return { status: 400, body: { error: "missing_param", message: "Pass ?year=&make=&model=[&trim=]" } };
+      }
+      const configs = await ctx.runQuery(internal.dataApi.listConfigCandidates, {
+        year: year!,
+        make: make!,
+        model: model!,
+        trim,
+      });
+      if (configs.length === 0) {
+        return {
+          status: 404,
+          body: {
+            error: "not_found",
+            message: "No enriched config matches that year/make/model — POST /v0/enrich {vin} to add one.",
+          },
+        };
+      }
+      return {
+        status: 200,
+        body: { object: "config_list", year, make, model, trim: trim ?? null, count: configs.length, configs },
+      };
+    }),
+  ),
+});
+
+// ── /v1/openapi.json — the machine-readable spec (public, no key). Powers the
+//    interactive reference at /developers/docs and is pullable by integrators,
+//    Postman, SDK generators, and agents. Server URL is injected from the
+//    request origin so the "Try it" playground targets this exact deployment. ──
+http.route({
+  path: "/v1/openapi.json",
+  method: "GET",
+  handler: httpAction(async (_ctx, request) => {
+    const spec = buildOpenApiSpec(new URL(request.url).origin);
+    return apiJson(200, spec);
+  }),
+});
+
 for (const path of [
   "/v0/maintenance",
   "/v0/labor",
@@ -1324,6 +1588,15 @@ for (const path of [
   "/v0/vehicle-image",
   "/v0/enrich",
   "/v0/service-history",
+  "/v1/vehicle",
+  "/v1/fluids",
+  "/v1/specs",
+  "/v1/tires",
+  "/v1/maintenance-schedule",
+  "/v1/parts",
+  "/v1/decode",
+  "/v1/configs",
+  "/v1/openapi.json",
 ]) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => corsOptions()) });
 }

@@ -31,7 +31,7 @@ import { internalMutation, internalQuery, mutation, query } from "./_generated/s
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireDirector, logAudit, roleHasCapability, type DirectorRole } from "./directorGate";
 import { deriveLayer, isServable, LAYER_FORMULA, type LayerLetter } from "./lib/dataLayers";
-import { collectSpecFields, latestFieldEvidence } from "./dataCatalog";
+import { collectSpecFields, latestFieldEvidence, loadSpecExtras } from "./dataCatalog";
 import { isPoisonPriceType, isNonPooledPriceType } from "./lib/priceTypes";
 import { detectTier } from "./lib/quoteEngine";
 import { resolvePublicLaborEstimate } from "./lib/publicLabor";
@@ -189,9 +189,10 @@ export const assembleMaintenance = internalQuery({
     const engine = c.engine_id ? await ctx.db.get(c.engine_id) : null;
     const transmission = c.transmission_id ? await ctx.db.get(c.transmission_id) : null;
 
+    const extras = await loadSpecExtras(ctx, c);
     const fields: MaintenanceField[] = [];
     const excluded: ExcludedField[] = [];
-    for (const f of collectSpecFields(c, engine, transmission)) {
+    for (const f of collectSpecFields(c, engine, transmission, extras)) {
       if (f.value == null) continue; // never serve empties
       const ev = await latestFieldEvidence(ctx, c, f.field_name);
       const layer = deriveLayer(ev?.source_type ?? null, ev?.confidence ?? null);
@@ -542,7 +543,7 @@ async function resolveByYmmt(
   make: string,
   model: string,
   trim: string | null,
-): Promise<{ config: Doc<"vehicle_configs"> | null; matches: YmmtMatch[] }> {
+): Promise<{ config: Doc<"vehicle_configs"> | null; matches: YmmtMatch[]; pool: Doc<"vehicle_configs">[] }> {
   const slug = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
   const prefix = `${year}_${slug(make)}_${slug(model)}`;
   const rows = await ctx.db
@@ -556,8 +557,68 @@ async function resolveByYmmt(
     config_key: r.config_key ?? null,
     label: r.config_key,
   }));
-  return { config: pool.length === 1 ? pool[0] : null, matches };
+  return { config: pool.length === 1 ? pool[0] : null, matches, pool };
 }
+
+/** /v1/configs — every config that fits a year/make/model[/trim], always as a
+ *  list (even a single match). Turns the /v0/vehicle 409 multiple_matches
+ *  disambiguation into a first-class "here are the candidate config_keys"
+ *  lookup so callers can pick one and switch to config_key access. */
+export type ConfigCandidate = {
+  config_key: string;
+  year: number;
+  make: string;
+  model: string;
+  trim: string | null;
+  drivetrain: string | null;
+  engine: string | null;
+  enrichment_status: string | null;
+  fill_rate: number | null;
+};
+
+export const listConfigCandidates = internalQuery({
+  args: { year: v.number(), make: v.string(), model: v.string(), trim: v.optional(v.string()) },
+  handler: async (ctx, { year, make, model, trim }): Promise<ConfigCandidate[]> => {
+    const { pool } = await resolveByYmmt(ctx, year, make, model, trim ?? null);
+    const makeNames = new Map<string, string>();
+    const modelNames = new Map<string, string>();
+    const out: ConfigCandidate[] = [];
+    for (const c of pool) {
+      let mk = makeNames.get(String(c.make_id));
+      if (mk === undefined) {
+        mk = (await ctx.db.get(c.make_id))?.name ?? "?";
+        makeNames.set(String(c.make_id), mk);
+      }
+      let md = modelNames.get(String(c.model_id));
+      if (md === undefined) {
+        md = (await ctx.db.get(c.model_id))?.name ?? "?";
+        modelNames.set(String(c.model_id), md);
+      }
+      const eng = c.engine_id ? await ctx.db.get(c.engine_id) : null;
+      out.push({
+        config_key: c.config_key,
+        year: c.year,
+        make: mk,
+        model: md,
+        trim: c.trim_name ?? null,
+        drivetrain: c.drivetrain ?? null,
+        engine: eng
+          ? [
+              (eng.displacement_l ?? eng.displacement_liters) != null
+                ? `${eng.displacement_l ?? eng.displacement_liters}L`
+                : null,
+              eng.engine_code ?? null,
+            ]
+              .filter(Boolean)
+              .join(" ") || null
+          : null,
+        enrichment_status: c.enrichment_status ?? null,
+        fill_rate: c.fill_rate ?? null,
+      });
+    }
+    return out;
+  },
+});
 
 /** Completed platform visits for a VIN (bookings.by_vin), shop names joined,
  *  date-desc. Shared by assembleVehicle's history block (which serves shop
@@ -669,6 +730,33 @@ export type VehicleResponse =
   | { object: "multiple_matches"; matches: YmmtMatch[] }
   | null;
 
+/** Coarse response groups the flagship assembly can be sliced into, and the
+ *  aliases the ?include= param and the granular /v1 endpoints resolve to. An
+ *  ABSENT include → the whole payload (v0 behaviour, unchanged); an explicit
+ *  (possibly empty) include → identity + only the named groups, so a caller
+ *  wanting just fluids never pays for the parts/labor/history joins. */
+const GROUP_ALIAS: Record<string, VehicleGroup> = {
+  specs: "specs",
+  fluids: "specs",
+  attributes: "specs",
+  chassis: "specs",
+  tires: "tires",
+  wheels: "tires",
+  intervals: "intervals",
+  maintenance: "intervals",
+  schedule: "intervals",
+  maintenance_schedule: "intervals",
+  services: "services",
+  parts: "services",
+  labor: "services",
+  history: "history",
+  service_history: "history",
+};
+type VehicleGroup = "specs" | "tires" | "intervals" | "services" | "history";
+function resolveGroupAlias(g: string): VehicleGroup | null {
+  return GROUP_ALIAS[g.trim().toLowerCase()] ?? null;
+}
+
 export const assembleVehicle = internalQuery({
   args: {
     config_key: v.optional(v.string()),
@@ -677,8 +765,17 @@ export const assembleVehicle = internalQuery({
     make: v.optional(v.string()),
     model: v.optional(v.string()),
     trim: v.optional(v.string()),
+    // Absent → whole payload. Present (even []) → identity + only these groups.
+    include: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args): Promise<VehicleResponse> => {
+    // ── Group selection: absent include = everything (v0 parity) ──
+    const wantAll = args.include === undefined;
+    const groups = new Set(
+      (args.include ?? []).map(resolveGroupAlias).filter((g): g is VehicleGroup => g !== null),
+    );
+    const want = (g: VehicleGroup) => wantAll || groups.has(g);
+
     // ── Resolve the config (config_key | vin | ymmt) ──
     let c = await resolveConfig(ctx, args.config_key ?? null, args.vin ?? null);
     if (!c && args.year && args.make && args.model) {
@@ -699,32 +796,32 @@ export const assembleVehicle = internalQuery({
     // ── Specs: everything populated, layer-tagged. Fields WITHOUT an evidence
     //    trail are our own stored enrichment values — served as Layer C. Only
     //    B-licensed (VDB) and X-flagged values are excluded (and listed). ──
+    const extras = await loadSpecExtras(ctx, c);
     const specs: MaintenanceField[] = [];
     const excluded: ExcludedField[] = [];
-    for (const f of collectSpecFields(c, engine, transmission)) {
-      if (f.value == null) continue;
-      const ev = await latestFieldEvidence(ctx, c, f.field_name);
-      const layer = deriveLayer(ev?.source_type ?? null, ev?.confidence ?? null);
-      if (!ev || isServable(layer.letter, ev.source_type)) {
-        specs.push({
-          field: f.field_name,
-          label: f.label,
-          group: f.group,
-          value: f.value,
-          layer: ev ? layer.letter : "C",
-          confidence: ev?.confidence ?? null,
-          source_domain: ev?.source_domain ?? null,
-        });
-      } else {
-        excluded.push({ field: f.field_name, label: f.label, blocking_layer: layer.letter, reason: layer.reason });
+    if (want("specs")) {
+      for (const f of collectSpecFields(c, engine, transmission, extras)) {
+        if (f.value == null) continue;
+        const ev = await latestFieldEvidence(ctx, c, f.field_name);
+        const layer = deriveLayer(ev?.source_type ?? null, ev?.confidence ?? null);
+        if (!ev || isServable(layer.letter, ev.source_type)) {
+          specs.push({
+            field: f.field_name,
+            label: f.label,
+            group: f.group,
+            value: f.value,
+            layer: ev ? layer.letter : "C",
+            confidence: ev?.confidence ?? null,
+            source_domain: ev?.source_domain ?? null,
+          });
+        } else {
+          excluded.push({ field: f.field_name, label: f.label, blocking_layer: layer.letter, reason: layer.reason });
+        }
       }
     }
 
-    // ── Tires (trim_specs — full OEM fitment package) ──
-    const ts = await ctx.db
-      .query("trim_specs")
-      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
-      .first();
+    // ── Tires (trim_specs — full OEM fitment package; reuse the extras read) ──
+    const ts = want("tires") ? extras.trimSpec : null;
     const tires = ts
       ? {
           options: (ts.tire_options as unknown[] | undefined) ?? null,
@@ -739,31 +836,42 @@ export const assembleVehicle = internalQuery({
         }
       : null;
 
-    // ── Service name lookup (23 rows — cheap) ──
-    const allServices = await ctx.db.query("services").collect();
-    const serviceById = new Map(allServices.map((s) => [String(s._id), s]));
+    // ── Service name lookup (23 rows — cheap). Needed by the intervals map,
+    //    the services block's labor labeling, and history visit labeling. ──
+    const needServices = want("intervals") || want("services") || (want("history") && !!args.vin);
+    const serviceById = new Map<string, Doc<"services">>();
+    if (needServices) {
+      for (const s of await ctx.db.query("services").collect()) serviceById.set(String(s._id), s);
+    }
 
     // ── OEM intervals (per-config table; display_string is the honest form) ──
-    const intervalRows = await ctx.db
-      .query("service_intervals")
-      .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
-      .take(100);
-    const intervals = intervalRows
-      .filter((r) => r.interval_miles != null || r.interval_months != null || r.display_string)
-      .map((r) => {
-        const svc = serviceById.get(String(r.service_id));
-        return {
-          service: svc?.slug ?? String(r.service_id),
-          name: svc?.name ?? "?",
-          interval_miles: r.interval_miles ?? null,
-          interval_months: r.interval_months ?? null,
-          display: r.display_string ?? null,
-          confidence: r.confidence ?? null,
-          mechanic_verified: r.mechanic_verified === true,
-        };
-      });
+    let intervals: Extract<NonNullable<VehicleResponse>, { object: "vehicle" }>["intervals"] = [];
+    if (want("intervals")) {
+      const intervalRows = await ctx.db
+        .query("service_intervals")
+        .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
+        .take(100);
+      intervals = intervalRows
+        .filter((r) => r.interval_miles != null || r.interval_months != null || r.display_string)
+        .map((r) => {
+          const svc = serviceById.get(String(r.service_id));
+          return {
+            service: svc?.slug ?? String(r.service_id),
+            name: svc?.name ?? "?",
+            interval_miles: r.interval_miles ?? null,
+            interval_months: r.interval_months ?? null,
+            display: r.display_string ?? null,
+            confidence: r.confidence ?? null,
+            mechanic_verified: r.mechanic_verified === true,
+          };
+        });
+    }
 
-    // ── Parts per service, with the latest trusted price per part ──
+    // ── Parts per service + labor (the services block). Skipped entirely
+    //    unless requested — this is the heaviest join set (fitments × prices,
+    //    applicability, the labor ladder). ──
+    const byService = new Map<string, VehicleServiceEntry>();
+    if (want("services")) {
     const fitments = await ctx.db
       .query("part_fitments")
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
@@ -773,7 +881,6 @@ export const assembleVehicle = internalQuery({
       .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
       .take(100);
 
-    const byService = new Map<string, VehicleServiceEntry>();
     const serviceEntry = (slugKey: string, name?: string | null, applicable = false): VehicleServiceEntry => {
       let e = byService.get(slugKey);
       if (!e) {
@@ -921,11 +1028,12 @@ export const assembleVehicle = internalQuery({
         entry.labor.tier_floor_applied = resolved.floor;
       }
     }
+    } // ── end services block (want("services")) ──
 
     // ── History (VIN lookups only): passport snapshot + platform visits.
     //    No customer identity, no payment amounts. ──
     let history: Extract<NonNullable<VehicleResponse>, { object: "vehicle" }>["history"] = null;
-    if (args.vin) {
+    if (want("history") && args.vin) {
       const vinUpper = args.vin.trim().toUpperCase();
       const passport = await ctx.db
         .query("vehicle_passports")
@@ -1042,11 +1150,12 @@ export const gateCheck = query({
     for (const c of configs) {
       const engine = c.engine_id ? await ctx.db.get(c.engine_id) : null;
       const transmission = c.transmission_id ? await ctx.db.get(c.transmission_id) : null;
+      const extras = await loadSpecExtras(ctx, c);
       let served = 0;
       let excludedB = 0;
       let excludedX = 0;
       let leaked = false;
-      for (const f of collectSpecFields(c, engine, transmission)) {
+      for (const f of collectSpecFields(c, engine, transmission, extras)) {
         if (f.value == null) continue;
         const ev = await latestFieldEvidence(ctx, c, f.field_name);
         const layer = ev

@@ -9,8 +9,10 @@ const nextConfig: NextConfig = {
     return [
       // The internal API console is gone — key management lives in /developers.
       { source: "/data/api-sandbox", destination: "/developers", permanent: false },
-      // The data portal moved under the director umbrella.
-      { source: "/data/:path*", destination: "/director/data/:path*", permanent: false },
+      // The internal data portal moved under the director umbrella. `:path+`
+      // (one-or-more) keeps the legacy deep-link shims working while letting
+      // `/data` itself render the public car-data product landing.
+      { source: "/data/:path+", destination: "/director/data/:path*", permanent: false },
     ];
   },
   images: {

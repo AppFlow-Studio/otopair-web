@@ -171,27 +171,62 @@ export function warningLightsReservePct(
 }
 
 /**
+ * Maintenance types that participate in the Upkeep sum. `maintenance_records.type`
+ * is an unconstrained `v.string()`, so any writer can land an arbitrary type on
+ * the row (`fluids`, `diagnostics`, `transmission_service`, …). Without a
+ * whitelist the item flows through `buildMaintenanceItems`, its type gets cast
+ * to MaintenanceType, and it deducts points on interval alone with no mechanic
+ * involved — the exact "services marked Overdue when they shouldn't be" bug
+ * Daniel reported (2026-08-26). The core five plus `warning` (for the
+ * consolidated active-lights card, `warning-active-<scopeId>`) are the only
+ * ids that legitimately score by default.
+ */
+const SCORING_TYPES: ReadonlySet<string> = new Set([
+  "oil",
+  "brakes",
+  "tires",
+  "battery",
+  "inspection",
+  "warning",
+]);
+
+/**
  * Does this maintenance row contribute to the Upkeep term?
  *
- * Two kinds of row are shown to the driver but must never move the score:
+ * Three kinds of row are shown to the driver but must never move the score:
  *  - recommendation cards (`sourceRecommendationId`) — the matching core or
  *    minor tile already scores that finding, and the Open-recs penalty covers
  *    it a second time.
  *  - catalog-inference rows (`excludeFromScore`) — derived from an OEM
  *    interval and an odometer alone, with no record and no mechanic behind
  *    them. Only the five core tiles score by default.
+ *  - non-scoring types (`fluids`, `diagnostics`, `transmission_service`, …)
+ *    — items derived from records whose `type` isn't one of the five core
+ *    tiles (plus `warning` for the consolidated active-lights card). These
+ *    were silently scoring at the CATEGORY_WEIGHTS["other"] weight = 10 on
+ *    interval alone. The `minor_` prefix stays exempt: those are the
+ *    mechanic-graded minor items in the Consolidated model, arriving as
+ *    `user-minor_bf_condition`-style ids only when the mechanic actually
+ *    graded them yellow/red — the whole point of that model.
  *
  * Exported so any UI that *describes* the score (the x/y maintenance counter)
  * filters on exactly the same rule the score itself uses, instead of keeping
- * a second definition that drifts. Web has no catalog-inference path today —
- * this is behaviourally a no-op here but mirrored from mobile to keep the
- * two copies aligned (see §04–§07 of the Vehicle Health handoff).
+ * a second definition that drifts. Aligned with mobile (see §04–§07 of the
+ * Vehicle Health handoff + Daniel's non-core-type report, 2026-08-26).
  */
 export function isScorableMaintenanceItem(item: {
+  id?: string;
   sourceRecommendationId?: string;
   excludeFromScore?: boolean;
 }): boolean {
-  return !item.sourceRecommendationId && !item.excludeFromScore;
+  if (item.sourceRecommendationId || item.excludeFromScore) return false;
+  if (!item.id) return true;
+  const type = extractMaintenanceType(item.id);
+  // Mechanic-graded minor items (Consolidated model) keep their weight-10
+  // deduction — that is the whole point of the model, and the `minor_` prefix
+  // only exists on records a mechanic graded yellow or red.
+  if (type.startsWith("minor_")) return true;
+  return SCORING_TYPES.has(type);
 }
 
 // ============================================================================

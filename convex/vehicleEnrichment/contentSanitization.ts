@@ -371,6 +371,10 @@ const CORPORATE_FAMILIES: Array<Set<string>> = [
   // division 1908-2004, absent only because no Olds had entered the fleet yet.
   new Set(["chevrolet", "gmc", "cadillac", "buick", "pontiac", "saturn", "hummer", "oldsmobile"]),
   new Set(["jaguar", "landrover", "rangerover"]),
+  // polestar added Aug 27 2026 (round-3 first-contact): Volvo's performance-EV
+  // marque, CMA/SPA platforms, parts catalogued and sold through Volvo dealer
+  // channels — the same badge-sibling relationship every other pair here has.
+  new Set(["volvo", "polestar"]),
 ];
 
 // Single-source identity key — see lib/makeKey.ts (imported at top).

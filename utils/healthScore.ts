@@ -97,28 +97,6 @@ const STATUS_SCORE: Record<MaintenanceStatus, number> = {
 };
 
 // ============================================================================
-// UNKNOWN-ITEM SCORE BY MILEAGE
-// ============================================================================
-
-/**
- * When a maintenance item has no data ("unknown"), its implied health
- * depends on how far the car has been driven.
- *
- *   ≤15k mi  → 0.95  (brand new, no service expected yet)
- *   ≤30k mi  → 0.85  (still early, most items haven't come due)
- *   ≤60k mi  → 0.55  (some service should have happened by now)
- *   ≤100k mi → 0.35  (missing records is a yellow flag)
- *   >100k mi → 0.20  (high mileage + no records is concerning)
- */
-function unknownScoreForMileage(miles: number): number {
-  if (miles <= 15_000) return 0.95;
-  if (miles <= 30_000) return 0.95 - ((miles - 15_000) / 15_000) * 0.10;  // 0.95→0.85
-  if (miles <= 60_000) return 0.85 - ((miles - 30_000) / 30_000) * 0.30;  // 0.85→0.55
-  if (miles <= 100_000) return 0.55 - ((miles - 60_000) / 40_000) * 0.20; // 0.55→0.35
-  return Math.max(0.15, 0.35 - ((miles - 100_000) / 50_000) * 0.15);     // 0.35→0.20→0.15 floor
-}
-
-// ============================================================================
 // WARNING-LIGHT PENALTY
 // ============================================================================
 
@@ -302,14 +280,14 @@ export function computeVehicleHealthScore(
 
   // ── Maintenance component (category-weighted) ─────────────────
   // For each present item, score it and weight it by its category's
-  // share. Unknown items use the mileage-aware inference curve (so a
-  // brand-new car stays healthy, an old car gets appropriate suspicion).
-  // Categories with no item drop out of the denominator — their weight
-  // redistributes naturally across the remaining ones. An item with a
-  // precomputed `rawScore` (brakes' per-corner blend today) uses that float
-  // directly instead of the 4-value STATUS_SCORE lookup.
-  const unknownInferredScore = unknownScoreForMileage(odometerMiles);
-
+  // share. Unknown items are excluded from BOTH the numerator and the
+  // denominator: mileage alone must never deduct points (§08). If we
+  // don't have a record for something, that's the "Estimated" state and
+  // the UI already prompts the driver to add history — the number itself
+  // stays honest. Categories with no item drop out of the denominator —
+  // their weight redistributes naturally across the remaining ones. An
+  // item with a precomputed `rawScore` (brakes' per-corner blend today)
+  // uses that float directly instead of the 4-value STATUS_SCORE lookup.
   let weightedSum = 0;
   let weightTotal = 0;
   for (const item of maintenanceItems) {
@@ -322,16 +300,13 @@ export function computeVehicleHealthScore(
     // double-counting the same physical problem the matching core/minor
     // tile already scores, on top of a third time via the Open-recs cap.
     if (!isScorableMaintenanceItem(item)) continue;
+    if (item.status === "unknown") continue;
     const w = categoryWeightForItem(item);
-    const score =
-      item.rawScore ??
-      (item.status === "unknown" ? unknownInferredScore : STATUS_SCORE[item.status]);
+    const score = item.rawScore ?? STATUS_SCORE[item.status];
     weightedSum += w * score;
     weightTotal += w;
   }
-  const maintenanceAvg = weightTotal > 0
-    ? weightedSum / weightTotal
-    : unknownInferredScore;
+  const maintenanceAvg = weightTotal > 0 ? weightedSum / weightTotal : 1;
   const maintenancePct = maintenanceAvg * 100;
 
   // ── Warning-light penalty + reserve ────────────────────────────
@@ -423,18 +398,19 @@ export function computeHealthScoreFactors(
   // they never create a weighted Upkeep item, only the core/minor tile
   // that already covers the same finding does).
   const scorableItems = maintenanceItems.filter(isScorableMaintenanceItem);
-  const knownCount = scorableItems.filter((i) => i.status !== "unknown").length;
+  // §08: unknowns don't take a share of the denominator either, or every
+  // other item's contribution is understated and the breakdown stops
+  // reconciling with the headline score.
   let weightTotal = 0;
-  for (const item of scorableItems) weightTotal += categoryWeightForItem(item);
+  for (const item of scorableItems) {
+    if (item.status === "unknown") continue;
+    weightTotal += categoryWeightForItem(item);
+  }
   const maintenanceBudget = upkeepWeight;
   const perWeightUnit = weightTotal > 0 ? maintenanceBudget / weightTotal : 0;
 
-  let unknownCount = 0;
   for (const item of scorableItems) {
-    if (item.status === "unknown") {
-      unknownCount += 1;
-      continue;
-    }
+    if (item.status === "unknown") continue;
     const itemWeight = categoryWeightForItem(item);
     const itemShare = itemWeight * perWeightUnit;
     const score = item.rawScore ?? STATUS_SCORE[item.status];
@@ -460,28 +436,10 @@ export function computeHealthScoreFactors(
     }
   }
 
-  if (unknownCount > 0) {
-    const inferred = unknownScoreForMileage(odometerMiles);
-    // Aggregate the unknowns' weighted share.
-    let unknownShare = 0;
-    for (const item of scorableItems) {
-      if (item.status === "unknown") {
-        unknownShare += categoryWeightForItem(item) * perWeightUnit;
-      }
-    }
-    const totalPts = Math.round((1 - inferred) * unknownShare);
-    if (totalPts > 0) {
-      negatives.push({
-        label: unknownCount === 1
-          ? "Service history pending"
-          : `Service history pending (${unknownCount})`,
-        detail: knownCount === 0
-          ? "Add records to refine your score"
-          : "Logging more services will improve accuracy",
-        pts: totalPts,
-      });
-    }
-  }
+  // §08: no "Service history pending" negative any more. Mileage alone
+  // must never deduct points — that state is already labelled "Estimated"
+  // in the UI with a prompt for service history, so the number stays honest
+  // without a fake deduction here.
 
   // ── Warning lights (warningLightsWeight reserve, minus penalty) ──
   // Same canonical, format-agnostic read as warningLightPenalty so the

@@ -255,7 +255,10 @@ export interface HealthScoreInput {
  *      oil 20, battery 13, inspection 12, other 10) — unchanged. Categories
  *      with no item present effectively redistribute their weight because
  *      they drop out of the denominator. Items with `status: "unknown"`
- *      keep their weight but score with the mileage-aware inference curve.
+ *      drop out entirely — no numerator, no denominator — per §08:
+ *      mileage alone must never deduct points. The absence of a record is
+ *      shown as "Estimated" in the UI with a prompt for service history,
+ *      so the number stays honest without a fake deduction here.
  *   2. The mileage/usage component is removed entirely (not just zeroed) —
  *      Otopair only scores what a driver can act on; raw mileage never
  *      mapped to a fixable item. The freed 20 points went to maintenance

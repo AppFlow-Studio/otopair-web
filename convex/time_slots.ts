@@ -8,6 +8,10 @@ import {
   syncShopAvailabilityWindow,
   syncShopDateAvailability,
 } from "./lib/timeSlotAvailability";
+import {
+  quoteHoldContextValidator,
+  resolveOwnedQuoteHoldExclusion,
+} from "./lib/quoteHoldOwnership";
 
 function sortSlotsBySchedule<T extends { date: string; start_time: string }>(slots: T[]) {
   return [...slots].sort((a, b) => {
@@ -74,14 +78,17 @@ export const getByShopAndDate = query({
     date: v.string(),
     mechanicId: v.optional(v.id("mechanics")),
     durationMinutes: v.optional(v.number()),
+    quote_context: v.optional(quoteHoldContextValidator),
   },
   handler: async (ctx, args) => {
+    const quoteExclusion = await resolveOwnedQuoteHoldExclusion(ctx, args.quote_context);
     return sortSlotsBySchedule(
       await listAvailableWindowsForShopDate(ctx, {
         shopId: args.shopId,
         date: args.date,
         mechanicId: args.mechanicId,
         durationMinutes: args.durationMinutes,
+        ...quoteExclusion,
       })
     );
   },
@@ -221,8 +228,10 @@ export const getAvailabilityByShopAndMonth = query({
     durationMinutes: v.optional(v.number()),
     cutoffDate: v.optional(v.string()),
     cutoffTime: v.optional(v.string()),
+    quote_context: v.optional(quoteHoldContextValidator),
   },
   handler: async (ctx, args) => {
+    const quoteExclusion = await resolveOwnedQuoteHoldExclusion(ctx, args.quote_context);
     // `month` arrives 1-based from the client (1 = January). JS Date months are
     // 0-based, so subtract 1 for the first-of-month and use `month` as the
     // exclusive-next-month sentinel (day 0 = last day of the requested month).
@@ -247,6 +256,7 @@ export const getAvailabilityByShopAndMonth = query({
         durationMinutes: args.durationMinutes,
         cutoffTime: args.cutoffDate === date ? args.cutoffTime : undefined,
         limit: 1,
+        ...quoteExclusion,
       });
       if (slots.length > 0) {
         availableDates.add(date);

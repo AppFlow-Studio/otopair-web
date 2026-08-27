@@ -6831,6 +6831,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeRotorQuoteResponseId,
     excludeSessionId,
     allowAfterClose,
     allowOutsideShopHours,
@@ -6843,6 +6844,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId?: any;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
+    excludeRotorQuoteResponseId?: string;
     excludeSessionId?: string;
     allowAfterClose?: boolean;
     allowOutsideShopHours?: boolean;
@@ -6857,6 +6859,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeRotorQuoteResponseId,
     excludeSessionId,
     allowAfterClose,
     allowOutsideShopHours,
@@ -16402,10 +16405,16 @@ export const acceptTireQuote = mutation({
     scheduled_date: v.string(),
     scheduled_time: v.string(),
     mechanic_id: v.optional(v.id("mechanics")),
+    hold_id: v.optional(v.id("slot_holds")),
+    session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.booking_id);
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (String(booking.user_id) !== String(currentUser._id)) {
+      throw new Error("Booking not found.");
+    }
     if (booking.status !== "quotes_ready" && booking.status !== "pending_quote") {
       const label =
         BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
@@ -16484,13 +16493,23 @@ export const acceptTireQuote = mutation({
     }
 
     const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.hold_id,
+      sessionId: args.session_id,
+      shopId: response.shop_id,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
+      heldBy: currentUser._id,
+    });
     const acceptedMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: response.shop_id,
       date: args.scheduled_date,
       startTime: args.scheduled_time,
       durationMinutes: acceptedDurationMinutes,
-      preferredMechanicId: args.mechanic_id ?? response.mechanic_id ?? undefined,
+      preferredMechanicId:
+        holdConsume.pinnedMechanicId ?? args.mechanic_id ?? response.mechanic_id ?? undefined,
       excludeTireQuoteResponseId: String(response._id),
+      excludeSessionId: holdConsume.excludeSessionId,
     });
 
     // Fill in the chosen shop + pricing + scheduled slot + service. Schedule
@@ -16529,6 +16548,8 @@ export const acceptTireQuote = mutation({
       booking.user_id,
       "tire_quote_accepted",
     );
+
+    await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     return args.booking_id;
   },
@@ -16700,10 +16721,16 @@ export const acceptRotorQuote = mutation({
     scheduled_date: v.string(),
     scheduled_time: v.string(),
     mechanic_id: v.optional(v.id("mechanics")),
+    hold_id: v.optional(v.id("slot_holds")),
+    session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.booking_id);
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (String(booking.user_id) !== String(currentUser._id)) {
+      throw new Error("Booking not found.");
+    }
     if (booking.status !== "quotes_ready" && booking.status !== "pending_quote") {
       const label =
         BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
@@ -16777,12 +16804,23 @@ export const acceptRotorQuote = mutation({
       (response.pad_price ?? 0) * (response.pad_quantity ?? response.quantity);
 
     const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.hold_id,
+      sessionId: args.session_id,
+      shopId: response.shop_id,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
+      heldBy: currentUser._id,
+    });
     const acceptedMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: response.shop_id,
       date: args.scheduled_date,
       startTime: args.scheduled_time,
       durationMinutes: acceptedDurationMinutes,
-      preferredMechanicId: args.mechanic_id ?? response.mechanic_id ?? undefined,
+      preferredMechanicId:
+        holdConsume.pinnedMechanicId ?? args.mechanic_id ?? response.mechanic_id ?? undefined,
+      excludeRotorQuoteResponseId: String(response._id),
+      excludeSessionId: holdConsume.excludeSessionId,
     });
 
     await ctx.db.patch(args.booking_id, {
@@ -16817,6 +16855,8 @@ export const acceptRotorQuote = mutation({
       booking.user_id,
       "rotor_quote_accepted",
     );
+
+    await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     return args.booking_id;
   },

@@ -10,6 +10,11 @@
 
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import {
+  assertMechanicAvailableForWindow,
+  isMechanicAvailableForWindow,
+} from "./lib/timeSlotAvailability";
+import { requireOwnedQuoteBooking } from "./lib/quoteHoldOwnership";
 
 // ============================================================================
 // CREATE — called by the website when a shop owner submits a rotor quote
@@ -60,6 +65,17 @@ export const create = mutation({
     if (existing) {
       throw new Error("This shop has already submitted a quote for this booking.");
     }
+    if (!args.mechanic_id) {
+      throw new Error("Pick a mechanic before submitting a rotor quote.");
+    }
+
+    await assertMechanicAvailableForWindow(ctx, {
+      shopId: args.shop_id,
+      mechanicId: args.mechanic_id,
+      date: args.availability.date,
+      startTime: args.availability.time,
+      durationMinutes: args.estimated_duration_minutes ?? 30,
+    });
 
     const now = Date.now();
     const responseId = await ctx.db.insert("rotor_quote_responses", {
@@ -125,6 +141,7 @@ export const listForBookingWithShops = query({
     booking_id: v.id("bookings"),
   },
   handler: async (ctx, args) => {
+    await requireOwnedQuoteBooking(ctx, args.booking_id);
     const responses = await ctx.db
       .query("rotor_quote_responses")
       .withIndex("by_booking_id", (q) => q.eq("booking_id", args.booking_id))
@@ -137,9 +154,22 @@ export const listForBookingWithShops = query({
 
     return Promise.all(
       live.map(async (r) => {
-        const shop = await ctx.db.get(r.shop_id);
+        const [shop, earliestSlotAvailable] = await Promise.all([
+          ctx.db.get(r.shop_id),
+          r.mechanic_id
+            ? isMechanicAvailableForWindow(ctx, {
+                shopId: r.shop_id,
+                mechanicId: r.mechanic_id,
+                date: r.availability.date,
+                startTime: r.availability.time,
+                durationMinutes: r.estimated_duration_minutes ?? 30,
+                excludeRotorQuoteResponseId: String(r._id),
+              })
+            : false,
+        ]);
         return {
           ...r,
+          earliest_slot_available: earliestSlotAvailable,
           shop: shop
             ? {
                 _id: shop._id,

@@ -10,7 +10,11 @@
 
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { assertMechanicAvailableForWindow } from "./lib/timeSlotAvailability";
+import {
+  assertMechanicAvailableForWindow,
+  isMechanicAvailableForWindow,
+} from "./lib/timeSlotAvailability";
+import { requireOwnedQuoteBooking } from "./lib/quoteHoldOwnership";
 
 // ============================================================================
 // CREATE — called by the website when a shop owner submits a quote
@@ -135,6 +139,7 @@ export const listForBookingWithShops = query({
     booking_id: v.id("bookings"),
   },
   handler: async (ctx, args) => {
+    await requireOwnedQuoteBooking(ctx, args.booking_id);
     const responses = await ctx.db
       .query("tire_quote_responses")
       .withIndex("by_booking_id", (q) => q.eq("booking_id", args.booking_id))
@@ -147,9 +152,22 @@ export const listForBookingWithShops = query({
 
     return Promise.all(
       live.map(async (r) => {
-        const shop = await ctx.db.get(r.shop_id);
+        const [shop, earliestSlotAvailable] = await Promise.all([
+          ctx.db.get(r.shop_id),
+          r.mechanic_id
+            ? isMechanicAvailableForWindow(ctx, {
+                shopId: r.shop_id,
+                mechanicId: r.mechanic_id,
+                date: r.availability.date,
+                startTime: r.availability.time,
+                durationMinutes: r.estimated_duration_minutes ?? 30,
+                excludeTireQuoteResponseId: String(r._id),
+              })
+            : false,
+        ]);
         return {
           ...r,
+          earliest_slot_available: earliestSlotAvailable,
           shop: shop
             ? {
                 _id: shop._id,

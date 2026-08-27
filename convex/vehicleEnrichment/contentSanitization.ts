@@ -367,7 +367,9 @@ const CORPORATE_FAMILIES: Array<Set<string>> = [
   new Set(["toyota", "lexus", "scion"]),
   new Set(["nissan", "infiniti"]),
   new Set(["hyundai", "kia", "genesis"]),
-  new Set(["chevrolet", "gmc", "cadillac", "buick", "pontiac", "saturn", "hummer"]),
+  // oldsmobile added Aug 27 2026 (source-registry family fallback): a GM
+  // division 1908-2004, absent only because no Olds had entered the fleet yet.
+  new Set(["chevrolet", "gmc", "cadillac", "buick", "pontiac", "saturn", "hummer", "oldsmobile"]),
   new Set(["jaguar", "landrover", "rangerover"]),
 ];
 

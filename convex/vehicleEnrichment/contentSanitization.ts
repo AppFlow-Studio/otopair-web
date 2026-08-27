@@ -369,7 +369,11 @@ const CORPORATE_FAMILIES: Array<Set<string>> = [
   new Set(["hyundai", "kia", "genesis"]),
   // oldsmobile added Aug 27 2026 (source-registry family fallback): a GM
   // division 1908-2004, absent only because no Olds had entered the fleet yet.
-  new Set(["chevrolet", "gmc", "cadillac", "buick", "pontiac", "saturn", "hummer", "oldsmobile"]),
+  // saab added Aug 27 2026 (round-3): the GM era (2000-2011 — Epsilon 9-3,
+  // Ecotec engines, GM part numbers stocked by GM stores) is what the fleet
+  // will actually see; pre-GM Saabs rely on the verifier's per-vehicle fitment
+  // gate exactly as every family member's old models already do.
+  new Set(["chevrolet", "gmc", "cadillac", "buick", "pontiac", "saturn", "hummer", "oldsmobile", "saab"]),
   new Set(["jaguar", "landrover", "rangerover"]),
   // polestar added Aug 27 2026 (round-3 first-contact): Volvo's performance-EV
   // marque, CMA/SPA platforms, parts catalogued and sold through Volvo dealer

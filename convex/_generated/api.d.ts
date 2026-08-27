@@ -217,6 +217,7 @@ import type * as lib_priceTypes from "../lib/priceTypes.js";
 import type * as lib_publicLabor from "../lib/publicLabor.js";
 import type * as lib_push_dispatcher from "../lib/push_dispatcher.js";
 import type * as lib_quoteEngine from "../lib/quoteEngine.js";
+import type * as lib_quoteHoldOwnership from "../lib/quoteHoldOwnership.js";
 import type * as lib_reviewFieldMap from "../lib/reviewFieldMap.js";
 import type * as lib_robustStats from "../lib/robustStats.js";
 import type * as lib_schedule_overlap from "../lib/schedule_overlap.js";
@@ -829,6 +830,7 @@ declare const fullApi: ApiFromModules<{
   "lib/publicLabor": typeof lib_publicLabor;
   "lib/push_dispatcher": typeof lib_push_dispatcher;
   "lib/quoteEngine": typeof lib_quoteEngine;
+  "lib/quoteHoldOwnership": typeof lib_quoteHoldOwnership;
   "lib/reviewFieldMap": typeof lib_reviewFieldMap;
   "lib/robustStats": typeof lib_robustStats;
   "lib/schedule_overlap": typeof lib_schedule_overlap;

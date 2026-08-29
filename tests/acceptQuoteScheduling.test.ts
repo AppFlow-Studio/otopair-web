@@ -126,6 +126,28 @@ test("a bare session id cannot bypass another customer's checkout hold", async (
 });
 
 for (const quoteType of ["tire", "rotor"] as const) {
+  test(`${quoteType} quote cannot be accepted after its hold expires`, async () => {
+    const { t, seed } = await seedAcceptance(quoteType);
+    await t.run((ctx) =>
+      ctx.db.patch(seed.responseId, { expires_at: Date.now() - 1 }),
+    );
+    const customer = t.withIdentity(identityFor(seed.customerClerkId));
+    const args = {
+      booking_id: seed.bookingId,
+      response_id: seed.responseId,
+      scheduled_date: "2026-06-01",
+      scheduled_time: "09:00",
+      hold_id: seed.holdId,
+      session_id: seed.sessionId,
+    };
+
+    await expect(
+      quoteType === "tire"
+        ? customer.mutation(api.bookings.acceptTireQuote, args as never)
+        : customer.mutation(api.bookings.acceptRotorQuote, args as never),
+    ).rejects.toThrow("expired");
+  });
+
   test(`${quoteType} quote owner can acquire the quoted slot while another customer cannot`, async () => {
     const { t, seed } = await seedAcceptance(quoteType);
     await t.run(async (ctx) => ctx.db.delete(seed.holdId));

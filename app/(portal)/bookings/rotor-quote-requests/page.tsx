@@ -438,6 +438,7 @@ function QuoteSubmissionDialog({
   const [submitting, setSubmitting] = useState(false);
 
   const [laneDate, setLaneDate] = useState<Date | null>(null);
+  const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
   const initialLaneDateSelectedRef = useRef(false);
 
   const laneDateStr = laneDate ? dateToString(laneDate) : todayIso();
@@ -464,6 +465,21 @@ function QuoteSubmissionDialog({
     dateFrom: initialLookaheadRange.dateFrom,
     dateTo: initialLookaheadRange.dateTo,
   });
+
+  useEffect(() => {
+    const nextExpiry = (scheduleBookings ?? [])
+      .map((event) => event.expiresAt)
+      .filter((expiresAt: unknown): expiresAt is number =>
+        typeof expiresAt === "number" && expiresAt > nowTimestamp,
+      )
+      .sort((a: number, b: number) => a - b)[0];
+    if (nextExpiry == null) return;
+    const timeoutId = window.setTimeout(
+      () => setNowTimestamp(Date.now()),
+      Math.max(0, nextExpiry - Date.now()) + 50,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [scheduleBookings, nowTimestamp]);
 
   useEffect(() => {
     if (initialLaneDateSelectedRef.current) return;
@@ -494,27 +510,34 @@ function QuoteSubmissionDialog({
   ]);
 
   const laneEvents: CalendarEvent[] = useMemo(() => {
-    const bookingEvents: CalendarEvent[] = (scheduleBookings ?? []).map((b: any) => {
-      const [h, m] = b.scheduledTime.split(":").map(Number);
-      const endTime = getBookingEndTime(b.scheduledTime, b.estimatedMinutes);
-      const [eh, em] = endTime.split(":").map(Number);
-      const start = new Date(b.scheduledDate + "T00:00:00");
-      start.setHours(h, m, 0, 0);
-      const end = new Date(b.scheduledDate + "T00:00:00");
-      end.setHours(eh, em, 0, 0);
-      return {
-        id: b._id,
-        title: `${b.customerName} — ${(b.serviceNames ?? []).join(", ")}`,
-        start,
-        end,
-        resourceId: b.mechanicId ?? undefined,
-        type: "booking" as const,
-        status: b.status,
-        customerName: b.customerName,
-        mechanicName: b.mechanicName,
-        serviceNames: b.serviceNames,
-      };
-    });
+    const bookingEvents: CalendarEvent[] = (scheduleBookings ?? [])
+      .filter(
+        (b) =>
+          b.status !== "tentative_quote" ||
+          b.expiresAt == null ||
+          b.expiresAt > nowTimestamp,
+      )
+      .map((b: any) => {
+        const [h, m] = b.scheduledTime.split(":").map(Number);
+        const endTime = getBookingEndTime(b.scheduledTime, b.estimatedMinutes);
+        const [eh, em] = endTime.split(":").map(Number);
+        const start = new Date(b.scheduledDate + "T00:00:00");
+        start.setHours(h, m, 0, 0);
+        const end = new Date(b.scheduledDate + "T00:00:00");
+        end.setHours(eh, em, 0, 0);
+        return {
+          id: b._id,
+          title: `${b.customerName} — ${(b.serviceNames ?? []).join(", ")}`,
+          start,
+          end,
+          resourceId: b.mechanicId ?? undefined,
+          type: "booking" as const,
+          status: b.status,
+          customerName: b.customerName,
+          mechanicName: b.mechanicName,
+          serviceNames: b.serviceNames,
+        };
+      });
 
     const blockedEvents: CalendarEvent[] = (blockedSlots ?? []).map((s: any) => {
       const [sh, sm] = s.startTime.split(":").map(Number);
@@ -538,7 +561,7 @@ function QuoteSubmissionDialog({
     });
 
     return [...bookingEvents, ...blockedEvents];
-  }, [scheduleBookings, blockedSlots]);
+  }, [scheduleBookings, blockedSlots, nowTimestamp]);
 
   const laneDayHours = useMemo(() => {
     if (!laneDate) return null;
@@ -723,7 +746,7 @@ function QuoteSubmissionDialog({
                   events={laneEvents}
                   minTime={laneMinTime}
                   maxTime={laneMaxTime}
-                  nowTimestamp={Date.now()}
+                  nowTimestamp={nowTimestamp}
                   onSelectEvent={() => {}}
                   currentDate={laneDate}
                   draftBooking={

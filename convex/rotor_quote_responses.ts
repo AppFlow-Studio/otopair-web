@@ -14,7 +14,11 @@ import {
   assertMechanicAvailableForWindow,
   isMechanicAvailableForWindow,
 } from "./lib/timeSlotAvailability";
-import { requireOwnedQuoteBooking } from "./lib/quoteHoldOwnership";
+import {
+  QUOTE_HOLD_DURATION_MS,
+  isQuoteHoldActive,
+  requireOwnedQuoteBooking,
+} from "./lib/quoteHoldOwnership";
 
 // ============================================================================
 // CREATE — called by the website when a shop owner submits a rotor quote
@@ -44,7 +48,6 @@ export const create = mutation({
     pad_type: v.optional(v.string()),
     pad_price: v.optional(v.number()),
     pad_quantity: v.optional(v.number()),
-    expires_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.booking_id);
@@ -95,7 +98,7 @@ export const create = mutation({
       pad_price: args.pad_price,
       pad_quantity: args.pad_quantity,
       created_at: now,
-      expires_at: args.expires_at,
+      expires_at: now + QUOTE_HOLD_DURATION_MS,
     });
 
     // First response flips pending_quote → quotes_ready so the Quotes tab
@@ -126,9 +129,7 @@ export const listForBooking = query({
       .collect();
 
     const now = Date.now();
-    return responses
-      .filter((r) => r.superseded_at == null)
-      .filter((r) => r.expires_at == null || r.expires_at > now);
+    return responses.filter((response) => isQuoteHoldActive(response, now));
   },
 });
 
@@ -148,9 +149,7 @@ export const listForBookingWithShops = query({
       .collect();
 
     const now = Date.now();
-    const live = responses
-      .filter((r) => r.superseded_at == null)
-      .filter((r) => r.expires_at == null || r.expires_at > now);
+    const live = responses.filter((response) => isQuoteHoldActive(response, now));
 
     return Promise.all(
       live.map(async (r) => {

@@ -14,6 +14,25 @@ export const quoteHoldContextValidator = v.union(
 
 export type QuoteHoldContext = Infer<typeof quoteHoldContextValidator>;
 
+export const QUOTE_HOLD_DURATION_MS = 10 * 60 * 1000;
+
+type QuoteHoldTiming = {
+  created_at: number;
+  expires_at?: number;
+  superseded_at?: number;
+};
+
+export function getQuoteHoldExpiresAt(response: QuoteHoldTiming): number {
+  return response.expires_at ?? response.created_at + QUOTE_HOLD_DURATION_MS;
+}
+
+export function isQuoteHoldActive(
+  response: QuoteHoldTiming,
+  now = Date.now(),
+): boolean {
+  return response.superseded_at == null && getQuoteHoldExpiresAt(response) > now;
+}
+
 export async function getAuthenticatedQuoteUser(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) return null;

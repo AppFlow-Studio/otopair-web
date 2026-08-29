@@ -635,8 +635,8 @@ export default function SchedulePage() {
   }, []);
 
   // Tentative-quote events (status="tentative_quote") use a synthetic id
-  // (`tq_<responseId>`) so they don't collide with real bookings. Clicking
-  // one routes the mechanic into the unified Quotes page on the Tires tab,
+  // (`tq_<responseId>` / `rq_<responseId>`) so they don't collide with real
+  // bookings. Clicking one routes the mechanic into the matching Quotes tab,
   // focused on the underlying booking so they can edit / withdraw their
   // quote.
   const handleEventSelect = useCallback(
@@ -644,7 +644,9 @@ export default function SchedulePage() {
       if (ev.status === "tentative_quote") {
         const targetBooking = ev.tentativeBookingId;
         if (targetBooking) {
-          router.push(`/bookings/quote-requests?type=tire&booking=${targetBooking}`);
+          router.push(
+            `/bookings/quote-requests?type=${ev.quoteType ?? "tire"}&booking=${targetBooking}`,
+          );
         }
         return;
       }
@@ -956,6 +958,21 @@ export default function SchedulePage() {
   });
   bookingsRef.current = bookings;
 
+  useEffect(() => {
+    const nextExpiry = (bookings ?? [])
+      .map((event) => event.expiresAt)
+      .filter((expiresAt): expiresAt is number =>
+        typeof expiresAt === "number" && expiresAt > nowTimestamp,
+      )
+      .sort((a, b) => a - b)[0];
+    if (nextExpiry == null) return;
+    const timeoutId = window.setTimeout(
+      () => setNowTimestamp(Date.now()),
+      Math.max(0, nextExpiry - Date.now()) + 50,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [bookings, nowTimestamp]);
+
   // Wider lookahead used only when auto-opening the create-booking drawer to find the
   // next available slot across the next 14 days.
   const wantsAutoOpen = searchParams.get("action") === "newBooking";
@@ -1221,6 +1238,12 @@ export default function SchedulePage() {
     if (!bookings) return [];
     const bookingEvents: CalendarEvent[] = bookings
       .filter((b) => mechanicFilter === "all" || b.mechanicId === mechanicFilter)
+      .filter(
+        (b) =>
+          b.status !== "tentative_quote" ||
+          b.expiresAt == null ||
+          b.expiresAt > nowTimestamp,
+      )
       .map((b) => {
         const [h, m] = b.scheduledTime.split(":").map(Number);
         const endTime = getBookingEndTime(
@@ -1262,6 +1285,13 @@ export default function SchedulePage() {
           responseId: (b as any).responseId
             ? String((b as any).responseId)
             : undefined,
+          quoteType:
+            b.source === "rotor_quote"
+              ? "rotor"
+              : b.source === "tire_quote"
+                ? "tire"
+                : undefined,
+          expiresAt: b.expiresAt ?? null,
         };
       });
 
@@ -1410,6 +1440,7 @@ export default function SchedulePage() {
     btDescription,
     btType,
     savedBlockTypes,
+    nowTimestamp,
   ]);
 
   // For month view: collapse individual bookings into one chip per status per day

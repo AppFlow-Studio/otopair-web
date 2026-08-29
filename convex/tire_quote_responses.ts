@@ -14,7 +14,11 @@ import {
   assertMechanicAvailableForWindow,
   isMechanicAvailableForWindow,
 } from "./lib/timeSlotAvailability";
-import { requireOwnedQuoteBooking } from "./lib/quoteHoldOwnership";
+import {
+  QUOTE_HOLD_DURATION_MS,
+  isQuoteHoldActive,
+  requireOwnedQuoteBooking,
+} from "./lib/quoteHoldOwnership";
 
 // ============================================================================
 // CREATE — called by the website when a shop owner submits a quote
@@ -42,7 +46,6 @@ export const create = mutation({
     }),
     /** Estimated job duration in minutes (15, 30, or 45). */
     estimated_duration_minutes: v.optional(v.number()),
-    expires_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const booking = await ctx.db.get(args.booking_id);
@@ -90,7 +93,7 @@ export const create = mutation({
       availability: args.availability,
       estimated_duration_minutes: args.estimated_duration_minutes,
       created_at: now,
-      expires_at: args.expires_at,
+      expires_at: now + QUOTE_HOLD_DURATION_MS,
     });
 
     // First response flips the booking from "pending_quote" → "quotes_ready"
@@ -122,9 +125,7 @@ export const listForBooking = query({
 
     // Skip superseded responses; expire stale ones at read time.
     const now = Date.now();
-    return responses
-      .filter((r) => r.superseded_at == null)
-      .filter((r) => r.expires_at == null || r.expires_at > now);
+    return responses.filter((response) => isQuoteHoldActive(response, now));
   },
 });
 
@@ -146,9 +147,7 @@ export const listForBookingWithShops = query({
       .collect();
 
     const now = Date.now();
-    const live = responses
-      .filter((r) => r.superseded_at == null)
-      .filter((r) => r.expires_at == null || r.expires_at > now);
+    const live = responses.filter((response) => isQuoteHoldActive(response, now));
 
     return Promise.all(
       live.map(async (r) => {

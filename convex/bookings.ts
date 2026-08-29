@@ -66,6 +66,7 @@ import { computePlatformFeeDollars } from "../lib/platformFee";
 import { hoursToMinutes } from "../lib/labor-units";
 import { metaMakeModel } from "./lib/bookingEnrichment";
 import { isRealVin, isPseudoVin, mintPseudoVin } from "./lib/vinIdentity";
+import { getQuoteHoldExpiresAt } from "./lib/quoteHoldOwnership";
 import { buildYmmtFingerprint } from "./vehicleEnrichment/types";
 import {
   computeDisclosedRange,
@@ -16430,6 +16431,10 @@ export const acceptTireQuote = mutation({
     if (response.superseded_at != null) {
       throw new Error("This quote has already been superseded.");
     }
+    const now = Date.now();
+    if (getQuoteHoldExpiresAt(response) <= now) {
+      throw new Error("This quote has expired.");
+    }
 
     // Trust boundary: the customer picks a slot on-device, but the shop's
     // quoted `availability` is the real floor — parts/install lead time the
@@ -16441,8 +16446,6 @@ export const acceptTireQuote = mutation({
     if (submittedEarlier) {
       throw new Error("Pick a time on or after the shop's earliest availability.");
     }
-
-    const now = Date.now();
 
     // Resolve the winning shop's "Tire Replacement" service so the
     // accepted booking carries a real `service_ids` entry — without it
@@ -16746,6 +16749,10 @@ export const acceptRotorQuote = mutation({
     if (response.superseded_at != null) {
       throw new Error("This quote has already been superseded.");
     }
+    const now = Date.now();
+    if (getQuoteHoldExpiresAt(response) <= now) {
+      throw new Error("This quote has expired.");
+    }
 
     // Trust boundary: the customer picks a slot on-device, but the shop's
     // quoted `availability` is the real floor — parts/install lead time the
@@ -16757,8 +16764,6 @@ export const acceptRotorQuote = mutation({
     if (submittedEarlier) {
       throw new Error("Pick a time on or after the shop's earliest availability.");
     }
-
-    const now = Date.now();
 
     // Resolve "Rotor Replacement" service so the accepted booking carries
     // a real service_ids entry. Tolerate the legacy underscore slug too.

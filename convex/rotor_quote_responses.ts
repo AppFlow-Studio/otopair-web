@@ -16,8 +16,14 @@ import {
 } from "./lib/timeSlotAvailability";
 import {
   QUOTE_HOLD_DURATION_MS,
+  assertQuoteNotHeldForCheckout,
+  buildShopQuoteDetail,
+  getQuoteAvailability,
+  getQuoteRevision,
   isQuoteHoldActive,
+  requireQuoteShopAccess,
   requireOwnedQuoteBooking,
+  throwQuoteUnavailable,
 } from "./lib/quoteHoldOwnership";
 
 // ============================================================================
@@ -99,6 +105,7 @@ export const create = mutation({
       pad_quantity: args.pad_quantity,
       created_at: now,
       expires_at: now + QUOTE_HOLD_DURATION_MS,
+      revision: 1,
     });
 
     // First response flips pending_quote → quotes_ready so the Quotes tab
@@ -111,6 +118,107 @@ export const create = mutation({
     }
 
     return responseId;
+  },
+});
+
+export const validateForCheckout = query({
+  args: {
+    booking_id: v.id("bookings"),
+    response_id: v.id("rotor_quote_responses"),
+    expected_revision: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await requireOwnedQuoteBooking(ctx, args.booking_id);
+    const response = await ctx.db.get(args.response_id);
+    if (!response || String(response.booking_id) !== String(args.booking_id)) {
+      return { available: false as const, reason: "unavailable" as const };
+    }
+    return getQuoteAvailability(response, {
+      expectedRevision: args.expected_revision,
+    });
+  },
+});
+
+export const getShopDetail = query({
+  args: { response_id: v.id("rotor_quote_responses") },
+  handler: async (ctx, args) => {
+    const response = await ctx.db.get(args.response_id);
+    return response ? buildShopQuoteDetail(ctx, "rotor", response) : null;
+  },
+});
+
+export const cancel = mutation({
+  args: { response_id: v.id("rotor_quote_responses") },
+  handler: async (ctx, args) => {
+    const response = await ctx.db.get(args.response_id);
+    if (!response) throw new Error("Quote not found.");
+    await requireQuoteShopAccess(ctx, response.shop_id);
+    const availability = getQuoteAvailability(response);
+    if (!availability.available) throwQuoteUnavailable(availability.reason);
+    await assertQuoteNotHeldForCheckout(
+      ctx,
+      "rotor",
+      response._id,
+      getQuoteRevision(response),
+    );
+    await ctx.db.patch(response._id, { cancelled_at: Date.now() });
+    return response._id;
+  },
+});
+
+export const requote = mutation({
+  args: {
+    response_id: v.id("rotor_quote_responses"),
+    mechanic_id: v.id("mechanics"),
+    rotor_brand: v.string(),
+    rotor_model: v.optional(v.string()),
+    per_rotor_price: v.number(),
+    quantity: v.number(),
+    labor_cost: v.number(),
+    total: v.number(),
+    availability: v.object({ date: v.string(), time: v.string() }),
+    estimated_duration_minutes: v.optional(v.number()),
+    pad_brand: v.optional(v.string()),
+    pad_type: v.optional(v.string()),
+    pad_price: v.optional(v.number()),
+    pad_quantity: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const response = await ctx.db.get(args.response_id);
+    if (!response) throw new Error("Quote not found.");
+    await requireQuoteShopAccess(ctx, response.shop_id);
+    const availability = getQuoteAvailability(response);
+    if (!availability.available) throwQuoteUnavailable(availability.reason);
+    const revision = getQuoteRevision(response);
+    await assertQuoteNotHeldForCheckout(ctx, "rotor", response._id, revision);
+    await assertMechanicAvailableForWindow(ctx, {
+      shopId: response.shop_id,
+      mechanicId: args.mechanic_id,
+      date: args.availability.date,
+      startTime: args.availability.time,
+      durationMinutes: args.estimated_duration_minutes ?? 30,
+      excludeRotorQuoteResponseId: String(response._id),
+    });
+    const now = Date.now();
+    await ctx.db.patch(response._id, {
+      mechanic_id: args.mechanic_id,
+      rotor_brand: args.rotor_brand,
+      rotor_model: args.rotor_model,
+      per_rotor_price: args.per_rotor_price,
+      quantity: args.quantity,
+      labor_cost: args.labor_cost,
+      total: args.total,
+      availability: args.availability,
+      estimated_duration_minutes: args.estimated_duration_minutes,
+      pad_brand: args.pad_brand,
+      pad_type: args.pad_type,
+      pad_price: args.pad_price,
+      pad_quantity: args.pad_quantity,
+      revision: revision + 1,
+      modified_at: now,
+      expires_at: now + QUOTE_HOLD_DURATION_MS,
+    });
+    return response._id;
   },
 });
 
@@ -149,13 +257,14 @@ export const listForBookingWithShops = query({
       .collect();
 
     const now = Date.now();
-    const live = responses.filter((response) => isQuoteHoldActive(response, now));
+    const current = responses.filter((response) => response.superseded_at == null);
 
     return Promise.all(
-      live.map(async (r) => {
+      current.map(async (r) => {
+        const quoteAvailability = getQuoteAvailability(r, { now });
         const [shop, earliestSlotAvailable] = await Promise.all([
           ctx.db.get(r.shop_id),
-          r.mechanic_id
+          quoteAvailability.available && r.mechanic_id
             ? isMechanicAvailableForWindow(ctx, {
                 shopId: r.shop_id,
                 mechanicId: r.mechanic_id,
@@ -168,6 +277,7 @@ export const listForBookingWithShops = query({
         ]);
         return {
           ...r,
+          quote_availability: quoteAvailability,
           earliest_slot_available: earliestSlotAvailable,
           shop: shop
             ? {

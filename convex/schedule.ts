@@ -17,7 +17,9 @@ import {
 import { metaMakeModel } from "./lib/bookingEnrichment";
 import { customServiceNames } from "./lib/customServiceNames";
 import {
+  getActiveQuoteCheckoutHold,
   getQuoteHoldExpiresAt,
+  getQuoteRevision,
   isQuoteHoldActive,
 } from "./lib/quoteHoldOwnership";
 
@@ -447,22 +449,33 @@ export const getBookingsForRange = query({
         .collect(),
     ]);
 
-    const activeResponses = [
+    const candidateResponses = [
       ...tireResponses.map((response) => ({ quoteType: "tire" as const, response })),
       ...rotorResponses.map((response) => ({ quoteType: "rotor" as const, response })),
-    ].filter(({ response: r }) => {
-      if (!isQuoteHoldActive(r, now)) return false;
-      if (!r.mechanic_id) return false; // unassigned tentative holds aren't surfaced
+    ];
+    const checkedResponses = await Promise.all(candidateResponses.map(async ({ quoteType, response: r }) => {
+      if (r.cancelled_at != null || r.superseded_at != null || !r.mechanic_id) return null;
+      const checkoutHold = await getActiveQuoteCheckoutHold(
+        ctx,
+        quoteType,
+        r._id,
+        getQuoteRevision(r),
+        now,
+      );
+      if (!isQuoteHoldActive(r, now) && !checkoutHold) return null;
       const date = r.availability?.date;
-      if (!date || date < args.dateFrom || date > args.dateTo) return false;
+      if (!date || date < args.dateFrom || date > args.dateTo) return null;
       if (scope && scope.kind === "mechanic" && String(r.mechanic_id) !== String(scope.mechanicId)) {
-        return false;
+        return null;
       }
-      return true;
-    });
+      return { quoteType, response: r, checkoutHold };
+    }));
+    const activeResponses = checkedResponses.filter(
+      (item): item is NonNullable<typeof item> => item != null,
+    );
 
     const tentativeEvents = await Promise.all(
-      activeResponses.map(async ({ quoteType, response: r }) => {
+      activeResponses.map(async ({ quoteType, response: r, checkoutHold }) => {
         const booking: any = await ctx.db.get(r.booking_id);
         if (!booking) return null;
         if (booking.status !== "pending_quote" && booking.status !== "quotes_ready") return null;
@@ -495,7 +508,7 @@ export const getBookingsForRange = query({
           diagnosticFollowupState: null,
           bookingId: booking._id,
           responseId: r._id,
-          expiresAt: getQuoteHoldExpiresAt(r),
+          expiresAt: checkoutHold?.expires_at ?? getQuoteHoldExpiresAt(r),
         };
       }),
     );

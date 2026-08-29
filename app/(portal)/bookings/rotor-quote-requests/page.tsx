@@ -14,6 +14,7 @@ import type { CalendarEvent } from "@/app/(portal)/schedule/day-swim-lanes";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { formatHoursValue } from "@/lib/labor-units";
+import ConfirmationDialog from "@/components/confirmation-dialog";
 import {
   Select,
   SelectItem,
@@ -64,6 +65,14 @@ const PAD_BRANDS = [
 ];
 
 const OTHER_BRAND = "__other__";
+
+function brandFormValue(
+  brands: Array<{ value: string; label: string }>,
+  stored: string | undefined,
+) {
+  if (!stored) return "";
+  return brands.find((brand) => brand.label.toLowerCase() === stored.toLowerCase())?.value ?? stored;
+}
 
 function BrandSelect({
   brands,
@@ -177,6 +186,28 @@ type OpenRequest = {
   vin: string;
   submitted_at: number;
   vehicle: { year: number | null; make: string | null; model: string | null } | null;
+  quote_status: "open" | "pending" | "expired" | "cancelled";
+  quote_response: null | {
+    _id: Id<"rotor_quote_responses">;
+    mechanic_id?: Id<"mechanics">;
+    rotor_brand: string;
+    rotor_model?: string;
+    per_rotor_price: number;
+    quantity: number;
+    labor_cost: number;
+    total: number;
+    availability: { date: string; time: string };
+    estimated_duration_minutes?: number;
+    created_at: number;
+    expires_at?: number;
+    cancelled_at?: number;
+    pad_brand?: string;
+    pad_type?: string;
+    pad_price?: number;
+    pad_quantity?: number;
+  };
+  checkout_held: boolean;
+  checkout_hold_expires_at: number | null;
 };
 
 function formatVehicle(v: OpenRequest["vehicle"]): string {
@@ -225,6 +256,41 @@ function formatRelative(ts: number): string {
   return `${days}d ago`;
 }
 
+function QuoteStatusBadge({ status }: { status: OpenRequest["quote_status"] }) {
+  const label =
+    status === "pending"
+      ? "Pending Quote"
+      : status === "expired"
+        ? "Expired"
+        : status === "cancelled"
+          ? "Cancelled"
+          : "Open";
+  const tone =
+    status === "pending"
+      ? "bg-amber-50 text-amber-700"
+      : status === "expired"
+        ? "bg-muted text-muted-foreground"
+        : status === "cancelled"
+          ? "bg-destructive/10 text-destructive"
+          : "bg-primary/10 text-primary";
+  return <span className={`rounded-full px-2 py-1 text-xs font-medium ${tone}`}>{label}</span>;
+}
+
+function liveQuoteState(request: OpenRequest, now: number) {
+  const checkoutHeld =
+    request.checkout_held &&
+    request.checkout_hold_expires_at != null &&
+    request.checkout_hold_expires_at > now;
+  const expiresAt = request.quote_response
+    ? request.quote_response.expires_at ?? request.quote_response.created_at + 10 * 60_000
+    : null;
+  const status =
+    request.quote_status === "pending" && !checkoutHeld && expiresAt != null && expiresAt <= now
+      ? "expired"
+      : request.quote_status;
+  return { checkoutHeld, status };
+}
+
 /**
  * Body of the Rotor Quote Requests page — exported separately so the
  * unified "Quotes" page at /bookings/quote-requests can render it as one
@@ -242,7 +308,25 @@ export function RotorQuoteRequestsContent({ hideHeader = false }: { hideHeader?:
 
   const [activeRequest, setActiveRequest] = useState<OpenRequest | null>(null);
   const [pendingRejectId, setPendingRejectId] = useState<string | null>(null);
+  const [cancelRequest, setCancelRequest] = useState<OpenRequest | null>(null);
+  const [holdNoticeOpen, setHoldNoticeOpen] = useState(false);
+  const [quoteClock, setQuoteClock] = useState(() => Date.now());
   const dismissQuoteRequest = useMutation(api.quote_request_dismissals.dismiss);
+  const cancelQuote = useMutation(api.rotor_quote_responses.cancel);
+
+  useEffect(() => {
+    const nextBoundary = (requests ?? [])
+      .flatMap((request) => [
+        request.quote_response?.expires_at ??
+          (request.quote_response ? request.quote_response.created_at + 10 * 60_000 : null),
+        request.checkout_hold_expires_at,
+      ])
+      .filter((value): value is number => value != null && value > quoteClock)
+      .sort((a, b) => a - b)[0];
+    if (nextBoundary == null) return;
+    const timer = window.setTimeout(() => setQuoteClock(Date.now()), nextBoundary - Date.now() + 50);
+    return () => window.clearTimeout(timer);
+  }, [quoteClock, requests]);
 
   const handleReject = async (id: Id<"bookings">) => {
     if (!shopId) return;
@@ -254,15 +338,27 @@ export function RotorQuoteRequestsContent({ hideHeader = false }: { hideHeader?:
     }
   };
 
+  const handleCancelQuote = async () => {
+    if (!cancelRequest?.quote_response) return;
+    try {
+      await cancelQuote({ response_id: cancelRequest.quote_response._id });
+      setCancelRequest(null);
+    } catch (error) {
+      const data = (error as { data?: { code?: string } })?.data;
+      if (data?.code === "QUOTE_HELD") {
+        setCancelRequest(null);
+        setHoldNoticeOpen(true);
+      }
+    }
+  };
+
   return (
     <div className="space-y-6">
       {hideHeader ? null : (
         <div>
           <h1 className="text-2xl font-bold text-foreground">Rotor Quote Requests</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Open rotor quotes from customers shopping the bid path. Source the
-            lowest OEM price you can offer, submit a quote, and the row leaves
-            once the customer accepts.
+            Review open requests and track pending, expired, or cancelled quotes.
           </p>
         </div>
       )}
@@ -298,6 +394,7 @@ export function RotorQuoteRequestsContent({ hideHeader = false }: { hideHeader?:
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Rotors</th>
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Brake Pads</th>
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Submitted</th>
+                <th className="px-5 py-3 text-left font-medium text-muted-foreground">Status</th>
                 <th className="px-5 py-3" />
               </tr>
             </thead>
@@ -305,6 +402,7 @@ export function RotorQuoteRequestsContent({ hideHeader = false }: { hideHeader?:
               {requests.map((r) => {
                 const qty = rotorQuantityForAxle(r.rotor_specs?.axle);
                 const includePads = r.rotor_specs?.include_pads === true;
+                const live = liveQuoteState(r, quoteClock);
                 return (
                   <tr key={r._id} className="border-b border-border last:border-b-0 hover:bg-muted/20">
                     <td className="px-5 py-4 text-foreground">{formatVehicle(r.vehicle)}</td>
@@ -330,21 +428,20 @@ export function RotorQuoteRequestsContent({ hideHeader = false }: { hideHeader?:
                     <td className="px-5 py-4 text-muted-foreground">
                       {formatRelative(r.submitted_at)}
                     </td>
+                    <td className="px-5 py-4"><QuoteStatusBadge status={live.status} /></td>
                     <td className="px-5 py-4 text-right">
                       <div className="inline-flex items-center gap-2">
-                        <button
-                          onClick={() => setActiveRequest(r)}
-                          className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
-                        >
-                          Make Quote
-                        </button>
-                        <button
-                          onClick={() => handleReject(r._id)}
-                          disabled={pendingRejectId === String(r._id)}
-                          className="inline-flex items-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-                        >
-                          {pendingRejectId === String(r._id) ? "Rejecting…" : "Reject"}
-                        </button>
+                        {live.status === "open" ? (
+                          <>
+                            <button onClick={() => setActiveRequest(r)} className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">Make Quote</button>
+                            <button onClick={() => handleReject(r._id)} disabled={pendingRejectId === String(r._id)} className="inline-flex items-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50">{pendingRejectId === String(r._id) ? "Rejecting…" : "Reject"}</button>
+                          </>
+                        ) : live.status === "pending" ? (
+                          <>
+                            <button onClick={() => setActiveRequest(r)} disabled={live.checkoutHeld} title={live.checkoutHeld ? "The customer has this quote held. Changes are unavailable." : undefined} className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">Requote</button>
+                            <button onClick={() => setCancelRequest(r)} disabled={live.checkoutHeld} title={live.checkoutHeld ? "The customer has this quote held. Changes are unavailable." : undefined} className="inline-flex items-center rounded-md border border-destructive/40 bg-background px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/5 disabled:cursor-not-allowed disabled:opacity-40">Cancel Quote</button>
+                          </>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -356,14 +453,33 @@ export function RotorQuoteRequestsContent({ hideHeader = false }: { hideHeader?:
       )}
 
       {activeRequest && shopId && (
-        <QuoteSubmissionDialog
+        <RotorQuoteSubmissionDialog
           request={activeRequest}
           shopId={shopId}
           shopMechanics={context?.mechanics ?? []}
           shopHours={context?.hours ?? []}
           onClose={() => setActiveRequest(null)}
+          onHeld={() => {
+            setActiveRequest(null);
+            setHoldNoticeOpen(true);
+          }}
         />
       )}
+      <ConfirmationDialog
+        open={cancelRequest != null}
+        title="Cancel this quote?"
+        description="The customer will no longer be able to accept this shop's quote."
+        onClose={() => setCancelRequest(null)}
+        secondaryAction={{ label: "Keep quote", onAction: () => setCancelRequest(null) }}
+        primaryAction={{ label: "Cancel quote", onAction: () => void handleCancelQuote(), variant: "destructive" }}
+      />
+      <ConfirmationDialog
+        open={holdNoticeOpen}
+        title="Quote changes unavailable"
+        description="The customer now has this slot and quote held on Review & Pay. The quote cannot be cancelled or modified until their hold ends."
+        onClose={() => setHoldNoticeOpen(false)}
+        primaryAction={{ label: "Got it", onAction: () => setHoldNoticeOpen(false) }}
+      />
     </div>
   );
 }
@@ -391,20 +507,31 @@ function formatTimeLabel(hhmm: string): string {
   return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
-function QuoteSubmissionDialog({
+export function RotorQuoteSubmissionDialog({
   request,
   shopId,
   shopMechanics,
   shopHours,
   onClose,
+  onHeld,
 }: {
   request: OpenRequest;
   shopId: Id<"shops">;
   shopMechanics: Array<{ _id: Id<"mechanics">; name: string; imageUrl?: string | null }>;
   shopHours: Array<{ dayOfWeek: number; openTime: string; closeTime: string; isClosed: boolean }>;
   onClose: () => void;
+  onHeld?: () => void;
 }) {
   const submit = useMutation(api.rotor_quote_responses.create);
+  const requote = useMutation(api.rotor_quote_responses.requote);
+  const existing = request.quote_response;
+  const liveDetail = useQuery(
+    api.rotor_quote_responses.getShopDetail,
+    existing ? { response_id: existing._id } : "skip",
+  );
+  useEffect(() => {
+    if (existing && liveDetail?.checkout_held) onHeld?.();
+  }, [existing, liveDetail?.checkout_held, onHeld]);
 
   const includePads = request.rotor_specs?.include_pads === true;
   const requestedPadType = request.rotor_specs?.pad_type;
@@ -415,31 +542,40 @@ function QuoteSubmissionDialog({
   // presets (both axles can easily run 90 min). Carbon-ceramic + pads tilts
   // toward the upper end, so seed 90 there.
   const [durationMinutes, setDurationMinutes] = useState(
-    isCarbonCeramic || (request.rotor_specs?.axle === "both" && includePads) ? 90 : 60,
+    existing?.estimated_duration_minutes ??
+      (isCarbonCeramic || (request.rotor_specs?.axle === "both" && includePads) ? 90 : 60),
   );
 
-  const [rotorBrand, setRotorBrand] = useState("");
-  const [rotorModel, setRotorModel] = useState("");
-  const [perRotorPrice, setPerRotorPrice] = useState("");
+  const [rotorBrand, setRotorBrand] = useState(
+    brandFormValue(ROTOR_BRANDS, existing?.rotor_brand),
+  );
+  const [rotorModel, setRotorModel] = useState(existing?.rotor_model ?? "");
+  const [perRotorPrice, setPerRotorPrice] = useState(existing ? String(existing.per_rotor_price) : "");
   // Pad fields — only collected when the request had include_pads=true.
   // pad_quantity defaults to rotor qty since pads ship paired; the shop can
   // override (e.g. 4-pad axle kit for a "front pair" request).
-  const [padBrand, setPadBrand] = useState("");
-  const [padType, setPadType] = useState<PadType | "">(requestedPadType ?? "");
-  const [padPrice, setPadPrice] = useState("");
-  const [padQuantity, setPadQuantity] = useState<string>(
-    includePads ? String(rotorQuantity || "") : "",
+  const [padBrand, setPadBrand] = useState(
+    brandFormValue(PAD_BRANDS, existing?.pad_brand),
   );
-  const [laborCost, setLaborCost] = useState("");
-  const [availabilityDate, setAvailabilityDate] = useState(todayIso());
-  const [availabilityTime, setAvailabilityTime] = useState("");
-  const [mechanicId, setMechanicId] = useState<string>("");
+  const [padType, setPadType] = useState<PadType | "">(
+    (existing?.pad_type as PadType | undefined) ?? requestedPadType ?? "",
+  );
+  const [padPrice, setPadPrice] = useState(existing?.pad_price != null ? String(existing.pad_price) : "");
+  const [padQuantity, setPadQuantity] = useState<string>(
+    existing?.pad_quantity != null
+      ? String(existing.pad_quantity)
+      : includePads ? String(rotorQuantity || "") : "",
+  );
+  const [laborCost, setLaborCost] = useState(existing ? String(existing.labor_cost) : "");
+  const [availabilityDate, setAvailabilityDate] = useState(existing?.availability.date ?? todayIso());
+  const [availabilityTime, setAvailabilityTime] = useState(existing?.availability.time ?? "");
+  const [mechanicId, setMechanicId] = useState<string>(existing?.mechanic_id ? String(existing.mechanic_id) : "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
-  const [laneDate, setLaneDate] = useState<Date | null>(null);
+  const [laneDate, setLaneDate] = useState<Date | null>(existing ? dateStringToDate(existing.availability.date) : null);
   const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
-  const initialLaneDateSelectedRef = useRef(false);
+  const initialLaneDateSelectedRef = useRef(Boolean(existing));
 
   const laneDateStr = laneDate ? dateToString(laneDate) : todayIso();
   const initialLookaheadRange = useMemo(() => {
@@ -649,9 +785,7 @@ function QuoteSubmissionDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await submit({
-        booking_id: request._id,
-        shop_id: shopId,
+      const quote = {
         rotor_brand: (ROTOR_BRANDS.find((b) => b.value === rotorBrand)?.label ?? rotorBrand).trim(),
         rotor_model: rotorModel.trim() ? rotorModel.trim() : undefined,
         per_rotor_price: Number(perRotorPrice),
@@ -660,7 +794,7 @@ function QuoteSubmissionDialog({
         total,
         availability: { date: availabilityDate, time: availabilityTime },
         estimated_duration_minutes: durationMinutes,
-        mechanic_id: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
+        mechanic_id: mechanicId as Id<"mechanics">,
         ...(includePads
           ? {
               pad_brand: (PAD_BRANDS.find((b) => b.value === padBrand)?.label ?? padBrand).trim(),
@@ -669,9 +803,19 @@ function QuoteSubmissionDialog({
               pad_quantity: Number(padQuantity),
             }
           : {}),
-      });
+      };
+      if (existing) {
+        await requote({ response_id: existing._id, ...quote });
+      } else {
+        await submit({ booking_id: request._id, shop_id: shopId, ...quote });
+      }
       onClose();
     } catch (e) {
+      const data = (e as { data?: { code?: string } })?.data;
+      if (data?.code === "QUOTE_HELD") {
+        onHeld?.();
+        return;
+      }
       setError(e instanceof Error ? e.message : "Couldn't submit your quote. Please try again.");
     } finally {
       setSubmitting(false);
@@ -686,7 +830,9 @@ function QuoteSubmissionDialog({
       <div className="relative w-full max-w-6xl h-[85vh] rounded-xl border border-border bg-card shadow-xl flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
           <div>
-            <h3 className="text-base font-semibold text-foreground">Submit rotor quote</h3>
+            <h3 className="text-base font-semibold text-foreground">
+              {existing ? "Requote rotor quote" : "Submit rotor quote"}
+            </h3>
             <p className="text-sm text-muted-foreground mt-0.5">
               {formatVehicle(request.vehicle)} ·{" "}
               {formatBrakeSystem(request.rotor_specs?.brake_system_type)} ·{" "}
@@ -1017,7 +1163,9 @@ function QuoteSubmissionDialog({
                 disabled={!canSubmit}
                 className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
-                {submitting ? "Submitting…" : "Submit quote"}
+                {submitting
+                  ? existing ? "Saving…" : "Submitting…"
+                  : existing ? "Save quote" : "Submit quote"}
               </button>
             </div>
           </div>

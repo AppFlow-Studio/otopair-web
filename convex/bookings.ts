@@ -66,7 +66,13 @@ import { computePlatformFeeDollars } from "../lib/platformFee";
 import { hoursToMinutes } from "../lib/labor-units";
 import { metaMakeModel } from "./lib/bookingEnrichment";
 import { isRealVin, isPseudoVin, mintPseudoVin } from "./lib/vinIdentity";
-import { getQuoteHoldExpiresAt } from "./lib/quoteHoldOwnership";
+import {
+  getActiveQuoteCheckoutHold,
+  getQuoteAvailability,
+  getQuoteHoldExpiresAt,
+  getQuoteRevision,
+  throwQuoteUnavailable,
+} from "./lib/quoteHoldOwnership";
 import { buildYmmtFingerprint } from "./vehicleEnrichment/types";
 import {
   computeDisclosedRange,
@@ -16408,6 +16414,7 @@ export const acceptTireQuote = mutation({
     mechanic_id: v.optional(v.id("mechanics")),
     hold_id: v.optional(v.id("slot_holds")),
     session_id: v.optional(v.string()),
+    quote_revision: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUser(ctx);
@@ -16428,12 +16435,29 @@ export const acceptTireQuote = mutation({
     if (String(response.booking_id) !== String(args.booking_id)) {
       throw new Error("This quote doesn't belong to the selected request.");
     }
-    if (response.superseded_at != null) {
-      throw new Error("This quote has already been superseded.");
-    }
     const now = Date.now();
-    if (getQuoteHoldExpiresAt(response) <= now) {
-      throw new Error("This quote has expired.");
+    const expectedRevision = args.quote_revision ?? 1;
+    const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.hold_id,
+      sessionId: args.session_id,
+      shopId: response.shop_id,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
+      heldBy: currentUser._id,
+      quoteType: "tire",
+      quoteResponseId: response._id,
+      quoteRevision: expectedRevision,
+    });
+    const quoteAvailability = getQuoteAvailability(response, {
+      expectedRevision,
+      now,
+    });
+    if (
+      !quoteAvailability.available &&
+      !(quoteAvailability.reason === "expired" && holdConsume.consumeHoldId)
+    ) {
+      throwQuoteUnavailable(quoteAvailability.reason);
     }
 
     // Trust boundary: the customer picks a slot on-device, but the shop's
@@ -16495,15 +16519,6 @@ export const acceptTireQuote = mutation({
       );
     }
 
-    const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
-    const holdConsume = await resolveSlotHoldForConsume(ctx, {
-      holdId: args.hold_id,
-      sessionId: args.session_id,
-      shopId: response.shop_id,
-      date: args.scheduled_date,
-      startTime: args.scheduled_time,
-      heldBy: currentUser._id,
-    });
     const acceptedMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: response.shop_id,
       date: args.scheduled_date,
@@ -16585,24 +16600,27 @@ export const listOpenTireQuoteRequestsForShop = query({
       (b) => b.tire_specs != null,
     );
 
-    // Filter out bookings this shop has already quoted on or dismissed.
+    // Keep this shop's submitted response visible as Pending/Expired/Cancelled.
+    // Only an untouched dismissed request disappears from this shop's queue.
     const filtered = await Promise.all(
       candidates.map(async (booking) => {
-        const existing = await ctx.db
+        const responses = await ctx.db
           .query("tire_quote_responses")
           .withIndex("by_booking_and_shop", (q) =>
             q.eq("booking_id", booking._id).eq("shop_id", args.shopId),
           )
-          .filter((q) => q.eq(q.field("superseded_at"), undefined))
-          .first();
-        if (existing) return null;
+          .collect();
+        const existing = responses
+          .filter((response) => response.superseded_at == null)
+          .sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+        if (existing) return { booking, response: existing };
         const dismissed = await ctx.db
           .query("quote_request_dismissals")
           .withIndex("by_booking_and_shop", (q) =>
             q.eq("booking_id", booking._id).eq("shop_id", args.shopId),
           )
           .first();
-        return dismissed ? null : booking;
+        return dismissed ? null : { booking, response: null };
       }),
     );
 
@@ -16610,13 +16628,32 @@ export const listOpenTireQuoteRequestsForShop = query({
 
     // Join basic vehicle context for the shop dashboard cards.
     return Promise.all(
-      open.map(async (booking) => {
+      open.map(async ({ booking, response }) => {
         const vehicle = await ctx.db
           .query("vehicles")
           .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
           .first();
         const meta =
           (vehicle?.metadata as { make?: string; model?: string } | undefined) ?? undefined;
+        const now = Date.now();
+        const checkoutHold = response
+          ? await getActiveQuoteCheckoutHold(
+              ctx,
+              "tire",
+              response._id,
+              getQuoteRevision(response),
+              now,
+            )
+          : null;
+        const quoteStatus = response
+          ? response.cancelled_at != null
+            ? "cancelled"
+            : checkoutHold != null
+              ? "pending"
+              : getQuoteHoldExpiresAt(response) <= now
+                ? "expired"
+                : "pending"
+          : "open";
         return {
           _id: booking._id,
           _creationTime: booking._creationTime,
@@ -16624,6 +16661,10 @@ export const listOpenTireQuoteRequestsForShop = query({
           tire_specs: booking.tire_specs,
           vin: booking.vin,
           submitted_at: booking.created_at ?? booking._creationTime,
+          quote_status: quoteStatus,
+          quote_response: response,
+          checkout_held: checkoutHold != null,
+          checkout_hold_expires_at: checkoutHold?.expires_at ?? null,
           vehicle: vehicle
             ? {
                 year: vehicle.year ?? null,
@@ -16726,6 +16767,7 @@ export const acceptRotorQuote = mutation({
     mechanic_id: v.optional(v.id("mechanics")),
     hold_id: v.optional(v.id("slot_holds")),
     session_id: v.optional(v.string()),
+    quote_revision: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUser(ctx);
@@ -16746,12 +16788,29 @@ export const acceptRotorQuote = mutation({
     if (String(response.booking_id) !== String(args.booking_id)) {
       throw new Error("This quote doesn't belong to the selected request.");
     }
-    if (response.superseded_at != null) {
-      throw new Error("This quote has already been superseded.");
-    }
     const now = Date.now();
-    if (getQuoteHoldExpiresAt(response) <= now) {
-      throw new Error("This quote has expired.");
+    const expectedRevision = args.quote_revision ?? 1;
+    const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.hold_id,
+      sessionId: args.session_id,
+      shopId: response.shop_id,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
+      heldBy: currentUser._id,
+      quoteType: "rotor",
+      quoteResponseId: response._id,
+      quoteRevision: expectedRevision,
+    });
+    const quoteAvailability = getQuoteAvailability(response, {
+      expectedRevision,
+      now,
+    });
+    if (
+      !quoteAvailability.available &&
+      !(quoteAvailability.reason === "expired" && holdConsume.consumeHoldId)
+    ) {
+      throwQuoteUnavailable(quoteAvailability.reason);
     }
 
     // Trust boundary: the customer picks a slot on-device, but the shop's
@@ -16808,15 +16867,6 @@ export const acceptRotorQuote = mutation({
     const padsSubtotal =
       (response.pad_price ?? 0) * (response.pad_quantity ?? response.quantity);
 
-    const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
-    const holdConsume = await resolveSlotHoldForConsume(ctx, {
-      holdId: args.hold_id,
-      sessionId: args.session_id,
-      shopId: response.shop_id,
-      date: args.scheduled_date,
-      startTime: args.scheduled_time,
-      heldBy: currentUser._id,
-    });
     const acceptedMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: response.shop_id,
       date: args.scheduled_date,
@@ -16893,34 +16943,55 @@ export const listOpenRotorQuoteRequestsForShop = query({
 
     const filtered = await Promise.all(
       candidates.map(async (booking) => {
-        const existing = await ctx.db
+        const responses = await ctx.db
           .query("rotor_quote_responses")
           .withIndex("by_booking_and_shop", (q) =>
             q.eq("booking_id", booking._id).eq("shop_id", args.shopId),
           )
-          .filter((q) => q.eq(q.field("superseded_at"), undefined))
-          .first();
-        if (existing) return null;
+          .collect();
+        const existing = responses
+          .filter((response) => response.superseded_at == null)
+          .sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+        if (existing) return { booking, response: existing };
         const dismissed = await ctx.db
           .query("quote_request_dismissals")
           .withIndex("by_booking_and_shop", (q) =>
             q.eq("booking_id", booking._id).eq("shop_id", args.shopId),
           )
           .first();
-        return dismissed ? null : booking;
+        return dismissed ? null : { booking, response: null };
       }),
     );
 
     const open = filtered.filter((b): b is NonNullable<typeof b> => b != null);
 
     return Promise.all(
-      open.map(async (booking) => {
+      open.map(async ({ booking, response }) => {
         const vehicle = await ctx.db
           .query("vehicles")
           .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
           .first();
         const meta =
           (vehicle?.metadata as { make?: string; model?: string } | undefined) ?? undefined;
+        const now = Date.now();
+        const checkoutHold = response
+          ? await getActiveQuoteCheckoutHold(
+              ctx,
+              "rotor",
+              response._id,
+              getQuoteRevision(response),
+              now,
+            )
+          : null;
+        const quoteStatus = response
+          ? response.cancelled_at != null
+            ? "cancelled"
+            : checkoutHold != null
+              ? "pending"
+              : getQuoteHoldExpiresAt(response) <= now
+                ? "expired"
+                : "pending"
+          : "open";
         return {
           _id: booking._id,
           _creationTime: booking._creationTime,
@@ -16928,6 +16999,10 @@ export const listOpenRotorQuoteRequestsForShop = query({
           rotor_specs: booking.rotor_specs,
           vin: booking.vin,
           submitted_at: booking.created_at ?? booking._creationTime,
+          quote_status: quoteStatus,
+          quote_response: response,
+          checkout_held: checkoutHold != null,
+          checkout_hold_expires_at: checkoutHold?.expires_at ?? null,
           vehicle: vehicle
             ? {
                 year: vehicle.year ?? null,

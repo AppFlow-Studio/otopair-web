@@ -4232,6 +4232,44 @@ export default defineSchema({
     .index("by_key_and_time", ["api_key_id", "created_at"])
     .index("by_created_at", ["created_at"]),
 
+  // Per-owner enrichment-run tracker for the self-serve Data API (OtoIndex
+  // /developers dashboard). One row per POST /v0/enrich that ACTUALLY schedules
+  // a run (202) — cache hits (200) never create a row. Drives (a) the live
+  // "Enrichment runs" card on the dashboard and (b) the queued/complete/failed
+  // emails. Status is reconciled off the config's enrichment_status by the
+  // `reconcile-data-api-enrich-runs` cron (see dataApiEnrich.ts) — this table
+  // is a view/notification ledger, NOT the pipeline's source of truth.
+  data_api_enrich_runs: defineTable({
+    owner_user_id: v.id("users"),
+    api_key_id: v.id("api_keys"),
+    vin: v.string(),
+    vehicle_id: v.optional(v.id("vehicles")),
+    config_key: v.optional(v.string()),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("enriching"),
+      v.literal("complete"),
+      v.literal("failed"),
+    ),
+    // Denormalized identity for display + email (decoded at schedule time).
+    year: v.optional(v.number()),
+    make: v.optional(v.string()),
+    model: v.optional(v.string()),
+    trim: v.optional(v.string()),
+    fill_rate: v.optional(v.number()),
+    error: v.optional(v.string()),
+    queued_at: v.number(),
+    last_status_at: v.number(),
+    completed_at: v.optional(v.number()),
+    // Idempotency guards for the two emails (queued email fires at insert time,
+    // completion email once the reconcile cron sees a terminal status).
+    notified_queued: v.boolean(),
+    notified_complete: v.boolean(),
+  })
+    .index("by_owner", ["owner_user_id", "queued_at"])
+    .index("by_status", ["status"])
+    .index("by_vin", ["vin"]),
+
   // ── Otofacts Car Data API billing (spec: convex/CARDATA_BILLING_SPEC.md) ────
   // One row per billing subject (Clerk user). The LIVE source of truth for what
   // a self-serve key may do — dataApi.withApiKey resolves key → owner_user_id →

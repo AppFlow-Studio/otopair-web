@@ -686,6 +686,71 @@ export const listConfigCandidates = internalQuery({
   },
 });
 
+/** The full enriched catalog — every config with enrichment_status
+ *  complete/verified, for discovery + the try-it sandbox's autocomplete. Same
+ *  item shape as listConfigCandidates (config_key + ymmt + engine + fill_rate).
+ *  Bounded by `limit` (default 2000) so a runaway dataset can't blow the query
+ *  read budget; the caller sees `count` and can raise the cap. No VINs. */
+export const listEnrichedCatalog = internalQuery({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit }): Promise<ConfigCandidate[]> => {
+    const cap = Math.min(Math.max(limit ?? 2000, 1), 5000);
+    const rows: Doc<"vehicle_configs">[] = [];
+    for (const status of ["complete", "verified"] as const) {
+      if (rows.length >= cap) break;
+      const batch = await ctx.db
+        .query("vehicle_configs")
+        .withIndex("by_enrichment_status", (q) => q.eq("enrichment_status", status))
+        .take(cap - rows.length);
+      rows.push(...batch);
+    }
+    const makeNames = new Map<string, string>();
+    const modelNames = new Map<string, string>();
+    const out: ConfigCandidate[] = [];
+    for (const c of rows) {
+      let mk = makeNames.get(String(c.make_id));
+      if (mk === undefined) {
+        mk = (await ctx.db.get(c.make_id))?.name ?? "?";
+        makeNames.set(String(c.make_id), mk);
+      }
+      let md = modelNames.get(String(c.model_id));
+      if (md === undefined) {
+        md = (await ctx.db.get(c.model_id))?.name ?? "?";
+        modelNames.set(String(c.model_id), md);
+      }
+      const eng = c.engine_id ? await ctx.db.get(c.engine_id) : null;
+      out.push({
+        config_key: c.config_key,
+        year: c.year,
+        make: mk,
+        model: md,
+        trim: c.trim_name ?? null,
+        drivetrain: c.drivetrain ?? null,
+        engine: eng
+          ? [
+              (eng.displacement_l ?? eng.displacement_liters) != null
+                ? `${eng.displacement_l ?? eng.displacement_liters}L`
+                : null,
+              eng.engine_code ?? null,
+            ]
+              .filter(Boolean)
+              .join(" ") || null
+          : null,
+        enrichment_status: c.enrichment_status ?? null,
+        fill_rate: c.fill_rate ?? null,
+      });
+    }
+    out.sort(
+      (a, b) =>
+        a.make.localeCompare(b.make) ||
+        a.model.localeCompare(b.model) ||
+        b.year - a.year ||
+        (a.trim ?? "").localeCompare(b.trim ?? ""),
+    );
+    return out;
+  },
+});
+
 /** Completed platform visits for a VIN (bookings.by_vin), shop names joined,
  *  date-desc. Shared by assembleVehicle's history block (which serves shop
  *  names) and assembleServiceHistory (which deliberately drops them). */

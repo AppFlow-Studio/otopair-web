@@ -164,6 +164,17 @@ crons.interval(
   (internal as any).email_dispatcher.dispatchPendingEmails,
 );
 
+// Data API self-serve enrich-run ledger: reconcile each active run (queued /
+// enriching) against its config's live enrichment_status, flipping it to
+// enriching / complete / failed and enqueuing the owner's completion email.
+// 2 min is plenty against the 7-40 min pipeline; DB-only, never spends.
+crons.interval(
+  "reconcile-data-api-enrich-runs",
+  { minutes: 2 },
+  internal.dataApiEnrich.reconcileEnrichRuns,
+  {},
+);
+
 // Pre-Job Approval: expire 24h-stale customer approval cycles. Pre-job
 // expiry captures the $20 deposit forfeit; mid-job expiry just freezes the
 // ceiling at the prior approved set price.

@@ -1380,12 +1380,35 @@ http.route({
         }
         return { status: 500, body: { error: "internal_error", message: "Vehicle row creation failed — retry later." } };
       }
+
+      // Ledger + "queued" email for self-serve dev keys (team keys carry no
+      // owner and have no dashboard). Best-effort: a failure here must not sink
+      // an otherwise-scheduled 202.
+      let runId: string | undefined;
+      if (key.ownerUserId) {
+        try {
+          runId = await ctx.runMutation(internal.dataApiEnrich.recordEnrichRunQueued, {
+            owner_user_id: key.ownerUserId,
+            api_key_id: key.keyId,
+            vin,
+            vehicle_id: result.vehicleId,
+            year: result.year,
+            make: result.make,
+            model: result.model,
+            trim: result.trim ?? undefined,
+          });
+        } catch (e) {
+          console.error("[/v0/enrich] recordEnrichRunQueued failed:", e);
+        }
+      }
+
       return {
         status: 202,
         body: {
           object: "enrichment",
           status: "queued",
           vin,
+          run_id: runId,
           ...(creditsRemaining !== undefined ? { credits_remaining: creditsRemaining } : {}),
           poll: {
             method: "GET",
@@ -1710,6 +1733,22 @@ http.route({
   ),
 });
 
+// ── /v1/catalog — the enriched catalog: every config we hold, complete/verified
+//    (config_key + year/make/model/trim + engine + fill_rate). Powers discovery
+//    and the try-it sandbox's autocomplete. Read-scoped; no VINs. ?limit= caps.
+http.route({
+  path: "/v1/catalog",
+  method: "GET",
+  handler: httpAction(async (ctx, request) =>
+    withApiKey(ctx, request, "/v1/catalog", "maintenance:read", async (params) => {
+      const raw = Number(params.get("limit"));
+      const limit = Number.isFinite(raw) && raw > 0 ? raw : undefined;
+      const configs = await ctx.runQuery(internal.dataApi.listEnrichedCatalog, { limit });
+      return { status: 200, body: { object: "config_catalog", count: configs.length, configs } };
+    }),
+  ),
+});
+
 // ── /v1/openapi.json — the machine-readable spec (public, no key). Powers the
 //    interactive reference at /developers/docs and is pullable by integrators,
 //    Postman, SDK generators, and agents. Server URL is injected from the
@@ -1738,6 +1777,7 @@ for (const path of [
   "/v1/parts",
   "/v1/decode",
   "/v1/configs",
+  "/v1/catalog",
   "/v1/openapi.json",
 ]) {
   http.route({ path, method: "OPTIONS", handler: httpAction(async () => corsOptions()) });

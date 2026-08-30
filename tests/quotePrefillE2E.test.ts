@@ -366,3 +366,81 @@ describe("added scope on a quote-originated booking (accept → add → customer
     });
   }
 });
+
+describe("quote accept records the pre-authorized deposit (like every other booking flow)", () => {
+  for (const quoteType of ["tire", "rotor"] as const) {
+    test(`${quoteType}: accepting with a pre-authorized deposit creates the payments row + disclosed band`, async () => {
+      const { t, seed } = await seedQuoteBooking(quoteType);
+      const customer = t.withIdentity(identityFor(seed.customerClerkId));
+      const args = {
+        booking_id: seed.bookingId,
+        response_id: seed.responseId,
+        scheduled_date: "2026-06-01",
+        scheduled_time: "09:00",
+        hold_id: seed.holdId,
+        session_id: seed.sessionId,
+        quote_revision: 1,
+        // The $20 deposit the mobile pre-authorized (preauthorizePaymentForBooking),
+        // handed to accept exactly like bookings.create receives it.
+        preauthorized_payment: {
+          stripe_payment_intent_id: "pi_test_deposit_hold",
+          idempotency_key: `booking_preauth:${quoteType}-e2e`,
+          hold_amount_cents: 2000,
+          payment_origin: "apple_pay" as const,
+        },
+      };
+      if (quoteType === "tire") {
+        await customer.mutation(api.bookings.acceptTireQuote, args as never);
+      } else {
+        await customer.mutation(api.bookings.acceptRotorQuote, args as never);
+      }
+
+      const { booking, payment } = await t.run(async (ctx) => {
+        const b: any = await ctx.db.get(seed.bookingId);
+        const p: any = await ctx.db
+          .query("payments")
+          .withIndex("by_booking_id", (q: any) =>
+            q.eq("booking_id", seed.bookingId),
+          )
+          .unique();
+        return { booking: b, payment: p };
+      });
+      console.log(
+        `[E2E ${quoteType} deposit] booking pas=${booking?.payment_approval_state} band=${booking?.disclosed_range_high_cents}; payment row:\n` +
+          JSON.stringify(payment, null, 2),
+      );
+
+      expect(booking?.status).toBe("confirmed");
+      // Now shaped like a normal pre-job-approval booking.
+      expect(booking?.payment_approval_state).toBe("none");
+      expect(booking?.disclosed_range_high_cents).toBeGreaterThan(0);
+      // The payments row exists FROM ACCEPT — the reauth actions will find it.
+      expect(payment).toBeTruthy();
+      expect(payment?.stripe_payment_intent_id).toBe("pi_test_deposit_hold");
+      expect(payment?.hold_amount_cents).toBe(2000);
+      expect(payment?.payment_origin).toBe("apple_pay");
+      expect(payment?.status).toBe("processing");
+    });
+
+    test(`${quoteType}: accept still confirms with NO deposit (hold falls to first reauth)`, async () => {
+      const { t, seed } = await seedQuoteBooking(quoteType);
+      const customer = t.withIdentity(identityFor(seed.customerClerkId));
+      await acceptQuote(t, seed, quoteType); // no preauthorized_payment
+
+      const { booking, payment } = await t.run(async (ctx) => {
+        const b: any = await ctx.db.get(seed.bookingId);
+        const p: any = await ctx.db
+          .query("payments")
+          .withIndex("by_booking_id", (q: any) =>
+            q.eq("booking_id", seed.bookingId),
+          )
+          .unique();
+        return { booking: b, payment: p };
+      });
+      // Confirms cleanly; no row yet — the first-hold path in the reauth actions
+      // (approveAndAuthorizeHold / resumeReauthFromMobile) covers that case.
+      expect(booking?.status).toBe("confirmed");
+      expect(payment).toBeNull();
+    });
+  }
+});

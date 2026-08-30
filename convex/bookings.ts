@@ -16497,6 +16497,80 @@ export const createTireQuoteRequest = mutation({
 });
 
 /**
+ * The customer's pre-authorized deposit, passed to the quote-accept mutations
+ * the same way `bookings.create` receives it. The mobile client authorizes the
+ * $20 hold up front (payments_stripe.preauthorizePaymentForBooking) and hands
+ * the resulting PI down so the payments row is created AT ACCEPT — exactly like
+ * a normal booking records it at create.
+ */
+const acceptQuotePreauthValidator = v.optional(
+  v.object({
+    stripe_payment_intent_id: v.string(),
+    idempotency_key: v.string(),
+    hold_amount_cents: v.number(),
+    payment_origin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
+  }),
+);
+
+/**
+ * Record the customer's pre-authorized deposit onto a just-confirmed quote
+ * booking — the payments-row insert `bookings.create` does for a normal booking
+ * (its `preauthorized_payment` branch), lifted here because a quote booking is
+ * created at request time and only gets a shop + price at accept. Without it a
+ * quote → job → added-scope booking had NO payments row, so the reauth actions
+ * threw "No payment row found". Idempotent by booking_id (an accept retry won't
+ * double-insert).
+ */
+async function recordPreauthorizedQuoteDeposit(
+  ctx: MutationCtx,
+  args: {
+    bookingId: Id<"bookings">;
+    userId: Id<"users">;
+    shopId: Id<"shops">;
+    amount: number;
+    now: number;
+    preauth: {
+      stripe_payment_intent_id: string;
+      idempotency_key: string;
+      hold_amount_cents: number;
+      payment_origin?: "card" | "apple_pay" | "google_pay";
+    };
+  },
+) {
+  const existing = await ctx.db
+    .query("payments")
+    .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+    .unique();
+  if (existing) return existing._id;
+  const paymentId = await ctx.db.insert("payments", {
+    booking_id: args.bookingId,
+    user_id: args.userId,
+    shop_id: args.shopId,
+    amount: args.amount,
+    payment_method: "card",
+    status: "processing",
+    stripe_payment_intent_id: args.preauth.stripe_payment_intent_id,
+    idempotency_key: args.preauth.idempotency_key,
+    hold_amount_cents: args.preauth.hold_amount_cents,
+    payment_origin: args.preauth.payment_origin,
+    created_at: args.now,
+    updated_at: args.now,
+  });
+  await ctx.scheduler.runAfter(0, internal.payment_status_history.log, {
+    payment_id: paymentId,
+    old_status: undefined,
+    new_status: "processing",
+  });
+  return paymentId;
+}
+
+/**
  * MUTATION: acceptTireQuote
  * The user picks one of the shop responses for their pending tire booking.
  * Fills in shop_id, costs, and pricing onto the booking, flips status to
@@ -16512,6 +16586,11 @@ export const acceptTireQuote = mutation({
     hold_id: v.optional(v.id("slot_holds")),
     session_id: v.optional(v.string()),
     quote_revision: v.optional(v.number()),
+    // The $20 deposit the customer pre-authorized in the accept payment sheet,
+    // recorded onto the booking here (like every other booking flow). Optional
+    // so an accept without it still confirms — the hold then lands at the first
+    // reauth. See acceptQuotePreauthValidator.
+    preauthorized_payment: acceptQuotePreauthValidator,
   },
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUser(ctx);
@@ -16640,9 +16719,30 @@ export const acceptTireQuote = mutation({
       scheduled_time: args.scheduled_time,
       estimated_labor_minutes: acceptedDurationMinutes,
       status: "confirmed",
+      // The customer agreed to the quoted total, so it IS the disclosed price
+      // band — capture up to it needs no further consent; added scope beyond it
+      // reauthorizes. Matches the normal pre-job-approval booking shape so the
+      // deposit / capture / mid-job flows treat a quote booking identically.
+      payment_approval_state: "none",
+      disclosed_range_low_cents: Math.round(response.total * 100),
+      disclosed_range_high_cents: Math.round(response.total * 100),
       updated_at: now,
       ...(attachServiceId ? { service_ids: [attachServiceId] } : {}),
     });
+
+    // Record the pre-authorized deposit onto the booking (like bookings.create),
+    // so a quote booking carries a payments row from acceptance instead of
+    // reaching the first hold with none.
+    if (args.preauthorized_payment) {
+      await recordPreauthorizedQuoteDeposit(ctx, {
+        bookingId: args.booking_id,
+        userId: booking.user_id,
+        shopId: response.shop_id,
+        amount: response.total,
+        now,
+        preauth: args.preauthorized_payment,
+      });
+    }
 
     // Supersede all other live responses for this booking.
     const siblings = await ctx.db
@@ -16880,6 +16980,8 @@ export const acceptRotorQuote = mutation({
     hold_id: v.optional(v.id("slot_holds")),
     session_id: v.optional(v.string()),
     quote_revision: v.optional(v.number()),
+    // Same $20 pre-authorized deposit as the tire path — recorded at accept.
+    preauthorized_payment: acceptQuotePreauthValidator,
   },
   handler: async (ctx, args) => {
     const currentUser = await getCurrentUser(ctx);
@@ -17000,9 +17102,25 @@ export const acceptRotorQuote = mutation({
       scheduled_time: args.scheduled_time,
       estimated_labor_minutes: acceptedDurationMinutes,
       status: "confirmed",
+      // Quoted total IS the disclosed price band (see acceptTireQuote).
+      payment_approval_state: "none",
+      disclosed_range_low_cents: Math.round(response.total * 100),
+      disclosed_range_high_cents: Math.round(response.total * 100),
       updated_at: now,
       ...(attachServiceId ? { service_ids: [attachServiceId] } : {}),
     });
+
+    // Record the pre-authorized deposit onto the booking (like bookings.create).
+    if (args.preauthorized_payment) {
+      await recordPreauthorizedQuoteDeposit(ctx, {
+        bookingId: args.booking_id,
+        userId: booking.user_id,
+        shopId: response.shop_id,
+        amount: response.total,
+        now,
+        preauth: args.preauthorized_payment,
+      });
+    }
 
     const siblings = await ctx.db
       .query("rotor_quote_responses")

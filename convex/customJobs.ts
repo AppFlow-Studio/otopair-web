@@ -1482,6 +1482,22 @@ export const listForBooking = query({
         : null;
     let servicesCache: any[] | null = null;
 
+    // Whether each off-catalog line is STILL awaiting the customer — read from
+    // the booking's custom_services scheduling copy, keyed by match_key.
+    // `pending_confirmation` is set true at add-time and cleared when an estimate
+    // carrying the line is approved (confirmStagedCustomServices), so it's the
+    // authoritative "confirmed vs staged" signal — independent of whether the
+    // line was linked to a mid-job approval. The work order reads this so a
+    // CONFIRMED pre-job-added line never renders as a draft.
+    const stagedByMatchKey = new Map<string, boolean>();
+    for (const line of ((booking as any)?.custom_services ?? []) as any[]) {
+      if (!line?.name) continue;
+      stagedByMatchKey.set(
+        serviceMatchKey(String(line.name)),
+        line.pending_confirmation === true,
+      );
+    }
+
     const out = [];
     for (const r of rows) {
       let parts = (r.parts ?? []) as Array<{
@@ -1545,6 +1561,9 @@ export const listForBooking = query({
         estimated_minutes: estimatedMinutes,
         actual_minutes: r.actual_minutes ?? null,
         status: r.status,
+        // False once the customer has approved an estimate carrying this line.
+        // Absent match (no scheduling-copy row) reads as confirmed, not staged.
+        pending_confirmation: stagedByMatchKey.get(r.match_key) ?? false,
       });
     }
     return out;

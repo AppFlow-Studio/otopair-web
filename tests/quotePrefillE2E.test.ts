@@ -444,3 +444,81 @@ describe("quote accept records the pre-authorized deposit (like every other book
     });
   }
 });
+
+describe("a pre-job-added line approved mid-job reads as CONFIRMED, not draft", () => {
+  test("listForBooking clears pending_confirmation even though the line isn't linked to the mid-job approval", async () => {
+    // Reproduces the real booking kn773wkz…: a Brake Pad Replacement added
+    // PRE-job (source pre_job) then confirmed by a mid-job approval. It never
+    // gets introduced_by_approval_id (stampMidJobCustomJobs only stamps mid_job
+    // lines), so it's absent from the scope change's addedServiceNames — which
+    // is why the work order mislabeled it DRAFT. pending_confirmation is the real
+    // signal, and it's cleared on approval.
+    const { t, seed } = await seedQuoteBooking("tire");
+    await acceptQuote(t, seed, "tire");
+    const owner = t.withIdentity(identityFor(seed.ownerClerkId));
+    const customer = t.withIdentity(identityFor(seed.customerClerkId));
+
+    // 1) Add the line PRE-job (booking is confirmed, not yet in progress).
+    await owner.mutation(api.customJobs.addPreJobCustomService, {
+      bookingId: seed.bookingId,
+      name: "Brake Pad Replacement",
+      systemTags: ["brakes"],
+      workType: "replace",
+      axle: "rear",
+    } as never);
+
+    const staged: any[] = await owner.query(api.customJobs.listForBooking, {
+      bookingId: seed.bookingId,
+    });
+    const stagedLine = staged.find((c) => c.name === "Brake Pad Replacement");
+    expect(stagedLine?.pending_confirmation).toBe(true); // draft until approved
+
+    // 2) Start the job and approve the scope via a MID-JOB cycle.
+    await t.run(async (ctx) => {
+      const now = Date.now();
+      await ctx.db.patch(seed.bookingId, {
+        status: "in_progress",
+        disclosed_range_low_cents: 5_000,
+        disclosed_range_high_cents: 10_000,
+      } as never);
+      await ctx.db.insert("job_actuals", {
+        booking_id: seed.bookingId,
+        mechanic_id: seed.mechanicId,
+        started_at: now,
+        created_at: now,
+        updated_at: now,
+      } as never);
+    });
+    await owner.mutation(api.booking_approvals.submitMidJobChange, {
+      bookingId: seed.bookingId,
+      parts: [],
+      laborHours: 4,
+      laborRateCents: 15_000,
+    } as never);
+    await customer.mutation(api.booking_approvals.applyApprovalDecision, {
+      bookingId: seed.bookingId,
+      decision: "approved",
+    } as never);
+
+    // 3) The line is confirmed — pending_confirmation cleared — even though it
+    //    was never linked to the mid-job approval.
+    const after: any[] = await owner.query(api.customJobs.listForBooking, {
+      bookingId: seed.bookingId,
+    });
+    const line = after.find((c) => c.name === "Brake Pad Replacement");
+    const cjRow: any = await t.run(async (ctx) => {
+      const rows = await ctx.db
+        .query("custom_jobs")
+        .withIndex("by_booking", (q: any) => q.eq("booking_id", seed.bookingId))
+        .collect();
+      return rows.find((r: any) => r.name === "Brake Pad Replacement");
+    });
+    console.log(
+      `[E2E draft fix] pending_confirmation=${line?.pending_confirmation} source=${cjRow?.source} introduced_by_approval_id=${cjRow?.introduced_by_approval_id ?? null}`,
+    );
+    expect(line?.pending_confirmation).toBe(false); // → work order: CONFIRMED
+    // The linkage gap that caused the bug: pre_job source, no approval link.
+    expect(cjRow?.source).toBe("pre_job");
+    expect(cjRow?.introduced_by_approval_id ?? null).toBeNull();
+  });
+});

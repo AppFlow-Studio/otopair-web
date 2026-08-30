@@ -261,7 +261,7 @@ export function NowWorkingPane({
   // green of agreed work.
   const customJobsList = useQuery(api.customJobs.listForBooking, {
     bookingId,
-  }) as Array<{ name: string }> | undefined;
+  }) as Array<{ name: string; pending_confirmation?: boolean }> | undefined;
 
   const serviceStatusList = useMemo(() => {
     const changes = scopeChanges ?? [];
@@ -274,10 +274,16 @@ export function NowWorkingPane({
       if (c.state !== "pending") continue;
       for (const n of c.addedServiceNames ?? []) pending.add(normServiceName(n));
     }
-    // Draft = an off-catalog line the mechanic added mid-job that hasn't been
-    // submitted for approval yet.
+    // Draft = an off-catalog line that's STILL staged (awaiting the customer)
+    // and was never sent. `pending_confirmation` is the authoritative signal:
+    // it's cleared once an estimate carrying the line is approved, so a
+    // confirmed line is booked work and never a draft — even a pre-job-added
+    // line that isn't linked to a mid-job approval (its introduced_by_approval_id
+    // is null, so it's absent from addedServiceNames/`submitted`). Keying draft
+    // off `submitted` alone mislabeled such confirmed lines as DRAFT.
     const draft = new Set<string>();
     for (const cj of customJobsList ?? []) {
+      if (cj.pending_confirmation !== true) continue; // confirmed → not a draft
       const n = normServiceName(cj.name);
       if (!submitted.has(n)) draft.add(n);
     }

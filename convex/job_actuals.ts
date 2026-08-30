@@ -365,6 +365,142 @@ export const getPostjobReportForBooking = query({
   },
 });
 
+// The quote flow attaches its service with either slug spelling depending on
+// which catalog row exists (bookings.acceptTireQuote / acceptRotorQuote try
+// "…-replacement" then "…_replacement"). The prefill MUST accept both — a real
+// booking on dev carries "tire_replacement" (underscore), and gating on the
+// hyphen alone is exactly why its parts step opened empty.
+const TIRE_REPLACEMENT_SLUGS = new Set(["tire-replacement", "tire_replacement"]);
+const ROTOR_REPLACEMENT_SLUGS = new Set([
+  "rotor-replacement",
+  "rotor_replacement",
+]);
+
+/** Per-axle tire counts. Honors the customer's booked corners
+ *  (tire_specs.positions: FL/FR → front, RL/RR → rear) so a rear-only job seeds
+ *  two rear tires, not one per axle. Falls back to an even split (front-weighted
+ *  on odd counts) when no positions were recorded. */
+function tireAxleQuantities(
+  positions: string[] | null | undefined,
+  totalQty: number,
+): { front: number; rear: number } {
+  if (Array.isArray(positions) && positions.length > 0) {
+    let front = 0;
+    let rear = 0;
+    for (const p of positions) {
+      if (p === "FL" || p === "FR") front += 1;
+      else if (p === "RL" || p === "RR") rear += 1;
+    }
+    if (front + rear > 0) return { front, rear };
+  }
+  const front = Math.ceil(totalQty / 2);
+  return { front, rear: totalQty - front };
+}
+
+/**
+ * The parts-step prefill for a quote-originated tire/rotor service.
+ *
+ * A quote booking carries its parts on the accepted (non-superseded)
+ * tire/rotor_quote_responses row — NOT priced_parts_snapshot — so this is the
+ * only prefill it has. Returns the lines marked `from_quote` (empty when the
+ * service isn't a tire/rotor replacement or no accepted quote exists). Shared by
+ * getPrefillData and the devOnly probe so the app and the confirmation read the
+ * exact same output.
+ */
+export async function quotePrefillLinesForService(
+  ctx: any,
+  booking: any,
+  slug: string | null | undefined,
+  serviceId: any,
+): Promise<SuggestedPart[]> {
+  if (!slug) return [];
+
+  if (TIRE_REPLACEMENT_SLUGS.has(slug)) {
+    const q = await ctx.db
+      .query("tire_quote_responses")
+      .withIndex("by_booking_id", (x: any) => x.eq("booking_id", booking._id))
+      .filter((x: any) => x.eq(x.field("superseded_at"), undefined))
+      .first();
+    if (!q) return [];
+    const totalQty = q.quantity ?? booking.tire_specs?.quantity ?? 4;
+    const size = booking.tire_specs?.size ?? null;
+    const brand = q.tire_brand ?? null;
+    const model = q.tire_model ?? null;
+    const brandModel = [brand, model].filter(Boolean).join(" ");
+    const oem = size ? `TIRE-${size}` : "";
+    const { front, rear } = tireAxleQuantities(
+      booking.tire_specs?.positions,
+      totalQty,
+    );
+    const lines: SuggestedPart[] = [];
+    for (const [position, axleQty] of [
+      ["front", front],
+      ["rear", rear],
+    ] as const) {
+      if (axleQty <= 0) continue;
+      lines.push({
+        part_name: brandModel
+          ? `Tires — ${brandModel} (x${axleQty})`
+          : `Tires (x${axleQty})`,
+        oem_number: oem,
+        cost: q.per_tire_price ?? 0,
+        quantity: axleQty,
+        service_id: serviceId,
+        is_tire: true,
+        from_quote: true,
+        tire_size: size,
+        tire_brand: brand,
+        tire_model: model,
+        tire_position: position,
+      });
+    }
+    return lines;
+  }
+
+  if (ROTOR_REPLACEMENT_SLUGS.has(slug)) {
+    const q = await ctx.db
+      .query("rotor_quote_responses")
+      .withIndex("by_booking_id", (x: any) => x.eq("booking_id", booking._id))
+      .filter((x: any) => x.eq(x.field("superseded_at"), undefined))
+      .first();
+    if (!q) return [];
+    const lines: SuggestedPart[] = [];
+    const rotorQty = q.quantity ?? 2;
+    const rotorBrandModel = [q.rotor_brand, q.rotor_model]
+      .filter(Boolean)
+      .join(" ");
+    // Axle-neutral name so the dialog's off-axle pruning (partNameAxle) never
+    // drops it — the quote gives a total count, not a per-axle split.
+    lines.push({
+      part_name: rotorBrandModel
+        ? `Rotors — ${rotorBrandModel} (x${rotorQty})`
+        : `Rotors (x${rotorQty})`,
+      oem_number: "",
+      cost: q.per_rotor_price ?? 0,
+      quantity: rotorQty,
+      service_id: serviceId,
+      from_quote: true,
+    });
+    if (q.pad_price != null || q.pad_brand) {
+      const padQty = q.pad_quantity ?? 1;
+      const padName = [q.pad_brand, q.pad_type].filter(Boolean).join(" ");
+      lines.push({
+        part_name: padName
+          ? `Brake Pads — ${padName} (x${padQty})`
+          : `Brake Pads (x${padQty})`,
+        oem_number: "",
+        cost: q.pad_price ?? 0,
+        quantity: padQty,
+        service_id: serviceId,
+        from_quote: true,
+      });
+    }
+    return lines;
+  }
+
+  return [];
+}
+
 export const getPrefillData = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -640,54 +776,25 @@ export const getPrefillData = query({
         }
       }
 
-      // Tire-replacement — independent of service_vehicle_specs. For in-app
-      // bookings the accepted tire_quote_responses row has brand / model /
-      // per-tire price / qty; for walk-in / backfilled jobs fall back to
-      // booking.tire_specs and leave cost 0 for the mechanic to fill.
-      if (suggestedParts.length === before && svc.slug === "tire-replacement") {
-        const acceptedQuote = await ctx.db
-          .query("tire_quote_responses")
-          .withIndex("by_booking_id", (q: any) =>
-            q.eq("booking_id", booking._id),
-          )
-          .filter((q: any) => q.eq(q.field("superseded_at"), undefined))
-          .first();
-        if (acceptedQuote) {
-          const totalQty = acceptedQuote.quantity ?? 4;
-          const size = booking.tire_specs?.size ?? null;
-          const brand = acceptedQuote.tire_brand ?? null;
-          const model = acceptedQuote.tire_model ?? null;
-          const brandModel = [brand, model].filter(Boolean).join(" ");
-          // Split the quoted set across both axles so the axle-based tire editor
-          // opens pre-filled on Front AND Rear (single size → even split; the
-          // mechanic can adjust). A quote carries one size (tire_specs.size), so
-          // front/rear share it. Odd counts weight the front.
-          const frontQty = Math.ceil(totalQty / 2);
-          const rearQty = totalQty - frontQty;
-          for (const { position, axleQty } of [
-            { position: "front", axleQty: frontQty },
-            { position: "rear", axleQty: rearQty },
-          ]) {
-            if (axleQty <= 0) continue;
-            suggestedParts.push({
-              part_name: brandModel
-                ? `Tires — ${brandModel} (x${axleQty})`
-                : `Tires (x${axleQty})`,
-              oem_number: tireOem(size),
-              // Per-unit cost + real per-axle quantity so the parts step (which
-              // bills cost × quantity) shows the true count.
-              cost: acceptedQuote.per_tire_price ?? 0,
-              quantity: axleQty,
-              service_id: sid,
-              is_tire: true,
-              from_quote: true,
-              tire_size: size,
-              tire_brand: brand,
-              tire_model: model,
-              tire_position: position,
-            });
-          }
-        } else if (booking.tire_specs) {
+      // Tire / rotor replacement — a quote-originated booking carries its parts
+      // on the accepted *_quote_responses row (NOT priced_parts_snapshot), so
+      // seed them from there. Shared helper (accepts both slug spellings, honors
+      // tire positions) so the app and the devOnly probe agree exactly.
+      if (suggestedParts.length === before) {
+        const quoteLines = await quotePrefillLinesForService(
+          ctx,
+          booking,
+          svc.slug,
+          sid,
+        );
+        if (quoteLines.length > 0) {
+          suggestedParts.push(...quoteLines);
+        } else if (
+          TIRE_REPLACEMENT_SLUGS.has(svc.slug) &&
+          booking.tire_specs
+        ) {
+          // Walk-in / backfilled tire job with no quote to read: single line at
+          // cost 0 for the mechanic to fill (unchanged legacy behavior).
           const qty = booking.tire_specs.quantity ?? 4;
           suggestedParts.push({
             part_name: `Tires — ${booking.tire_specs.tier} ${booking.tire_specs.type} (x${qty})`,
@@ -698,64 +805,6 @@ export const getPrefillData = query({
             is_tire: true,
             tire_size: booking.tire_specs.size ?? null,
           });
-        }
-      }
-
-      // Rotor-replacement — the accepted rotor_quote_responses row carries the
-      // shop's rotor + pad brand / per-unit price / qty. Like tires, a quote-
-      // originated rotor booking has no priced_parts_snapshot to seed from, and
-      // the catalog-floor block above keys on slug "brake-rotors" — the quote
-      // flow attaches "rotor-replacement" (bookings.acceptRotorQuote), so it
-      // never matched. Seed the real quoted rotor/pad parts here instead.
-      if (
-        suggestedParts.length === before &&
-        (svc.slug === "rotor-replacement" || svc.slug === "rotor_replacement")
-      ) {
-        const acceptedQuote = await ctx.db
-          .query("rotor_quote_responses")
-          .withIndex("by_booking_id", (q: any) =>
-            q.eq("booking_id", booking._id),
-          )
-          .filter((q: any) => q.eq(q.field("superseded_at"), undefined))
-          .first();
-        if (acceptedQuote) {
-          const rotorQty = acceptedQuote.quantity ?? 2;
-          const rotorBrandModel = [
-            acceptedQuote.rotor_brand,
-            acceptedQuote.rotor_model,
-          ]
-            .filter(Boolean)
-            .join(" ");
-          // Axle-neutral name so the dialog's off-axle pruning (partNameAxle)
-          // never drops it — the quote gives a total count, not a per-axle split.
-          suggestedParts.push({
-            part_name: rotorBrandModel
-              ? `Rotors — ${rotorBrandModel} (x${rotorQty})`
-              : `Rotors (x${rotorQty})`,
-            oem_number: "",
-            cost: acceptedQuote.per_rotor_price ?? 0,
-            quantity: rotorQty,
-            service_id: sid,
-            from_quote: true,
-          });
-          // Pads are optional on a rotor quote (pads_included). Seed them only
-          // when the shop quoted them.
-          if (acceptedQuote.pad_price != null || acceptedQuote.pad_brand) {
-            const padQty = acceptedQuote.pad_quantity ?? 1;
-            const padName = [acceptedQuote.pad_brand, acceptedQuote.pad_type]
-              .filter(Boolean)
-              .join(" ");
-            suggestedParts.push({
-              part_name: padName
-                ? `Brake Pads — ${padName} (x${padQty})`
-                : `Brake Pads (x${padQty})`,
-              oem_number: "",
-              cost: acceptedQuote.pad_price ?? 0,
-              quantity: padQty,
-              service_id: sid,
-              from_quote: true,
-            });
-          }
         }
       }
     }

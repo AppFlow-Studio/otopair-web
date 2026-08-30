@@ -19,7 +19,15 @@ import { identityFor, makeT } from "./helpers";
 const VIN = "1HGCM82633A004352";
 type QuoteType = "tire" | "rotor";
 
-async function seedQuoteBooking(quoteType: QuoteType) {
+type SeedOpts = {
+  // Both slug spellings occur in the wild — acceptTireQuote/acceptRotorQuote try
+  // "…-replacement" then "…_replacement". The real dev booking used underscore.
+  tireSlug?: "tire-replacement" | "tire_replacement";
+  tirePositions?: Array<"FL" | "FR" | "RL" | "RR">;
+  tireQuantity?: number;
+};
+
+async function seedQuoteBooking(quoteType: QuoteType, opts: SeedOpts = {}) {
   const t = makeT();
   const seed = await t.run(async (ctx) => {
     const now = Date.now();
@@ -58,7 +66,10 @@ async function seedQuoteBooking(quoteType: QuoteType) {
     });
     await ctx.db.insert("services", {
       name: quoteType === "tire" ? "Tire Replacement" : "Rotor Replacement",
-      slug: quoteType === "tire" ? "tire-replacement" : "rotor-replacement",
+      slug:
+        quoteType === "tire"
+          ? opts.tireSlug ?? "tire-replacement"
+          : "rotor-replacement",
       default_labor_hours: 0.5,
       created_at: now,
     } as never);
@@ -82,7 +93,10 @@ async function seedQuoteBooking(quoteType: QuoteType) {
               size: "225/65R17",
               type: "all_season",
               tier: "premium",
-              quantity: 4,
+              quantity: opts.tireQuantity ?? 4,
+              ...(opts.tirePositions
+                ? { positions: opts.tirePositions }
+                : {}),
             },
           }
         : {
@@ -97,7 +111,7 @@ async function seedQuoteBooking(quoteType: QuoteType) {
       booking_id: bookingId,
       shop_id: shopId,
       mechanic_id: mechanicId,
-      quantity: quoteType === "tire" ? 4 : 2,
+      quantity: quoteType === "tire" ? opts.tireQuantity ?? 4 : 2,
       labor_cost: 150,
       total: quoteType === "tire" ? 590 : 410,
       availability: { date: "2026-06-01", time: "09:00" },
@@ -217,6 +231,34 @@ describe("quote-originated booking prefills its parts step from the accepted quo
     expect(
       tireLines.reduce((s: number, l: any) => s + (l.quantity ?? 0), 0),
     ).toBe(4);
+  });
+
+  test("TIRE: underscore slug + rear-only positions seeds two REAR tires (the real dev booking's shape)", async () => {
+    // Reproduces booking kn773wkz… on third-bird-914: service slug
+    // "tire_replacement" (underscore) and tire_specs.positions [RL, RR]. The
+    // hyphen-only gate + even-split would have wrongly emitted 1 front + 1 rear
+    // (or nothing at all). This pins the real fix.
+    const { t, seed } = await seedQuoteBooking("tire", {
+      tireSlug: "tire_replacement",
+      tirePositions: ["RL", "RR"],
+      tireQuantity: 2,
+    });
+    await acceptQuote(t, seed, "tire");
+    const owner = t.withIdentity(identityFor(seed.ownerClerkId));
+    const prefill: any = await owner.query(api.job_actuals.getPrefillData, {
+      bookingId: seed.bookingId,
+    });
+    const tireLines = (prefill?.suggestedParts ?? []).filter(
+      (p: any) => p.is_tire && p.from_quote,
+    );
+    console.log(
+      "[E2E tire underscore+rear-only] " + JSON.stringify(tireLines, null, 2),
+    );
+    // A single REAR line for both tires — not split across axles.
+    expect(tireLines.length).toBe(1);
+    expect(tireLines[0].tire_position).toBe("rear");
+    expect(tireLines[0].quantity).toBe(2);
+    expect(tireLines[0].cost).toBe(110);
   });
 
   test("ROTOR: accepted quote auto-fills rotor + pad parts (brand / price / qty)", async () => {

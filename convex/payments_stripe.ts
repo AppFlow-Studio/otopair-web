@@ -769,7 +769,15 @@ export const preauthorizePaymentForBooking = action({
     assertShopReadyForPayments(shop);
 
     if (!user.stripe_customer_id) {
-      throw new Error("Add a payment method before confirming.");
+      // Wallet payments (Apple Pay / Google Pay) mint a one-time PaymentMethod
+      // on-device and don't require a saved card, so a first-time customer may
+      // not have a Stripe customer yet. Create one lazily instead of blocking
+      // the booking — the PaymentIntent still needs a customer to attach the
+      // charge to. Idempotent; persists stripe_customer_id on the user row.
+      user.stripe_customer_id = await ctx.runAction(
+        internal.payments_stripe._getOrCreateStripeCustomer,
+        { userId: user._id },
+      );
     }
 
     const stripe = getStripe();
@@ -921,7 +929,15 @@ export const createPaymentIntentForBooking = action({
         );
 
     if (!user.stripe_customer_id) {
-      throw new Error("Add a payment method before confirming.");
+      // Wallet payments (Apple Pay / Google Pay) mint a one-time PaymentMethod
+      // on-device and don't require a saved card, so a first-time customer may
+      // not have a Stripe customer yet. Create one lazily instead of blocking
+      // the booking — the PaymentIntent still needs a customer to attach the
+      // charge to. Idempotent; persists stripe_customer_id on the user row.
+      user.stripe_customer_id = await ctx.runAction(
+        internal.payments_stripe._getOrCreateStripeCustomer,
+        { userId: user._id },
+      );
     }
 
     // Verify ownership of the payment method. Saved cards are attached to
@@ -1368,7 +1384,15 @@ export const resumeReauthFromMobile = action({
       throw new Error("Shop is not ready to accept payments yet.");
     }
     if (!user.stripe_customer_id) {
-      throw new Error("Add a payment method before confirming.");
+      // Wallet payments (Apple Pay / Google Pay) mint a one-time PaymentMethod
+      // on-device and don't require a saved card, so a first-time customer may
+      // not have a Stripe customer yet. Create one lazily instead of blocking
+      // the booking — the PaymentIntent still needs a customer to attach the
+      // charge to. Idempotent; persists stripe_customer_id on the user row.
+      user.stripe_customer_id = await ctx.runAction(
+        internal.payments_stripe._getOrCreateStripeCustomer,
+        { userId: user._id },
+      );
     }
 
     const payment: any = await ctx.runQuery(
@@ -1530,7 +1554,15 @@ export const approveAndAuthorizeHold = action({
       throw new Error("Shop is not ready to accept payments yet.");
     }
     if (!user.stripe_customer_id) {
-      throw new Error("Add a payment method before confirming.");
+      // Wallet payments (Apple Pay / Google Pay) mint a one-time PaymentMethod
+      // on-device and don't require a saved card, so a first-time customer may
+      // not have a Stripe customer yet. Create one lazily instead of blocking
+      // the booking — the PaymentIntent still needs a customer to attach the
+      // charge to. Idempotent; persists stripe_customer_id on the user row.
+      user.stripe_customer_id = await ctx.runAction(
+        internal.payments_stripe._getOrCreateStripeCustomer,
+        { userId: user._id },
+      );
     }
 
     // Record the approval and park the booking in `reauth_required`. Throws for

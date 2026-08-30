@@ -595,6 +595,7 @@ export const getByUserIdWithDetails = query({
           rotor_specs: booking.rotor_specs,
           quote_state: quoteLifecycle?.status ?? null,
           quote_expires_at: quoteLifecycle?.expiresAt ?? null,
+          quote_dismissed_at_ms: booking.quote_dismissed_at_ms ?? null,
           // Pickup-request round trip: whether the customer asked for the car
           // back and how the shop answered. Drives the status line on the card.
           pickupRequestedAtMs: booking.cancel_requested_at_ms ?? null,
@@ -783,6 +784,22 @@ export const getQuoteRequestAvailability = query({
             : ("unavailable" as const),
       ...lifecycle,
     };
+  },
+});
+
+export const dismissExpiredQuoteRequest = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const { booking } = await requireOwnedQuoteBooking(ctx, args.bookingId);
+    if (booking.quote_dismissed_at_ms != null) return { dismissed: true };
+
+    const lifecycle = await getBookingQuoteLifecycle(ctx, booking);
+    if (!lifecycle || lifecycle.status !== "expired") {
+      throwQuoteUnavailable("unavailable");
+    }
+
+    await ctx.db.patch(booking._id, { quote_dismissed_at_ms: Date.now() });
+    return { dismissed: true };
   },
 });
 

@@ -8,6 +8,9 @@ const NOW = new Date("2026-08-29T15:30:00-04:00");
 const getQuoteRequestAvailability = (api.bookings as unknown as {
   getQuoteRequestAvailability: typeof api.bookings.getById;
 }).getQuoteRequestAvailability;
+const dismissExpiredQuoteRequest = (api.bookings as unknown as {
+  dismissExpiredQuoteRequest: typeof api.bookings.getById;
+}).dismissExpiredQuoteRequest;
 
 afterEach(() => vi.useRealTimers());
 
@@ -124,6 +127,24 @@ for (const quoteType of ["tire", "rotor"] as const) {
     const response = await t.run((ctx) => ctx.db.get(seed.responseId));
     expect(booking?.status).toBe("cancelled");
     expect(response?.superseded_at).toBe(NOW.getTime());
+  });
+
+  test(`${quoteType} customer dismissal preserves an expired quote request`, async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW.getTime() + 10 * 60_000 + 1);
+    const { t, seed } = await seedLifecycle(quoteType);
+    const customer = t.withIdentity(identityFor(seed.customerClerkId));
+
+    await customer.mutation(dismissExpiredQuoteRequest, { bookingId: seed.bookingId } as never);
+
+    const booking = await t.run((ctx) => ctx.db.get(seed.bookingId));
+    const response = await t.run((ctx) => ctx.db.get(seed.responseId));
+    expect(booking).toMatchObject({
+      status: "quotes_ready",
+      quote_dismissed_at_ms: NOW.getTime() + 10 * 60_000 + 1,
+    });
+    expect(response?.cancelled_at).toBeUndefined();
+    expect(response?.superseded_at).toBeUndefined();
   });
 
   test(`${quoteType} customer preflight reports expiry before opening quote choices`, async () => {

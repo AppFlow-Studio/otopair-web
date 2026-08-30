@@ -2779,6 +2779,9 @@ export default defineSchema({
         ),
       })
     ),
+    // Customer-only presentation preference for an expired quote request.
+    // This intentionally does not change the booking or quote-response status.
+    quote_dismissed_at_ms: v.optional(v.number()),
     // Picked variants for services with has_options = true (e.g. brake pads
     // front-vs-rear). Tires keep using tire_specs above. One entry per
     // has_options service. option_label and option_type are snapshotted so

@@ -1466,12 +1466,16 @@ export const _reconcileAmountCapturableUpdated = internalMutation({
   handler: async (ctx, args) => {
     // Find the most recent approval row tied to this PI. Both the original
     // PI (from booking confirm) and a reauth-replacement PI should match.
-    const rows = await ctx.db.query("booking_approvals").collect();
-    const candidate = rows
-      .filter(
-        (r: any) => r.stripe_payment_intent_id === args.stripePaymentIntentId,
+    // Index-scoped (not a full-table `.collect()`): the second index field is
+    // submitted_at_ms, so `.order("desc").first()` returns the newest cycle for
+    // this PI directly.
+    const candidate = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_stripe_payment_intent_id", (q: any) =>
+        q.eq("stripe_payment_intent_id", args.stripePaymentIntentId),
       )
-      .sort((a: any, b: any) => b.submitted_at_ms - a.submitted_at_ms)[0];
+      .order("desc")
+      .first();
 
     // Drift reconciliation: patch the payment row to match Stripe's view.
     if (args.amountCapturable != null) {

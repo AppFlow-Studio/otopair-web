@@ -590,6 +590,136 @@ export async function sendWalkinClaimEmail({
   }
 }
 
+// ============================================================================
+// Data API — enrichment run updates (OtoIndex /developers)
+// ============================================================================
+//
+// Sent to the API-key owner when a POST /v0/enrich run they triggered is
+// queued, completes, or fails. Enqueued onto notification_outbox by
+// dataApiEnrich.ts and dispatched via lib/email_provider.ts. The dashboard
+// link honors OTOINDEX_APP_URL / OTOFACTS_APP_URL (falls back to
+// https://otoindex.com).
+
+type EnrichEmailCategory = "enrich_queued" | "enrich_complete" | "enrich_failed";
+
+type EnrichEmailPayload = {
+  vin?: string | null;
+  vehicle?: string | null;
+  year?: number | null;
+  make?: string | null;
+  model?: string | null;
+  trim?: string | null;
+  config_key?: string | null;
+  fill_rate?: number | null;
+  error?: string | null;
+};
+
+function otoindexDashboardUrl(): string {
+  const base = (
+    process.env.OTOINDEX_APP_URL ||
+    process.env.OTOFACTS_APP_URL ||
+    "https://otoindex.com"
+  ).replace(/\/$/, "");
+  return `${base}/developers`;
+}
+
+function renderEnrichIdentity(p: EnrichEmailPayload): string {
+  const vehicle =
+    (p.vehicle && p.vehicle.trim()) ||
+    [p.year, p.make, p.model, p.trim].filter((x) => x != null && x !== "").join(" ");
+  const rows = [
+    vehicle
+      ? `<tr><td style="padding:6px 0;color:#5b6b80;font-size:14px;width:110px;">Vehicle</td><td style="padding:6px 0;color:#12233f;font-size:14px;font-weight:600;">${escapeHtml(vehicle)}</td></tr>`
+      : "",
+    p.vin
+      ? `<tr><td style="padding:6px 0;color:#5b6b80;font-size:14px;">VIN</td><td style="padding:6px 0;color:#12233f;font-size:13px;font-family:'SF Mono',Menlo,monospace;">${escapeHtml(p.vin)}</td></tr>`
+      : "",
+    p.config_key
+      ? `<tr><td style="padding:6px 0;color:#5b6b80;font-size:14px;">config_key</td><td style="padding:6px 0;color:#12233f;font-size:13px;font-family:'SF Mono',Menlo,monospace;">${escapeHtml(p.config_key)}</td></tr>`
+      : "",
+    p.fill_rate != null
+      ? `<tr><td style="padding:6px 0;color:#5b6b80;font-size:14px;">Fill rate</td><td style="padding:6px 0;color:#12233f;font-size:14px;font-weight:600;">${escapeHtml(String(p.fill_rate))}%</td></tr>`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("");
+  if (!rows) return "";
+  return `<table role="presentation" style="width:100%;border-collapse:collapse;margin:4px 0 24px;background:#f6f1e6;border-radius:10px;border:1px solid #e4dccb;">
+    <tr><td style="padding:12px 18px;"><table role="presentation" style="width:100%;border-collapse:collapse;">${rows}</table></td></tr>
+  </table>`;
+}
+
+function enrichCta(label: string, url: string): string {
+  return `<table role="presentation" style="width:100%;border-collapse:collapse;margin:8px 0 4px;">
+    <tr><td align="center">
+      <a href="${escapeHtml(url)}" style="display:inline-block;padding:13px 30px;background:#1b3358;color:#f6f1e6;text-decoration:none;border-radius:8px;font-weight:600;font-size:15px;">${escapeHtml(label)}</a>
+    </td></tr>
+  </table>`;
+}
+
+/** Enrichment-run lifecycle email (queued / complete / failed). */
+export async function sendEnrichUpdateEmail({
+  to,
+  category,
+  payload,
+}: {
+  to: string;
+  category: EnrichEmailCategory;
+  payload: EnrichEmailPayload;
+}) {
+  try {
+    const label =
+      (payload.vehicle && payload.vehicle.trim()) ||
+      [payload.year, payload.make, payload.model].filter((x) => x != null && x !== "").join(" ") ||
+      (payload.vin ? `VIN ${payload.vin}` : "your vehicle");
+    const dash = otoindexDashboardUrl();
+    const identity = renderEnrichIdentity(payload);
+
+    let subject: string;
+    let headline: string;
+    let body: string;
+
+    if (category === "enrich_complete") {
+      subject = `Your ${label} data is ready`;
+      headline = "Enrichment complete";
+      body = `
+        <p style="margin:0 0 8px;">Good news — the data for <strong>${escapeHtml(label)}</strong> is enriched and ready to query.</p>
+        ${identity}
+        <p style="margin:0 0 16px;color:#5b6b80;font-size:14px;">Fetch the full payload any time:</p>
+        <p style="margin:0 0 20px;padding:12px 16px;background:#12233f;border-radius:8px;color:#e9edf5;font-size:13px;font-family:'SF Mono',Menlo,monospace;overflow-wrap:anywhere;">GET /v0/vehicle?vin=${escapeHtml(payload.vin ?? "")}</p>
+        ${enrichCta("View on your dashboard", dash)}`;
+    } else if (category === "enrich_failed") {
+      subject = `Enrichment couldn't complete for ${label}`;
+      headline = "Enrichment didn't complete";
+      body = `
+        <p style="margin:0 0 8px;">We weren't able to finish enriching <strong>${escapeHtml(label)}</strong>.</p>
+        ${identity}
+        ${payload.error ? `<p style="margin:0 0 16px;color:#8a5a1a;font-size:14px;">${escapeHtml(payload.error)}</p>` : ""}
+        <p style="margin:0 0 20px;color:#5b6b80;font-size:14px;">Any enrich credit for a failed run is refunded automatically — you can retry from the console, and it often succeeds on a second pass.</p>
+        ${enrichCta("Open the dashboard", dash)}`;
+    } else {
+      subject = `Enriching ${label} — we'll email you when it's ready`;
+      headline = "Enrichment started";
+      body = `
+        <p style="margin:0 0 8px;">We've started enriching <strong>${escapeHtml(label)}</strong>. This usually takes 7–40 minutes; we'll email you the moment it's ready.</p>
+        ${identity}
+        <p style="margin:0 0 20px;color:#5b6b80;font-size:14px;">You can watch live progress on your dashboard, or poll <span style="font-family:'SF Mono',Menlo,monospace;">GET /v0/enrich?vin=${escapeHtml(payload.vin ?? "")}</span>.</p>
+        ${enrichCta("Track it live", dash)}`;
+    }
+
+    const result = await resend.emails.send({
+      from: "OtoIndex <info@otopair.com>",
+      to,
+      subject,
+      html: brandedShellWithLogo(headline, body),
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    console.error("Error sending enrich update email:", error);
+    return { success: false, error };
+  }
+}
+
 /**
  * Receipt / invoice email — sent after Stripe capture succeeds with the
  * branded PDF attached. Both the inline HTML and the attachment carry the

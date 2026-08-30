@@ -1,0 +1,470 @@
+{
+  "carApiInRange": true,
+  "inFleet": true,
+  "label": "2019 Chevy Silverado 1500 5.3L L84 (sibling-engine poison)",
+  "providers": {
+    "carapi": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "carapi",
+        "_sourceEndpoint": "vin/{vin}",
+        "blockType": null,
+        "bodyType": "Pickup",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 8,
+        "cylindersConfiguration": null,
+        "displacement": 5.3,
+        "doors": 4,
+        "drivetrain": "4WD/4-Wheel Drive/4x4",
+        "engineCode": null,
+        "engineDescription": "L84 - DI, DFM, ALUM, GEN 5, VAR 2",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": null,
+        "make": "CHEVROLET",
+        "model": "Silverado",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 8,
+        "transType": "Automatic",
+        "trim": "High Country 4dr Crew Cab 4WD 5.8 ft. SB (5.3L 8cyl 8A)",
+        "wheelTorque": null,
+        "year": 2019
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"vin\":{\"year\":2019,\"make\":\"CHEVROLET\",\"model\":\"Silverado\",\"trim\":\"1500\",\"specs\":{\"active_safety_system_note\":\"Front and Rear Park Assist: Optional\",\"adaptive_cruise_control_acc\":null,\"adaptive_driving_beam_adb\":null,\"antilock_braking_system_abs\":\"Standard\",\"auto_reverse_system_for_windows_and_sunroofs\":\"Standard\",\"automatic_crash_notification_acn_advanced_automatic_crash_notification_aacn\":\"Standard\",\"automatic_pedestrian_alerting_sound_for_hybrid_and_ev_only\":null,\"axle_configuration\":null,\"axles\":\"2\",\"backup_camera\":\"Standard\",\"base_price\":\"44195.00\",\"battery_current_amps_from\":null,\"battery_current_amps_to\":null,\"battery_energy_kwh_from\":null,\"battery_energy_kwh_to\":null,\"battery_type\":null,\"battery_voltage_volts_from\":null,\"battery_voltage_volts_to\":null,\"bed_length_inches\":null,\"bed_type\":null,\"blind_spot_intervention_bsi\":null,\"blind_spot_warning_bsw\":\"Optional\",\"body_class\":\"Pickup\",\"brake_system_description\":null,\"brake_system_type\":\"Hydraulic\",\"bus_floor_configuration_type\":\"Not Applicable\",\"bus_length_feet\":null,\"bus_type\":\"Not Applicable\",\"cab_type\":\"Crew/Super Crew/Crew Max\",\"charger_level\":null,\"charger_power_kw\":null,\"combined_braking_system_cbs\":null,\"cooling_type\":null,\"crash_imminent_braking_cib\":null,\"curb_weight_pounds\":null,\"curtain_air_bag_locations\":\"All Rows\",\"custom_motorcycle_type\":\"Not Applicable\",\"daytime_running_light_drl\":\"Standard\",\"destination_market\":null,\"displacement_cc\":\"5300.0\",\"displacement_ci\":\"323.4258437020811049\",\"displacement_l\":\"5.3\",\"doors\":\"4\",\"drive_type\":\"4WD/4-Wheel Drive/4x4\",\"dynamic_brake_support_dbs\":\"Standard\",\"electrification_level\":null,\"electronic_stability_control_esc\":\"Standard\",\"engine_brake_hp_from\":null,\"engine_brake_hp_to\":null,\"engine_configuration\":null,\"engine_manufacturer\":null,\"engine_model\":\"L84 - DI, DFM, ALUM, GEN 5, VAR 2\",\"engine_number_of_cylinders\":\"8\",\"engine_power_kw\":null,\"engine_stroke_cycles\":null,\"entertainment_system\":null,\"ev_drive_unit\":null,\"event_data_recorder_edr\":null,\"forward_collision_warning_fcw\":null,\"front_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"fuel_delivery_fuel_injection_type\":null,\"fuel_tank_material\":null,\"fuel_tank_type\":null,\"fuel_type_primary\":\"Gasoline\",\"fuel_type_secondary\":null,\"gross_combination_weight_rating_from\":null,\"gross_combination_weight_rating_to\":null,\"gross_vehicle_weight_rating_from\":\"Class 2F: 7,001 - 8,000 lb (3,175 - 3,629 kg)\",\"gross_vehicle_weight_rating_to\":null,\"headlamp_light_source\":null,\"keyless_ignition\":null,\"knee_air_bag_locations\":null,\"lane_centering_assistance\":null,\"lane_departure_warning_ldw\":null,\"lane_keeping_assistance_lka\":null,\"manufacturer_name\":\"GENERAL MOTORS LLC\",\"motorcycle_chassis_type\":\"Not Applicable\",\"motorcycle_suspension_type\":\"Not Applicable\",\"non_land_use\":null,\"note\":null,\"number_of_battery_cells_per_module\":null,\"number_of_battery_modules_per_pack\":null,\"number_of_battery_packs_per_vehicle\":null,\"number_of_seat_rows\":\"2\",\"number_of_seats\":\"6\",\"number_of_wheels\":\"4\",\"other_battery_info\":null,\"other_bus_info\":null,\"other_engine_info\":null,\"other_motorcycle_info\":null,\"other_restraint_system_info\":null,\"other_trailer_info\":null,\"parking_assist\":null,\"pedestrian_automatic_emergency_braking_paeb\":null,\"plant_city\":\"FORT WAYNE\",\"plant_company_name\":null,\"plant_country\":\"UNITED STATES (USA)\",\"plant_state\":\"INDIANA\",\"possible_values\":\"\",\"pretensioner\":null,\"rear_automatic_emergency_braking\":null,\"rear_cross_traffic_alert\":null,\"sae_automation_level_from\":null,\"sae_automation_level_to\":null,\"seat_belt_type\":\"Manual\",\"seat_cushion_air_bag_locations\":null,\"semiautomatic_headlamp_beam_switching\":\"Standard\",\"series\":\"1500\",\"series2\":null,\"side_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"steering_location\":\"Left-Hand Drive (LHD)\",\"suggested_vin\":\"\",\"tire_pressure_monitoring_system_tpms_type\":\"Direct\",\"top_speed_mph\":\"130\",\"track_width_inches\":null,\"traction_control\":\"Standard\",\"trailer_body_type\":\"Not Applicable\",\"trailer_length_feet\":null,\"trailer_type_connection\":\"Not Applicable\",\"transmission_speeds\":\"8\",\"transmission_style\":\"Automatic\",\"trim\":\"LT\",\"trim2\":null,\"turbo\":null,\"valve_train_design\":null,\"vehicle_descriptor\":\"1GCUYDED*KZ\",\"vehicle_type\":\"TRUCK\",\"wheel_size_front_inches\":\"17\",\"wheel_size_rear_inches\":\"17\",\"wheelbase_inches_from\":\"147.40\",\"wheelbase_inches_to\":\"156.90\",\"wheelbase_type\":null,\"wheelie_mitigation\":null,\"windows\":null},\"trims\":[{\"id\":9685,\"make_model_id\":165,\"year\":2019,\"name\":\"High Country\",\"description\":\"High Country 4dr Crew Cab 4WD 5.8 ft. SB (5.3L 8cyl 8A)\",\"msrp\":56300,\"invoice\":52753,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70533,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"High Country\"}},{\"id\":9686,\"make_model_id\":165,\"year\":2019,\"name\":\"High Country\",\"description\":\"High Country 4dr Crew Cab 4WD 6.6 ft. SB (5.3L 8cyl 8A)\",\"msrp\":56600,\"invoice\":53034,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70533,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"High Country\"}},{\"id\":9683,\"make_model_id\":165,\"year\":2019,\"name\":\"High Country\",\"description\":\"High Country 4dr Crew Cab 5.8 ft. SB (5.3L 8cyl 8A)\",\"msrp\":53000,\"invoice\":49661,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70533,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"High Country\"}},{\"id\":9684,\"make_model_id\":165,\"year\":2019,\"name\":\"High Country\",\"description\":\"High Country 4dr Crew Cab 6.6 ft. SB (5.3L 8cyl 8A)\",\"msrp\":53300,\"invoice\":49942,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70533,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"High Country\"}},{\"id\":9682,\"make_model_id\":165,\"year\":2019,\"name\":\"LT Trail Boss\",\"description\":\"LT Trail Boss 4dr Crew Cab 4WD 5.8 ft. SB (5.3L 8cyl 8A)\",\"msrp\":48600,\"invoice\":45538,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70535,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"LT Trail Boss\"}},{\"id\":9681,\"make_model_id\":165,\"year\":2019,\"name\":\"LT Trail Boss\",\"description\":\"LT Trail Boss 4dr Crew Cab 4WD 6.6 ft. SB (5.3L 8cyl 8A)\",\"msrp\":48300,\"invoice\":45257,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70535,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"LT Trail Boss\"}},{\"id\":9658,\"make_model_id\":165,\"year\":2019,\"name\":\"LT Trail Boss\",\"description\":\"LT Trail Boss 4dr Double Cab 4WD SB (5.3L 8cyl 8A)\",\"msrp\":45900,\"invoice\":43008,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70535,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"LT Trail Boss\"}},{\"id\":9679,\"make_model_id\":165,\"year\":2019,\"name\":\"LTZ\",\"description\":\"LTZ 4dr Crew Cab 4WD 5.8 ft. SB (5.3L 8cyl 8A)\",\"msrp\":48700,\"invoice\":45632,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70536,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"LTZ\"}},{\"id\":9680,\"make_model_id\":165,\"year\":2019,\"name\":\"LTZ\",\"description\":\"LTZ 4dr Crew Cab 4WD 6.6 ft. SB (5.3L 8cyl 8A)\",\"msrp\":49000,\"invoice\":45913,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70536,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"LTZ\"}},{\"id\":9677,\"make_model_id\":165,\"year\":2019,\"name\":\"LTZ\",\"description\":\"LTZ 4dr Crew Cab 5.8 ft. SB (5.3L 8cyl 8A)\",\"msrp\":45400,\"invoice\":42540,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70536,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"LTZ\"}},{\"id\":9678,\"make_model_id\":165,\"year\":2019,\"name\":\"LTZ\",\"description\":\"LTZ 4dr Crew Cab 6.6 ft. SB (5.3L 8cyl 8A)\",\"msrp\":45700,\"invoice\":42821,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70536,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"LTZ\"}},{\"id\":9657,\"make_model_id\":165,\"year\":2019,\"name\":\"LTZ\",\"description\":\"LTZ 4dr Double Cab 4WD SB (5.3L 8cyl 8A)\",\"msrp\":46300,\"invoice\":43383,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70536,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"LTZ\"}},{\"id\":9656,\"make_model_id\":165,\"year\":2019,\"name\":\"LTZ\",\"description\":\"LTZ 4dr Double Cab SB (5.3L 8cyl 8A)\",\"msrp\":43000,\"invoice\":40291,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":165,\"make_id\":6,\"name\":\"Silverado 1500\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70536,\"oem_make_model_id\":5891,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"submodel\":\"LTZ\"}},{\"id\":9690,\"make_model_id\":474,\"year\":2019,\"name\":\"Custom\",\"description\":\"Custom 4dr Double Cab 4WD SB (5.3L 8cyl 6A)\",\"msrp\":40300,\"invoice\":38567,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":474,\"make_id\":6,\"name\":\"Silverado 1500 LD\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70596,\"oem_make_model_id\":7321,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500 Legacy\",\"submodel\":\"Custom\"}},{\"id\":9689,\"make_model_id\":474,\"year\":2019,\"name\":\"Custom\",\"description\":\"Custom 4dr Double Cab SB (5.3L 8cyl 6A)\",\"msrp\":36300,\"invoice\":34739,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":474,\"make_id\":6,\"name\":\"Silverado 1500 LD\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70596,\"oem_make_model_id\":7321,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500 Legacy\",\"submodel\":\"Custom\"}},{\"id\":9692,\"make_model_id\":474,\"year\":2019,\"name\":\"LT\",\"description\":\"LT 4dr Double Cab 4WD SB (5.3L 8cyl 6A)\",\"msrp\":42700,\"invoice\":40010,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":474,\"make_id\":6,\"name\":\"Silverado 1500 LD\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70597,\"oem_make_model_id\":7321,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500 Legacy\",\"submodel\":\"LT\"}},{\"id\":9691,\"make_model_id\":474,\"year\":2019,\"name\":\"LT\",\"description\":\"LT 4dr Double Cab SB (5.3L 8cyl 6A)\",\"msrp\":39200,\"invoice\":36730,\"created\":\"2023-06-29T…[truncated]"
+    },
+    "marketcheck": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "marketcheck",
+        "_sourceEndpoint": "decode/car/neovin/{vin}/specs",
+        "blockType": null,
+        "bodyType": "Pickup",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": null,
+        "cylindersConfiguration": null,
+        "displacement": null,
+        "doors": 4,
+        "drivetrain": "4WD",
+        "engineCode": null,
+        "engineDescription": "5.3L V8",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Unleaded",
+        "horsepower": null,
+        "make": "Chevrolet",
+        "model": "Silverado 1500",
+        "mpgCity": 23,
+        "mpgCombined": null,
+        "mpgHighway": 29,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": null,
+        "transType": "Automatic",
+        "trim": "LT",
+        "wheelTorque": null,
+        "year": 2019
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"basic\":{\"is_valid\":true,\"decode_mode\":\"squishVIN\",\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"trim\":\"LT\",\"body_type\":\"Pickup\",\"body_subtype\":\"Crew\",\"vehicle_type\":\"Truck\",\"transmission\":\"Automatic\",\"drivetrain\":\"4WD\",\"fuel_type\":\"Unleaded\",\"engine\":\"5.3L V8\",\"doors\":4,\"made_in\":\"USA\",\"overall_height\":\"75.4\",\"overall_length\":\"241.4\",\"overall_width\":\"81.2\",\"std_seating\":\"6\",\"highway_mpg\":29,\"city_mpg\":23},\"neovin\":{\"vin\":\"1GCUYDED2KZ100001\",\"updated_at\":1787841800,\"updated_at_date\":\"2026-08-27T14:43:20.000Z\",\"decode_version\":1,\"reason\":\"NO HISTORY FOUND\",\"generic\":[{\"USA\":[{\"squish_vin\":\"1GCUYDED_KZ\",\"year\":\"2019\",\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"trim\":\"LT\",\"transmission\":\"Automatic\",\"drivetrain\":\"4WD\",\"engine\":\"5.3L V8\",\"fuel_type\":\"Unleaded\",\"body_type\":\"Pickup\",\"body_subtype\":\"Crew\",\"doors\":\"4\",\"weight\":\"7200\",\"width\":\"81.2\",\"height\":\"75.4\",\"length\":\"241.4\",\"city_mpg\":\"23\",\"highway_mpg\":\"29\",\"combined_mpg\":\"25\",\"electric_range\":\"\",\"seating_capacity\":\"6\",\"msrp\":\"42900\",\"delivery_charges\":\"1495\",\"vehicle_type\":\"Truck\",\"powertrain_type\":\"Combustion\",\"overall_safety_rating\":\"5\",\"side_safety_rating\":\"5\",\"front_safety_rating\":\"5\",\"roof_strength_rating\":\"Good\",\"rollover_rating\":\"4\",\"total_warranty_distance\":\"36000\",\"total_warranty_duration\":\"36\",\"powertrain_warranty_duration\":\"60\",\"powertrain_warranty_distance\":\"60000\",\"anti_corrosion_warranty_duration\":\"72\",\"anti_corrosion_warranty_distance\":\"100000\",\"roadside_assistance_warranty_duration\":\"60\",\"roadside_assistance_warranty_distance\":\"60000\",\"country\":\"USA\",\"version_name\":\"LT 4X4 Crew Cab Standard Box\",\"manufacturer_code\":\"CK10743/1LT\",\"data_source\":\"JATO\",\"features\":{\"STANDARD\":[{\"category\":\"Infotainment\",\"feature_type\":\"Audio Speakers\",\"description\":\"6 Speakers\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlight Lens Type\",\"description\":\"Complex Surface Headlights\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"LED Headlights-Low Beam\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"LED Headlights-High Beam\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Dusk Sensor\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Daytime Running Lights\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Type\",\"description\":\"Touch Screen Audio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Color Screen Audio System\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Bluetooth Connection\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio System\",\"description\":\"Premium Brand Audio\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag-Front And Rear\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Driver Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Passenger Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Intelligent Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Front Side Airbag\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Remote Audio Controls\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Steering Wheel Mounted Audio Controls\"},{\"category\":\"Exterior\",\"feature_type\":\"Tires\",\"description\":\"All Season Tires\"},{\"category\":\"Exterior\",\"feature_type\":\"Pickup Bed\",\"description\":\"Pickup Bed-Straight Side\"},{\"category\":\"Exterior\",\"feature_type\":\"Pickup Bed-Length\",\"description\":\"Regular Pickup Bed\"},{\"category\":\"Exterior\",\"feature_type\":\"Load Restraint\",\"description\":\"Load Restraint-Hooks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Remote Power Locks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Power Locks Automatic Locking\"},{\"category\":\"Exterior\",\"feature_type\":\"Paint\",\"description\":\"Paint-Metallic\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints-2\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat belts Pre-Tensioners\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat Belts Height Adjustable\"},{\"category\":\"General\",\"feature_type\":\"Global Segment\",\"description\":\"Pickup\"},{\"category\":\"Interior\",\"feature_type\":\"Seat Upholstery\",\"description\":\"Cloth Seats\"},{\"category\":\"General\",\"feature_type\":\"Vehicle Segment\",\"description\":\"Full Size Pickup\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Reclining Manual Driver Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Passenger Seat Manual Reclining\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Type\",\"description\":\"Rear Seats Bench\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Adjustment\",\"description\":\"Folding Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Adjustment\",\"description\":\"Split Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Type\",\"description\":\"Plastic Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Height Adjustment Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Multi Function Steering Wheel\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Power Steering\",\"description\":\"Power Steering\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Power Outlet\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Wishbone Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Beam Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Leaf Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Front Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Rigid Suspension-Rear\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Type\",\"description\":\"Automatic Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Speeds\",\"description\":\"8 Speed Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Mode Select\",\"description\":\"Automatic Only Mode Select\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission\",\"description\":\"Manual Mode\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Description\",\"description\":\"Automatic With Manual Mode Trans\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Ventilation System\",\"description\":\"Combustion Heater\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning\",\"description\":\"Semi-Automatic Air Conditioning\"},{\"category\":\"Interior\",\"feature_type\":\"Rear View Mirror\",\"description\":\"Rear View Mirror/Camera\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Driver-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Passenger-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Heated Door Mirrors\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Variable Intermittent Wipe\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Rear Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Express Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Rear Express Power Windows\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Aluminum/Alloy Wheels\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Aluminum/Alloy Wheels\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Wheel Diameter (17 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Wheel Diameter (17 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Wheel Width (8 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Wheel Width (8 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Spare Wheel\",\"description\":\"Spare Wheel\"},{\"category\":\"Exterior\",\"feature_type\":\"Spare Wheel\",\"description\":\"Fullsize Spare Wheel\"},{\"category\":\"Exterior\",\"feature_type\":\"Spare Wheel\",\"description\":\"Steel Spare Wheel\"},{\"category\":\"Infotainment\",\"feature_type\":\"Navigational Systems\",\"description\":\"Navigational Systems\"},{\"category\":\"Infotainment\",\"feature_type\":\"Navigational Systems\",\"description\":\"Navigational Systems Data Feed-Internet\"},{\"category\":\"Infotainment\",\"feature_type\":\"Navigational Systems\",\"description\":\"Navigational Systems Display Type-Color\"},{\"category\":\"Infotainment\",\"feature_type\":\"Navigational Systems\",\"description\":\"Mobile Phone Navigational Systems\"},{\"category\":\"Infotainment\",\"feature_type\":\"Navigational Systems Screen\",\"description\":\"Navigational Systems Screen Size (8 in)\"},{\"category\":\"Infotainment\",\"feature_type\":\"Telematics\",\"description\":\"Traffic Information\"},{\"category\":\"Infotainment\",\"feature_type\":\"Telematics\",\"description\":\"Voice Recognition\"},{\"category\":\"Infotainment\",\"feature_type\":\"Telematics\",\"description\":\"Telematics System\"},{\"category\":\"Infotainment\",\"feature_type\":\"Telematics\",\"description\":\"Telematics Includes Engine Shut Down\"},{\"category\":\"Infotainment\",\"feature_type\":\"Telematics\",\"description\":\"Advanced Auto Collision Notification\"},{\"category\":\"Infotainment\",\"feature_type\":\"Telematics\",\"description\":\"Text To Speech / Speech To Text\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Compass\",\"description\":\"Compass\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Disc Brakes\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Disc Brakes-4\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Ventilated Disc Brakes-4\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"ABS Brakes\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Electronic Brake Distribution\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brake Assist\",\"description\":\"Brake Assist\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Tire Indicator\",\"description\":\"Low Tire Pressure Monitor\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Isofix\",\"description\":\"Isofix Preparation\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Smart Key\",\"description\":\"Smart Card / Smart Key\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Smart Key\",\"description\":\"Manual Smart Card / Smart Key\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Smart Key\",\"description\":\"Smart Key With Programmable Settings\"},{\"category\":\"Infotainment\",\"feature_type\":\"Voice Activating System\",\"description\":\"Includes Audio Player\"},{\"category\":\"Infotainment\",\"feature_type\":\"Voice Activating System\",\"descri…[truncated]"
+    },
+    "nhtsa": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "nhtsa",
+        "_sourceEndpoint": "vpic decodevinvaluesextended",
+        "blockType": null,
+        "bodyType": "Pickup",
+        "brakeType": "Hydraulic",
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 8,
+        "cylindersConfiguration": null,
+        "displacement": 5.3,
+        "doors": 4,
+        "drivetrain": "4WD/4-Wheel Drive/4x4",
+        "engineCode": "L84 - DI, DFM, ALUM, GEN 5, VAR 2",
+        "engineDescription": "L84 - DI, DFM, ALUM, GEN 5, VAR 2",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": null,
+        "make": "CHEVROLET",
+        "model": "Silverado",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 8,
+        "transType": "Automatic",
+        "trim": "LT",
+        "wheelTorque": null,
+        "year": 2019
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"Count\":1,\"Message\":\"Results returned successfully. NOTE: Any missing decoded values should be interpreted as NHTSA does not have data on the specific variable. Missing value should NOT be interpreted as an indication that a feature or technology is unavailable for a vehicle.\",\"SearchCriteria\":\"VIN(s): 1GCUYDED2KZ100001\",\"Results\":[{\"ABS\":\"Standard\",\"ActiveSafetySysNote\":\"Front and Rear Park Assist: Optional\",\"AdaptiveCruiseControl\":\"\",\"AdaptiveDrivingBeam\":\"\",\"AdaptiveHeadlights\":\"\",\"AdditionalErrorText\":\"The Model Year decoded for this VIN may be incorrect. If you know the Model year, please enter it and decode again to get more accurate information.\",\"AirBagLocCurtain\":\"All Rows\",\"AirBagLocFront\":\"1st Row (Driver and Passenger)\",\"AirBagLocKnee\":\"\",\"AirBagLocSeatCushion\":\"\",\"AirBagLocSide\":\"1st Row (Driver and Passenger)\",\"AutoReverseSystem\":\"Standard\",\"AutomaticPedestrianAlertingSound\":\"\",\"AxleConfiguration\":\"\",\"Axles\":\"2\",\"BasePrice\":\"44195.00\",\"BatteryA\":\"\",\"BatteryA_to\":\"\",\"BatteryCells\":\"\",\"BatteryInfo\":\"\",\"BatteryKWh\":\"\",\"BatteryKWh_to\":\"\",\"BatteryModules\":\"\",\"BatteryPacks\":\"\",\"BatteryType\":\"\",\"BatteryV\":\"\",\"BatteryV_to\":\"\",\"BedLengthIN\":\"\",\"BedType\":\"\",\"BlindSpotIntervention\":\"\",\"BlindSpotMon\":\"Optional\",\"BodyCabType\":\"Crew/Super Crew/Crew Max\",\"BodyClass\":\"Pickup\",\"BrakeSystemDesc\":\"\",\"BrakeSystemType\":\"Hydraulic\",\"BusFloorConfigType\":\"Not Applicable\",\"BusLength\":\"\",\"BusType\":\"Not Applicable\",\"CAN_AACN\":\"Standard\",\"CIB\":\"\",\"CashForClunkers\":\"\",\"ChargerLevel\":\"\",\"ChargerPowerKW\":\"\",\"CombinedBrakingSystem\":\"\",\"CoolingType\":\"\",\"CurbWeightLB\":\"\",\"CustomMotorcycleType\":\"Not Applicable\",\"DaytimeRunningLight\":\"Standard\",\"DestinationMarket\":\"\",\"DisplacementCC\":\"5300.0\",\"DisplacementCI\":\"323.42584370208\",\"DisplacementL\":\"5.3\",\"Doors\":\"4\",\"DriveType\":\"4WD/4-Wheel Drive/4x4\",\"DriverAssist\":\"\",\"DynamicBrakeSupport\":\"Standard\",\"EDR\":\"\",\"ESC\":\"Standard\",\"EVDriveUnit\":\"\",\"ElectrificationLevel\":\"\",\"EngineConfiguration\":\"\",\"EngineCycles\":\"\",\"EngineCylinders\":\"8\",\"EngineHP\":\"\",\"EngineHP_to\":\"\",\"EngineKW\":\"\",\"EngineManufacturer\":\"\",\"EngineModel\":\"L84 - DI, DFM, ALUM, GEN 5, VAR 2\",\"EntertainmentSystem\":\"\",\"ErrorCode\":\"0\",\"ErrorText\":\"0 - VIN decoded clean. Check Digit (9th position) is correct\",\"ForwardCollisionWarning\":\"\",\"FuelInjectionType\":\"\",\"FuelTankMaterial\":\"\",\"FuelTankType\":\"\",\"FuelTypePrimary\":\"Gasoline\",\"FuelTypeSecondary\":\"\",\"GCWR\":\"\",\"GCWR_to\":\"\",\"GVWR\":\"Class 2F: 7,001 - 8,000 lb (3,175 - 3,629 kg)\",\"GVWR_to\":\"\",\"KeylessIgnition\":\"\",\"LaneCenteringAssistance\":\"\",\"LaneDepartureWarning\":\"\",\"LaneKeepSystem\":\"\",\"LowerBeamHeadlampLightSource\":\"\",\"Make\":\"CHEVROLET\",\"MakeID\":\"467\",\"Manufacturer\":\"GENERAL MOTORS LLC\",\"ManufacturerId\":\"984\",\"Model\":\"Silverado\",\"ModelID\":\"1850\",\"ModelYear\":\"2019\",\"MotorcycleChassisType\":\"Not Applicable\",\"MotorcycleSuspensionType\":\"Not Applicable\",\"NCSABodyType\":\"Light Pickup\",\"NCSAMake\":\"Chevrolet\",\"NCSAMapExcApprovedBy\":\"\",\"NCSAMapExcApprovedOn\":\"\",\"NCSAMappingException\":\"\",\"NCSAModel\":\"C, K, R, V-series pickup/Silverado\",\"NCSANote\":\"\",\"NonLandUse\":\"\",\"Note\":\"\",\"OtherBusInfo\":\"\",\"OtherEngineInfo\":\"\",\"OtherMotorcycleInfo\":\"\",\"OtherRestraintSystemInfo\":\"\",\"OtherTrailerInfo\":\"\",\"ParkAssist\":\"\",\"PedestrianAutomaticEmergencyBraking\":\"\",\"PlantCity\":\"FORT WAYNE\",\"PlantCompanyName\":\"\",\"PlantCountry\":\"UNITED STATES (USA)\",\"PlantState\":\"INDIANA\",\"PossibleValues\":\"\",\"Pretensioner\":\"\",\"RearAutomaticEmergencyBraking\":\"\",\"RearCrossTrafficAlert\":\"\",\"RearVisibilitySystem\":\"Standard\",\"SAEAutomationLevel\":\"\",\"SAEAutomationLevel_to\":\"\",\"SeatBeltsAll\":\"Manual\",\"SeatRows\":\"2\",\"Seats\":\"6\",\"SemiautomaticHeadlampBeamSwitching\":\"Standard\",\"Series\":\"1500\",\"Series2\":\"\",\"SteeringLocation\":\"Left-Hand Drive (LHD)\",\"SuggestedVIN\":\"\",\"TPMS\":\"Direct\",\"TopSpeedMPH\":\"130\",\"TrackWidth\":\"\",\"TractionControl\":\"Standard\",\"TrailerBodyType\":\"Not Applicable\",\"TrailerLength\":\"\",\"TrailerType\":\"Not Applicable\",\"TransmissionSpeeds\":\"8\",\"TransmissionStyle\":\"Automatic\",\"Trim\":\"LT\",\"Trim2\":\"\",\"Turbo\":\"\",\"VIN\":\"1GCUYDED2KZ100001\",\"ValveTrainDesign\":\"\",\"VehicleDescriptor\":\"1GCUYDED*KZ\",\"VehicleType\":\"TRUCK\",\"WheelBaseLong\":\"156.90\",\"WheelBaseShort\":\"147.40\",\"WheelBaseType\":\"\",\"WheelSizeFront\":\"17\",\"WheelSizeRear\":\"17\",\"WheelieMitigation\":\"\",\"Wheels\":\"4\",\"Windows\":\"\"}]}"
+    },
+    "vdb": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "vdb",
+        "_sourceEndpoint": "advanced-vin-decode/v2/{vin}",
+        "blockType": "V",
+        "bodyType": "Pickup",
+        "brakeType": "Pwr",
+        "camType": null,
+        "cca": 730,
+        "chassisCode": null,
+        "cylinders": null,
+        "cylindersConfiguration": null,
+        "displacement": 5.3,
+        "doors": 4,
+        "drivetrain": "4x4",
+        "engineCode": "L84",
+        "engineDescription": null,
+        "frontRotorDia": 13.5,
+        "frontTirePressure": 35,
+        "frontTireSize": "275/50R22S",
+        "fuelType": "Gasoline",
+        "horsepower": 355,
+        "make": "Chevrolet",
+        "model": "Silverado 1500",
+        "mpgCity": 19,
+        "mpgCombined": 20,
+        "mpgHighway": 22,
+        "packages": [
+          "tow_package"
+        ],
+        "rearRotorDia": 13.6,
+        "rearTirePressure": 35,
+        "rearTireSize": "275/50R22S",
+        "steeringType": "electric",
+        "transDescription": "Automatic",
+        "transSpeeds": 8,
+        "transType": "Automatic",
+        "trim": "LT",
+        "wheelTorque": 140,
+        "year": 2019
+      },
+      "ok": true,
+      "rawSample": "{\"vin\":\"1GCUYDED2KZ100001\",\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Silverado 1500\",\"trim\":\"LT\",\"style\":\"4x2 Crew Cab 5.75 ft. box 147.4 in. WB Automatic\",\"trim_and_style\":\"LT 4x2 Crew Cab 5.75 ft. box 147.4 in. WB Automatic\",\"summary\":\"The 2019 Chevrolet Silverado 1500 LT comes with a range of impressive features. It is powered by a 5.3L I-4 310hp intercooled turbo engine, paired with an 8-speed automatic transmission with overdrive. Safety is a priority, with 4-wheel anti-lock brakes (ABS), side seat mounted airbags, and curtain 1st and 2nd row overhead airbags. The vehicle also includes air conditioning, stylish 17\\\" aluminum wheels, and convenient features like cruise control. The Silverado 1500 LT ensures a smooth and safe ride with ABS and driveline traction control, as well as StabiliTrak w/Proactive Roll Avoidance electronic stability.\",\"price\":{\"base_msrp\":\"39,300\",\"delivery_charges\":\"1,595\",\"invoice_price\":\"36,903\",\"total_price\":\"40,895\",\"currency\":\"USD\"},\"vehicle\":{\"epa_classification\":\"Truck\",\"rear_door_type\":\"\",\"body_type\":\"Pickup\",\"doors\":\"4\"},\"dimensions\":[{\"exterior\":[{\"overall_length\":[{\"value\":\"5,885\",\"unit\":\"mm\"},{\"value\":\"231.69\",\"unit\":\"in\"}]},{\"overall_length_without_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_length_with_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_width\":[{\"value\":\"2,063\",\"unit\":\"mm\"},{\"value\":\"81.22\",\"unit\":\"in\"}]},{\"max_width_without_mirrors\":[{\"value\":\"81.24\",\"unit\":\"in\"},{\"value\":\"2,063.5\",\"unit\":\"mm\"}]},{\"overall_height\":[{\"value\":\"1,917\",\"unit\":\"mm\"},{\"value\":\"75.47\",\"unit\":\"in\"}]},{\"liftover_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_front\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_rear_without_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"track_width_front\":[{\"value\":\"68\",\"unit\":\"in\"},{\"value\":\"1,727.2\",\"unit\":\"mm\"}]},{\"track_width_rear\":[{\"value\":\"67.96\",\"unit\":\"in\"},{\"value\":\"1,726.21\",\"unit\":\"mm\"}]},{\"wheelbase\":[{\"value\":\"3,744\",\"unit\":\"mm\"},{\"value\":\"147.4\",\"unit\":\"in\"}]},{\"front_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"ground_to_top_of_load_floor\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cab_to_end_of_frame\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"bed_length\":[{\"value\":\"5.75\",\"unit\":\"ft\"},{\"value\":\"69\",\"unit\":\"in\"},{\"value\":\"1,752.6\",\"unit\":\"mm\"}]}]},{\"interior\":[{\"passenger_volume\":[{\"value\":\"\",\"unit\":\"l\"},{\"value\":\"\",\"unit\":\"cu.ft\"}]},{\"trunk_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"front_head_room\":[{\"value\":\"1,093\",\"unit\":\"mm\"},{\"value\":\"43\",\"unit\":\"in\"}]},{\"rear_head_room\":[{\"value\":\"1,019\",\"unit\":\"mm\"},{\"value\":\"40.1\",\"unit\":\"in\"}]},{\"third_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_shoulder_room\":[{\"value\":\"1,677\",\"unit\":\"mm\"},{\"value\":\"66\",\"unit\":\"in\"}]},{\"rear_shoulder_room\":[{\"value\":\"1,655\",\"unit\":\"mm\"},{\"value\":\"65.2\",\"unit\":\"in\"}]},{\"third_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"rear_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"third_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_leg_room\":[{\"value\":\"1,131\",\"unit\":\"mm\"},{\"value\":\"44.5\",\"unit\":\"in\"}]},{\"rear_leg_room\":[{\"value\":\"1,102\",\"unit\":\"mm\"},{\"value\":\"43.4\",\"unit\":\"in\"}]},{\"third_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"cargo\":[{\"cargo_volume\":[{\"value\":\"\",\"unit\":\"l\"},{\"value\":\"\",\"unit\":\"cu.ft\"}]},{\"max_cargo_volume\":[{\"value\":\"\",\"unit\":\"l\"},{\"value\":\"\",\"unit\":\"cu.ft\"}]},{\"front_cargo_volume\":[{\"value\":\"\",\"unit\":\"l\"},{\"value\":\"\",\"unit\":\"cu.ft\"}]},{\"cargo_volume_to_seat1\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat2\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat3\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat4\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_down\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_up\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"extended_cab_cargo_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"floor_to_console_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat1_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat2_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat3_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"beltline_cargo_area_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_height\":[{\"value\":\"22.4\",\"unit\":\"in\"},{\"value\":\"568.96\",\"unit\":\"mm\"}]},{\"cargo_box_floor_length\":[{\"value\":\"1,775.97\",\"unit\":\"in\"}]},{\"cargo_box_floor_width\":[{\"value\":\"71.4\",\"unit\":\"in\"},{\"value\":\"1,813.56\",\"unit\":\"mm\"}]},{\"cargo_box_wheelhousings_width\":[{\"value\":\"50.63\",\"unit\":\"in\"},{\"value\":\"1,286\",\"unit\":\"mm\"}]},{\"tailgate_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"weights\":[{\"curb_weight_as_spec'd\":[{\"value\":\"4,662\",\"unit\":\"lb\"},{\"value\":\"2,114.29\",\"unit\":\"kg\"}]},{\"payload_as_spec'd\":[{\"value\":\"2,138\",\"unit\":\"lb\"},{\"value\":\"969.61\",\"unit\":\"kg\"}]},{\"curb_weight_base\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight\":[{\"value\":\"4,602\",\"unit\":\"lb\"},{\"value\":\"2,087.07\",\"unit\":\"kg\"}]},{\"curb_weight_front\":[{\"value\":\"2,713\",\"unit\":\"lb\"},{\"value\":\"1,230.39\",\"unit\":\"kg\"}]},{\"curb_weight_rear\":[{\"value\":\"1,889\",\"unit\":\"lb\"},{\"value\":\"856.69\",\"unit\":\"kg\"}]},{\"gross_axle_weight_rating\":[{\"value\":\"7,500\",\"unit\":\"lb\"},{\"value\":\"3,401.36\",\"unit\":\"kg\"}]},{\"gross_combined_weight_rating\":[{\"value\":\"12,000\",\"unit\":\"lb\"},{\"value\":\"5,442.18\",\"unit\":\"kg\"}]},{\"gross_vehicle_weight_rating\":[{\"value\":\"6,800\",\"unit\":\"lb\"},{\"value\":\"3,083.9\",\"unit\":\"kg\"}]},{\"max_payload_capacity\":[{\"value\":\"2,198\",\"unit\":\"lb\"},{\"value\":\"996.83\",\"unit\":\"kg\"}]},{\"option_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"total_option_weight\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"towing_capacity\":[{\"value\":\"9,700\",\"unit\":\"lb\"},{\"value\":\"21,412.8\",\"unit\":\"kg\"}]},{\"payload_capacity\":[{\"value\":\"2,180.74\",\"unit\":\"lb\"},{\"value\":\"989\",\"unit\":\"kg\"}]}]},{\"ground_clearance\":[{\"ground_clearance_max\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"ground_clearance_min\":[{\"value\":\"200\",\"unit\":\"mm\"},{\"value\":\"7.9\",\"unit\":\"in\"}]}]},{\"off_road_attributes\":[{\"approach_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]},{\"departure_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]},{\"ramp_breakover_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]}]},{\"steering\":[{\"turning_diameter_curb_to_curb\":[{\"value\":\"46.3\",\"unit\":\"ft\"},{\"value\":\"14.11\",\"unit\":\"m\"}]},{\"turning_diameter_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]},{\"turning_radius_curb_to_curb\":[{\"value\":\"23.15\",\"unit\":\"ft\"},{\"value\":\"7.06\",\"unit\":\"m\"}]},{\"turning_radius_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]}]},{\"trailering\":[{\"max_capacity\":[{\"value\":\"11,600\",\"unit\":\"lb\"},{\"value\":\"5,260.77\",\"unit\":\"kg\"}]},{\"max_tongue_dead_weight_hitch\":[{\"value\":\"500\",\"unit\":\"lb\"},{\"value\":\"226.76\",\"unit\":\"kg\"}]},{\"max_trailer_dead_weight_hitch\":[{\"value\":\"5,000\",\"unit\":\"lb\"},{\"value\":\"2,267.57\",\"unit\":\"kg\"}]},{\"max_tongue_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_weigth_distributing_hitch\":[{\"value\":\"690\",\"unit\":\"lb\"},{\"value\":\"312.93\",\"unit\":\"kg\"}]},{\"max_trailer_weigth_distributing_hitch\":[{\"value\":\"6,900\",\"unit\":\"lb\"},{\"value\":\"3,129.25\",\"unit\":\"kg\"}]}]},{\"braking\":[{\"front_brake_rotor_dia\":[{\"value\":\"13.5\",\"unit\":\"in\"},{\"value\":\"342.9\",\"unit\":\"mm\"}]},{\"front_brake_rotor_thickness\":[{\"value\":\"1.18\",\"unit\":\"in\"},{\"value\":\"29.97\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_dia\":[{\"value\":\"13.6\",\"unit\":\"in\"},{\"value\":\"345.44\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_thickness\":[{\"value\":\"0.79\",\"unit\":\"in\"},{\"value\":\"20.07\",\"unit\":\"mm\"}]}]},{\"wheels\":[{\"front_wheel_size\":[{\"value\":\"17 x 8 \",\"unit\":\"in\"}]},{\"rear_wheel_size\":[{\"value\":\"17 x 8 \",\"unit\":\"in\"}]},{\"spare_wheel_size\":[{\"value\":\"17 x -TBD- \",\"unit\":\"in\"}]},{\"wheel_torque\":[{\"value\":\"140\",\"unit\":\"lb.ft\"}]}]},{\"engine\":[{\"engine_size\":[{\"value\":5.3,\"unit\":\"l\"}]},{\"horsepower\":[{\"value\":\"5,600\",\"unit\":\"rpm\"},{\"value\":\"355\",\"unit\":\"hp\"}]},{\"torque\":[{\"value\":\"1,500\",\"unit\":\"rpm\"},{\"value\":\"460\",\"unit\":\"lb.ft\"}]},{\"bore\":[{\"value\":\"96\",\"unit\":\"mm\"},{\"value\":\"3.78\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"92\",\"unit\":\"mm\"},{\"value\":\"3.62\",\"unit\":\"in\"}]}]},{\"fuel\":[{\"tank_capacity\":[{\"value\":\"24\",\"unit\":\"gal\"},{\"value\":\"90.84\",\"unit\":\"l\"}]},{\"auxiliary_fuel_tank_capacity\":[{\"value\":\"\",\"unit\":\"gal\"},{\"value\":\"\",\"unit\":\"l\"}]}]},{\"mpg\":[{\"cruising_range_city\":[{\"value\":\"480\",\"unit\":\"mi\"}]},{\"cruising_range_hwy\":[{\"value\":\"552\",\"unit\":\"mi\"}]},{\"estimated_battery_range\":[{\"value\":\"\",\"unit\":\"mi\"}]}]},{\"electric_powertrain\":[{\"motor1_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor2_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor3_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor4_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor_horsepower\":[{\"value\":\"\",\"unit\":\"hp\"}]}]},{\"traction_battery\":[{\"all_electric_range\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"total_dual_fusion\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"peak_dc_fast_charge_time\":[{\"value\":\"\",\"unit\":\"minutes\"}]}]},{\"range_extender\":[{\"output\":[{\"value\":\"\",\"unit\":\"hp\"}]},{\"rpm\":[{\"value\":\"\",\"unit\":\"rpm\"}]},{\"bore\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]}]}],\"specifications\":[{\"exterior\":{\"cab_style\":\"Crew Cab\"}},{\"steering\":{\"type\":\"Electric Rack & Pinion\",\"overall_ratio\":\"\",\"turns_to_turns_ratio\":\"\"}},{\"braking\":{\"type\":\"Pwr\",\"primary_abs_system\":\"4-Wheel\",\"secondary_abs_system\":\"\",\"front_disc\":\"Yes\",\"rear_disc\":\"Yes\",\"rear_drum\":\"\"}},{\"electrical\":{\"cold_cranking_capacity_amps\":\"730\",\"max_alternator_capacity_amps\":\"220\"}},{\"suspensions\":{\"front_type\":\"Independent\",\"front_type_extended\":\"\",\"rear_type\":\"Solid Axle\",\"rear_type_extended\":\"\",\"front_axle\":\"\",\"rear_axle\":\"\"}},{\"seating\":{\"number_of_seats\":\"6\",\"max_seating_capacity\":\"6\"}},{\"wheels\":{\"front_wheel_material\":\"Aluminum\",\"rear_wheel_material\":\"Aluminum\",\"spare_wheel_material\":\"\"}},{\"tires\":{\"front_tire_size\":\"275/50R22S\",\"rear_tire_size\":\"275/50R22S\",\"spare_tire_size\":\"255/70R17\",\"type\":\"All-season\",\"front_tire_pressure_psi\":\"35\",\"rear_tire_pressure_psi\":\"35\"}},{\"emissions\":{\"greenhouse_gas_score\":\"\",\"air_pollution_score\":\"\"}},{\"engine\":{\"type\":\"Turbocharged Gas N/A\",\"code\":\"L84\",\"cylinders_configuration\":\"\",\"displacement\":5300,\"compressor\":\"Intercooled turbo\",\"drivetype\":\"4x4\",\"oil_cooler\":\"\",\"engine_location\":\"Front\",\"valves\":\"24\",\"compression\":\"15\",\"variable_intake_…[truncated]"
+    }
+  },
+  "score": {
+    "disagreements": [
+      {
+        "field": "model",
+        "values": {
+          "carapi": "Silverado",
+          "marketcheck": "Silverado 1500",
+          "nhtsa": "Silverado",
+          "vdb": "Silverado 1500"
+        }
+      },
+      {
+        "field": "trim",
+        "values": {
+          "carapi": "High Country 4dr Crew Cab 4WD 5.8 ft. SB (5.3L 8cyl 8A)",
+          "marketcheck": "LT",
+          "nhtsa": "LT",
+          "vdb": "LT"
+        }
+      },
+      {
+        "field": "engineCode",
+        "values": {
+          "nhtsa": "L84 - DI, DFM, ALUM, GEN 5, VAR 2",
+          "vdb": "L84"
+        }
+      },
+      {
+        "field": "drivetrain",
+        "values": {
+          "carapi": "4WD/4-Wheel Drive/4x4",
+          "marketcheck": "4WD",
+          "nhtsa": "4WD/4-Wheel Drive/4x4",
+          "vdb": "4x4"
+        }
+      },
+      {
+        "field": "fuelType",
+        "values": {
+          "carapi": "Gasoline",
+          "marketcheck": "Unleaded",
+          "nhtsa": "Gasoline",
+          "vdb": "Gasoline"
+        }
+      },
+      {
+        "field": "brakeType",
+        "values": {
+          "nhtsa": "Hydraulic",
+          "vdb": "Pwr"
+        }
+      }
+    ],
+    "perProvider": {
+      "carapi": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 37,
+          "present": 7,
+          "total": 19
+        },
+        "engineCode": "absent",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "absent",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 40,
+          "present": 14,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "marketcheck": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 21,
+          "present": 4,
+          "total": 19
+        },
+        "engineCode": "absent",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "absent",
+          "cylindersConfiguration": "absent",
+          "displacement": "absent",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "absent",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "absent",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 37,
+          "present": 13,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "nhtsa": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 42,
+          "present": 8,
+          "total": 19
+        },
+        "engineCode": "match",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "present",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "absent",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 46,
+          "present": 16,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      },
+      "vdb": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 84,
+          "present": 16,
+          "total": 19
+        },
+        "engineCode": "match",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "present",
+          "camType": "absent",
+          "cca": "present",
+          "chassisCode": "absent",
+          "cylinders": "absent",
+          "cylindersConfiguration": "absent",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "absent",
+          "frontRotorDia": "present",
+          "frontTirePressure": "present",
+          "frontTireSize": "present",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "present",
+          "mpgHighway": "present",
+          "packages": "present",
+          "rearRotorDia": "present",
+          "rearTirePressure": "present",
+          "rearTireSize": "present",
+          "steeringType": "present",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "present",
+          "year": "present"
+        },
+        "full": {
+          "pct": 83,
+          "present": 29,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 75,
+          "present": 3,
+          "total": 4
+        },
+        "ok": true
+      }
+    }
+  },
+  "vin": "1GCUYDED2KZ100001",
+  "year": 2019
+}

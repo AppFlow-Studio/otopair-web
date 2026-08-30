@@ -14,7 +14,7 @@ import {
   query,
 } from "./_generated/server";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import { fetchYmmTrimsFromProviders } from "./lib/ymmTrims";
 
 const NHTSA_BASE = "https://vpic.nhtsa.dot.gov/api/vehicles";
 
@@ -240,10 +240,14 @@ export const _upsertTrims = internalMutation({
     const existingByNorm = new Map(
       existing.map((t) => [normalizeName(t.name), t])
     );
+    // Tracks norms inserted during THIS call — existingByNorm only reflects the
+    // pre-call DB snapshot, so without this a duplicate inside `names` would
+    // insert a second row for the same trim.
+    const insertedNorms = new Set<string>();
 
     for (const raw of names) {
       const norm = normalizeName(raw);
-      if (!norm) continue;
+      if (!norm || insertedNorms.has(norm)) continue;
       const found = existingByNorm.get(norm);
       if (found) {
         const start = Math.min(found.year_start ?? year, year);
@@ -255,10 +259,13 @@ export const _upsertTrims = internalMutation({
       }
       await ctx.db.insert("trims", {
         model_id: modelId,
-        name: titleCase(raw),
+        // Stored verbatim — the provider trims arrive already clean
+        // ("EX-L", "XSE"); titleCase would mangle acronym/hyphen trims.
+        name: raw.trim(),
         year_start: year,
         year_end: year,
       });
+      insertedNorms.add(norm);
     }
 
     const cacheRow = await ctx.db
@@ -301,25 +308,19 @@ export const ensureTrimsForModelYear = action({
       return;
     }
 
-    const url = `${NHTSA_BASE}/GetModelsForMakeYear/make/${encodeURIComponent(
-      model.makeName
-    )}/modelyear/${year}?format=json`;
-
-    // NHTSA's free vPIC API doesn't expose trims directly without VIN context.
-    // We cache an empty list so the UI knows trim is optional / free-text only.
+    // Trims come from the premium Car API (/trims/v2) + MarketCheck facets —
+    // NHTSA doesn't expose trims without VIN context, and VDB is being dropped
+    // for trims. Best-effort: on total failure we cache an empty list so the UI
+    // falls back to free-text entry rather than re-hitting the APIs per keystroke.
     let names: string[] = [];
     try {
-      const trimUrl = `${NHTSA_BASE}/GetVehicleVariableValuesList/Trim?format=json`;
-      const res = await fetch(trimUrl);
-      if (res.ok) {
-        const _data = await res.json();
-        // Trim variable list is shop-agnostic; we intentionally keep `names`
-        // empty so cached trims come purely from VIN-decoded bookings later.
-        names = [];
-      }
-      void url;
+      names = await fetchYmmTrimsFromProviders({
+        year,
+        make: model.makeName,
+        model: model.name,
+      });
     } catch {
-      // ignore; cache empty
+      // ignore — cache empty
     }
 
     await ctx.runMutation(internal.ymmtCatalog._upsertTrims, {
@@ -327,5 +328,33 @@ export const ensureTrimsForModelYear = action({
       year,
       names,
     });
+  },
+});
+
+/**
+ * Public string-in trim lookup for the mobile "add vehicle" flow (which holds
+ * only make/model strings, e.g. after a VIN decode). Returns the freshly
+ * merged Car API + MarketCheck trims (with family-name expansion for makes that
+ * split variants into separate models, e.g. Mercedes GLE → GLE 350/450/63 S).
+ *
+ * Deliberately does NOT read back the shared `trims` catalog table: that table
+ * is also written by the enrichment / VIN-decode paths and can carry duplicate
+ * or family-mismatched rows under a family model_id (that read-back was the
+ * "4× identical AMG GLE 63 S" bug). Providers are the source of truth here.
+ */
+export const resolveTrimsForYmm = action({
+  args: { year: v.number(), make: v.string(), model: v.string() },
+  handler: async (
+    ctx,
+    { year, make, model },
+  ): Promise<{ trims: string[] }> => {
+    if (!year || !make.trim() || !model.trim()) return { trims: [] };
+    let trims: string[] = [];
+    try {
+      trims = await fetchYmmTrimsFromProviders({ year, make, model });
+    } catch {
+      trims = [];
+    }
+    return { trims };
   },
 });

@@ -21,6 +21,10 @@ const navItems = [
         href: '/services'
     },
     {
+        label: 'Car Data',
+        href: '/data'
+    },
+    {
         label: 'Partner with us',
         href: '/partner-with-us'
     }
@@ -36,7 +40,9 @@ function Navbar() {
     const isHome = pathname === "/"
     // The flagship home hero and the partner page each ship their own floating
     // glass pill nav, so the global chrome stands down on both routes.
-    const hideChrome = isHome || pathname === "/partner-with-us"
+    // /developers is an app-like docs/portal surface — it ships its own slim
+    // header, so the marketing chrome stands down there too.
+    const hideChrome = isHome || pathname === "/partner-with-us" || (pathname?.startsWith("/developers") ?? false)
 
     useEffect(() => {
         if (!isHome) {

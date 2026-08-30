@@ -576,6 +576,8 @@ export const vehicleConfigsList = query({
           rotorFrontMinMm:     cfg.rotor_front_min_thickness_mm ?? null,
           rotorRearMinMm:      cfg.rotor_rear_min_thickness_mm ?? null,
           rotorMinEstimated:
+            cfg.rotor_front_min_quality === "derived_15pct_wear" ||
+            cfg.rotor_rear_min_quality === "derived_15pct_wear" ||
             cfg.rotor_front_min_quality === "derived_from_nominal" ||
             cfg.rotor_rear_min_quality === "derived_from_nominal",
           vehicleCount:        vehiclesForConfig.length,

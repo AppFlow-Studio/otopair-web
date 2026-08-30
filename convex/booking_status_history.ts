@@ -15,6 +15,8 @@ import { v } from "convex/values";
  */
 
 const VALID_TRANSITIONS: Record<string, string[]> = {
+  pending_quote: ["cancelled"],
+  quotes_ready: ["cancelled"],
   pending: ["confirmed", "cancelled", "pending_customer_acceptance"],
   pending_shop_acceptance: [
     "confirmed",

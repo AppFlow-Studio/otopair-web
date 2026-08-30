@@ -239,7 +239,7 @@ export default function QuoteDetailPanel({
       </div>
 
       <ConfirmationDialog open={confirmCancel} title="Cancel this quote?" description="The customer will no longer be able to accept this shop's quote." onClose={() => setConfirmCancel(false)} secondaryAction={{ label: "Keep quote", onAction: () => setConfirmCancel(false) }} primaryAction={{ label: "Cancel quote", onAction: () => void handleCancel(), variant: "destructive" }} />
-      <ConfirmationDialog open={heldNoticeOpen} title="Quote changes unavailable" description="The customer now has this slot and quote held on Review & Pay. The quote cannot be cancelled or modified until their hold ends." onClose={() => setHeldNoticeOpen(false)} primaryAction={{ label: "Got it", onAction: () => setHeldNoticeOpen(false) }} />
+      <ConfirmationDialog open={heldNoticeOpen} title="Quote changes unavailable" description="The customer now has this slot and quote held." onClose={() => setHeldNoticeOpen(false)} primaryAction={{ label: "Got it", onAction: () => setHeldNoticeOpen(false) }} />
 
       {requoteOpen && quoteType === "tire" ? <TireQuoteSubmissionDialog request={request} shopId={context.shopId} shopMechanics={context.mechanics ?? []} shopHours={context.hours ?? []} onClose={() => setRequoteOpen(false)} onHeld={showHeldNotice} /> : null}
       {requoteOpen && quoteType === "rotor" ? <RotorQuoteSubmissionDialog request={request} shopId={context.shopId} shopMechanics={context.mechanics ?? []} shopHours={context.hours ?? []} onClose={() => setRequoteOpen(false)} onHeld={showHeldNotice} /> : null}

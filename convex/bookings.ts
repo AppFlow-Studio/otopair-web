@@ -68,9 +68,11 @@ import { metaMakeModel } from "./lib/bookingEnrichment";
 import { isRealVin, isPseudoVin, mintPseudoVin } from "./lib/vinIdentity";
 import {
   getActiveQuoteCheckoutHold,
+  getBookingQuoteLifecycle,
   getQuoteAvailability,
   getQuoteHoldExpiresAt,
   getQuoteRevision,
+  requireOwnedQuoteBooking,
   throwQuoteUnavailable,
 } from "./lib/quoteHoldOwnership";
 import { buildYmmtFingerprint } from "./vehicleEnrichment/types";
@@ -531,6 +533,10 @@ export const getByUserIdWithDetails = query({
         let currentStage: string | undefined;
         let delayMinutes: number | undefined;
         const liveStage = booking.live_stage;
+        const quoteLifecycle =
+          booking.status === "pending_quote" || booking.status === "quotes_ready"
+            ? await getBookingQuoteLifecycle(ctx, booking)
+            : null;
         if (booking.status === "in_progress") {
           const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
           const estimatedMinutes = booking.estimated_labor_minutes ?? 60;
@@ -587,6 +593,8 @@ export const getByUserIdWithDetails = query({
           shopLng: shop?.lng,
           tire_specs: booking.tire_specs,
           rotor_specs: booking.rotor_specs,
+          quote_state: quoteLifecycle?.status ?? null,
+          quote_expires_at: quoteLifecycle?.expiresAt ?? null,
           // Pickup-request round trip: whether the customer asked for the car
           // back and how the shop answered. Drives the status line on the card.
           pickupRequestedAtMs: booking.cancel_requested_at_ms ?? null,
@@ -717,7 +725,64 @@ export const cancelBooking = mutation({
       cancellationKind: kind,
     });
 
+    if (booking.status === "pending_quote" || booking.status === "quotes_ready") {
+      const now = Date.now();
+      const quoteType = booking.rotor_specs != null ? "rotor" : "tire";
+      const responses = await ctx.db
+        .query(quoteType === "tire" ? "tire_quote_responses" : "rotor_quote_responses")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+        .collect();
+      for (const response of responses) {
+        if (response.superseded_at == null) {
+          await ctx.db.patch(response._id, { superseded_at: now });
+        }
+        const holds = await ctx.db
+          .query("slot_holds")
+          .withIndex(
+            quoteType === "tire" ? "by_tire_quote_response" : "by_rotor_quote_response",
+            (q) =>
+              q.eq(
+                quoteType === "tire" ? "tire_quote_response_id" : "rotor_quote_response_id",
+                response._id,
+              ),
+          )
+          .collect();
+        for (const hold of holds) {
+          if (hold.status === "active") await ctx.db.delete(hold._id);
+        }
+      }
+    }
+
     return { cancelled: true, feeCents, kind };
+  },
+});
+
+export const getQuoteRequestAvailability = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const { booking } = await requireOwnedQuoteBooking(ctx, args.bookingId);
+    const lifecycle = await getBookingQuoteLifecycle(ctx, booking);
+    if (!lifecycle || (booking.status !== "pending_quote" && booking.status !== "quotes_ready")) {
+      return {
+        available: false as const,
+        reason: "unavailable" as const,
+        status: "cancelled" as const,
+        expiresAt: null,
+      };
+    }
+    if (lifecycle.status === "ready") {
+      return { available: true as const, ...lifecycle };
+    }
+    return {
+      available: false as const,
+      reason:
+        lifecycle.status === "expired"
+          ? ("expired" as const)
+          : lifecycle.status === "cancelled"
+            ? ("cancelled" as const)
+            : ("unavailable" as const),
+      ...lifecycle,
+    };
   },
 });
 

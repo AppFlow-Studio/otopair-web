@@ -14,6 +14,7 @@ import type { CalendarEvent } from "@/app/(portal)/schedule/day-swim-lanes";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { formatHoursValue } from "@/lib/labor-units";
+import { shouldShowShopQuoteRequest } from "@/lib/quoteRequestVisibility";
 import {
   Select,
   SelectItem,
@@ -272,6 +273,14 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
     return () => window.clearTimeout(timer);
   }, [quoteClock, requests]);
 
+  const visibleRequests = useMemo(
+    () =>
+      (requests ?? []).filter((request) =>
+        shouldShowShopQuoteRequest(liveQuoteState(request, quoteClock).status),
+      ),
+    [quoteClock, requests],
+  );
+
   const handleReject = async (id: Id<"bookings">) => {
     if (!shopId) return;
     setPendingRejectId(String(id));
@@ -302,7 +311,7 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
         <div>
           <h1 className="text-2xl font-bold text-foreground">Tire Quote Requests</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Review open requests and track pending, expired, or cancelled quotes.
+            Review open requests and track pending or cancelled quotes.
           </p>
         </div>
       )}
@@ -319,7 +328,7 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
         <div className="bg-card rounded-xl border border-border p-8 text-center text-muted-foreground">
           Loading requests…
         </div>
-      ) : requests.length === 0 ? (
+      ) : visibleRequests.length === 0 ? (
         <div className="bg-card rounded-xl border border-border p-12 text-center">
           <Wrench className="mx-auto h-10 w-10 text-muted-foreground/40" strokeWidth={1.5} />
           <p className="mt-3 text-sm font-medium text-foreground">No open tire quote requests</p>
@@ -343,7 +352,7 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
               </tr>
             </thead>
             <tbody>
-              {requests.map((r) => {
+              {visibleRequests.map((r) => {
                 const live = liveQuoteState(r, quoteClock);
                 return (
                 <tr key={r._id} className="border-b border-border last:border-b-0 hover:bg-muted/20">
@@ -407,7 +416,7 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
       <ConfirmationDialog
         open={holdNoticeOpen}
         title="Quote changes unavailable"
-        description="The customer now has this slot and quote held on Review & Pay. The quote cannot be cancelled or modified until their hold ends."
+        description="The customer now has this slot and quote held."
         onClose={() => setHoldNoticeOpen(false)}
         primaryAction={{ label: "Got it", onAction: () => setHoldNoticeOpen(false) }}
       />

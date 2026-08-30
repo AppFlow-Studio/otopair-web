@@ -26,6 +26,21 @@ type QuoteHoldTiming = {
   revision?: number;
 };
 
+export type CustomerQuoteLifecycleStatus =
+  | "pending"
+  | "ready"
+  | "expired"
+  | "cancelled";
+
+type QuoteLifecycleCandidate = QuoteHoldTiming & {
+  checkout_hold_expires_at?: number;
+};
+
+export type CustomerQuoteLifecycle = {
+  status: CustomerQuoteLifecycleStatus;
+  expiresAt: number | null;
+};
+
 export type QuoteUnavailableReason =
   | "expired"
   | "cancelled"
@@ -53,6 +68,28 @@ export function getQuoteAvailability(
     return { available: false, reason: "expired" };
   }
   return { available: true };
+}
+
+export function summarizeQuoteLifecycle(
+  responses: QuoteLifecycleCandidate[],
+  now = Date.now(),
+): CustomerQuoteLifecycle {
+  const current = responses.filter((response) => response.superseded_at == null);
+  if (current.length === 0) return { status: "pending", expiresAt: null };
+
+  const nonCancelled = current.filter((response) => response.cancelled_at == null);
+  if (nonCancelled.length === 0) return { status: "cancelled", expiresAt: null };
+
+  const effectiveExpiries = nonCancelled.map((response) =>
+    Math.max(
+      getQuoteHoldExpiresAt(response),
+      response.checkout_hold_expires_at ?? 0,
+    ),
+  );
+  const expiresAt = Math.max(...effectiveExpiries);
+  return expiresAt > now
+    ? { status: "ready", expiresAt }
+    : { status: "expired", expiresAt };
 }
 
 export function throwQuoteUnavailable(reason: QuoteUnavailableReason): never {
@@ -108,6 +145,33 @@ export async function getActiveQuoteCheckoutHold(
         hold.quote_revision === revision,
     ) ?? null
   );
+}
+
+export async function getBookingQuoteLifecycle(ctx: any, booking: any) {
+  const quoteType = booking.rotor_specs != null ? "rotor" : booking.tire_specs != null ? "tire" : null;
+  if (!quoteType) return null;
+  const responses = await ctx.db
+    .query(quoteType === "tire" ? "tire_quote_responses" : "rotor_quote_responses")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", booking._id))
+    .collect();
+  const now = Date.now();
+  const candidates = await Promise.all(
+    responses.map(async (response: any) => {
+      if (response.superseded_at != null || response.cancelled_at != null) return response;
+      const hold = await getActiveQuoteCheckoutHold(
+        ctx,
+        quoteType,
+        response._id,
+        getQuoteRevision(response),
+        now,
+      );
+      return {
+        ...response,
+        checkout_hold_expires_at: hold?.expires_at,
+      };
+    }),
+  );
+  return summarizeQuoteLifecycle(candidates, now);
 }
 
 export async function assertQuoteNotHeldForCheckout(

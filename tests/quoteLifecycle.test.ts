@@ -1,9 +1,13 @@
 import { afterEach, expect, test, vi } from "vitest";
 
 import { api } from "../convex/_generated/api";
+import { validateTransition } from "../convex/booking_status_history";
 import { identityFor, makeT } from "./helpers";
 
 const NOW = new Date("2026-08-29T15:30:00-04:00");
+const getQuoteRequestAvailability = (api.bookings as unknown as {
+  getQuoteRequestAvailability: typeof api.bookings.getById;
+}).getQuoteRequestAvailability;
 
 afterEach(() => vi.useRealTimers());
 
@@ -106,6 +110,40 @@ async function seedLifecycle(quoteType: "tire" | "rotor") {
 }
 
 for (const quoteType of ["tire", "rotor"] as const) {
+  test(`${quoteType} quote request can be cancelled by its customer`, async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const { t, seed } = await seedLifecycle(quoteType);
+    const customer = t.withIdentity(identityFor(seed.customerClerkId));
+
+    expect(validateTransition("pending_quote", "cancelled")).toBeNull();
+    expect(validateTransition("quotes_ready", "cancelled")).toBeNull();
+    await customer.mutation(api.bookings.cancelBooking, { bookingId: seed.bookingId });
+
+    const booking = await t.run((ctx) => ctx.db.get(seed.bookingId));
+    const response = await t.run((ctx) => ctx.db.get(seed.responseId));
+    expect(booking?.status).toBe("cancelled");
+    expect(response?.superseded_at).toBe(NOW.getTime());
+  });
+
+  test(`${quoteType} customer preflight reports expiry before opening quote choices`, async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const { t, seed } = await seedLifecycle(quoteType);
+    const customer = t.withIdentity(identityFor(seed.customerClerkId));
+    expect(
+      await customer.query(getQuoteRequestAvailability, { bookingId: seed.bookingId } as never),
+    ).toMatchObject({ available: true, status: "ready" });
+    expect(
+      (await customer.query(api.bookings.getByUserIdWithDetails, { userId: seed.customerId }))[0],
+    ).toMatchObject({ quote_state: "ready", quote_expires_at: NOW.getTime() + 10 * 60_000 });
+
+    vi.setSystemTime(NOW.getTime() + 10 * 60_000 + 1);
+    expect(
+      await customer.query(getQuoteRequestAvailability, { bookingId: seed.bookingId } as never),
+    ).toMatchObject({ available: false, reason: "expired", status: "expired" });
+  });
+
   test(`${quoteType} quote reads as expired after ten minutes`, async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
@@ -172,6 +210,9 @@ for (const quoteType of ["tire", "rotor"] as const) {
       available: false,
       reason: "cancelled",
     });
+    expect(
+      await customer.query(getQuoteRequestAvailability, { bookingId: seed.bookingId } as never),
+    ).toMatchObject({ available: false, reason: "cancelled", status: "cancelled" });
   });
 
   test(`${quoteType} requote increments the internal revision and resets ten-minute expiry`, async () => {

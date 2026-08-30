@@ -31,6 +31,22 @@ import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import OverrunExtendCard from "./overrun-extend-card";
 import ExtraWorkStatus from "@/components/booking/extra-work-status";
 import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
+import { BrakeAxleDialog } from "@/components/brake-axle-dialog";
+import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
+import type { AxlePosition } from "@/convex/lib/brakeScope";
+
+/** Brake-pad / rotor replacement needs an axle scope before it's added mid-job
+ *  — the same services deriveTierInspectionScope requires an axle for. Matched
+ *  on the resolved name so the axle prompt fires iff the work is axle-scoped. */
+function isBrakeAxleFinding(f: {
+  serviceName: string | null;
+  label: string;
+}): boolean {
+  const name = f.serviceName ?? f.label ?? "";
+  if (!name) return false;
+  const flags = getBookingServiceFlags([name]);
+  return flags.hasBrakePadReplacement || flags.hasRotorReplacement;
+}
 
 type DraftPhoto = {
   id: string;
@@ -129,6 +145,12 @@ export function NowWorkingPane({
   // catalog service, which carries its own taxonomy and adds in one tap.
   const [pendingFinding, setPendingFinding] =
     useState<UnaddressedFinding | null>(null);
+  // A brake/rotor finding waiting on its axle before it's added — brake work
+  // needs a front/rear/both scope so the inspection grades the right corners.
+  const [pendingBrakeAxle, setPendingBrakeAxle] = useState<{
+    finding: UnaddressedFinding;
+    taxonomy: { systemTags: string[]; workType: string };
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   /* The "Flag issue" flow — the sheet and the mid-job scope dialog it opens — is
@@ -195,6 +217,9 @@ export function NowWorkingPane({
   const commitFinding = async (
     f: UnaddressedFinding,
     taxonomy: { systemTags: string[]; workType: string },
+    // Set for brake/rotor work — the axle its inspection scope needs. Server
+    // defaults it to "both" if absent so the add never dead-ends the inspection.
+    axle?: AxlePosition,
   ) => {
     setAddingFinding(f.key);
     try {
@@ -204,8 +229,10 @@ export function NowWorkingPane({
         complaint: f.reasons.join("; ") || undefined,
         systemTags: taxonomy.systemTags,
         workType: taxonomy.workType,
+        axle,
       });
       setPendingFinding(null);
+      setPendingBrakeAxle(null);
       setScopeOpen(true);
     } catch (err: unknown) {
       onToast?.(
@@ -659,10 +686,16 @@ export function NowWorkingPane({
                     // A catalog service carries its taxonomy — add it straight
                     // away. A freeform finding has none, so collect one first.
                     if (f.systemTags && f.workType) {
-                      void commitFinding(f, {
+                      const taxonomy = {
                         systemTags: f.systemTags,
                         workType: f.workType,
-                      });
+                      };
+                      // Brake/rotor work needs an axle scope first.
+                      if (isBrakeAxleFinding(f)) {
+                        setPendingBrakeAxle({ finding: f, taxonomy });
+                      } else {
+                        void commitFinding(f, taxonomy);
+                      }
                     } else {
                       setPendingFinding(f);
                     }
@@ -1078,7 +1111,37 @@ export function NowWorkingPane({
         busy={addingFinding !== null}
         onCancel={() => setPendingFinding(null)}
         onConfirm={(taxonomy) => {
-          if (pendingFinding) void commitFinding(pendingFinding, taxonomy);
+          const finding = pendingFinding;
+          if (!finding) return;
+          setPendingFinding(null);
+          // A freeform finding that reads as brake/rotor work needs an axle
+          // before it lands — hand it to the axle prompt. Otherwise commit.
+          if (isBrakeAxleFinding(finding)) {
+            setPendingBrakeAxle({ finding, taxonomy });
+          } else {
+            void commitFinding(finding, taxonomy);
+          }
+        }}
+      />
+
+      {/* Brake/rotor work adds an axle step so the inspection scopes the right
+          corners. Defaults to Front and rear — see BrakeAxleDialog. */}
+      <BrakeAxleDialog
+        open={pendingBrakeAxle !== null}
+        serviceName={
+          pendingBrakeAxle?.finding.serviceName ??
+          pendingBrakeAxle?.finding.label ??
+          ""
+        }
+        busy={addingFinding !== null}
+        onCancel={() => setPendingBrakeAxle(null)}
+        onConfirm={(axle) => {
+          if (pendingBrakeAxle)
+            void commitFinding(
+              pendingBrakeAxle.finding,
+              pendingBrakeAxle.taxonomy,
+              axle,
+            );
         }}
       />
     </div>

@@ -37,6 +37,9 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
+import { BrakeAxleDialog } from "@/components/brake-axle-dialog";
+import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
+import type { AxlePosition } from "@/convex/lib/brakeScope";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
@@ -192,6 +195,21 @@ type ResolvedSuggestion = {
   systemTags: string[] | null;
   workType: string | null;
 };
+
+/**
+ * Does adding this suggestion need an axle? True only for brake-pad and rotor
+ * replacement — the exact services deriveTierInspectionScope requires an axle
+ * scope for. Matched through getBookingServiceFlags on the resolved name so the
+ * picker fires iff the inspection would otherwise dead-end on a missing axle.
+ * Brake fluid flush and other brake-adjacent work are deliberately excluded:
+ * they carry no axle meaning and don't gate the inspection.
+ */
+function isBrakeAxleSuggestion(suggestion: ResolvedSuggestion): boolean {
+  const name = suggestion.serviceName ?? suggestion.label ?? "";
+  if (!name) return false;
+  const flags = getBookingServiceFlags([name]);
+  return flags.hasBrakePadReplacement || flags.hasRotorReplacement;
+}
 
 const prepareInspectionPhotoUploadRef = makeFunctionReference<"mutation">(
   "inspections:prepareInspectionPhotoUpload",
@@ -1047,6 +1065,15 @@ function MultiPointInspectionDialogBody({
   // Null for a catalog service, which adds in one tap. See handleAddToJob.
   const [pendingJobSuggestion, setPendingJobSuggestion] =
     useState<ResolvedSuggestion | null>(null);
+  // A brake/rotor line awaiting its axle before it's added. Brake work needs an
+  // axle scope (front/rear/both) so the inspection knows which corners to grade;
+  // a line added off-catalog carries no selected_service_options to read one
+  // from, so we collect it here. Holds the resolved taxonomy so the commit after
+  // the axle pick has everything it needs. See handleAddToJob.
+  const [pendingBrakeAxle, setPendingBrakeAxle] = useState<{
+    suggestion: ResolvedSuggestion;
+    taxonomy: { systemTags: string[]; workType: string };
+  } | null>(null);
   // The MID-JOB scope dialog (price it, say why, add parts, send for the
   // customer's confirmation) — the SAME flow the active-job overlay opens. Only
   // reachable while the job is running; a pre-job inspection sends its added
@@ -1643,6 +1670,10 @@ function MultiPointInspectionDialogBody({
   async function commitAddToJob(
     suggestion: ResolvedSuggestion,
     taxonomy: { systemTags: string[]; workType: string },
+    // Set for brake/rotor work, collected via BrakeAxleDialog. Threaded to the
+    // add so resolveBrakeScopeForBooking has an axle to read for the off-catalog
+    // line (it defaults to "both" server-side if somehow absent).
+    axle?: AxlePosition,
   ) {
     if (!bookingId || addingToJobKey) return;
     setAddingToJobKey(suggestion.key);
@@ -1668,9 +1699,11 @@ function MultiPointInspectionDialogBody({
         // so the scope dialog lists them instead of an empty "Add part for X".
         // Null for a freeform finding (nothing to look up).
         catalogServiceId: suggestion.serviceId ?? undefined,
+        axle,
       });
       setAddedToJob((prev) => ({ ...prev, [suggestion.key]: true }));
       setPendingJobSuggestion(null);
+      setPendingBrakeAxle(null);
       setScopeSubmittedNote(null);
       // Staged only — NO auto-send. The line now shows in "Added to this job".
       // Pre-job: it goes out when the mechanic submits the inspection. Mid-job:
@@ -1691,10 +1724,18 @@ function MultiPointInspectionDialogBody({
     // A catalog service carries its own taxonomy (derived from the slug) — add
     // it in one tap. A freeform finding has none, so collect one via the picker.
     if (suggestion.systemTags && suggestion.workType) {
-      void commitAddToJob(suggestion, {
+      const taxonomy = {
         systemTags: suggestion.systemTags,
         workType: suggestion.workType,
-      });
+      };
+      // Brake pad / rotor replacement needs an axle scope so the inspection
+      // grades the right corners — collect it before committing. Everything
+      // else adds in one tap.
+      if (isBrakeAxleSuggestion(suggestion)) {
+        setPendingBrakeAxle({ suggestion, taxonomy });
+      } else {
+        void commitAddToJob(suggestion, taxonomy);
+      }
     } else {
       setPendingJobSuggestion(suggestion);
     }
@@ -2386,8 +2427,37 @@ function MultiPointInspectionDialogBody({
         busy={addingToJobKey !== null}
         onCancel={() => setPendingJobSuggestion(null)}
         onConfirm={(taxonomy) => {
-          if (pendingJobSuggestion)
-            void commitAddToJob(pendingJobSuggestion, taxonomy);
+          const suggestion = pendingJobSuggestion;
+          if (!suggestion) return;
+          setPendingJobSuggestion(null);
+          // A freeform finding that reads as brake/rotor work still needs an
+          // axle before it lands — hand it to the axle prompt. Otherwise commit.
+          if (isBrakeAxleSuggestion(suggestion)) {
+            setPendingBrakeAxle({ suggestion, taxonomy });
+          } else {
+            void commitAddToJob(suggestion, taxonomy);
+          }
+        }}
+      />
+
+      {/* Brake/rotor work adds an axle step before it lands, so the inspection
+          scopes the right corners. Defaults to Front and rear — see BrakeAxleDialog. */}
+      <BrakeAxleDialog
+        open={pendingBrakeAxle !== null}
+        serviceName={
+          pendingBrakeAxle?.suggestion.serviceName ??
+          pendingBrakeAxle?.suggestion.label ??
+          ""
+        }
+        busy={addingToJobKey !== null}
+        onCancel={() => setPendingBrakeAxle(null)}
+        onConfirm={(axle) => {
+          if (pendingBrakeAxle)
+            void commitAddToJob(
+              pendingBrakeAxle.suggestion,
+              pendingBrakeAxle.taxonomy,
+              axle,
+            );
         }}
       />
 

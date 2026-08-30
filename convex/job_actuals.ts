@@ -57,6 +57,12 @@ type SuggestedPart = {
   tire_brand?: string | null;
   tire_model?: string | null;
   tire_position?: string | null;
+  // Seeded from the shop's accepted tire/rotor QUOTE response rather than the
+  // catalog cascade. A quote-originated booking carries its parts on the
+  // *_quote_responses row, not priced_parts_snapshot, so these lines are the
+  // only prefill for it — the post-job parts step unions them in explicitly
+  // (they must survive even when other snapshot parts, e.g. brakes, exist).
+  from_quote?: boolean;
 };
 
 // Mirror of SHOP_DEMOTE_DELTA in shop_part_preferences.ts so the cascade
@@ -647,25 +653,40 @@ export const getPrefillData = query({
           .filter((q: any) => q.eq(q.field("superseded_at"), undefined))
           .first();
         if (acceptedQuote) {
-          const qty = acceptedQuote.quantity ?? 4;
-          const brandModel = [acceptedQuote.tire_brand, acceptedQuote.tire_model]
-            .filter(Boolean)
-            .join(" ");
-          suggestedParts.push({
-            part_name: brandModel
-              ? `Tires — ${brandModel} (x${qty})`
-              : `Tires (x${qty})`,
-            oem_number: tireOem(booking.tire_specs?.size),
-            // Per-unit cost + real quantity so the parts step (which bills
-            // cost × quantity) shows the true count instead of a single line.
-            cost: acceptedQuote.per_tire_price ?? 0,
-            quantity: qty,
-            service_id: sid,
-            is_tire: true,
-            tire_size: booking.tire_specs?.size ?? null,
-            tire_brand: acceptedQuote.tire_brand ?? null,
-            tire_model: acceptedQuote.tire_model ?? null,
-          });
+          const totalQty = acceptedQuote.quantity ?? 4;
+          const size = booking.tire_specs?.size ?? null;
+          const brand = acceptedQuote.tire_brand ?? null;
+          const model = acceptedQuote.tire_model ?? null;
+          const brandModel = [brand, model].filter(Boolean).join(" ");
+          // Split the quoted set across both axles so the axle-based tire editor
+          // opens pre-filled on Front AND Rear (single size → even split; the
+          // mechanic can adjust). A quote carries one size (tire_specs.size), so
+          // front/rear share it. Odd counts weight the front.
+          const frontQty = Math.ceil(totalQty / 2);
+          const rearQty = totalQty - frontQty;
+          for (const { position, axleQty } of [
+            { position: "front", axleQty: frontQty },
+            { position: "rear", axleQty: rearQty },
+          ]) {
+            if (axleQty <= 0) continue;
+            suggestedParts.push({
+              part_name: brandModel
+                ? `Tires — ${brandModel} (x${axleQty})`
+                : `Tires (x${axleQty})`,
+              oem_number: tireOem(size),
+              // Per-unit cost + real per-axle quantity so the parts step (which
+              // bills cost × quantity) shows the true count.
+              cost: acceptedQuote.per_tire_price ?? 0,
+              quantity: axleQty,
+              service_id: sid,
+              is_tire: true,
+              from_quote: true,
+              tire_size: size,
+              tire_brand: brand,
+              tire_model: model,
+              tire_position: position,
+            });
+          }
         } else if (booking.tire_specs) {
           const qty = booking.tire_specs.quantity ?? 4;
           suggestedParts.push({
@@ -677,6 +698,64 @@ export const getPrefillData = query({
             is_tire: true,
             tire_size: booking.tire_specs.size ?? null,
           });
+        }
+      }
+
+      // Rotor-replacement — the accepted rotor_quote_responses row carries the
+      // shop's rotor + pad brand / per-unit price / qty. Like tires, a quote-
+      // originated rotor booking has no priced_parts_snapshot to seed from, and
+      // the catalog-floor block above keys on slug "brake-rotors" — the quote
+      // flow attaches "rotor-replacement" (bookings.acceptRotorQuote), so it
+      // never matched. Seed the real quoted rotor/pad parts here instead.
+      if (
+        suggestedParts.length === before &&
+        (svc.slug === "rotor-replacement" || svc.slug === "rotor_replacement")
+      ) {
+        const acceptedQuote = await ctx.db
+          .query("rotor_quote_responses")
+          .withIndex("by_booking_id", (q: any) =>
+            q.eq("booking_id", booking._id),
+          )
+          .filter((q: any) => q.eq(q.field("superseded_at"), undefined))
+          .first();
+        if (acceptedQuote) {
+          const rotorQty = acceptedQuote.quantity ?? 2;
+          const rotorBrandModel = [
+            acceptedQuote.rotor_brand,
+            acceptedQuote.rotor_model,
+          ]
+            .filter(Boolean)
+            .join(" ");
+          // Axle-neutral name so the dialog's off-axle pruning (partNameAxle)
+          // never drops it — the quote gives a total count, not a per-axle split.
+          suggestedParts.push({
+            part_name: rotorBrandModel
+              ? `Rotors — ${rotorBrandModel} (x${rotorQty})`
+              : `Rotors (x${rotorQty})`,
+            oem_number: "",
+            cost: acceptedQuote.per_rotor_price ?? 0,
+            quantity: rotorQty,
+            service_id: sid,
+            from_quote: true,
+          });
+          // Pads are optional on a rotor quote (pads_included). Seed them only
+          // when the shop quoted them.
+          if (acceptedQuote.pad_price != null || acceptedQuote.pad_brand) {
+            const padQty = acceptedQuote.pad_quantity ?? 1;
+            const padName = [acceptedQuote.pad_brand, acceptedQuote.pad_type]
+              .filter(Boolean)
+              .join(" ");
+            suggestedParts.push({
+              part_name: padName
+                ? `Brake Pads — ${padName} (x${padQty})`
+                : `Brake Pads (x${padQty})`,
+              oem_number: "",
+              cost: acceptedQuote.pad_price ?? 0,
+              quantity: padQty,
+              service_id: sid,
+              from_quote: true,
+            });
+          }
         }
       }
     }

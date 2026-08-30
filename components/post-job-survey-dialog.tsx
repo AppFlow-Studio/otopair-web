@@ -1340,6 +1340,44 @@ function PostJobSurveyDialogBody({
     return changed ? next : rows;
   };
 
+  // Parts seeded from the shop's accepted tire/rotor QUOTE response
+  // (getPrefillData marks them `from_quote`). A quote-originated booking carries
+  // its parts on the *_quote_responses row, NOT priced_parts_snapshot, so these
+  // are its only prefill — and the initial seed prefers `quotedParts` (the
+  // snapshot) and only falls back to `suggestedParts` when it's empty. That drop
+  // is exactly why a tire/rotor quote showed an EMPTY parts step whenever the
+  // booking also had snapshot parts (e.g. brakes). Union them in explicitly.
+  const quotePartRows = useMemo<PartRowState[]>(
+    () =>
+      buildPartRows(
+        (prefillData?.suggestedParts ?? []).filter((p) => p.from_quote),
+      ),
+    [prefillData],
+  );
+  // Idempotent union, mirroring applyCustomJobParts: add each quote line unless
+  // it's already represented. Tires defer entirely to any tire rows already in
+  // the list (mechanic-entered, prejob-seeded, or a prior union); the generic
+  // rotor/pad lines dedupe by part name.
+  const applyQuoteParts = (rows: PartRowState[]): PartRowState[] => {
+    if (quotePartRows.length === 0) return rows;
+    const norm = (s?: string | null) => (s ?? "").trim().toLowerCase();
+    const next = [...rows];
+    const hasTire = next.some((r) => r.is_tire);
+    const nameSeen = new Set(next.map((r) => norm(r.part_name)).filter(Boolean));
+    let changed = false;
+    for (const qp of quotePartRows) {
+      if (qp.is_tire) {
+        if (hasTire) continue;
+      } else if (nameSeen.has(norm(qp.part_name))) {
+        continue;
+      }
+      next.push(qp);
+      if (!qp.is_tire) nameSeen.add(norm(qp.part_name));
+      changed = true;
+    }
+    return changed ? next : rows;
+  };
+
   // Hard guard: never offer a brake axle the customer didn't book. Even if the
   // prefill (or a stale snapshot) carries an off-axle part, prune it from the
   // initial seed once the booking's scope resolves. Runs once, before any
@@ -1387,14 +1425,14 @@ function PostJobSurveyDialogBody({
     }
     if (!quotedParts || quotedParts.length === 0) return;
     if (readOnlyBillingMode) {
-      // Re-apply extra-work parts every mirror so a quote refresh can't drop
-      // them (they're deduped against the quote, so no double-count).
-      setParts(applyCustomJobParts(buildPartRows(quotedParts)));
+      // Re-apply extra-work + quote-seeded parts every mirror so a quote refresh
+      // can't drop them (both are deduped, so no double-count).
+      setParts(applyQuoteParts(applyCustomJobParts(buildPartRows(quotedParts))));
       return;
     }
     if (seededPartsForOpenRef.current) return;
     seededPartsForOpenRef.current = true;
-    setParts(applyCustomJobParts(buildPartRows(quotedParts)));
+    setParts(applyQuoteParts(applyCustomJobParts(buildPartRows(quotedParts))));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, quotedParts, readOnlyBillingMode, lockBilling, cycle]);
   // custom_jobs resolves a tick after mount and can arrive after the quote seed
@@ -1407,6 +1445,16 @@ function PostJobSurveyDialogBody({
     setParts((current) => applyCustomJobParts(current));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, customJobPartRows]);
+  // getPrefillData (and therefore the accepted-quote tire/rotor lines) resolves
+  // a tick after mount. Union them in whenever they load — the same idempotent
+  // pattern as the extra-work parts above — so a tire/rotor quote's parts show
+  // up even when the initial seed took the `quotedParts` (snapshot) branch.
+  useEffect(() => {
+    if (!open) return;
+    if (quotePartRows.length === 0) return;
+    setParts((current) => applyQuoteParts(current));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, quotePartRows]);
   // Seed the custom tire editor from the prejob inspection when tire
   // replacement is added mid-job — there's no quote to seed from, so pre-load
   // every axle the inspection recorded a size for. Runs once per open and only

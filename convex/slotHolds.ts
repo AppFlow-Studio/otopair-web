@@ -125,6 +125,16 @@ export const holdSlot = mutation({
           expires_at: expiresAt,
           end_time: endTime,
           held_by: quoteOwner?._id ?? h.held_by ?? args.held_by,
+          quote_type: args.quote_context?.quote_type,
+          quote_revision: args.quote_context?.revision ?? (args.quote_context ? 1 : undefined),
+          tire_quote_response_id:
+            args.quote_context?.quote_type === "tire"
+              ? args.quote_context.response_id
+              : undefined,
+          rotor_quote_response_id:
+            args.quote_context?.quote_type === "rotor"
+              ? args.quote_context.response_id
+              : undefined,
         });
         reusedId = h._id;
       } else {
@@ -148,6 +158,16 @@ export const holdSlot = mutation({
       expires_at: expiresAt,
       status: "active",
       created_at: now,
+      quote_type: args.quote_context?.quote_type,
+      quote_revision: args.quote_context?.revision ?? (args.quote_context ? 1 : undefined),
+      tire_quote_response_id:
+        args.quote_context?.quote_type === "tire"
+          ? args.quote_context.response_id
+          : undefined,
+      rotor_quote_response_id:
+        args.quote_context?.quote_type === "rotor"
+          ? args.quote_context.response_id
+          : undefined,
     });
     return { holdId, mechanicId, expiresAt };
   },
@@ -249,6 +269,9 @@ export async function resolveSlotHoldForConsume(
     date: string;
     startTime: string;
     heldBy?: any;
+    quoteType?: "tire" | "rotor";
+    quoteResponseId?: any;
+    quoteRevision?: number;
   },
 ): Promise<{
   pinnedMechanicId: any | null;
@@ -273,7 +296,16 @@ export async function resolveSlotHoldForConsume(
     hold.date === args.date &&
     hold.start_time === args.startTime;
   const owned = !args.heldBy || String(hold.held_by) === String(args.heldBy);
-  if (!valid || !owned) {
+  const quoteMatches =
+    !args.quoteType ||
+    (hold.quote_type === args.quoteType &&
+      hold.quote_revision === (args.quoteRevision ?? 1) &&
+      String(
+        args.quoteType === "tire"
+          ? hold.tire_quote_response_id
+          : hold.rotor_quote_response_id,
+      ) === String(args.quoteResponseId));
+  if (!valid || !owned || !quoteMatches) {
     return { pinnedMechanicId: null, consumeHoldId: null, excludeSessionId: undefined };
   }
   return {

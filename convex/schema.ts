@@ -2643,10 +2643,16 @@ export default defineSchema({
       v.literal("released"),
     ),
     created_at: v.number(),
+    quote_type: v.optional(v.union(v.literal("tire"), v.literal("rotor"))),
+    quote_revision: v.optional(v.number()),
+    tire_quote_response_id: v.optional(v.id("tire_quote_responses")),
+    rotor_quote_response_id: v.optional(v.id("rotor_quote_responses")),
   })
     .index("by_shop_and_date", ["shop_id", "date"]) // availability read
     .index("by_expiry", ["expires_at"]) // cron sweep
-    .index("by_session", ["session_id"]), // idempotency + getMyActiveHold
+    .index("by_session", ["session_id"])
+    .index("by_tire_quote_response", ["tire_quote_response_id"])
+    .index("by_rotor_quote_response", ["rotor_quote_response_id"]),
 
   // ===== BOOKINGS & PAYMENTS =====
 
@@ -2789,6 +2795,9 @@ export default defineSchema({
         ),
       })
     ),
+    // Customer-only presentation preference for an expired quote request.
+    // This intentionally does not change the booking or quote-response status.
+    quote_dismissed_at_ms: v.optional(v.number()),
     // Picked variants for services with has_options = true (e.g. brake pads
     // front-vs-rear). Tires keep using tire_specs above. One entry per
     // has_options service. option_label and option_type are snapshotted so
@@ -3199,6 +3208,9 @@ export default defineSchema({
     expires_at: v.optional(v.number()),
     /** Set when user accepts this quote (or another one). */
     superseded_at: v.optional(v.number()),
+    revision: v.optional(v.number()),
+    modified_at: v.optional(v.number()),
+    cancelled_at: v.optional(v.number()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_id", ["shop_id"])
@@ -3234,6 +3246,9 @@ export default defineSchema({
     created_at: v.number(),
     expires_at: v.optional(v.number()),
     superseded_at: v.optional(v.number()),
+    revision: v.optional(v.number()),
+    modified_at: v.optional(v.number()),
+    cancelled_at: v.optional(v.number()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_id", ["shop_id"])

@@ -11,6 +11,7 @@ import {
   type ScheduleBlockedSlot,
   type ScheduleBooking,
 } from "./schedule_overlap";
+import { isQuoteHoldActive } from "./quoteHoldOwnership";
 
 export const DEFAULT_AVAILABILITY_DAYS = 35;
 
@@ -205,8 +206,7 @@ async function getLiveQuoteHoldsForShopDate(
     if (excluded && String(response._id) === excluded) {
       continue;
     }
-    if (response.superseded_at != null) continue;
-    if (typeof response.expires_at === "number" && response.expires_at <= now) continue;
+    if (!isQuoteHoldActive(response, now)) continue;
     if (!response.mechanic_id) continue;
     if (response.availability?.date !== date) continue;
 

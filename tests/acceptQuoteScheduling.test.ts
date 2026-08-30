@@ -89,7 +89,12 @@ async function seedAcceptance(quoteType: "tire" | "rotor") {
       expires_at: now + 15 * 60 * 1000,
       status: "active",
       created_at: now,
-    });
+      quote_type: quoteType,
+      quote_revision: 1,
+      ...(quoteType === "tire"
+        ? { tire_quote_response_id: responseId }
+        : { rotor_quote_response_id: responseId }),
+    } as never);
     return {
       customerClerkId,
       otherClerkId,
@@ -120,12 +125,39 @@ test("a bare session id cannot bypass another customer's checkout hold", async (
         scheduled_date: "2026-06-01",
         scheduled_time: "09:00",
         session_id: seed.sessionId,
+        quote_revision: 1,
       } as never,
     ),
   ).rejects.toThrow("held by another customer");
 });
 
 for (const quoteType of ["tire", "rotor"] as const) {
+  test(`${quoteType} quote remains acceptable after quote expiry while Review & Pay holds its revision`, async () => {
+    const { t, seed } = await seedAcceptance(quoteType);
+    await t.run((ctx) =>
+      ctx.db.patch(seed.responseId, { expires_at: Date.now() - 1 }),
+    );
+    const customer = t.withIdentity(identityFor(seed.customerClerkId));
+    const args = {
+      booking_id: seed.bookingId,
+      response_id: seed.responseId,
+      scheduled_date: "2026-06-01",
+      scheduled_time: "09:00",
+      hold_id: seed.holdId,
+      session_id: seed.sessionId,
+      quote_revision: 1,
+    };
+
+    if (quoteType === "tire") {
+      await customer.mutation(api.bookings.acceptTireQuote, args as never);
+    } else {
+      await customer.mutation(api.bookings.acceptRotorQuote, args as never);
+    }
+
+    const booking = await t.run((ctx) => ctx.db.get(seed.bookingId));
+    expect(booking?.status).toBe("confirmed");
+  });
+
   test(`${quoteType} quote owner can acquire the quoted slot while another customer cannot`, async () => {
     const { t, seed } = await seedAcceptance(quoteType);
     await t.run(async (ctx) => ctx.db.delete(seed.holdId));
@@ -173,6 +205,7 @@ for (const quoteType of ["tire", "rotor"] as const) {
       scheduled_time: "09:00",
       hold_id: seed.holdId,
       session_id: seed.sessionId,
+      quote_revision: 1,
     };
 
     if (quoteType === "tire") {
@@ -200,6 +233,7 @@ for (const quoteType of ["tire", "rotor"] as const) {
       scheduled_time: "09:00",
       hold_id: seed.holdId,
       session_id: seed.sessionId,
+      quote_revision: 1,
     };
 
     await expect(

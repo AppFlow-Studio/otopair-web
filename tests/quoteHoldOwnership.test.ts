@@ -1,7 +1,10 @@
 import { expect, test } from "vitest";
 import type { Id } from "../convex/_generated/dataModel";
 
-import { resolveOwnedQuoteHoldExclusion } from "../convex/lib/quoteHoldOwnership";
+import {
+  getQuoteAvailability,
+  resolveOwnedQuoteHoldExclusion,
+} from "../convex/lib/quoteHoldOwnership";
 
 type Row = Record<string, unknown>;
 
@@ -77,5 +80,63 @@ test("another user cannot exclude the booking owner's quote hold", async () => {
       quote_type: "tire",
       response_id: "tire-response-1" as Id<"tire_quote_responses">,
     }),
+  ).resolves.toEqual({});
+});
+
+test("cancelled and modified quote revisions are unavailable without exposing revisions", () => {
+  const now = Date.now();
+
+  expect(
+    getQuoteAvailability(
+      {
+        created_at: now,
+        expires_at: now + 60_000,
+        cancelled_at: now,
+        revision: 1,
+      },
+      { expectedRevision: 1, now },
+    ),
+  ).toEqual({ available: false, reason: "cancelled" });
+
+  expect(
+    getQuoteAvailability(
+      {
+        created_at: now,
+        expires_at: now + 60_000,
+        revision: 2,
+      },
+      { expectedRevision: 1, now },
+    ),
+  ).toEqual({ available: false, reason: "modified" });
+});
+
+test("availability browsing can omit a stale quote exclusion without throwing", async () => {
+  const now = Date.now();
+  const ctx = makeCtx(
+    {
+      ...seed,
+      tire_quote_responses: [
+        {
+          _id: "tire-response-1",
+          booking_id: "booking-1",
+          created_at: now,
+          expires_at: now + 60_000,
+          revision: 2,
+        },
+      ],
+    },
+    "clerk-owner",
+  );
+
+  await expect(
+    resolveOwnedQuoteHoldExclusion(
+      ctx,
+      {
+        quote_type: "tire",
+        response_id: "tire-response-1" as Id<"tire_quote_responses">,
+        revision: 1,
+      },
+      { throwOnUnavailable: false },
+    ),
   ).resolves.toEqual({});
 });

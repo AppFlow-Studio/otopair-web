@@ -81,7 +81,11 @@ export const getByShopAndDate = query({
     quote_context: v.optional(quoteHoldContextValidator),
   },
   handler: async (ctx, args) => {
-    const quoteExclusion = await resolveOwnedQuoteHoldExclusion(ctx, args.quote_context);
+    const quoteExclusion = await resolveOwnedQuoteHoldExclusion(
+      ctx,
+      args.quote_context,
+      { throwOnUnavailable: false },
+    );
     return sortSlotsBySchedule(
       await listAvailableWindowsForShopDate(ctx, {
         shopId: args.shopId,
@@ -231,7 +235,11 @@ export const getAvailabilityByShopAndMonth = query({
     quote_context: v.optional(quoteHoldContextValidator),
   },
   handler: async (ctx, args) => {
-    const quoteExclusion = await resolveOwnedQuoteHoldExclusion(ctx, args.quote_context);
+    const quoteExclusion = await resolveOwnedQuoteHoldExclusion(
+      ctx,
+      args.quote_context,
+      { throwOnUnavailable: false },
+    );
     // `month` arrives 1-based from the client (1 = January). JS Date months are
     // 0-based, so subtract 1 for the first-of-month and use `month` as the
     // exclusive-next-month sentinel (day 0 = last day of the requested month).

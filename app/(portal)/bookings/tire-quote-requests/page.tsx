@@ -14,6 +14,7 @@ import type { CalendarEvent } from "@/app/(portal)/schedule/day-swim-lanes";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { formatHoursValue } from "@/lib/labor-units";
+import { shouldShowShopQuoteRequest } from "@/lib/quoteRequestVisibility";
 import {
   Select,
   SelectItem,
@@ -23,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { QuoteVehiclePanel, type QuoteSpecItem } from "@/components/quote/quote-vehicle-panel";
+import ConfirmationDialog from "@/components/confirmation-dialog";
 
 // Customer-facing tier vocabulary (from the tire-spec picker) is
 // premium / plus / standard, but the tire_brands catalog is keyed
@@ -170,6 +172,24 @@ type OpenRequest = {
     spec_label?: string | null;
     image_url?: string | null;
   } | null;
+  quote_status: "open" | "pending" | "expired" | "cancelled";
+  quote_response: null | {
+    _id: Id<"tire_quote_responses">;
+    mechanic_id?: Id<"mechanics">;
+    tire_brand: string;
+    tire_model?: string;
+    per_tire_price: number;
+    quantity: number;
+    labor_cost: number;
+    total: number;
+    availability: { date: string; time: string };
+    estimated_duration_minutes?: number;
+    created_at: number;
+    expires_at?: number;
+    cancelled_at?: number;
+  };
+  checkout_held: boolean;
+  checkout_hold_expires_at: number | null;
 };
 
 function formatVehicle(v: OpenRequest["vehicle"]): string {
@@ -193,6 +213,41 @@ function formatRelative(ts: number): string {
   return `${days}d ago`;
 }
 
+function QuoteStatusBadge({ status }: { status: OpenRequest["quote_status"] }) {
+  const label =
+    status === "pending"
+      ? "Pending Quote"
+      : status === "expired"
+        ? "Expired"
+        : status === "cancelled"
+          ? "Cancelled"
+          : "Open";
+  const tone =
+    status === "pending"
+      ? "bg-amber-50 text-amber-700"
+      : status === "expired"
+        ? "bg-muted text-muted-foreground"
+        : status === "cancelled"
+          ? "bg-destructive/10 text-destructive"
+          : "bg-primary/10 text-primary";
+  return <span className={`rounded-full px-2 py-1 text-xs font-medium ${tone}`}>{label}</span>;
+}
+
+function liveQuoteState(request: OpenRequest, now: number) {
+  const checkoutHeld =
+    request.checkout_held &&
+    request.checkout_hold_expires_at != null &&
+    request.checkout_hold_expires_at > now;
+  const expiresAt = request.quote_response
+    ? request.quote_response.expires_at ?? request.quote_response.created_at + 10 * 60_000
+    : null;
+  const status =
+    request.quote_status === "pending" && !checkoutHeld && expiresAt != null && expiresAt <= now
+      ? "expired"
+      : request.quote_status;
+  return { checkoutHeld, status };
+}
+
 /**
  * Body of the Tire Quote Requests page — exported separately so the
  * unified "Quotes" page at /bookings/quote-requests can render it as one
@@ -210,7 +265,33 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
 
   const [activeRequest, setActiveRequest] = useState<OpenRequest | null>(null);
   const [pendingRejectId, setPendingRejectId] = useState<string | null>(null);
+  const [cancelRequest, setCancelRequest] = useState<OpenRequest | null>(null);
+  const [holdNoticeOpen, setHoldNoticeOpen] = useState(false);
+  const [quoteClock, setQuoteClock] = useState(() => Date.now());
   const dismissQuoteRequest = useMutation(api.quote_request_dismissals.dismiss);
+  const cancelQuote = useMutation(api.tire_quote_responses.cancel);
+
+  useEffect(() => {
+    const nextBoundary = (requests ?? [])
+      .flatMap((request) => [
+        request.quote_response?.expires_at ??
+          (request.quote_response ? request.quote_response.created_at + 10 * 60_000 : null),
+        request.checkout_hold_expires_at,
+      ])
+      .filter((value): value is number => value != null && value > quoteClock)
+      .sort((a, b) => a - b)[0];
+    if (nextBoundary == null) return;
+    const timer = window.setTimeout(() => setQuoteClock(Date.now()), nextBoundary - Date.now() + 50);
+    return () => window.clearTimeout(timer);
+  }, [quoteClock, requests]);
+
+  const visibleRequests = useMemo(
+    () =>
+      (requests ?? []).filter((request) =>
+        shouldShowShopQuoteRequest(liveQuoteState(request, quoteClock).status),
+      ),
+    [quoteClock, requests],
+  );
 
   const handleReject = async (id: Id<"bookings">) => {
     if (!shopId) return;
@@ -222,14 +303,27 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
     }
   };
 
+  const handleCancelQuote = async () => {
+    if (!cancelRequest?.quote_response) return;
+    try {
+      await cancelQuote({ response_id: cancelRequest.quote_response._id });
+      setCancelRequest(null);
+    } catch (error) {
+      const data = (error as { data?: { code?: string } })?.data;
+      if (data?.code === "QUOTE_HELD") {
+        setCancelRequest(null);
+        setHoldNoticeOpen(true);
+      }
+    }
+  };
+
   return (
     <div className="space-y-6">
       {hideHeader ? null : (
         <div>
           <h1 className="text-2xl font-bold text-foreground">Tire Quote Requests</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Open requests from customers shopping for tires. Submit a quote
-            and the row disappears once the customer picks one.
+            Review open requests and track pending or cancelled quotes.
           </p>
         </div>
       )}
@@ -246,7 +340,7 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
         <div className="bg-card rounded-xl border border-border p-8 text-center text-muted-foreground">
           Loading requests…
         </div>
-      ) : requests.length === 0 ? (
+      ) : visibleRequests.length === 0 ? (
         <div className="bg-card rounded-xl border border-border p-12 text-center">
           <Wrench className="mx-auto h-10 w-10 text-muted-foreground/40" strokeWidth={1.5} />
           <p className="mt-3 text-sm font-medium text-foreground">No open tire quote requests</p>
@@ -265,11 +359,14 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Tier</th>
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Qty</th>
                 <th className="px-5 py-3 text-left font-medium text-muted-foreground">Submitted</th>
+                <th className="px-5 py-3 text-left font-medium text-muted-foreground">Status</th>
                 <th className="px-5 py-3" />
               </tr>
             </thead>
             <tbody>
-              {requests.map((r) => (
+              {visibleRequests.map((r) => {
+                const live = liveQuoteState(r, quoteClock);
+                return (
                 <tr key={r._id} className="border-b border-border last:border-b-0 hover:bg-muted/20">
                   <td className="px-5 py-4 text-foreground">{formatVehicle(r.vehicle)}</td>
                   <td className="px-5 py-4 text-foreground">{r.tire_specs?.size ?? "—"}</td>
@@ -283,39 +380,58 @@ export function TireQuoteRequestsContent({ hideHeader = false }: { hideHeader?: 
                   <td className="px-5 py-4 text-muted-foreground">
                     {formatRelative(r.submitted_at)}
                   </td>
+                  <td className="px-5 py-4"><QuoteStatusBadge status={live.status} /></td>
                   <td className="px-5 py-4 text-right">
                     <div className="inline-flex items-center gap-2">
-                      <button
-                        onClick={() => setActiveRequest(r)}
-                        className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
-                      >
-                        Make Quote
-                      </button>
-                      <button
-                        onClick={() => handleReject(r._id)}
-                        disabled={pendingRejectId === String(r._id)}
-                        className="inline-flex items-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
-                      >
-                        {pendingRejectId === String(r._id) ? "Rejecting…" : "Reject"}
-                      </button>
+                      {live.status === "open" ? (
+                        <>
+                          <button onClick={() => setActiveRequest(r)} className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90">Make Quote</button>
+                          <button onClick={() => handleReject(r._id)} disabled={pendingRejectId === String(r._id)} className="inline-flex items-center rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50">{pendingRejectId === String(r._id) ? "Rejecting…" : "Reject"}</button>
+                        </>
+                      ) : live.status === "pending" ? (
+                        <>
+                          <button onClick={() => setActiveRequest(r)} disabled={live.checkoutHeld} title={live.checkoutHeld ? "The customer has this quote held. Changes are unavailable." : undefined} className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">Requote</button>
+                          <button onClick={() => setCancelRequest(r)} disabled={live.checkoutHeld} title={live.checkoutHeld ? "The customer has this quote held. Changes are unavailable." : undefined} className="inline-flex items-center rounded-md border border-destructive/40 bg-background px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/5 disabled:cursor-not-allowed disabled:opacity-40">Cancel Quote</button>
+                        </>
+                      ) : null}
                     </div>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
       {activeRequest && shopId && (
-        <QuoteSubmissionDialog
+        <TireQuoteSubmissionDialog
           request={activeRequest}
           shopId={shopId}
           shopMechanics={context?.mechanics ?? []}
           shopHours={context?.hours ?? []}
           onClose={() => setActiveRequest(null)}
+          onHeld={() => {
+            setActiveRequest(null);
+            setHoldNoticeOpen(true);
+          }}
         />
       )}
+      <ConfirmationDialog
+        open={cancelRequest != null}
+        title="Cancel this quote?"
+        description="The customer will no longer be able to accept this shop's quote."
+        onClose={() => setCancelRequest(null)}
+        secondaryAction={{ label: "Keep quote", onAction: () => setCancelRequest(null) }}
+        primaryAction={{ label: "Cancel quote", onAction: () => void handleCancelQuote(), variant: "destructive" }}
+      />
+      <ConfirmationDialog
+        open={holdNoticeOpen}
+        title="Quote changes unavailable"
+        description="The customer now has this slot and quote held."
+        onClose={() => setHoldNoticeOpen(false)}
+        primaryAction={{ label: "Got it", onAction: () => setHoldNoticeOpen(false) }}
+      />
     </div>
   );
 }
@@ -343,20 +459,31 @@ function formatTimeLabel(hhmm: string): string {
   return `${hour}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
-function QuoteSubmissionDialog({
+export function TireQuoteSubmissionDialog({
   request,
   shopId,
   shopMechanics,
   shopHours,
   onClose,
+  onHeld,
 }: {
   request: OpenRequest;
   shopId: Id<"shops">;
   shopMechanics: Array<{ _id: Id<"mechanics">; name: string; imageUrl?: string | null }>;
   shopHours: Array<{ dayOfWeek: number; openTime: string; closeTime: string; isClosed: boolean }>;
   onClose: () => void;
+  onHeld?: () => void;
 }) {
   const submit = useMutation(api.tire_quote_responses.create);
+  const requote = useMutation(api.tire_quote_responses.requote);
+  const existing = request.quote_response;
+  const liveDetail = useQuery(
+    api.tire_quote_responses.getShopDetail,
+    existing ? { response_id: existing._id } : "skip",
+  );
+  useEffect(() => {
+    if (existing && liveDetail?.checkout_held) onHeld?.();
+  }, [existing, liveDetail?.checkout_held, onHeld]);
 
   // Curated, tier-filtered brand list: the mechanic only chooses from brands
   // that qualify for the tier the customer requested. "Other…" stays available
@@ -375,21 +502,22 @@ function QuoteSubmissionDialog({
   }, [tierBrands]);
   const brandsLoading = catalogTier != null && tierBrands === undefined;
 
-  const [durationMinutes, setDurationMinutes] = useState(30);
+  const [durationMinutes, setDurationMinutes] = useState(existing?.estimated_duration_minutes ?? 30);
 
-  const [tireBrand, setTireBrand] = useState("");
-  const [tireModel, setTireModel] = useState("");
-  const [perTirePrice, setPerTirePrice] = useState("");
-  const [laborCost, setLaborCost] = useState("");
-  const [availabilityDate, setAvailabilityDate] = useState(todayIso());
-  const [availabilityTime, setAvailabilityTime] = useState("");
-  const [mechanicId, setMechanicId] = useState<string>("");
+  const [tireBrand, setTireBrand] = useState(existing?.tire_brand ?? "");
+  const [tireModel, setTireModel] = useState(existing?.tire_model ?? "");
+  const [perTirePrice, setPerTirePrice] = useState(existing ? String(existing.per_tire_price) : "");
+  const [laborCost, setLaborCost] = useState(existing ? String(existing.labor_cost) : "");
+  const [availabilityDate, setAvailabilityDate] = useState(existing?.availability.date ?? todayIso());
+  const [availabilityTime, setAvailabilityTime] = useState(existing?.availability.time ?? "");
+  const [mechanicId, setMechanicId] = useState<string>(existing?.mechanic_id ? String(existing.mechanic_id) : "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Schedule lane state
-  const [laneDate, setLaneDate] = useState<Date | null>(null);
-  const initialLaneDateSelectedRef = useRef(false);
+  const [laneDate, setLaneDate] = useState<Date | null>(existing ? dateStringToDate(existing.availability.date) : null);
+  const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
+  const initialLaneDateSelectedRef = useRef(Boolean(existing));
 
   const laneDateStr = laneDate ? dateToString(laneDate) : todayIso();
   const initialLookaheadRange = useMemo(() => {
@@ -415,6 +543,21 @@ function QuoteSubmissionDialog({
     dateFrom: initialLookaheadRange.dateFrom,
     dateTo: initialLookaheadRange.dateTo,
   });
+
+  useEffect(() => {
+    const nextExpiry = (scheduleBookings ?? [])
+      .map((event) => event.expiresAt)
+      .filter((expiresAt: unknown): expiresAt is number =>
+        typeof expiresAt === "number" && expiresAt > nowTimestamp,
+      )
+      .sort((a: number, b: number) => a - b)[0];
+    if (nextExpiry == null) return;
+    const timeoutId = window.setTimeout(
+      () => setNowTimestamp(Date.now()),
+      Math.max(0, nextExpiry - Date.now()) + 50,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [scheduleBookings, nowTimestamp]);
 
   useEffect(() => {
     if (initialLaneDateSelectedRef.current) return;
@@ -445,27 +588,34 @@ function QuoteSubmissionDialog({
   ]);
 
   const laneEvents: CalendarEvent[] = useMemo(() => {
-    const bookingEvents: CalendarEvent[] = (scheduleBookings ?? []).map((b: any) => {
-      const [h, m] = b.scheduledTime.split(":").map(Number);
-      const endTime = getBookingEndTime(b.scheduledTime, b.estimatedMinutes);
-      const [eh, em] = endTime.split(":").map(Number);
-      const start = new Date(b.scheduledDate + "T00:00:00");
-      start.setHours(h, m, 0, 0);
-      const end = new Date(b.scheduledDate + "T00:00:00");
-      end.setHours(eh, em, 0, 0);
-      return {
-        id: b._id,
-        title: `${b.customerName} — ${(b.serviceNames ?? []).join(", ")}`,
-        start,
-        end,
-        resourceId: b.mechanicId ?? undefined,
-        type: "booking" as const,
-        status: b.status,
-        customerName: b.customerName,
-        mechanicName: b.mechanicName,
-        serviceNames: b.serviceNames,
-      };
-    });
+    const bookingEvents: CalendarEvent[] = (scheduleBookings ?? [])
+      .filter(
+        (b) =>
+          b.status !== "tentative_quote" ||
+          b.expiresAt == null ||
+          b.expiresAt > nowTimestamp,
+      )
+      .map((b: any) => {
+        const [h, m] = b.scheduledTime.split(":").map(Number);
+        const endTime = getBookingEndTime(b.scheduledTime, b.estimatedMinutes);
+        const [eh, em] = endTime.split(":").map(Number);
+        const start = new Date(b.scheduledDate + "T00:00:00");
+        start.setHours(h, m, 0, 0);
+        const end = new Date(b.scheduledDate + "T00:00:00");
+        end.setHours(eh, em, 0, 0);
+        return {
+          id: b._id,
+          title: `${b.customerName} — ${(b.serviceNames ?? []).join(", ")}`,
+          start,
+          end,
+          resourceId: b.mechanicId ?? undefined,
+          type: "booking" as const,
+          status: b.status,
+          customerName: b.customerName,
+          mechanicName: b.mechanicName,
+          serviceNames: b.serviceNames,
+        };
+      });
 
     const blockedEvents: CalendarEvent[] = (blockedSlots ?? []).map((s: any) => {
       const [sh, sm] = s.startTime.split(":").map(Number);
@@ -489,7 +639,7 @@ function QuoteSubmissionDialog({
     });
 
     return [...bookingEvents, ...blockedEvents];
-  }, [scheduleBookings, blockedSlots]);
+  }, [scheduleBookings, blockedSlots, nowTimestamp]);
 
   const laneDayHours = useMemo(() => {
     if (!laneDate) return null;
@@ -572,9 +722,7 @@ function QuoteSubmissionDialog({
     setSubmitting(true);
     setError(null);
     try {
-      await submit({
-        booking_id: request._id,
-        shop_id: shopId,
+      const quote = {
         tire_brand: tireBrand.trim(),
         tire_model: tireModel.trim() ? tireModel.trim() : undefined,
         per_tire_price: Number(perTirePrice),
@@ -583,10 +731,20 @@ function QuoteSubmissionDialog({
         total,
         availability: { date: availabilityDate, time: availabilityTime },
         estimated_duration_minutes: durationMinutes,
-        mechanic_id: mechanicId ? (mechanicId as Id<"mechanics">) : undefined,
-      });
+        mechanic_id: mechanicId as Id<"mechanics">,
+      };
+      if (existing) {
+        await requote({ response_id: existing._id, ...quote });
+      } else {
+        await submit({ booking_id: request._id, shop_id: shopId, ...quote });
+      }
       onClose();
     } catch (e) {
+      const data = (e as { data?: { code?: string } })?.data;
+      if (data?.code === "QUOTE_HELD") {
+        onHeld?.();
+        return;
+      }
       setError(e instanceof Error ? e.message : "Couldn't submit your quote. Please try again.");
     } finally {
       setSubmitting(false);
@@ -602,7 +760,9 @@ function QuoteSubmissionDialog({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
           <div>
-            <h3 className="text-base font-semibold text-foreground">Submit tire quote</h3>
+            <h3 className="text-base font-semibold text-foreground">
+              {existing ? "Requote tire quote" : "Submit tire quote"}
+            </h3>
             <p className="text-sm text-muted-foreground mt-0.5">
               {formatVehicle(request.vehicle)} · {request.tire_specs?.size ?? "—"} · qty {quantity}
             </p>
@@ -662,7 +822,7 @@ function QuoteSubmissionDialog({
                   events={laneEvents}
                   minTime={laneMinTime}
                   maxTime={laneMaxTime}
-                  nowTimestamp={Date.now()}
+                  nowTimestamp={nowTimestamp}
                   onSelectEvent={() => {}}
                   currentDate={laneDate}
                   draftBooking={
@@ -849,7 +1009,9 @@ function QuoteSubmissionDialog({
                 disabled={!canSubmit}
                 className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
-                {submitting ? "Submitting…" : "Submit quote"}
+                {submitting
+                  ? existing ? "Saving…" : "Submitting…"
+                  : existing ? "Save quote" : "Submit quote"}
               </button>
             </div>
           </div>

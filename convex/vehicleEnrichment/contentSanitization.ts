@@ -217,9 +217,15 @@ const OEM_PART_PATTERNS: Record<string, RegExp> = {
   // (N0138157 drain plug gasket, N 908 132 02). Rejected live 2026-07-10.
   // First alternation's suffix widened to two 1-3 char groups: wiper SKUs
   // like 17B 955 425 A 03C carry index letter + revision (audit Jul 11 2026).
-  volkswagen: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
-  audi: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
-  porsche: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|[GB][\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
+  // G-branch (chemical/fluid numbers) widened Aug 28 2026: the second group is
+  // ALPHANUMERIC in real VAG chemical SKUs — G 12E 050 M2 (G12evo coolant),
+  // G 013 A8J M1 — not just \d{3} (G 052 167 A2). A verifier-confirmed genuine
+  // coolant died at the write on exactly this (Atlas, G12E050M2). The digit
+  // lookahead keeps prose out: "GERMANY" fits the letter shape but has no
+  // digit, so it still rejects. B-branch stays digit-strict.
+  volkswagen: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|G(?=[\sA-Z0-9-]*\d)[\s-]?[A-Z0-9]{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|B[\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
+  audi: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|G(?=[\sA-Z0-9-]*\d)[\s-]?[A-Z0-9]{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|B[\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
+  porsche: /^(?:[0-9A-Z]{3}[\s-]?\d{3}[\s-]?\d{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|G(?=[\sA-Z0-9-]*\d)[\s-]?[A-Z0-9]{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|B[\s-]?\d{3}[\s-]?[A-Z0-9]{3}(?:[\s-]?[A-Z0-9]{1,3}){0,2}|N[\s-]?\d{3}[\s-]?\d{3}[\s-]?\d{1,3})$/i,
   // Subaru: various letter-digit combos (deliberately broad). The optional
   // dashed tail matters — Subaru's catalog prints 26296-AL03A and 15208-AA160,
   // and without it this pattern could not rescue its own make's numbers when

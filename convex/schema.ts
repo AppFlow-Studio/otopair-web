@@ -308,12 +308,16 @@ export default defineSchema({
     rotor_rear_min_thickness_mm: v.optional(v.number()),
     rotor_front_nominal_thickness_mm: v.optional(v.number()),
     rotor_rear_nominal_thickness_mm: v.optional(v.number()),
-    // Per-axle provenance for the MINIMUM — drives the "est." badge, the
-    // passport source tag and the classify() warn-cap. One of:
-    //   "oem_spec" | "oem_spec_flagged" | "mechanic_read" | "director_verified"
-    //   | "derived_from_nominal" | "default_fallback"
-    // "oem_spec_flagged" = sourced but sanity-flagged (delta-implausible or
-    // front<rear) — graded like an estimate (warn-capped), never as a clean spec.
+    // Per-axle provenance for the MINIMUM — drives the "est." badge and the
+    // passport source tag. One of:
+    //   "derived_15pct_wear" | "oem_spec" | "oem_spec_flagged" |
+    //   "mechanic_read" | "director_verified" | "derived_from_nominal" (legacy)
+    //   | "default_fallback"
+    // "derived_15pct_wear" is the STANDARD since Aug 2026: minimum = 85% of
+    // the OEM nominal (rotorSpecResource.deriveRotorMinMm — 15% wear threshold
+    // from mechanic interviews). It grades the inspection at full strength but
+    // is tagged "estimated" in the passport so it never reads as the
+    // manufacturer's printed figure. Minimums are no longer searched.
     rotor_front_min_quality: v.optional(v.string()),
     rotor_rear_min_quality: v.optional(v.string()),
     rotor_min_source_url: v.optional(v.string()),
@@ -1124,13 +1128,25 @@ export default defineSchema({
     // PART_FIELD_MAP subcategory of the role this product fills:
     // "engine_oil" | "coolant" | "atf_fluid" | "brake_fluid" | "gear_oil".
     fluid_kind: v.string(),
-    // OEM spec sheet the product satisfies, e.g. "MB 325.0", "MB 229.5" —
-    // matched against the engine row's spec strings (coolant_type, …).
+    // OEM spec/CERTIFICATION the product satisfies, e.g. "MB 325.0",
+    // "G 060 162". Alias syntax: segments split on "|" or "/" each match
+    // independently ("G 060 162|ZF LifeGuard 8|8HP"), so one row can carry a
+    // certification's every published name. Matched against the vehicle-side
+    // spec strings (engines.coolant_type, transmissions fluid type, …).
     spec: v.optional(v.string()),
     // Oil grade, e.g. "0W-40" — matched against engines.oil_viscosity.
     viscosity: v.optional(v.string()),
     oem_part_number: v.string(),
     name: v.string(),
+    // "oem" (default; the genuine bottle) | "aftermarket" (a supplier/OES
+    // bottle carrying the SAME certification — ZF, Fuchs, Pentosin). Policy
+    // Aug 2026 (mechanic feedback): certification is the identity; a $111/qt
+    // genuine Audi jug must never be presented when a cert-equivalent
+    // aftermarket bottle exists for far less. The resolver's fluid
+    // price-sanity rule keys on the stamped oem_parts.part_tier.
+    part_tier: v.optional(v.string()),
+    // Supplier brand for aftermarket rows ("ZF", "Fuchs"). Display + audit.
+    brand: v.optional(v.string()),
     package_size: v.optional(v.string()),
     provenance: v.string(),
     created_at: v.number(),
@@ -4191,6 +4207,89 @@ export default defineSchema({
     .index("by_key_and_time", ["api_key_id", "created_at"])
     .index("by_created_at", ["created_at"]),
 
+  // ── Otofacts Car Data API billing (spec: convex/CARDATA_BILLING_SPEC.md) ────
+  // One row per billing subject (Clerk user). The LIVE source of truth for what
+  // a self-serve key may do — dataApi.withApiKey resolves key → owner_user_id →
+  // this row on every request. Absent row = free tier (dataApiBilling.FREE_*).
+  api_entitlements: defineTable({
+    owner_user_id: v.id("users"),
+    plan: v.union(
+      v.literal("free"),
+      v.literal("pro"),
+      v.literal("scale"),
+      v.literal("enterprise"),
+    ),
+    status: v.string(), // mirrors Stripe subscription.status; active|trialing are entitled
+    scopes: v.array(
+      v.union(
+        v.literal("maintenance:read"),
+        v.literal("labor:read"),
+        v.literal("media:read"),
+        v.literal("enrich:write"),
+        v.literal("service_history:read"),
+      ),
+    ),
+    rate_limit_per_min: v.number(),
+    monthly_read_quota: v.number(),
+    enrich_credits_remaining: v.number(),
+    enrich_monthly_grant: v.number(),
+    metered_overage: v.boolean(),
+    spend_cap_cents: v.optional(v.number()), // undefined = no cap
+    overage_spent_cents_this_period: v.number(),
+    stripe_customer_id: v.optional(v.string()),
+    stripe_subscription_id: v.optional(v.string()),
+    stripe_price_lookup_key: v.optional(v.string()),
+    current_period_start: v.optional(v.number()),
+    current_period_end: v.optional(v.number()),
+    updated_at: v.number(),
+  })
+    .index("by_user", ["owner_user_id"])
+    .index("by_stripe_customer", ["stripe_customer_id"])
+    .index("by_stripe_subscription", ["stripe_subscription_id"]),
+
+  // Auditable enrich-credit ledger + the reserve→commit|refund state machine
+  // that guarantees a failed enrich is never charged (reconcileEnrichLedger).
+  enrich_ledger: defineTable({
+    owner_user_id: v.id("users"),
+    api_key_id: v.optional(v.id("api_keys")), // absent on grant/topup rows
+    vin: v.optional(v.string()),
+    config_key: v.optional(v.string()),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    stripe_customer_id: v.optional(v.string()),
+    kind: v.union(
+      v.literal("reserve"),
+      v.literal("commit"),
+      v.literal("refund"),
+      v.literal("grant"),
+      v.literal("topup"),
+    ),
+    credit_delta: v.number(), // -1 reserve credit · 0 overage · +N grant/refund
+    billable: v.boolean(), // true → metered overage, report to Stripe on commit
+    billed_cents: v.optional(v.number()),
+    settlement: v.union(
+      v.literal("pending"),
+      v.literal("committed"),
+      v.literal("refunded"),
+      v.literal("na"), // grant/topup rows
+    ),
+    stripe_meter_event_id: v.optional(v.string()),
+    created_at: v.number(),
+    settled_at: v.optional(v.number()),
+  })
+    .index("by_user", ["owner_user_id"])
+    .index("by_settlement", ["settlement"])
+    .index("by_vehicle_config", ["vehicle_config_id"]),
+
+  // Monthly read-quota counter. api_usage is a per-request log (doesn't scale to
+  // count 2M rows) — quota reads this rollup instead, bumped on each read.
+  api_usage_counters: defineTable({
+    owner_user_id: v.id("users"),
+    period_key: v.string(), // "YYYY-MM" — cheap, no cross-period scan
+    read_requests: v.number(),
+    enrich_scheduled: v.number(),
+    updated_at: v.number(),
+  }).index("by_user_period", ["owner_user_id", "period_key"]),
+
   // Thin review-queue materialization over the four real streams (decision
   // #4, Data spec §13): consensus needs_review, mechanic corrections,
   // report-wrong-data, survey disconfirmations. Rows are created ONLY by the
@@ -6181,7 +6280,14 @@ export default defineSchema({
   })
     .index("by_booking_and_cycle", ["booking_id", "cycle"])
     .index("by_decision", ["decision"])
-    .index("by_sla_expires_at", ["sla_expires_at_ms"]),
+    .index("by_sla_expires_at", ["sla_expires_at_ms"])
+    // Reconcile the amount_capturable_updated webhook by PI without scanning
+    // the whole table. Second field lets the query take the newest cycle for a
+    // PI via `.order("desc").first()` (submitted_at_ms == submit/creation time).
+    .index("by_stripe_payment_intent_id", [
+      "stripe_payment_intent_id",
+      "submitted_at_ms",
+    ]),
 
   // ─────────────────────────────────────────────────────────────────────
   // Pre-Job Approval — customer recourse channel. Filed within 14 days of

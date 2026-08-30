@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuoteVehiclePanel, type QuoteSpecItem } from "@/components/quote/quote-vehicle-panel";
 
 // Rotor brands the shop can pick from. "Other…" lets them type free text.
 // Curated against the common OEM + aftermarket suppliers; the customer's
@@ -176,7 +177,14 @@ type OpenRequest = {
   rotor_specs?: RotorSpecs;
   vin: string;
   submitted_at: number;
-  vehicle: { year: number | null; make: string | null; model: string | null } | null;
+  vehicle: {
+    year: number | null;
+    make: string | null;
+    model: string | null;
+    trim?: string | null;
+    spec_label?: string | null;
+    image_url?: string | null;
+  } | null;
 };
 
 function formatVehicle(v: OpenRequest["vehicle"]): string {
@@ -410,6 +418,23 @@ function QuoteSubmissionDialog({
   const requestedPadType = request.rotor_specs?.pad_type;
   const rotorQuantity = rotorQuantityForAxle(request.rotor_specs?.axle);
   const isCarbonCeramic = request.rotor_specs?.brake_system_type === "carbon_ceramic";
+
+  // Pinned reference the mechanic quotes against — the brake spec they source
+  // rotors/pads for, folded into the vehicle panel so it stays visible.
+  const rotorSpecItems: QuoteSpecItem[] = useMemo(() => {
+    const specs = request.rotor_specs;
+    const items: QuoteSpecItem[] = [
+      { label: "Brake system", value: formatBrakeSystem(specs?.brake_system_type) },
+      { label: "Axle", value: `${formatAxle(specs?.axle)} · ${rotorQuantity} rotors` },
+      {
+        label: "Pads",
+        value: includePads
+          ? `Included${requestedPadType ? ` · ${formatPadType(requestedPadType)}` : ""}`
+          : "Not requested",
+      },
+    ];
+    return items;
+  }, [request.rotor_specs, rotorQuantity, includePads, requestedPadType]);
 
   // Rotor jobs are heavier than tire swaps — default to 60 min, give 45/60/90
   // presets (both axles can easily run 90 min). Carbon-ceramic + pads tilts
@@ -754,31 +779,13 @@ function QuoteSubmissionDialog({
             </p>
           </div>
 
-          <div className="w-80 shrink-0 flex flex-col overflow-y-auto">
-            <div className="p-5 space-y-4 flex-1">
-              <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs space-y-1">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Brake system</span>
-                  <span className="font-medium text-foreground">
-                    {formatBrakeSystem(request.rotor_specs?.brake_system_type)}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Axle</span>
-                  <span className="font-medium text-foreground">
-                    {formatAxle(request.rotor_specs?.axle)} · {rotorQuantity} rotors
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Pads</span>
-                  <span className="font-medium text-foreground">
-                    {includePads
-                      ? `Included${requestedPadType ? ` · ${formatPadType(requestedPadType)}` : ""}`
-                      : "Not requested"}
-                  </span>
-                </div>
-              </div>
-
+          <div className="w-80 shrink-0 flex flex-col min-h-0">
+            <QuoteVehiclePanel
+              vehicle={request.vehicle}
+              vin={request.vin}
+              specItems={rotorSpecItems}
+            />
+            <div className="p-5 space-y-4 flex-1 overflow-y-auto">
               <Field label="Rotor brand" required>
                 <BrandSelect brands={ROTOR_BRANDS} value={rotorBrand} onChange={setRotorBrand} />
               </Field>

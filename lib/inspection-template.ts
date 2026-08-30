@@ -251,16 +251,20 @@ export function classifyInspectionMeasure(
   field: Extract<InspectionField, { type: "measure" }>,
   measures: Record<string, string | undefined>,
   select: Record<string, string | number | undefined>,
+  /** Resolved rotor minimum for THIS corner (from effectiveRotorRef). Used only
+   *  for rotor fields; when omitted the field's static ref is used. */
+  rotorRefOverride?: number | null,
 ): ClassifyResult {
   const raw = measures[field.key];
   if (field.classify !== "rotor") {
     return classify(field.classify, raw, field.ref);
   }
+  const ref = rotorRefOverride != null ? rotorRefOverride : field.ref;
   const entered = parseFloat(String(raw ?? ""));
-  if (!Number.isFinite(entered)) return classify("rotor", raw, field.ref);
+  if (!Number.isFinite(entered)) return classify("rotor", raw, ref);
   const unit: RotorUnit = select.rotor_unit === "in" ? "in" : "mm";
   const millimeters = rotorValueToMicrometers(entered, unit) / 1000;
-  return classify("rotor", millimeters, field.ref);
+  return classify("rotor", millimeters, ref);
 }
 
 // ---------------------------------------------------------------------------
@@ -464,6 +468,37 @@ function cornerFields(opts: {
 export const DEFAULT_FRONT_ROTOR_MIN = 23.0;
 export const DEFAULT_REAR_ROTOR_MIN = 8.0;
 
+/**
+ * Per-axle rotor minimum thickness (mm) for a specific vehicle — the
+ * enrichment-derived replace-at figure (nominal × 0.85, the 15%-wear
+ * threshold). Either axle may be null when enrichment couldn't source a
+ * nominal; grading then falls back to the static default baked into the field.
+ * See convex/vehicleEnrichment/utils/rotorSpecResource.deriveRotorMinMm.
+ */
+export type RotorMinByAxle = {
+  front?: number | null;
+  rear?: number | null;
+};
+
+/**
+ * The rotor minimum the inspection should grade a corner against: the
+ * per-vehicle enrichment minimum for that axle when known, otherwise the
+ * field's static fallback (DEFAULT_FRONT/REAR_ROTOR_MIN). Front corners read
+ * the front-axle minimum, rear corners the rear.
+ */
+export function effectiveRotorRef(
+  zoneId: ZoneId,
+  fieldRef: number | null | undefined,
+  rotorMin?: RotorMinByAxle | null,
+): number | null {
+  const fallback = typeof fieldRef === "number" ? fieldRef : null;
+  const isFront = zoneId === "FL" || zoneId === "FR";
+  const perVehicle = isFront ? rotorMin?.front : rotorMin?.rear;
+  return typeof perVehicle === "number" && Number.isFinite(perVehicle)
+    ? perVehicle
+    : fallback;
+}
+
 export const INSPECTION_NAV_ZONE_IDS: Exclude<ZoneId, "OWNER">[] = [
   "FL",
   "FR",
@@ -651,6 +686,62 @@ export type InspectionState = {
   template_version: string;
   zones: Partial<Record<ZoneId, ZoneState>>;
 };
+
+// ---------------------------------------------------------------------------
+// NYS state-inspection safety items
+// ---------------------------------------------------------------------------
+// Some inspection fields are state-mandated safety items: a red (non-functional)
+// reading is an *automatic* NYS inspection failure, and the item is mandatory —
+// the mechanic can't mark it "unavailable" to skip it. A failed item also drives
+// the two-stage repair flow (diagnose before a replacement can be approved).
+//
+// Locked Aug 2026 (parking-lot item): horn. A non-functional horn fails the
+// state inspection; a 15–20 min diagnostic (fuse / clock spring / horn unit)
+// must clear before a horn replacement can be approved. Extend this list as
+// more items are locked.
+export const NYS_SAFETY_FIELDS: ReadonlyArray<{ zoneId: ZoneId; fieldKey: string }> = [
+  { zoneId: "FRT", fieldKey: "horn" },
+];
+
+export function isNysSafetyField(zoneId: ZoneId, fieldKey: string): boolean {
+  return NYS_SAFETY_FIELDS.some(
+    (f) => f.zoneId === zoneId && f.fieldKey === fieldKey,
+  );
+}
+
+/**
+ * NYS safety items are mandatory — they can never be marked
+ * unavailable/skipped. Everything else stays skippable as before.
+ */
+export function canMarkFieldUnavailable(zoneId: ZoneId, fieldKey: string): boolean {
+  return !isNysSafetyField(zoneId, fieldKey);
+}
+
+/**
+ * NYS state-inspection failures currently present in the inspection: safety
+ * items read as red (non-functional). Drives the "automatic inspection
+ * failure" banner and the diagnostic-first repair flow. Empty array = the
+ * safety items inspected so far all pass.
+ */
+export function deriveStateInspectionFailures(
+  state: InspectionState,
+): Array<{ zoneId: ZoneId; fieldKey: string; label: string }> {
+  const out: Array<{ zoneId: ZoneId; fieldKey: string; label: string }> = [];
+  for (const { zoneId, fieldKey } of NYS_SAFETY_FIELDS) {
+    const zone = state.zones[zoneId];
+    if (!zone) continue;
+    // Mandatory items can't be marked unavailable, but guard against legacy
+    // data that has a status set anyway.
+    if (zone.statuses[fieldKey]) continue;
+    if (zone.tri[fieldKey] === "r") {
+      const field = INSPECTION_ZONES_BY_ID[zoneId]?.fields.find(
+        (f) => f.key === fieldKey,
+      );
+      out.push({ zoneId, fieldKey, label: field?.label ?? fieldKey });
+    }
+  }
+  return out;
+}
 
 export function emptyZoneState(): ZoneState {
   return {
@@ -1288,7 +1379,7 @@ export type Findings = { attention: Finding[]; monitor: Finding[] };
 
 export function gatherFindings(
   state: InspectionState,
-  opts?: { onlyCompletedZones?: boolean },
+  opts?: { onlyCompletedZones?: boolean; rotorMin?: RotorMinByAxle | null },
 ): Findings {
   const attention: Finding[] = [];
   const monitor: Finding[] = [];
@@ -1306,7 +1397,11 @@ export function gatherFindings(
         if (s === "r") attention.push({ label: field.label, zone: zone.label });
         else if (s === "y") monitor.push({ label: field.label, zone: zone.label });
       } else if (field.type === "measure" && field.classify) {
-        const res = classifyInspectionMeasure(field, zs.measures, zs.select);
+        const rotorRef =
+          field.classify === "rotor"
+            ? effectiveRotorRef(zone.id, field.ref, opts?.rotorMin)
+            : undefined;
+        const res = classifyInspectionMeasure(field, zs.measures, zs.select, rotorRef);
         if (res.lvl === "bad")
           attention.push({ label: `${field.label} · ${res.txt}`, zone: zone.label });
         else if (res.lvl === "warn")
@@ -1359,6 +1454,7 @@ function minDefined(a: number | null, b: number | null): number | null {
 function deriveRotorCondition(
   state: InspectionState,
   context?: ZoneCompletionContext,
+  rotorMin?: RotorMinByAxle | null,
 ): RotorCondition | null {
   const corners: ZoneId[] = ["FL", "FR", "RL", "RR"];
   let worst: RotorCondition | null = null;
@@ -1383,7 +1479,12 @@ function deriveRotorCondition(
     let rotorInspected = false;
     if (rotorField && rotorField.type === "measure" && !zs.statuses.rotor) {
       rotorInspected = (zs.measures.rotor ?? "").trim() !== "";
-      const res = classifyInspectionMeasure(rotorField, zs.measures, zs.select);
+      const res = classifyInspectionMeasure(
+        rotorField,
+        zs.measures,
+        zs.select,
+        effectiveRotorRef(id, rotorField.ref, rotorMin),
+      );
       if (res.lvl === "bad") bump("needs_attention");
     }
     const desc = zs.statuses.desc ? [] : (zs.descriptors["desc"] ?? []);
@@ -1403,6 +1504,9 @@ export type DerivePrejobOptions = {
   flaggedVehicleSpecs?: boolean;
   nextMechanicTip?: string | null;
   completionContext?: ZoneCompletionContext;
+  /** Per-vehicle rotor minimums so the derived rotor_condition grades against
+   *  the enrichment figure, not the static fallback. */
+  rotorMin?: RotorMinByAxle | null;
 };
 
 export function derivePrejobFromInspection(
@@ -1595,7 +1699,7 @@ export function derivePrejobFromInspection(
             front_pad_mm: frontPad,
             rear_pad_mm: rearPad,
             // Unavailable visual results stay unknown rather than becoming green.
-            rotor_condition: deriveRotorCondition(state, opts.completionContext),
+            rotor_condition: deriveRotorCondition(state, opts.completionContext, opts.rotorMin),
             rotor_thickness: Object.keys(rotorThickness).length
               ? rotorThickness
               : null,
@@ -1717,6 +1821,7 @@ function measuresAcrossCorners(
   state: InspectionState,
   key: string,
   onlyDone = false,
+  rotorMin?: RotorMinByAxle | null,
 ): { values: number[]; worst: GradeLevel; min: number | null; ref?: number | null } {
   const corners: ZoneId[] = ["FL", "FR", "RL", "RR"];
   const rank: Record<GradeLevel, number> = { none: 0, ok: 1, warn: 2, bad: 3 };
@@ -1744,7 +1849,11 @@ function measuresAcrossCorners(
         : entered;
     values.push(value);
     min = min == null ? value : Math.min(min, value);
-    const res = classifyInspectionMeasure(field, zs.measures, zs.select);
+    const rotorRef =
+      field.classify === "rotor"
+        ? effectiveRotorRef(id, field.ref, rotorMin)
+        : undefined;
+    const res = classifyInspectionMeasure(field, zs.measures, zs.select, rotorRef);
     if (rank[res.lvl] > rank[worst]) worst = res.lvl;
   }
   return { values, worst, min };
@@ -1786,10 +1895,11 @@ const URGENCY_RANK: Record<SuggestedRecUrgency, number> = {
  */
 export function deriveSuggestedRecommendations(
   state: InspectionState,
-  opts?: { onlyCompletedZones?: boolean },
+  opts?: { onlyCompletedZones?: boolean; rotorMin?: RotorMinByAxle | null },
 ): SuggestedRecommendation[] {
   const raw: RawSuggestion[] = [];
   const onlyDone = !!opts?.onlyCompletedZones;
+  const rotorMin = opts?.rotorMin ?? null;
   const gradeUrgency = (lvl: GradeLevel): SuggestedRecUrgency | null =>
     lvl === "bad" ? "soon" : lvl === "warn" ? "within_3_months" : null;
   const triUrgency = (v: TriValue | undefined): SuggestedRecUrgency | null =>
@@ -1818,7 +1928,7 @@ export function deriveSuggestedRecommendations(
     });
   }
 
-  const rotor = measuresAcrossCorners(state, "rotor", onlyDone);
+  const rotor = measuresAcrossCorners(state, "rotor", onlyDone, rotorMin);
   const rotorUrg = gradeUrgency(rotor.worst);
   if (rotorUrg) {
     raw.push({
@@ -2069,13 +2179,30 @@ export function deriveSuggestedRecommendations(
       { key: "lamp", label: "Headlight / Hazard / Tail Light Repair" },
       { key: "glass", label: "Windshield Repair" },
       { key: "wipe", label: "Wiper Blade Replacement" },
-      { key: "horn", label: "Horn Repair" },
     ];
     for (const f of frtFields) {
       const urg = frt.statuses[f.key] ? null : triUrgency(frt.tri[f.key]);
       if (urg) {
         raw.push({ groupKey: f.key, match: [], label: f.label, urgency: urg, reason: `${f.label} flagged on eye-check` });
       }
+    }
+    // Horn is an NYS safety item on a two-stage repair flow (locked Aug 2026):
+    // a non-functional horn is an automatic state-inspection failure, and a
+    // 15–20 min diagnostic (fuse / clock spring / horn unit) must clear before
+    // a replacement service can be approved. So the recommendation is always
+    // the diagnostic — never a direct horn swap.
+    const hornTri = frt.statuses.horn ? undefined : frt.tri.horn;
+    if (hornTri === "r" || hornTri === "y") {
+      raw.push({
+        groupKey: "horn",
+        match: [],
+        label: "Horn Diagnostic",
+        urgency: hornTri === "r" ? "soon" : "within_3_months",
+        reason:
+          hornTri === "r"
+            ? "Non-functional horn — automatic NYS inspection failure. 15–20 min diagnostic (fuse / clock spring / horn unit) required before a replacement service can be approved."
+            : "Intermittent horn — 15–20 min diagnostic (fuse / clock spring / horn unit) before any replacement.",
+      });
     }
   }
 
@@ -2261,7 +2388,10 @@ export function specPrefillFromPassport(
   return out;
 }
 
-export function formatZonesForPdf(storedZones: StoredZone[]): PdfZone[] {
+export function formatZonesForPdf(
+  storedZones: StoredZone[],
+  opts?: { rotorMin?: RotorMinByAxle | null },
+): PdfZone[] {
   const byId = new Map(storedZones.map((z) => [z.zone_id, z]));
   const out: PdfZone[] = [];
 
@@ -2285,10 +2415,15 @@ export function formatZonesForPdf(storedZones: StoredZone[]): PdfZone[] {
       if (field.type === "measure") {
         const raw = stored.measures?.[field.key];
         if (raw == null || String(raw).trim() === "") continue;
+        const rotorRef =
+          field.classify === "rotor"
+            ? effectiveRotorRef(zone.id, field.ref, opts?.rotorMin)
+            : undefined;
         const res = classifyInspectionMeasure(
           field,
           stored.measures ?? {},
           stored.select ?? {},
+          rotorRef,
         );
         const unit =
           field.classify === "rotor"

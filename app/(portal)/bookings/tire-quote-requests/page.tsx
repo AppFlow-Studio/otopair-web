@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { QuoteVehiclePanel, type QuoteSpecItem } from "@/components/quote/quote-vehicle-panel";
 
 // Customer-facing tier vocabulary (from the tire-spec picker) is
 // premium / plus / standard, but the tire_brands catalog is keyed
@@ -161,13 +162,24 @@ type OpenRequest = {
   };
   vin: string;
   submitted_at: number;
-  vehicle: { year: number | null; make: string | null; model: string | null } | null;
+  vehicle: {
+    year: number | null;
+    make: string | null;
+    model: string | null;
+    trim?: string | null;
+    spec_label?: string | null;
+    image_url?: string | null;
+  } | null;
 };
 
 function formatVehicle(v: OpenRequest["vehicle"]): string {
   if (!v) return "Unknown vehicle";
   const parts = [v.year, v.make, v.model].filter(Boolean);
   return parts.length ? parts.join(" ") : "Unknown vehicle";
+}
+
+function capitalize(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
 }
 
 function formatRelative(ts: number): string {
@@ -511,6 +523,18 @@ function QuoteSubmissionDialog({
 
   const quantity = request.tire_specs?.quantity ?? 0;
 
+  // Pinned reference the mechanic quotes against — tire size is the key they
+  // paste into their supplier lookup, so it's copyable.
+  const tireSpecItems: QuoteSpecItem[] = useMemo(() => {
+    const specs = request.tire_specs;
+    const items: QuoteSpecItem[] = [];
+    if (specs?.size) items.push({ label: "Tire size", value: specs.size, copyable: true });
+    items.push({ label: "Quantity", value: String(quantity) });
+    if (specs?.type) items.push({ label: "Type", value: capitalize(specs.type) });
+    if (specs?.tier) items.push({ label: "Tier", value: capitalize(specs.tier) });
+    return items;
+  }, [request.tire_specs, quantity]);
+
   const availabilityDateTime = useMemo(() => {
     if (!availabilityDate || !availabilityTime) return null;
     const dt = new Date(`${availabilityDate}T${availabilityTime}`);
@@ -670,8 +694,13 @@ function QuoteSubmissionDialog({
           </div>
 
           {/* Right: quote form */}
-          <div className="w-80 shrink-0 flex flex-col overflow-y-auto">
-            <div className="p-5 space-y-4 flex-1">
+          <div className="w-80 shrink-0 flex flex-col min-h-0">
+            <QuoteVehiclePanel
+              vehicle={request.vehicle}
+              vin={request.vin}
+              specItems={tireSpecItems}
+            />
+            <div className="p-5 space-y-4 flex-1 overflow-y-auto">
               <Field label="Tire brand" required>
                 {catalogTier ? (
                   <p className="mb-1.5 text-[11px] text-muted-foreground">

@@ -11,6 +11,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { assertMechanicAvailableForWindow } from "./lib/timeSlotAvailability";
+import { notifyCustomerQuoteReceived } from "./lib/quoteNotifications";
 
 // ============================================================================
 // CREATE — called by the website when a shop owner submits a quote
@@ -97,6 +98,14 @@ export const create = mutation({
         updated_at: now,
       });
     }
+
+    // Notify the customer (in-app feed + push) that a shop just quoted.
+    await notifyCustomerQuoteReceived(ctx, {
+      booking,
+      shopId: args.shop_id,
+      kind: "tire",
+      total: args.total,
+    });
 
     return responseId;
   },

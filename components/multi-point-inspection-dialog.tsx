@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -56,12 +58,15 @@ import {
   defaultZoneState,
   derivePrejobFromInspection,
   deriveSuggestedRecommendations,
+  effectiveRotorRef,
   gatherFindings,
   getDirtyIncompleteZones,
   inspectionSlugTaxonomy,
   INSPECTION_NAV_ZONE_IDS,
   deriveTierInspectionScope,
   isBrakeDetailFieldRelevant,
+  canMarkFieldUnavailable,
+  isNysSafetyField,
   isFieldApplicableToZone,
   isFieldRequiredForZone,
   isSpecPrefillField,
@@ -85,6 +90,7 @@ import {
   type FieldUnavailableStatus,
   type InspectionField,
   type InspectionState,
+  type RotorMinByAxle,
   type SpecPrefillEntry,
   type TriValue,
   type WarningLightEntry,
@@ -135,6 +141,12 @@ import {
   servicesForSystems,
   type AffectedSystem,
 } from "@/lib/vehicle-mod-systems";
+
+// Per-vehicle rotor minimums (enrichment-derived) provided once at the dialog
+// root so the deeply-nested MeasureField can grade + label each corner's rotor
+// against THIS car's replace-at figure without prop-drilling. Null ⇒ fall back
+// to the static default (effectiveRotorRef handles the fallback).
+const RotorMinContext = createContext<RotorMinByAxle | null>(null);
 
 type SubmitIntent = "close" | "start";
 type BookedTirePosition = "FL" | "FR" | "RL" | "RR";
@@ -454,6 +466,18 @@ function MultiPointInspectionDialogBody({
     passportData?.is_first_shop_visit ??
     (passportData ? specsIncomplete && !hasPriorVisits : true);
 
+  // Per-vehicle rotor minimums (enrichment-derived, nominal × 0.85) so every
+  // rotor grade — live chips, findings, recommendations, the prejob rollup —
+  // measures against THIS car's replace-at figure. Null axles fall back to the
+  // static default baked into the corner field (effectiveRotorRef).
+  const rotorMin = useMemo<RotorMinByAxle>(
+    () => ({
+      front: passportData?.passport.brakes.rotor_min_front_mm ?? null,
+      rear: passportData?.passport.brakes.rotor_min_rear_mm ?? null,
+    }),
+    [passportData],
+  );
+
   const savedInspection = useQuery(
     api.inspections.getByBooking,
     bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
@@ -565,6 +589,21 @@ function MultiPointInspectionDialogBody({
   // "PARTS" is a synthetic zone (like "OWNER") — never enters the diagram or
   // requiredZones; it hosts the mechanic parts fill-in gate.
   const [activeZone, setActiveZone] = useState<ZoneId | "PARTS" | null>(null);
+  // Completion-moment "copy this corner to its same-axle sibling" prompt. It
+  // surfaces at the diagram the instant a corner is marked complete (the locked
+  // rule: mirror a wheel only after its inspection is fully complete).
+  // `copyPromptCopied` flips the bar from its offer state to a brief "Copied ✓"
+  // confirmation that auto-clears after a beat — the mechanic stays on the diagram.
+  const [copyPromptFor, setCopyPromptFor] = useState<CornerZoneId | null>(null);
+  const [copyPromptCopied, setCopyPromptCopied] = useState(false);
+  useEffect(() => {
+    if (!copyPromptCopied) return;
+    const timer = window.setTimeout(() => {
+      setCopyPromptFor(null);
+      setCopyPromptCopied(false);
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [copyPromptCopied]);
   const [hydrated, setHydrated] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [error, setError] = useState("");
@@ -946,8 +985,8 @@ function MultiPointInspectionDialogBody({
   // surfaces the moment its zone is marked complete (not after the whole
   // inspection) and never counts un-confirmed scratch input.
   const findings = useMemo(
-    () => gatherFindings(state, { onlyCompletedZones: true }),
-    [state],
+    () => gatherFindings(state, { onlyCompletedZones: true, rotorMin }),
+    [state, rotorMin],
   );
 
   // Suggested follow-up recommendations derived from threshold measurements,
@@ -955,6 +994,7 @@ function MultiPointInspectionDialogBody({
   const suggestedRecs = useMemo<ResolvedSuggestion[]>(() => {
     const list = deriveSuggestedRecommendations(state, {
       onlyCompletedZones: true,
+      rotorMin,
     });
     return list.map((s) => {
       // `match` holds exact catalog slugs — resolve straight to the service.
@@ -974,7 +1014,7 @@ function MultiPointInspectionDialogBody({
         workType: taxonomy?.work_type ?? null,
       };
     });
-  }, [state, services]);
+  }, [state, services, rotorMin]);
 
   // Drop anything this booking is already doing. Suggesting "tire replacement
   // — soon" on the job that is replacing the tires reads as the system not
@@ -1020,7 +1060,7 @@ function MultiPointInspectionDialogBody({
     prejob: PreJobSurveyPayload;
     inspection: InspectionInputPayload;
   } => {
-    const f = gatherFindings(state, { onlyCompletedZones: true });
+    const f = gatherFindings(state, { onlyCompletedZones: true, rotorMin });
     const prejob = derivePrejobFromInspection(state, {
       mileage: mileage.trim() ? Number(mileage) : null,
       inspectionStatus: inspectionStatus
@@ -1039,6 +1079,7 @@ function MultiPointInspectionDialogBody({
         : null,
       nextMechanicTip: nextTip.trim() || null,
       completionContext,
+      rotorMin,
     });
     const inspection: InspectionInputPayload = {
       template_version: state.template_version,
@@ -1088,6 +1129,7 @@ function MultiPointInspectionDialogBody({
     nextTip,
     liftStatus,
     completionContext,
+    rotorMin,
   ]);
 
   // Compact signature of everything savePrejob persists — a change here is what
@@ -1311,6 +1353,7 @@ function MultiPointInspectionDialogBody({
     const current = zoneState(zoneId);
     if (current.done) {
       patchZone(zoneId, { done: false });
+      setCopyPromptFor(null);
       return;
     }
     const result = validateZoneForCompletion(state, zoneId, completionContext);
@@ -1330,6 +1373,16 @@ function MultiPointInspectionDialogBody({
     }
     setError("");
     patchZone(zoneId, { done: true });
+    // Locked rule: offer the same-axle copy only now that this corner is fully
+    // complete, and only when the sibling isn't already done (nothing to mirror
+    // onto a finished corner). Non-corner zones have no opposite → no prompt.
+    const opposite = OPPOSITE_CORNER[zoneId as CornerZoneId];
+    if (opposite && !zoneState(opposite).done) {
+      setCopyPromptCopied(false);
+      setCopyPromptFor(zoneId as CornerZoneId);
+    } else {
+      setCopyPromptFor(null);
+    }
     closeZoneToDiagram();
   }
 
@@ -1842,7 +1895,7 @@ function MultiPointInspectionDialogBody({
   );
 
   return (
-    <>
+    <RotorMinContext.Provider value={rotorMin}>
       <SurveyDialogShell
         open={open}
         onClose={() => {
@@ -2074,6 +2127,78 @@ function MultiPointInspectionDialogBody({
               />
             </div>
 
+            {/* Copy-to-sibling prompt — surfaces the instant a corner is marked
+                complete, gated on the source being done (the locked rule). */}
+            {copyPromptFor
+              ? (() => {
+                  const opposite = OPPOSITE_CORNER[copyPromptFor];
+                  const sourceLabel =
+                    INSPECTION_ZONES_BY_ID[copyPromptFor].label;
+                  const oppositeLabel = INSPECTION_ZONES_BY_ID[opposite].label;
+                  const oppositeShort = INSPECTION_ZONES_BY_ID[opposite].short;
+                  const siblingHasInput = zoneHasInput(
+                    opposite,
+                    zoneState(opposite),
+                  );
+                  return (
+                    <div
+                      className={cn(
+                        "mx-auto w-full max-w-md rounded-xl border px-3 py-2.5 text-[13px]",
+                        copyPromptCopied
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                          : "border-primary/20 bg-primary/[0.04] text-foreground",
+                      )}
+                    >
+                      {copyPromptCopied ? (
+                        <p className="flex items-center gap-1.5 font-medium text-emerald-700">
+                          <Check className="h-4 w-4" />
+                          Copied to {oppositeLabel}
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          <div>
+                            <p className="flex items-center gap-1.5 font-semibold">
+                              <Check className="h-4 w-4 text-emerald-600" />
+                              {sourceLabel} complete
+                            </p>
+                            <p className="mt-0.5 text-muted-foreground">
+                              Copy these readings to {oppositeLabel}, then adjust
+                              the few that differ.
+                              {siblingHasInput ? (
+                                <span className="mt-0.5 block text-amber-700">
+                                  This replaces the readings already entered
+                                  there.
+                                </span>
+                              ) : null}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                copyCornerToOpposite(copyPromptFor);
+                                setCopyPromptCopied(true);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground hover:bg-primary/90"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                              Copy to {oppositeShort}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCopyPromptFor(null)}
+                              className="rounded-lg border border-primary/20 px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-primary/5"
+                            >
+                              Not now
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
+              : null}
+
             {/* owner-profile zone entry (not a physical location) */}
             <div className="flex justify-center">
               <button
@@ -2173,7 +2298,6 @@ function MultiPointInspectionDialogBody({
                   onSharedText={(key, value) =>
                     patchSharedText(activeZone, key, value)
                   }
-                  onCopyToOpposite={() => copyCornerToOpposite(activeZone)}
                   onPhoto={(file, tag) =>
                     handlePhotoUpload(activeZone, file, tag)
                   }
@@ -2285,7 +2409,7 @@ function MultiPointInspectionDialogBody({
           );
         }}
       />
-    </>
+    </RotorMinContext.Provider>
   );
 }
 
@@ -2733,7 +2857,6 @@ function ZonePanel({
   extraHeader,
   onPatch,
   onSharedText,
-  onCopyToOpposite,
   onPhoto,
   onRemovePhoto,
   onToggleDone,
@@ -2762,8 +2885,6 @@ function ZonePanel({
   extraHeader?: React.ReactNode;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
-  /** Copies this corner's readings onto its same-axle sibling (corners only). */
-  onCopyToOpposite: () => void;
   onPhoto: (file: File, tag?: "general" | "rotor_stamp") => void;
   onRemovePhoto: (storageId: string) => void;
   onToggleDone: () => void;
@@ -2774,15 +2895,6 @@ function ZonePanel({
   /** Flags a field as pending-save the moment the mechanic edits it. */
   onFieldSaving: (fieldKey: string) => void;
 }) {
-  // Transient "Copied ✓" confirmation on the copy-to-opposite button. Reset when
-  // the panel switches zones and auto-cleared after a short beat.
-  const [copiedFlash, setCopiedFlash] = useState(false);
-  useEffect(() => setCopiedFlash(false), [zoneId]);
-  useEffect(() => {
-    if (!copiedFlash) return;
-    const timer = window.setTimeout(() => setCopiedFlash(false), 2200);
-    return () => window.clearTimeout(timer);
-  }, [copiedFlash]);
   // Refs to every field row so the rail (and spec review) can jump straight to a
   // question, plus a transient highlight so the mechanic sees where they landed.
   const fieldRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -2808,14 +2920,6 @@ function ZonePanel({
     setRailTarget(document.getElementById(INSPECTION_SIDE_RAIL_ID));
   }, []);
   const zone = INSPECTION_ZONES_BY_ID[zoneId];
-  // Same-axle sibling for the one-tap copy (undefined on non-corner zones).
-  const oppositeCorner = OPPOSITE_CORNER[zoneId as CornerZoneId] as
-    | CornerZoneId
-    | undefined;
-  const oppositeLabel = oppositeCorner
-    ? INSPECTION_ZONES_BY_ID[oppositeCorner].label
-    : null;
-  const canCopyOpposite = !!oppositeCorner && zoneHasInput(zoneId, zs);
   const tireReplacementScheduled =
     (zoneId === "FL" ||
       zoneId === "FR" ||
@@ -2905,42 +3009,6 @@ function ZonePanel({
             <span className="mr-1 inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-600">
               <Check className="h-3.5 w-3.5" /> confirmed
             </span>
-          ) : null}
-          {oppositeCorner ? (
-            <button
-              type="button"
-              onClick={() => {
-                onCopyToOpposite();
-                setCopiedFlash(true);
-              }}
-              disabled={!canCopyOpposite}
-              title={
-                canCopyOpposite
-                  ? `Copy every reading from this corner to ${oppositeLabel}, then adjust the few that differ`
-                  : `Enter this corner's readings first, then copy them to ${oppositeLabel}`
-              }
-              aria-label={`Copy all readings to ${oppositeLabel}`}
-              className={cn(
-                "mr-0.5 inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[12px] font-medium transition-colors",
-                copiedFlash
-                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                  : canCopyOpposite
-                    ? "border-primary/20 text-muted-foreground hover:bg-primary/5"
-                    : "cursor-not-allowed border-primary/10 text-muted-foreground/40",
-              )}
-            >
-              {copiedFlash ? (
-                <>
-                  <Check className="h-3.5 w-3.5" />
-                  Copied to {INSPECTION_ZONES_BY_ID[oppositeCorner].short}
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3.5 w-3.5" />
-                  Copy to {INSPECTION_ZONES_BY_ID[oppositeCorner].short}
-                </>
-              )}
-            </button>
           ) : null}
           <button
             type="button"
@@ -3252,7 +3320,11 @@ function FieldRow({
     return statuses;
   };
   const unavailable = !!zs.statuses[field.key];
-  const unavailableControl = (
+  // NYS safety items (e.g. horn) are mandatory — the mechanic can't mark them
+  // unavailable to skip them, so drop the toggle entirely for those fields.
+  const skippable = canMarkFieldUnavailable(zoneId, field.key);
+  const nysSafety = isNysSafetyField(zoneId, field.key);
+  const unavailableControl = skippable ? (
     <UnavailableToggle
       active={unavailable}
       onToggle={() => {
@@ -3262,7 +3334,7 @@ function FieldRow({
         onPatch({ statuses });
       }}
     />
-  );
+  ) : null;
   const rotorNotConfirmed =
     ROTOR_GATE_FIELDS.has(field.key) && zs.select.rotor_applicable !== "yes";
   if (field.type === "measure") {
@@ -3342,6 +3414,19 @@ function FieldRow({
           </div>
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+        {nysSafety ? (
+          selected === "r" ? (
+            <p className="px-1 pb-2 text-[11px] font-medium text-red-600">
+              Automatic NYS inspection failure — a 15–20 min diagnostic (fuse /
+              clock spring / horn unit) is required before a replacement can be
+              approved.
+            </p>
+          ) : (
+            <p className="px-1 pb-2 text-[11px] text-muted-foreground">
+              Mandatory state-inspection safety item — can’t be skipped.
+            </p>
+          )
+        ) : null}
       </div>
     );
   }
@@ -3829,7 +3914,14 @@ function MeasureField({
   saveState?: FieldSaveState;
 }) {
   const value = zs.measures[field.key] ?? "";
-  const result = classifyInspectionMeasure(field, zs.measures, zs.select);
+  // Grade rotor against THIS vehicle's enrichment-derived minimum (nominal ×
+  // 0.85), falling back to the field's static default when unknown.
+  const rotorMinCtx = useContext(RotorMinContext);
+  const rotorRef =
+    field.classify === "rotor"
+      ? effectiveRotorRef(zoneId, field.ref, rotorMinCtx)
+      : undefined;
+  const result = classifyInspectionMeasure(field, zs.measures, zs.select, rotorRef);
   const clearUnavailable = () => {
     const statuses = { ...zs.statuses };
     delete statuses[field.key];
@@ -3965,9 +4057,12 @@ function MeasureField({
 
   const isRotor = field.key === "rotor";
   const unit: RotorUnit = zs.select.rotor_unit === "in" ? "in" : "mm";
+  // Prefer the per-vehicle minimum over the field's static reference so the
+  // mechanic sees the same replace-at figure the grade is measured against.
+  const displayRotorRef = rotorRef ?? field.ref;
   const hint =
-    isRotor && field.ref != null
-      ? `Reference min ${formatRotorReferenceMinimum(field.ref, unit)}`
+    isRotor && displayRotorRef != null
+      ? `Reference min ${formatRotorReferenceMinimum(displayRotorRef, unit)}`
       : field.hint;
   return (
     <div className="border-b border-primary/10">

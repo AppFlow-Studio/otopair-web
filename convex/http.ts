@@ -9,7 +9,7 @@ import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { ActionCtx } from "./_generated/server";
 import type { ApiScope, KeyAuth, VehicleResponse } from "./dataApi";
-import { ENRICH_DAILY_QUOTA, IMAGE_LIVE_FETCH_DAILY_CAP } from "./dataApi";
+import { ENRICH_HARD_DAILY_CAP, IMAGE_LIVE_FETCH_DAILY_CAP, billingPeriodKey } from "./dataApi";
 import { buildOpenApiSpec } from "./openapi";
 import Stripe from "stripe";
 
@@ -451,6 +451,62 @@ async function handleStripeWebhook(ctx: ActionCtx, request: Request) {
       return new Response("ok", { status: 200 });
     }
 
+    // ── Otofacts Car Data API subscriptions (shared Stripe account) ─────────
+    // Every branch is guarded on metadata.app === "otofacts" downstream:
+    // entitlementFromSubscription returns null for anything else, so booking
+    // subscriptions (if any) are a safe no-op. Spec: CARDATA_BILLING_SPEC.md.
+    if (event.type === "checkout.session.completed") {
+      const s = event.data.object as Stripe.Checkout.Session;
+      const subId = typeof s.subscription === "string" ? s.subscription : s.subscription?.id;
+      if (s.metadata?.app === "otofacts" && s.mode === "subscription" && subId) {
+        await ctx.runAction(internal.dataApiBilling.syncSubscriptionFromStripe, { subscriptionId: subId });
+      }
+      await ctx.runMutation(internal.stripe_webhook_events.record, {
+        eventId: event.id,
+        eventType: event.type,
+        livemode: event.livemode,
+      });
+      return new Response("ok", { status: 200 });
+    }
+
+    if (
+      event.type === "customer.subscription.created" ||
+      event.type === "customer.subscription.updated" ||
+      event.type === "customer.subscription.deleted"
+    ) {
+      const sub = event.data.object as Stripe.Subscription;
+      await ctx.runAction(internal.dataApiBilling.syncSubscriptionFromStripe, { subscriptionId: sub.id });
+      await ctx.runMutation(internal.stripe_webhook_events.record, {
+        eventId: event.id,
+        eventType: event.type,
+        livemode: event.livemode,
+      });
+      return new Response("ok", { status: 200 });
+    }
+
+    if (event.type === "invoice.paid" || event.type === "invoice.payment_failed") {
+      // Stripe moved invoice→subscription under `parent` in recent API versions;
+      // read whichever shape this account's version emits.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const invAny = event.data.object as any;
+      const subId: string | undefined =
+        (typeof invAny.subscription === "string" ? invAny.subscription : invAny.subscription?.id) ??
+        invAny.parent?.subscription_details?.subscription ??
+        undefined;
+      if (subId) {
+        await ctx.runAction(internal.dataApiBilling.onInvoice, {
+          subscriptionId: subId,
+          paid: event.type === "invoice.paid",
+        });
+      }
+      await ctx.runMutation(internal.stripe_webhook_events.record, {
+        eventId: event.id,
+        eventType: event.type,
+        livemode: event.livemode,
+      });
+      return new Response("ok", { status: 200 });
+    }
+
     await ctx.runMutation(internal.stripe_webhook_events.record, {
       eventId: event.id,
       eventType: event.type,
@@ -882,21 +938,55 @@ async function withApiKey(
   const key = await ctx.runQuery(internal.dataApi.lookupKeyByHash, { key_hash: await sha256Hex(rawKey) });
   if (!key) return apiJson(401, { error: "invalid_api_key", message: "Unknown API key." });
   if (key.revoked) return apiJson(401, { error: "revoked_api_key", message: "This key has been revoked." });
-  if (!key.scopes.includes(scope)) {
+  // Self-serve keys resolve their scopes + limits LIVE from the owner's Stripe
+  // entitlement, so an upgrade takes effect with no re-mint. Director-minted
+  // (internal) keys keep their explicit scopes and skip entitlement + quota.
+  let effScopes: string[] = key.scopes;
+  let effRate = key.rate_limit_per_min;
+  let readQuota = Infinity;
+  if (!key.isInternal) {
+    const ent = await ctx.runQuery(internal.dataApiBilling.resolveEntitlement, {
+      owner_user_id: key.ownerUserId ?? undefined,
+    });
+    effScopes = ent.scopes;
+    effRate = ent.rate_limit_per_min;
+    readQuota = ent.monthly_read_quota;
+  }
+
+  if (!effScopes.includes(scope)) {
     await ctx.runMutation(internal.dataApi.recordUsage, { api_key_id: key.keyId, endpoint, status: 403 });
-    return apiJson(403, { error: "insufficient_scope", message: `This key lacks the '${scope}' scope.` });
+    return apiJson(403, {
+      error: "insufficient_scope",
+      message: `This key lacks the '${scope}' scope.`,
+      ...(scope === "enrich:write" ? { upgrade_url: "https://otoindex.com/pricing" } : {}),
+    });
   }
 
   const usedLastMinute = await ctx.runQuery(internal.dataApi.countRecentUsage, {
     api_key_id: key.keyId,
     since: Date.now() - 60_000,
   });
-  if (usedLastMinute >= key.rate_limit_per_min) {
+  if (usedLastMinute >= effRate) {
     await ctx.runMutation(internal.dataApi.recordUsage, { api_key_id: key.keyId, endpoint, status: 429 });
     return apiJson(429, {
       error: "rate_limited",
-      message: `Limit is ${key.rate_limit_per_min} requests/minute for this key.`,
+      message: `Limit is ${effRate} requests/minute for this key.`,
     });
+  }
+
+  // Monthly read quota (reads only — enrich is credit-metered, not read-metered).
+  if (!key.isInternal && key.ownerUserId && scope !== "enrich:write") {
+    const used = await ctx.runQuery(internal.dataApi.readCountThisPeriod, {
+      owner_user_id: key.ownerUserId,
+      period_key: billingPeriodKey(Date.now()),
+    });
+    if (used >= readQuota) {
+      await ctx.runMutation(internal.dataApi.recordUsage, { api_key_id: key.keyId, endpoint, status: 429 });
+      return apiJson(429, {
+        error: "quota_exceeded",
+        message: `Monthly request quota (${readQuota}) reached. Upgrade at otoindex.com/pricing.`,
+      });
+    }
   }
 
   const result = await handler(new URL(request.url).searchParams, key);
@@ -906,6 +996,15 @@ async function withApiKey(
     status: result.status,
     config_key: result.config_key,
   });
+  // Count successful reads toward the monthly quota rollup.
+  if (!key.isInternal && key.ownerUserId && scope !== "enrich:write" && result.status < 400) {
+    await ctx.runMutation(internal.dataApi.bumpUsageCounter, {
+      owner_user_id: key.ownerUserId,
+      period_key: billingPeriodKey(Date.now()),
+      read: 1,
+      enrich: 0,
+    });
+  }
   return apiJson(result.status, result.body);
 }
 
@@ -1204,39 +1303,81 @@ http.route({
         };
       }
 
-      const scheduledToday = await ctx.runQuery(internal.dataApi.countUsageForEndpointSince, {
-        api_key_id: key.keyId,
-        endpoint: "/v0/enrich",
-        since: Date.now() - 24 * 60 * 60 * 1000,
-        status: 202,
-      });
-      if (scheduledToday >= ENRICH_DAILY_QUOTA) {
-        return {
-          status: 429,
-          body: {
-            error: "quota_exceeded",
-            message: `Daily enrichment quota (${ENRICH_DAILY_QUOTA} scheduled runs/day/key) reached. Cache hits stay free and unlimited.`,
-          },
-        };
+      // Enrich costs real money (a VDB decode + an Anthropic batch). Charge one
+      // credit up front (reserve) and refund on any non-scheduled outcome, so a
+      // failed enrich is never billed. Director-minted (internal) keys are
+      // trusted and unmetered. Cache hits above already returned free.
+      let reservationId: import("./_generated/dataModel").Id<"enrich_ledger"> | null = null;
+      let creditsRemaining: number | undefined;
+      if (!key.isInternal && key.ownerUserId) {
+        const reserve = await ctx.runMutation(internal.dataApiBilling.reserveEnrichCredit, {
+          owner_user_id: key.ownerUserId,
+          api_key_id: key.keyId,
+          vin,
+        });
+        if (reserve.status === "no_credits") {
+          return {
+            status: 402,
+            body: {
+              error: "no_enrich_credits",
+              message:
+                "Out of enrich credits and metered overage is off. Upgrade or enable overage at otoindex.com/pricing.",
+              topup_url: "https://otoindex.com/pricing",
+            },
+          };
+        }
+        if (reserve.status === "cap_reached") {
+          return {
+            status: 402,
+            body: {
+              error: "spend_cap_reached",
+              message: "Monthly enrich spend cap reached. Raise it in your dashboard to continue.",
+            },
+          };
+        }
+        reservationId = reserve.ledgerId;
+        creditsRemaining = reserve.creditsRemaining;
+
+        // Abuse/runaway backstop on top of credits.
+        const scheduledToday = await ctx.runQuery(internal.dataApi.countUsageForEndpointSince, {
+          api_key_id: key.keyId,
+          endpoint: "/v0/enrich",
+          since: Date.now() - 24 * 60 * 60 * 1000,
+          status: 202,
+        });
+        if (scheduledToday >= ENRICH_HARD_DAILY_CAP) {
+          await ctx.runMutation(internal.dataApiBilling.refundReservation, { ledgerId: reservationId });
+          return {
+            status: 429,
+            body: {
+              error: "daily_cap",
+              message: "Daily enrich safety cap reached — contact support to raise it. Cache hits stay free.",
+            },
+          };
+        }
       }
 
       const result = await ctx.runAction(internal.dataApiEnrich.triggerEnrichForVin, { vin });
-      if (result.status === "decode_failed") {
-        return {
-          status: 400,
-          body: { error: "vin_decode_failed", message: "The VIN did not decode against Vehicle Databases or NHTSA." },
-        };
-      }
-      if (result.status === "no_engine_code") {
-        return {
-          status: 422,
-          body: {
-            error: "unsupported_vehicle",
-            message: "The VIN decoded but no engine code could be resolved — this vehicle cannot be enriched.",
-          },
-        };
-      }
-      if (result.status === "vehicle_upsert_failed") {
+      if (result.status !== "scheduled") {
+        // Never charge for a run that didn't schedule.
+        if (reservationId) {
+          await ctx.runMutation(internal.dataApiBilling.refundReservation, { ledgerId: reservationId });
+        }
+        if (result.status === "decode_failed") {
+          return {
+            status: 400,
+            body: { error: "vin_decode_failed", message: "The VIN did not decode against Vehicle Databases or NHTSA." },
+          };
+        }
+        if (result.status === "no_engine_code") {
+          return {
+            status: 422,
+            body: {
+              error: "unsupported_vehicle",
+              message: "The VIN decoded but no engine code could be resolved — this vehicle cannot be enriched.",
+            },
+          };
+        }
         return { status: 500, body: { error: "internal_error", message: "Vehicle row creation failed — retry later." } };
       }
       return {
@@ -1245,6 +1386,7 @@ http.route({
           object: "enrichment",
           status: "queued",
           vin,
+          ...(creditsRemaining !== undefined ? { credits_remaining: creditsRemaining } : {}),
           poll: {
             method: "GET",
             url: `/v0/enrich?vin=${vin}`,

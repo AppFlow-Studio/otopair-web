@@ -12,6 +12,7 @@
  */
 
 import { carApiYearInFreeRange, type CanonicalVehicleSpec } from "./vdbCompareTypes";
+import { extractVDBFields } from "./vehicleDatabases";
 
 const CARAPI_BASE = "https://carapi.app/api";
 
@@ -285,4 +286,124 @@ export function normalizeCarApi(res: CarApiResult): CanonicalVehicleSpec | null 
     _provider: "carapi",
     _sourceEndpoint: res.vin ? "vin/{vin}" : "trims+engines+bodies",
   };
+}
+
+// ── production entry points (used by processVin / v3 enrichment) ─────────────
+
+/**
+ * Decode one VIN via CarAPI (`/vin/{vin}`). NO year gate — the paid plan covers
+ * all model years. Fail-open null (caller falls back to NHTSA), same contract as
+ * advancedVinDecode(). Returns the raw `vin` body (make/model/year/specs/trims).
+ */
+export async function carApiVinDecode(vin: string): Promise<any | null> {
+  if (!process.env.CAR_API_TOKEN || !process.env.CAR_API_SECRET) return null;
+  const r = await carApiGet(`/vin/${encodeURIComponent(vin)}`);
+  return r.ok ? r.body : null;
+}
+
+/**
+ * Map a CarAPI VIN-decode body → the EXACT shape `extractVDBFields()` returns,
+ * so it drops into the processVin merge slot with no downstream changes. CarAPI
+ * specs are NHTSA-derived (snake_case); it has no OEM engine code, chassis code,
+ * or tire/brake/battery specs → those come back null/undefined (Claude +
+ * wheel-size.com fill them). Reuses the sources()/makePick() readers.
+ */
+export function extractCarApiFields(vinRaw: any): ReturnType<typeof extractVDBFields> {
+  const srcs = sources({
+    ok: true,
+    applicable: true,
+    vin: vinRaw,
+    trims: null,
+    engines: null,
+    bodies: null,
+  } as CarApiResult);
+  const p = makePick(srcs);
+  const displacement = p.num("displacement_l", "size", "displacement");
+  // Trim: read the regulatory `specs.trim` ("XSE") ONLY. Never `series` — that's
+  // a model/engine code ("AXVA70L/GSV70L/AXVH70L") that would match NHTSA's
+  // Series field in the merge gate and wrongly win; never top-level `vin.trim`
+  // either (a bare sub-code like "3" on some makes).
+  const cleanTrim =
+    typeof vinRaw?.specs?.trim === "string" && vinRaw.specs.trim.trim()
+      ? vinRaw.specs.trim.trim()
+      : null;
+  return {
+    year: p.num("year"),
+    make: p.str("make"),
+    model: p.str("model"),
+    trim: cleanTrim,
+    style: null,
+    trimAndStyle: null,
+    bodyType: p.str("body_class", "type", "body_type"),
+    doors: p.num("doors"),
+    engineCode: p.str("engine_code"), // CarAPI publishes no OEM engine code
+    engineDescription: p.str("engine_model", "engine_type", "description"),
+    cylinders: p.num("engine_number_of_cylinders", "cylinders"),
+    displacement,
+    camType: p.str("valve_train_design", "cam_type"),
+    blockType: p.str("engine_configuration"),
+    drivetrain: p.str("drive_type", "drivetrain"),
+    fuelType: p.str("fuel_type_primary", "fuel_type"),
+    horsepower: p.num("engine_brake_hp_from", "horsepower_hp"),
+    engineDisplacementLiters: displacement,
+    cylindersConfiguration: p.str("engine_configuration"),
+    mpgCity: p.num("epa_city_mpg", "city_mpg"),
+    mpgHighway: p.num("epa_highway_mpg", "highway_mpg"),
+    mpgCombined: p.num("epa_combined_mpg", "combined_mpg"),
+    transType: p.str("transmission_style", "transmission"),
+    transSpeeds: p.num("transmission_speeds"),
+    transDescription: p.str("transmission_style", "transmission"),
+    // VDB-unique fields CarAPI doesn't provide → null/undefined (filled elsewhere)
+    frontTireSize: null,
+    rearTireSize: null,
+    frontTirePressure: null,
+    rearTirePressure: null,
+    wheelTorque: null,
+    cca: null,
+    frontRotorDia: null,
+    rearRotorDia: null,
+    brakeType: null,
+    brakeSystemType: undefined,
+    steeringType: null,
+  };
+}
+
+/**
+ * Resolve our model name to CarAPI's catalog naming (needed only for the no-VIN
+ * YMMT path — `/vin/{vin}` returns make/model directly). CarAPI files some makes
+ * by variant (BMW "328i" not "3 Series"); returns null when no clean match so
+ * the caller falls back to Claude (researchYmmtPowertrain).
+ */
+export async function carApiResolveModel(
+  make: string,
+  year: number,
+  model: string,
+): Promise<string | null> {
+  const r = await carApiGet(`/models/v2?year=${year}&make=${encodeURIComponent(make)}`);
+  const list: any[] = Array.isArray(r.body?.data) ? r.body.data : [];
+  if (!list.length) return null;
+  const norm = (s: string) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const target = norm(model);
+  const exact = list.find((m) => norm(m.name) === target);
+  if (exact) return exact.name as string;
+  const sub = list.find((m) => {
+    const n = norm(m.name);
+    return n.includes(target) || target.includes(n);
+  });
+  return sub ? (sub.name as string) : null;
+}
+
+/**
+ * All model names CarAPI catalogs for a make/year (e.g. Mercedes-Benz 2023 →
+ * "GLE 350", "GLE 450", "AMG GLE 63 S", "AMG GLE 63 S Coupe", ...). Used to
+ * expand a family-level model name ("GLE-Class") into the specific variants
+ * CarAPI files trims under, so the trim picker shows differentiated entries.
+ */
+export async function carApiModelsForMakeYear(
+  make: string,
+  year: number,
+): Promise<string[]> {
+  const r = await carApiGet(`/models/v2?year=${year}&make=${encodeURIComponent(make)}`);
+  const list: any[] = Array.isArray(r.body?.data) ? r.body.data : [];
+  return list.map((m) => String(m?.name ?? "").trim()).filter(Boolean);
 }

@@ -56,6 +56,16 @@ const DEFAULT_RATE_LIMIT_PER_MIN = 60;
 // only 202 "scheduled" enrich responses and live VDB image fetches count.
 export const ENRICH_DAILY_QUOTA = 5;
 export const IMAGE_LIVE_FETCH_DAILY_CAP = 10;
+// Abuse/runaway backstop for enrich on ANY paid key, on top of credits.
+export const ENRICH_HARD_DAILY_CAP = 500;
+
+/** Billing/quota period bucket ("YYYY-MM", UTC). Deterministic from `ms`, so
+ *  it's safe in queries. v1 uses a calendar month; switch to the Stripe billing
+ *  anchor later if quotas should track the invoice cycle exactly. */
+export function billingPeriodKey(ms: number): string {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
 
 /** One validator for every place that accepts key scopes — keep in sync with
  *  API_SCOPES and schema.ts api_keys.scopes. */
@@ -75,6 +85,11 @@ export type KeyAuth = {
   scopes: string[];
   rate_limit_per_min: number;
   revoked: boolean;
+  // Self-serve keys carry an owner → live entitlement resolution (billing).
+  // Director-minted keys (created_by) are internal + trusted: they keep their
+  // explicit scopes and bypass entitlement, credits, and read quota.
+  ownerUserId: Id<"users"> | null;
+  isInternal: boolean;
 };
 
 export const lookupKeyByHash = internalQuery({
@@ -91,6 +106,8 @@ export const lookupKeyByHash = internalQuery({
       scopes: key.scopes,
       rate_limit_per_min: key.rate_limit_per_min,
       revoked: key.revoked_at != null,
+      ownerUserId: key.owner_user_id ?? null,
+      isInternal: key.created_by != null,
     };
   },
 });
@@ -122,6 +139,55 @@ export const recordUsage = internalMutation({
         request_count: key.request_count + 1,
       });
     }
+  },
+});
+
+// ─── Monthly read-quota rollup (billing) ─────────────────────────────────────
+// api_usage is a per-request log; counting it for a 2M-read month doesn't scale.
+// The read-quota gate reads/writes this cheap per-(user, month) counter instead.
+
+export const bumpUsageCounter = internalMutation({
+  args: {
+    owner_user_id: v.id("users"),
+    period_key: v.string(),
+    read: v.number(),
+    enrich: v.number(),
+  },
+  handler: async (ctx, a): Promise<void> => {
+    const row = await ctx.db
+      .query("api_usage_counters")
+      .withIndex("by_user_period", (q) =>
+        q.eq("owner_user_id", a.owner_user_id).eq("period_key", a.period_key),
+      )
+      .first();
+    if (!row) {
+      await ctx.db.insert("api_usage_counters", {
+        owner_user_id: a.owner_user_id,
+        period_key: a.period_key,
+        read_requests: a.read,
+        enrich_scheduled: a.enrich,
+        updated_at: Date.now(),
+      });
+    } else {
+      await ctx.db.patch(row._id, {
+        read_requests: row.read_requests + a.read,
+        enrich_scheduled: row.enrich_scheduled + a.enrich,
+        updated_at: Date.now(),
+      });
+    }
+  },
+});
+
+export const readCountThisPeriod = internalQuery({
+  args: { owner_user_id: v.id("users"), period_key: v.string() },
+  handler: async (ctx, { owner_user_id, period_key }): Promise<number> => {
+    const row = await ctx.db
+      .query("api_usage_counters")
+      .withIndex("by_user_period", (q) =>
+        q.eq("owner_user_id", owner_user_id).eq("period_key", period_key),
+      )
+      .first();
+    return row?.read_requests ?? 0;
   },
 });
 

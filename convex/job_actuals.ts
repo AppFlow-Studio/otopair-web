@@ -23,6 +23,7 @@ import {
 import { ensureWalkInCashPayment } from "./bookings";
 import { passesI1ReadGuardNamed, makeNameCached } from "./lib/makeIdentity";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
+import { rotorMinForVin } from "./lib/rotorMin";
 import { serviceMatchKey } from "./lib/serviceMatch";
 import { resolveSparkPlugQuantity } from "./lib/sparkPlugs";
 import { deriveSuggestedRecommendations } from "../lib/inspection-template";
@@ -963,6 +964,8 @@ export const getPrefillData = query({
       .first();
     const allServices = booking.shop_id ? await ctx.db.query("services").collect() : [];
     const inspectionState = inspection ? hydrateTieredInspectionState(inspection) : null;
+    // Rotor recommendation grades against THIS vehicle's enrichment minimum.
+    const rotorMin = inspectionState ? await rotorMinForVin(ctx, booking.vin) : null;
 
     // Work that's already ON this job — don't offer it as a "for next time"
     // suggestion. Abdul hit this from the other side: he added a tire
@@ -987,6 +990,7 @@ export const getPrefillData = query({
     const suggestedFromInspection = inspectionState
       ? deriveSuggestedRecommendations(inspectionState, {
           onlyCompletedZones: true,
+          rotorMin,
         })
           .map((s) => {
             const found = allServices.find((svc: any) =>

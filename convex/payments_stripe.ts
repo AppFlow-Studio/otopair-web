@@ -1223,24 +1223,31 @@ export const _stampApprovalStripeAction = internalMutation({
 /** Reverts the booking back to `pre_job_pending` after a reauth failure so
  *  the customer can update their payment method. Also pushes them. */
 export const _revertBookingToPendingForReauth = internalMutation({
-  args: { bookingId: v.id("bookings") },
+  // v.string() + normalizeId for the same reason as
+  // _clearReauthRequiredAfterSuccess: the `requires_action` webhook passes an
+  // untrusted `metadata.bookingId` that may belong to another deployment sharing
+  // this Stripe account. A foreign/malformed id no-ops here instead of throwing
+  // and 500-ing the webhook.
+  args: { bookingId: v.string() },
   handler: async (ctx, args) => {
-    const booking: any = await ctx.db.get(args.bookingId);
+    const bookingId = ctx.db.normalizeId("bookings", args.bookingId);
+    if (!bookingId) return;
+    const booking: any = await ctx.db.get(bookingId);
     if (!booking) return;
     const now = Date.now();
-    await ctx.db.patch(args.bookingId, {
+    await ctx.db.patch(bookingId, {
       payment_approval_state: "reauth_required",
       updated_at: now,
     });
     // Push the customer to update their card.
     await ctx.db.insert("notification_outbox", {
       user_id: booking.user_id,
-      booking_id: args.bookingId,
+      booking_id: bookingId,
       shop_id: booking.shop_id,
       channel: "push",
       category: "booking_reauth_required",
       status: "pending",
-      dedupe_key: `reauth_required:${String(args.bookingId)}:${now}`,
+      dedupe_key: `reauth_required:${String(bookingId)}:${now}`,
       payload: {
         title: "Confirm new hold on your card",
         body: "Your bank needs to verify the updated hold. Tap to confirm — you may be asked to authenticate.",
@@ -1249,8 +1256,8 @@ export const _revertBookingToPendingForReauth = internalMutation({
           // (`app/booking/approve-estimate/[id].tsx` → ReauthView). The
           // NotificationsSheet parses this via `parseOtopairDeepLink` →
           // kind: "reauth" → approve-estimate with `mode=reauth`.
-          deepLink: `otopair://booking/${String(args.bookingId)}/reauth`,
-          bookingId: String(args.bookingId),
+          deepLink: `otopair://booking/${String(bookingId)}/reauth`,
+          bookingId: String(bookingId),
         },
       },
       created_at: now,
@@ -1267,9 +1274,19 @@ export const _revertBookingToPendingForReauth = internalMutation({
  *  initiated action AND the `amount_capturable_updated` webhook fallback.
  */
 export const _clearReauthRequiredAfterSuccess = internalMutation({
-  args: { bookingId: v.id("bookings") },
+  // v.string() (not v.id("bookings")): the `amount_capturable_updated` webhook
+  // passes an UNTRUSTED `metadata.bookingId`. The Stripe test account is shared
+  // across Convex deployments (see convex/CARDATA_BILLING_SPEC.md), so an event
+  // can carry a booking id minted by another deployment. A strict v.id()
+  // validator rejects a foreign id and throws — the webhook's outer catch turns
+  // that into a 500, and Stripe then retries the event indefinitely. normalizeId
+  // returns null for a foreign/malformed id so we no-op instead. Internal
+  // callers pass a real Id<"bookings">, which normalizeId resolves unchanged.
+  args: { bookingId: v.string() },
   handler: async (ctx, args) => {
-    const booking: any = await ctx.db.get(args.bookingId);
+    const bookingId = ctx.db.normalizeId("bookings", args.bookingId);
+    if (!bookingId) return { status: "foreign_id" };
+    const booking: any = await ctx.db.get(bookingId);
     if (!booking) return { status: "no_booking" };
     if (booking.payment_approval_state !== "reauth_required") {
       return { status: "skipped" };
@@ -1278,7 +1295,7 @@ export const _clearReauthRequiredAfterSuccess = internalMutation({
       booking.running_approved_ceiling_cents != null
         ? "pre_job_approved"
         : "none";
-    await ctx.db.patch(args.bookingId, {
+    await ctx.db.patch(bookingId, {
       payment_approval_state: priorState,
       updated_at: Date.now(),
     });

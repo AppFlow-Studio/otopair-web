@@ -168,7 +168,8 @@ export const vehiclePassportBrakesValidator = v.object({
   // the mechanic reads the number cast on the rotor hat.
   rotor_min_front_mm: v.optional(nullableNumberValidator),
   rotor_min_rear_mm: v.optional(nullableNumberValidator),
-  // "oem_spec" | "mechanic_read" | "director_verified" | "derived_from_nominal"
+  // "derived_15pct_wear" (standard: 85% of OEM nominal) | "oem_spec" |
+  // "mechanic_read" | "director_verified" | "derived_from_nominal" (legacy)
   // | "default_fallback" — anything derived must never read as an OEM figure.
   rotor_min_quality_front: v.optional(nullableStringValidator),
   rotor_min_quality_rear: v.optional(nullableStringValidator),

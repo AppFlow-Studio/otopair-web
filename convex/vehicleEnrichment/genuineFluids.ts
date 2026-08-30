@@ -33,16 +33,24 @@ import { familyMakeKeys } from "./contentSanitization";
 /** Loose token-contains spec match: row spec "MB 325.0" matches an engine
  *  coolant_type of "MB 325.0", "MB 325.0 / Q 1 03 0002", "MB325.0" — but not
  *  "MB 326.3". Both sides are collapsed to alphanumerics so punctuation and
- *  spacing never decide. */
+ *  spacing never decide.
+ *
+ *  Alias support (Aug 2026): the ROW side splits on "|" and "/" and any
+ *  segment may match — one certification travels under several published
+ *  names ("G 060 162|ZF LifeGuard 8|8HP"), and requiring the whole combined
+ *  string to appear verbatim in the vehicle's spec would match nothing.
+ *  Single-segment rows behave exactly as before. */
 export function specMatches(
   rowSpec: string | null | undefined,
   engineSpec: string | null | undefined,
 ): boolean {
   if (!rowSpec || !engineSpec) return false;
   const flat = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, "");
-  const needle = flat(rowSpec);
-  if (needle.length < 3) return false;
-  return flat(engineSpec).includes(needle);
+  const hay = flat(engineSpec);
+  return rowSpec.split(/[|/]/).some((alias) => {
+    const needle = flat(alias);
+    return needle.length >= 3 && hay.includes(needle);
+  });
 }
 
 /** Viscosity equality with normalized punctuation ("0W-40" ≡ "0w40"). */
@@ -65,6 +73,11 @@ export const upsertGenuineFluidProduct = internalMutation({
     viscosity: v.optional(v.string()),
     oemPartNumber: v.string(),
     name: v.string(),
+    /** "oem" (default) | "aftermarket" — a supplier/OES bottle carrying the
+     *  same certification (ZF, Fuchs). See schema comment. */
+    partTier: v.optional(v.string()),
+    /** Supplier brand for aftermarket rows ("ZF", "Fuchs"). */
+    brand: v.optional(v.string()),
     packageSize: v.optional(v.string()),
     provenance: v.string(),
   },
@@ -87,6 +100,8 @@ export const upsertGenuineFluidProduct = internalMutation({
       viscosity: args.viscosity,
       oem_part_number: args.oemPartNumber,
       name: args.name,
+      part_tier: args.partTier ?? "oem",
+      brand: args.brand,
       package_size: args.packageSize,
       provenance: args.provenance,
       created_at: Date.now(),
@@ -132,6 +147,17 @@ export const seedFluidsRung = internalAction({
           engineId: resolved.engineId,
         })
       : null;
+    // ATF anchor. `resolved.transFluidType` never existed on the resolver's
+    // return shape, so the ATF target had compared against undefined since
+    // birth — the certification anchor only ever fired through the
+    // single-chemistry fallback. Fetch the transmission's own fluid_type
+    // (e.g. "ZF Lifeguard 8 (lifetime)", "VW G 055 540 A2").
+    const transmission: any = resolved.transmissionId
+      ? await ctx.runQuery(internal.vehicleEnrichment.v3queries.getTransmission, {
+          transmissionId: resolved.transmissionId,
+        })
+      : null;
+    const transFluidType: string | null = transmission?.fluid_type ?? null;
 
     const latestRun: any = await ctx.runQuery(
       internal.vehicleEnrichment.v3queries.getLatestRunForConfig,
@@ -162,6 +188,8 @@ export const seedFluidsRung = internalAction({
       roleKey: string;
       specValue: string | null;
       anchor: (row: any) => boolean;
+      /** No-spec single-chemistry fallback forbidden (2020+ ATF). */
+      strictSpec?: boolean;
     }> = [];
     if (missingRoles.has("coolant")) {
       targets.push({
@@ -180,8 +208,14 @@ export const seedFluidsRung = internalAction({
     if (missingRoles.has("atf_fluid")) {
       targets.push({
         roleKey: "atf_fluid",
-        specValue: resolved?.transFluidType ?? null,
-        anchor: (row) => specMatches(row.spec, resolved?.transFluidType ?? null),
+        specValue: transFluidType,
+        anchor: (row) => specMatches(row.spec, transFluidType),
+        // Mechanic feedback (Aug 2026): 2020+ transmissions are certification-
+        // strict — a modern gearbox takes ITS approved chemistry, and the
+        // single-curated-chemistry fallback below is a guess this role can't
+        // afford on those vehicles. Older boxes keep the fallback (still
+        // verifier-adjudicated).
+        strictSpec: Number(resolved?.year ?? 0) >= 2020,
       });
     }
     if (targets.length === 0) return { status: "nothing_missing" as const };
@@ -197,12 +231,15 @@ export const seedFluidsRung = internalAction({
     // 2021 Nautilus's coolant hit no_seed_match with Ford rows on file).
     const famKeys = familyMakeKeys(resolved.make);
 
+    const aftermarketEnabled = process.env.PARTS_FLUID_AFTERMARKET !== "off";
     const toVerify: Array<{
       roleKey: string;
       oem: string;
       name: string;
       quantity: number | null;
       observedTitle: string | null;
+      partTier: string;
+      brand: string | null;
     }> = [];
     for (const t of targets) {
       const rows: any[] = [];
@@ -216,6 +253,7 @@ export const seedFluidsRung = internalAction({
           const norm = normalizeOemNumber(row.oem_part_number);
           if (seenRow.has(norm)) continue;
           seenRow.add(norm);
+          if ((row.part_tier ?? "oem") === "aftermarket" && !aftermarketEnabled) continue;
           rows.push(row);
         }
       }
@@ -225,10 +263,15 @@ export const seedFluidsRung = internalAction({
       // still adjudicates it against the real vehicle before any write. Two
       // or more chemistries with no spec stays a real gap: guessing between
       // them 50/50 is exactly the wrong-chemistry failure this rung exists
-      // to prevent.
+      // to prevent. `strictSpec` targets (2020+ ATF) forbid even the
+      // single-chemistry guess — certification match or nothing.
       const anchored = rows.filter((row) => t.anchor(row));
       const candidates =
-        anchored.length > 0 ? anchored : !t.specValue && rows.length === 1 ? rows : [];
+        anchored.length > 0
+          ? anchored
+          : !t.strictSpec && !t.specValue && rows.length === 1
+            ? rows
+            : [];
       if (anchored.length === 0 && candidates.length === 1) {
         console.log(
           `[genuine-fluids] ${t.roleKey}: no vehicle spec on file — using the family's single curated chemistry (${candidates[0].oem_part_number}), verifier decides`,
@@ -242,6 +285,8 @@ export const seedFluidsRung = internalAction({
           name: metaBySubcategory[t.roleKey]?.name ?? t.roleKey,
           quantity: null,
           observedTitle: row.name,
+          partTier: (row.part_tier ?? "oem") as string,
+          brand: (row.brand ?? null) as string | null,
         });
       }
     }
@@ -277,15 +322,18 @@ export const seedFluidsRung = internalAction({
         `${t.roleKey}:${t.oem}:${verdict}${vd?.reason ? ` — ${vd.reason.slice(0, 160)}` : ""}`,
       );
       // Curated + provenance + spec-anchored = catalog-grade: write unless
-      // the verifier POSITIVELY refutes it for this vehicle.
-      if (verdict === "refuted" || filled.has(t.roleKey)) continue;
+      // the verifier POSITIVELY refutes it for this vehicle. One write per
+      // (role, tier): the genuine bottle AND a cert-equivalent aftermarket
+      // both land, so the resolver's fluid price-sanity rule has a real
+      // choice instead of a monopoly price.
+      if (verdict === "refuted" || filled.has(`${t.roleKey}|${t.partTier}`)) continue;
       const meta = metaBySubcategory[t.roleKey];
       if (!meta) continue;
       const res: any = await ctx.runMutation(
         internal.vehicleEnrichment.v3mutations.upsertPartAndFitment,
         {
           oem_part_number: t.oem,
-          name: meta.name,
+          name: t.partTier === "aftermarket" && t.brand ? `${meta.name} (${t.brand})` : meta.name,
           category: meta.category,
           subcategory: meta.subcategory,
           make_id: resolved.makeId,
@@ -296,11 +344,13 @@ export const seedFluidsRung = internalAction({
           service_role: meta.serviceRole,
           confidence: 0.75,
           observed_title: t.observedTitle ?? undefined,
+          part_tier: t.partTier,
+          brand: t.brand ?? undefined,
         },
       );
       if (res?.part_id && !res?.rejected) {
-        filled.add(t.roleKey);
-        written.push(`${t.roleKey}:${t.oem}`);
+        filled.add(`${t.roleKey}|${t.partTier}`);
+        written.push(`${t.roleKey}:${t.oem}${t.partTier === "aftermarket" ? `:aftermarket(${t.brand ?? "?"})` : ""}`);
       } else {
         outcomes.push(`${t.roleKey}:${t.oem}:write_rejected_${res?.rejected ?? "unknown"}`);
       }

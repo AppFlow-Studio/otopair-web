@@ -5853,13 +5853,15 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       "oem_default"
     ),
     // A derived OR sanity-flagged minimum is tagged "estimated", never
-    // "oem_default" — neither is a clean OEM figure, and the tag is what
-    // downstream surfaces key on to avoid presenting it as the manufacturer's
-    // spec.
+    // "oem_default" — the tag is provenance, not trust: `derived_15pct_wear`
+    // (the standard 15%-wear threshold, operator policy Aug 2026) grades the
+    // inspection at full strength, but presenting it as the manufacturer's
+    // printed figure would be a lie the UI can't take back.
     "brakes.rotor_min_front_mm": buildSourceTag(
       null,
       vehicleConfig?.rotor_front_min_thickness_mm,
-      vehicleConfig?.rotor_front_min_quality === "derived_from_nominal" ||
+      vehicleConfig?.rotor_front_min_quality === "derived_15pct_wear" ||
+        vehicleConfig?.rotor_front_min_quality === "derived_from_nominal" ||
         vehicleConfig?.rotor_front_min_quality === "oem_spec_flagged"
         ? "estimated"
         : "oem_default"
@@ -5867,7 +5869,8 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
     "brakes.rotor_min_rear_mm": buildSourceTag(
       null,
       vehicleConfig?.rotor_rear_min_thickness_mm,
-      vehicleConfig?.rotor_rear_min_quality === "derived_from_nominal" ||
+      vehicleConfig?.rotor_rear_min_quality === "derived_15pct_wear" ||
+        vehicleConfig?.rotor_rear_min_quality === "derived_from_nominal" ||
         vehicleConfig?.rotor_rear_min_quality === "oem_spec_flagged"
         ? "estimated"
         : "oem_default"
@@ -6177,13 +6180,22 @@ async function validateTieredInspectionInput({
     }
   }
 
-  const findings = gatherFindings(state, { onlyCompletedZones: true });
+  // Per-vehicle rotor minimums (enrichment-derived) so findings + the derived
+  // rotor_condition grade against THIS car's replace-at figure, not the static
+  // fallback. Null axles fall back inside effectiveRotorRef.
+  const rotorMin = {
+    front: passportView.passport.brakes.rotor_min_front_mm ?? null,
+    rear: passportView.passport.brakes.rotor_min_rear_mm ?? null,
+  };
+
+  const findings = gatherFindings(state, { onlyCompletedZones: true, rotorMin });
   const canonicalInspection = {
     ...inspection,
     findings_attention: findings.attention,
     findings_monitor: findings.monitor,
   };
   const canonicalPrejob = derivePrejobFromInspection(state, {
+    rotorMin,
     mileage:
       typeof inspection.odometer === "number"
         ? inspection.odometer
@@ -10160,7 +10172,10 @@ export const listForMyShop = query({
       bookings = bookings.filter((booking) => booking.status === args.status);
     }
 
-    bookings.sort(compareBookingsBySchedule);
+    // "All Bookings" page shows newest scheduled first (latest → oldest), so
+    // invert the shared ascending comparator here rather than changing it
+    // globally (schedule/archive views still rely on ascending order).
+    bookings.sort((a, b) => compareBookingsBySchedule(b, a));
     return await Promise.all(bookings.map((booking) => mapBookingListItem(ctx, booking)));
   },
 });
@@ -16521,6 +16536,13 @@ export const acceptTireQuote = mutation({
       await ctx.db.patch(sibling._id, { superseded_at: now });
     }
 
+    // The "a shop quoted your request" cards are stale once a quote is
+    // accepted — drop them from the customer's feed.
+    await resolveBookingNotifications(ctx, args.booking_id, {
+      categories: ["quote_received"],
+      reason: "superseded",
+    });
+
     await logBookingStatusChange(
       ctx,
       args.booking_id,
@@ -16592,7 +16614,12 @@ export const listOpenTireQuoteRequestsForShop = query({
           .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
           .first();
         const meta =
-          (vehicle?.metadata as { make?: string; model?: string } | undefined) ?? undefined;
+          (vehicle?.metadata as
+            | { make?: string; model?: string; trim?: string }
+            | undefined) ?? undefined;
+        // Resolve engine/trim/chassis label so the mechanic sees the full
+        // spec while building the quote (they source parts off this).
+        const label = vehicle ? await resolveVehicleLabel(ctx, booking.vin) : null;
         return {
           _id: booking._id,
           _creationTime: booking._creationTime,
@@ -16605,6 +16632,9 @@ export const listOpenTireQuoteRequestsForShop = query({
                 year: vehicle.year ?? null,
                 make: meta?.make ?? null,
                 model: meta?.model ?? null,
+                trim: meta?.trim ?? null,
+                spec_label: label?.spec_label ?? null,
+                image_url: vehicle.image_url ?? null,
               }
             : null,
         };
@@ -16809,6 +16839,13 @@ export const acceptRotorQuote = mutation({
       await ctx.db.patch(sibling._id, { superseded_at: now });
     }
 
+    // The "a shop quoted your request" cards are stale once a quote is
+    // accepted — drop them from the customer's feed.
+    await resolveBookingNotifications(ctx, args.booking_id, {
+      categories: ["quote_received"],
+      reason: "superseded",
+    });
+
     await logBookingStatusChange(
       ctx,
       args.booking_id,
@@ -16875,7 +16912,12 @@ export const listOpenRotorQuoteRequestsForShop = query({
           .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
           .first();
         const meta =
-          (vehicle?.metadata as { make?: string; model?: string } | undefined) ?? undefined;
+          (vehicle?.metadata as
+            | { make?: string; model?: string; trim?: string }
+            | undefined) ?? undefined;
+        // Resolve engine/trim/chassis label so the mechanic sees the full
+        // spec while building the quote (they source parts off this).
+        const label = vehicle ? await resolveVehicleLabel(ctx, booking.vin) : null;
         return {
           _id: booking._id,
           _creationTime: booking._creationTime,
@@ -16888,6 +16930,9 @@ export const listOpenRotorQuoteRequestsForShop = query({
                 year: vehicle.year ?? null,
                 make: meta?.make ?? null,
                 model: meta?.model ?? null,
+                trim: meta?.trim ?? null,
+                spec_label: label?.spec_label ?? null,
+                image_url: vehicle.image_url ?? null,
               }
             : null,
         };

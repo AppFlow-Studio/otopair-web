@@ -1503,6 +1503,31 @@ async function fitmentsForServiceType(
  *  grabs that MAD outlier rejection can't see at n<4 sources. */
 const PLAUSIBLE_ANCHOR_MULT = 6;
 
+/** Fluid roles under the certification-equivalence pricing rule (mechanic
+ *  feedback Aug 2026): candidates for these roles were certification-anchored
+ *  at write time (the genuine-fluids rung matches spec strings and every
+ *  fitment passed the verifier), so a genuine bottle and a supplier bottle in
+ *  one role group are interchangeable chemistry — and the customer must never
+ *  be quoted the exorbitant one. */
+const FLUID_PRICE_SANITY_ROLES: ReadonlySet<string> = new Set([
+  "atf_fluid",
+  "coolant",
+  "engine_oil",
+  "brake_fluid",
+  "ps_fluid",
+  "gear_oil",
+  "diff_fluid",
+  "transfer_case_fluid",
+]);
+
+/** The genuine bottle is dropped from the scorer pool when its unit price
+ *  exceeds this multiple of the cheapest trusted-priced cert-equivalent
+ *  aftermarket candidate ($111/qt genuine Audi ATF vs a ~$20 ZF bottle is
+ *  5.5×; a genuine bottle at a fair premium survives). Kill switch:
+ *  PARTS_FLUID_AFTERMARKET=off disables the rule AND the seeding of
+ *  aftermarket fluid rows. */
+const FLUID_GENUINE_PRICE_MULT = 1.5;
+
 /**
  * Synthesize a role's universal-consumable candidate: the seeded oem_parts
  * row (category "consumable", subcategory === roleKey) with a PRICED summary,
@@ -1960,29 +1985,81 @@ export async function resolveWinningPartForService(
       }
     }
 
-    const inputs: CandidateInput[] = g.candidates.map((c) => ({
-      part_id: c.part._id,
-      confidence: c.fitment.confidence ?? 0,
-      mechanic_verified: c.fitment.mechanic_verified === true,
-      data_quality: normalizeDataQuality(
-        c.fitment.data_quality ?? c.part.data_quality ?? null,
-      ),
-      refute_flagged: c.fitment.refute_flagged === true,
-      source_domains: c.fitment.source_domains ?? [],
-      prices: c.priceSummary.sources_used.map((s) => ({
-        price: s.price,
-        source_domain: s.source_domain,
-        refreshed_days_ago:
-          s.refreshed_at != null
-            ? Math.max(0, Math.floor((now - s.refreshed_at) / MS_PER_DAY))
-            : 9999,
-      })),
-    }));
+    // ── Fluid price sanity (mechanic feedback Aug 2026) ──────────────────
+    // For fluid roles, when a cert-equivalent AFTERMARKET candidate (part_tier
+    // "aftermarket", written by the certification-anchored seed rung) carries
+    // a trusted price, any genuine candidate priced above
+    // FLUID_GENUINE_PRICE_MULT × the cheapest such aftermarket unit price is
+    // dropped from the scorer pool — the $111/qt genuine Audi jug must never
+    // be quoted past a $20 ZF bottle with the same certification. Director
+    // pins and VIN-sticky (above) still beat this: a human's choice wins.
+    // The dropped genuine stays in `losers`, so the confirm-parts UI still
+    // shows it as the alternative. If the filtered pool yields no scorer
+    // winner, selection falls back to the full pool — never worse than the
+    // pre-rule behavior.
+    let scorerPool = g.candidates;
+    if (
+      FLUID_PRICE_SANITY_ROLES.has(g.roleKey) &&
+      process.env.PARTS_FLUID_AFTERMARKET !== "off"
+    ) {
+      const unitOf = (c: WinnerCandidate) =>
+        c.priceSummary.sample_size > 0 ? quoteUnitPrice(c.priceSummary) : null;
+      const tierOf = (c: WinnerCandidate) =>
+        ((c.part as any).part_tier ?? "oem") as string;
+      const aftermarketUnits = g.candidates
+        .filter((c) => tierOf(c) === "aftermarket" && !c.fitment.refute_flagged)
+        .map(unitOf)
+        .filter((u): u is number => u != null && u > 0);
+      if (aftermarketUnits.length > 0) {
+        const cheapestAftermarket = Math.min(...aftermarketUnits);
+        const sane = g.candidates.filter((c) => {
+          if (tierOf(c) === "aftermarket") return true;
+          const u = unitOf(c);
+          return u == null || u <= cheapestAftermarket * FLUID_GENUINE_PRICE_MULT;
+        });
+        if (sane.length < g.candidates.length && sane.length > 0) {
+          console.log(
+            `[serviceParts] fluid price sanity (${g.roleKey}): dropped ` +
+              `${g.candidates.length - sane.length} genuine candidate(s) priced ` +
+              `> ${FLUID_GENUINE_PRICE_MULT}× the $${cheapestAftermarket.toFixed(2)} cert-equivalent aftermarket`,
+          );
+          scorerPool = sane;
+        }
+      }
+    }
 
-    const result = selectPart(inputs, {
+    const buildInputs = (pool: WinnerCandidate[]): CandidateInput[] =>
+      pool.map((c) => ({
+        part_id: c.part._id,
+        confidence: c.fitment.confidence ?? 0,
+        mechanic_verified: c.fitment.mechanic_verified === true,
+        data_quality: normalizeDataQuality(
+          c.fitment.data_quality ?? c.part.data_quality ?? null,
+        ),
+        refute_flagged: c.fitment.refute_flagged === true,
+        source_domains: c.fitment.source_domains ?? [],
+        prices: c.priceSummary.sources_used.map((s) => ({
+          price: s.price,
+          source_domain: s.source_domain,
+          refreshed_days_ago:
+            s.refreshed_at != null
+              ? Math.max(0, Math.floor((now - s.refreshed_at) / MS_PER_DAY))
+              : 9999,
+        })),
+      }));
+
+    let result = selectPart(buildInputs(scorerPool), {
       gateEnabled: true,
       gateThreshold: PART_CONFIDENCE_GATE_THRESHOLD,
     });
+    if (!result.winner && scorerPool !== g.candidates) {
+      // Filtered pool all gated out — fall back to the full pool rather than
+      // losing the role entirely to the price rule.
+      result = selectPart(buildInputs(g.candidates), {
+        gateEnabled: true,
+        gateThreshold: PART_CONFIDENCE_GATE_THRESHOLD,
+      });
+    }
     if (!result.winner) continue;
     const winner = g.candidates.find((c) => c.part._id === result.winner!.part_id)!;
     const q = resolveRoleQuantity(g.role, bundle, winner.fitment.quantity_needed);

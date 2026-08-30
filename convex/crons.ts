@@ -367,4 +367,14 @@ crons.interval(
   { limit: 10 },
 );
 
+// Otofacts Car Data API billing: settle reserved enrich credits against run
+// outcome — complete → commit (report meter for overage), failed/timed-out →
+// refund. So a failed enrich is never charged. Spec: CARDATA_BILLING_SPEC.md.
+crons.interval(
+  "otofacts-reconcile-enrich-ledger",
+  { minutes: 5 },
+  internal.dataApiBilling.reconcileEnrichLedger,
+  {},
+);
+
 export default crons;

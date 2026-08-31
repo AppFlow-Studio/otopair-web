@@ -417,6 +417,21 @@ export function computeHealthScoreFactors(
     const itemWeight = categoryWeightForItem(item);
     const itemShare = itemWeight * perWeightUnit;
     const score = item.rawScore ?? STATUS_SCORE[item.status];
+    // Confidence hold (Fallback v2 §5): the item is due or overdue, but the
+    // interval behind it is a class default, so it raises a recommendation
+    // without deducting. It genuinely belongs in neither bucket.
+    //
+    // Explicit rather than incidental. Without this branch the item still
+    // produces nothing — it takes the `else` below, computes (1 - 1.0) = 0 and
+    // is swallowed by the `pts <= 0` guard — but only by accident, which is
+    // how it would silently regress. This function's contract is that the
+    // breakdown reconciles with the headline; honour it deliberately.
+    //
+    // DO NOT reach for excludeFromScore here: weightTotal only accumulates
+    // for included items, so excluding a held item removes its weight from
+    // the denominator and redistributes it across every other item, changing
+    // their shares. A held item must stay in the denominator at factor 1.00.
+    if (item.factorApplied === 1 && item.status !== "on_time") continue;
     if (item.status === "on_time") {
       // Headroom above baseline 0.5 — what the on-time status "earns" you.
       const pts = Math.round((score - 0.5) * itemShare);

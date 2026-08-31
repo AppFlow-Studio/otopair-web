@@ -41,7 +41,7 @@ export default function PayoutSection() {
   return (
     <section
       id="for-shops"
-      className="mx-auto w-full max-w-[1440px] px-4 pt-28 sm:px-10 sm:pt-36 lg:px-[78px]"
+      className="mx-auto w-full max-w-[1440px] px-4 pt-20 sm:px-10 sm:pt-28 lg:px-[78px]"
     >
       {/* V1's content box: 1190 wide, centred — 125px in from a 1440 page. */}
       <div className="mx-auto w-full max-w-[1190px]">
@@ -57,7 +57,7 @@ export default function PayoutSection() {
           </h2>
         </Reveal>
 
-        <div className="mt-12 grid grid-cols-1 gap-5 lg:mt-[54px] lg:grid-cols-3 lg:gap-[20px]">
+        <div className="mt-10 grid grid-cols-1 gap-5 lg:mt-[40px] lg:grid-cols-3 lg:gap-[20px]">
           {/* Cards follow the headline rather than racing it: 0.15s lead, then
               0.09s apart — the same rhythm section 2 gives its stats
               (delayChildren 0.15 / staggerChildren 0.09). At i * 0.1 the first

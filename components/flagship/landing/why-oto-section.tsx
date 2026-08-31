@@ -59,7 +59,7 @@ export default function WhyOtoSection() {
       {/* Ticker — blue serif floating on white, no rule (V1 302:1005). */}
       <Reveal>
         <p
-          className="pt-10 pb-7 text-center text-[19px] leading-[1.6] text-[#4B82A5] sm:text-[24px] lg:text-[28px]"
+          className="pt-2 pb-7 text-center text-[19px] leading-[1.6] text-[#4B82A5] sm:text-[24px] lg:text-[28px]"
           style={serif}
         >
           Now onboarding · Staten Island, NYC
@@ -143,14 +143,14 @@ export default function WhyOtoSection() {
 
           {/* CTA row (W1: single device-detecting download). */}
           <Reveal delay={0.15}>
-            <div className="mt-14 flex flex-wrap items-center justify-center gap-3 lg:mt-[70px]">
+            <div className="mt-10 flex flex-wrap items-center justify-center gap-3 lg:mt-[44px]">
               <DownloadApp />
             </div>
           </Reveal>
 
-          {/* Breathing room — the gradient fades to white under empty space
-              before the card ends (V1 leaves ~170px). */}
-          <div className="h-24 lg:h-[170px]" aria-hidden />
+          {/* Breathing room under the badges — V1's ~170px read as dead card
+              on screen; halved (design feedback 2026-08-30). */}
+          <div className="h-16 lg:h-[88px]" aria-hidden />
         </div>
       </Reveal>
     </section>

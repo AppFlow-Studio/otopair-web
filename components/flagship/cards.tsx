@@ -163,7 +163,7 @@ export function VehicleCard({
       <Step delay={0.05} className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Car className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
             Your Vehicle
           </h3>
         </div>
@@ -182,7 +182,7 @@ export function VehicleCard({
       <Step delay={0.14}>
         <p
           className="mt-3 text-[24px] leading-tight text-[#1a1a1a]"
-          style={{ fontFamily: "var(--font-Lora)" }}
+          style={{ fontFamily: "var(--font-Petrona)" }}
         >
           {vehicle.label}
         </p>
@@ -286,7 +286,7 @@ export function SchedulingCard({ onConfirm }: { onConfirm: () => void }) {
       <Step delay={0.05}>
         <div className="flex items-center gap-2">
           <Calendar className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
             Instant Scheduling
           </h3>
         </div>
@@ -341,7 +341,7 @@ export function ChooseShopCard({
       <Step delay={0.05}>
         <div className="flex items-center gap-2">
           <MapPin className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
             Choose a Shop
           </h3>
         </div>
@@ -424,7 +424,7 @@ export function DateTimeCard({
       <Step delay={0.05}>
         <div className="flex items-center gap-2">
           <Calendar className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
             Instant Scheduling
           </h3>
         </div>
@@ -533,7 +533,7 @@ export function BookingConfirmedCard({
           />
         </motion.div>
         <Step delay={0.3}>
-          <h3 className="mt-3 text-[22px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+          <h3 className="mt-3 text-[22px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
             Booking confirmed
           </h3>
         </Step>

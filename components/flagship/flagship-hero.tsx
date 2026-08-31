@@ -219,52 +219,51 @@ function HeroInner() {
   return (
     <section
       ref={sectionRef}
-      className="relative flex min-h-screen w-full flex-col overflow-hidden bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_600px)]"
+      // Content-sized in BOTH states — never viewport-elastic. Sizing the
+      // hero to the screen puts (viewport − content) of dead air around
+      // whatever it holds, ballooning on tall windows; that got flagged twice
+      // on 2026-08-30 (idle tail, then active state). The min is only a floor
+      // for stub states; real content always exceeds it.
+      className="relative flex min-h-[720px] w-full flex-col overflow-hidden bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_600px)]"
     >
       <PillNav />
 
       {/* TEMP: dev-only trigger panel for every card the agent can summon. */}
       {process.env.NODE_ENV === "development" && <DebugTriggers oto={oto} />}
 
-      {/* Headline — collapses (but stays prominent) once the conversation starts. */}
-      <div
-        className={`relative z-20 flex flex-col items-center px-6 text-center transition-[padding] duration-500 ${
-          active ? "pt-[100px]" : "pt-[150px]"
-        }`}
-      >
-        {/* Idle state is Figma V1's declared type (node 302:901): 60px / 65px
-            line-height / #1a1a1a / 683px measure / no tracking. V1 sets it in
-            Romie, which we don't license — Lora is the standing substitute. */}
-        <motion.h1
-          layout
-          className={`text-[#1a1a1a] transition-all duration-500 ${
-            active
-              ? "max-w-[20ch] text-[34px] leading-[1.05] tracking-[-0.01em] sm:text-[42px]"
-              : "max-w-[683px] text-[38px] leading-[1.08] sm:text-[48px] md:text-[60px] md:leading-[65px]"
-          }`}
+      {/* Headline — IDENTICAL in idle and active (design feedback 2026-08-30:
+          the circled block must not move or resize when the conversation
+          opens). The old active-shrink variant also double-animated (framer
+          layout + CSS transition-all) and visibly warped on the flip — an
+          audit P2; with one static style both animators are gone. */}
+      {/* pb-6: breathing room between the subhead and whatever sits below it
+          (orb when idle, panels when active) — 2026-08-30. */}
+      <div className="relative z-20 flex flex-col items-center px-6 pb-6 pt-[150px] text-center">
+        {/* Figma V1's declared type (node 302:901): 60px / 65px line-height /
+            #1a1a1a / 683px measure / no tracking. V1 sets it in Romie, which
+            we don't license — Petrona is the standing substitute. */}
+        <h1
+          className="max-w-[683px] text-[38px] leading-[1.08] text-[#1a1a1a] sm:text-[48px] md:text-[60px] md:leading-[65px]"
           style={serifDisplay}
         >
           No more phone tag with mechanics
-        </motion.h1>
+        </h1>
 
-        {/* Subhead stays present (per the Figma hero vision); just shrinks.
-            Idle state is V1 node 302:978: 18px / 25px / #777169 / 487px. */}
-        <p
-          className={`transition-all duration-500 ${
-            active
-              ? "mt-3 max-w-[52ch] text-[14px] text-[#6b655d]"
-              : "mt-5 max-w-[487px] text-[16px] text-[#777169] sm:text-[18px] sm:leading-[25px]"
-          }`}
-        >
+        {/* Subhead — V1 node 302:978: 18px / 25px / #777169 / 487px. */}
+        <p className="mt-5 max-w-[487px] text-[16px] text-[#777169] sm:text-[18px] sm:leading-[25px]">
           Talk to Oto. Get fixed prices from real shops nearby.
-          {!active && <br className="hidden sm:block" />} Book in 90 seconds.
+          <br className="hidden sm:block" /> Book in 90 seconds.
         </p>
-
       </div>
 
       {/* Content stage. The orb is the centerpiece: large, and it sits BEHIND
           the translucent panels (which overlap its edges so it glows through). */}
-      <div className="relative z-10 mx-auto flex w-full max-w-[1180px] flex-1 items-center justify-center px-6 pb-16">
+      {/* The hero is a fixed composition like the Figma frame, not
+          viewport-elastic: min-h-screen + centered content meant every extra
+          pixel of screen height became air under the chips (2026-08-30 —
+          "they got farther when I wanted them closer"). Natural height + this
+          pb gives a constant chips → "Now onboarding" gap at every screen. */}
+      <div className="relative z-10 mx-auto flex w-full max-w-[1180px] flex-1 items-center justify-center px-6 pb-10">
         <div className="relative flex w-full flex-col items-center justify-center gap-8 lg:flex-row lg:items-center lg:justify-center lg:gap-0">
           {/* LEFT — chat (translucent; overlaps the orb's left edge) */}
           <AnimatePresence>
@@ -395,27 +394,8 @@ function HeroInner() {
         )}
       </AnimatePresence>
 
-      {/* Scroll cue */}
-      <AnimatePresence>
-        {!active && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="pointer-events-none absolute bottom-6 left-1/2 z-20 -translate-x-1/2"
-          >
-            <div className="flex h-9 w-[22px] items-start justify-center rounded-full border border-[#1a1a1a]/20 p-1.5" aria-hidden>
-              {!reduce && (
-                <motion.span
-                  className="h-1.5 w-1 rounded-full bg-[#1a1a1a]/40"
-                  animate={{ y: [0, 8, 0], opacity: [1, 0.3, 1] }}
-                  transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
-                />
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* (Scroll cue removed 2026-08-30 — it floated alone in the hero's tail
+          and read as a stray mark rather than a hint.) */}
     </section>
   );
 }

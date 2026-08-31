@@ -59,7 +59,7 @@ function CardHead({
     <Step delay={delay}>
       <div className="flex items-center gap-2">
         <Icon className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
           {title}
         </h3>
       </div>
@@ -113,7 +113,7 @@ export function ServiceCatalogCard() {
   return (
     <div className={CARD}>
       <Step delay={0.05}>
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
           Service Catalog
         </h3>
         <p className="mt-1 text-[12px] text-[#1a1a1a]/45">
@@ -153,7 +153,7 @@ export function PricingCard() {
   return (
     <div className={CARD}>
       <Step delay={0.05}>
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
           Transparent pricing
         </h3>
         <p className="mt-1 text-[12px] text-[#1a1a1a]/45">
@@ -222,7 +222,7 @@ export function HealthScoreCard() {
       <Step delay={0.05}>
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
             Vehicle Health
           </h3>
         </div>
@@ -294,7 +294,7 @@ export function TiresCard() {
   return (
     <div className={CARD}>
       <Step delay={0.05}>
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
           New tires
         </h3>
         <p className="mt-1 text-[12px] text-[#1a1a1a]/45">
@@ -436,7 +436,7 @@ export function RewardsCard() {
       <Step delay={0.05}>
         <div className="flex items-center gap-2">
           <Gift className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
             Ownership Credit
           </h3>
         </div>

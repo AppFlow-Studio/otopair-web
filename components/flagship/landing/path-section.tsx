@@ -89,6 +89,7 @@ function Pop({
 function PathCard({
   stage,
   controls,
+  badge,
   lead,
   copy,
   shown,
@@ -97,21 +98,33 @@ function PathCard({
 }: Beat & {
   stage: React.ReactNode;
   controls: React.ReactNode;
+  /** Optional pill that straddles the stage's bottom-left edge — the stage
+   *  clips its own children (overflow-hidden), so the straddle has to hang
+   *  off the outer card (Figma: "Comparing Shops"). */
+  badge?: React.ReactNode;
   lead: string;
   copy: string;
 }) {
   return (
     <motion.div
-      className="flex h-full flex-col"
+      className="flex h-full flex-col lg:row-span-2 lg:grid lg:grid-rows-subgrid lg:gap-y-0"
       initial={reduce ? { opacity: 0 } : { opacity: 0, y: 26 }}
       animate={shown ? { opacity: 1, y: 0 } : undefined}
       transition={{ delay: reduce ? 0 : base, duration: reduce ? 0.4 : 0.7, ease: EASE }}
     >
-      <div className="flex flex-1 flex-col rounded-[20px] bg-[linear-gradient(155deg,#f3f9fd_0%,#ddeefa_60%,#d3e9f8_100%)] p-4 shadow-[0_18px_44px_rgba(43,84,120,0.10)] ring-1 ring-white/70 sm:p-5">
-        <div className="relative flex-1 overflow-hidden rounded-[14px] bg-[linear-gradient(160deg,#bcdcf3_0%,#e0effa_70%,#eef6fc_100%)]">
+      {/* Figma 354:95: the outer card is NEAR-WHITE — the blue lives only in
+          the inset stage, which floats inside it with an even margin. The old
+          blue-gradient outer card was so close to the stage color that the two
+          read as one edge-to-edge blue slab (design feedback 2026-08-30). */}
+      <div className="relative flex flex-1 flex-col rounded-[18px] bg-[#f7fafd] p-3.5 shadow-[0_24px_50px_rgba(43,84,120,0.12)] ring-1 ring-[#e7eef5] sm:p-4">
+        <div className="relative flex-1 overflow-hidden rounded-[14px] bg-[linear-gradient(168deg,#9fcbef_0%,#c7e1f6_58%,#e9f3fb_100%)]">
           {stage}
         </div>
-        <div className="flex h-[64px] shrink-0 items-center justify-center">{controls}</div>
+        {/* The stage's bottom edge sits at 74px (60 controls + 14 padding).
+            The pill rides mostly ON the stage with its lip hanging off — set
+            high enough that it clears the pager row below (frame look). */}
+        {badge && <div className="absolute bottom-[68px] left-7 z-10">{badge}</div>}
+        <div className="flex h-[60px] shrink-0 items-center justify-center">{controls}</div>
       </div>
       <Rise at={0.5} y={10} shown={shown} reduce={reduce} base={base}>
         <p className="mt-4 text-[14px] leading-[1.55] text-[#777169] sm:text-[15px]">
@@ -210,7 +223,7 @@ function VoiceIntakeCard(beat: Beat) {
             base={base}
             className="absolute -right-3 top-5 w-[62%]"
           >
-            <div className="rounded-l-[10px] bg-white/55 px-4 py-3 backdrop-blur-sm">
+            <div className="rounded-l-[10px] bg-white/90 px-4 py-3 shadow-[0_8px_20px_rgba(43,84,120,0.08)]">
               <p className="text-[11px] font-semibold text-[#1a1a1a]">Booking Suggestions</p>
               <div className="mt-1.5 flex justify-between text-[10px] text-[#777169]">
                 <span>Service</span>
@@ -232,7 +245,8 @@ function VoiceIntakeCard(beat: Beat) {
             base={base}
             className="absolute inset-x-4 top-[34%] sm:inset-x-5"
           >
-            <div className="rounded-[12px] bg-white/70 px-4 py-3.5 shadow-[0_14px_34px_rgba(43,84,120,0.14)] backdrop-blur-md">
+            {/* Frosted glass, per the frame — the stage reads through it. */}
+            <div className="rounded-[16px] bg-white/40 px-5 py-4 shadow-[0_14px_34px_rgba(43,84,120,0.12)] backdrop-blur-lg">
               <div className="flex items-center gap-2">
                 <motion.span
                   className="h-1.5 w-1.5 rounded-full"
@@ -244,7 +258,7 @@ function VoiceIntakeCard(beat: Beat) {
                   LISTENING
                 </span>
               </div>
-              <Waveform active={!reduce} bars={14} className="mt-2 h-[20px] text-[#5299fe]" />
+              <Waveform active={!reduce} bars={18} className="mt-2 h-[20px] text-[#7fb0f5]" />
               <TypedTranscript shown={shown} reduce={reduce} startAt={base + 0.6} />
             </div>
           </Rise>
@@ -300,7 +314,7 @@ function PagerButton({ dir, onClick }: { dir: -1 | 1; onClick: () => void }) {
       onClick={onClick}
       whileHover={{ scale: 1.06 }}
       whileTap={{ scale: 0.92 }}
-      className="flex h-10 w-10 items-center justify-center rounded-full bg-white text-[#1a1a1a] shadow-[0_8px_22px_rgba(43,84,120,0.16)]"
+      className="flex h-9 w-[44px] items-center justify-center rounded-[8px] bg-white text-[#1a1a1a] shadow-[0_6px_16px_rgba(43,84,120,0.12)] ring-1 ring-[#e7eef5]"
     >
       <Icon className="h-4 w-4" strokeWidth={2} />
     </motion.button>
@@ -337,8 +351,25 @@ function PayCard(beat: Beat) {
       {...beat}
       lead="What you'll actually pay."
       copy="Labor, parts, and fees broken out line by line — the total you see is the total you pay. No padding, no surprises at pickup."
+      badge={
+        <Rise at={0.58} y={12} shown={shown} reduce={reduce} base={base}>
+          <div className="inline-flex items-center gap-2 rounded-full bg-white/85 px-4 py-2 shadow-[0_10px_24px_rgba(43,84,120,0.12)] backdrop-blur-sm">
+            <span className="text-[11px] font-medium text-[#1a1a1a]">Comparing Shops</span>
+            <span className="flex items-center gap-1">
+              {QUOTES.map((_, i) => (
+                <motion.span
+                  key={i}
+                  className="h-1.5 w-1.5 rounded-full"
+                  animate={{ backgroundColor: i === idx ? BLUE : "rgba(26,26,26,0.18)" }}
+                  transition={{ duration: 0.3 }}
+                />
+              ))}
+            </span>
+          </div>
+        </Rise>
+      }
       stage={
-        <div className="absolute inset-0 flex flex-col justify-center px-4 sm:px-5">
+        <div className="absolute inset-0 flex flex-col justify-center px-6 sm:px-8">
           {/* aria-live so paging announces the new quote to screen readers. */}
           <div className="relative overflow-hidden" aria-live="polite">
             {/* Direction must come through variants+custom: a plain exit prop
@@ -361,13 +392,13 @@ function PayCard(beat: Beat) {
                   duration: reduce ? 0.4 : 0.45,
                   ease: EASE,
                 }}
-                className="rounded-[12px] bg-white/80 px-5 py-4 shadow-[0_14px_34px_rgba(43,84,120,0.14)] backdrop-blur-md"
+                className="rounded-[14px] bg-white/60 px-6 py-5 shadow-[0_14px_34px_rgba(43,84,120,0.12)] backdrop-blur-lg"
               >
                 <div className="flex items-baseline justify-between">
                   <p className="text-[15px] text-[#1a1a1a]" style={serif}>
                     {q.shop}
                   </p>
-                  <span className="text-[8.5px] font-medium uppercase tracking-[0.08em] text-[#8a9094]">
+                  <span className="text-[9px] font-medium tracking-[0.03em] text-[#8a9094]">
                     Verified Shop
                   </span>
                 </div>
@@ -396,27 +427,11 @@ function PayCard(beat: Beat) {
             </AnimatePresence>
           </div>
 
-          {/* Comparing Shops + live dots */}
-          <Rise at={0.58} y={12} shown={shown} reduce={reduce} base={base} className="mt-4 self-start">
-            <div className="inline-flex items-center gap-2 rounded-full bg-white/55 px-4 py-2 backdrop-blur-sm">
-              <span className="text-[11px] font-medium text-[#1a1a1a]">Comparing Shops</span>
-              <span className="flex items-center gap-1">
-                {QUOTES.map((_, i) => (
-                  <motion.span
-                    key={i}
-                    className="h-1.5 w-1.5 rounded-full"
-                    animate={{ backgroundColor: i === idx ? BLUE : "rgba(26,26,26,0.18)" }}
-                    transition={{ duration: 0.3 }}
-                  />
-                ))}
-              </span>
-            </div>
-          </Rise>
         </div>
       }
       controls={
         <Pop at={0.66} shown={shown} reduce={reduce} base={base}>
-          <div className="flex items-center gap-5">
+          <div className="flex items-center gap-4">
             <PagerButton dir={-1} onClick={() => page(-1)} />
             <span className="min-w-[30px] text-center text-[13px] text-[#1a1a1a] tabular-nums">
               {idx + 1}/{QUOTES.length}
@@ -433,27 +448,40 @@ function PayCard(beat: Beat) {
 /*  Card 3 — Secure Authorization                                      */
 /* ------------------------------------------------------------------ */
 
-/** Faint white street grid + two pins, standing in for the booked shop's map.
- *  The streets draw themselves in, then the pins drop. */
+/** The booked shop's neighborhood. The Figma frame shows a real street map —
+ *  organic curves, varied road weights — with the brand's 3D glass pins, not
+ *  a sparse abstract grid with dots (design feedback 2026-08-30). Streets
+ *  draw themselves in, then the pins drop. */
 function MapArt({ shown, reduce, base }: Beat) {
   const draw = (i: number) => ({
     initial: reduce ? { opacity: 0 } : { pathLength: 0, opacity: 0 },
     animate: shown ? (reduce ? { opacity: 1 } : { pathLength: 1, opacity: 1 }) : undefined,
-    transition: { delay: reduce ? 0 : base + 0.18 + i * 0.05, duration: reduce ? 0.4 : 0.9, ease: EASE },
+    transition: { delay: reduce ? 0 : base + 0.14 + i * 0.04, duration: reduce ? 0.4 : 0.9, ease: EASE },
   });
-  const majors = [
-    "M-10 60 C 90 40, 180 90, 410 55",
-    "M-10 140 C 120 120, 240 165, 410 130",
-    "M-10 225 C 100 210, 260 250, 410 215",
-    "M70 -10 C 60 90, 95 200, 75 310",
-    "M180 -10 C 175 80, 200 210, 185 310",
-    "M300 -10 C 290 100, 320 190, 305 310",
+  // The frame's map is a dense real-city network, not a sparse sketch —
+  // deterministic wavy streets at three weights (no randomness: resume-safe
+  // and stable between renders).
+  const wave = (i: number, k: number) => ((i * 37 + k * 13) % 17) - 8;
+  const horizontals = Array.from({ length: 11 }, (_, i) => {
+    const y = 12 + i * 28 + wave(i, 1);
+    return `M-10 ${y} C ${55 + ((i * 29) % 45)} ${y + wave(i, 2)}, ${190 + ((i * 53) % 55)} ${y - wave(i, 3)}, 410 ${y + wave(i, 4)}`;
+  });
+  const verticals = Array.from({ length: 10 }, (_, i) => {
+    const x = 18 + i * 41 + wave(i, 5);
+    return `M${x} -10 C ${x + wave(i, 6)} 70, ${x - wave(i, 7)} 190, ${x + wave(i, 8)} 310`;
+  });
+  const diagonals = [
+    "M-10 30 C 90 70, 210 150, 410 250",
+    "M60 -10 C 130 80, 260 160, 410 200",
+    "M-10 250 C 120 220, 260 140, 410 40",
+    "M200 310 C 250 220, 330 120, 410 90",
   ];
-  const minors = [
-    "M-10 100 C 130 85, 250 120, 410 95",
-    "M-10 185 C 110 170, 270 205, 410 175",
-    "M125 -10 C 118 100, 140 220, 128 310",
-    "M245 -10 C 240 90, 260 200, 250 310",
+  // The booked shop gets the big pin; the runner-up sits smaller, further out.
+  // Both live in the top strip of the stage — the $347 card overlays the
+  // bottom ~60%, so anything below y≈100 hides behind it.
+  const pins = [
+    { cx: 132, cy: 92, w: 46 },
+    { cx: 308, cy: 60, w: 30 },
   ];
   return (
     <svg
@@ -462,23 +490,39 @@ function MapArt({ shown, reduce, base }: Beat) {
       preserveAspectRatio="xMidYMid slice"
       aria-hidden
     >
-      <g stroke="rgba(255,255,255,0.75)" strokeWidth="2.5" fill="none">
-        {majors.map((d, i) => (
-          <motion.path key={d} d={d} {...draw(i)} />
+      <g fill="none" strokeLinecap="round">
+        {horizontals.map((d, i) => (
+          <motion.path
+            key={d}
+            d={d}
+            stroke={`rgba(255,255,255,${i % 3 === 0 ? 0.8 : 0.5})`}
+            strokeWidth={i % 3 === 0 ? 2 : 1.1}
+            {...draw(i % 6)}
+          />
+        ))}
+        {verticals.map((d, i) => (
+          <motion.path
+            key={d}
+            d={d}
+            stroke={`rgba(255,255,255,${i % 3 === 1 ? 0.75 : 0.45})`}
+            strokeWidth={i % 3 === 1 ? 1.8 : 1}
+            {...draw((i + 2) % 6)}
+          />
+        ))}
+        {diagonals.map((d, i) => (
+          <motion.path
+            key={d}
+            d={d}
+            stroke="rgba(255,255,255,0.4)"
+            strokeWidth="1.2"
+            {...draw((i + 4) % 6)}
+          />
         ))}
       </g>
-      <g stroke="rgba(255,255,255,0.45)" strokeWidth="1.4" fill="none">
-        {minors.map((d, i) => (
-          <motion.path key={d} d={d} {...draw(i + 3)} />
-        ))}
-      </g>
-      {[
-        { cx: 148, cy: 84 },
-        { cx: 302, cy: 64 },
-      ].map((p, i) => (
+      {pins.map((p, i) => (
         <motion.g
           key={i}
-          initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0, y: -10 }}
+          initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0, y: -12 }}
           animate={shown ? { opacity: 1, scale: 1, y: 0 } : undefined}
           style={{ transformOrigin: `${p.cx}px ${p.cy}px` }}
           transition={
@@ -487,8 +531,16 @@ function MapArt({ shown, reduce, base }: Beat) {
               : { delay: base + 0.62 + i * 0.12, type: "spring", stiffness: 300, damping: 16 }
           }
         >
-          <circle cx={p.cx} cy={p.cy} r="11" fill="white" opacity="0.9" />
-          <circle cx={p.cx} cy={p.cy} r="6" fill={BLUE} />
+          {/* White marker dot under the mark, like the frame's map pins. */}
+          <circle cx={p.cx} cy={p.cy} r={p.w * 0.3} fill="white" opacity="0.95" />
+          {/* Anchor the pin's tip (bottom-center of the mark) on the spot. */}
+          <image
+            href="/pin-logo-3d.png"
+            x={p.cx - p.w / 2}
+            y={p.cy - p.w * 0.88}
+            width={p.w}
+            height={p.w}
+          />
         </motion.g>
       ))}
     </svg>
@@ -496,37 +548,23 @@ function MapArt({ shown, reduce, base }: Beat) {
 }
 
 /*
- * The authorization ladder. One click walks the card through three tiers —
- * the hold goes on, the hold is authorized, then the job settles — rather
- * than snapping straight from "Authorized · held" to "Confirmed". Each tier
- * owns a third of the progress line, and the line is notched into three
- * segments so the ladder reads even before it moves.
- *
- * Labels use the card's own vocabulary from the Figma mock ("Authorized ·
- * held", "Job complete · paid out in 24 hours"). They are data here, so
- * renaming a tier or reordering the ladder is a one-line edit.
+ * The authorization card. Two tiers, both worded straight from the Figma
+ * frame: it rests at "Authorized · held" with the payout note, and ↵ confirm
+ * settles it to "Confirmed". (The older four-tier walk-up ladder was replaced
+ * 2026-08-30 when the section was matched to the frame verbatim.)
  */
 const AUTH_TIERS = [
-  { status: "Awaiting authorization", note: "Tap confirm to place the hold.", fill: 0.06, done: false, control: "confirm" },
-  { status: "Hold placed · $347", note: "Card verified — funds not captured.", fill: 0.36, done: false, control: "placing the hold" },
-  { status: "Authorized · held", note: "Held until the job is done.", fill: 0.7, done: false, control: "authorizing" },
+  // Resting state matches the Figma frame verbatim: the hold is already
+  // authorized, the payout note showing, bar most of the way (2026-08-30 —
+  // "exactly like the figma"). ↵ confirm settles it.
+  { status: "Authorized · held", note: "Job complete · paid out in 24 hours.", fill: 0.85, done: false, control: "confirm" },
   { status: "Confirmed", note: "Job complete · paid out in 24 hours.", fill: 1, done: true, control: "confirmed" },
 ] as const;
-
-const TIER_MS = 1050;
 
 function AuthCard(beat: Beat) {
   const { shown, reduce, base } = beat;
   const [tier, setTier] = useState(0);
   const t = AUTH_TIERS[tier];
-  const last = AUTH_TIERS.length - 1;
-
-  // Once the visitor starts the ladder it climbs on its own to the top.
-  useEffect(() => {
-    if (tier === 0 || tier >= last) return;
-    const id = window.setTimeout(() => setTier(tier + 1), reduce ? 300 : TIER_MS);
-    return () => window.clearTimeout(id);
-  }, [tier, last, reduce]);
 
   return (
     <PathCard
@@ -542,13 +580,13 @@ function AuthCard(beat: Beat) {
             shown={shown}
             reduce={reduce}
             base={base}
-            className="absolute inset-x-4 top-1/2 -translate-y-1/2 sm:inset-x-5"
+            className="absolute inset-x-4 top-[57%] -translate-y-1/2 sm:inset-x-5"
           >
-            <div className="rounded-[12px] bg-white/80 px-5 py-4 shadow-[0_14px_34px_rgba(43,84,120,0.16)] backdrop-blur-md">
+            <div className="rounded-[14px] bg-white/55 px-5 py-4 shadow-[0_14px_34px_rgba(43,84,120,0.14)] backdrop-blur-lg">
               <p className="text-[22px] leading-none text-[#1a1a1a]" style={{ ...serif, fontWeight: 500 }}>
                 $347
               </p>
-              <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-[#eef4fb] px-2.5 py-1">
+              <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-[#e9f1fa]/80 px-2.5 py-1">
                 <motion.span
                   className="h-1.5 w-1.5 rounded-full"
                   animate={{
@@ -575,9 +613,8 @@ function AuthCard(beat: Beat) {
                 </AnimatePresence>
               </div>
 
-              {/* Three-segment progress line: notched into thirds, one tier
-                  per segment, filling as the ladder climbs. */}
-              <div className="relative mt-3 h-[2.5px] overflow-hidden rounded-full bg-[#1a1a1a]/10">
+              {/* Progress line — a single unbroken bar, per the frame. */}
+              <div className="relative mt-3 h-[3px] overflow-hidden rounded-full bg-[#1a1a1a]/10">
                 <motion.div
                   className="h-full origin-left rounded-full"
                   animate={{
@@ -594,14 +631,6 @@ function AuthCard(beat: Beat) {
                     backgroundColor: { duration: 0.4 },
                   }}
                 />
-                {[1, 2].map((n) => (
-                  <span
-                    key={n}
-                    className="absolute inset-y-0 w-px bg-white/70"
-                    style={{ left: `${(n / 3) * 100}%` }}
-                    aria-hidden
-                  />
-                ))}
               </div>
 
               <div className="mt-3 min-h-[1.4em]">
@@ -667,7 +696,7 @@ export default function PathSection() {
   const shown = useInView(rowRef, { once: true, margin: "0px 0px -12% 0px" });
 
   return (
-    <section className="mx-auto w-full max-w-[1440px] px-4 pt-28 sm:px-10 sm:pt-36 lg:px-[78px]">
+    <section className="mx-auto w-full max-w-[1440px] px-4 pt-20 sm:px-10 sm:pt-28 lg:px-[78px]">
       <Reveal>
         <h2
           className="max-w-[600px] text-[40px] leading-[1.0] text-[#1a1a1a] sm:text-[54px] lg:text-[68px]"
@@ -679,17 +708,28 @@ export default function PathSection() {
         </h2>
       </Reveal>
 
+      {/* Two shared rows on lg — stage, then caption. Every column is a subgrid
+          spanning both, so the blue cards all end on one line and the captions
+          all start on one line, however many lines a caption wraps to (design
+          feedback 2026-08-30: the middle caption runs to 3 lines where the
+          outer two run to 2, which was stealing ~23px off the middle card).
+
+          The height floor is on the stage row rather than on the column, so a
+          longer caption lengthens the column instead of eating the stage. 380px
+          is the height the stages already rendered at with 2-line captions —
+          the middle one now matches them instead of the other two shrinking to
+          meet it. Row gap is 0 because the caption carries its own `mt-4`. */}
       <div
         ref={rowRef}
-        className="mt-14 grid grid-cols-1 gap-6 lg:mt-20 lg:grid-cols-3 lg:gap-5"
+        className="mt-10 grid grid-cols-1 gap-6 lg:mt-14 lg:grid-cols-3 lg:grid-rows-[minmax(380px,1fr)_auto] lg:gap-x-5 lg:gap-y-0"
       >
-        <div className="min-h-[440px]">
+        <div className="min-h-[440px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
           <VoiceIntakeCard shown={shown} reduce={reduce} base={LEAD[0]} />
         </div>
-        <div className="min-h-[440px]">
+        <div className="min-h-[440px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
           <PayCard shown={shown} reduce={reduce} base={LEAD[1]} />
         </div>
-        <div className="min-h-[440px]">
+        <div className="min-h-[440px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
           <AuthCard shown={shown} reduce={reduce} base={LEAD[2]} />
         </div>
       </div>

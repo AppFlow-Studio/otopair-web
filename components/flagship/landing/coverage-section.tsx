@@ -192,14 +192,14 @@ export default function CoverageSection() {
   return (
     <section
       id="coverage"
-      className="mx-auto w-full max-w-[1440px] px-4 pt-28 sm:px-10 sm:pt-36 lg:px-[78px]"
+      className="mx-auto w-full max-w-[1440px] px-4 pt-20 sm:px-10 sm:pt-28 lg:px-[78px]"
     >
       {/* V1's content box for this band is the same centred 1190 as the payout
           section — measured off the render: bar 121->1303, sidebar ends 1305. */}
       <div className="mx-auto w-full max-w-[1190px]">
         <Reveal>
           <h2
-            className="max-w-[760px] text-[40px] leading-[1.02] text-[#1a1a1a] sm:text-[54px] lg:text-[68px]"
+            className="max-w-[760px] text-[40px] leading-[1.02] text-[#1a1a1a] sm:text-[54px] lg:text-[68px] lg:leading-[68px]"
             style={serifDisplay}
           >
             Network coverage across NYC boroughs
@@ -210,7 +210,7 @@ export default function CoverageSection() {
             r8, #EBF5FB) and sets the boroughs on plain white beneath it — no
             grid box, no vertical dividers, no second tinted block. */}
         <Reveal delay={0.1}>
-          <div className="mt-12 sm:mt-16 lg:mt-[68px]">
+          <div className="mt-10 sm:mt-12 lg:mt-[48px]">
             <div className="hidden lg:block">
               <div className="grid grid-cols-5 rounded-[8px] bg-[#EBF5FB]">
                 {BOROUGHS.map((b) => (
@@ -254,7 +254,7 @@ export default function CoverageSection() {
             welding them into one bordered panel, and the sidebar carries the
             same #EBF5FB tint as the bar above. */}
         <Reveal delay={0.15}>
-          <div className="mt-10 grid grid-cols-1 gap-6 lg:mt-[54px] lg:grid-cols-[minmax(0,1fr)_250px] lg:gap-[41px]">
+          <div className="mt-8 grid grid-cols-1 gap-6 lg:mt-[40px] lg:grid-cols-[minmax(0,1fr)_250px] lg:gap-[41px]">
             <div
               ref={mapCellRef}
               className="relative h-[380px] overflow-hidden rounded-[8px] sm:h-[520px] lg:h-auto lg:min-h-[720px]"

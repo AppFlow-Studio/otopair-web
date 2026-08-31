@@ -141,6 +141,15 @@ export function useOtoAgent() {
   useEffect(() => {
     setDynamicCard(null);
   }, [step]);
+  // Same guarantee for the demo-card channel. flagship-hero renders demoFeature
+  // BEFORE any step branch, so an explainer left standing masks the entire
+  // booking funnel. Every LOCAL path clears it by hand; this covers the agent's
+  // tools and any future setStep site the same way the effect above does.
+  // (Not sufficient alone: setStep to the CURRENT step is a no-op and won't
+  // re-run this — hence the explicit clears in the funnel tools below.)
+  useEffect(() => {
+    setDemoFeature(null);
+  }, [step]);
 
   const pushMessage = useCallback((role: ChatMessage["role"], text: string) => {
     setMessages((prev) => [...prev, { id: mkId(), role, text }]);
@@ -357,6 +366,7 @@ export function useOtoAgent() {
 
   // ---- Client tools the live agent calls to drive the UI -------------------
   useConversationClientTool("show_scheduling", () => {
+    setDemoFeature(null);
     setStep("scheduling");
     return "Scheduling preview shown.";
   });
@@ -366,6 +376,7 @@ export function useOtoAgent() {
     if (Array.isArray(incoming) && incoming.length) {
       setShops(incoming as unknown as Shop[]);
     }
+    setDemoFeature(null);
     setStep("shops");
     return "Shop list shown to the user.";
   });
@@ -378,6 +389,7 @@ export function useOtoAgent() {
     if (typeof params?.shop === "string") {
       setSelectedShop((prev) => prev ?? { ...DEFAULT_SHOPS[0], name: params.shop as string });
     }
+    setDemoFeature(null);
     setStep("datetime");
     return "Available times shown to the user.";
   });
@@ -396,6 +408,7 @@ export function useOtoAgent() {
             ? (params.total as number)
             : prev.total,
       }));
+      setDemoFeature(null);
       setStep("confirmed");
       return "Booking confirmed in the UI.";
     }

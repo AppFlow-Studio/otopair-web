@@ -56,18 +56,20 @@ export default function PillNav({
   });
 
   const ctaClass =
-    "group relative flex h-9 min-w-[150px] shrink-0 items-center justify-center gap-2 rounded-[40px] border border-[#1a1a1a] bg-[#1a1a1a] px-5 pl-[46px] text-[15px] leading-[22px] text-white shadow-[-5px_10px_20px_rgba(70,127,237,0.17)]";
+    "group relative flex h-9 min-w-[150px] shrink-0 items-center justify-center gap-2 rounded-[40px] border border-[#1a1a1a] bg-[#1a1a1a] px-5 text-[15px] leading-[22px] text-white shadow-[-5px_10px_20px_rgba(70,127,237,0.17)]";
   const ctaInner = (
     <>
       {/* V1 floats the pin over the button rather than putting it in flow, so
           the label stays centred within the button. */}
+      {/* pin-logo-3d (500px) over logo.png (200px, soft edges) — the small
+          flat export read as a blurry blob at button size (2026-08-30). */}
       <Image
-        src="/logo.png"
+        src="/pin-logo-3d.png"
         alt=""
-        width={21}
-        height={21}
+        width={22}
+        height={22}
         aria-hidden
-        className="absolute left-[20px] top-1/2 h-[21px] w-[21px] -translate-y-1/2 object-contain transition-transform duration-300 group-hover:-rotate-6"
+        className="absolute left-[20px] top-1/2 h-[22px] w-[22px] -translate-y-1/2 object-contain transition-transform duration-300 group-hover:-rotate-6"
       />
       {cta.label}
     </>
@@ -87,32 +89,37 @@ export default function PillNav({
     >
       {/* Values are Figma V1's declared layer props (node 302:1212): r100, white
           @ 20%, 0.5px white @ 50% edge, 35px backdrop blur, no shadow on the
-          pill. Width relaxes to fit the extra "Partner with us" destination. */}
+          pill. The V1 pill holds 3 destinations with wide air between them; we
+          carry 5, so the pill widens to 800px and the link gap grows to keep
+          V1's breathing room instead of packing 6 items into V1's 680px
+          (design feedback 2026-08-30). */}
       <nav
-        className="flex h-[69px] w-full max-w-[680px] items-center justify-between gap-4 rounded-[100px] border-[0.5px] border-white/50 bg-white/20 backdrop-blur-[35px]"
-        style={{ paddingLeft: 26.5, paddingRight: 17 }}
+        className="flex h-[69px] w-full max-w-[800px] items-center justify-between gap-4 rounded-[100px] border-[0.5px] border-white/50 bg-white/20 backdrop-blur-[35px]"
+        style={{ paddingLeft: 30, paddingRight: 17 }}
       >
         <Link href="/" className="flex items-center" aria-label="Otopair home">
-          {/* The layout box is V1's true mark size (24x30). logo.png carries
-              transparent padding, so the image is scaled to 46px and centred
-              inside that box. */}
+          {/* Layout box sized to the V1 mark's presence in the pill (28x34 —
+              the 24x30 box undersold it next to the wider spacing).
+              pin-logo-3d.png (500px source — the old 200px logo.png read as a
+              blurry blob at this size, 2026-08-30) carries transparent
+              padding, so the image is scaled to 48px and centred. */}
           <motion.span
             whileHover={{ rotate: -8, scale: 1.08 }}
             transition={{ type: "spring", stiffness: 400, damping: 15 }}
-            className="relative block h-[30px] w-[24px] shrink-0"
+            className="relative block h-[34px] w-[28px] shrink-0"
           >
             <Image
-              src="/logo.png"
+              src="/pin-logo-3d.png"
               alt="Otopair"
-              width={46}
-              height={46}
+              width={48}
+              height={48}
               priority
-              className="absolute left-1/2 top-1/2 h-[46px] w-[46px] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
+              className="absolute left-1/2 top-1/2 h-[48px] w-[48px] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain"
             />
           </motion.span>
         </Link>
 
-        <ul className="hidden items-center gap-6 sm:flex">
+        <ul className="hidden items-center gap-9 sm:flex">
           {links.map((l) => (
             <li key={l.label} className="whitespace-nowrap">
               <UnderlineLink
@@ -127,12 +134,18 @@ export default function PillNav({
 
         <div className="flex items-center gap-4">
           {shopSignIn && (
-            <UnderlineLink
-              href={shopSignIn.href}
-              className="hidden whitespace-nowrap text-[15px] leading-[28px] text-[#1a1a1a] transition-colors hover:text-[#1a1a1a]/70 sm:inline-block"
-            >
-              {shopSignIn.label}
-            </UnderlineLink>
+            /* Hide via a wrapper: UnderlineLink's base class ends in
+               `inline-block`, which ties with `hidden` at equal specificity
+               and wins on stylesheet order — so the link itself can't be
+               responsive-hidden reliably (audit P2, 2026-08-30). */
+            <span className="hidden sm:block">
+              <UnderlineLink
+                href={shopSignIn.href}
+                className="whitespace-nowrap text-[15px] leading-[28px] text-[#1a1a1a] transition-colors hover:text-[#1a1a1a]/70"
+              >
+                {shopSignIn.label}
+              </UnderlineLink>
+            </span>
           )}
           {cta.href.startsWith("#") ? (
             <motion.a href={cta.href} {...ctaMotion} className={ctaClass}>

@@ -37,7 +37,7 @@ export default function ChatCard({
   }, [messages, thinking]);
 
   return (
-    <div className="flex h-full w-full flex-col rounded-[20px] border border-white/40 bg-white/45 p-6 shadow-[0_22px_60px_rgba(0,0,0,0.10)] backdrop-blur-[40px]">
+    <div className="flex h-full w-full flex-col rounded-[20px] border border-white/40 bg-white/55 p-6 shadow-[0_22px_60px_rgba(0,0,0,0.10)] backdrop-blur-[40px]">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -46,7 +46,7 @@ export default function ChatCard({
           </p>
           <h3
             className="mt-1 text-[26px] leading-none text-[#1a1a1a]"
-            style={{ fontFamily: "var(--font-Lora)" }}
+            style={{ fontFamily: "var(--font-Petrona)" }}
           >
             Talk to Oto
           </h3>

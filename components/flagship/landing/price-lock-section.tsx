@@ -1,13 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
-import {
-  AnimatePresence,
-  motion,
-  useInView,
-  useMotionValueEvent,
-  useScroll,
-} from "motion/react";
+import { AnimatePresence, motion, useInView } from "motion/react";
 import { useReducedMotionSafe } from "../shared";
 import { Reveal, serif, serifDisplay } from "./reveal";
 import DriversPanel from "./drivers-panel";
@@ -610,36 +604,13 @@ export default function PriceLockSection() {
   const listRef = useRef<HTMLDivElement>(null);
   const listInView = useInView(listRef, { amount: 0.35 });
 
-  // ── Pinned scroll-through (design feedback 2026-08-24, item 2) ──
-  // On desktop the card pins inside a 320vh runway and the visitor's scroll
-  // steps 01 → 02 → 03 (a third of the runway each), so nobody misses two of
-  // the three roles behind a hover they never perform. Hover/tap still swaps
-  // instantly between threshold crossings. Mobile and tablet keep the
-  // stacked layout with the auto-advancing reel.
-  const [pinnedMode, setPinnedMode] = useState(false);
-  useEffect(() => {
-    const mq = window.matchMedia("(min-width: 1024px)");
-    const sync = () => setPinnedMode(mq.matches);
-    sync();
-    mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
-  }, []);
-
-  const runwayRef = useRef<HTMLDivElement>(null);
-  const { scrollYProgress } = useScroll({
-    target: runwayRef,
-    offset: ["start start", "end end"],
-  });
-  useMotionValueEvent(scrollYProgress, "change", (p) => {
-    if (!pinnedMode) return;
-    const zone = p < 1 / 3 ? 0 : p < 2 / 3 ? 1 : 2;
-    setActive((a) => {
-      if (a === zone) return a;
-      // Scroll is the desktop driver — it also retires the auto reel.
-      engaged.current = true;
-      return zone;
-    });
-  });
+  // ── No scroll-driven motion (design feedback 2026-08-30) ──
+  // This section sat in a pinned 280vh runway where scroll stepped the roles;
+  // the visitor asked for the section to hold still like every other one. The
+  // roles now advance on the auto-reel everywhere (each story plays to
+  // completion), with hover/tap/focus as the manual override — the behavior
+  // mobile always had. This also gives each 24–37s panel story its full run,
+  // which the ~2s-per-zone scroll never did (audit P1, 2026-08-30).
 
   // Full loop length of each role's story, minus a beat so we hand off just
   // before the loop restarts. MUST track the SEQ restart times in
@@ -652,17 +623,16 @@ export default function PriceLockSection() {
   }, [listInView]);
 
   // The reel: an untouched visitor sees Drivers → Shops → Oto, each story
-  // playing to completion before the next takes the stage. Only off-desktop —
-  // when the section pins, scroll position is the driver instead.
+  // playing to completion before the next takes the stage.
   useEffect(() => {
-    if (pinnedMode || reduce || !listInView || resetToken === 0) return;
+    if (reduce || !listInView || resetToken === 0) return;
     if (engaged.current) return;
     const t = window.setTimeout(() => {
       if (!engaged.current) setActive((a) => (a + 1) % ROLES.length);
     }, STORY_MS[active]);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, listInView, pinnedMode, reduce, resetToken]);
+  }, [active, listInView, reduce, resetToken]);
 
   const select = (i: number) => {
     touched.current = true;
@@ -683,7 +653,7 @@ export default function PriceLockSection() {
   return (
     <section
       id="how-it-works"
-      className="mx-auto w-full max-w-[1440px] px-4 pt-28 sm:px-10 sm:pt-36 lg:px-[78px]"
+      className="mx-auto w-full max-w-[1440px] px-4 pt-12 sm:px-10 sm:pt-16 lg:px-[78px]"
     >
       {/* Centered three-line headline (V1 302:1149: 912x204 box, 68px line
           pitch, page-centered) */}
@@ -705,14 +675,10 @@ export default function PriceLockSection() {
           in from the card's left edge, the demo stage fills the right — V1's
           arrangement (rail x160, UI x726 on the page). On mobile the stage
           still stacks first, so the DOM order is stage → list and the swap
-          happens with order utilities at lg.
-
-          On lg the card lives inside a 320vh runway and pins (sticky, centered
-          in the viewport when it fits) while scroll steps the three roles;
-          past the runway it releases and the page continues. */}
-      <div ref={runwayRef} className="lg:h-[320vh]">
-        <div className="lg:sticky lg:top-[max(16px,calc(50vh-430px))]">
-      <div className="mx-auto mt-16 w-full max-w-[1269px] overflow-clip rounded-[28px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] sm:mt-24 sm:rounded-[40px]">
+          happens with order utilities at lg. Ordinary flow at every width —
+          the pinned scroll-through runway is gone (design feedback
+          2026-08-30: no components moving with scroll position). */}
+      <div className="mx-auto mt-10 w-full max-w-[1269px] overflow-clip rounded-[28px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] sm:mt-12 sm:rounded-[40px]">
         {/* pb keeps the phone mock + caption chips off the card's bottom edge
             on every step (design feedback 2026-08-24, item 4). */}
         <div className="grid grid-cols-1 gap-12 px-5 pt-10 pb-16 sm:px-10 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:pt-5 lg:pb-20 lg:pl-[76px] lg:pr-[27px]">
@@ -754,7 +720,7 @@ export default function PriceLockSection() {
                     select(i);
                   }
                 }}
-                className="relative flex cursor-pointer flex-col justify-center rounded-[16px] px-0 py-8 outline-none [transition:filter_400ms_ease] focus-visible:ring-1 focus-visible:ring-[#1a1a1a]/30 lg:h-[33.333%] lg:min-h-[168px] lg:px-8"
+                className="relative flex cursor-pointer flex-col justify-center rounded-[16px] px-0 py-8 outline-none [transition:filter_400ms_ease] focus-visible:ring-1 focus-visible:ring-[#1a1a1a]/30 lg:h-[33.333%] lg:px-8"
                 style={{ filter: on ? "blur(0px)" : "blur(5px)" }}
               >
                 <p
@@ -785,8 +751,6 @@ export default function PriceLockSection() {
             );
           })}
         </div>
-        </div>
-      </div>
         </div>
       </div>
     </section>

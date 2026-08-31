@@ -40,6 +40,12 @@ function StoreBadge({ store, size = "md" }: { store: "apple" | "google"; size?: 
     <motion.a
       whileTap={{ scale: 0.97 }}
       href={href}
+      // While the store URLs are still the "#" placeholders, clicking a badge
+      // scroll-jumped the visitor back to the top of the page (audit P1,
+      // 2026-08-30). Swallow the jump until the real listings land.
+      onClick={(e) => {
+        if (href === "#") e.preventDefault();
+      }}
       aria-label={store === "apple" ? "Download Otopair on the App Store" : "Get Otopair on Google Play"}
       className="flex items-center justify-center rounded-[8px] bg-[#1a1a1a] transition-transform duration-300 hover:scale-[1.03]"
       style={{ width: w, height: h }}

@@ -1,54 +1,78 @@
 "use client";
 
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
-import { motion, useInView } from "motion/react";
-import { Waveform } from "../voice-bar";
+import { AnimatePresence, motion, useInView } from "motion/react";
 import { useReducedMotionSafe } from "../shared";
 import { serif } from "./reveal";
 
 /*
- * "Oto Listens." — the V2 photo section (Figma 354:738 "Frame 73", 1440x835).
- * One full-bleed rounded photo of the drive (dashboard, phone on "Oto
- * Scanning") with the conversation floating over it, and a darker driver
- * close-up overlaying the left half as its own card (624x690, 40px left
- * radius) carrying the copy on a frosted panel. Replaces the old "Built to
- * understand your car" three-up (design feedback 2026-08-24, item 5).
+ * "Oto Listens." — the V2 photo section is a STORY ROTATION (design feedback
+ * 2026-08-30): four selling points, each a full-bleed photo with the copy
+ * block mid-left, auto-advancing like a story reel. The tick bars above the
+ * title (previously misread as a waveform) are the rotation indicator — one
+ * tall bright bar for the active story, short dim bars for the rest; clicking
+ * a tick jumps to that story and retires the auto-advance.
  *
- * Both photos are straight 2x exports of the Figma layers
- * (public/landing/oto-listens-{driver,dash}.png) — the bubbles and copy are
- * real elements here, nothing is baked into the images.
+ * Story 1 keeps the original layered composite (dash photo + driver close-up
+ * card + chat bubbles). Stories 2–4 are single full-bleed photos.
  *
- * Everything in the frame animates. One local clock (`shown`) drives the
- * whole entrance so the beats land in a fixed order rather than each element
- * racing its own scroll trigger:
- *
- *   0.00  dash photo fades up out of a 1.08 push-in
- *   0.12  driver card wipes in from the left edge
- *   0.26  frosted panel rises and unblurs
- *   0.38  waveform ticks in (then loops on its own)
- *   0.46  "Oto Listens." rises
- *   0.60  body copy rises
- *   0.80  the question bubble pops
- *   1.25  Oto's answer pops
- *
- * After the entrance settles, two ambient loops keep the frame alive: a very
- * slow Ken Burns on the photo and a small float under each bubble. Reduced
- * motion gets plain fades and no loops.
+ * ASSETS: stories 2–4 want their own Figma exports —
+ *   public/landing/story-health.png   (hand + phone, vehicle health screen)
+ *   public/landing/story-records.png  (maintenance tracker / passport)
+ *   public/landing/story-booking.png  (hand + phone, NYC map + Select Services)
+ * Until those exist the dash photo stands in (onError fallback) so nothing
+ * renders broken. Drop the exports in and the reel is done.
  */
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
+/** Entrance beats for story 1's composite (one local clock from `shown`). */
 const BEAT = {
   photo: 0,
   card: 0.12,
   panel: 0.26,
-  wave: 0.38,
+  ticks: 0.38,
   title: 0.46,
   body: 0.6,
   ask: 0.8,
   answer: 1.25,
 } as const;
+
+/** How long each story holds the stage. Story 1 runs longer — its bubbles
+ *  conversation needs time to land. */
+const STORY_HOLD_MS = [9000, 7000, 7000, 7000] as const;
+
+const STORIES = [
+  {
+    id: "listens",
+    title: "Oto Listens.",
+    body: "Describe the problem out loud. Oto understands symptoms, context, and your specific car — not just keywords.",
+    img: null, // story 1 renders the layered composite, not a single photo
+    alt: "",
+  },
+  {
+    id: "health",
+    title: "Your car's health, live.",
+    body: "A running health score for your exact car — what's strong, what's wearing, and what's due next.",
+    img: "/landing/story-health.png",
+    alt: "A phone showing a live vehicle health score",
+  },
+  {
+    id: "records",
+    title: "Every record, remembered.",
+    body: "Service history, receipts and inspections on one passport — nothing lost to a glovebox.",
+    img: "/landing/story-records.png",
+    alt: "A phone showing a car's complete service history",
+  },
+  {
+    id: "booking",
+    title: "Booked in 90 seconds.",
+    body: "Real shops on a live map, prices locked before you tap confirm.",
+    img: "/landing/story-booking.png",
+    alt: "A phone showing nearby shops on a map, ready to book",
+  },
+] as const;
 
 type Beat = { shown: boolean; reduce: boolean };
 
@@ -74,43 +98,90 @@ function Rise({
   );
 }
 
-/** Frosted copy panel (Figma UI 354:746: 398x418, radius 20, bg-blur 70). */
-function CopyPanel({ shown, reduce }: Beat) {
+/** The rotation indicator (Figma: one tall bright bar, short dim bars).
+ *  Each tick is a button — clicking jumps to that story. */
+function StoryTicks({
+  active,
+  onPick,
+}: {
+  active: number;
+  onPick: (i: number) => void;
+}) {
   return (
-    <Rise
-      at={BEAT.panel}
-      y={22}
-      blur={8}
-      shown={shown}
-      reduce={reduce}
-      className="max-w-[398px] rounded-[20px] bg-white/5 p-7 backdrop-blur-[35px] sm:p-9"
-    >
-      <Rise at={BEAT.wave} y={8} shown={shown} reduce={reduce}>
-        <Waveform active={!reduce} bars={4} className="h-[18px] text-white/80" />
-      </Rise>
-      <Rise at={BEAT.title} y={18} shown={shown} reduce={reduce}>
-        <h2
-          className="mt-5 text-[28px] leading-[1.15] text-white sm:text-[36px] sm:leading-[41px]"
-          style={{ ...serif, letterSpacing: "0.37px" }}
+    <div className="flex items-end gap-[4px]" role="tablist" aria-label="Stories">
+      {STORIES.map((s, i) => (
+        <button
+          key={s.id}
+          type="button"
+          role="tab"
+          aria-selected={i === active}
+          aria-label={s.title}
+          onClick={() => onPick(i)}
+          className="group flex h-[22px] items-end px-[2px]"
         >
-          Oto Listens.
-        </h2>
+          <motion.span
+            className="block w-[2.5px] rounded-full"
+            initial={false}
+            animate={{
+              height: i === active ? 18 : 8,
+              backgroundColor: i === active ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.45)",
+            }}
+            transition={{ duration: 0.35, ease: EASE }}
+          />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** The copy block: ticks, title, body — swaps with the active story. */
+function CopyPanel({
+  shown,
+  reduce,
+  active,
+  onPick,
+}: Beat & { active: number; onPick: (i: number) => void }) {
+  const story = STORIES[active];
+  return (
+    <Rise at={BEAT.panel} y={22} blur={8} shown={shown} reduce={reduce} className="max-w-[398px]">
+      <Rise at={BEAT.ticks} y={8} shown={shown} reduce={reduce}>
+        <StoryTicks active={active} onPick={onPick} />
       </Rise>
-      <Rise at={BEAT.body} y={14} shown={shown} reduce={reduce}>
-        <p className="mt-4 max-w-[300px] text-[14px] font-medium leading-[1.5] text-white/90 sm:text-[15px]">
-          Describe the problem out loud. Oto understands symptoms, context, and your specific car
-          — not just keywords.
-        </p>
-      </Rise>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={story.id}
+          initial={reduce ? { opacity: 0 } : { opacity: 0, y: 14 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={reduce ? { opacity: 0 } : { opacity: 0, y: -10 }}
+          transition={{ duration: reduce ? 0.3 : 0.45, ease: EASE }}
+        >
+          <Rise at={BEAT.title} y={18} shown={shown} reduce={reduce}>
+            <h2
+              className="mt-5 text-[28px] leading-[1.15] text-white sm:text-[36px] sm:leading-[41px]"
+              style={{ ...serif, letterSpacing: "0.37px" }}
+            >
+              {story.title}
+            </h2>
+          </Rise>
+          <Rise at={BEAT.body} y={14} shown={shown} reduce={reduce}>
+            <p className="mt-4 max-w-[300px] text-[14px] font-medium leading-[1.5] text-white/90 sm:text-[15px]">
+              {story.body}
+            </p>
+          </Rise>
+        </motion.div>
+      </AnimatePresence>
     </Rise>
   );
 }
 
-/** A floating chat bubble: springs in, then drifts. `float` offsets the two
- *  loops so they never bob in lockstep. */
+/** A chat bubble: springs in, then holds.
+ *
+ *  These used to drift on an infinite `y: [0, -5, 0]` loop, but the bubble is
+ *  `backdrop-blur`-ed over the photo, and Chrome re-samples a backdrop-filter's
+ *  source at whole device pixels — the frosted content stepped pixel by pixel
+ *  instead of gliding (design feedback 2026-08-30). Frost wins over a drift. */
 function Bubble({
   at,
-  float,
   tone,
   className,
   children,
@@ -118,7 +189,6 @@ function Bubble({
   reduce,
 }: Beat & {
   at: number;
-  float: number;
   tone: "ask" | "answer";
   className: string;
   children: React.ReactNode;
@@ -134,77 +204,36 @@ function Bubble({
           : { delay: at, type: "spring", stiffness: 250, damping: 22 }
       }
     >
-      <motion.div
-        animate={reduce || !shown ? undefined : { y: [0, -5, 0] }}
-        transition={{ duration: 6.5, delay: float, repeat: Infinity, ease: "easeInOut" }}
+      {/* Figma's bubbles are flat and glassy: radius 10, wide padding. */}
+      <div
+        className={`rounded-[10px] px-6 py-4 text-[12px] leading-snug text-[#1a1a1a] shadow-[0_10px_30px_rgba(0,0,0,0.10)] backdrop-blur-md sm:px-9 sm:py-5 sm:text-[13.5px] ${
+          tone === "ask" ? "bg-white/45" : "bg-white/40"
+        }`}
       >
-        <div
-          className={`rounded-[14px] px-5 py-3.5 text-[12px] leading-snug text-[#1a1a1a] shadow-[0_10px_30px_rgba(0,0,0,0.10)] backdrop-blur-md sm:px-7 sm:py-4 sm:text-[14px] ${
-            tone === "ask" ? "bg-white/60" : "bg-white/45"
-          }`}
-        >
-          {children}
-        </div>
-      </motion.div>
+        {children}
+      </div>
     </motion.div>
   );
 }
 
-/** The dashboard photo: pushes in on entrance, then breathes. */
-function DashPhoto({ shown, reduce, alt }: Beat & { alt: string }) {
-  return (
-    <motion.div
-      className="absolute inset-0"
-      initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 1.08 }}
-      animate={shown ? { opacity: 1, scale: 1 } : undefined}
-      transition={{ delay: BEAT.photo, duration: reduce ? 0.5 : 1.5, ease: EASE }}
-    >
-      <motion.div
-        className="absolute inset-0"
-        animate={reduce || !shown ? undefined : { scale: [1, 1.035, 1] }}
-        transition={{ duration: 24, repeat: Infinity, ease: "easeInOut" }}
-      >
-        <Image
-          src="/landing/oto-listens-dash.png"
-          alt={alt}
-          fill
-          sizes="(min-width: 1024px) 1288px, 100vw"
-          className="object-cover"
-          priority={false}
-        />
-      </motion.div>
-    </motion.div>
-  );
-}
-
-function Bubbles({ shown, reduce, compact = false }: Beat & { compact?: boolean }) {
+function Bubbles({ shown, reduce }: Beat) {
   return (
     <>
       <Bubble
         at={BEAT.ask}
-        float={0}
         tone="ask"
         shown={shown}
         reduce={reduce}
-        className={
-          compact
-            ? "absolute right-[4%] top-[10%] max-w-[78%]"
-            : "absolute right-[5%] top-[15%] max-w-[46%]"
-        }
+        className="absolute right-[4%] top-[26%] max-w-[52%]"
       >
         &ldquo;My brakes squeal in the cold. Can you check?&rdquo;
       </Bubble>
       <Bubble
         at={BEAT.answer}
-        float={2.6}
         tone="answer"
         shown={shown}
         reduce={reduce}
-        className={
-          compact
-            ? "absolute left-[6%] top-[30%] max-w-[70%]"
-            : "absolute left-[51%] top-[33%] max-w-[40%]"
-        }
+        className="absolute left-[52%] top-[38%] max-w-[46%]"
       >
         Classic glazed pads. Found 3 shops.
       </Bubble>
@@ -212,73 +241,167 @@ function Bubbles({ shown, reduce, compact = false }: Beat & { compact?: boolean 
   );
 }
 
+/** Full-bleed story photo with a slow Ken Burns; falls back to the dash
+ *  export while a story's own Figma photo hasn't been dropped in yet. */
+function StoryPhoto({
+  src,
+  alt,
+  shown,
+  reduce,
+}: Beat & { src: string; alt: string }) {
+  const [actualSrc, setActualSrc] = useState(src);
+  return (
+    <motion.div
+      className="absolute inset-0"
+      animate={reduce || !shown ? undefined : { scale: [1, 1.035, 1] }}
+      transition={{ duration: 24, repeat: Infinity, ease: "easeInOut" }}
+    >
+      <Image
+        src={actualSrc}
+        alt={alt}
+        fill
+        sizes="(min-width: 1024px) 1288px, 100vw"
+        className="object-cover"
+        onError={() => setActualSrc("/landing/oto-listens-dash.png")}
+      />
+    </motion.div>
+  );
+}
+
+/** Story 1 — the original layered composite: dash photo, chat bubbles, and
+ *  the driver close-up card over the left half. */
+function ListensComposite({ shown, reduce, entrance }: Beat & { entrance: boolean }) {
+  return (
+    <>
+      <motion.div
+        className="absolute inset-0"
+        initial={entrance && !reduce ? { opacity: 0, scale: 1.08 } : { opacity: 0 }}
+        animate={shown ? { opacity: 1, scale: 1 } : undefined}
+        transition={{ delay: BEAT.photo, duration: reduce || !entrance ? 0.5 : 1.5, ease: EASE }}
+      >
+        <StoryPhoto
+          src="/landing/oto-listens-dash.png"
+          alt="A driver holding a phone running Oto while parked"
+          shown={shown}
+          reduce={reduce}
+        />
+      </motion.div>
+      <Bubbles shown={shown} reduce={reduce} />
+      <motion.div
+        className="absolute inset-y-0 left-0 w-[48.5%] overflow-hidden rounded-l-[40px]"
+        initial={
+          entrance && !reduce
+            ? { opacity: 0, x: -40, clipPath: "inset(0 100% 0 0)" }
+            : { opacity: 0 }
+        }
+        animate={shown ? { opacity: 1, x: 0, clipPath: "inset(0 0% 0 0)" } : undefined}
+        transition={{ delay: entrance && !reduce ? BEAT.card : 0, duration: reduce || !entrance ? 0.5 : 1.0, ease: EASE }}
+      >
+        <Image
+          src="/landing/oto-listens-driver.png"
+          alt=""
+          fill
+          sizes="(min-width: 1024px) 625px, 100vw"
+          className="object-cover"
+        />
+        {/* The frame runs moodier than the raw export — a quiet dark wash
+            keeps the white copy legible. */}
+        <div className="absolute inset-0 bg-[#141e29]/25" aria-hidden />
+      </motion.div>
+    </>
+  );
+}
+
 export default function ListensSection() {
   const reduce = useReducedMotionSafe();
   const ref = useRef<HTMLElement>(null);
-  // One trigger for the whole section — every beat above counts from here.
+  // One trigger for the whole section — story 1's entrance counts from here.
   const shown = useInView(ref, { once: true, margin: "0px 0px -12% 0px" });
   const beat = { shown, reduce };
+
+  const [active, setActive] = useState(0);
+  // First rotation pass only: story 1 gets its full entrance choreography;
+  // revisits (auto or clicked) come back with a plain crossfade. State, not a
+  // ref — it's read during render (the `entrance` prop).
+  const [visited, setVisited] = useState(false);
+  // Clicking a tick retires the auto-advance — the visitor is driving now.
+  const engaged = useRef(false);
+
+  useEffect(() => {
+    if (!shown || reduce || engaged.current) return;
+    const t = window.setTimeout(() => {
+      if (!engaged.current) {
+        setVisited(true);
+        setActive((a) => (a + 1) % STORIES.length);
+      }
+    }, STORY_HOLD_MS[active]);
+    return () => window.clearTimeout(t);
+  }, [shown, reduce, active]);
+
+  const pick = (i: number) => {
+    engaged.current = true;
+    setVisited(true);
+    setActive(i);
+  };
+
+  const story = STORIES[active];
 
   return (
     <section
       ref={ref}
-      className="mx-auto w-full max-w-[1440px] px-4 pt-28 sm:px-10 sm:pt-36 lg:px-[76px]"
+      className="mx-auto w-full max-w-[1440px] px-4 pt-20 sm:px-10 sm:pt-28 lg:px-[78px]"
     >
-      {/* ---- Desktop: the layered composite, at the design's 1287:690 ---- */}
-      <div className="relative hidden aspect-[1287/690] w-full overflow-hidden rounded-[40px] lg:block">
-        <DashPhoto {...beat} alt="A driver holding a phone running Oto while parked" />
-        <Bubbles {...beat} />
+      {/* ---- Desktop: the rotating stage, at the design's 1287:690 ---- */}
+      <div className="relative hidden aspect-[1287/690] w-full overflow-hidden rounded-[40px] bg-[#141e29] lg:block">
+        <AnimatePresence initial={false}>
+          <motion.div
+            key={story.id}
+            className="absolute inset-0"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduce ? 0.3 : 0.7, ease: EASE }}
+          >
+            {story.id === "listens" ? (
+              <ListensComposite {...beat} entrance={!visited} />
+            ) : (
+              <>
+                <StoryPhoto src={story.img!} alt={story.alt} {...beat} />
+                <div className="absolute inset-0 bg-[#141e29]/30" aria-hidden />
+              </>
+            )}
+          </motion.div>
+        </AnimatePresence>
 
-        {/* Driver close-up overlays the left half as its own card — it wipes
-            in from the left edge rather than just fading with the photo. */}
-        <motion.div
-          className="absolute inset-y-0 left-0 w-[48.5%] overflow-hidden rounded-l-[40px]"
-          initial={reduce ? { opacity: 0 } : { opacity: 0, x: -40, clipPath: "inset(0 100% 0 0)" }}
-          animate={shown ? { opacity: 1, x: 0, clipPath: "inset(0 0% 0 0)" } : undefined}
-          transition={{ delay: reduce ? 0 : BEAT.card, duration: reduce ? 0.5 : 1.0, ease: EASE }}
-        >
-          <Image
-            src="/landing/oto-listens-driver.png"
-            alt=""
-            fill
-            sizes="(min-width: 1024px) 625px, 100vw"
-            className="object-cover"
-          />
-          <div className="absolute bottom-[8%] left-[10%] right-[6%]">
-            <CopyPanel {...beat} />
-          </div>
-        </motion.div>
+        {/* Copy + ticks sit above the rotation, fixed mid-left (the frame's
+            position) — only the story behind them swaps. */}
+        <div className="absolute left-[5%] right-[8%] top-1/2 z-20 w-[38%] -translate-y-1/2">
+          <CopyPanel {...beat} active={active} onPick={pick} />
+        </div>
       </div>
 
-      {/* ---- Mobile/tablet: the two photos stack as sibling cards ---- */}
-      <div className="flex flex-col gap-4 lg:hidden">
-        <motion.div
-          className="relative aspect-[624/690] max-h-[560px] w-full overflow-hidden rounded-[24px]"
-          initial={reduce ? { opacity: 0 } : { opacity: 0, y: 28, scale: 0.98 }}
-          animate={shown ? { opacity: 1, y: 0, scale: 1 } : undefined}
-          transition={{ duration: reduce ? 0.4 : 0.8, ease: EASE }}
-        >
-          <Image
-            src="/landing/oto-listens-driver.png"
-            alt="A driver describing a problem to Oto out loud"
-            fill
-            sizes="100vw"
-            className="object-cover"
-          />
-          <div className="absolute bottom-5 left-5 right-5">
-            <CopyPanel {...beat} />
-          </div>
-        </motion.div>
-
-        <motion.div
-          className="relative aspect-[1287/690] w-full overflow-hidden rounded-[24px]"
-          initial={reduce ? { opacity: 0 } : { opacity: 0, y: 28 }}
-          animate={shown ? { opacity: 1, y: 0 } : undefined}
-          transition={{ delay: reduce ? 0 : 0.1, duration: reduce ? 0.4 : 0.8, ease: EASE }}
-        >
-          <DashPhoto {...beat} alt="A phone running Oto's scan while parked" />
-          <Bubbles {...beat} compact />
-        </motion.div>
+      {/* ---- Mobile/tablet: same rotation as a single tall card ---- */}
+      <div className="relative aspect-[624/690] max-h-[560px] w-full overflow-hidden rounded-[24px] bg-[#141e29] lg:hidden">
+        <AnimatePresence initial={false}>
+          <motion.div
+            key={story.id}
+            className="absolute inset-0"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduce ? 0.3 : 0.6, ease: EASE }}
+          >
+            <StoryPhoto
+              src={story.id === "listens" ? "/landing/oto-listens-driver.png" : story.img!}
+              alt={story.alt || "A driver describing a problem to Oto out loud"}
+              {...beat}
+            />
+            <div className="absolute inset-0 bg-[#141e29]/30" aria-hidden />
+          </motion.div>
+        </AnimatePresence>
+        <div className="absolute bottom-7 left-6 right-5 z-20">
+          <CopyPanel {...beat} active={active} onPick={pick} />
+        </div>
       </div>
     </section>
   );

@@ -236,14 +236,15 @@ for (const quoteType of ["tire", "rotor"] as const) {
     ).toMatchObject({ available: false, reason: "cancelled", status: "cancelled" });
   });
 
-  test(`${quoteType} requote increments the internal revision and resets ten-minute expiry`, async () => {
+  test(`${quoteType} requote increments the internal revision without extending expiry`, async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(NOW);
     const { t, seed } = await seedLifecycle(quoteType);
     const owner = t.withIdentity(identityFor(seed.ownerClerkId));
     const quoteApi = quoteType === "tire"
       ? api.tire_quote_responses
       : api.rotor_quote_responses;
+
+    vi.setSystemTime(NOW.getTime() + 5 * 60_000);
 
     await owner.mutation(quoteApi.requote, {
       response_id: seed.responseId,
@@ -267,7 +268,7 @@ for (const quoteType of ["tire", "rotor"] as const) {
 
     const response = await t.run((ctx) => ctx.db.get(seed.responseId));
     expect(response?.revision).toBe(2);
-    expect(response?.modified_at).toBe(NOW.getTime());
+    expect(response?.modified_at).toBe(NOW.getTime() + 5 * 60_000);
     expect(response?.expires_at).toBe(NOW.getTime() + 10 * 60_000);
     expect(response?.labor_cost).toBe(125);
   });

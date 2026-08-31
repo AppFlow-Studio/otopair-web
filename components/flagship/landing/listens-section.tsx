@@ -7,22 +7,20 @@ import { useReducedMotionSafe } from "../shared";
 import { serif } from "./reveal";
 
 /*
- * "Oto Listens." — the V2 photo section is a STORY ROTATION (design feedback
- * 2026-08-30): four selling points, each a full-bleed photo with the copy
- * block mid-left, auto-advancing like a story reel. The tick bars above the
- * title (previously misread as a waveform) are the rotation indicator — one
- * tall bright bar for the active story, short dim bars for the rest; clicking
- * a tick jumps to that story and retires the auto-advance.
+ * "Oto Listens." — a self-rotating story reel of three selling points, in
+ * ordinary page flow (design feedback 2026-08-31: one scroll-driven section
+ * on the page is a moment, two is a pattern — this one holds still). Stories
+ * advance on their own clock; the tick bars above the title show which is
+ * active and are clickable to jump (clicking retires the auto-advance).
  *
- * Story 1 keeps the original layered composite (dash photo + driver close-up
- * card + chat bubbles). Stories 2–4 are single full-bleed photos.
+ * Story 1 keeps the original layered composite (dash photo + driver
+ * close-up card + chat bubbles). Stories 2–3 are single full-bleed photos.
  *
- * ASSETS: stories 2–4 want their own Figma exports —
+ * ASSETS: stories 2–3 want their own Figma exports —
  *   public/landing/story-health.png   (hand + phone, vehicle health screen)
- *   public/landing/story-records.png  (maintenance tracker / passport)
  *   public/landing/story-booking.png  (hand + phone, NYC map + Select Services)
  * Until those exist the dash photo stands in (onError fallback) so nothing
- * renders broken. Drop the exports in and the reel is done.
+ * renders broken.
  */
 
 const EASE = [0.22, 1, 0.36, 1] as const;
@@ -39,9 +37,9 @@ const BEAT = {
   answer: 1.25,
 } as const;
 
-/** How long each story holds the stage. Story 1 runs longer — its bubbles
- *  conversation needs time to land. */
-const STORY_HOLD_MS = [9000, 7000, 7000, 7000] as const;
+/** How long each story holds before handing off. Story 1 runs longer — its
+ *  bubble conversation needs time to land. */
+const STORY_HOLD_MS = [9000, 7000, 7000] as const;
 
 const STORIES = [
   {
@@ -57,13 +55,6 @@ const STORIES = [
     body: "A running health score for your exact car — what's strong, what's wearing, and what's due next.",
     img: "/landing/story-health.png",
     alt: "A phone showing a live vehicle health score",
-  },
-  {
-    id: "records",
-    title: "Every record, remembered.",
-    body: "Service history, receipts and inspections on one passport — nothing lost to a glovebox.",
-    img: "/landing/story-records.png",
-    alt: "A phone showing a car's complete service history",
   },
   {
     id: "booking",
@@ -98,15 +89,9 @@ function Rise({
   );
 }
 
-/** The rotation indicator (Figma: one tall bright bar, short dim bars).
- *  Each tick is a button — clicking jumps to that story. */
-function StoryTicks({
-  active,
-  onPick,
-}: {
-  active: number;
-  onPick: (i: number) => void;
-}) {
+/** The rotation indicator (tall bright bar = active). Each tick is a
+ *  button — clicking jumps to that story and retires the auto-advance. */
+function StoryTicks({ active, onPick }: { active: number; onPick: (i: number) => void }) {
   return (
     <div className="flex items-end gap-[4px]" role="tablist" aria-label="Stories">
       {STORIES.map((s, i) => (
@@ -117,7 +102,7 @@ function StoryTicks({
           aria-selected={i === active}
           aria-label={s.title}
           onClick={() => onPick(i)}
-          className="group flex h-[22px] items-end px-[2px]"
+          className="flex h-[22px] items-end px-[2px]"
         >
           <motion.span
             className="block w-[2.5px] rounded-full"
@@ -321,8 +306,7 @@ export default function ListensSection() {
 
   const [active, setActive] = useState(0);
   // First rotation pass only: story 1 gets its full entrance choreography;
-  // revisits (auto or clicked) come back with a plain crossfade. State, not a
-  // ref — it's read during render (the `entrance` prop).
+  // revisits come back with a plain crossfade.
   const [visited, setVisited] = useState(false);
   // Clicking a tick retires the auto-advance — the visitor is driving now.
   const engaged = useRef(false);
@@ -351,56 +335,60 @@ export default function ListensSection() {
       ref={ref}
       className="mx-auto w-full max-w-[1440px] px-4 pt-20 sm:px-10 sm:pt-28 lg:px-[78px]"
     >
-      {/* ---- Desktop: the rotating stage, at the design's 1287:690 ---- */}
-      <div className="relative hidden aspect-[1287/690] w-full overflow-hidden rounded-[40px] bg-[#141e29] lg:block">
-        <AnimatePresence initial={false}>
-          <motion.div
-            key={story.id}
-            className="absolute inset-0"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reduce ? 0.3 : 0.7, ease: EASE }}
-          >
-            {story.id === "listens" ? (
-              <ListensComposite {...beat} entrance={!visited} />
-            ) : (
-              <>
-                <StoryPhoto src={story.img!} alt={story.alt} {...beat} />
+      <div>
+        <div>
+          {/* ---- Desktop: the rotating stage, at the design's 1287:690 ---- */}
+          <div className="relative hidden aspect-[1287/690] w-full overflow-hidden rounded-[40px] bg-[#141e29] lg:block">
+            <AnimatePresence initial={false}>
+              <motion.div
+                key={story.id}
+                className="absolute inset-0"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: reduce ? 0.3 : 0.7, ease: EASE }}
+              >
+                {story.id === "listens" ? (
+                  <ListensComposite {...beat} entrance={!visited} />
+                ) : (
+                  <>
+                    <StoryPhoto src={story.img!} alt={story.alt} {...beat} />
+                    <div className="absolute inset-0 bg-[#141e29]/30" aria-hidden />
+                  </>
+                )}
+              </motion.div>
+            </AnimatePresence>
+
+            {/* Copy + ticks sit above the rotation, fixed mid-left — only the
+                story behind them swaps. */}
+            <div className="absolute left-[5%] right-[8%] top-1/2 z-20 w-[38%] -translate-y-1/2">
+              <CopyPanel {...beat} active={active} onPick={pick} />
+            </div>
+          </div>
+
+          {/* ---- Mobile/tablet: same rotation as a single tall card ---- */}
+          <div className="relative aspect-[624/690] max-h-[560px] w-full overflow-hidden rounded-[24px] bg-[#141e29] lg:hidden">
+            <AnimatePresence initial={false}>
+              <motion.div
+                key={story.id}
+                className="absolute inset-0"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: reduce ? 0.3 : 0.6, ease: EASE }}
+              >
+                <StoryPhoto
+                  src={story.id === "listens" ? "/landing/oto-listens-driver.png" : story.img!}
+                  alt={story.alt || "A driver describing a problem to Oto out loud"}
+                  {...beat}
+                />
                 <div className="absolute inset-0 bg-[#141e29]/30" aria-hidden />
-              </>
-            )}
-          </motion.div>
-        </AnimatePresence>
-
-        {/* Copy + ticks sit above the rotation, fixed mid-left (the frame's
-            position) — only the story behind them swaps. */}
-        <div className="absolute left-[5%] right-[8%] top-1/2 z-20 w-[38%] -translate-y-1/2">
-          <CopyPanel {...beat} active={active} onPick={pick} />
-        </div>
-      </div>
-
-      {/* ---- Mobile/tablet: same rotation as a single tall card ---- */}
-      <div className="relative aspect-[624/690] max-h-[560px] w-full overflow-hidden rounded-[24px] bg-[#141e29] lg:hidden">
-        <AnimatePresence initial={false}>
-          <motion.div
-            key={story.id}
-            className="absolute inset-0"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reduce ? 0.3 : 0.6, ease: EASE }}
-          >
-            <StoryPhoto
-              src={story.id === "listens" ? "/landing/oto-listens-driver.png" : story.img!}
-              alt={story.alt || "A driver describing a problem to Oto out loud"}
-              {...beat}
-            />
-            <div className="absolute inset-0 bg-[#141e29]/30" aria-hidden />
-          </motion.div>
-        </AnimatePresence>
-        <div className="absolute bottom-7 left-6 right-5 z-20">
-          <CopyPanel {...beat} active={active} onPick={pick} />
+              </motion.div>
+            </AnimatePresence>
+            <div className="absolute bottom-7 left-6 right-5 z-20">
+              <CopyPanel {...beat} active={active} onPick={pick} />
+            </div>
+          </div>
         </div>
       </div>
     </section>

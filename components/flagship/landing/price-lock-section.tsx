@@ -1,7 +1,14 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion, useInView } from "motion/react";
+import {
+  AnimatePresence,
+  motion,
+  useInView,
+  useMotionValueEvent,
+  useScroll,
+} from "motion/react";
+import { useLenis } from "lenis/react";
 import { useReducedMotionSafe } from "../shared";
 import { Reveal, serif, serifDisplay } from "./reveal";
 import DriversPanel from "./drivers-panel";
@@ -78,7 +85,7 @@ const SHOP_CAPTIONS: Record<ShopBeat, string> = {
 };
 
 /* Restart time for the full story loop — mirrored in STORY_MS. */
-const SHOPS_LOOP_MS = 33800;
+const SHOPS_LOOP_MS = 31300;
 
 /* The cast on the board, exactly as the Figma frames name them. */
 const MECHS = ["Twunna S.", "Temur S.", "Abubeckr E."] as const;
@@ -274,16 +281,20 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
       ["time", 650],
       ["cols", 1000],
       ["rows", 1900],
-      ["land", 5700],
-      ["press", 9200],    // block click…
-      ["job1", 10000],    // …opens the sheet 0.8s later
-      ["job2", 13000],
-      ["ready", 16800],
-      ["start", 19800],   // START SERVICE press…
-      ["step3", 20600],   // …advances the stepper 0.8s later
-      ["step4", 24400],
-      ["alldone", 27800], // COMPLETE press + all checks…
-      ["complete", 29000],// …collapse into the ✓ card
+      // The assembled grid used to hold 3.8s before the booking landed —
+      // "holds its position for too long" (design feedback 2026-08-31).
+      // `land` now follows ~1.3s after the cascade settles; everything after
+      // keeps its original spacing, shifted up by the 2.5s saved.
+      ["land", 3200],
+      ["press", 6700],    // block click…
+      ["job1", 7500],     // …opens the sheet 0.8s later
+      ["job2", 10500],
+      ["ready", 14300],
+      ["start", 17300],   // START SERVICE press…
+      ["step3", 18100],   // …advances the stepper 0.8s later
+      ["step4", 21900],
+      ["alldone", 25300], // COMPLETE press + all checks…
+      ["complete", 26500],// …collapse into the ✓ card
     ];
     const run = () => {
       for (const [b, t] of SEQ) later(b, t);
@@ -571,7 +582,7 @@ function PriceLockCard({
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "0px 0px -12% 0px" }}
       transition={{ duration: 0.9, ease: EASE }}
-      className="relative h-[440px] w-full sm:h-[560px] lg:h-[640px]"
+      className="relative h-[440px] w-full sm:h-[560px] lg:h-[clamp(400px,calc(100vh_-_400px),640px)]"
     >
       {[0, 1, 2].map((i) => (
         <div
@@ -593,24 +604,80 @@ function PriceLockCard({
 /* ------------------------------------------------------------------ */
 export default function PriceLockSection() {
   const reduce = useReducedMotionSafe();
-  // Default focus is "Drivers" (index 0); hovering a role swaps the graphic.
+  // Default focus is "Drivers" (index 0).
   const [active, setActive] = useState(0);
-  const touched = useRef(false);
-  // Any engagement (hover, tap, focus) permanently ends the auto-playing reel.
-  const engaged = useRef(false);
-  // Bumped once when the section first scrolls into view — remounts the
-  // panels so the story clock and the auto-advance clock start together.
+  // Bumped when the section scrolls into view — remounts the panels so the
+  // story clock and the advance clock start together.
   const [resetToken, setResetToken] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const listInView = useInView(listRef, { amount: 0.35 });
 
-  // ── No scroll-driven motion (design feedback 2026-08-30) ──
-  // This section sat in a pinned 280vh runway where scroll stepped the roles;
-  // the visitor asked for the section to hold still like every other one. The
-  // roles now advance on the auto-reel everywhere (each story plays to
-  // completion), with hover/tap/focus as the manual override — the behavior
-  // mobile always had. This also gives each 24–37s panel story its full run,
-  // which the ~2s-per-zone scroll never did (audit P1, 2026-08-30).
+  // ── Scroll-driven stories (design feedback 2026-08-31) ──
+  // On lg the WHOLE COMPOSITION — headline + card — pins inside a 280vh
+  // runway (the composition pin keeps the headline gap intact). Stories are
+  // driven by exactly two things — scroll and the story clock — hover/click/
+  // focus switching is gone. SCROLL IS TRUTH in both directions: scrolling
+  // down steps 01→02→03, scrolling back up rewinds. The clock only ever
+  // moves FORWARD (a watched story hands off to the next when it completes)
+  // and stops at 03 — no loop back to 01, which would yank the reel out from
+  // under a visitor whose scroll still sits in zone 3.
+  const advanceTo = (i: number) =>
+    setActive((a) => Math.max(a, Math.min(i, ROLES.length - 1)));
+
+  const [pinnedMode, setPinnedMode] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const sync = () => setPinnedMode(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  // Short-desktop compact mode: the pinned composition must fit one
+  // viewport, and the card's height is driven by the role rows' type +
+  // padding — so on sub-1000px-tall screens the headline, row padding and
+  // card tail all step down a size. Class swaps via state rather than
+  // stacked media variants: `lg:` and `[@media(max-height:…)]:` utilities
+  // tie on specificity and resolve by stylesheet order.
+  const [shortPin, setShortPin] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px) and (max-height: 1099px)");
+    const sync = () => setShortPin(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  // Fit-scale: when the nav-clearing hold plus the composition can't fit
+  // the viewport (short laptops), the pinned composition scales down
+  // visually — layout (and the sticky release point) stay untouched.
+  const stickyRef = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState(1);
+  useEffect(() => {
+    if (!pinnedMode) {
+      setFit(1);
+      return;
+    }
+    const measure = () => {
+      const h = stickyRef.current?.offsetHeight ?? 0; // layout height, pre-transform
+      const top = shortPin ? 88 : 104;
+      setFit(Math.min(1, (window.innerHeight - top - 12) / Math.max(1, h)));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [pinnedMode, shortPin]);
+
+  const runwayRef = useRef<HTMLDivElement>(null);
+  const { scrollYProgress } = useScroll({
+    target: runwayRef,
+    offset: ["start start", "end end"],
+  });
+  useMotionValueEvent(scrollYProgress, "change", (p) => {
+    if (!pinnedMode) return;
+    // Direct set, not advanceTo: scroll rewinds as well as advances.
+    setActive(p < 1 / 3 ? 0 : p < 2 / 3 ? 1 : 2);
+  });
 
   // Full loop length of each role's story, minus a beat so we hand off just
   // before the loop restarts. MUST track the SEQ restart times in
@@ -619,138 +686,155 @@ export default function PriceLockSection() {
   const STORY_MS = [24100, SHOPS_LOOP_MS - 300, 37400];
 
   useEffect(() => {
-    if (listInView && !engaged.current) setResetToken((t) => t + 1);
+    if (listInView) setResetToken((t) => t + 1);
   }, [listInView]);
 
-  // The reel: an untouched visitor sees Drivers → Shops → Oto, each story
-  // playing to completion before the next takes the stage.
+  // The watch path: a visitor who stays on a story sees it hand off to the
+  // next when it completes. Stops at the last story — no loop back.
+  //
+  // A timed hand-off ALSO moves the scroll position to the new story's zone.
+  // While pinned this is invisible (the composition is fixed to the
+  // viewport; runway progress has no visual) — but it keeps scroll ⇄ story
+  // in sync, so the visitor's next scroll gesture continues from the story
+  // they're actually watching instead of rewinding them through the zones
+  // they timed past (design feedback 2026-08-31). Forward jumps only.
+  const lenis = useLenis();
   useEffect(() => {
     if (reduce || !listInView || resetToken === 0) return;
-    if (engaged.current) return;
+    if (active >= ROLES.length - 1) return;
     const t = window.setTimeout(() => {
-      if (!engaged.current) setActive((a) => (a + 1) % ROLES.length);
+      const next = active + 1;
+      advanceTo(next);
+      if (pinnedMode && runwayRef.current) {
+        const r = runwayRef.current.getBoundingClientRect();
+        const rTop = r.top + window.scrollY;
+        const span = r.height - window.innerHeight;
+        const target = Math.round(rTop + span * (next / 3 + 0.02));
+        if (target > window.scrollY) {
+          if (lenis) lenis.scrollTo(target, { immediate: true });
+          else window.scrollTo(0, target);
+        }
+      }
     }, STORY_MS[active]);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, listInView, reduce, resetToken]);
-
-  const select = (i: number) => {
-    touched.current = true;
-    engaged.current = true;
-    setActive(i);
-  };
-
-  // Touch browsers synthesize mouseenter (and re-fire it when content moves
-  // under the stale pointer position) — hover may only drive state on devices
-  // that actually hover; touch goes through click/focus.
-  const hoverTo = (i: number) => {
-    if (window.matchMedia("(hover: hover)").matches) {
-      engaged.current = true;
-      setActive(i);
-    }
-  };
+  }, [active, listInView, reduce, resetToken, pinnedMode]);
 
   return (
     <section
       id="how-it-works"
       className="mx-auto w-full max-w-[1440px] px-4 pt-12 sm:px-10 sm:pt-16 lg:px-[78px]"
     >
-      {/* Centered three-line headline (V1 302:1149: 912x204 box, 68px line
-          pitch, page-centered) */}
-      <Reveal>
-        <h2
-          className="mx-auto max-w-[912px] text-center text-[38px] leading-[1.19] text-[#1a1a1a] sm:text-[50px] lg:text-[57px] lg:leading-[68px]"
-          style={serifDisplay}
-        >
-          The shop sets the price.
-          <br />
-          Oto locks it.
-          <br />
-          You never negotiate.
-        </h2>
-      </Reveal>
-
       {/* V1's gradient card (node 302:1074 — section 2's 1269x642 card
           rotated 180°: white fading to #95C7E7, radius 40). The rail sits 76px
           in from the card's left edge, the demo stage fills the right — V1's
           arrangement (rail x160, UI x726 on the page). On mobile the stage
           still stacks first, so the DOM order is stage → list and the swap
-          happens with order utilities at lg. Ordinary flow at every width —
-          the pinned scroll-through runway is gone (design feedback
-          2026-08-30: no components moving with scroll position). */}
-      <div className="mx-auto mt-10 w-full max-w-[1269px] overflow-clip rounded-[28px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] sm:mt-12 sm:rounded-[40px]">
-        {/* pb keeps the phone mock + caption chips off the card's bottom edge
-            on every step (design feedback 2026-08-24, item 4). */}
-        <div className="grid grid-cols-1 gap-12 px-5 pt-10 pb-16 sm:px-10 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:pt-5 lg:pb-20 lg:pl-[76px] lg:pr-[27px]">
-        {/* The story stage */}
-        <div className="lg:order-2">
-          <PriceLockCard active={active} reduce={reduce} resetToken={resetToken} />
-        </div>
+          happens with order utilities at lg; mobile stays ordinary flow with
+          the timed hand-offs only.
 
-        {/* Numbered roles — hover/tap/focus swaps the card graphic */}
+          The sticky box is exactly one viewport tall — pin window and
+          `scrollYProgress` are identical by construction (both run from
+          "runway top hits viewport top" to "runway bottom hits viewport
+          bottom"). No hand-computed card-height constants: the stage height
+          flexes with a clamp so headline + card fit one viewport down to
+          short laptops. Margins must NOT sit on the sticky box's children in
+          normal flow — they collapse out and drag the pin. */}
+      {/* `relative` anchors motion's useScroll offset math (it warns on
+          static targets). */}
+      <div ref={runwayRef} className="relative mt-2 sm:mt-3 lg:h-[280vh]">
+        {/* Natural height + fixed top offset, NOT h-screen centering — the
+            centered box padded (viewport − composition)/2 of slack under the
+            card at release, inflating the gap to the payout section on tall
+            monitors (design feedback 2026-08-31, "I hate that you're forcing
+            spacing"). Released flush with the runway's end, the next section
+            follows at its own padding — constant everywhere. */}
         <div
-          ref={listRef}
-          className="relative lg:order-1"
-          onMouseLeave={() => {
-            // Only snap back on true hover devices — touch browsers fire
-            // synthetic mouse events that would undo the visitor's tap.
-            if (window.matchMedia("(hover: hover)").matches && !touched.current) setActive(0);
-          }}
+          ref={stickyRef}
+          className={`lg:sticky lg:flex lg:flex-col lg:items-center ${
+            shortPin ? "lg:top-[88px] lg:gap-7" : "lg:top-[104px] lg:gap-12"
+          }`}
+          style={
+            pinnedMode && fit < 1
+              ? { transform: `scale(${fit})`, transformOrigin: "top center" }
+              : undefined
+          }
         >
-          {/* Inactive rows sit blurred on the card (no highlight box) —
-              hovering a row already swaps `active`, which sharpens it;
-              clicking pins it. */}
-          {ROLES.map((role, i) => {
-            const on = active === i;
-            return (
-              <div
-                key={role.num}
-                role="button"
-                tabIndex={0}
-                aria-pressed={on}
-                onMouseEnter={() => hoverTo(i)}
-                onFocus={() => {
-                  engaged.current = true;
-                  setActive(i);
-                }}
-                onClick={() => select(i)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    select(i);
-                  }
-                }}
-                className="relative flex cursor-pointer flex-col justify-center rounded-[16px] px-0 py-8 outline-none [transition:filter_400ms_ease] focus-visible:ring-1 focus-visible:ring-[#1a1a1a]/30 lg:h-[33.333%] lg:px-8"
-                style={{ filter: on ? "blur(0px)" : "blur(5px)" }}
-              >
-                <p
-                  className="text-[17px] tracking-[0.05em] [transition:color_350ms_ease]"
-                  style={{ color: on ? "rgb(119,113,105)" : "rgba(119,113,105,0.35)" }}
-                >
-                  {role.num}
-                </p>
-                <div
-                  className="mt-3 h-px w-full [transition:background-color_350ms_ease]"
-                  style={{ backgroundColor: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.18)" }}
-                />
-                <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-8">
-                  <h3
-                    className="w-[130px] shrink-0 text-[25px] [transition:color_350ms_ease]"
-                    style={{ ...serif, color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
-                  >
-                    {role.title}
-                  </h3>
-                  <p
-                    className="max-w-[320px] text-[17px] leading-[23px] tracking-[0.05em] [transition:color_350ms_ease]"
-                    style={{ color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
-                  >
-                    {role.body}
-                  </p>
-                </div>
+          {/* Centered three-line headline (V1 302:1149: 912x204 box, 68px
+              line pitch, page-centered; steps down a size when the pin is
+              height-bound) */}
+          <Reveal>
+            <h2
+              className={`mx-auto max-w-[912px] text-center text-[38px] leading-[1.19] text-[#1a1a1a] sm:text-[50px] ${
+                shortPin ? "lg:text-[44px] lg:leading-[52px]" : "lg:text-[57px] lg:leading-[68px]"
+              }`}
+              style={serifDisplay}
+            >
+              The shop sets the price.
+              <br />
+              Oto locks it.
+              <br />
+              You never negotiate.
+            </h2>
+          </Reveal>
+
+          <div className="mx-auto mt-10 w-full max-w-[1269px] overflow-clip rounded-[28px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] sm:mt-12 sm:rounded-[40px] lg:mt-0">
+            {/* pb keeps the phone mock + caption chips off the card's bottom
+                edge on every step (design feedback 2026-08-24, item 4). */}
+            <div
+              className={`grid grid-cols-1 gap-12 px-5 pt-10 pb-16 sm:px-10 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:pt-5 lg:pl-[76px] lg:pr-[27px] ${
+                shortPin ? "lg:pb-10" : "lg:pb-20"
+              }`}
+            >
+              {/* The story stage */}
+              <div className="lg:order-2">
+                <PriceLockCard active={active} reduce={reduce} resetToken={resetToken} />
               </div>
-            );
-          })}
-        </div>
+
+              {/* Numbered roles — display only: they light up as the story
+                  advances (scroll or hand-off), never on hover/click. */}
+              <div ref={listRef} className="relative lg:order-1">
+                {ROLES.map((role, i) => {
+                  const on = active === i;
+                  return (
+                    <div
+                      key={role.num}
+                      aria-current={on || undefined}
+                      className={`relative flex flex-col justify-center rounded-[16px] px-0 [transition:filter_400ms_ease] lg:h-[33.333%] lg:px-8 ${
+                        shortPin ? "py-4" : "py-8"
+                      }`}
+                      style={{ filter: on ? "blur(0px)" : "blur(5px)" }}
+                    >
+                      <p
+                        className="text-[17px] tracking-[0.05em] [transition:color_350ms_ease]"
+                        style={{ color: on ? "rgb(119,113,105)" : "rgba(119,113,105,0.35)" }}
+                      >
+                        {role.num}
+                      </p>
+                      <div
+                        className="mt-3 h-px w-full [transition:background-color_350ms_ease]"
+                        style={{ backgroundColor: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.18)" }}
+                      />
+                      <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-8">
+                        <h3
+                          className="w-[130px] shrink-0 text-[25px] [transition:color_350ms_ease]"
+                          style={{ ...serif, color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
+                        >
+                          {role.title}
+                        </h3>
+                        <p
+                          className="max-w-[320px] text-[17px] leading-[23px] tracking-[0.05em] [transition:color_350ms_ease]"
+                          style={{ color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
+                        >
+                          {role.body}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </section>

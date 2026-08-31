@@ -1,9 +1,8 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { motion, useMotionValueEvent, useScroll } from "motion/react";
+import { motion } from "motion/react";
 import { UnderlineLink } from "./shared";
 
 type PillLink = { label: string; href: string };
@@ -29,7 +28,8 @@ const HOME_CTA: PillCta = { label: "Get Oto", href: "#get-oto" };
 const HOME_SHOP_SIGN_IN: PillLink = { label: "Shop sign-in", href: "/shop" };
 
 /**
- * Floating glass pill nav — fixed, hides on scroll-down, reveals on scroll-up.
+ * Floating glass pill nav — fixed and always visible (2026-08-31; it used to
+ * hide on scroll-down and reveal on scroll-up).
  *
  * Reused across the flagship pages: pass `links`/`cta` to retarget it (the
  * partner page carries its own sections + an "Apply" CTA); defaults render the
@@ -45,16 +45,6 @@ export default function PillNav({
   cta?: PillCta;
   shopSignIn?: PillLink | null;
 }) {
-  const { scrollY } = useScroll();
-  const [hidden, setHidden] = useState(false);
-
-  useMotionValueEvent(scrollY, "change", (y) => {
-    const prev = scrollY.getPrevious() ?? 0;
-    // Reveal near the top or when scrolling up; hide when scrolling down.
-    if (y < 120 || y < prev) setHidden(false);
-    else if (y > prev && y > 160) setHidden(true);
-  });
-
   const ctaClass =
     "group relative flex h-9 min-w-[150px] shrink-0 items-center justify-center gap-2 rounded-[40px] border border-[#1a1a1a] bg-[#1a1a1a] px-5 text-[15px] leading-[22px] text-white shadow-[-5px_10px_20px_rgba(70,127,237,0.17)]";
   const ctaInner = (
@@ -83,7 +73,7 @@ export default function PillNav({
   return (
     <motion.header
       initial={{ y: -24, opacity: 0 }}
-      animate={{ y: hidden ? -120 : 0, opacity: 1 }}
+      animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
       className="fixed inset-x-0 top-0 z-50 flex justify-center px-4 pt-4"
     >

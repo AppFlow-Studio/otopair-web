@@ -184,6 +184,24 @@ export async function resolveBrakeScopeForBooking(
     if (axle === "rear" || axle === "both") rear = true;
   }
 
+  // Off-catalog brake/rotor work added via the pre-job / mid-job "Add to this
+  // job" path lives in custom_services, NOT service_ids, so the loop above never
+  // sees it. It carries its axle inline (customJobs.addCustomServiceForBooking
+  // defaults a brake line to "both"), because it has no selected_service_options
+  // entry to read. Fold it in so a booking whose ONLY brake work was added
+  // off-catalog still resolves a real axle scope instead of dead-ending the
+  // inspection on "missing axle selection". isBrakeSlug matches the display name
+  // ("Brake Pad Replacement" → brake) the same way it matches a service slug.
+  for (const line of booking.custom_services ?? []) {
+    if (!isBrakeSlug(line?.name)) continue;
+    hasBrakeWork = true;
+    const axle = line?.axle as AxlePosition | undefined;
+    if (!axle) continue;
+    sawAxleSignal = true;
+    if (axle === "front" || axle === "both") front = true;
+    if (axle === "rear" || axle === "both") rear = true;
+  }
+
   if (!hasBrakeWork) return { hasBrakeWork: false, front: false, rear: false };
   // Missing axle scope is invalid for a brake booking. Callers surface a
   // blocking booking-scope error instead of silently inspecting all corners.

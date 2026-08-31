@@ -635,6 +635,7 @@ export interface DetectedPackage {
     | "vdb_optional_options"
     | "vdb_standard_options"
     | "vdb_installed_equipment"
+    | "marketcheck_neovin"
     | "claude_inference"
     | "rules_table";
   confidence: number;
@@ -664,7 +665,10 @@ export interface DetectedPackage {
  *     than 500 chars (URLs, multi-paragraph descriptions — won't match any
  *     short package-name pattern and waste regex time)
  */
-function collectPackageStrings(vdbRaw: any): { source: DetectedPackage["detected_from"]; text: string }[] {
+function collectPackageStrings(
+  vdbRaw: any,
+  source: DetectedPackage["detected_from"] = "vdb_optional_options",
+): { source: DetectedPackage["detected_from"]; text: string }[] {
   const out: { source: DetectedPackage["detected_from"]; text: string }[] = [];
   if (!vdbRaw || typeof vdbRaw !== "object") return out;
 
@@ -675,7 +679,7 @@ function collectPackageStrings(vdbRaw: any): { source: DetectedPackage["detected
     if (node == null || depth > MAX_DEPTH) return;
     if (typeof node === "string") {
       if (node.length >= 2 && node.length <= 500) {
-        out.push({ source: "vdb_optional_options", text: node });
+        out.push({ source, text: node });
       }
       return;
     }
@@ -715,6 +719,9 @@ export function assessAvailablePackages(args: {
   model: string;
   trim: string;
   year: number;
+  /** Provenance tag for detected packages. CarAPI path passes MarketCheck
+   *  NeoVIN raw here with "marketcheck_neovin". Defaults to VDB. */
+  source?: DetectedPackage["detected_from"];
 }): DetectedPackage[] {
   const { vdbRaw, make, model, trim } = args;
   const detected = new Map<string, DetectedPackage>();
@@ -742,8 +749,8 @@ export function assessAvailablePackages(args: {
   const explicitRules = PACKAGE_RULES.filter(ruleAffectsKnownService);
   const inferenceRules = TRIM_INFERENCE_RULES.filter(ruleAffectsKnownService);
 
-  // 1. Explicit matches against VDB option/equipment strings (highest signal).
-  const strings = collectPackageStrings(vdbRaw);
+  // 1. Explicit matches against option/equipment strings (highest signal).
+  const strings = collectPackageStrings(vdbRaw, args.source ?? "vdb_optional_options");
   for (const { source, text } of strings) {
     for (const rule of explicitRules) {
       if (rule.make !== "*" && rule.make.toLowerCase() !== make.toLowerCase()) continue;

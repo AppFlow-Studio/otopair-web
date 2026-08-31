@@ -30,6 +30,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { isSyntheticEngineCode } from "./utils/engineLookup";
 import { sanitizeCylinders } from "./cylindersRepair";
+import { carApiResolveModel, carApiYmmtCatalog } from "../lib/carApi";
 
 /** One powertrain a given year/make/model was actually sold with. */
 export type PowertrainCandidate = {
@@ -553,4 +554,79 @@ export async function fetchNhtsaModels(make: string, year: number): Promise<stri
   } catch {
     return [];
   }
+}
+
+/* ─────────────────────────── CarAPI YMMT catalog ───────────────────────── */
+
+/** "V6" | "I-4" | "6" → 6. */
+function parseCarApiCylinders(raw: any): number | null {
+  if (raw == null) return null;
+  const m = String(raw).match(/(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+/** Map CarAPI's fuel/engine strings to our enum. */
+function mapCarApiFuel(fuelType: any, engineType: any): string {
+  const s = `${fuelType ?? ""} ${engineType ?? ""}`.toLowerCase();
+  if (s.includes("diesel")) return "Diesel";
+  if (s.includes("plug-in") || s.includes("plug in")) return "Plug-in Hybrid";
+  if (s.includes("hybrid") || (s.includes("electric") && s.includes("gas"))) return "Hybrid";
+  if (s.includes("electric") || s.includes("ev")) return "Electric";
+  return "Gasoline"; // flex-fuel / unleaded / premium / gas
+}
+
+/**
+ * Deterministic powertrain enumeration for a YMM from CarAPI's OEM catalog
+ * (`/trims/v2` + `/engines/v2`), an alternative to the Claude web-search path in
+ * `researchYmmtPowertrain`. Groups per-trim engine rows into unique powertrains
+ * with the trims each was offered on (so `pickPowertrainCandidate` can still
+ * disambiguate by trim). CarAPI publishes no OEM engine code → `engine_code`
+ * stays empty and the caller applies its synthetic `{disp}l_{cyl}cyl` fallback,
+ * identical to the F-150 case in the Claude path. Returns [] on miss so the
+ * caller falls back to Claude.
+ */
+export async function carApiPowertrainCandidates(args: {
+  year: number;
+  make: string;
+  model: string;
+}): Promise<PowertrainCandidate[]> {
+  const resolvedModel = (await carApiResolveModel(args.make, args.year, args.model)) ?? args.model;
+  const cat = await carApiYmmtCatalog({ year: args.year, make: args.make, model: resolvedModel });
+  const engines: any[] = Array.isArray(cat.engines?.data) ? cat.engines.data : [];
+  if (!engines.length) return [];
+
+  const byKey = new Map<string, PowertrainCandidate>();
+  for (const e of engines) {
+    const disp = parseFloat(String(e.size));
+    const displacement_l = Number.isNaN(disp) ? null : disp;
+    const cylinders = parseCarApiCylinders(e.cylinders);
+    const fuel_type = mapCarApiFuel(e.fuel_type, e.engine_type);
+    const trimName = String(e.trim ?? e.submodel ?? "").trim().toLowerCase();
+    const key = `${displacement_l ?? "?"}|${cylinders ?? "?"}|${fuel_type}`;
+
+    const existing = byKey.get(key);
+    if (existing) {
+      if (trimName && !existing.trims_offered.includes(trimName)) existing.trims_offered.push(trimName);
+      continue;
+    }
+    const aspText = `${e.engine_type ?? ""} ${e.trim_description ?? ""}`.toLowerCase();
+    const aspiration = /turbo/.test(aspText)
+      ? "turbo"
+      : /supercharg/.test(aspText)
+        ? "supercharged"
+        : null;
+    byKey.set(key, {
+      engine_code: "", // CarAPI has no OEM code → synthetic fallback in caller
+      marketing_name: displacement_l ? `${displacement_l}L ${e.engine_type ?? ""}`.trim() : null,
+      displacement_l,
+      cylinders,
+      fuel_type,
+      aspiration,
+      trims_offered: trimName ? [trimName] : [],
+      drivetrain: e.drive_type ? String(e.drive_type) : null,
+      transmission_type: e.transmission ? String(e.transmission) : null,
+      confidence: 0.8, // deterministic OEM catalog — high, below a VIN decode
+    });
+  }
+  return [...byKey.values()];
 }

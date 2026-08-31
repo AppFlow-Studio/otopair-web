@@ -31,7 +31,7 @@ import {
 } from "@/lib/use-approval-workflow";
 import type { JobActualsPayload } from "@/lib/job-actuals";
 import VehiclePassportCard from "@/components/vehicle-passport-card";
-import JobStepIndicator from "@/components/job-step-indicator";
+import JobStepRing from "@/components/job-step-ring";
 import MultiPointInspectionDialog, {
   type InspectionInputPayload,
 } from "@/components/multi-point-inspection-dialog";
@@ -69,7 +69,6 @@ import {
   drawerSelectTriggerClassName,
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
-import { StatusPill } from "@/components/status-pill";
 import BookingTimelineModal from "@/components/booking/booking-timeline-modal";
 import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
 import {
@@ -695,6 +694,8 @@ export interface JobDetailData {
   previousMechanicName?: string | null;
   rescheduleProposedAt?: number | null;
   estimatedLaborMinutes?: number | null;
+  combinedLaborSavedMinutes?: number | null;
+  combinedLaborNotes?: string[] | null;
   scheduleChangeMode?: string | null;
   scheduleChangeSourceBookingId?: Id<"bookings"> | null;
   customerCanRestoreOriginal?: boolean | null;
@@ -2101,24 +2102,42 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     <h2 className="truncate text-base font-semibold text-foreground">
                       {job.vehicle || "Booking Detail"}
                     </h2>
-                    <StatusPill status={job.status} />
+                    <JobStepRing
+                      currentStep={getJobStep(job.status)}
+                      status={job.status}
+                      paused={jobPaused}
+                      awaitingHold={awaitingHold}
+                    />
                     <PaymentApprovalBadge
                       state={(job as any).paymentApprovalState}
                       settlementState={(job as any).settlementState}
                     />
                   </div>
-                  <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                    {job.serviceNames.join(", ")}
-                    {job.customerName ? ` · ${job.customerName}` : ""}
-                  </p>
-                  {/* Renders only when this booking's car is on a placeholder
-                      VIN (Off-Catalog Work spec, §5). The mechanic has the car;
-                      nobody else can fix it this cheaply. */}
-                  <div className="mt-2">
-                    <VinRepairPrompt
-                      bookingId={String(job._id)}
-                      onDone={(msg) => onSuccess?.(msg)}
-                    />
+                  {/* Service · customer and the VIN prompt collapse away once the
+                      body scrolls, so the pinned header keeps only the title,
+                      status, N/4 progress, live countdown, and actions. */}
+                  <div
+                    className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${
+                      isStepIndicatorCompact
+                        ? "grid-rows-[0fr] opacity-0"
+                        : "grid-rows-[1fr] opacity-100"
+                    }`}
+                  >
+                    <div className={`min-h-0 overflow-hidden ${isStepIndicatorCompact ? "pointer-events-none" : ""}`}>
+                      <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                        {job.serviceNames.join(", ")}
+                        {job.customerName ? ` · ${job.customerName}` : ""}
+                      </p>
+                      {/* Renders only when this booking's car is on a placeholder
+                          VIN (Off-Catalog Work spec, §5). The mechanic has the car;
+                          nobody else can fix it this cheaply. */}
+                      <div className="mt-2">
+                        <VinRepairPrompt
+                          bookingId={String(job._id)}
+                          onDone={(msg) => onSuccess?.(msg)}
+                        />
+                      </div>
+                    </div>
                   </div>
                   {(() => {
                     const subtext = getStatusSubtext(job.status);
@@ -2135,7 +2154,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     if (!subtext && !clock && !rescheduleCd) return null;
                     return (
                       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-                        {subtext && (
+                        {subtext && !isStepIndicatorCompact && (
                           <span className="text-xs text-muted-foreground">
                             {subtext}
                           </span>
@@ -2192,14 +2211,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             </div>
             {job ? (
               <div className="space-y-3 px-5 pb-4">
-                <JobStepIndicator
-                  currentStep={getJobStep(job.status)}
-                  status={job.status}
-                  compact={isStepIndicatorCompact}
-                  paused={jobPaused}
-                  awaitingHold={awaitingHold}
-                  className="border-0 bg-transparent px-0 py-0"
-                />
                 {awaitingHold ? (
                   <AwaitingHoldConfirmation
                     cycle={approvalPendingCycle}
@@ -2255,6 +2266,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                         <span className="text-muted-foreground">
                           {" · est. "}
                           {formatDurationMinutes(job.estimatedLaborMinutes)}
+                        </span>
+                      ) : null}
+                      {job.combinedLaborSavedMinutes != null &&
+                      job.combinedLaborSavedMinutes > 0 ? (
+                        <span
+                          className="ml-2 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800"
+                          title={(job.combinedLaborNotes ?? []).join(" ")}
+                        >
+                          Combined labor · −{formatDurationMinutes(job.combinedLaborSavedMinutes)}
                         </span>
                       ) : null}
                       {job.diagnosticSystem ? (

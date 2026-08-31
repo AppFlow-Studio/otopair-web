@@ -42,6 +42,12 @@ import {
   isCustomJobTaxonomyComplete,
 } from "@/components/custom-job-taxonomy-picker";
 import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
+import { sanitizeVinInput } from "@/lib/vin";
+import {
+  resolveCombinedLabor,
+  type CombinedLaborServiceInput,
+} from "@/convex/lib/combinedLabor";
+import { parseAxlePosition } from "@/convex/lib/brakeScope";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -78,6 +84,10 @@ interface CreateBookingDrawerProps {
   /** Per-checkout session id owned by the schedule page (so the grid can
    *  exclude this drawer's own hold from its "On hold" overlay). */
   holdSessionId: string;
+  /** True on the compact (bottom-sheet) layout — phones, iPads, small laptops
+   *  (<xl). Drives where the submit button lives: header top-right when compact
+   *  (to reclaim vertical space), a full-width bottom bar on the desktop panel. */
+  compact: boolean;
   onClose: () => void;
   onToast: (msg: string) => void;
 }
@@ -156,6 +166,8 @@ function CollapsibleSection({
   onToggle,
   required,
   meta,
+  complete,
+  registerRef,
   children,
 }: {
   sectionKey: string;
@@ -165,15 +177,26 @@ function CollapsibleSection({
   onToggle: (key: string) => void;
   required?: boolean;
   meta?: React.ReactNode;
+  /** True once this section's fields are filled — shows a check in the header. */
+  complete?: boolean;
+  /** Callback ref so the drawer can track this section for the sticky nav. */
+  registerRef?: (el: HTMLElement | null) => void;
   children: React.ReactNode;
 }) {
+  // No `overflow-hidden` here — it would trap the `sticky` header inside the
+  // card. The header instead sticks to the top of the scroll body as you pass
+  // it, so the section you're filling always names itself (bg-card keeps the
+  // scrolling content from bleeding through).
   return (
-    <section className={cn(drawerCardClassName, "overflow-hidden")}>
+    <section ref={registerRef} data-section={sectionKey} className={drawerCardClassName}>
       <button
         type="button"
         onClick={() => onToggle(sectionKey)}
         aria-expanded={open}
-        className="flex w-full items-center gap-3 px-4 py-3.5 text-left"
+        className={cn(
+          "sticky top-0 z-10 flex w-full items-center gap-3 rounded-t-2xl bg-card px-4 py-2.5 text-left",
+          open && "border-b border-border/60",
+        )}
       >
         <DrawerCardSectionHeader
           icon={Icon}
@@ -182,11 +205,19 @@ function CollapsibleSection({
           meta={meta}
           className="flex-1"
         />
+        {complete ? (
+          <span
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-600"
+            title="Completed"
+          >
+            <Check className="h-3 w-3" strokeWidth={3} />
+          </span>
+        ) : null}
         <ChevronDown
           className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${open ? "rotate-180" : ""}`}
         />
       </button>
-      {open ? <div className="px-4 pb-4">{children}</div> : null}
+      {open ? <div className="px-4 pb-3.5 pt-3">{children}</div> : null}
     </section>
   );
 }
@@ -238,6 +269,7 @@ export default function CreateBookingDrawer({
   bookings,
   shopHours,
   holdSessionId,
+  compact,
   onClose,
   onToast,
 }: CreateBookingDrawerProps) {
@@ -271,6 +303,12 @@ export default function CreateBookingDrawer({
   const [vinImageUrl, setVinImageUrl] = useState<string | null>(null);
   const [vinImageLoading, setVinImageLoading] = useState(false);
   const [vinConfirmOpen, setVinConfirmOpen] = useState(false);
+  // What the field last auto-fixed on the most recent keystroke, so the change
+  // is surfaced rather than silent. Cleared once a keystroke needs no fixing.
+  const [vinCorrection, setVinCorrection] = useState<{
+    correctedOI: boolean;
+    droppedInvalid: boolean;
+  } | null>(null);
   const lastDecodedVinRef = useRef<string>("");
 
   type OwnerInfo = { userId: string; firstName: string | null; lastName: string | null; email: string | null; phone: string | null };
@@ -571,9 +609,11 @@ export default function CreateBookingDrawer({
   const [pendingSubmitOutsideHours, setPendingSubmitOutsideHours] = useState<boolean | null>(null);
 
   /* ---- Parts declaration + editor (walk-in confirmed flow) ----
-     The mechanic declares whether this job has parts. "Add parts" reveals the
-     editor, prefilled from quotes.previewCatalogPartsByVin (OEM catalog) and
-     freely editable / extendable. Declared parts become the booking's
+     The mechanic declares whether this job has parts. "Add parts" reveals an
+     editor they fill themselves; a per-service "Add … catalog parts" button
+     pulls OEM rows from quotes.previewCatalogPartsByVin on demand (never
+     reactively — that used to shift fields under the typing mechanic). Every
+     row stays freely editable / extendable. Declared parts become the booking's
      priced_parts_snapshot + parts_cost — feeding the job scope, pre-job and
      post-job — and are ALSO recorded in parts_quote_snapshots for catalog
      accuracy analytics. */
@@ -608,7 +648,6 @@ export default function CreateBookingDrawer({
   const [partsDeclaration, setPartsDeclaration] = useState<
     "none" | "add" | "skip" | null
   >(null);
-  const dirtyPartKeysRef = useRef<Set<string>>(new Set());
   const addedPartSeqRef = useRef(0);
 
   const shopData = useQuery(api.schedule.getShopServicesWithCategories);
@@ -616,10 +655,31 @@ export default function CreateBookingDrawer({
   // walk-in part defaults to the vehicle's make (OEM), but stays free-form so
   // supplier brands (Denso, Bosch…) or custom values can still be typed.
   const makesList = useQuery(api.makes.list);
-  const makeOptions = useMemo(
-    () => (makesList ?? []).map((m) => ({ value: m.name, label: m.name })),
-    [makesList],
-  );
+  // The shop's remembered custom brands (Bosch, Denso, a one-off supplier…),
+  // added by an explicit "Add … as custom" tap on a prior booking. Surfaced
+  // first in the picker so a shop reaches for what it used last.
+  const customBrandList = useQuery(
+    (api as any).shopCustomPartBrands.listForShop,
+    shopData?.shopId ? { shopId: shopData.shopId } : "skip",
+  ) as { _id: string; name: string }[] | undefined;
+  const addCustomBrand = useMutation((api as any).shopCustomPartBrands.add);
+  const makeOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const opts: { value: string; label: string }[] = [];
+    for (const b of customBrandList ?? []) {
+      const key = b.name.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      opts.push({ value: b.name, label: b.name });
+    }
+    for (const m of makesList ?? []) {
+      const key = m.name.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      opts.push({ value: m.name, label: m.name });
+    }
+    return opts;
+  }, [customBrandList, makesList]);
   const createBooking = useMutation(api.bookings.createByShop);
   const backfillBooking = useMutation((api as any).bookings.backfillCompletedBooking);
 
@@ -682,8 +742,106 @@ export default function CreateBookingDrawer({
 
   const categories = useMemo(() => shopData?.categories ?? [], [shopData?.categories]);
 
-  // Reactive OEM-catalog prefill for the parts editor (seeds the "Add parts"
-  // rows for the chosen services + options).
+  // Per-vehicle labor times — the SAME ladder the customer app books through
+  // (empirical → book/VDB → sibling chassis → Camry×tier "Yassin fallback" →
+  // catalog default), resolved by VIN for every catalog service so the list
+  // badges + running estimate reflect THIS vehicle instead of a flat default.
+  const allCatalogServiceIds = useMemo(
+    () =>
+      categories.flatMap((c: any) =>
+        (c.services as any[]).map((s) => s._id as Id<"services">),
+      ),
+    [categories],
+  );
+  // Axle position per service (brakes), from the option picker. Built before
+  // the labor query so per_axle-scaled services (a "both axles" brake job)
+  // resolve to ~2× labor on the server — the drawer badges + running estimate
+  // then match the quote engine.
+  const positionsArg = useMemo(() => {
+    const rec: Record<string, "front" | "rear" | "both"> = {};
+    for (const o of selectedServiceOptions) {
+      const pos = parseAxlePosition(o.option_label);
+      if (pos) rec[String(o.service_id)] = pos;
+    }
+    return rec;
+  }, [selectedServiceOptions]);
+  const vehicleLaborTimes = useQuery(
+    api.laborTimes.getLaborHoursForServicesByVin,
+    validVin && allCatalogServiceIds.length > 0
+      ? { vin: validVin, serviceIds: allCatalogServiceIds, positions: positionsArg }
+      : "skip",
+  );
+  // serviceId → per-service labor for O(1) badge lookup + combine input.
+  // `isEstimate` true for the tier fallback / catalog default (app renders an
+  // "est." pill); `unroundedHours`/`slug`/`source` feed the combined-labor pass.
+  const vehicleLaborByServiceId = useMemo(() => {
+    const m = new Map<
+      string,
+      { minutes: number; isEstimate: boolean; unroundedHours: number; slug: string; source: string }
+    >();
+    for (const r of vehicleLaborTimes ?? []) {
+      m.set(String(r.serviceId), {
+        minutes: Math.round(r.hours * 60),
+        isEstimate: r.source === "default",
+        unroundedHours: r.unroundedHours ?? r.hours,
+        slug: r.serviceSlug,
+        source: r.source,
+      });
+    }
+    return m;
+  }, [vehicleLaborTimes]);
+  const hasVehicleLabor = vehicleLaborByServiceId.size > 0;
+
+  // Combined labor operations (honest overlap deduction), gated by the director
+  // flag. Runs the SAME pure resolver the quote engine uses so the drawer's
+  // estimate matches what the customer would be quoted.
+  const directorSettings = useQuery(api.directorSettings.getGlobal, {});
+  const combinedLaborEnabled = directorSettings?.combined_labor_enabled === true;
+  const roundLaborTo15 = directorSettings?.round_labor_times_to_15min ?? true;
+  // Axle position per selected service (brakes) as a Map, for the combined-labor
+  // pass. Same source as `positionsArg` (fed to the labor query above).
+  const positionByServiceId = useMemo(
+    () => new Map<string, "front" | "rear" | "both">(Object.entries(positionsArg)),
+    [positionsArg],
+  );
+  // { combinedMinutes, savedMinutes, notes } for the SELECTED services. Falls
+  // back to a naive sum when the flag is off or nothing shares teardown.
+  const combinedLabor = useMemo(() => {
+    const inputs = Array.from(selectedIds)
+      .map((sid) => {
+        const l = vehicleLaborByServiceId.get(String(sid));
+        if (!l) return null;
+        return {
+          serviceId: String(sid),
+          slug: l.slug,
+          standaloneHours: l.unroundedHours,
+          position: positionByServiceId.get(String(sid)) ?? null,
+          source: l.source,
+        };
+      })
+      .filter(Boolean) as CombinedLaborServiceInput[];
+    const res = resolveCombinedLabor(inputs, {
+      enabled: combinedLaborEnabled && inputs.length >= 2,
+    });
+    // Round the combined total (and the naive baseline) to 15 min ONCE, then
+    // derive the saving as the difference so `saved + combined = naive` holds.
+    const ceil15 = (h: number) =>
+      roundLaborTo15 ? Math.ceil((h * 60) / 15) * 15 : Math.round(h * 60);
+    const combinedMinutes = ceil15(res.combinedHours);
+    const naiveMinutes = ceil15(res.combinedHours + res.savedHours);
+    return {
+      combinedMinutes,
+      savedMinutes: Math.max(0, naiveMinutes - combinedMinutes),
+      notes: res.notes,
+      applied: res.savedHours > 0,
+    };
+  }, [selectedIds, vehicleLaborByServiceId, positionByServiceId, combinedLaborEnabled, roundLaborTo15]);
+
+  // OEM-catalog preview for the parts editor. Reactive (re-resolves on VIN /
+  // service / option changes) but NEVER auto-applied — it only powers the
+  // per-service "Add … catalog parts" button (count + the pull source) and the
+  // "no catalog match" hint. Applying it reactively used to rebuild every row
+  // under the typing mechanic, shifting the field they were in.
   const catalogPartsPreview = useQuery(
     api.quotes.previewCatalogPartsByVin,
     validVin && selectedIds.size > 0
@@ -702,63 +860,69 @@ export default function CreateBookingDrawer({
       : "skip",
   );
 
-  // Seed editable rows from the catalog preview without clobbering the
-  // mechanic's edits (tracked in dirtyPartKeysRef) or any manually-added rows.
-  // Rebuilds for the currently-selected services so deselected ones drop out.
-  useEffect(() => {
-    if (catalogPartsPreview === undefined) return;
-    const previewBySvc = new Map<string, any>();
-    if (catalogPartsPreview.hasConfig) {
+  // service_id → preview bucket, when the VIN resolved to a config. Shared by
+  // the button's available-count read and the pull action below.
+  const previewBySvc = useMemo(() => {
+    const m = new Map<string, any>();
+    if (catalogPartsPreview?.hasConfig) {
       for (const svc of catalogPartsPreview.services) {
-        previewBySvc.set(String(svc.service_id), svc);
+        m.set(String(svc.service_id), svc);
       }
     }
+    return m;
+  }, [catalogPartsPreview]);
+
+  // How the vehicle is named in button copy ("…for this Corolla"). Falls back
+  // to make, then generic wording when neither is known yet.
+  const vehicleLabel = model.trim() || make.trim() || "";
+
+  // Build one editable row from a catalog preview row. OEM parts are branded by
+  // the make, so a brandless catalog row falls back to the vehicle make; a
+  // price-unknown row seeds "0.00" for the mechanic to fill.
+  const catalogRowFromPreview = (sid: string, r: any): MechanicPartEdit => ({
+    key: r.role_key || r.oem_number || r.part_name,
+    service_id: sid,
+    part_name: r.part_name,
+    oem_number: r.oem_number,
+    brand: (r.brand ?? "").trim() || make.trim() || "",
+    quantity: String(r.quantity),
+    unit_price: r.price_unknown
+      ? "0.00"
+      : formatFixedCentCurrency(r.unit_price_cents / 100),
+    catalog_origin: true,
+    price_unknown: r.price_unknown === true,
+    part_id: r.part_id ?? undefined,
+    role_key: r.role_key ?? undefined,
+    quantity_basis: r.quantity_basis ?? undefined,
+  });
+
+  // Catalog rows available for `sid` that the mechanic hasn't pulled yet —
+  // drives the button's count + visibility (hides once everything is pulled,
+  // reappears when an option change surfaces new rows).
+  const availableCatalogCount = (sid: string): number => {
+    const svc = previewBySvc.get(sid);
+    if (!svc) return 0;
+    const have = new Set((catalogPartEdits[sid] ?? []).map((e) => e.key));
+    return (svc.rows ?? []).filter(
+      (r: any) => !have.has(r.role_key || r.oem_number || r.part_name),
+    ).length;
+  };
+
+  // Explicit, on-demand pull: append only catalog rows not already in the
+  // bucket, leaving every existing (manual or already-pulled/edited) row
+  // untouched. Idempotent — safe to click again after an axle/option change.
+  const pullCatalogPartsForService = (sid: string) =>
     setCatalogPartEdits((prev) => {
-      // Custom-line buckets survive verbatim. This rebuild is driven by the
-      // CATALOG preview and keys off selectedIds, so anything off-catalog would
-      // otherwise be dropped every time the preview re-resolved — silently
-      // deleting parts the mechanic had already typed.
-      const next: Record<string, MechanicPartEdit[]> = {};
-      for (const [bucket, rows] of Object.entries(prev)) {
-        if (bucket.startsWith(CUSTOM_BUCKET_PREFIX)) next[bucket] = rows;
-      }
-      for (const sid of Array.from(selectedIds).map(String)) {
-        const existing = prev[sid] ?? [];
-        const svc = previewBySvc.get(sid);
-        const catalogRows: MechanicPartEdit[] = (svc?.rows ?? []).map(
-          (r: any) => {
-            const key = r.role_key || r.oem_number || r.part_name;
-            const composite = `${sid}::${key}`;
-            if (dirtyPartKeysRef.current.has(composite)) {
-              const edited = existing.find((e) => e.key === key);
-              if (edited) return edited;
-            }
-            return {
-              key,
-              service_id: sid,
-              part_name: r.part_name,
-              oem_number: r.oem_number,
-              // OEM parts are branded by the make — if the catalog row has no
-              // brand, fall back to the vehicle make so Brand is never blank.
-              brand: (r.brand ?? "").trim() || make.trim() || "",
-              quantity: String(r.quantity),
-              unit_price: r.price_unknown
-                ? "0.00"
-                : formatFixedCentCurrency(r.unit_price_cents / 100),
-              catalog_origin: true,
-              price_unknown: r.price_unknown === true,
-              part_id: r.part_id ?? undefined,
-              role_key: r.role_key ?? undefined,
-              quantity_basis: r.quantity_basis ?? undefined,
-            };
-          },
-        );
-        const added = existing.filter((e) => !e.catalog_origin);
-        next[sid] = [...catalogRows, ...added];
-      }
-      return next;
+      const svc = previewBySvc.get(sid);
+      if (!svc) return prev;
+      const existing = prev[sid] ?? [];
+      const have = new Set(existing.map((e) => e.key));
+      const additions = (svc.rows ?? [])
+        .map((r: any) => catalogRowFromPreview(sid, r))
+        .filter((row: MechanicPartEdit) => !have.has(row.key));
+      if (additions.length === 0) return prev;
+      return { ...prev, [sid]: [...existing, ...additions] };
     });
-  }, [catalogPartsPreview, selectedIds]);
 
   // Reset the parts declaration when the booking has no work on it at all.
   // Custom lines count: a booking whose only line is off-catalog still has
@@ -784,8 +948,6 @@ export default function CreateBookingDrawer({
   ) =>
     setCatalogPartEdits((prev) => {
       const rows = prev[sid] ?? [];
-      const row = rows[idx];
-      if (row) dirtyPartKeysRef.current.add(`${sid}::${row.key}`);
       return {
         ...prev,
         [sid]: rows.map((r, i) => (i === idx ? { ...r, [field]: value } : r)),
@@ -796,7 +958,6 @@ export default function CreateBookingDrawer({
     setCatalogPartEdits((prev) => {
       const rows = prev[sid] ?? [];
       const key = `manual-${addedPartSeqRef.current++}`;
-      dirtyPartKeysRef.current.add(`${sid}::${key}`);
       return {
         ...prev,
         [sid]: [
@@ -822,8 +983,6 @@ export default function CreateBookingDrawer({
   const removeCatalogPartRow = (sid: string, idx: number) =>
     setCatalogPartEdits((prev) => {
       const rows = prev[sid] ?? [];
-      const row = rows[idx];
-      if (row) dirtyPartKeysRef.current.delete(`${sid}::${row.key}`);
       return { ...prev, [sid]: rows.filter((_, i) => i !== idx) };
     });
 
@@ -835,7 +994,6 @@ export default function CreateBookingDrawer({
       const rows = prev[sid] ?? [];
       const row = rows[idx];
       if (!row) return prev;
-      dirtyPartKeysRef.current.add(`${sid}::${row.key}`);
       return {
         ...prev,
         [sid]: rows.map((r, i) =>
@@ -1100,13 +1258,18 @@ export default function CreateBookingDrawer({
       (sum: number, c) => sum + (c.durationMinutes ?? 0),
       0,
     );
-    return (
-      selected.reduce(
-        (sum: number, s: any) => sum + (s.defaultLaborHours ?? 0) * 60,
-        0,
-      ) + customMins
-    );
-  }, [categories, selectedIds, customServices]);
+    const naive =
+      selected.reduce((sum: number, s: any) => {
+        // Vehicle-specific labor (the customer-app ladder) wins once the VIN
+        // resolves; otherwise the flat catalog default. Keeps the running
+        // estimate — end time, slot hold, suggested price — car-aware too.
+        const vehicleMins = vehicleLaborByServiceId.get(String(s._id))?.minutes;
+        return sum + (vehicleMins ?? (s.defaultLaborHours ?? 0) * 60);
+      }, 0) + customMins;
+    // Honest overlap: shave the shared teardown once (custom + non-vehicle
+    // lines still count fully — the saving only covers the combineable set).
+    return Math.max(0, naive - (combinedLaborEnabled ? combinedLabor.savedMinutes : 0));
+  }, [categories, selectedIds, customServices, vehicleLaborByServiceId, combinedLaborEnabled, combinedLabor]);
 
   // Mechanic override wins when present; otherwise fall back to catalog sum.
   const effectiveEstimateMinutes = useMemo(
@@ -1636,6 +1799,16 @@ export default function CreateBookingDrawer({
         source: "mechanic_walk_in",
         mechanicEstimatedMinutes: mechanicEstimateMinutes ?? undefined,
         catalogEstimatedMinutes: catalogMinutes,
+        // Honest overlap deduction (director flag). Persisted so the booking
+        // detail / receipt can show the shared-labor saving.
+        combinedLaborSavedMinutes:
+          combinedLaborEnabled && combinedLabor.applied
+            ? combinedLabor.savedMinutes
+            : undefined,
+        combinedLaborNotes:
+          combinedLaborEnabled && combinedLabor.applied && combinedLabor.notes.length > 0
+            ? combinedLabor.notes
+            : undefined,
         mechanicQuotedPrice: mechanicQuotedPrice ?? undefined,
         catalogQuotedPrice: 0,
         mechanicPartEntries:
@@ -1896,15 +2069,210 @@ export default function CreateBookingDrawer({
     await submitBooking(false);
   }
 
+  /* ---- Scroll-aware header + section navigator ------------------------
+     The drawer is tall and, on iPad / laptop, the fixed header ate most of the
+     viewport — you could barely see one field at a time. So: the scheduling
+     controls collapse to a one-line summary once the body scrolls, each section
+     header sticks to the top as you pass it, and a compact chip bar shows which
+     section you're in and jumps to any other. */
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const sectionElRefs = useRef<Record<string, HTMLElement | null>>({});
+  const [headerCompact, setHeaderCompact] = useState(false);
+  const [activeSection, setActiveSection] = useState<SectionKey>("customer");
+
+  // Sections in render order, filtered to the ones actually shown, so both the
+  // chip bar and the active-section math stay in sync with the form below.
+  const navSections = useMemo(() => {
+    const partsVisible =
+      !isBackfill && (selectedIds.size > 0 || customServices.length > 0);
+    return (
+      [
+        { key: "customer", label: "Customer", icon: User, visible: true },
+        { key: "vehicle", label: "Vehicle", icon: Car, visible: true },
+        { key: "services", label: "Services", icon: Wrench, visible: true },
+        {
+          key: "mechanic_estimate",
+          label: isBackfill ? "Actuals" : "Estimate",
+          icon: Clock,
+          visible: true,
+        },
+        { key: "catalog_parts", label: "Parts", icon: Package, visible: partsVisible },
+        { key: "diagnostic", label: "Diagnostic", icon: Stethoscope, visible: isDiagnostic },
+        { key: "notes", label: "Notes", icon: MessageSquare, visible: true },
+      ] as Array<{ key: SectionKey; label: string; icon: React.ElementType<{ className?: string }>; visible: boolean }>
+    ).filter((s) => s.visible);
+  }, [isBackfill, selectedIds.size, customServices.length, isDiagnostic]);
+
+  // Per-section "has the user filled what this section needs" — drives the
+  // green check in the section headers and the nav chips. For required sections
+  // it mirrors the submit gate; for optional ones (Vehicle, Notes) it just
+  // reflects "something's entered".
+  const sectionComplete = useMemo<Record<SectionKey, boolean>>(
+    () => ({
+      customer: Boolean(firstName.trim()) && isValidUsPhone(phone),
+      vehicle: validVin.length === 17 || Boolean(make.trim() && model.trim()),
+      services: selectedIds.size > 0 || customServices.length > 0,
+      mechanic_estimate:
+        (mechanicEstimateMinutes ?? 0) > 0 && (mechanicQuotedPrice ?? 0) > 0,
+      catalog_parts: partsDeclaration !== null,
+      diagnostic: diagnosticSystem !== null,
+      notes: Boolean(customerNotes.trim()),
+    }),
+    [
+      firstName,
+      phone,
+      validVin,
+      make,
+      model,
+      selectedIds.size,
+      customServices.length,
+      mechanicEstimateMinutes,
+      mechanicQuotedPrice,
+      partsDeclaration,
+      diagnosticSystem,
+      customerNotes,
+    ],
+  );
+
+  // Required fields still missing before this booking can be submitted — mirrors
+  // the field-level checks in handleSubmit (the interactive pickers for options /
+  // tires / outside-hours still run on click). Drives the header submit button's
+  // disabled state + its "what's left" tooltip.
+  const missingRequired = useMemo(() => {
+    const missing: string[] = [];
+    if (!firstName.trim()) missing.push("customer name");
+    if (!isValidUsPhone(phone)) missing.push("valid phone");
+    if ((mechanicEstimateMinutes ?? 0) <= 0)
+      missing.push(isBackfill ? "actual time" : "time estimate");
+    if ((mechanicQuotedPrice ?? 0) <= 0)
+      missing.push(isBackfill ? "price charged" : "quoted price");
+    if (isBackfill) {
+      if (
+        backfillCompletionMileage == null ||
+        !Number.isFinite(backfillCompletionMileage) ||
+        backfillCompletionMileage < 0
+      )
+        missing.push("completion mileage");
+    } else if (
+      (selectedIds.size > 0 || customServices.length > 0) &&
+      partsDeclaration === null
+    ) {
+      missing.push("parts choice");
+    }
+    return missing;
+  }, [
+    firstName,
+    phone,
+    mechanicEstimateMinutes,
+    mechanicQuotedPrice,
+    isBackfill,
+    backfillCompletionMileage,
+    selectedIds.size,
+    customServices.length,
+    partsDeclaration,
+  ]);
+  const requiredReady = missingRequired.length === 0;
+  const submitTitle = requiredReady
+    ? isBackfill
+      ? "Log completed job"
+      : "Create booking"
+    : `Still needed: ${missingRequired.join(", ")}`;
+
+  // Track scroll: compact the header past a small threshold (with hysteresis so
+  // it doesn't flicker at the boundary) and mark the section under the top edge.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const top = el.scrollTop;
+        setHeaderCompact((prev) => (prev ? top > 6 : top > 16));
+        // Detection line sits just below the scroll top, so the lit chip tracks
+        // whichever section header is currently pinned there.
+        const line = el.getBoundingClientRect().top + 8;
+        let current = navSections[0]?.key ?? "customer";
+        for (const s of navSections) {
+          const node = sectionElRefs.current[s.key];
+          if (!node) continue;
+          if (node.getBoundingClientRect().top - line <= 0) current = s.key;
+        }
+        // Snap to the last section once the body bottoms out, so short trailing
+        // sections still light their chip.
+        if (el.scrollHeight - top - el.clientHeight < 48) {
+          current = navSections[navSections.length - 1]?.key ?? current;
+        }
+        setActiveSection(current);
+      });
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [navSections]);
+
+  const scrollToTop = () =>
+    scrollRef.current?.scrollTo({ top: 0, behavior: "smooth" });
+
+  const scrollToSection = (key: SectionKey) => {
+    openSection(key);
+    // Let the section expand first, then bring its (now sticky) header to the top.
+    requestAnimationFrame(() => {
+      const node = sectionElRefs.current[key];
+      const container = scrollRef.current;
+      if (!node || !container) return;
+      const delta =
+        node.getBoundingClientRect().top - container.getBoundingClientRect().top;
+      container.scrollTo({
+        top: container.scrollTop + delta - 4,
+        behavior: "smooth",
+      });
+    });
+  };
+
+  // One-line schedule digest shown in the header once it collapses.
+  const compactScheduleSummary = useMemo(() => {
+    const d = new Date(`${date}T00:00:00`);
+    const shortDate = Number.isFinite(d.getTime())
+      ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+      : date;
+    const timeLabel = TIME_OPTIONS.find((o) => o.value === time)?.label ?? time;
+    const mech =
+      assignmentPreference === "any"
+        ? entityLabel.anyLabel
+        : mechanics.find((m) => m._id === mechanicId)?.name ?? "";
+    return [shortDate, timeLabel, mech].filter(Boolean).join(" · ");
+  }, [date, time, assignmentPreference, mechanicId, mechanics, entityLabel.anyLabel]);
+
   /* ---- Render ---- */
   return (
     <div className="flex flex-col h-full">
       {/* Header — scheduling lives here so date, time, and assignment are
-          always visible and editable without scrolling. */}
-      <div className="shrink-0 border-b border-border px-5 py-4">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold text-foreground">Create booking</h2>
-          <div className="flex items-center gap-2">
+          editable without scrolling. Past a small scroll it collapses to a
+          one-line digest to hand the viewport back to the form. */}
+      <div className="shrink-0 border-b border-border px-5 pt-3 pb-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <h2 className="shrink-0 text-base font-semibold text-foreground">
+              {isBackfill ? "Log past job" : "Create booking"}
+            </h2>
+            {/* Collapsed-header digest — tap to jump back up and edit schedule. */}
+            {headerCompact && (
+              <button
+                type="button"
+                onClick={scrollToTop}
+                title="Edit date, time & assignment"
+                className="min-w-0 truncate rounded-md bg-muted/60 px-2 py-0.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                {compactScheduleSummary}
+              </button>
+            )}
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
             {holdCountdownLabel && (
               <span
                 className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
@@ -1922,8 +2290,37 @@ export default function CreateBookingDrawer({
                 {holdExpired ? "Hold expired" : `Held ${holdCountdownLabel}`}
               </span>
             )}
+            {/* Compact layouts only (laptop / iPad / phone): the primary submit
+                lives here — not a bottom bar — to hand the scarce vertical space
+                back to the form. The desktop side panel keeps its bottom button.
+                Disabled until every required field is filled; the tooltip says
+                what's still missing. */}
+            {compact && (
+              <button
+                type="button"
+                onClick={() => {
+                  void handleSubmit();
+                }}
+                disabled={!requiredReady || isSaving}
+                title={submitTitle}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-semibold text-primary-foreground transition-all hover:opacity-90 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {isSaving ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>{isBackfill ? "Logging…" : "Creating…"}</span>
+                  </>
+                ) : (
+                  <>
+                    <span>{isBackfill ? "Log job" : "Create booking"}</span>
+                    <ArrowRight className="h-4 w-4" />
+                  </>
+                )}
+              </button>
+            )}
             <button
               onClick={onClose}
+              aria-label="Close"
               className="p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
             >
               <X className="w-5 h-5" />
@@ -1931,68 +2328,79 @@ export default function CreateBookingDrawer({
           </div>
         </div>
 
-        {/* Date + time + end, inline */}
-        <div className="mt-3 flex flex-wrap items-center gap-2">
-          <DatePicker
-            className="w-40"
-            value={date}
-            onChange={(next) => next && setDate(next)}
-          />
-          <Select selectedKey={time} onSelectionChange={(key) => setTime(String(key))}>
-            <SelectTrigger className="h-9 w-32 rounded-lg border-border bg-card text-sm px-3">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectPopover placement="bottom start">
-              <SelectListBox shouldFocusWrap>
-                {filteredTimeOptions.map((o) => (
-                  <SelectItem key={o.value} id={o.value} textValue={o.label}>
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectListBox>
-            </SelectPopover>
-          </Select>
-          {computedEndLabel ? (
-            <span className="text-xs text-muted-foreground">Ends ~ {computedEndLabel}</span>
-          ) : null}
+        {/* Scheduling controls — collapse away (height + fade) once scrolled. */}
+        <div
+          className={cn(
+            "grid transition-[grid-template-rows,opacity] duration-200 ease-out",
+            headerCompact ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100",
+          )}
+        >
+          <div className={cn("min-h-0 overflow-hidden", headerCompact && "pointer-events-none")}>
+            {/* Date + time + end, inline */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <DatePicker
+                className="w-40"
+                value={date}
+                onChange={(next) => next && setDate(next)}
+              />
+              <Select selectedKey={time} onSelectionChange={(key) => setTime(String(key))}>
+                <SelectTrigger className="h-9 w-32 rounded-lg border-border bg-card text-sm px-3">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopover placement="bottom start">
+                  <SelectListBox shouldFocusWrap>
+                    {filteredTimeOptions.map((o) => (
+                      <SelectItem key={o.value} id={o.value} textValue={o.label}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectListBox>
+                </SelectPopover>
+              </Select>
+              {computedEndLabel ? (
+                <span className="text-xs text-muted-foreground">Ends ~ {computedEndLabel}</span>
+              ) : null}
+            </div>
+
+            {/* Mechanic assignment — small, unboxed, free-flowing */}
+            {mechanics.length > 0 && (
+              <div className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
+                <span>Assigned to</span>
+                <Select
+                  selectedKey={assignmentPreference === "any" ? "any" : mechanicId}
+                  onSelectionChange={(key) => {
+                    if (key === "any") {
+                      setAssignmentPreference("any");
+                      setMechanicId("");
+                      return;
+                    }
+                    setAssignmentPreference("specific_mechanic");
+                    setMechanicId(String(key));
+                  }}
+                >
+                  <SelectTrigger className="inline-flex h-auto w-auto items-center gap-1 rounded-md border-0 bg-transparent px-1.5 py-0.5 text-sm font-medium text-foreground shadow-none ring-offset-0 hover:text-primary">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectPopover placement="bottom start">
+                    <SelectListBox shouldFocusWrap>
+                      <SelectItem id="any" textValue={entityLabel.anyLabel}>
+                        <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
+                      </SelectItem>
+                      {mechanics.map((m) => (
+                        <SelectItem key={m._id} id={m._id} textValue={m.name}>
+                          {m.name}
+                        </SelectItem>
+                      ))}
+                    </SelectListBox>
+                  </SelectPopover>
+                </Select>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Mechanic assignment — small, unboxed, free-flowing */}
-        {mechanics.length > 0 && (
-          <div className="mt-2 flex items-center gap-1.5 text-sm text-muted-foreground">
-            <span>Assigned to</span>
-            <Select
-              selectedKey={assignmentPreference === "any" ? "any" : mechanicId}
-              onSelectionChange={(key) => {
-                if (key === "any") {
-                  setAssignmentPreference("any");
-                  setMechanicId("");
-                  return;
-                }
-                setAssignmentPreference("specific_mechanic");
-                setMechanicId(String(key));
-              }}
-            >
-              <SelectTrigger className="inline-flex h-auto w-auto items-center gap-1 rounded-md border-0 bg-transparent px-1.5 py-0.5 text-sm font-medium text-foreground shadow-none ring-offset-0 hover:text-primary">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectPopover placement="bottom start">
-                <SelectListBox shouldFocusWrap>
-                  <SelectItem id="any" textValue={entityLabel.anyLabel}>
-                    <span className="text-muted-foreground">{entityLabel.anyLabel}</span>
-                  </SelectItem>
-                  {mechanics.map((m) => (
-                    <SelectItem key={m._id} id={m._id} textValue={m.name}>
-                      {m.name}
-                    </SelectItem>
-                  ))}
-                </SelectListBox>
-              </SelectPopover>
-            </Select>
-          </div>
-        )}
-
-        {/* Scheduling validation */}
+        {/* Scheduling validation — kept out of the collapsing block so a
+            blocking overlap / hours error is never hidden behind the digest. */}
         {(overlapError || blockingHoursError || capacityWarning || outsideHoursWarning) && (
           <div className="mt-2 space-y-1">
             {overlapError && <p className="form-error-text text-xs">{overlapError}</p>}
@@ -2009,8 +2417,47 @@ export default function CreateBookingDrawer({
         )}
       </div>
 
-      {/* Scrollable body */}
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4">
+      {/* Section navigator — always-visible chip bar naming the section you're
+          in (highlighted from scroll position) with tap-to-jump. */}
+      <div className="shrink-0 border-b border-border bg-muted/20 px-3 py-1.5">
+        <div className="flex items-center gap-1 overflow-x-auto scrollbar-none">
+          {navSections.map((s) => {
+            const active = activeSection === s.key;
+            const done = sectionComplete[s.key];
+            // Once a section is complete its icon becomes a check, so the chip
+            // bar doubles as a progress row.
+            const Icon = done ? Check : s.icon;
+            return (
+              <button
+                key={s.key}
+                type="button"
+                onClick={() => scrollToSection(s.key)}
+                aria-current={active ? "true" : undefined}
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+                  active
+                    ? "bg-primary text-primary-foreground"
+                    : done
+                      ? "text-emerald-600 hover:bg-muted"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+              >
+                <Icon
+                  className={cn("h-3.5 w-3.5 shrink-0", done && !active && "text-emerald-500")}
+                  {...(done ? { strokeWidth: 3 } : {})}
+                />
+                {s.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Scrollable body. No top padding — it would offset the `sticky top-0`
+          section headers down and let content peek above them; we want each
+          header to pin flush under the nav bar. `flex-1` keeps it filling the
+          full height between the header and (on desktop) the bottom bar. */}
+      <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto px-5 pb-3 space-y-3">
 
         {isBackfill && (
           <div className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -2031,6 +2478,8 @@ export default function CreateBookingDrawer({
         {/* ── Customer Info ── */}
         <CollapsibleSection
           sectionKey="customer"
+          registerRef={(el) => { sectionElRefs.current.customer = el; }}
+          complete={sectionComplete.customer}
           icon={User}
           label="Customer Info"
           open={openSections.has("customer")}
@@ -2062,6 +2511,8 @@ export default function CreateBookingDrawer({
         {/* ── Vehicle Info ── */}
         <CollapsibleSection
           sectionKey="vehicle"
+          registerRef={(el) => { sectionElRefs.current.vehicle = el; }}
+          complete={sectionComplete.vehicle}
           icon={Car}
           label="Vehicle Info"
           open={openSections.has("vehicle")}
@@ -2075,7 +2526,20 @@ export default function CreateBookingDrawer({
                   type="text"
                   placeholder="17-digit code"
                   value={vin}
-                  onChange={(e) => setVin(e.target.value.toUpperCase())}
+                  onChange={(e) => {
+                    // Auto-correct the ISO ambiguous typos (O→0, I→1) and strip
+                    // anything a VIN can't contain BEFORE it reaches state, so a
+                    // VIN entered with an "O" still hits the 17-char check and
+                    // fires enrichment instead of silently stalling one char shy.
+                    const { value, correctedOI, droppedInvalid } =
+                      sanitizeVinInput(e.target.value);
+                    setVin(value);
+                    setVinCorrection(
+                      correctedOI || droppedInvalid
+                        ? { correctedOI, droppedInvalid }
+                        : null,
+                    );
+                  }}
                   maxLength={17}
                   className={`${drawerInputClassName} font-mono uppercase pr-9`}
                 />
@@ -2083,6 +2547,24 @@ export default function CreateBookingDrawer({
                   <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground animate-spin" />
                 )}
               </div>
+              {/* Tell the mechanic what we just fixed, so an auto-correct never
+                  changes their input behind their back. */}
+              {vinCorrection && (
+                <p className="mt-1 text-xs text-amber-600">
+                  {vinCorrection.correctedOI && vinCorrection.droppedInvalid
+                    ? "Fixed that VIN — read O/I as 0/1 and dropped characters a VIN can't contain (no I, O or Q)."
+                    : vinCorrection.correctedOI
+                      ? "VINs never use the letters O or I — read those as 0 and 1."
+                      : "Dropped a character a VIN can't contain (no I, O or Q)."}
+                </p>
+              )}
+              {/* Live length feedback while the VIN is partial — the "can't take
+                  it yet" state, surfaced at the field instead of at submit. */}
+              {vin.length > 0 && vin.length < 17 && (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {vin.length}/17 characters
+                </p>
+              )}
               {vinLookupState === "error" && (
                 <p className="mt-1 text-xs text-muted-foreground">
                   Couldn&apos;t decode VIN. Enter make/model manually.
@@ -2131,6 +2613,8 @@ export default function CreateBookingDrawer({
         {/* ── Service Selection ── */}
         <CollapsibleSection
           sectionKey="services"
+          registerRef={(el) => { sectionElRefs.current.services = el; }}
+          complete={sectionComplete.services}
           icon={Wrench}
           label="Service Selection"
           open={openSections.has("services")}
@@ -2167,10 +2651,28 @@ export default function CreateBookingDrawer({
                   }
                   className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-medium hover:bg-amber-200 transition-colors"
                 >
-                  <span>{c.name}{c.durationMinutes ? ` · ${c.durationMinutes}m` : ""}</span>
+                  <span>{c.name}{c.durationMinutes ? ` · ${formatHoursValue(c.durationMinutes)}h` : ""}</span>
                   <X className="w-3 h-3" />
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* Combined labor savings — the honest overlap deduction. Only shows
+              when the director flag is on AND co-booked services shared teardown. */}
+          {combinedLaborEnabled && combinedLabor.applied && combinedLabor.savedMinutes > 0 && (
+            <div className="mb-3 rounded-lg border border-emerald-200 bg-emerald-50/70 p-2.5 text-xs text-emerald-900">
+              <div className="flex items-center gap-1.5 font-semibold">
+                <Check className="h-3.5 w-3.5" />
+                Combined labor savings · −{formatHoursValue(combinedLabor.savedMinutes)}h
+              </div>
+              {combinedLabor.notes.length > 0 && (
+                <ul className="mt-1 list-disc space-y-0.5 pl-5 text-emerald-800/90">
+                  {combinedLabor.notes.map((n, i) => (
+                    <li key={i}>{n}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
 
@@ -2234,6 +2736,17 @@ export default function CreateBookingDrawer({
             />
           </div>
 
+          {hasVehicleLabor && (
+            <p className="mb-2 text-[11px] text-muted-foreground">
+              Labor times shown for{" "}
+              <span className="font-medium text-foreground">
+                {[year, make, model].filter(Boolean).join(" ") || "this vehicle"}
+              </span>
+              {" · "}
+              <span className="tabular-nums">~</span> = tier estimate
+            </p>
+          )}
+
           {shopData === undefined ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-5 h-5 text-primary animate-spin" />
@@ -2266,7 +2779,15 @@ export default function CreateBookingDrawer({
                       <div className="divide-y divide-border/60">
                         {cat.services.map((s: any) => {
                           const checked = selectedIds.has(s._id);
-                          const mins = Math.round((s.defaultLaborHours ?? 0) * 60);
+                          // Prefer the per-vehicle labor time once a VIN
+                          // resolves; else the flat catalog default. `~` +
+                          // muted tone flags a tier/default estimate (the
+                          // "Yassin fallback"), matching the app's Estimate pill.
+                          const vehicleLabor = vehicleLaborByServiceId.get(String(s._id));
+                          const mins = vehicleLabor
+                            ? vehicleLabor.minutes
+                            : Math.round((s.defaultLaborHours ?? 0) * 60);
+                          const isEstimate = vehicleLabor?.isEstimate ?? false;
                           return (
                             <label
                               key={s._id}
@@ -2282,9 +2803,21 @@ export default function CreateBookingDrawer({
                               />
                               <span className="flex-1 text-sm text-foreground truncate">{s.name}</span>
                               {mins > 0 && (
-                                <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground tabular-nums shrink-0">
+                                <span
+                                  className={cn(
+                                    "inline-flex items-center gap-1 text-[11px] tabular-nums shrink-0",
+                                    isEstimate ? "text-muted-foreground/70" : "text-muted-foreground",
+                                  )}
+                                  title={
+                                    vehicleLabor
+                                      ? isEstimate
+                                        ? "Estimated from vehicle tier"
+                                        : "Based on this vehicle"
+                                      : undefined
+                                  }
+                                >
                                   <Clock className="w-3 h-3" />
-                                  {mins}m
+                                  {isEstimate ? "~" : ""}{formatHoursValue(mins)}h
                                 </span>
                               )}
                             </label>
@@ -2525,6 +3058,8 @@ export default function CreateBookingDrawer({
             actual_price_charged on the booking row. */}
         <CollapsibleSection
           sectionKey="mechanic_estimate"
+          registerRef={(el) => { sectionElRefs.current.mechanic_estimate = el; }}
+          complete={sectionComplete.mechanic_estimate}
           icon={Clock}
           label={isBackfill ? "Actuals" : "Mechanic estimate"}
           open={openSections.has("mechanic_estimate")}
@@ -2812,12 +3347,15 @@ export default function CreateBookingDrawer({
         </CollapsibleSection>
 
         {/* ── Parts (declaration → editor; feeds the bill + job scope) ──
-            "Add parts" itemizes the parts on this bill (prefilled from the OEM
-            catalog, fully editable). They become priced_parts_snapshot +
-            parts_cost and feed the job scope, pre-job and post-job. */}
+            "Add parts" itemizes the parts on this bill. The mechanic fills the
+            rows; a per-service button pulls matching OEM catalog rows on demand
+            (fully editable). They become priced_parts_snapshot + parts_cost and
+            feed the job scope, pre-job and post-job. */}
         {!isBackfill && (selectedIds.size > 0 || customServices.length > 0) && (
           <CollapsibleSection
             sectionKey="catalog_parts"
+            registerRef={(el) => { sectionElRefs.current.catalog_parts = el; }}
+            complete={sectionComplete.catalog_parts}
             icon={Package}
             label="Parts"
             open={openSections.has("catalog_parts")}
@@ -2834,7 +3372,7 @@ export default function CreateBookingDrawer({
             <DrawerFieldLabel>Does this job have parts?</DrawerFieldLabel>
             <div className="space-y-1.5">
               {([
-                { value: "add", label: "Add parts", hint: "List the parts on this bill — prefilled from our catalog" },
+                { value: "add", label: "Add parts", hint: "List the parts on this bill — pull from our catalog or add your own" },
                 { value: "none", label: "No parts", hint: "Labor-only job — nothing to install" },
                 { value: "skip", label: "Skip for now", hint: "Decide later — pre-job will suggest from the catalog" },
               ] as Array<{ value: "add" | "none" | "skip"; label: string; hint: string }>).map((opt) => {
@@ -2889,6 +3427,9 @@ export default function CreateBookingDrawer({
                   )}
                 {catalogPartServices.map(({ service_id: sid, name, custom }) => {
                   const rows = catalogPartEdits[sid] ?? [];
+                  // Un-pulled OEM catalog rows for this service (custom lines
+                  // have none). Drives the empty-state copy + the pull button.
+                  const catalogCount = custom ? 0 : availableCatalogCount(sid);
                   // Tire replacement has no OEM parts — the mechanic enters the
                   // tires directly (size / brand / model / per-tire price).
                   if (tireService != null && sid === String(tireService._id)) {
@@ -2937,7 +3478,9 @@ export default function CreateBookingDrawer({
                           <p className="text-xs text-muted-foreground">
                             {custom
                               ? "Off-catalog work — we have nothing to prefill. Add what you fitted."
-                              : "No catalog parts for this service — add one below."}
+                              : catalogCount > 0
+                                ? "Pull the OEM parts we have for this service, or add your own below."
+                                : "No catalog parts for this service — add one below."}
                           </p>
                         )}
                         {rows.map((p, idx) =>
@@ -3032,10 +3575,10 @@ export default function CreateBookingDrawer({
                             </div>
                             <div className="grid grid-cols-2 gap-3">
                               <div>
-                                <DrawerFieldLabel>OEM #</DrawerFieldLabel>
+                                <DrawerFieldLabel>Part Number</DrawerFieldLabel>
                                 <input
                                   type="text"
-                                  placeholder="OEM #"
+                                  placeholder="Part number"
                                   value={p.oem_number}
                                   onChange={(e) =>
                                     setCatalogPartField(sid, idx, "oem_number", e.target.value)
@@ -3055,14 +3598,27 @@ export default function CreateBookingDrawer({
                                 <DrawerFieldLabel>Brand</DrawerFieldLabel>
                                 <Combobox
                                   ariaLabel="Brand"
-                                  placeholder="Brand"
+                                  placeholder="Search or type a brand…"
                                   value={p.brand ?? ""}
                                   onChange={(value) =>
                                     setCatalogPartField(sid, idx, "brand", value)
                                   }
                                   options={makeOptions}
                                   loading={makesList === undefined}
-                                  emptyText="No matching make — type to add a custom brand"
+                                  emptyText="No matching brand — type one, then tap Add"
+                                  onAddCustom={(value) => {
+                                    // Select it on this part now…
+                                    setCatalogPartField(sid, idx, "brand", value);
+                                    // …and remember it for this shop's future
+                                    // bookings. Fire-and-forget: a failed save must
+                                    // never cost the mechanic the brand they typed.
+                                    if (shopData?.shopId) {
+                                      addCustomBrand({
+                                        shopId: shopData.shopId as Id<"shops">,
+                                        name: value,
+                                      }).catch(() => {});
+                                    }
+                                  }}
                                   inputClassName={drawerInputClassName}
                                 />
                               </div>
@@ -3155,14 +3711,28 @@ export default function CreateBookingDrawer({
                           </div>
                           )
                         )}
-                        <button
-                          type="button"
-                          onClick={() => addCatalogPartRow(sid)}
-                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          Add part
-                        </button>
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                          {catalogCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => pullCatalogPartsForService(sid)}
+                              className="inline-flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/5 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/10"
+                            >
+                              <Package className="w-3.5 h-3.5" />
+                              {`Add ${catalogCount} catalog part${
+                                catalogCount === 1 ? "" : "s"
+                              }${vehicleLabel ? ` for this ${vehicleLabel}` : ""}`}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => addCatalogPartRow(sid)}
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            Add part
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );
@@ -3176,6 +3746,8 @@ export default function CreateBookingDrawer({
         {isDiagnostic && (
           <CollapsibleSection
             sectionKey="diagnostic"
+            registerRef={(el) => { sectionElRefs.current.diagnostic = el; }}
+            complete={sectionComplete.diagnostic}
             icon={Stethoscope}
             label="Diagnostic system"
             open={openSections.has("diagnostic")}
@@ -3236,6 +3808,8 @@ export default function CreateBookingDrawer({
         {/* ── Customer states ── */}
         <CollapsibleSection
           sectionKey="notes"
+          registerRef={(el) => { sectionElRefs.current.notes = el; }}
+          complete={sectionComplete.notes}
           icon={MessageSquare}
           label="Customer states"
           open={openSections.has("notes")}
@@ -3253,28 +3827,34 @@ export default function CreateBookingDrawer({
 
       </div>
 
-      {/* Footer */}
-      <div className="px-5 py-4 border-t border-border shrink-0">
-        <button
-          onClick={() => {
-            void handleSubmit();
-          }}
-          disabled={!firstName.trim() || !isValidUsPhone(phone) || isSaving}
-          className="w-full py-3 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {isSaving ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span>{isBackfill ? "Logging…" : "Creating…"}</span>
-            </>
-          ) : (
-            <>
-              <span>{isBackfill ? "Log Completed Job" : "Create Booking"}</span>
-              <ArrowRight className="w-4 h-4" />
-            </>
-          )}
-        </button>
-      </div>
+      {/* Bottom bar — desktop side panel only. On compact layouts the submit
+          button lives in the header instead (see above), so there's no footer
+          eating vertical space there. */}
+      {!compact && (
+        <div className="px-5 py-3 border-t border-border shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              void handleSubmit();
+            }}
+            disabled={!requiredReady || isSaving}
+            title={submitTitle}
+            className="w-full py-3 bg-primary text-primary-foreground text-sm font-semibold rounded-lg hover:opacity-90 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>{isBackfill ? "Logging…" : "Creating…"}</span>
+              </>
+            ) : (
+              <>
+                <span>{isBackfill ? "Log Completed Job" : "Create Booking"}</span>
+                <ArrowRight className="w-4 h-4" />
+              </>
+            )}
+          </button>
+        </div>
+      )}
 
       <ConfirmationDialog
         open={vinConfirmOpen && !!vinSuggestion}

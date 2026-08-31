@@ -65,6 +65,18 @@
 }
 
 
+/* iOS Safari zooms the viewport when a focused <input> has font-size < 16px.
+ * Schedule inputs use text-sm (14px); the page root and its portaled bottom
+ * sheets both carry `.schedule-scope`, so bump their inputs to 16px on
+ * phones/iPads (<xl) to stop the zoom-on-focus. */
+@media (max-width: 1279px) {
+  .schedule-scope input,
+  .schedule-scope select,
+  .schedule-scope textarea {
+    font-size: 16px;
+  }
+}
+
 /* Blocked slot diagonal stripe pattern */
 .blocked-slot-pattern {
   background: repeating-linear-gradient(

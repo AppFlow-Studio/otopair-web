@@ -6,10 +6,10 @@
 // 30-day usage chart, and the full endpoint Reference.
 
 import { useState } from "react";
+import Link from "next/link";
 import { SignedIn, SignedOut, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Reference } from "./Reference";
 import { baseUrl } from "./shared";
 
 const ink = "#1a1a1a";
@@ -32,8 +32,9 @@ type DevUsageDay = { date: string; requests: number; errors: number };
 
 export function DevelopersClient() {
   return (
-    <main className="min-h-screen w-full bg-[#eceae6] px-4 pb-24 pt-28 md:pt-32">
-      <div className="mx-auto max-w-4xl">
+    <main className="min-h-screen w-full bg-[#eceae6]">
+      <DevHeader />
+      <div className="mx-auto max-w-4xl px-4 pb-24 pt-10 md:pt-12">
         <SignedOut>
           <Landing />
         </SignedOut>
@@ -42,6 +43,32 @@ export function DevelopersClient() {
         </SignedIn>
       </div>
     </main>
+  );
+}
+
+// Slim in-page header — replaces the marketing navbar (hidden on /developers).
+// Home wordmark + the docs links, and the account button once signed in.
+function DevHeader() {
+  return (
+    <div className="sticky top-0 z-20 flex items-center gap-3 border-b border-[#dcd8d0] bg-[#eceae6]/90 px-4 py-3 backdrop-blur md:px-6">
+      <Link href="/" className="text-[16px] font-semibold" style={{ fontFamily: "var(--font-Lora)", color: ink }}>
+        Otopair
+      </Link>
+      <span className="hidden text-[13px] sm:inline" style={{ color: muted }}>
+        Car Data API
+      </span>
+      <nav className="ml-auto flex items-center gap-4 text-[14px] font-semibold">
+        <Link href="/developers/docs" className="hover:opacity-70" style={{ color: ink }}>
+          Docs
+        </Link>
+        <Link href="/developers/docs/quickstart" className="hover:opacity-70" style={{ color: ink }}>
+          Quickstart
+        </Link>
+        <SignedIn>
+          <UserButton />
+        </SignedIn>
+      </nav>
+    </div>
   );
 }
 
@@ -75,13 +102,41 @@ function Landing() {
       <p className="mt-3 text-[12px]" style={{ color: muted }}>
         Free tier: one key · all read scopes · 60 requests/min. No card required.
       </p>
-
-      {/* The docs are the sales pitch — show them signed-out too. */}
+      {/* The interactive reference is the sales pitch — link people straight in. */}
       <div className="mt-14 text-left">
-        <h2 className="mb-4 text-xl" style={{ fontFamily: "var(--font-Lora)", color: ink }}>
-          The API
-        </h2>
-        <Reference />
+        <DocsCta />
+      </div>
+    </div>
+  );
+}
+
+// A single card that sends people to the interactive, try-it API reference
+// (Scalar, /developers/docs) — the one source of truth for endpoints + schemas.
+function DocsCta() {
+  return (
+    <div className={CARD}>
+      <div className="flex flex-col gap-4 md:flex-row md:items-center">
+        <div className="flex-1">
+          <h2 className="text-xl" style={{ fontFamily: "var(--font-Lora)", color: ink }}>
+            Explore the interactive API reference
+          </h2>
+          <p className="mt-2 text-[14px] leading-6" style={{ color: muted }}>
+            Every v0 &amp; v1 endpoint with detailed request/response schemas, real examples, and a
+            live <strong>Try it</strong> console — run a call against real data right in the browser.
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-3">
+          <Link href="/developers/docs" className={BTN_PRIMARY}>
+            Open API reference
+          </Link>
+          <Link
+            href="/developers/docs/quickstart"
+            className="rounded-xl border border-[#1a1a1a] px-6 py-3 text-[15px] font-semibold transition hover:bg-[#1a1a1a] hover:text-white"
+            style={{ color: ink }}
+          >
+            Quickstart
+          </Link>
+        </div>
       </div>
     </div>
   );
@@ -129,14 +184,9 @@ function Dashboard() {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center gap-3">
-        <h1 className="text-3xl" style={{ fontFamily: "var(--font-Lora)", color: ink }}>
-          Developer dashboard
-        </h1>
-        <span className="ml-auto">
-          <UserButton />
-        </span>
-      </div>
+      <h1 className="text-3xl" style={{ fontFamily: "var(--font-Lora)", color: ink }}>
+        Developer dashboard
+      </h1>
 
       {/* Key card */}
       <div className={CARD}>
@@ -260,13 +310,8 @@ function Dashboard() {
         )}
       </div>
 
-      {/* Reference */}
-      <div>
-        <h2 className="mb-4 text-xl" style={{ fontFamily: "var(--font-Lora)", color: ink }}>
-          Reference
-        </h2>
-        <Reference />
-      </div>
+      {/* Reference — the interactive docs are the source of truth. */}
+      <DocsCta />
     </div>
   );
 }

@@ -1,14 +1,16 @@
 "use client";
 
 import {
-  Fragment,
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import {
   FluidCatalogSelectField,
   FLUID_KIND_BY_KEY,
@@ -35,8 +37,10 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
+import { BrakeAxleDialog } from "@/components/brake-axle-dialog";
+import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
+import type { AxlePosition } from "@/convex/lib/brakeScope";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
-import PreJobScopeDialog from "@/components/booking/pre-job-scope-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
 import MonthPicker from "@/components/ui/month-picker";
@@ -57,17 +61,19 @@ import {
   defaultZoneState,
   derivePrejobFromInspection,
   deriveSuggestedRecommendations,
+  effectiveRotorRef,
   gatherFindings,
   getDirtyIncompleteZones,
   inspectionSlugTaxonomy,
   INSPECTION_NAV_ZONE_IDS,
   deriveTierInspectionScope,
   isBrakeDetailFieldRelevant,
+  canMarkFieldUnavailable,
+  isNysSafetyField,
   isFieldApplicableToZone,
   isFieldRequiredForZone,
   isSpecPrefillField,
   normalizeTireSize,
-  nextInspectionZoneAfterCompletion,
   OPPOSITE_CORNER,
   patchInspectionZone,
   patchSharedInspectionText,
@@ -87,6 +93,7 @@ import {
   type FieldUnavailableStatus,
   type InspectionField,
   type InspectionState,
+  type RotorMinByAxle,
   type SpecPrefillEntry,
   type TriValue,
   type WarningLightEntry,
@@ -138,6 +145,12 @@ import {
   type AffectedSystem,
 } from "@/lib/vehicle-mod-systems";
 
+// Per-vehicle rotor minimums (enrichment-derived) provided once at the dialog
+// root so the deeply-nested MeasureField can grade + label each corner's rotor
+// against THIS car's replace-at figure without prop-drilling. Null ⇒ fall back
+// to the static default (effectiveRotorRef handles the fallback).
+const RotorMinContext = createContext<RotorMinByAxle | null>(null);
+
 type SubmitIntent = "close" | "start";
 type BookedTirePosition = "FL" | "FR" | "RL" | "RR";
 
@@ -183,6 +196,21 @@ type ResolvedSuggestion = {
   workType: string | null;
 };
 
+/**
+ * Does adding this suggestion need an axle? True only for brake-pad and rotor
+ * replacement — the exact services deriveTierInspectionScope requires an axle
+ * scope for. Matched through getBookingServiceFlags on the resolved name so the
+ * picker fires iff the inspection would otherwise dead-end on a missing axle.
+ * Brake fluid flush and other brake-adjacent work are deliberately excluded:
+ * they carry no axle meaning and don't gate the inspection.
+ */
+function isBrakeAxleSuggestion(suggestion: ResolvedSuggestion): boolean {
+  const name = suggestion.serviceName ?? suggestion.label ?? "";
+  if (!name) return false;
+  const flags = getBookingServiceFlags([name]);
+  return flags.hasBrakePadReplacement || flags.hasRotorReplacement;
+}
+
 const prepareInspectionPhotoUploadRef = makeFunctionReference<"mutation">(
   "inspections:prepareInspectionPhotoUpload",
 );
@@ -197,6 +225,10 @@ const deleteInspectionPhotoRef = makeFunctionReference<"mutation">(
 );
 
 const NAV_ZONE_IDS = INSPECTION_NAV_ZONE_IDS;
+
+// DOM id of the gutter slot the dialog shell renders just left of the card, into
+// which the floating vertical field rail is portaled.
+const INSPECTION_SIDE_RAIL_ID = "inspection-side-rail-slot";
 
 // Diagram geometry (top-down car). Mirrors the prototype layout. OWNER is not a
 // physical location, so it renders as a chip below the diagram, not on the car.
@@ -278,7 +310,12 @@ const SCOPE_INDEPENDENT_BRAKE_DETAIL_FIELDS = new Set([
 // "Applicable rotor present" gates whether these fields are grayed out —
 // same pattern as pad measurement method being gated by pad_inner/pad_outer
 // actually having a reading — not whether they're shown at all.
-const ROTOR_GATE_FIELDS = new Set(["rotor", "rotor_tool", "rotor_stamp", "desc"]);
+const ROTOR_GATE_FIELDS = new Set([
+  "rotor",
+  "rotor_tool",
+  "rotor_stamp",
+  "desc",
+]);
 
 // Tier 4 fields record what's being installed, not an observed condition —
 // they get a "Not available" option in the combobox itself (alongside
@@ -299,11 +336,12 @@ const URGENCY_LABEL: Record<string, string> = {
   next_visit: "Next visit",
 };
 
-const INSPECTION_STATUS_OPTIONS: { value: InspectionStatus; label: string }[] = [
-  { value: "current", label: "Current" },
-  { value: "not_current", label: "Not current" },
-  { value: "not_visible", label: "Not visible" },
-];
+const INSPECTION_STATUS_OPTIONS: { value: InspectionStatus; label: string }[] =
+  [
+    { value: "current", label: "Current" },
+    { value: "not_current", label: "Not current" },
+    { value: "not_visible", label: "Not visible" },
+  ];
 
 function userFacingInspectionError(error: unknown, fallback: string): string {
   if (!(error instanceof Error)) return fallback;
@@ -318,21 +356,21 @@ function serverValidationTarget(
   message: string,
 ): { zoneId: ZoneId; fieldKey: string } | null {
   const lower = message.toLowerCase().replace(/[^a-z0-9]+/g, " ");
-  const position =
-    lower.includes("front left")
-      ? "FL"
-      : lower.includes("front right")
-        ? "FR"
-        : lower.includes("rear left")
-          ? "RL"
-          : lower.includes("rear right")
-            ? "RR"
-            : lower.includes("front ")
-              ? "FL"
-              : lower.includes("rear ")
-                ? "RL"
-                : null;
-  if (lower.includes("tread")) return { zoneId: position ?? "FL", fieldKey: "tread" };
+  const position = lower.includes("front left")
+    ? "FL"
+    : lower.includes("front right")
+      ? "FR"
+      : lower.includes("rear left")
+        ? "RL"
+        : lower.includes("rear right")
+          ? "RR"
+          : lower.includes("front ")
+            ? "FL"
+            : lower.includes("rear ")
+              ? "RL"
+              : null;
+  if (lower.includes("tread"))
+    return { zoneId: position ?? "FL", fieldKey: "tread" };
   if (lower.includes("rotor thickness")) {
     return { zoneId: position ?? "FL", fieldKey: "rotor" };
   }
@@ -357,7 +395,8 @@ function serverValidationTarget(
   if (lower.includes("oil viscosity")) {
     return { zoneId: "ENG", fieldKey: "oil_viscosity" };
   }
-  if (lower.includes("oil type")) return { zoneId: "ENG", fieldKey: "oil_type" };
+  if (lower.includes("oil type"))
+    return { zoneId: "ENG", fieldKey: "oil_type" };
   return null;
 }
 
@@ -445,6 +484,18 @@ function MultiPointInspectionDialogBody({
     passportData?.is_first_shop_visit ??
     (passportData ? specsIncomplete && !hasPriorVisits : true);
 
+  // Per-vehicle rotor minimums (enrichment-derived, nominal × 0.85) so every
+  // rotor grade — live chips, findings, recommendations, the prejob rollup —
+  // measures against THIS car's replace-at figure. Null axles fall back to the
+  // static default baked into the corner field (effectiveRotorRef).
+  const rotorMin = useMemo<RotorMinByAxle>(
+    () => ({
+      front: passportData?.passport.brakes.rotor_min_front_mm ?? null,
+      rear: passportData?.passport.brakes.rotor_min_rear_mm ?? null,
+    }),
+    [passportData],
+  );
+
   const savedInspection = useQuery(
     api.inspections.getByBooking,
     bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
@@ -461,7 +512,9 @@ function MultiPointInspectionDialogBody({
   const submitInspectionRecs = useMutation(
     api.inspections.submitInspectionRecommendations,
   );
-  const undoInspectionRec = useMutation(api.jobRecommendations.confirmFromPreJob);
+  const undoInspectionRec = useMutation(
+    api.jobRecommendations.confirmFromPreJob,
+  );
   const addToJob = useMutation(api.customJobs.addMidJobCustomService);
   // Pre-start sibling of addToJob: appends the same line to a booking that
   // hasn't been started, to be sent as a PRE-job estimate the customer confirms
@@ -526,7 +579,9 @@ function MultiPointInspectionDialogBody({
     zoneId: Exclude<ZoneId, "OWNER">;
     uploadToken: string;
   }) => Promise<string>;
-  const attachInspectionPhoto = useMutation(attachInspectionPhotoRef) as (args: {
+  const attachInspectionPhoto = useMutation(
+    attachInspectionPhotoRef,
+  ) as (args: {
     bookingId: string;
     zoneId: Exclude<ZoneId, "OWNER">;
     storageId: string;
@@ -536,7 +591,9 @@ function MultiPointInspectionDialogBody({
   const generateInspectionPdf = useAction(generateInspectionPdfRef) as (args: {
     bookingId: string;
   }) => Promise<{ url: string | null }>;
-  const deleteInspectionPhoto = useMutation(deleteInspectionPhotoRef) as (args: {
+  const deleteInspectionPhoto = useMutation(
+    deleteInspectionPhotoRef,
+  ) as (args: {
     bookingId: string;
     storageId: string;
     zoneId?: Exclude<ZoneId, "OWNER">;
@@ -544,10 +601,27 @@ function MultiPointInspectionDialogBody({
   }) => Promise<void>;
 
   // ---- state -------------------------------------------------------------
-  const [state, setState] = useState<InspectionState>(() => createInspectionState());
+  const [state, setState] = useState<InspectionState>(() =>
+    createInspectionState(),
+  );
   // "PARTS" is a synthetic zone (like "OWNER") — never enters the diagram or
   // requiredZones; it hosts the mechanic parts fill-in gate.
   const [activeZone, setActiveZone] = useState<ZoneId | "PARTS" | null>(null);
+  // Completion-moment "copy this corner to its same-axle sibling" prompt. It
+  // surfaces at the diagram the instant a corner is marked complete (the locked
+  // rule: mirror a wheel only after its inspection is fully complete).
+  // `copyPromptCopied` flips the bar from its offer state to a brief "Copied ✓"
+  // confirmation that auto-clears after a beat — the mechanic stays on the diagram.
+  const [copyPromptFor, setCopyPromptFor] = useState<CornerZoneId | null>(null);
+  const [copyPromptCopied, setCopyPromptCopied] = useState(false);
+  useEffect(() => {
+    if (!copyPromptCopied) return;
+    const timer = window.setTimeout(() => {
+      setCopyPromptFor(null);
+      setCopyPromptCopied(false);
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [copyPromptCopied]);
   const [hydrated, setHydrated] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [error, setError] = useState("");
@@ -555,7 +629,9 @@ function MultiPointInspectionDialogBody({
     Partial<Record<ZoneId, { fieldKey: string; message: string }>>
   >({});
   const [downloading, setDownloading] = useState(false);
-  const [photoPreviews, setPhotoPreviews] = useState<Record<string, string>>({});
+  const [photoPreviews, setPhotoPreviews] = useState<Record<string, string>>(
+    {},
+  );
   const [photoBusy, setPhotoBusy] = useState<string | null>(null);
   const [photoToRemove, setPhotoToRemove] = useState<{
     zoneId: ZoneId;
@@ -596,13 +672,17 @@ function MultiPointInspectionDialogBody({
   const [mileage, setMileage] = useState("");
   const [mileageError, setMileageError] = useState("");
   const [liftStatus, setLiftStatus] = useState<"yes" | "no" | "">("");
-  const [inspectionStatus, setInspectionStatus] = useState<InspectionStatus | "">("");
+  const [inspectionStatus, setInspectionStatus] = useState<
+    InspectionStatus | ""
+  >("");
   const [inspectionExpires, setInspectionExpires] = useState("");
   const [modAftermarket, setModAftermarket] = useState(false);
   const [modNotes, setModNotes] = useState("");
   // Carried through from the pre-job survey / passport so a multi-point save
   // doesn't wipe affected systems this dialog has no UI to edit.
-  const [modAffectedSystems, setModAffectedSystems] = useState<AffectedSystem[]>([]);
+  const [modAffectedSystems, setModAffectedSystems] = useState<
+    AffectedSystem[]
+  >([]);
   const [nextTip, setNextTip] = useState("");
 
   // Owner-profile (skipped onboarding) answers keyed by question key.
@@ -667,16 +747,28 @@ function MultiPointInspectionDialogBody({
       tireReplacementPositions,
       isFirstShopVisit: isFirstVisit,
       priorTreadReadings: {
-        FL: passportData?.passport.tires.tread_depths?.front_left?.reported_min_32nds,
-        FR: passportData?.passport.tires.tread_depths?.front_right?.reported_min_32nds,
-        RL: passportData?.passport.tires.tread_depths?.rear_left?.reported_min_32nds,
-        RR: passportData?.passport.tires.tread_depths?.rear_right?.reported_min_32nds,
+        FL: passportData?.passport.tires.tread_depths?.front_left
+          ?.reported_min_32nds,
+        FR: passportData?.passport.tires.tread_depths?.front_right
+          ?.reported_min_32nds,
+        RL: passportData?.passport.tires.tread_depths?.rear_left
+          ?.reported_min_32nds,
+        RR: passportData?.passport.tires.tread_depths?.rear_right
+          ?.reported_min_32nds,
       },
       rotorPhotoEvidence: passportData?.rotor_photo_evidence,
       inspectionState: state,
       liftStatus,
     }),
-    [bookingServices, brakeScope, tireReplacementPositions, isFirstVisit, passportData, state, liftStatus],
+    [
+      bookingServices,
+      brakeScope,
+      tireReplacementPositions,
+      isFirstVisit,
+      passportData,
+      state,
+      liftStatus,
+    ],
   );
 
   useEffect(() => {
@@ -728,7 +820,10 @@ function MultiPointInspectionDialogBody({
               Object.entries((z.lights ?? {}) as Record<string, any[]>).map(
                 ([key, entries]) => [
                   key,
-                  entries.map((e) => ({ light: e.light, otherText: e.other_text })),
+                  entries.map((e) => ({
+                    light: e.light,
+                    otherText: e.other_text,
+                  })),
                 ],
               ),
             ),
@@ -741,7 +836,10 @@ function MultiPointInspectionDialogBody({
       } else if (typeof pf?.mileage === "number") {
         setMileage(String(pf.mileage));
       }
-      if (savedInspection.lift_status === "yes" || savedInspection.lift_status === "no") {
+      if (
+        savedInspection.lift_status === "yes" ||
+        savedInspection.lift_status === "no"
+      ) {
         setLiftStatus(savedInspection.lift_status);
       }
       if (pf?.inspection?.status) setInspectionStatus(pf.inspection.status);
@@ -767,10 +865,7 @@ function MultiPointInspectionDialogBody({
   // Measured/observed fields are never seeded — they change every visit.
   const specPrefill = useMemo(
     () =>
-      specPrefillFromPassport(
-        passportData?.passport,
-        passportData?.sources,
-      ),
+      specPrefillFromPassport(passportData?.passport, passportData?.sources),
     [passportData],
   );
 
@@ -841,9 +936,7 @@ function MultiPointInspectionDialogBody({
 
   const patchSharedText = useCallback(
     (sourceId: ZoneId, key: string, value: string) => {
-      setState((prev) =>
-        patchSharedInspectionText(prev, sourceId, key, value),
-      );
+      setState((prev) => patchSharedInspectionText(prev, sourceId, key, value));
       setFieldErrors((prev) => {
         if (!prev[sourceId]) return prev;
         const next = { ...prev };
@@ -892,18 +985,35 @@ function MultiPointInspectionDialogBody({
     [requiredZones, state],
   );
 
+  // Every required zone graded, with no zone left holding un-saved readings.
+  // Gates "Price & send" for staged extra work: the pre-job estimate goes to the
+  // customer only when the whole check is done. Sending it early parks the
+  // booking in "awaiting hold" (payment_approval_state pre_job_pending), which
+  // clears canStartJob in the booking panel and locks the mechanic out of
+  // reopening the inspection to finish it — the trap the user hit.
+  const inspectionComplete = useMemo(
+    () =>
+      requiredZones.length > 0 &&
+      requiredZones.every((id) => state.zones[id]?.done) &&
+      getDirtyIncompleteZones(state).length === 0,
+    [requiredZones, state],
+  );
+
   // Findings + suggestions are evaluated from COMPLETED zones only, so a finding
   // surfaces the moment its zone is marked complete (not after the whole
   // inspection) and never counts un-confirmed scratch input.
   const findings = useMemo(
-    () => gatherFindings(state, { onlyCompletedZones: true }),
-    [state],
+    () => gatherFindings(state, { onlyCompletedZones: true, rotorMin }),
+    [state, rotorMin],
   );
 
   // Suggested follow-up recommendations derived from threshold measurements,
   // each resolved to a real catalog service when possible.
   const suggestedRecs = useMemo<ResolvedSuggestion[]>(() => {
-    const list = deriveSuggestedRecommendations(state, { onlyCompletedZones: true });
+    const list = deriveSuggestedRecommendations(state, {
+      onlyCompletedZones: true,
+      rotorMin,
+    });
     return list.map((s) => {
       // `match` holds exact catalog slugs — resolve straight to the service.
       const found = (
@@ -912,9 +1022,7 @@ function MultiPointInspectionDialogBody({
           name: string;
           slug?: string;
         }>
-      ).find((svc) =>
-        svc.slug ? s.match.includes(svc.slug) : false,
-      );
+      ).find((svc) => (svc.slug ? s.match.includes(svc.slug) : false));
       const taxonomy = inspectionSlugTaxonomy(s.match);
       return {
         ...s,
@@ -924,7 +1032,7 @@ function MultiPointInspectionDialogBody({
         workType: taxonomy?.work_type ?? null,
       };
     });
-  }, [state, services]);
+  }, [state, services, rotorMin]);
 
   // Drop anything this booking is already doing. Suggesting "tire replacement
   // — soon" on the job that is replacing the tires reads as the system not
@@ -938,8 +1046,7 @@ function MultiPointInspectionDialogBody({
   const openSuggestedRecs = useMemo(
     () =>
       suggestedRecs.filter(
-        (s) =>
-          !bookedMatchKeys.has(serviceMatchKey(s.serviceName ?? s.label)),
+        (s) => !bookedMatchKeys.has(serviceMatchKey(s.serviceName ?? s.label)),
       ),
     [suggestedRecs, bookedMatchKeys],
   );
@@ -958,16 +1065,20 @@ function MultiPointInspectionDialogBody({
   // Null for a catalog service, which adds in one tap. See handleAddToJob.
   const [pendingJobSuggestion, setPendingJobSuggestion] =
     useState<ResolvedSuggestion | null>(null);
-  // The mid-job scope dialog (price it, say why, add parts, send for the
-  // customer's confirmation) — the SAME flow the active-job overlay opens. Adding
-  // a finding to the job opens it right here so the mechanic never has to reopen
-  // it later in the overlay and re-do the send. See commitAddToJob.
+  // A brake/rotor line awaiting its axle before it's added. Brake work needs an
+  // axle scope (front/rear/both) so the inspection knows which corners to grade;
+  // a line added off-catalog carries no selected_service_options to read one
+  // from, so we collect it here. Holds the resolved taxonomy so the commit after
+  // the axle pick has everything it needs. See handleAddToJob.
+  const [pendingBrakeAxle, setPendingBrakeAxle] = useState<{
+    suggestion: ResolvedSuggestion;
+    taxonomy: { systemTags: string[]; workType: string };
+  } | null>(null);
+  // The MID-JOB scope dialog (price it, say why, add parts, send for the
+  // customer's confirmation) — the SAME flow the active-job overlay opens. Only
+  // reachable while the job is running; a pre-job inspection sends its added
+  // scope through the inspection submit instead. See onOpenScope / ResultsScreen.
   const [scopeOpen, setScopeOpen] = useState(false);
-  // The pre-job estimate dialog — same "price it, add parts, send" flow, but for
-  // a booking that hasn't started (routes through the pre_job approval cycle so
-  // the customer confirms the added scope BEFORE work begins). Only one of
-  // scopeOpen / preScopeOpen is ever true, picked by jobInProgress.
-  const [preScopeOpen, setPreScopeOpen] = useState(false);
   const [scopeSubmittedNote, setScopeSubmittedNote] = useState<string | null>(
     null,
   );
@@ -976,7 +1087,7 @@ function MultiPointInspectionDialogBody({
     prejob: PreJobSurveyPayload;
     inspection: InspectionInputPayload;
   } => {
-    const f = gatherFindings(state, { onlyCompletedZones: true });
+    const f = gatherFindings(state, { onlyCompletedZones: true, rotorMin });
     const prejob = derivePrejobFromInspection(state, {
       mileage: mileage.trim() ? Number(mileage) : null,
       inspectionStatus: inspectionStatus
@@ -995,6 +1106,7 @@ function MultiPointInspectionDialogBody({
         : null,
       nextMechanicTip: nextTip.trim() || null,
       completionContext,
+      rotorMin,
     });
     const inspection: InspectionInputPayload = {
       template_version: state.template_version,
@@ -1044,6 +1156,7 @@ function MultiPointInspectionDialogBody({
     nextTip,
     liftStatus,
     completionContext,
+    rotorMin,
   ]);
 
   // Compact signature of everything savePrejob persists — a change here is what
@@ -1197,9 +1310,7 @@ function MultiPointInspectionDialogBody({
 
   function focusZoneField(zoneId: ZoneId, fieldKey: string) {
     requestAnimationFrame(() => {
-      document
-        .getElementById(`inspection-${zoneId}-${fieldKey}`)
-        ?.focus();
+      document.getElementById(`inspection-${zoneId}-${fieldKey}`)?.focus();
     });
   }
 
@@ -1208,7 +1319,19 @@ function MultiPointInspectionDialogBody({
   // *incoming* zone after it commits — a bare requestAnimationFrame sometimes ran
   // before the new zone rendered, leaving the form scrolled partway down.
   const pendingZoneScrollRef = useRef<ScrollBehavior | null>(null);
+  // Set (instead of pendingZoneScrollRef) when the next commit should land the
+  // mechanic back on the car diagram rather than on the zone panel.
+  const pendingDiagramScrollRef = useRef<ScrollBehavior | null>(null);
   useLayoutEffect(() => {
+    const diagramBehavior = pendingDiagramScrollRef.current;
+    if (diagramBehavior) {
+      pendingDiagramScrollRef.current = null;
+      pendingZoneScrollRef.current = null;
+      document
+        .getElementById("inspection-car-diagram")
+        ?.scrollIntoView({ behavior: diagramBehavior, block: "start" });
+      return;
+    }
     const behavior = pendingZoneScrollRef.current;
     if (!behavior) return;
     pendingZoneScrollRef.current = null;
@@ -1220,6 +1343,14 @@ function MultiPointInspectionDialogBody({
   function openZoneAtTop(zoneId: ZoneId) {
     pendingZoneScrollRef.current = "auto";
     setActiveZone(zoneId);
+  }
+
+  // Finishing a zone collapses the panel and brings the car diagram back into
+  // view so the mechanic picks the next corner themselves — rather than us auto-
+  // opening the next zone, which jumped them away and lost their place.
+  function closeZoneToDiagram() {
+    pendingDiagramScrollRef.current = "smooth";
+    setActiveZone(null);
   }
 
   // User-initiated zone selection (tapping a part on the car diagram, or the
@@ -1249,6 +1380,7 @@ function MultiPointInspectionDialogBody({
     const current = zoneState(zoneId);
     if (current.done) {
       patchZone(zoneId, { done: false });
+      setCopyPromptFor(null);
       return;
     }
     const result = validateZoneForCompletion(state, zoneId, completionContext);
@@ -1260,7 +1392,7 @@ function MultiPointInspectionDialogBody({
     // — the guard against rubber-stamping a form that's already full.
     if (zoneNeedsSpecReview(zoneId)) {
       setError(
-        "Confirm the pre-filled specs match this vehicle, then mark the zone complete.",
+        "Tap the amber markers in the rail to check the pre-filled specs, then mark the zone complete.",
       );
       setShowResults(false);
       setActiveZone(zoneId);
@@ -1268,15 +1400,23 @@ function MultiPointInspectionDialogBody({
     }
     setError("");
     patchZone(zoneId, { done: true });
-    const next = nextInspectionZoneAfterCompletion(zoneId);
-    if (next) {
-      openZoneAtTop(next);
+    // Locked rule: offer the same-axle copy only now that this corner is fully
+    // complete, and only when the sibling isn't already done (nothing to mirror
+    // onto a finished corner). Non-corner zones have no opposite → no prompt.
+    const opposite = OPPOSITE_CORNER[zoneId as CornerZoneId];
+    if (opposite && !zoneState(opposite).done) {
+      setCopyPromptCopied(false);
+      setCopyPromptFor(zoneId as CornerZoneId);
+    } else {
+      setCopyPromptFor(null);
     }
+    closeZoneToDiagram();
   }
 
   function validateBeforePersistence(action: SubmitIntent): boolean {
     setError("");
-    const scopeError = deriveTierInspectionScope(completionContext).bookingScopeError;
+    const scopeError =
+      deriveTierInspectionScope(completionContext).bookingScopeError;
     if (scopeError) {
       setError(scopeError);
       setShowResults(false);
@@ -1295,7 +1435,9 @@ function MultiPointInspectionDialogBody({
     // "Mark zone complete", those values don't count — block and point them to it.
     const dirty = getDirtyIncompleteZones(state);
     if (dirty.length) {
-      const labels = dirty.map((id) => INSPECTION_ZONES_BY_ID[id].label).join(", ");
+      const labels = dirty
+        .map((id) => INSPECTION_ZONES_BY_ID[id].label)
+        .join(", ");
       setError(
         `Tap "Mark zone complete" in: ${labels}. Readings there won't be recorded until the zone is marked complete.`,
       );
@@ -1306,7 +1448,9 @@ function MultiPointInspectionDialogBody({
     if (action === "start") {
       const incomplete = requiredZones.find((id) => !state.zones[id]?.done);
       if (incomplete) {
-        setError(`Mark ${INSPECTION_ZONES_BY_ID[incomplete].label} complete before submitting.`);
+        setError(
+          `Mark ${INSPECTION_ZONES_BY_ID[incomplete].label} complete before submitting.`,
+        );
         setShowResults(false);
         setActiveZone(incomplete);
         return false;
@@ -1385,7 +1529,10 @@ function MultiPointInspectionDialogBody({
         return changed ? next : prev;
       });
     } catch (err) {
-      const message = userFacingInspectionError(err, "Could not save inspection.");
+      const message = userFacingInspectionError(
+        err,
+        "Could not save inspection.",
+      );
       if (message.toLowerCase().includes("mileage")) {
         setError(message);
         setMileageError(message);
@@ -1450,7 +1597,8 @@ function MultiPointInspectionDialogBody({
       else await onSubmit(prejob, inspection, "close");
       const res = await generateInspectionPdf({ bookingId });
       if (res?.url) window.open(res.url, "_blank", "noopener,noreferrer");
-      else setError("Inspection sheet is not ready yet. Try again in a moment.");
+      else
+        setError("Inspection sheet is not ready yet. Try again in a moment.");
     } catch (err) {
       setError(userFacingInspectionError(err, "Could not generate the PDF."));
     } finally {
@@ -1488,7 +1636,9 @@ function MultiPointInspectionDialogBody({
         return next;
       });
     } catch (err) {
-      setError(userFacingInspectionError(err, "Could not add recommendations."));
+      setError(
+        userFacingInspectionError(err, "Could not add recommendations."),
+      );
     } finally {
       setRecsBusy(false);
     }
@@ -1497,22 +1647,33 @@ function MultiPointInspectionDialogBody({
   /**
    * Promote a flagged finding into work on THIS job (Decision D1).
    *
-   * Appends an off-catalog line to the booking, then opens the scope dialog —
-   * the same "price it, say why, add parts, send for confirmation" flow — routed
-   * by whether the job is running: in progress → mid-job change; not started yet
-   * (the usual pre-job inspection case) → pre-job estimate. Neither add re-quotes
-   * or moves money; the money and consent live in that dialog, gated behind the
-   * customer's approval. So the mechanic goes straight from the finding into
-   * pricing-and-sending it, instead of adding it here and having to reopen the
-   * scope step in the overlay and confirm all over again.
+   * STAGES an off-catalog line: it appears in "Added to this job" and nothing is
+   * sent, no money moves, and the customer isn't notified. How it later reaches
+   * the customer depends on whether the job is running:
+   *   - pre-job (the usual inspection case): the added scope goes out as part of
+   *     "Submit → Vehicle Health" — commitInspectionAndAwaitEstimate opens the
+   *     pre-job estimate in the booking panel. There is NO send button here.
+   *   - mid-job: the running job has no such submit step, so each line keeps its
+   *     own "Price & send" → mid-job change.
    *
-   * Before this, a wiper flagged red here had to be re-entered from scratch via
-   * Flag Issue → "Extra work needed now", which is exactly what Abdul had to do
-   * on Aug 20 after the inspection didn't carry it forward.
+   * This intentionally does NOT open a send dialog. It used to, which marched the
+   * mechanic straight into "Send for confirmation" mid-inspection — before the
+   * remaining zones were done — reading as the whole inspection being submitted
+   * early. Staging preserves the intended order:
+   * inspect → add → finish the inspection → send on submit.
+   *
+   * Before "Add to this job" existed, a wiper flagged red here had to be
+   * re-entered from scratch via Flag Issue → "Extra work needed now", which is
+   * exactly what Abdul had to do on Aug 20 after the inspection didn't carry it
+   * forward.
    */
   async function commitAddToJob(
     suggestion: ResolvedSuggestion,
     taxonomy: { systemTags: string[]; workType: string },
+    // Set for brake/rotor work, collected via BrakeAxleDialog. Threaded to the
+    // add so resolveBrakeScopeForBooking has an axle to read for the off-catalog
+    // line (it defaults to "both" server-side if somehow absent).
+    axle?: AxlePosition,
   ) {
     if (!bookingId || addingToJobKey) return;
     setAddingToJobKey(suggestion.key);
@@ -1525,8 +1686,8 @@ function MultiPointInspectionDialogBody({
       if (onSaveDraft) await onSaveDraft(prejob, inspection);
       // Which cycle depends on whether the job is already running. In progress →
       // mid-job change; not started yet (the usual case for a pre-job inspection)
-      // → pre-job estimate. Both append the same line; only the approval cycle
-      // and the dialog opened below differ.
+      // → pre-job estimate. Both append the same line; only where it's later sent
+      // from differs (mid-job "Price & send" vs the pre-job inspection submit).
       const add = jobInProgress ? addToJob : addToJobPreStart;
       await add({
         bookingId: bookingId as Id<"bookings">,
@@ -1538,17 +1699,20 @@ function MultiPointInspectionDialogBody({
         // so the scope dialog lists them instead of an empty "Add part for X".
         // Null for a freeform finding (nothing to look up).
         catalogServiceId: suggestion.serviceId ?? undefined,
+        axle,
       });
       setAddedToJob((prev) => ({ ...prev, [suggestion.key]: true }));
       setPendingJobSuggestion(null);
+      setPendingBrakeAxle(null);
       setScopeSubmittedNote(null);
-      // Straight into pricing + send-for-confirmation. The dialog reads the
-      // booking's now-updated scope (the line just appended), so it opens with
-      // this finding already on it. A new re-quote cleared any prior note.
-      if (jobInProgress) setScopeOpen(true);
-      else setPreScopeOpen(true);
+      // Staged only — NO auto-send. The line now shows in "Added to this job".
+      // Pre-job: it goes out when the mechanic submits the inspection. Mid-job:
+      // via that line's "Price & send". Auto-opening a send dialog here is what
+      // jumped the mechanic into "Send for confirmation" mid-inspection.
     } catch (err) {
-      setError(userFacingInspectionError(err, "Could not add that to the job."));
+      setError(
+        userFacingInspectionError(err, "Could not add that to the job."),
+      );
     } finally {
       setAddingToJobKey(null);
     }
@@ -1560,10 +1724,18 @@ function MultiPointInspectionDialogBody({
     // A catalog service carries its own taxonomy (derived from the slug) — add
     // it in one tap. A freeform finding has none, so collect one via the picker.
     if (suggestion.systemTags && suggestion.workType) {
-      void commitAddToJob(suggestion, {
+      const taxonomy = {
         systemTags: suggestion.systemTags,
         workType: suggestion.workType,
-      });
+      };
+      // Brake pad / rotor replacement needs an axle scope so the inspection
+      // grades the right corners — collect it before committing. Everything
+      // else adds in one tap.
+      if (isBrakeAxleSuggestion(suggestion)) {
+        setPendingBrakeAxle({ suggestion, taxonomy });
+      } else {
+        void commitAddToJob(suggestion, taxonomy);
+      }
     } else {
       setPendingJobSuggestion(suggestion);
     }
@@ -1592,7 +1764,9 @@ function MultiPointInspectionDialogBody({
       if (removed) {
         const removedKey = serviceMatchKey(removed.name);
         const staleKeys = suggestedRecs
-          .filter((s) => serviceMatchKey(s.serviceName ?? s.label) === removedKey)
+          .filter(
+            (s) => serviceMatchKey(s.serviceName ?? s.label) === removedKey,
+          )
           .map((s) => s.key);
         if (staleKeys.length) {
           setAddedToJob((prev) => {
@@ -1633,7 +1807,9 @@ function MultiPointInspectionDialogBody({
         return next;
       });
     } catch (err) {
-      setError(userFacingInspectionError(err, "Could not undo that recommendation."));
+      setError(
+        userFacingInspectionError(err, "Could not undo that recommendation."),
+      );
     } finally {
       setUndoingKey(null);
     }
@@ -1713,7 +1889,9 @@ function MultiPointInspectionDialogBody({
         return patchInspectionZone(prev, id, {
           photoIds: current.photoIds.filter((photoId) => photoId !== storageId),
           photoTags: Object.fromEntries(
-            Object.entries(current.photoTags).filter(([photoId]) => photoId !== storageId),
+            Object.entries(current.photoTags).filter(
+              ([photoId]) => photoId !== storageId,
+            ),
           ),
         });
       });
@@ -1732,7 +1910,8 @@ function MultiPointInspectionDialogBody({
   const footer = (
     <div className="flex items-center justify-between gap-3">
       <span className="hidden text-[11px] text-primary sm:inline-flex sm:items-center sm:gap-1.5">
-        <Camera className="h-3.5 w-3.5" /> Verify a measurement with a photo → rating boost
+        <Camera className="h-3.5 w-3.5" /> Verify a measurement with a photo →
+        rating boost
       </span>
       <div className="flex flex-1 items-center justify-end gap-2">
         <button
@@ -1757,365 +1936,463 @@ function MultiPointInspectionDialogBody({
   );
 
   return (
-    <>
+    <RotorMinContext.Provider value={rotorMin}>
       <SurveyDialogShell
-      open={open}
-      onClose={() => {
-        // Bank any edit still sitting in the debounce window before the dialog
-        // tears down, so closing never costs the mechanic their last answer.
-        flushPendingSave();
-        onClose();
-      }}
-      title="Multi-point inspection"
-      description={bookingSubLabel}
-      maxWidthClassName="max-w-2xl"
-      mobileFullBleed
-      contentClassName="min-h-0 flex-1 overflow-y-auto px-5 pb-4 sm:px-6 sm:pb-5"
-      headerBadge={
-        isFirstVisit ? (
-          <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-semibold text-primary">
-            First visit
-          </span>
-        ) : specsIncomplete ? (
-          <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
-            Specs incomplete
-          </span>
-        ) : null
-      }
-      footer={showResults ? undefined : footer}
-    >
-      {showResults ? (
-        <div className="pt-4 sm:pt-5">
-          <ResultsScreen
-            findings={findings}
-            totalLogged={Object.values(state.zones).filter((z) => z?.done).length}
-            vehicleLabel={bookingLabel}
-            downloading={downloading}
-            onBack={() => setShowResults(false)}
-            onDownload={handleDownloadPdf}
-            suggestions={openSuggestedRecs}
-            canRecommend={!!bookingId}
-            recsBusy={recsBusy}
-            submittedRecs={submittedRecs}
-            onAddRecommendations={handleAddRecommendations}
-            onUndoRecommendation={handleUndoRecommendation}
-            undoingKey={undoingKey}
-            error={error}
-            canAddToJob={!!bookingId}
-            onAddToJob={handleAddToJob}
-            addedToJob={addedToJob}
-            addingToJobKey={addingToJobKey}
-            addedJobs={addedJobs ?? []}
-            onRemoveAddedJob={handleRemoveAddedJob}
-            removingJobId={removingJobId}
-            onOpenScope={() =>
-              jobInProgress ? setScopeOpen(true) : setPreScopeOpen(true)
-            }
-            scopeSubmittedNote={scopeSubmittedNote}
-          />
-        </div>
-      ) : (
-        <div className="space-y-4 pt-4 sm:pt-5">
-          {/* vehicle + odometer bar */}
-          <div className="flex flex-wrap items-end gap-x-6 gap-y-3 rounded-xl border border-primary/10 bg-primary/[0.03] px-4 py-3">
-            <div>
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                Vehicle
-              </div>
-              <div className="text-[13px] font-medium text-foreground">
-                {bookingLabel}
-              </div>
-            </div>
-            <div>
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                Current odometer
-              </div>
-              <div className="mt-0.5 flex items-baseline gap-1">
-                <div className="w-24 rounded-lg border border-primary/15 bg-muted/50 px-2 py-1 text-[14px] tabular-nums text-muted-foreground">
-                  {typeof baselineMileage === "number"
-                    ? baselineMileage.toLocaleString()
-                    : "—"}
+        open={open}
+        onClose={() => {
+          // Bank any edit still sitting in the debounce window before the dialog
+          // tears down, so closing never costs the mechanic their last answer.
+          flushPendingSave();
+          onClose();
+        }}
+        title="Multi-point inspection"
+        description={bookingSubLabel}
+        maxWidthClassName="max-w-2xl"
+        mobileFullBleed
+        sideRailSlotId={INSPECTION_SIDE_RAIL_ID}
+        contentClassName="min-h-0 flex-1 overflow-y-auto px-5 pb-4 sm:px-6 sm:pb-5"
+        headerBadge={
+          isFirstVisit ? (
+            <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-semibold text-primary">
+              First visit
+            </span>
+          ) : specsIncomplete ? (
+            <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-semibold text-amber-700">
+              Specs incomplete
+            </span>
+          ) : null
+        }
+        footer={showResults ? undefined : footer}
+      >
+        {showResults ? (
+          <div className="pt-4 sm:pt-5">
+            <ResultsScreen
+              findings={findings}
+              totalLogged={
+                Object.values(state.zones).filter((z) => z?.done).length
+              }
+              vehicleLabel={bookingLabel}
+              downloading={downloading}
+              onBack={() => setShowResults(false)}
+              onDownload={handleDownloadPdf}
+              suggestions={openSuggestedRecs}
+              canRecommend={!!bookingId}
+              recsBusy={recsBusy}
+              submittedRecs={submittedRecs}
+              onAddRecommendations={handleAddRecommendations}
+              onUndoRecommendation={handleUndoRecommendation}
+              undoingKey={undoingKey}
+              error={error}
+              canAddToJob={!!bookingId}
+              onAddToJob={handleAddToJob}
+              addedToJob={addedToJob}
+              addingToJobKey={addingToJobKey}
+              addedJobs={addedJobs ?? []}
+              onRemoveAddedJob={handleRemoveAddedJob}
+              removingJobId={removingJobId}
+              onOpenScope={() => setScopeOpen(true)}
+              jobInProgress={jobInProgress}
+              inspectionComplete={inspectionComplete}
+              scopeSubmittedNote={scopeSubmittedNote}
+            />
+          </div>
+        ) : (
+          <div className="space-y-4 pt-4 sm:pt-5">
+            {/* vehicle + odometer bar */}
+            <div className="flex flex-wrap items-end gap-x-6 gap-y-3 rounded-xl border border-primary/10 bg-primary/[0.03] px-4 py-3">
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Vehicle
                 </div>
-                <span className="text-[11px] text-muted-foreground">mi</span>
+                <div className="text-[13px] font-medium text-foreground">
+                  {bookingLabel}
+                </div>
               </div>
+              <div>
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Current odometer
+                </div>
+                <div className="mt-0.5 flex items-baseline gap-1">
+                  <div className="w-24 rounded-lg border border-primary/15 bg-muted/50 px-2 py-1 text-[14px] tabular-nums text-muted-foreground">
+                    {typeof baselineMileage === "number"
+                      ? baselineMileage.toLocaleString()
+                      : "—"}
+                  </div>
+                  <span className="text-[11px] text-muted-foreground">mi</span>
+                </div>
+              </div>
+              <label className="block">
+                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  New reading <span className="text-red-500">*</span>
+                </div>
+                <div className="mt-0.5 flex items-baseline gap-1">
+                  <input
+                    id="inspection-odometer"
+                    aria-invalid={!!mileageError}
+                    inputMode="numeric"
+                    value={mileage}
+                    onChange={(e) => {
+                      const next = e.target.value.replace(/[^0-9]/g, "");
+                      setMileage(next);
+                      // Flag a backwards odometer the instant it's typed, so the
+                      // mechanic fixes it in place instead of hitting a wall at
+                      // submit time.
+                      setMileageError(
+                        odometerBelowBaseline(next)
+                          ? odometerTooLowMessage()
+                          : "",
+                      );
+                    }}
+                    placeholder="—"
+                    className="w-24 rounded-lg border border-primary/20 bg-card px-2 py-1 text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none"
+                  />
+                  <span className="text-[11px] text-muted-foreground">mi</span>
+                </div>
+                {mileageError ? (
+                  <span className="mt-1 block text-[10px] font-medium normal-case tracking-normal text-red-600">
+                    {mileageError}
+                  </span>
+                ) : null}
+              </label>
+              <fieldset>
+                <legend className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                  Is the vehicle on a lift?{" "}
+                  <span className="text-red-500">*</span>
+                </legend>
+                <div className="mt-1 flex gap-1.5">
+                  {(["yes", "no"] as const).map((value) => (
+                    <button
+                      key={value}
+                      id={value === "yes" ? "inspection-lift-yes" : undefined}
+                      type="button"
+                      aria-pressed={liftStatus === value}
+                      onClick={() => setLiftStatus(value)}
+                      className={cn(
+                        "rounded-lg border px-3 py-1 text-[12px] font-medium capitalize",
+                        liftStatus === value
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-primary/20 text-muted-foreground",
+                      )}
+                    >
+                      {value}
+                    </button>
+                  ))}
+                </div>
+              </fieldset>
             </div>
-            <label className="block">
-              <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                New reading <span className="text-red-500">*</span>
-              </div>
-              <div className="mt-0.5 flex items-baseline gap-1">
-                <input
-                  id="inspection-odometer"
-                  aria-invalid={!!mileageError}
-                  inputMode="numeric"
-                  value={mileage}
-                  onChange={(e) => {
-                    const next = e.target.value.replace(/[^0-9]/g, "");
-                    setMileage(next);
-                    // Flag a backwards odometer the instant it's typed, so the
-                    // mechanic fixes it in place instead of hitting a wall at
-                    // submit time.
-                    setMileageError(
-                      odometerBelowBaseline(next) ? odometerTooLowMessage() : "",
-                    );
-                  }}
-                  placeholder="—"
-                  className="w-24 rounded-lg border border-primary/20 bg-card px-2 py-1 text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none"
+
+            {/* progress ring */}
+            <div className="flex items-center gap-4">
+              <svg width="56" height="56" viewBox="0 0 58 58" aria-hidden>
+                <circle
+                  cx="29"
+                  cy="29"
+                  r="22"
+                  fill="none"
+                  stroke="currentColor"
+                  className="text-primary/15"
+                  strokeWidth="6"
                 />
-                <span className="text-[11px] text-muted-foreground">mi</span>
+                <circle
+                  cx="29"
+                  cy="29"
+                  r="22"
+                  fill="none"
+                  stroke="currentColor"
+                  className="text-primary"
+                  strokeWidth="6"
+                  strokeLinecap="round"
+                  strokeDasharray={ringDash}
+                  strokeDashoffset={(ringDash * (1 - pct)).toFixed(1)}
+                  transform="rotate(-90 29 29)"
+                />
+                <text
+                  x="29"
+                  y="33.5"
+                  textAnchor="middle"
+                  fontSize="13"
+                  fontWeight="600"
+                  className="fill-foreground"
+                >
+                  {doneCount}/{totalRequired}
+                </text>
+              </svg>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] font-semibold text-foreground">
+                  {doneCount} of {totalRequired} required zones inspected
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  Tap a part of the car to inspect it
+                </div>
               </div>
-              {mileageError ? (
-                <span className="mt-1 block text-[10px] font-medium normal-case tracking-normal text-red-600">
-                  {mileageError}
-                </span>
-              ) : null}
-            </label>
-            <fieldset>
-              <legend className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                Is the vehicle on a lift? <span className="text-red-500">*</span>
-              </legend>
-              <div className="mt-1 flex gap-1.5">
-                {(["yes", "no"] as const).map((value) => (
-                  <button
-                    key={value}
-                    id={value === "yes" ? "inspection-lift-yes" : undefined}
-                    type="button"
-                    aria-pressed={liftStatus === value}
-                    onClick={() => setLiftStatus(value)}
-                    className={cn(
-                      "rounded-lg border px-3 py-1 text-[12px] font-medium capitalize",
-                      liftStatus === value
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-primary/20 text-muted-foreground",
-                    )}
+              <SaveStatusIndicator
+                status={saveStatus}
+                enabled={!!bookingId && !!onSaveDraft}
+              />
+              <div className="hidden items-center gap-3 sm:flex">
+                {(["g", "y", "r"] as TriValue[]).map((c) => (
+                  <span
+                    key={c}
+                    className="flex items-center gap-1 text-[11px] text-muted-foreground"
                   >
-                    {value}
-                  </button>
+                    <span className={cn("h-3 w-3 rounded-full", TRI_DOT[c])} />
+                    {TRI_LABELS[c]}
+                  </span>
                 ))}
               </div>
-            </fieldset>
-          </div>
+            </div>
 
-          {/* progress ring */}
-          <div className="flex items-center gap-4">
-            <svg width="56" height="56" viewBox="0 0 58 58" aria-hidden>
-              <circle cx="29" cy="29" r="22" fill="none" stroke="currentColor" className="text-primary/15" strokeWidth="6" />
-              <circle
-                cx="29"
-                cy="29"
-                r="22"
-                fill="none"
-                stroke="currentColor"
-                className="text-primary"
-                strokeWidth="6"
-                strokeLinecap="round"
-                strokeDasharray={ringDash}
-                strokeDashoffset={(ringDash * (1 - pct)).toFixed(1)}
-                transform="rotate(-90 29 29)"
+            {/* required vs optional legend */}
+            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 rounded-[3px] border-2 border-primary bg-primary/10" />
+                Required
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 rounded-[3px] border border-dashed border-muted-foreground/40" />
+                Optional
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span className="inline-block h-3 w-3 rounded-[3px] border-2 border-emerald-500 bg-emerald-100" />
+                Completed
+              </span>
+            </div>
+
+            {/* diagram */}
+            <div id="inspection-car-diagram" className="flex justify-center scroll-mt-4">
+              <CarDiagram
+                activeZone={activeZone === "PARTS" ? null : activeZone}
+                isDone={(id) => !!state.zones[id]?.done}
+                isRequired={(id) => requiredSet.has(id)}
+                onSelect={selectZone}
               />
-              <text x="29" y="33.5" textAnchor="middle" fontSize="13" fontWeight="600" className="fill-foreground">
-                {doneCount}/{totalRequired}
-              </text>
-            </svg>
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-semibold text-foreground">
-                {doneCount} of {totalRequired} required zones inspected
-              </div>
-              <div className="text-[11px] text-muted-foreground">
-                Tap a part of the car to inspect it
-              </div>
             </div>
-            <SaveStatusIndicator
-              status={saveStatus}
-              enabled={!!bookingId && !!onSaveDraft}
-            />
-            <div className="hidden items-center gap-3 sm:flex">
-              {(["g", "y", "r"] as TriValue[]).map((c) => (
-                <span key={c} className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                  <span className={cn("h-3 w-3 rounded-full", TRI_DOT[c])} />
-                  {TRI_LABELS[c]}
-                </span>
-              ))}
-            </div>
-          </div>
 
-          {/* required vs optional legend */}
-          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-3 rounded-[3px] border-2 border-primary bg-primary/10" />
-              Required
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-3 rounded-[3px] border border-dashed border-muted-foreground/40" />
-              Optional
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="inline-block h-3 w-3 rounded-[3px] border-2 border-emerald-500 bg-emerald-100" />
-              Completed
-            </span>
-          </div>
-
-          {/* diagram */}
-          <div className="flex justify-center">
-            <CarDiagram
-              activeZone={activeZone === "PARTS" ? null : activeZone}
-              isDone={(id) => !!state.zones[id]?.done}
-              isRequired={(id) => requiredSet.has(id)}
-              onSelect={selectZone}
-            />
-          </div>
-
-          {/* owner-profile zone entry (not a physical location) */}
-          <div className="flex justify-center">
-            <button
-              type="button"
-              onClick={() => selectZone("OWNER")}
-              className={cn(
-                "inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[12px] font-medium transition-colors",
-                activeZone === "OWNER"
-                  ? "border-primary bg-primary/10 text-primary"
-                  : "border-primary/20 text-muted-foreground hover:bg-primary/5",
-              )}
-            >
-              Owner profile
-              {skippedOwnerQuestions.length > 0 ? (
-                <span className="rounded-full bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-700">
-                  {skippedOwnerQuestions.length} skipped
-                </span>
-              ) : null}
-            </button>
-          </div>
-
-          {/* panel */}
-          <div
-            id="inspection-zone-panel"
-            className="rounded-xl border border-primary/10 bg-card p-4"
-          >
-            {activeZone == null ? (
-              <p className="py-8 text-center text-[13px] text-muted-foreground">
-                Tap a wheel or body zone on the car to begin.
-              </p>
-            ) : activeZone === "OWNER" ? (
-              <OwnerZone
-                questions={skippedOwnerQuestions}
-                answers={ownerAnswers}
-                loading={ownerProfile === undefined}
-                confirmed={ownerConfirmed}
-                onChange={(key, value) => {
-                  setOwnerAnswers((prev) => ({ ...prev, [key]: value }));
-                  setOwnerDirty(true);
-                  setOwnerConfirmed(false);
-                }}
-                onToggleComplete={() => {
-                  setOwnerConfirmed((confirmed) => !confirmed);
-                  setOwnerDirty(
-                    ownerConfirmed
-                      ? Object.keys(ownerAnswers).length > 0
-                      : false,
+            {/* Copy-to-sibling prompt — surfaces the instant a corner is marked
+                complete, gated on the source being done (the locked rule). */}
+            {copyPromptFor
+              ? (() => {
+                  const opposite = OPPOSITE_CORNER[copyPromptFor];
+                  const sourceLabel =
+                    INSPECTION_ZONES_BY_ID[copyPromptFor].label;
+                  const oppositeLabel = INSPECTION_ZONES_BY_ID[opposite].label;
+                  const oppositeShort = INSPECTION_ZONES_BY_ID[opposite].short;
+                  const siblingHasInput = zoneHasInput(
+                    opposite,
+                    zoneState(opposite),
                   );
-                }}
-              />
-            ) : activeZone === "PARTS" ? (
-              <PartsVerifyZone
-                items={partsToVerify?.items ?? []}
-                verifiedKeys={verifiedKeys}
-                onVerify={handleVerifyPart}
-                onNotApplicable={handleMarkNotApplicable}
-              />
-            ) : (
-              <ZonePanel
-                zoneId={activeZone}
-                zs={zoneState(activeZone)}
-                vin={passportData?.vin ?? null}
-                isFirstVisit={isFirstVisit}
-                isRequired={requiredSet.has(activeZone)}
-                tireSizeOptions={tireSizeOptionsFromList(
-                  activeZone === "FL" || activeZone === "FR"
-                    ? passportData?.available_tire_sizes?.front
-                    : activeZone === "RL" || activeZone === "RR"
-                      ? passportData?.available_tire_sizes?.rear
-                      : undefined,
+                  return (
+                    <div
+                      className={cn(
+                        "mx-auto w-full max-w-md rounded-xl border px-3 py-2.5 text-[13px]",
+                        copyPromptCopied
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                          : "border-primary/20 bg-primary/[0.04] text-foreground",
+                      )}
+                    >
+                      {copyPromptCopied ? (
+                        <p className="flex items-center gap-1.5 font-medium text-emerald-700">
+                          <Check className="h-4 w-4" />
+                          Copied to {oppositeLabel}
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          <div>
+                            <p className="flex items-center gap-1.5 font-semibold">
+                              <Check className="h-4 w-4 text-emerald-600" />
+                              {sourceLabel} complete
+                            </p>
+                            <p className="mt-0.5 text-muted-foreground">
+                              Copy these readings to {oppositeLabel}, then adjust
+                              the few that differ.
+                              {siblingHasInput ? (
+                                <span className="mt-0.5 block text-amber-700">
+                                  This replaces the readings already entered
+                                  there.
+                                </span>
+                              ) : null}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                copyCornerToOpposite(copyPromptFor);
+                                setCopyPromptCopied(true);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground hover:bg-primary/90"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                              Copy to {oppositeShort}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCopyPromptFor(null)}
+                              className="rounded-lg border border-primary/20 px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-primary/5"
+                            >
+                              Not now
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
+              : null}
+
+            {/* owner-profile zone entry (not a physical location) */}
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={() => selectZone("OWNER")}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-full border px-4 py-1.5 text-[12px] font-medium transition-colors",
+                  activeZone === "OWNER"
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-primary/20 text-muted-foreground hover:bg-primary/5",
                 )}
-                completionContext={completionContext}
-                fieldError={fieldErrors[activeZone]}
-                canPhoto={!!bookingId}
-                photoBusy={photoBusy}
-                photoUrl={photoUrl}
-                specPrefill={specPrefill[activeZone] ?? []}
-                specConfirmed={confirmedSpecZones.has(activeZone)}
-                onConfirmSpecs={() => markSpecReviewed(activeZone)}
-                onSpecEdited={() => markSpecReviewed(activeZone)}
-                extraHeader={
-                  activeZone === "FRT" ? (
-                    <InspectionStickerFields
-                      status={inspectionStatus}
-                      expires={inspectionExpires}
-                      onStatus={(value) => {
-                        setInspectionStatus(value);
-                        patchZone("FRT", {});
-                      }}
-                      onExpires={(value) => {
-                        setInspectionExpires(value);
-                        patchZone("FRT", {});
-                      }}
-                    />
-                  ) : null
-                }
-                onPatch={(patch) => patchZone(activeZone, patch)}
-                onSharedText={(key, value) =>
-                  patchSharedText(activeZone, key, value)
-                }
-                onCopyToOpposite={() => copyCornerToOpposite(activeZone)}
-                onPhoto={(file, tag) => handlePhotoUpload(activeZone, file, tag)}
-                onRemovePhoto={(storageId) =>
-                  setPhotoToRemove({ zoneId: activeZone, storageId })
-                }
-                onToggleDone={() => handleToggleZone(activeZone)}
-                onPrevious={() => {
-                  const index = NAV_ZONE_IDS.indexOf(activeZone);
-                  openZoneAtTop(
-                    NAV_ZONE_IDS[
-                      (index - 1 + NAV_ZONE_IDS.length) % NAV_ZONE_IDS.length
-                    ],
-                  );
-                }}
-                onNext={() => {
-                  const index = NAV_ZONE_IDS.indexOf(activeZone);
-                  openZoneAtTop(NAV_ZONE_IDS[(index + 1) % NAV_ZONE_IDS.length]);
-                }}
-                fieldSaveState={fieldSaveState}
-                onFieldSaving={(key) => markFieldSaving(activeZone, key)}
-              />
-            )}
-          </div>
+              >
+                Owner profile
+                {skippedOwnerQuestions.length > 0 ? (
+                  <span className="rounded-full bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-700">
+                    {skippedOwnerQuestions.length} skipped
+                  </span>
+                ) : null}
+              </button>
+            </div>
 
-          {error ? (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">
-              {error}
-            </p>
-          ) : null}
-
-          {Object.values(state.zones).some((z) => z?.done) ? (
-            <button
-              type="button"
-              onClick={() => setShowResults(true)}
-              className="w-full rounded-xl border border-primary/20 bg-primary/[0.04] py-2 text-[13px] font-semibold text-primary hover:bg-primary/10"
+            {/* panel */}
+            <div
+              id="inspection-zone-panel"
+              className="rounded-xl border border-primary/10 bg-card p-4"
             >
-              Review findings &amp; recommendations (
-              {findings.attention.length + findings.monitor.length})
-            </button>
-          ) : null}
+              {activeZone == null ? (
+                <p className="py-8 text-center text-[13px] text-muted-foreground">
+                  Tap a wheel or body zone on the car to begin.
+                </p>
+              ) : activeZone === "OWNER" ? (
+                <OwnerZone
+                  questions={skippedOwnerQuestions}
+                  answers={ownerAnswers}
+                  loading={ownerProfile === undefined}
+                  confirmed={ownerConfirmed}
+                  onChange={(key, value) => {
+                    setOwnerAnswers((prev) => ({ ...prev, [key]: value }));
+                    setOwnerDirty(true);
+                    setOwnerConfirmed(false);
+                  }}
+                  onToggleComplete={() => {
+                    setOwnerConfirmed((confirmed) => !confirmed);
+                    setOwnerDirty(
+                      ownerConfirmed
+                        ? Object.keys(ownerAnswers).length > 0
+                        : false,
+                    );
+                  }}
+                />
+              ) : activeZone === "PARTS" ? (
+                <PartsVerifyZone
+                  items={partsToVerify?.items ?? []}
+                  verifiedKeys={verifiedKeys}
+                  onVerify={handleVerifyPart}
+                  onNotApplicable={handleMarkNotApplicable}
+                />
+              ) : (
+                <ZonePanel
+                  zoneId={activeZone}
+                  zs={zoneState(activeZone)}
+                  vin={passportData?.vin ?? null}
+                  isFirstVisit={isFirstVisit}
+                  isRequired={requiredSet.has(activeZone)}
+                  tireSizeOptions={tireSizeOptionsFromList(
+                    activeZone === "FL" || activeZone === "FR"
+                      ? passportData?.available_tire_sizes?.front
+                      : activeZone === "RL" || activeZone === "RR"
+                        ? passportData?.available_tire_sizes?.rear
+                        : undefined,
+                  )}
+                  completionContext={completionContext}
+                  fieldError={fieldErrors[activeZone]}
+                  canPhoto={!!bookingId}
+                  photoBusy={photoBusy}
+                  photoUrl={photoUrl}
+                  specPrefill={specPrefill[activeZone] ?? []}
+                  specConfirmed={confirmedSpecZones.has(activeZone)}
+                  onConfirmSpecs={() => markSpecReviewed(activeZone)}
+                  extraHeader={
+                    activeZone === "FRT" ? (
+                      <InspectionStickerFields
+                        status={inspectionStatus}
+                        expires={inspectionExpires}
+                        onStatus={(value) => {
+                          setInspectionStatus(value);
+                          patchZone("FRT", {});
+                        }}
+                        onExpires={(value) => {
+                          setInspectionExpires(value);
+                          patchZone("FRT", {});
+                        }}
+                      />
+                    ) : null
+                  }
+                  onPatch={(patch) => patchZone(activeZone, patch)}
+                  onSharedText={(key, value) =>
+                    patchSharedText(activeZone, key, value)
+                  }
+                  onPhoto={(file, tag) =>
+                    handlePhotoUpload(activeZone, file, tag)
+                  }
+                  onRemovePhoto={(storageId) =>
+                    setPhotoToRemove({ zoneId: activeZone, storageId })
+                  }
+                  onToggleDone={() => handleToggleZone(activeZone)}
+                  onPrevious={() => {
+                    const index = NAV_ZONE_IDS.indexOf(activeZone);
+                    openZoneAtTop(
+                      NAV_ZONE_IDS[
+                        (index - 1 + NAV_ZONE_IDS.length) % NAV_ZONE_IDS.length
+                      ],
+                    );
+                  }}
+                  onNext={() => {
+                    const index = NAV_ZONE_IDS.indexOf(activeZone);
+                    openZoneAtTop(
+                      NAV_ZONE_IDS[(index + 1) % NAV_ZONE_IDS.length],
+                    );
+                  }}
+                  fieldSaveState={fieldSaveState}
+                  onFieldSaving={(key) => markFieldSaving(activeZone, key)}
+                />
+              )}
+            </div>
 
-          <AftermarketModsSection
-            aftermarket={modAftermarket}
-            notes={modNotes}
-            systems={modAffectedSystems}
-            onAftermarket={setModAftermarket}
-            onNotes={setModNotes}
-            onSystems={setModAffectedSystems}
-          />
-        </div>
-      )}
+            {error ? (
+              <p className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">
+                {error}
+              </p>
+            ) : null}
+
+            {Object.values(state.zones).some((z) => z?.done) ? (
+              <button
+                type="button"
+                onClick={() => setShowResults(true)}
+                className="w-full rounded-xl border border-primary/20 bg-primary/[0.04] py-2 text-[13px] font-semibold text-primary hover:bg-primary/10"
+              >
+                Review findings &amp; recommendations (
+                {findings.attention.length + findings.monitor.length})
+              </button>
+            ) : null}
+
+            <AftermarketModsSection
+              aftermarket={modAftermarket}
+              notes={modNotes}
+              systems={modAffectedSystems}
+              onAftermarket={setModAftermarket}
+              onNotes={setModNotes}
+              onSystems={setModAffectedSystems}
+            />
+          </div>
+        )}
       </SurveyDialogShell>
       <ConfirmationDialog
         open={photoToRemove !== null}
@@ -2150,38 +2427,59 @@ function MultiPointInspectionDialogBody({
         busy={addingToJobKey !== null}
         onCancel={() => setPendingJobSuggestion(null)}
         onConfirm={(taxonomy) => {
-          if (pendingJobSuggestion)
-            void commitAddToJob(pendingJobSuggestion, taxonomy);
+          const suggestion = pendingJobSuggestion;
+          if (!suggestion) return;
+          setPendingJobSuggestion(null);
+          // A freeform finding that reads as brake/rotor work still needs an
+          // axle before it lands — hand it to the axle prompt. Otherwise commit.
+          if (isBrakeAxleSuggestion(suggestion)) {
+            setPendingBrakeAxle({ suggestion, taxonomy });
+          } else {
+            void commitAddToJob(suggestion, taxonomy);
+          }
         }}
       />
 
-      {/* Price it, say why, add parts, send for the customer's confirmation —
-          opened straight after a finding is added to the job (commitAddToJob) so
-          the whole thing happens here, not later in the active-job overlay. The
-          in-progress job re-quotes through the mid-job cycle; a not-yet-started
-          job sends a pre-job estimate the customer confirms before work begins.
-          Only one is ever open (commitAddToJob picks by jobInProgress). */}
+      {/* Brake/rotor work adds an axle step before it lands, so the inspection
+          scopes the right corners. Defaults to Front and rear — see BrakeAxleDialog. */}
+      <BrakeAxleDialog
+        open={pendingBrakeAxle !== null}
+        serviceName={
+          pendingBrakeAxle?.suggestion.serviceName ??
+          pendingBrakeAxle?.suggestion.label ??
+          ""
+        }
+        busy={addingToJobKey !== null}
+        onCancel={() => setPendingBrakeAxle(null)}
+        onConfirm={(axle) => {
+          if (pendingBrakeAxle)
+            void commitAddToJob(
+              pendingBrakeAxle.suggestion,
+              pendingBrakeAxle.taxonomy,
+              axle,
+            );
+        }}
+      />
+
+      {/* MID-JOB ONLY: price it, say why, add parts, send the added scope for
+          the customer's confirmation. Opened from "Price & send" in the "Added
+          to this job" box while the job is running (there's no inspection-submit
+          step then to carry the estimate). A PRE-job inspection has no scope
+          dialog here at all — its added scope rides the "Submit → Vehicle Health"
+          flow (commitInspectionAndAwaitEstimate opens the pre-job estimate in the
+          booking panel), so the mechanic can't send before the check is done. */}
       <MidJobScopeDialog
         open={scopeOpen}
         bookingId={bookingId ? (bookingId as Id<"bookings">) : null}
         onClose={() => setScopeOpen(false)}
         onSubmitted={() => {
           setScopeOpen(false);
-          setScopeSubmittedNote("Extra work sent to the customer for confirmation.");
-        }}
-      />
-      <PreJobScopeDialog
-        open={preScopeOpen}
-        bookingId={bookingId ? (bookingId as Id<"bookings">) : null}
-        onClose={() => setPreScopeOpen(false)}
-        onSubmitted={() => {
-          setPreScopeOpen(false);
           setScopeSubmittedNote(
-            "Estimate sent to the customer for confirmation.",
+            "Extra work sent to the customer for confirmation.",
           );
         }}
       />
-    </>
+    </RotorMinContext.Provider>
   );
 }
 
@@ -2278,85 +2576,336 @@ function CarDiagram({
   onSelect: (id: ZoneId) => void;
 }) {
   return (
-    <svg width="300" height="232" viewBox="0 0 300 232" role="group" aria-label="Vehicle inspection map">
-      <rect x="92" y="20" width="116" height="192" rx="32" className="fill-primary/[0.04] stroke-primary/15" strokeWidth="1.4" />
+    <svg
+      width="300"
+      height="232"
+      viewBox="0 0 300 232"
+      role="group"
+      aria-label="Vehicle inspection map"
+    >
+      <rect
+        x="92"
+        y="20"
+        width="116"
+        height="192"
+        rx="32"
+        className="fill-primary/[0.04] stroke-primary/15"
+        strokeWidth="1.4"
+      />
       <path
         d="M110 72 Q150 60 190 72 L184 106 L116 106 Z"
         className="fill-primary/10 stroke-primary/15"
         strokeWidth="1"
       />
-      <rect x="120" y="150" width="60" height="30" rx="8" className="fill-primary/[0.06] stroke-primary/15" strokeWidth="1" />
-      {(Object.keys(DIAGRAM_RECTS) as Array<Exclude<ZoneId, "OWNER">>).map((id) => {
-        const r = DIAGRAM_RECTS[id];
-        const done = isDone(id);
-        const active = activeZone === id;
-        const required = isRequired(id);
-        const todo = required && !done && !active;
-        const zone = INSPECTION_ZONES_BY_ID[id];
+      <rect
+        x="120"
+        y="150"
+        width="60"
+        height="30"
+        rx="8"
+        className="fill-primary/[0.06] stroke-primary/15"
+        strokeWidth="1"
+      />
+      {(Object.keys(DIAGRAM_RECTS) as Array<Exclude<ZoneId, "OWNER">>).map(
+        (id) => {
+          const r = DIAGRAM_RECTS[id];
+          const done = isDone(id);
+          const active = activeZone === id;
+          const required = isRequired(id);
+          const todo = required && !done && !active;
+          const zone = INSPECTION_ZONES_BY_ID[id];
+          return (
+            <g
+              key={id}
+              role="button"
+              tabIndex={0}
+              aria-label={zone.label}
+              className="cursor-pointer"
+              onClick={() => onSelect(id)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(id);
+                }
+              }}
+            >
+              <rect
+                x={r.x}
+                y={r.y}
+                width={r.w}
+                height={r.h}
+                rx={6}
+                className={cn(
+                  "transition-colors",
+                  done
+                    ? "fill-emerald-100 stroke-emerald-500"
+                    : active
+                      ? "fill-primary/25 stroke-primary"
+                      : required
+                        ? "fill-primary/10 stroke-primary"
+                        : "fill-transparent stroke-muted-foreground/30",
+                )}
+                strokeWidth={done ? 1.6 : active ? 2 : required ? 2.25 : 1}
+                strokeDasharray={required || done || active ? undefined : "4 3"}
+              />
+              <text
+                x={r.lx}
+                y={r.ly}
+                textAnchor="middle"
+                fontSize="11"
+                fontWeight={required && !done ? 700 : 500}
+                className={cn(
+                  done || active || required
+                    ? "fill-foreground"
+                    : "fill-muted-foreground",
+                )}
+              >
+                {zone.short}
+              </text>
+              {done ? (
+                <path
+                  d={`M${r.lx - 5} ${r.ly + 6} l3 3 l6 -7`}
+                  fill="none"
+                  className="stroke-emerald-600"
+                  strokeWidth="2.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              ) : todo ? (
+                // "must inspect" marker so required zones read at a glance even
+                // when the fill is subtle.
+                <circle
+                  cx={r.x + r.w - 3.5}
+                  cy={r.y + 3.5}
+                  r={3}
+                  className="fill-primary"
+                />
+              ) : null}
+            </g>
+          );
+        },
+      )}
+    </svg>
+  );
+}
+
+// --- Zone field rail --------------------------------------------------------
+// A textless, color-coded tracker that lists every question in the active zone
+// so the mechanic sees what's left at a glance and can tap to jump to it. It's a
+// floating vertical pill on desktop and a sticky horizontal strip on mobile.
+// Colors: red = required & unanswered · amber = seeded spec to check ·
+// blue = answered/done · gray = optional & unanswered.
+type RailStatus = "req" | "spec" | "done" | "opt";
+
+const RAIL_BAR_CLASS: Record<RailStatus, string> = {
+  req: "bg-red-500",
+  spec: "bg-amber-400",
+  done: "bg-blue-500",
+  opt: "border border-slate-300 bg-transparent",
+};
+
+const RAIL_STATUS_LABEL: Record<RailStatus, string> = {
+  req: "required",
+  spec: "check spec",
+  done: "done",
+  opt: "optional",
+};
+
+/** True when a field carries an answer — a value, a rating, or a "not visible" mark. */
+function isFieldAnswered(field: InspectionField, zs: ZoneState): boolean {
+  if (zs.statuses[field.key]) return true;
+  switch (field.type) {
+    case "measure":
+      return (zs.measures[field.key] ?? "").trim() !== "";
+    case "tri":
+      return !!zs.tri[field.key];
+    case "descriptors":
+      return (zs.descriptors[field.key] ?? []).length > 0;
+    case "lights":
+      return (zs.lights[field.key] ?? []).some((entry) => !!entry.light);
+    case "select":
+      return (
+        (zs.select[field.key] ?? "").trim() !== "" ||
+        (zs.methods[field.key] ?? "").trim() !== ""
+      );
+    case "text":
+      return (zs.text[field.key] ?? "").trim() !== "";
+    default:
+      return false;
+  }
+}
+
+function LegendSwatch({
+  className,
+  label,
+}: {
+  className: string;
+  label: string;
+}) {
+  return (
+    <span className="flex items-center gap-1">
+      <span className={cn("inline-block h-2 w-2 rounded-full", className)} />
+      {label}
+    </span>
+  );
+}
+
+function ZoneFieldRail({
+  orientation,
+  zoneId,
+  fields,
+  zs,
+  completionContext,
+  specByKey,
+  specConfirmed,
+  checkedSpecKeys,
+  flashedFieldKey,
+  onJump,
+}: {
+  /** "vertical" floats in the dialog's left gutter; "horizontal" is the mobile strip. */
+  orientation: "vertical" | "horizontal";
+  zoneId: ZoneId;
+  fields: InspectionField[];
+  zs: ZoneState;
+  completionContext: ZoneCompletionContext;
+  /** Seeded passport specs for this zone, keyed by field. */
+  specByKey: Map<string, SpecPrefillEntry>;
+  specConfirmed: boolean;
+  /** Seeded specs the mechanic has already tapped/edited this session. */
+  checkedSpecKeys: Set<string>;
+  flashedFieldKey: string | null;
+  onJump: (fieldKey: string) => void;
+}) {
+  const vertical = orientation === "vertical";
+  const tabs = fields.map((field) => {
+    const isPendingSpec =
+      specByKey.has(field.key) &&
+      !specConfirmed &&
+      !checkedSpecKeys.has(field.key);
+    const status: RailStatus = isPendingSpec
+      ? "spec"
+      : isFieldAnswered(field, zs)
+        ? "done"
+        : isFieldRequiredForZone(zoneId, field.key, completionContext)
+          ? "req"
+          : "opt";
+    return { key: field.key, label: field.label, status };
+  });
+  // Horizontal (mobile) strip: track whether it's scrolled off either edge so
+  // we can hint "more questions this way" with a fading chevron.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ left: false, right: false });
+  const measureEdges = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const { scrollLeft, scrollWidth, clientWidth } = el;
+    setEdges({
+      left: scrollLeft > 1,
+      right: Math.ceil(scrollLeft + clientWidth) < scrollWidth - 1,
+    });
+  }, []);
+  useEffect(() => {
+    if (vertical) return;
+    measureEdges();
+    const el = scrollRef.current;
+    if (!el) return;
+    // Re-measure when the strip resizes; content changes re-run via tabs.length.
+    const ro = new ResizeObserver(() => measureEdges());
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [vertical, measureEdges, tabs.length]);
+
+  const tablist = (
+    <div
+      ref={vertical ? undefined : scrollRef}
+      onScroll={vertical ? undefined : measureEdges}
+      role="tablist"
+      aria-label="Jump to a question in this section"
+      className={cn(
+        "flex gap-1.5",
+        vertical
+          ? // Floating labelled rail in the dialog's left gutter (desktop): each
+            // row is [a few label chars][status bar], right-aligned so the bars
+            // line up and every pill is legible without hovering.
+            "pointer-events-auto max-h-[80vh] flex-col items-end overflow-y-auto rounded-2xl border border-primary/10 bg-card px-2 py-2 shadow-[0_8px_24px_-4px_rgba(14,27,43,0.16)]"
+          : // Scrolling horizontal strip (mobile/narrow): each cell is the
+            // question written vertically, left of a full-height status pill.
+            "flex-row items-stretch overflow-x-auto px-1 py-1.5",
+      )}
+    >
+      {tabs.map(({ key, label, status }) => {
+        const emphasized = status === "req" || status === "spec";
         return (
-          <g
-            key={id}
-            role="button"
-            tabIndex={0}
-            aria-label={zone.label}
-            className="cursor-pointer"
-            onClick={() => onSelect(id)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onSelect(id);
-              }
-            }}
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            onClick={() => onJump(key)}
+            // Native tooltip naming the question on hover — reliable and never
+            // clipped by the rail's own scroll container.
+            title={`${label} · ${RAIL_STATUS_LABEL[status]}`}
+            aria-label={`Jump to ${label} (${RAIL_STATUS_LABEL[status]})`}
+            className={cn(
+              "group relative flex shrink-0",
+              // Both rails: [question label][status pill] in a row. Desktop shows
+              // a few horizontal chars; the mobile strip writes the label
+              // vertically to the LEFT of a full-height pill.
+              vertical
+                ? "items-center gap-1.5 py-0.5"
+                : "h-[4.5rem] flex-row items-stretch gap-1 px-0.5",
+            )}
           >
-            <rect
-              x={r.x}
-              y={r.y}
-              width={r.w}
-              height={r.h}
-              rx={6}
+            <span
               className={cn(
-                "transition-colors",
-                done
-                  ? "fill-emerald-100 stroke-emerald-500"
-                  : active
-                    ? "fill-primary/25 stroke-primary"
-                    : required
-                      ? "fill-primary/10 stroke-primary"
-                      : "fill-transparent stroke-muted-foreground/30",
-              )}
-              strokeWidth={done ? 1.6 : active ? 2 : required ? 2.25 : 1}
-              strokeDasharray={required || done || active ? undefined : "4 3"}
-            />
-            <text
-              x={r.lx}
-              y={r.ly}
-              textAnchor="middle"
-              fontSize="11"
-              fontWeight={required && !done ? 700 : 500}
-              className={cn(
-                done || active || required ? "fill-foreground" : "fill-muted-foreground",
+                "truncate text-[10px] font-medium text-muted-foreground group-hover:text-foreground",
+                vertical
+                  ? "max-w-[4rem] leading-none"
+                  : "leading-tight [writing-mode:vertical-rl]",
               )}
             >
-              {zone.short}
-            </text>
-            {done ? (
-              <path
-                d={`M${r.lx - 5} ${r.ly + 6} l3 3 l6 -7`}
-                fill="none"
-                className="stroke-emerald-600"
-                strokeWidth="2.4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            ) : todo ? (
-              // "must inspect" marker so required zones read at a glance even
-              // when the fill is subtle.
-              <circle cx={r.x + r.w - 3.5} cy={r.y + 3.5} r={3} className="fill-primary" />
-            ) : null}
-          </g>
+              {label}
+            </span>
+            <span
+              className={cn(
+                "shrink-0 rounded-full transition-transform group-hover:scale-110 group-active:scale-95",
+                vertical
+                  ? emphasized
+                    ? "h-2 w-7"
+                    : "h-2 w-5"
+                  : emphasized
+                    ? "w-3 self-stretch"
+                    : "w-2.5 self-stretch",
+                RAIL_BAR_CLASS[status],
+                flashedFieldKey === key &&
+                  "ring-2 ring-amber-400 ring-offset-1 ring-offset-card",
+              )}
+            />
+          </button>
         );
       })}
-    </svg>
+    </div>
+  );
+
+  if (vertical) return tablist;
+
+  return (
+    <div className="lg:hidden">
+      <div className="relative border-t border-primary/10">
+        {tablist}
+        {/* "More questions this way" — a fading chevron on whichever edge the
+            strip is scrolled past. pointer-events-none so it never blocks a pill. */}
+        {edges.left ? (
+          <div className="pointer-events-none absolute inset-y-0 left-0 z-20 flex w-9 items-center justify-start bg-gradient-to-r from-card via-card/85 to-transparent">
+            <ChevronLeft className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          </div>
+        ) : null}
+        {edges.right ? (
+          <div className="pointer-events-none absolute inset-y-0 right-0 z-20 flex w-9 items-center justify-end bg-gradient-to-l from-card via-card/85 to-transparent">
+            <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+          </div>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -2375,11 +2924,9 @@ function ZonePanel({
   specPrefill,
   specConfirmed,
   onConfirmSpecs,
-  onSpecEdited,
   extraHeader,
   onPatch,
   onSharedText,
-  onCopyToOpposite,
   onPhoto,
   onRemovePhoto,
   onToggleDone,
@@ -2405,12 +2952,9 @@ function ZonePanel({
   specPrefill: SpecPrefillEntry[];
   specConfirmed: boolean;
   onConfirmSpecs: () => void;
-  onSpecEdited: () => void;
   extraHeader?: React.ReactNode;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
-  /** Copies this corner's readings onto its same-axle sibling (corners only). */
-  onCopyToOpposite: () => void;
   onPhoto: (file: File, tag?: "general" | "rotor_stamp") => void;
   onRemovePhoto: (storageId: string) => void;
   onToggleDone: () => void;
@@ -2421,37 +2965,36 @@ function ZonePanel({
   /** Flags a field as pending-save the moment the mechanic edits it. */
   onFieldSaving: (fieldKey: string) => void;
 }) {
-  // Transient "Copied ✓" confirmation on the copy-to-opposite button. Reset when
-  // the panel switches zones and auto-cleared after a short beat.
-  const [copiedFlash, setCopiedFlash] = useState(false);
-  useEffect(() => setCopiedFlash(false), [zoneId]);
+  // Refs to every field row so the rail (and spec review) can jump straight to a
+  // question, plus a transient highlight so the mechanic sees where they landed.
+  const fieldRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const [flashedFieldKey, setFlashedFieldKey] = useState<string | null>(null);
+  useEffect(() => setFlashedFieldKey(null), [zoneId]);
   useEffect(() => {
-    if (!copiedFlash) return;
-    const timer = window.setTimeout(() => setCopiedFlash(false), 2200);
+    if (!flashedFieldKey) return;
+    const timer = window.setTimeout(() => setFlashedFieldKey(null), 1800);
     return () => window.clearTimeout(timer);
-  }, [copiedFlash]);
-  // Refs to each seeded spec field so the "confirm specs match" prompt can jump
-  // straight to the row that needs checking, plus a transient highlight so the
-  // mechanic can see which one they landed on.
-  const specFieldRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const [flashedSpecKey, setFlashedSpecKey] = useState<string | null>(null);
-  useEffect(() => setFlashedSpecKey(null), [zoneId]);
+  }, [flashedFieldKey]);
+  // Per-tab spec review: each seeded spec shows amber in the rail until the
+  // mechanic taps it (jumps to check it) or edits it, then it turns "done".
+  // Once every seeded spec is checked, the zone's specs are confirmed.
+  const [checkedSpecKeys, setCheckedSpecKeys] = useState<Set<string>>(
+    () => new Set(),
+  );
+  useEffect(() => setCheckedSpecKeys(new Set()), [zoneId]);
+  // The floating vertical rail lives in a gutter slot the dialog shell renders
+  // just outside the card's left edge, so it can overhang without being clipped
+  // by the card's overflow. We portal into it once it's in the DOM.
+  const [railTarget, setRailTarget] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    if (!flashedSpecKey) return;
-    const timer = window.setTimeout(() => setFlashedSpecKey(null), 1800);
-    return () => window.clearTimeout(timer);
-  }, [flashedSpecKey]);
+    setRailTarget(document.getElementById(INSPECTION_SIDE_RAIL_ID));
+  }, []);
   const zone = INSPECTION_ZONES_BY_ID[zoneId];
-  // Same-axle sibling for the one-tap copy (undefined on non-corner zones).
-  const oppositeCorner = OPPOSITE_CORNER[zoneId as CornerZoneId] as
-    | CornerZoneId
-    | undefined;
-  const oppositeLabel = oppositeCorner
-    ? INSPECTION_ZONES_BY_ID[oppositeCorner].label
-    : null;
-  const canCopyOpposite = !!oppositeCorner && zoneHasInput(zoneId, zs);
   const tireReplacementScheduled =
-    (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
+    (zoneId === "FL" ||
+      zoneId === "FR" ||
+      zoneId === "RL" ||
+      zoneId === "RR") &&
     completionContext.tireReplacementPositions?.includes(zoneId);
   const applicableFields = zone.fields.filter((field) => {
     if (ALWAYS_VISIBLE_FIELDS.has(field.key)) return true;
@@ -2461,33 +3004,64 @@ function ZonePanel({
     return isFieldApplicableToZone(zoneId, field.key, completionContext);
   });
   const rotorPhotoRequired =
-    (zoneId === "FL" || zoneId === "FR" || zoneId === "RL" || zoneId === "RR") &&
+    (zoneId === "FL" ||
+      zoneId === "FR" ||
+      zoneId === "RL" ||
+      zoneId === "RR") &&
     !!completionContext.inspectionState &&
-    requiresRotorStampPhoto(completionContext.inspectionState, zoneId, completionContext);
+    requiresRotorStampPhoto(
+      completionContext.inspectionState,
+      zoneId,
+      completionContext,
+    );
   // Per-field lookup of the seeded value/provenance for this zone.
   const specByKey = new Map(specPrefill.map((s) => [s.fieldKey, s]));
   const hasSpecPrefill = specPrefill.length > 0;
   const needsSpecReview = hasSpecPrefill && !zs.done && !specConfirmed;
-  // Seeded spec fields in the order they actually render, so the jump-to chips
-  // and the in-place confirm below land in the right places.
-  const seededSpecs = applicableFields
-    .filter((field) => specByKey.has(field.key))
-    .map((field) => ({ fieldKey: field.key, label: field.label }));
-  const firstSeededKey = seededSpecs[0]?.fieldKey;
-  const lastSeededKey = seededSpecs[seededSpecs.length - 1]?.fieldKey;
-  const manySpecs = seededSpecs.length > 1;
-  const scrollToSpec = (fieldKey?: string) => {
-    const key = fieldKey ?? firstSeededKey;
-    if (!key) return;
-    specFieldRefs.current[key]?.scrollIntoView({
+  // Seeded specs that actually render here — the set the mechanic must check.
+  const seededKeys = applicableFields
+    .map((field) => field.key)
+    .filter((key) => specByKey.has(key));
+  const seededKeysSig = seededKeys.join("|");
+  const markSpecChecked = (fieldKey: string) => {
+    if (!specByKey.has(fieldKey)) return;
+    setCheckedSpecKeys((prev) => {
+      if (prev.has(fieldKey)) return prev;
+      const next = new Set(prev);
+      next.add(fieldKey);
+      return next;
+    });
+  };
+  const handleJump = (fieldKey: string) => {
+    fieldRefs.current[fieldKey]?.scrollIntoView({
       behavior: "smooth",
       block: "start",
     });
-    setFlashedSpecKey(key);
+    setFlashedFieldKey(fieldKey);
+    // Tapping a seeded spec counts as reviewing it.
+    markSpecChecked(fieldKey);
   };
+  // Confirm the zone's specs once every rendered seeded spec has been checked.
+  // If the zone carries seeded specs that don't actually render here (all
+  // filtered out of applicableFields), there's nothing to review — confirm
+  // immediately so the mechanic isn't dead-ended with no marker to tap.
+  useEffect(() => {
+    if (!needsSpecReview) return;
+    if (
+      seededKeys.length === 0 ||
+      seededKeys.every((key) => checkedSpecKeys.has(key))
+    ) {
+      onConfirmSpecs();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkedSpecKeys, needsSpecReview, seededKeysSig]);
   return (
     <div className="space-y-1">
-      <div className="sticky top-0 z-20 -mx-2 mb-2 flex items-center justify-between gap-2 border-b border-primary/10 bg-card/95 px-2 py-2 backdrop-blur">
+      {/* Header + mobile field rail stick together as one block, so the rail
+          tucks directly under the header and stays visible while the questions
+          scroll — no magic offset, no z-index fight. */}
+      <div className="sticky top-0 z-20 -mx-2 mb-2 border-b border-primary/10 bg-card/95 backdrop-blur">
+        <div className="flex items-center justify-between gap-2 px-2 py-2">
         <h4 className="flex items-center gap-2 text-[15px] font-semibold text-foreground">
           {zone.label}
           {isRequired ? (
@@ -2506,42 +3080,6 @@ function ZonePanel({
               <Check className="h-3.5 w-3.5" /> confirmed
             </span>
           ) : null}
-          {oppositeCorner ? (
-            <button
-              type="button"
-              onClick={() => {
-                onCopyToOpposite();
-                setCopiedFlash(true);
-              }}
-              disabled={!canCopyOpposite}
-              title={
-                canCopyOpposite
-                  ? `Copy every reading from this corner to ${oppositeLabel}, then adjust the few that differ`
-                  : `Enter this corner's readings first, then copy them to ${oppositeLabel}`
-              }
-              aria-label={`Copy all readings to ${oppositeLabel}`}
-              className={cn(
-                "mr-0.5 inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[12px] font-medium transition-colors",
-                copiedFlash
-                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                  : canCopyOpposite
-                    ? "border-primary/20 text-muted-foreground hover:bg-primary/5"
-                    : "cursor-not-allowed border-primary/10 text-muted-foreground/40",
-              )}
-            >
-              {copiedFlash ? (
-                <>
-                  <Check className="h-3.5 w-3.5" />
-                  Copied to {INSPECTION_ZONES_BY_ID[oppositeCorner].short}
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3.5 w-3.5" />
-                  Copy to {INSPECTION_ZONES_BY_ID[oppositeCorner].short}
-                </>
-              )}
-            </button>
-          ) : null}
           <button
             type="button"
             onClick={onPrevious}
@@ -2559,6 +3097,21 @@ function ZonePanel({
             <ChevronRight className="h-4 w-4" />
           </button>
         </div>
+        </div>
+        {applicableFields.length >= 2 ? (
+          <ZoneFieldRail
+            orientation="horizontal"
+            zoneId={zoneId}
+            fields={applicableFields}
+            zs={zs}
+            completionContext={completionContext}
+            specByKey={specByKey}
+            specConfirmed={specConfirmed}
+            checkedSpecKeys={checkedSpecKeys}
+            flashedFieldKey={flashedFieldKey}
+            onJump={handleJump}
+          />
+        ) : null}
       </div>
 
       {tireReplacementScheduled ? (
@@ -2570,117 +3123,111 @@ function ZonePanel({
         </p>
       ) : null}
 
-      {needsSpecReview ? (
-        <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
-          <p className="text-[12px] text-amber-900">
-            {manySpecs ? "These specs are" : "This spec is"} pre-filled from this
-            vehicle&apos;s records. Tap {manySpecs ? "one" : "it"} to jump down and
-            check {manySpecs ? "they" : "it"} still{" "}
-            {manySpecs ? "match" : "matches"} — or edit — then confirm.
-          </p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {seededSpecs.map((s) => (
-              <button
-                key={s.fieldKey}
-                type="button"
-                onClick={() => scrollToSpec(s.fieldKey)}
-                aria-label={`Jump to ${s.label}`}
-                className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white/70 px-2.5 py-1 text-[12px] font-medium text-amber-900 transition-colors hover:bg-white active:scale-95"
-              >
-                {s.label}
-                <ChevronDown className="h-3 w-3" />
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={onConfirmSpecs}
-            className="mt-2.5 inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-amber-600 px-3 py-2 text-[13px] font-semibold text-white hover:bg-amber-700 sm:w-auto"
-          >
-            <Check className="h-3.5 w-3.5" /> Specs match
-          </button>
+      {applicableFields.length >= 2 ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-0.5 pt-1 text-[10px] text-muted-foreground">
+          <LegendSwatch className="bg-red-500" label="Required" />
+          {seededKeys.length > 0 ? (
+            <LegendSwatch className="bg-amber-400" label="Check spec" />
+          ) : null}
+          <LegendSwatch className="bg-blue-500" label="Done" />
+          <LegendSwatch
+            className="border border-slate-300 bg-transparent"
+            label="Optional"
+          />
         </div>
-      ) : hasSpecPrefill && specConfirmed && !zs.done ? (
-        <p className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-[12px] font-medium text-emerald-700">
-          <Check className="h-3.5 w-3.5" /> Specs confirmed
-        </p>
       ) : null}
+
+      {/* Desktop: floating vertical rail in the dialog's left gutter. The mobile
+          strip now lives inside the sticky header block above. */}
+      {applicableFields.length >= 2 && railTarget
+        ? createPortal(
+            <ZoneFieldRail
+              orientation="vertical"
+              zoneId={zoneId}
+              fields={applicableFields}
+              zs={zs}
+              completionContext={completionContext}
+              specByKey={specByKey}
+              specConfirmed={specConfirmed}
+              checkedSpecKeys={checkedSpecKeys}
+              flashedFieldKey={flashedFieldKey}
+              onJump={handleJump}
+            />,
+            railTarget,
+          )
+        : null}
 
       {applicableFields.map((field, i) => {
         const prevSection = i > 0 ? applicableFields[i - 1].section : undefined;
         const showSection = field.section && field.section !== prevSection;
-        const isSeeded = specByKey.has(field.key);
         return (
-          <Fragment key={field.key}>
-            <div
-              ref={
-                isSeeded
-                  ? (el) => {
-                      specFieldRefs.current[field.key] = el;
-                    }
-                  : undefined
-              }
-              className={cn(
-                // scroll-mt clears the sticky zone header when we jump here.
-                isSeeded && "scroll-mt-20 rounded-lg transition-shadow",
-                isSeeded &&
-                  flashedSpecKey === field.key &&
-                  "ring-2 ring-amber-400 ring-offset-2 ring-offset-card",
-              )}
-            >
-              {showSection ? (
-                <div className="mb-1 mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-1">
-                  {field.section}
-                </div>
-              ) : null}
-              <FieldRow
-                zoneId={zoneId}
-                field={field}
-                zs={zs}
-                vin={vin}
-                isFirstVisit={isFirstVisit}
-                tireSizeOptions={tireSizeOptions}
-                required={isFieldRequiredForZone(
-                  zoneId,
-                  field.key,
-                  completionContext,
-                )}
-                errorMessage={
-                  fieldError?.fieldKey === field.key ||
-                  (field.key === "tread" &&
-                    fieldError?.fieldKey.startsWith("tread_"))
-                    ? fieldError.message
-                    : undefined
-                }
-                prefill={specByKey.get(field.key)}
-                onSpecEdited={onSpecEdited}
-                onPatch={(patch) => {
-                  onFieldSaving(field.key);
-                  onPatch(patch);
-                }}
-                onSharedText={(key, value) => {
-                  onFieldSaving(field.key);
-                  onSharedText(key, value);
-                }}
-                saveState={fieldSaveState[`${zoneId}::${field.key}`]}
-              />
-            </div>
-            {/* Confirm right where the specs are, so there's no scroll back up. */}
-            {needsSpecReview && field.key === lastSeededKey ? (
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50/70 px-3 py-2">
-                <span className="text-[12px] text-amber-900">
-                  {manySpecs ? "Everything above still match?" : "Still matches?"}
-                </span>
-                <button
-                  type="button"
-                  onClick={onConfirmSpecs}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-[12px] font-semibold text-white hover:bg-amber-700"
-                >
-                  <Check className="h-3.5 w-3.5" /> Specs match
-                </button>
+          <div
+            key={field.key}
+            ref={(el) => {
+              fieldRefs.current[field.key] = el;
+            }}
+            onFocus={(e) => {
+              // Mobile: tapping a field brings it up under the sticky header
+              // (clear of the keyboard) so you're always looking at what you're
+              // editing. Only for real inputs — not every button tap — and never
+              // on desktop, where the whole zone is already in view.
+              if (window.matchMedia("(min-width: 1024px)").matches) return;
+              const t = e.target as HTMLElement;
+              if (
+                !(t instanceof HTMLInputElement) &&
+                !(t instanceof HTMLSelectElement) &&
+                !(t instanceof HTMLTextAreaElement)
+              )
+                return;
+              e.currentTarget.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
+            className={cn(
+              // scroll-mt clears the sticky header + rail when we jump (or focus)
+              // here so the question lands clearly below them, not tucked under.
+              // Mobile's rail is taller (full-height labelled pills), so it needs
+              // a bigger offset than the desktop header-only case.
+              "scroll-mt-44 rounded-lg transition-shadow lg:scroll-mt-28",
+              flashedFieldKey === field.key &&
+                "ring-2 ring-amber-400 ring-offset-2 ring-offset-card",
+            )}
+          >
+            {showSection ? (
+              <div className="mb-1 mt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-1">
+                {field.section}
               </div>
             ) : null}
-          </Fragment>
+            <FieldRow
+              zoneId={zoneId}
+              field={field}
+              zs={zs}
+              vin={vin}
+              isFirstVisit={isFirstVisit}
+              tireSizeOptions={tireSizeOptions}
+              required={isFieldRequiredForZone(
+                zoneId,
+                field.key,
+                completionContext,
+              )}
+              errorMessage={
+                fieldError?.fieldKey === field.key ||
+                (field.key === "tread" &&
+                  fieldError?.fieldKey.startsWith("tread_"))
+                  ? fieldError.message
+                  : undefined
+              }
+              prefill={specByKey.get(field.key)}
+              onSpecEdited={() => markSpecChecked(field.key)}
+              onPatch={(patch) => {
+                onFieldSaving(field.key);
+                onPatch(patch);
+              }}
+              onSharedText={(key, value) => {
+                onFieldSaving(field.key);
+                onSharedText(key, value);
+              }}
+              saveState={fieldSaveState[`${zoneId}::${field.key}`]}
+            />
+          </div>
         );
       })}
 
@@ -2695,11 +3242,11 @@ function ZonePanel({
                 key={storageId}
                 className="relative overflow-hidden rounded-lg border border-primary/15 bg-muted"
               >
-                  {zs.photoTags[storageId] === "rotor_stamp" ? (
-                    <span className="absolute left-2 top-2 z-10 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-semibold text-white">
-                      Rotor stamp
-                    </span>
-                  ) : null}
+                {zs.photoTags[storageId] === "rotor_stamp" ? (
+                  <span className="absolute left-2 top-2 z-10 rounded-full bg-black/70 px-2 py-0.5 text-[10px] font-semibold text-white">
+                    Rotor stamp
+                  </span>
+                ) : null}
                 {src ? (
                   <a
                     href={src}
@@ -2747,8 +3294,8 @@ function ZonePanel({
       {!zs.done && zs.dirty ? (
         <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
           You&apos;ve entered readings here — tap{" "}
-          <span className="font-semibold">Mark zone complete</span> so they count
-          toward findings &amp; recommendations.
+          <span className="font-semibold">Mark zone complete</span> so they
+          count toward findings &amp; recommendations.
         </p>
       ) : null}
 
@@ -2759,7 +3306,9 @@ function ZonePanel({
             tabIndex={-1}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg border border-primary/20 px-3 py-1.5 text-[12px] text-muted-foreground hover:bg-primary/5",
-              photoBusy === zoneId ? "cursor-wait opacity-60" : "cursor-pointer",
+              photoBusy === zoneId
+                ? "cursor-wait opacity-60"
+                : "cursor-pointer",
             )}
           >
             {photoBusy === zoneId ? (
@@ -2767,7 +3316,9 @@ function ZonePanel({
             ) : (
               <Camera className="h-3.5 w-3.5" />
             )}
-            {rotorPhotoRequired ? "Add required rotor-stamp photo" : "Add photo"}
+            {rotorPhotoRequired
+              ? "Add required rotor-stamp photo"
+              : "Add photo"}
             <input
               type="file"
               accept="image/*"
@@ -2775,7 +3326,8 @@ function ZonePanel({
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
-                if (file) onPhoto(file, rotorPhotoRequired ? "rotor_stamp" : "general");
+                if (file)
+                  onPhoto(file, rotorPhotoRequired ? "rotor_stamp" : "general");
                 e.target.value = "";
               }}
             />
@@ -2838,7 +3390,11 @@ function FieldRow({
     return statuses;
   };
   const unavailable = !!zs.statuses[field.key];
-  const unavailableControl = (
+  // NYS safety items (e.g. horn) are mandatory — the mechanic can't mark them
+  // unavailable to skip them, so drop the toggle entirely for those fields.
+  const skippable = canMarkFieldUnavailable(zoneId, field.key);
+  const nysSafety = isNysSafetyField(zoneId, field.key);
+  const unavailableControl = skippable ? (
     <UnavailableToggle
       active={unavailable}
       onToggle={() => {
@@ -2848,7 +3404,7 @@ function FieldRow({
         onPatch({ statuses });
       }}
     />
-  );
+  ) : null;
   const rotorNotConfirmed =
     ROTOR_GATE_FIELDS.has(field.key) && zs.select.rotor_applicable !== "yes";
   if (field.type === "measure") {
@@ -2879,9 +3435,7 @@ function FieldRow({
               const label = triLabelFor(field.key, color);
               const active = selected === color && !unavailable;
               const id =
-                color === "g"
-                  ? `inspection-${zoneId}-${field.key}`
-                  : undefined;
+                color === "g" ? `inspection-${zoneId}-${field.key}` : undefined;
               if (hasCustomLabels) {
                 return (
                   <button
@@ -2919,7 +3473,9 @@ function FieldRow({
                   }
                   className={cn(
                     "h-7 w-7 rounded-full border-2 transition-transform active:scale-90",
-                    active ? TRI_DOT[color] : "border-primary/25 bg-transparent",
+                    active
+                      ? TRI_DOT[color]
+                      : "border-primary/25 bg-transparent",
                   )}
                 />
               );
@@ -2928,6 +3484,19 @@ function FieldRow({
           </div>
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+        {nysSafety ? (
+          selected === "r" ? (
+            <p className="px-1 pb-2 text-[11px] font-medium text-red-600">
+              Automatic NYS inspection failure — a 15–20 min diagnostic (fuse /
+              clock spring / horn unit) is required before a replacement can be
+              approved.
+            </p>
+          ) : (
+            <p className="px-1 pb-2 text-[11px] text-muted-foreground">
+              Mandatory state-inspection safety item — can’t be skipped.
+            </p>
+          )
+        ) : null}
       </div>
     );
   }
@@ -2964,9 +3533,7 @@ function FieldRow({
               <button
                 key={option}
                 id={
-                  index === 0
-                    ? `inspection-${zoneId}-${field.key}`
-                    : undefined
+                  index === 0 ? `inspection-${zoneId}-${field.key}` : undefined
                 }
                 type="button"
                 disabled={rotorNotConfirmed}
@@ -2977,7 +3544,10 @@ function FieldRow({
                   } else if (option === "none") {
                     next = ["none"];
                   } else {
-                    next = [...selected.filter((value) => value !== "none"), option];
+                    next = [
+                      ...selected.filter((value) => value !== "none"),
+                      option,
+                    ];
                   }
                   onPatch({
                     descriptors: { ...zs.descriptors, [field.key]: next },
@@ -3008,7 +3578,10 @@ function FieldRow({
         : [{ light: "" }];
     const hasNone = entries.some((e) => e.light === "none");
     const lightOptions: InspectionOption[] = [
-      ...WARNING_LIGHT_PICKER_OPTIONS.map((o) => ({ value: o.value, label: o.label })),
+      ...WARNING_LIGHT_PICKER_OPTIONS.map((o) => ({
+        value: o.value,
+        label: o.label,
+      })),
       { value: "other", label: "Other" },
       { value: "none", label: "None" },
     ];
@@ -3044,7 +3617,9 @@ function FieldRow({
           {entries.map((entry, index) => (
             <div key={index} className="flex items-center gap-2">
               <CompactSelect
-                id={index === 0 ? `inspection-${zoneId}-${field.key}` : undefined}
+                id={
+                  index === 0 ? `inspection-${zoneId}-${field.key}` : undefined
+                }
                 ariaLabel={field.label}
                 value={entry.light}
                 options={lightOptions}
@@ -3059,7 +3634,11 @@ function FieldRow({
                   setEntries(
                     entries.map((e, i) =>
                       i === index
-                        ? { light, otherText: light === "other" ? e.otherText : undefined }
+                        ? {
+                            light,
+                            otherText:
+                              light === "other" ? e.otherText : undefined,
+                          }
                         : e,
                     ),
                   );
@@ -3071,7 +3650,9 @@ function FieldRow({
                   onChange={(e) =>
                     setEntries(
                       entries.map((row, i) =>
-                        i === index ? { ...row, otherText: e.target.value } : row,
+                        i === index
+                          ? { ...row, otherText: e.target.value }
+                          : row,
                       ),
                     )
                   }
@@ -3082,7 +3663,9 @@ function FieldRow({
               {index > 0 ? (
                 <button
                   type="button"
-                  onClick={() => setEntries(entries.filter((_, i) => i !== index))}
+                  onClick={() =>
+                    setEntries(entries.filter((_, i) => i !== index))
+                  }
                   className="rounded-lg p-1.5 text-muted-foreground hover:bg-red-50 hover:text-red-600"
                   aria-label="Remove light"
                 >
@@ -3111,7 +3694,7 @@ function FieldRow({
       field.key === "pad_method" || field.key === "rotor_tool";
     const value = isMeasurementMethod
       ? zs.methods[field.key] || zs.select[field.key] || ""
-      : zs.select[field.key] ?? "";
+      : (zs.select[field.key] ?? "");
     const wasMeasured = (key: string) =>
       !zs.statuses[key] && !!(zs.measures[key] ?? "").trim();
     const measurementNotTaken =
@@ -3123,10 +3706,38 @@ function FieldRow({
     // Verbatim OEM value that maps to no canonical option (odd coolant/trans
     // brand strings, or a pre-filled passport value): inject it so the enriched
     // spec still shows + stays picked.
-    const isKnown = value === "" || field.options.some((o) => o.value === value);
-    const selectOptions = isKnown
-      ? field.options
-      : [...field.options, { value, label: value }];
+    //
+    // `tire_type` additionally gets an "Other…" escape hatch so a mechanic can
+    // record a season/type not in the controlled catalog vocabulary. The typed
+    // value is stored verbatim in the same `select` bucket; it simply won't join
+    // the tire catalog for auto-rebooking (mapTireType returns undefined), which
+    // is the intended graceful fallback. We deliberately do NOT add "Other" to
+    // TIRE_TYPE_OPTIONS (that list is the join vocabulary); the affordance is
+    // UI-only, and the transient sentinel is filtered out of the passport read
+    // in lib/inspection-template.ts.
+    const allowOther = field.key === "tire_type";
+    const matchesOption = field.options.some((o) => o.value === value);
+    const isKnown = value === "" || matchesOption;
+    const isOtherMode = allowOther && value !== "" && !matchesOption;
+    const selectOptions = allowOther
+      ? [...field.options, { value: OTHER_INSPECTION_OPTION, label: "Other…" }]
+      : isKnown
+        ? field.options
+        : [...field.options, { value, label: value }];
+    const writeSelect = (next: string) => {
+      if (prefill) onSpecEdited?.();
+      onPatch(
+        isMeasurementMethod
+          ? {
+              methods: { ...zs.methods, [field.key]: next },
+              statuses: clearUnavailable(),
+            }
+          : {
+              select: { ...zs.select, [field.key]: next },
+              statuses: clearUnavailable(),
+            },
+      );
+    };
     const showPrefillTag = !!prefill && value === prefill.value;
     return (
       <div className="border-b border-primary/10">
@@ -3135,25 +3746,22 @@ function FieldRow({
             <CompactSelect
               id={`inspection-${zoneId}-${field.key}`}
               ariaLabel={field.label}
-              value={value}
+              value={isOtherMode ? OTHER_INSPECTION_OPTION : value}
               options={selectOptions}
               className="w-44"
               isDisabled={measurementNotTaken}
-              onChange={(next) => {
-                if (prefill) onSpecEdited?.();
-                onPatch(
-                  isMeasurementMethod
-                    ? {
-                        methods: { ...zs.methods, [field.key]: next },
-                        statuses: clearUnavailable(),
-                      }
-                    : {
-                        select: { ...zs.select, [field.key]: next },
-                        statuses: clearUnavailable(),
-                      },
-                );
-              }}
+              onChange={writeSelect}
             />
+            {isOtherMode ? (
+              <input
+                id={`inspection-${zoneId}-${field.key}-other`}
+                aria-label={`Custom ${field.label.toLowerCase()}`}
+                value={value === OTHER_INSPECTION_OPTION ? "" : value}
+                placeholder={`Enter ${field.label.toLowerCase()}`}
+                onChange={(event) => writeSelect(event.target.value)}
+                className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+              />
+            ) : null}
             {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
           </div>
           {isMeasurementMethod || field.key === "rotor_applicable"
@@ -3376,7 +3984,14 @@ function MeasureField({
   saveState?: FieldSaveState;
 }) {
   const value = zs.measures[field.key] ?? "";
-  const result = classifyInspectionMeasure(field, zs.measures, zs.select);
+  // Grade rotor against THIS vehicle's enrichment-derived minimum (nominal ×
+  // 0.85), falling back to the field's static default when unknown.
+  const rotorMinCtx = useContext(RotorMinContext);
+  const rotorRef =
+    field.classify === "rotor"
+      ? effectiveRotorRef(zoneId, field.ref, rotorMinCtx)
+      : undefined;
+  const result = classifyInspectionMeasure(field, zs.measures, zs.select, rotorRef);
   const clearUnavailable = () => {
     const statuses = { ...zs.statuses };
     delete statuses[field.key];
@@ -3388,9 +4003,22 @@ function MeasureField({
       active={unavailable}
       onToggle={() => {
         const statuses = { ...zs.statuses };
-        if (unavailable) delete statuses[field.key];
-        else statuses[field.key] = "not_applicable";
-        onPatch({ statuses });
+        if (unavailable) {
+          delete statuses[field.key];
+          onPatch({ statuses });
+          return;
+        }
+        // Marking not visible / not available is mutually exclusive with a
+        // reading: clear any typed measurement so a stale number (and its
+        // auto-classified grade) can't linger behind the toggle.
+        statuses[field.key] = "not_applicable";
+        const measures = { ...zs.measures, [field.key]: "" };
+        if (field.key === "tread") {
+          measures.tread_inner = "";
+          measures.tread_center = "";
+          measures.tread_outer = "";
+        }
+        onPatch({ statuses, measures });
       }}
     />
   );
@@ -3416,7 +4044,12 @@ function MeasureField({
     };
     return (
       <div className="border-b border-primary/10 py-2.5">
-        <Row label={field.label} hint={field.hint} required={required} saveState={saveState}>
+        <Row
+          label={field.label}
+          hint={field.hint}
+          required={required}
+          saveState={saveState}
+        >
           {!detailed ? (
             <>
               <input
@@ -3453,14 +4086,17 @@ function MeasureField({
               ] as const
             ).map(([key, label]) => (
               <label key={key} className="text-[11px] text-muted-foreground">
-                {label}<span className="ml-0.5 text-red-500">*</span>
+                {label}
+                <span className="ml-0.5 text-red-500">*</span>
                 <div className="mt-1 flex items-center gap-1">
                   <input
                     id={`inspection-${zoneId}-${key}`}
                     aria-invalid={!!errorMessage}
                     inputMode="numeric"
                     value={zs.measures[key] ?? ""}
-                    onChange={(event) => updateDetailed(key, event.target.value)}
+                    onChange={(event) =>
+                      updateDetailed(key, event.target.value)
+                    }
                     className="min-w-0 flex-1 rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-center text-[13px] tabular-nums text-foreground focus:border-primary focus:outline-none"
                   />
                   <span>/32&quot;</span>
@@ -3491,13 +4127,21 @@ function MeasureField({
 
   const isRotor = field.key === "rotor";
   const unit: RotorUnit = zs.select.rotor_unit === "in" ? "in" : "mm";
+  // Prefer the per-vehicle minimum over the field's static reference so the
+  // mechanic sees the same replace-at figure the grade is measured against.
+  const displayRotorRef = rotorRef ?? field.ref;
   const hint =
-    isRotor && field.ref != null
-      ? `Reference min ${formatRotorReferenceMinimum(field.ref, unit)}`
+    isRotor && displayRotorRef != null
+      ? `Reference min ${formatRotorReferenceMinimum(displayRotorRef, unit)}`
       : field.hint;
   return (
     <div className="border-b border-primary/10">
-      <Row label={field.label} hint={hint} required={required} saveState={saveState}>
+      <Row
+        label={field.label}
+        hint={hint}
+        required={required}
+        saveState={saveState}
+      >
         <input
           id={`inspection-${zoneId}-${field.key}`}
           aria-invalid={!!errorMessage}
@@ -3586,11 +4230,7 @@ function UnavailableToggle({
   );
 }
 
-function GradeTag({
-  result,
-}: {
-  result: { lvl: string; txt: string };
-}) {
+function GradeTag({ result }: { result: { lvl: string; txt: string } }) {
   return (
     <span
       className={cn(
@@ -3621,7 +4261,8 @@ function optionsForInspectionField(fieldKey: string): InspectionOption[] {
   if (fieldKey === "coolant_type") return COOLANT_TYPE_OPTIONS;
   if (fieldKey === "brake_fluid_type") return BRAKE_FLUID_OPTIONS;
   if (fieldKey === "transmission_fluid_type") return TRANSMISSION_FLUID_OPTIONS;
-  if (fieldKey === "power_steering_fluid_type") return POWER_STEERING_FLUID_OPTIONS;
+  if (fieldKey === "power_steering_fluid_type")
+    return POWER_STEERING_FLUID_OPTIONS;
   return [];
 }
 
@@ -3711,7 +4352,9 @@ function Row({
           </span>
         ) : null}
         {hint ? (
-          <span className="ml-1 text-[11px] text-muted-foreground">· {hint}</span>
+          <span className="ml-1 text-[11px] text-muted-foreground">
+            · {hint}
+          </span>
         ) : null}
       </span>
       {children}
@@ -3846,7 +4489,8 @@ function AftermarketModsSection({
               if (onlyCosmetic) {
                 return (
                   <div className="mt-2 rounded-lg border border-primary/20 bg-card px-2.5 py-2 text-[11px] text-muted-foreground">
-                    Cosmetic only — recorded, but won&apos;t flag any future service.
+                    Cosmetic only — recorded, but won&apos;t flag any future
+                    service.
                   </div>
                 );
               }
@@ -3865,7 +4509,9 @@ function AftermarketModsSection({
                     {services.length === 1 ? "" : "s"}:
                   </span>{" "}
                   {services.map((s) => s.name).join(" · ")}.{" "}
-                  <span className="font-semibold">Hidden on everything else.</span>
+                  <span className="font-semibold">
+                    Hidden on everything else.
+                  </span>
                 </div>
               );
             })()}
@@ -3895,7 +4541,12 @@ type PartVerifyItem = {
   status: "MISSING" | "LOW_CONFIDENCE";
   kind: "booked" | "gap";
   position?: "front" | "rear";
-  current: { partId: string; oemNumber: string; name: string; confidence: number } | null;
+  current: {
+    partId: string;
+    oemNumber: string;
+    name: string;
+    confidence: number;
+  } | null;
   pickOptions: PartVerifyPickOption[];
 };
 
@@ -3935,8 +4586,8 @@ function PartsVerifyZone({
               Parts for this job
             </h4>
             <p className="text-[11px] text-muted-foreground">
-              Confirm the OEM part for the booked service — pick the match or type
-              the number off the old part.
+              Confirm the OEM part for the booked service — pick the match or
+              type the number off the old part.
             </p>
           </div>
           {booked.map((item) => (
@@ -3957,8 +4608,9 @@ function PartsVerifyZone({
               Missing parts for this vehicle
             </h4>
             <p className="text-[11px] text-muted-foreground">
-              We have no OEM part on file for these services. Add the part off the
-              vehicle to make the service available, or mark it not applicable.
+              We have no OEM part on file for these services. Add the part off
+              the vehicle to make the service available, or mark it not
+              applicable.
             </p>
           </div>
           {gaps.map((item) => (
@@ -4008,11 +4660,17 @@ function PartsVerifyRow({
     try {
       await onVerify(
         isFreehand
-          ? { mode: "freehand", oemNumber: oemNumber.trim(), partName: partName.trim() }
+          ? {
+              mode: "freehand",
+              oemNumber: oemNumber.trim(),
+              partName: partName.trim(),
+            }
           : { mode: "confirm_existing", partId: selected },
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save this part.");
+      setError(
+        err instanceof Error ? err.message : "Could not save this part.",
+      );
     } finally {
       setBusy(false);
     }
@@ -4024,7 +4682,9 @@ function PartsVerifyRow({
     try {
       await onNotApplicable();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update this service.");
+      setError(
+        err instanceof Error ? err.message : "Could not update this service.",
+      );
     } finally {
       setBusy(false);
     }
@@ -4035,8 +4695,13 @@ function PartsVerifyRow({
       <div className="flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5">
         <Check className="h-4 w-4 text-emerald-600" />
         <div className="text-[13px]">
-          <span className="font-semibold text-emerald-800">{item.roleLabel}</span>
-          <span className="text-emerald-700"> confirmed for {item.serviceName}.</span>
+          <span className="font-semibold text-emerald-800">
+            {item.roleLabel}
+          </span>
+          <span className="text-emerald-700">
+            {" "}
+            confirmed for {item.serviceName}.
+          </span>
         </div>
       </div>
     );
@@ -4052,7 +4717,9 @@ function PartsVerifyRow({
               <span className="text-muted-foreground"> ({item.position})</span>
             ) : null}
           </div>
-          <div className="text-[11px] text-muted-foreground">{item.serviceName}</div>
+          <div className="text-[11px] text-muted-foreground">
+            {item.serviceName}
+          </div>
         </div>
         <span
           className={cn(
@@ -4115,7 +4782,9 @@ function PartsVerifyRow({
             checked={isFreehand}
             onChange={() => setSelected(FREEHAND)}
           />
-          <span className="font-medium text-foreground">Type the OEM number</span>
+          <span className="font-medium text-foreground">
+            Type the OEM number
+          </span>
         </label>
       </div>
 
@@ -4199,11 +4868,11 @@ function OwnerZone({
               Optional
             </span>
           </h4>
-        <p className="text-[11px] text-muted-foreground">
-          {questions.length === 0
-            ? "The customer answered everything during onboarding — nothing to fill in."
-            : "Questions the customer skipped during onboarding. Fill in what you can observe or ask."}
-        </p>
+          <p className="text-[11px] text-muted-foreground">
+            {questions.length === 0
+              ? "The customer answered everything during onboarding — nothing to fill in."
+              : "Questions the customer skipped during onboarding. Fill in what you can observe or ask."}
+          </p>
         </div>
         {confirmed ? (
           <span className="inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-600">
@@ -4251,7 +4920,9 @@ function OwnerQuestionRow({
       <div className="mb-1.5 text-[13px] text-foreground">
         {question.question}
         {question.hint ? (
-          <span className="ml-1 text-[11px] text-muted-foreground">· {question.hint}</span>
+          <span className="ml-1 text-[11px] text-muted-foreground">
+            · {question.hint}
+          </span>
         ) : null}
       </div>
 
@@ -4286,7 +4957,9 @@ function OwnerQuestionRow({
                 type="button"
                 onClick={() =>
                   onChange(
-                    active ? arr.filter((v) => v !== opt.value) : [...arr, opt.value],
+                    active
+                      ? arr.filter((v) => v !== opt.value)
+                      : [...arr, opt.value],
                   )
                 }
                 className={cn(
@@ -4360,9 +5033,14 @@ function ResultsScreen({
   onRemoveAddedJob,
   removingJobId,
   onOpenScope,
+  jobInProgress,
+  inspectionComplete,
   scopeSubmittedNote,
 }: {
-  findings: { attention: { label: string; zone: string }[]; monitor: { label: string; zone: string }[] };
+  findings: {
+    attention: { label: string; zone: string }[];
+    monitor: { label: string; zone: string }[];
+  };
   totalLogged: number;
   vehicleLabel: string;
   downloading: boolean;
@@ -4387,9 +5065,20 @@ function ResultsScreen({
   /** Pull a line back off the job. */
   onRemoveAddedJob: (customJobId: Id<"custom_jobs">) => void;
   removingJobId: string | null;
-  /** Re-open the scope dialog for a line already added to the job. */
+  /** Open the mid-job scope dialog for a line already added to the job. Only
+   *  used when jobInProgress — a pre-job inspection sends its added scope through
+   *  the inspection SUBMIT, not a button here. */
   onOpenScope: () => void;
-  /** Set once the scope dialog sends the extra work for confirmation. */
+  /** The booking is already running. Pre-job (false): the added scope is sent as
+   *  part of "Submit → Vehicle Health" (commitInspectionAndAwaitEstimate opens
+   *  the estimate), so there's NO "Price & send" here — just a note that submit
+   *  will prompt it. Mid-job (true): the job's underway with no such submit step,
+   *  so the line keeps its own "Price & send" → mid-job change. */
+  jobInProgress: boolean;
+  /** All required zones are graded, with no zone left holding unsaved readings.
+   *  Gates the mid-job "Price & send" and flips the pre-job note to "ready". */
+  inspectionComplete: boolean;
+  /** Set once the (mid-job) scope dialog sends the extra work for confirmation. */
   scopeSubmittedNote: string | null;
 }) {
   // Default-select the urgent ("soon") suggestions; mechanic can toggle.
@@ -4423,22 +5112,42 @@ function ResultsScreen({
           <Check className="h-5 w-5 text-emerald-600" />
         </div>
         <div>
-          <h3 className="text-[16px] font-semibold text-foreground">Inspection summary</h3>
+          <h3 className="text-[16px] font-semibold text-foreground">
+            Inspection summary
+          </h3>
           <p className="text-[12px] text-muted-foreground">{vehicleLabel}</p>
         </div>
       </div>
 
       <div className="grid grid-cols-3 gap-3">
-        <Stat n={findings.attention.length} label="Needs attention" tone="text-red-600" />
-        <Stat n={findings.monitor.length} label="Monitor" tone="text-amber-600" />
+        <Stat
+          n={findings.attention.length}
+          label="Needs attention"
+          tone="text-red-600"
+        />
+        <Stat
+          n={findings.monitor.length}
+          label="Monitor"
+          tone="text-amber-600"
+        />
         <Stat n={totalLogged} label="Zones logged" tone="text-emerald-600" />
       </div>
 
       {findings.attention.length ? (
-        <FindingList title="Needs attention" tone="text-red-600" dot="bg-red-500" items={findings.attention} />
+        <FindingList
+          title="Needs attention"
+          tone="text-red-600"
+          dot="bg-red-500"
+          items={findings.attention}
+        />
       ) : null}
       {findings.monitor.length ? (
-        <FindingList title="Monitor" tone="text-amber-600" dot="bg-amber-500" items={findings.monitor} />
+        <FindingList
+          title="Monitor"
+          tone="text-amber-600"
+          dot="bg-amber-500"
+          items={findings.monitor}
+        />
       ) : null}
 
       {/* Work added to this job. Server-derived so it survives a refresh (the
@@ -4453,13 +5162,34 @@ function ResultsScreen({
             Added to this job
           </div>
           <p className="mb-2 text-[11px] text-muted-foreground">
-            Price it, add parts, and send for the customer&apos;s confirmation —
-            or remove it if you added it by mistake.
+            {jobInProgress
+              ? "Price it, add parts, and send for the customer's confirmation — or remove it if you added it by mistake."
+              : "Staged for this vehicle. You'll price it and send for the customer's confirmation when you submit the inspection — or remove it if you added it by mistake."}
           </p>
           {scopeSubmittedNote ? (
             <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-[11px] font-medium text-emerald-700">
               <Check className="h-3.5 w-3.5 flex-shrink-0" />
               {scopeSubmittedNote}
+            </p>
+          ) : !inspectionComplete ? (
+            // The estimate must wait for a finished inspection. Sending it early
+            // parks the booking in "awaiting hold", which blocks reopening the
+            // check — the exact trap this guards against.
+            <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-700">
+              Finish every zone first
+              {jobInProgress
+                ? " — then send this for confirmation."
+                : ", then submit the inspection to price and send this for the customer's confirmation."}
+            </p>
+          ) : !jobInProgress ? (
+            // All zones done — the pre-job estimate goes out as part of the
+            // inspection submit (commitInspectionAndAwaitEstimate), so tell the
+            // mechanic that's where it happens. No standalone send button.
+            <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-primary">
+              <Wrench className="h-3.5 w-3.5 flex-shrink-0" />
+              Ready — &ldquo;Submit → Vehicle Health&rdquo; will prompt you to
+              price and send this added scope for the customer&apos;s
+              confirmation.
             </p>
           ) : null}
           <div className="space-y-1">
@@ -4471,13 +5201,24 @@ function ResultsScreen({
                 <span className="flex-1 text-[13px] font-medium text-foreground">
                   {job.name}
                 </span>
-                <button
-                  type="button"
-                  onClick={onOpenScope}
-                  className="inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10"
-                >
-                  Price &amp; send
-                </button>
+                {/* Mid-job only: the running job has no inspection-submit step to
+                    carry the estimate, so each line keeps its own send. A pre-job
+                    inspection sends everything through "Submit → Vehicle Health". */}
+                {jobInProgress ? (
+                  <button
+                    type="button"
+                    onClick={onOpenScope}
+                    disabled={!inspectionComplete}
+                    title={
+                      inspectionComplete
+                        ? undefined
+                        : "Finish the inspection before sending for confirmation"
+                    }
+                    className="inline-flex flex-shrink-0 items-center gap-1 rounded-md border border-primary/30 px-1.5 py-0.5 text-[10px] font-semibold text-primary transition hover:bg-primary/10 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+                  >
+                    Price &amp; send
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => onRemoveAddedJob(job._id)}
@@ -4506,9 +5247,9 @@ function ResultsScreen({
             Suggested follow-ups
           </div>
           <p className="mb-2 text-[11px] text-muted-foreground">
-            Derived from your measurements. Confirm to send to the customer&apos;s
-            recommendations — attributed to this shop&apos;s inspection, and
-            lowers their Vehicle Health Score until resolved.
+            Derived from your measurements. Confirm to send to the
+            customer&apos;s recommendations — attributed to this shop&apos;s
+            inspection, and lowers their Vehicle Health Score until resolved.
           </p>
           <div className="space-y-1">
             {visibleSuggestions.map((s) =>
@@ -4550,7 +5291,10 @@ function ResultsScreen({
                       type="checkbox"
                       checked={!!selected[s.key]}
                       onChange={(e) =>
-                        setSelected((prev) => ({ ...prev, [s.key]: e.target.checked }))
+                        setSelected((prev) => ({
+                          ...prev,
+                          [s.key]: e.target.checked,
+                        }))
                       }
                       className="mt-0.5 h-4 w-4 accent-[var(--primary)]"
                     />
@@ -4597,7 +5341,9 @@ function ResultsScreen({
               onClick={() => onAddRecommendations(selectedKeys)}
               className="mt-2 inline-flex items-center gap-2 rounded-xl border border-primary/30 bg-card px-3 py-1.5 text-[12px] font-semibold text-primary hover:bg-primary/10 disabled:opacity-50"
             >
-              {recsBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+              {recsBusy ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : null}
               Add {selectedKeys.length || ""} recommendation
               {selectedKeys.length === 1 ? "" : "s"}
             </button>
@@ -4606,7 +5352,9 @@ function ResultsScreen({
       ) : null}
 
       {error ? (
-        <p className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">{error}</p>
+        <p className="rounded-lg bg-red-50 px-3 py-2 text-[12px] text-red-700">
+          {error}
+        </p>
       ) : null}
 
       <div className="flex items-center gap-2 pt-1">
@@ -4623,7 +5371,11 @@ function ResultsScreen({
           disabled={downloading}
           className="ml-auto inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-[13px] font-semibold text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
         >
-          {downloading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+          {downloading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Download className="h-4 w-4" />
+          )}
           Download inspection sheet
         </button>
       </div>
@@ -4634,7 +5386,9 @@ function ResultsScreen({
 function Stat({ n, label, tone }: { n: number; label: string; tone: string }) {
   return (
     <div className="rounded-xl border border-primary/10 bg-card px-3 py-3">
-      <div className={cn("text-[22px] font-semibold tabular-nums", tone)}>{n}</div>
+      <div className={cn("text-[22px] font-semibold tabular-nums", tone)}>
+        {n}
+      </div>
       <div className="text-[11px] text-muted-foreground">{label}</div>
     </div>
   );
@@ -4655,7 +5409,10 @@ function FindingList({
     <div>
       <div className={cn("mb-1 text-[12px] font-semibold", tone)}>{title}</div>
       {items.map((it, i) => (
-        <div key={i} className="flex items-center gap-2 border-b border-primary/10 py-2 last:border-b-0">
+        <div
+          key={i}
+          className="flex items-center gap-2 border-b border-primary/10 py-2 last:border-b-0"
+        >
           <span className={cn("h-3 w-3 rounded-full", dot)} />
           <span className="flex-1 text-[13px] text-foreground">{it.label}</span>
           <span className="text-[11px] text-muted-foreground">{it.zone}</span>

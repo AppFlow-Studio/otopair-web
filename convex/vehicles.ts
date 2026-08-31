@@ -327,9 +327,65 @@ export const getVehicleBookingInfo = query({
  * recorded brand/model/run-flat so the mobile UI can pre-select tier hints.
  */
 export const getTireOptionsForVehicle = query({
-  args: { vin: v.string() },
+  args: {
+    vin: v.string(),
+    // Optional so unauthenticated / demo callers still get OEM sizes.
+    // When present, we also surface the tire set actually mounted on
+    // this owner's car so the Shop Tires screen can pre-select it.
+    vehicleOwnerId: v.optional(v.id("vehicle_owners")),
+  },
   handler: async (ctx, args) => {
-    return await resolveTireSizesForVin(ctx, args.vin);
+    const profile = await resolveTireSizesForVin(ctx, args.vin);
+
+    // "Mounted" = the tire set on the car right now (or last recorded).
+    // Prefer the owner-confirmed record (vehicle_owner_specs.tire_setup,
+    // written by recordTireSetup); fall back to the verified passport
+    // entry that resolveTireSizesForVin already surfaced. Null when we
+    // know nothing beyond the OEM defaults.
+    let mounted:
+      | {
+          sizeFront: string | null;
+          sizeRear: string | null;
+          brand: string | null;
+          model: string | null;
+        }
+      | null = null;
+
+    const ownerId = args.vehicleOwnerId;
+    if (ownerId) {
+      const specs = await ctx.db
+        .query("vehicle_owner_specs")
+        .withIndex("by_vehicle_owner", (q) =>
+          q.eq("vehicle_owner_id", ownerId),
+        )
+        .first();
+      const setup = specs?.tire_setup;
+      if (setup && (setup.front || setup.rear)) {
+        const front = setup.front?.size?.trim() || null;
+        const rear = setup.rear?.size?.trim() || null;
+        mounted = {
+          sizeFront: front,
+          // Collapse a rear that equals the front to a square setup.
+          sizeRear: rear && rear !== front ? rear : null,
+          brand: setup.front?.brand?.trim() || setup.rear?.brand?.trim() || null,
+          model: setup.front?.model?.trim() || setup.rear?.model?.trim() || null,
+        };
+      }
+    }
+
+    if (!mounted) {
+      const verified = profile.sizes.find((s) => s.source === "verified");
+      if (verified || profile.lastKnown.brand || profile.lastKnown.model) {
+        mounted = {
+          sizeFront: verified?.size ?? null,
+          sizeRear: verified?.sizeRear ?? null,
+          brand: profile.lastKnown.brand,
+          model: profile.lastKnown.model,
+        };
+      }
+    }
+
+    return { ...profile, mounted };
   },
 });
 

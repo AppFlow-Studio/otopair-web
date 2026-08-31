@@ -60,6 +60,9 @@ export type ComputeDisclosedRangeArgs = {
    *  zeroes its labor contribution. */
   shop_id?: Id<"shops"> | null;
   vehicle_config_id?: Id<"vehicle_configs"> | null;
+  /** Booked axle per service (brakes) for the engine-band sanity sidecar, so
+   *  the disclosed range's per_axle labor scaling matches the customer's. */
+  service_positions?: Record<string, "front" | "rear" | "both">;
 };
 
 export type DisclosedRangeBreakdown = {
@@ -263,6 +266,7 @@ export async function computeDisclosedRange(
       vehicle_config_id: args.vehicle_config_id,
       service_ids: args.services.map((s) => s.service_id),
       shop_id: args.shop_id,
+      service_positions: args.service_positions,
     });
     const anyRefused = series.quotes.some((q) => !q.ok);
     if (anyRefused) {

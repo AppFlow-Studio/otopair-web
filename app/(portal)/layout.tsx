@@ -842,17 +842,22 @@ export default function PortalLayout({
             </div>
           </header>
 
-          {/* Desktop top header — active-job pill on the left, notifications on the right */}
-          <header className="sticky top-0 z-40 hidden lg:flex items-center gap-3 px-6 py-3 bg-white border-b border-gray-200">
-            {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
-              <>
-                <ActiveJobStrip />
-                <div className="ml-auto">
-                  <NotificationBell />
-                </div>
-              </>
-            )}
-          </header>
+          {/* Desktop top header — active-job pill on the left, notifications on
+              the right. Suppressed on /schedule, which reclaims this row's height
+              and re-hosts both widgets itself (the bell folds into the toolbar;
+              the active-jobs pill sits under the calendar). */}
+          {pathname !== "/schedule" && (
+            <header className="sticky top-0 z-40 hidden lg:flex items-center gap-3 px-6 py-3 bg-white border-b border-gray-200">
+              {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
+                <>
+                  <ActiveJobStrip />
+                  <div className="ml-auto">
+                    <NotificationBell />
+                  </div>
+                </>
+              )}
+            </header>
+          )}
 
           <main className="flex-1 px-6 pt-6 pb-0">
             <CustomerSchedulingAlerts />

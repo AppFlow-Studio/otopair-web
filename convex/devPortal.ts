@@ -110,6 +110,52 @@ export const myUsageSeries = query({
   },
 });
 
+export type DevEnrichRun = {
+  id: string;
+  vin: string;
+  status: "queued" | "enriching" | "complete" | "failed";
+  config_key: string | null;
+  year: number | null;
+  make: string | null;
+  model: string | null;
+  trim: string | null;
+  fill_rate: number | null;
+  error: string | null;
+  queued_at: number;
+  completed_at: number | null;
+};
+
+/** The caller's enrichment runs (most recent first), for the dashboard's live
+ *  "Enrichment runs" card. Reactive — Convex re-runs it as the reconcile cron
+ *  flips statuses, so active runs animate queued → enriching → complete with no
+ *  client polling. Bounded to the last 25. */
+export const myEnrichRuns = query({
+  args: {},
+  handler: async (ctx): Promise<DevEnrichRun[]> => {
+    const user = await currentUser(ctx);
+    if (!user) return [];
+    const rows = await ctx.db
+      .query("data_api_enrich_runs")
+      .withIndex("by_owner", (q) => q.eq("owner_user_id", user._id))
+      .order("desc")
+      .take(25);
+    return rows.map((r) => ({
+      id: String(r._id),
+      vin: r.vin,
+      status: r.status,
+      config_key: r.config_key ?? null,
+      year: r.year ?? null,
+      make: r.make ?? null,
+      model: r.model ?? null,
+      trim: r.trim ?? null,
+      fill_rate: r.fill_rate ?? null,
+      error: r.error ?? null,
+      queued_at: r.queued_at,
+      completed_at: r.completed_at ?? null,
+    }));
+  },
+});
+
 // --- Mint / revoke -------------------------------------------------------------
 
 export const _getOrCreateUserForIdentity = internalMutation({

@@ -164,6 +164,17 @@ crons.interval(
   (internal as any).email_dispatcher.dispatchPendingEmails,
 );
 
+// Data API self-serve enrich-run ledger: reconcile each active run (queued /
+// enriching) against its config's live enrichment_status, flipping it to
+// enriching / complete / failed and enqueuing the owner's completion email.
+// 2 min is plenty against the 7-40 min pipeline; DB-only, never spends.
+crons.interval(
+  "reconcile-data-api-enrich-runs",
+  { minutes: 2 },
+  internal.dataApiEnrich.reconcileEnrichRuns,
+  {},
+);
+
 // Pre-Job Approval: expire 24h-stale customer approval cycles. Pre-job
 // expiry captures the $20 deposit forfeit; mid-job expiry just freezes the
 // ceiling at the prior approved set price.
@@ -213,6 +224,20 @@ crons.weekly(
   "determinism-sentinel-probe",
   { dayOfWeek: "sunday", hourUTC: 3, minuteUTC: 0 },
   internal.vehicleEnrichment.determinismProbe.runScheduledProbe,
+  {},
+);
+
+// Standing fitment audit (plan P3, Aug 2026): re-adjudicate the configs
+// whose stored fitments have gone longest unexamined — Sonnet verify,
+// double-refute to delete, heal scheduled per removal. The one-time fleet
+// sweep this loop grew out of removed ~69 plausible-but-wrong parts the
+// finalize-time verifier had approved. Freshness-ordered (no cursor state);
+// dark unless PARTS_FITMENT_AUDIT_BUDGET (configs/night) is set > 0. Runs
+// before role repair so reopened holes are re-sourced the same night.
+crons.daily(
+  "fitment-audit-sweep",
+  { hourUTC: 7, minuteUTC: 30 },
+  internal.vehicleEnrichment.fitmentReverify.nightly,
   {},
 );
 
@@ -351,6 +376,16 @@ crons.interval(
   { hours: 168 },
   (internal as any).vehicleEnrichment.partIndex.refreshIndexedMakes,
   { limit: 10 },
+);
+
+// Otofacts Car Data API billing: settle reserved enrich credits against run
+// outcome — complete → commit (report meter for overage), failed/timed-out →
+// refund. So a failed enrich is never charged. Spec: CARDATA_BILLING_SPEC.md.
+crons.interval(
+  "otofacts-reconcile-enrich-ledger",
+  { minutes: 5 },
+  internal.dataApiBilling.reconcileEnrichLedger,
+  {},
 );
 
 export default crons;

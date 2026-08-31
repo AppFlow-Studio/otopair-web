@@ -21,6 +21,7 @@
  */
 
 import type { VehicleInput } from "./types";
+import { makesSameFamily } from "./contentSanitization";
 
 /**
  * Domains blocked from Batch 2 web_search via the native API `blocked_domains` parameter.
@@ -618,7 +619,33 @@ export function getSourceConfig(make: string): MakeSourceConfig | null {
   const key = Object.keys(SOURCE_REGISTRY).find(
     (k) => k.toLowerCase() === make?.toLowerCase(),
   );
-  return key ? SOURCE_REGISTRY[key] : null;
+  if (key) return SOURCE_REGISTRY[key];
+
+  // ── Corporate-family fallback (Aug 27 2026, the 2008 Pontiac G6) ────────
+  //
+  // Dead badges have no registry entry, so every store-backed lane — the
+  // price-store leg, tier-1 role repair, category harvest — silently
+  // resolved to NOTHING for exactly the cars whose open-web ecosystem is
+  // worst. But the family's stores genuinely serve them: gmpartsgiant sells
+  // the whole GM range (Pontiac/Saturn/Oldsmobile vehicle pages included),
+  // Ford stores list Mercury, Toyota stores list Scion. Same predicate the
+  // vocabulary gate, the verifier, and the I1 read guard already use —
+  // makesSameFamily admits badge-siblings only, so Subaru still resolves to
+  // nothing rather than to some stranger's storefront.
+  //
+  // Deterministic pick: prefer the family member carrying a validated PRICE
+  // alternate (Chevrolet holds GM_ALTERNATES), else the first family match
+  // in registry order.
+  const family = Object.keys(SOURCE_REGISTRY).filter((k) => makesSameFamily(make, k));
+  if (family.length === 0) return null;
+  const pick =
+    family.find((k) =>
+      (SOURCE_REGISTRY[k].parts.alternates ?? []).some(
+        (a) => a.validated && a.capabilities.includes("price"),
+      ),
+    ) ?? family[0];
+  console.log(`[source-registry] family fallback: ${make} → ${pick}`);
+  return SOURCE_REGISTRY[pick];
 }
 
 

@@ -308,12 +308,16 @@ export default defineSchema({
     rotor_rear_min_thickness_mm: v.optional(v.number()),
     rotor_front_nominal_thickness_mm: v.optional(v.number()),
     rotor_rear_nominal_thickness_mm: v.optional(v.number()),
-    // Per-axle provenance for the MINIMUM — drives the "est." badge, the
-    // passport source tag and the classify() warn-cap. One of:
-    //   "oem_spec" | "oem_spec_flagged" | "mechanic_read" | "director_verified"
-    //   | "derived_from_nominal" | "default_fallback"
-    // "oem_spec_flagged" = sourced but sanity-flagged (delta-implausible or
-    // front<rear) — graded like an estimate (warn-capped), never as a clean spec.
+    // Per-axle provenance for the MINIMUM — drives the "est." badge and the
+    // passport source tag. One of:
+    //   "derived_15pct_wear" | "oem_spec" | "oem_spec_flagged" |
+    //   "mechanic_read" | "director_verified" | "derived_from_nominal" (legacy)
+    //   | "default_fallback"
+    // "derived_15pct_wear" is the STANDARD since Aug 2026: minimum = 85% of
+    // the OEM nominal (rotorSpecResource.deriveRotorMinMm — 15% wear threshold
+    // from mechanic interviews). It grades the inspection at full strength but
+    // is tagged "estimated" in the passport so it never reads as the
+    // manufacturer's printed figure. Minimums are no longer searched.
     rotor_front_min_quality: v.optional(v.string()),
     rotor_rear_min_quality: v.optional(v.string()),
     rotor_min_source_url: v.optional(v.string()),
@@ -377,6 +381,11 @@ export default defineSchema({
     // drivetrain, brake_fluid_capacity_oz and ps_fluid_capacity_oz are today.
     // Durable across re-runs, same as na_role_keys above.
     verified_fields: v.optional(v.array(v.string())),
+    /** When this config's fitments last went through the adversarial
+     *  re-verification sweep (fitmentReverify). The nightly audit loop picks
+     *  never/oldest-audited first, so the whole fleet rotates through the
+     *  auditor without any cursor state to lose. */
+    fitment_audited_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
     .index("by_config_key", ["config_key"])
@@ -1119,13 +1128,25 @@ export default defineSchema({
     // PART_FIELD_MAP subcategory of the role this product fills:
     // "engine_oil" | "coolant" | "atf_fluid" | "brake_fluid" | "gear_oil".
     fluid_kind: v.string(),
-    // OEM spec sheet the product satisfies, e.g. "MB 325.0", "MB 229.5" —
-    // matched against the engine row's spec strings (coolant_type, …).
+    // OEM spec/CERTIFICATION the product satisfies, e.g. "MB 325.0",
+    // "G 060 162". Alias syntax: segments split on "|" or "/" each match
+    // independently ("G 060 162|ZF LifeGuard 8|8HP"), so one row can carry a
+    // certification's every published name. Matched against the vehicle-side
+    // spec strings (engines.coolant_type, transmissions fluid type, …).
     spec: v.optional(v.string()),
     // Oil grade, e.g. "0W-40" — matched against engines.oil_viscosity.
     viscosity: v.optional(v.string()),
     oem_part_number: v.string(),
     name: v.string(),
+    // "oem" (default; the genuine bottle) | "aftermarket" (a supplier/OES
+    // bottle carrying the SAME certification — ZF, Fuchs, Pentosin). Policy
+    // Aug 2026 (mechanic feedback): certification is the identity; a $111/qt
+    // genuine Audi jug must never be presented when a cert-equivalent
+    // aftermarket bottle exists for far less. The resolver's fluid
+    // price-sanity rule keys on the stamped oem_parts.part_tier.
+    part_tier: v.optional(v.string()),
+    // Supplier brand for aftermarket rows ("ZF", "Fuchs"). Display + audit.
+    brand: v.optional(v.string()),
     package_size: v.optional(v.string()),
     provenance: v.string(),
     created_at: v.number(),
@@ -2622,10 +2643,16 @@ export default defineSchema({
       v.literal("released"),
     ),
     created_at: v.number(),
+    quote_type: v.optional(v.union(v.literal("tire"), v.literal("rotor"))),
+    quote_revision: v.optional(v.number()),
+    tire_quote_response_id: v.optional(v.id("tire_quote_responses")),
+    rotor_quote_response_id: v.optional(v.id("rotor_quote_responses")),
   })
     .index("by_shop_and_date", ["shop_id", "date"]) // availability read
     .index("by_expiry", ["expires_at"]) // cron sweep
-    .index("by_session", ["session_id"]), // idempotency + getMyActiveHold
+    .index("by_session", ["session_id"])
+    .index("by_tire_quote_response", ["tire_quote_response_id"])
+    .index("by_rotor_quote_response", ["rotor_quote_response_id"]),
 
   // ===== BOOKINGS & PAYMENTS =====
 
@@ -2768,6 +2795,9 @@ export default defineSchema({
         ),
       })
     ),
+    // Customer-only presentation preference for an expired quote request.
+    // This intentionally does not change the booking or quote-response status.
+    quote_dismissed_at_ms: v.optional(v.number()),
     // Picked variants for services with has_options = true (e.g. brake pads
     // front-vs-rear). Tires keep using tire_specs above. One entry per
     // has_options service. option_label and option_type are snapshotted so
@@ -2857,6 +2887,24 @@ export default defineSchema({
         v.object({
           name: v.string(),
           duration_minutes: v.optional(v.float64()),
+          // Axle scope for a brake/rotor line added off-catalog. Originally-booked
+          // brake work carries its axle in selected_service_options; a line added
+          // mid-inspection has no such option, so the inspection's brake-axle
+          // scope (resolveBrakeScopeForBooking) reads it here instead. Defaults to
+          // "both" at add time for brake/rotor lines so the inspection never
+          // dead-ends on a missing axle; the mechanic can narrow it in the add UI.
+          // Absent on non-brake lines and on rows written before this shipped.
+          axle: v.optional(
+            v.union(v.literal("front"), v.literal("rear"), v.literal("both")),
+          ),
+          // True while this off-catalog line is STAGED but not yet confirmed by
+          // the customer — i.e. added mid-inspection ("Add to this job") / as
+          // unforeseen scope, and awaiting approval of the pre_job / mid_job
+          // estimate that carries it. Shop-facing surfaces still show it (the
+          // mechanic priced and sent it); customer-facing reads hide it until
+          // approval clears this flag. Absent = confirmed/booked work (the
+          // pre-existing default), so old rows read as confirmed.
+          pending_confirmation: v.optional(v.boolean()),
         })
       )
     ),
@@ -3080,6 +3128,12 @@ export default defineSchema({
     quote_flags: v.optional(v.array(v.string())),
     quote_fallback_low: v.optional(v.float64()),
     quote_fallback_high: v.optional(v.float64()),
+    // Combined labor operations (convex/lib/combinedLabor.ts): minutes shaved
+    // off the naive per-service labor sum because co-booked services shared
+    // teardown, plus the human reasons shown to the customer. Set at
+    // createBatch when the director flag is on; absent = no combine applied.
+    combined_labor_saved_minutes: v.optional(v.number()),
+    combined_labor_notes: v.optional(v.array(v.string())),
     // Dollar delta when the customer's labor cost lands above the engine's
     // expected labor cost by more than ±8% — paired with the
     // `labor_cost_above_engine` flag on `quote_flags`. Server still books
@@ -3164,6 +3218,9 @@ export default defineSchema({
     expires_at: v.optional(v.number()),
     /** Set when user accepts this quote (or another one). */
     superseded_at: v.optional(v.number()),
+    revision: v.optional(v.number()),
+    modified_at: v.optional(v.number()),
+    cancelled_at: v.optional(v.number()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_id", ["shop_id"])
@@ -3199,6 +3256,9 @@ export default defineSchema({
     created_at: v.number(),
     expires_at: v.optional(v.number()),
     superseded_at: v.optional(v.number()),
+    revision: v.optional(v.number()),
+    modified_at: v.optional(v.number()),
+    cancelled_at: v.optional(v.number()),
   })
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_id", ["shop_id"])
@@ -4172,6 +4232,127 @@ export default defineSchema({
     .index("by_key_and_time", ["api_key_id", "created_at"])
     .index("by_created_at", ["created_at"]),
 
+  // Per-owner enrichment-run tracker for the self-serve Data API (OtoIndex
+  // /developers dashboard). One row per POST /v0/enrich that ACTUALLY schedules
+  // a run (202) — cache hits (200) never create a row. Drives (a) the live
+  // "Enrichment runs" card on the dashboard and (b) the queued/complete/failed
+  // emails. Status is reconciled off the config's enrichment_status by the
+  // `reconcile-data-api-enrich-runs` cron (see dataApiEnrich.ts) — this table
+  // is a view/notification ledger, NOT the pipeline's source of truth.
+  data_api_enrich_runs: defineTable({
+    owner_user_id: v.id("users"),
+    api_key_id: v.id("api_keys"),
+    vin: v.string(),
+    vehicle_id: v.optional(v.id("vehicles")),
+    config_key: v.optional(v.string()),
+    status: v.union(
+      v.literal("queued"),
+      v.literal("enriching"),
+      v.literal("complete"),
+      v.literal("failed"),
+    ),
+    // Denormalized identity for display + email (decoded at schedule time).
+    year: v.optional(v.number()),
+    make: v.optional(v.string()),
+    model: v.optional(v.string()),
+    trim: v.optional(v.string()),
+    fill_rate: v.optional(v.number()),
+    error: v.optional(v.string()),
+    queued_at: v.number(),
+    last_status_at: v.number(),
+    completed_at: v.optional(v.number()),
+    // Idempotency guards for the two emails (queued email fires at insert time,
+    // completion email once the reconcile cron sees a terminal status).
+    notified_queued: v.boolean(),
+    notified_complete: v.boolean(),
+  })
+    .index("by_owner", ["owner_user_id", "queued_at"])
+    .index("by_status", ["status"])
+    .index("by_vin", ["vin"]),
+
+  // ── Otofacts Car Data API billing (spec: convex/CARDATA_BILLING_SPEC.md) ────
+  // One row per billing subject (Clerk user). The LIVE source of truth for what
+  // a self-serve key may do — dataApi.withApiKey resolves key → owner_user_id →
+  // this row on every request. Absent row = free tier (dataApiBilling.FREE_*).
+  api_entitlements: defineTable({
+    owner_user_id: v.id("users"),
+    plan: v.union(
+      v.literal("free"),
+      v.literal("pro"),
+      v.literal("scale"),
+      v.literal("enterprise"),
+    ),
+    status: v.string(), // mirrors Stripe subscription.status; active|trialing are entitled
+    scopes: v.array(
+      v.union(
+        v.literal("maintenance:read"),
+        v.literal("labor:read"),
+        v.literal("media:read"),
+        v.literal("enrich:write"),
+        v.literal("service_history:read"),
+      ),
+    ),
+    rate_limit_per_min: v.number(),
+    monthly_read_quota: v.number(),
+    enrich_credits_remaining: v.number(),
+    enrich_monthly_grant: v.number(),
+    metered_overage: v.boolean(),
+    spend_cap_cents: v.optional(v.number()), // undefined = no cap
+    overage_spent_cents_this_period: v.number(),
+    stripe_customer_id: v.optional(v.string()),
+    stripe_subscription_id: v.optional(v.string()),
+    stripe_price_lookup_key: v.optional(v.string()),
+    current_period_start: v.optional(v.number()),
+    current_period_end: v.optional(v.number()),
+    updated_at: v.number(),
+  })
+    .index("by_user", ["owner_user_id"])
+    .index("by_stripe_customer", ["stripe_customer_id"])
+    .index("by_stripe_subscription", ["stripe_subscription_id"]),
+
+  // Auditable enrich-credit ledger + the reserve→commit|refund state machine
+  // that guarantees a failed enrich is never charged (reconcileEnrichLedger).
+  enrich_ledger: defineTable({
+    owner_user_id: v.id("users"),
+    api_key_id: v.optional(v.id("api_keys")), // absent on grant/topup rows
+    vin: v.optional(v.string()),
+    config_key: v.optional(v.string()),
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    stripe_customer_id: v.optional(v.string()),
+    kind: v.union(
+      v.literal("reserve"),
+      v.literal("commit"),
+      v.literal("refund"),
+      v.literal("grant"),
+      v.literal("topup"),
+    ),
+    credit_delta: v.number(), // -1 reserve credit · 0 overage · +N grant/refund
+    billable: v.boolean(), // true → metered overage, report to Stripe on commit
+    billed_cents: v.optional(v.number()),
+    settlement: v.union(
+      v.literal("pending"),
+      v.literal("committed"),
+      v.literal("refunded"),
+      v.literal("na"), // grant/topup rows
+    ),
+    stripe_meter_event_id: v.optional(v.string()),
+    created_at: v.number(),
+    settled_at: v.optional(v.number()),
+  })
+    .index("by_user", ["owner_user_id"])
+    .index("by_settlement", ["settlement"])
+    .index("by_vehicle_config", ["vehicle_config_id"]),
+
+  // Monthly read-quota counter. api_usage is a per-request log (doesn't scale to
+  // count 2M rows) — quota reads this rollup instead, bumped on each read.
+  api_usage_counters: defineTable({
+    owner_user_id: v.id("users"),
+    period_key: v.string(), // "YYYY-MM" — cheap, no cross-period scan
+    read_requests: v.number(),
+    enrich_scheduled: v.number(),
+    updated_at: v.number(),
+  }).index("by_user_period", ["owner_user_id", "period_key"]),
+
   // Thin review-queue materialization over the four real streams (decision
   // #4, Data spec §13): consensus needs_review, mechanic corrections,
   // report-wrong-data, survey disconfirmations. Rows are created ONLY by the
@@ -4330,6 +4511,20 @@ export default defineSchema({
     // defaults (enabled, 15-minute TTL).
     slot_hold_enabled: v.optional(v.boolean()),
     slot_hold_ttl_minutes: v.optional(v.number()),
+    // Combined labor operations (convex/lib/combinedLabor.ts). When enabled,
+    // multi-service bookings that share teardown (pads+rotors, wheels-off,
+    // coolant drain) charge the shared labor once. Absent/false → naive sum
+    // (today's behavior). `combined_labor_disabled_families` holds any overlap
+    // family ids the director switched off (see OVERLAP_FAMILIES).
+    combined_labor_enabled: v.optional(v.boolean()),
+    combined_labor_disabled_families: v.optional(v.array(v.string())),
+    // Per-axle / per-unit labor scaling (convex/lib/serviceUnits.ts
+    // resolveLaborUnitCount). When enabled, a service that scales per axle
+    // (brakes) bills its labor × the booked axle count — a "both axles" job
+    // ≈ 2× a single axle. Absent/false → flat labor (today's behavior).
+    // Independent of combined_labor: per-axle inflates the job to its true
+    // size; combined_labor then shaves shared teardown.
+    per_axle_labor_enabled: v.optional(v.boolean()),
     updated_at: v.number(),
     updated_by_user_id: v.optional(v.id("director_users")),
   }).index("by_key", ["key"]),
@@ -4869,6 +5064,25 @@ export default defineSchema({
     .index("by_shop_and_match_key", ["shop_id", "match_key"])
     .index("by_match_key", ["match_key"]),
 
+  // A shop's remembered custom PART brands — supplier brands (Bosch, Denso…) or
+  // any one-off brand a mechanic sourced externally for a part on a walk-in
+  // booking. The parts Brand picker is seeded from the vehicle `makes` catalog,
+  // but that table is vehicle makes only (guarded by getOrCreateMake); part
+  // brands would pollute it. So, exactly like shop_custom_services, these are
+  // shop-scoped "autocomplete with a memory" — added only by an explicit
+  // "Add … as custom" tap, never driver-facing or bookable.
+  shop_custom_part_brands: defineTable({
+    shop_id: v.id("shops"),
+    name: v.string(),
+    // Trimmed + lowercased identity key for an idempotent upsert per shop.
+    name_key: v.string(),
+    use_count: v.number(),
+    last_used_at: v.number(),
+    created_at: v.number(),
+  })
+    .index("by_shop", ["shop_id"])
+    .index("by_shop_and_key", ["shop_id", "name_key"]),
+
   // One structured record per piece of off-catalog work (Off-Catalog Work
   // spec, §7). `bookings.custom_services[]` stays as the lightweight display
   // and scheduling copy — this table is the extraction spine.
@@ -4925,6 +5139,16 @@ export default defineSchema({
     // service; a row WITHOUT it is genuine off-catalog work and stays isolated.
     // Null on all pre-existing rows and on every truly off-catalog job.
     catalog_service_id: v.optional(v.id("services")),
+
+    // Axle scope for a brake/rotor line (front/rear/both). Mirrors the axle
+    // stamped on the booking's custom_services entry — kept here too so the
+    // structured custom_jobs record is self-describing for the parts/labor
+    // reads that scan this table without loading the booking. Defaulted to
+    // "both" for brake/rotor lines at add time; absent on non-brake lines and
+    // on rows written before this shipped.
+    axle: v.optional(
+      v.union(v.literal("front"), v.literal("rear"), v.literal("both")),
+    ),
 
     // The reasoning. `complaint` is why the work happened, `resolution` is what
     // was actually done, `resolved_complaint` is whether it worked.
@@ -6129,7 +6353,14 @@ export default defineSchema({
   })
     .index("by_booking_and_cycle", ["booking_id", "cycle"])
     .index("by_decision", ["decision"])
-    .index("by_sla_expires_at", ["sla_expires_at_ms"]),
+    .index("by_sla_expires_at", ["sla_expires_at_ms"])
+    // Reconcile the amount_capturable_updated webhook by PI without scanning
+    // the whole table. Second field lets the query take the newest cycle for a
+    // PI via `.order("desc").first()` (submitted_at_ms == submit/creation time).
+    .index("by_stripe_payment_intent_id", [
+      "stripe_payment_intent_id",
+      "submitted_at_ms",
+    ]),
 
   // ─────────────────────────────────────────────────────────────────────
   // Pre-Job Approval — customer recourse channel. Filed within 14 days of

@@ -46,6 +46,7 @@ import {
 import {
   stampMidJobCustomJobs,
   revertDeclinedMidJobWork,
+  confirmStagedCustomServices,
 } from "./customJobs";
 
 const SLA_MS = 24 * 60 * 60 * 1000;
@@ -878,6 +879,17 @@ export const applyApprovalDecision = mutation({
         approvedPatch.labor_cost = (open.labor_cents ?? 0) / 100;
       }
       await ctx.db.patch(args.bookingId, approvedPatch);
+      // The customer just said yes to the (pre/mid-job) estimate → surface any
+      // off-catalog lines it carried on their booking card. They were staged
+      // `pending_confirmation` at add-time so an unapproved line never showed on
+      // the driver's card until this approval. (Declines strip the line instead,
+      // via revertDeclinedMidJobWork.)
+      if (cycle === "pre_job" || cycle === "mid_job") {
+        await confirmStagedCustomServices(ctx, {
+          bookingId: args.bookingId,
+          now,
+        });
+      }
       if (ctx.scheduler?.runAfter) {
         await ctx.scheduler.runAfter(
           0,
@@ -1040,6 +1052,10 @@ export const _recordApprovalApproved = internalMutation({
       reauthPatch.labor_cost = (open.labor_cents ?? 0) / 100;
     }
     await ctx.db.patch(args.bookingId, reauthPatch);
+    // Customer approved the estimate (the payment re-auth hold is a separate,
+    // following step) → clear the staged flag so the confirmed off-catalog lines
+    // show on their card. `cycle` is already asserted pre_job/mid_job above.
+    await confirmStagedCustomServices(ctx, { bookingId: args.bookingId, now });
     return { ceilingCents: newCeiling, cycle };
   },
 });
@@ -1450,12 +1466,16 @@ export const _reconcileAmountCapturableUpdated = internalMutation({
   handler: async (ctx, args) => {
     // Find the most recent approval row tied to this PI. Both the original
     // PI (from booking confirm) and a reauth-replacement PI should match.
-    const rows = await ctx.db.query("booking_approvals").collect();
-    const candidate = rows
-      .filter(
-        (r: any) => r.stripe_payment_intent_id === args.stripePaymentIntentId,
+    // Index-scoped (not a full-table `.collect()`): the second index field is
+    // submitted_at_ms, so `.order("desc").first()` returns the newest cycle for
+    // this PI directly.
+    const candidate = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_stripe_payment_intent_id", (q: any) =>
+        q.eq("stripe_payment_intent_id", args.stripePaymentIntentId),
       )
-      .sort((a: any, b: any) => b.submitted_at_ms - a.submitted_at_ms)[0];
+      .order("desc")
+      .first();
 
     // Drift reconciliation: patch the payment row to match Stripe's view.
     if (args.amountCapturable != null) {

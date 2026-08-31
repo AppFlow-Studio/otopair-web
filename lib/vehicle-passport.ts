@@ -233,6 +233,11 @@ export type JobActualPartPayload = {
   tire_brand?: string | null;
   tire_model?: string | null;
   tire_position?: string | null;
+  // True when this prefill line was seeded from the shop's accepted tire/rotor
+  // QUOTE response (getPrefillData) rather than the catalog cascade. The post-
+  // job parts step unions these in explicitly so a quote-originated booking's
+  // parts appear even alongside other snapshot parts (e.g. brakes).
+  from_quote?: boolean;
 };
 
 export type PreJobSurveyPayload = {

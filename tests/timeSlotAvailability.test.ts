@@ -81,6 +81,8 @@ function baseSeed(overrides: Partial<Record<string, Row[]>> = {}) {
     bookings: [],
     time_slots: [],
     tire_quote_responses: [],
+    rotor_quote_responses: [],
+    slot_holds: [],
     ...overrides,
   };
 }
@@ -207,6 +209,7 @@ test("booking, blocked slot, and tire quote holds each block availability", asyn
           mechanic_id: "mech-1",
           availability: { date: "2026-06-01", time: "10:30" },
           estimated_duration_minutes: 30,
+          created_at: Date.now(),
         },
       ],
     }),
@@ -220,6 +223,86 @@ test("booking, blocked slot, and tire quote holds each block availability", asyn
       durationMinutes: 60,
     }),
   ).toBe(false);
+});
+
+test("rotor quote holds block availability", async () => {
+  const ctx = makeCtx(
+    baseSeed({
+      bookings: [{ _id: "quote-booking-1", status: "quotes_ready" }],
+      rotor_quote_responses: [
+        {
+          _id: "rotor-response-1",
+          booking_id: "quote-booking-1",
+          shop_id: "shop-1",
+          mechanic_id: "mech-1",
+          availability: { date: "2026-06-01", time: "10:30" },
+          estimated_duration_minutes: 30,
+          created_at: Date.now(),
+        },
+      ],
+    }),
+  );
+
+  expect(
+    await isMechanicAvailableForWindow(ctx, {
+      shopId: "shop-1",
+      mechanicId: "mech-1",
+      date: "2026-06-01",
+      startTime: "10:30",
+      durationMinutes: 30,
+    }),
+  ).toBe(false);
+});
+
+test("only the selected quote response can be excluded", async () => {
+  const ctx = makeCtx(
+    baseSeed({
+      bookings: [{ _id: "quote-booking-1", status: "quotes_ready" }],
+      tire_quote_responses: [
+        {
+          _id: "tire-response-1",
+          booking_id: "quote-booking-1",
+          shop_id: "shop-1",
+          mechanic_id: "mech-1",
+          availability: { date: "2026-06-01", time: "10:30" },
+          estimated_duration_minutes: 30,
+          created_at: Date.now(),
+        },
+      ],
+      rotor_quote_responses: [
+        {
+          _id: "rotor-response-1",
+          booking_id: "quote-booking-1",
+          shop_id: "shop-1",
+          mechanic_id: "mech-2",
+          availability: { date: "2026-06-01", time: "10:30" },
+          estimated_duration_minutes: 30,
+          created_at: Date.now(),
+        },
+      ],
+    }),
+  );
+
+  expect(
+    await isMechanicAvailableForWindow(ctx, {
+      shopId: "shop-1",
+      mechanicId: "mech-1",
+      date: "2026-06-01",
+      startTime: "10:30",
+      durationMinutes: 30,
+      excludeTireQuoteResponseId: "tire-response-1",
+    }),
+  ).toBe(true);
+  expect(
+    await isMechanicAvailableForWindow(ctx, {
+      shopId: "shop-1",
+      mechanicId: "mech-2",
+      date: "2026-06-01",
+      startTime: "10:30",
+      durationMinutes: 30,
+      excludeRotorQuoteResponseId: "rotor-response-1",
+    }),
+  ).toBe(true);
 });
 
 test("any-mechanic assignment chooses the lowest same-day workload", async () => {
@@ -312,6 +395,7 @@ test("any-mechanic workload includes live tire quote holds", async () => {
           mechanic_id: "mech-1",
           availability: { date: "2026-06-01", time: "09:00" },
           estimated_duration_minutes: 30,
+          created_at: Date.now(),
         },
       ],
     }),

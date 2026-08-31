@@ -66,6 +66,15 @@ import { computePlatformFeeDollars } from "../lib/platformFee";
 import { hoursToMinutes } from "../lib/labor-units";
 import { metaMakeModel } from "./lib/bookingEnrichment";
 import { isRealVin, isPseudoVin, mintPseudoVin } from "./lib/vinIdentity";
+import {
+  getActiveQuoteCheckoutHold,
+  getBookingQuoteLifecycle,
+  getQuoteAvailability,
+  getQuoteHoldExpiresAt,
+  getQuoteRevision,
+  requireOwnedQuoteBooking,
+  throwQuoteUnavailable,
+} from "./lib/quoteHoldOwnership";
 import { buildYmmtFingerprint } from "./vehicleEnrichment/types";
 import {
   computeDisclosedRange,
@@ -466,7 +475,11 @@ export const getByUserIdWithDetails = query({
           })
         ).then((a) => [
           ...a.filter(Boolean),
-          ...customServiceNames(booking.custom_services),
+          // Consumer app's booking list — hide off-catalog lines the customer
+          // hasn't approved yet (staged mid-inspection via "Add to this job").
+          ...customServiceNames(booking.custom_services, {
+            customerVisibleOnly: true,
+          }),
         ]);
 
         const vehicle = await ctx.db
@@ -520,6 +533,10 @@ export const getByUserIdWithDetails = query({
         let currentStage: string | undefined;
         let delayMinutes: number | undefined;
         const liveStage = booking.live_stage;
+        const quoteLifecycle =
+          booking.status === "pending_quote" || booking.status === "quotes_ready"
+            ? await getBookingQuoteLifecycle(ctx, booking)
+            : null;
         if (booking.status === "in_progress") {
           const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
           const estimatedMinutes = booking.estimated_labor_minutes ?? 60;
@@ -576,6 +593,9 @@ export const getByUserIdWithDetails = query({
           shopLng: shop?.lng,
           tire_specs: booking.tire_specs,
           rotor_specs: booking.rotor_specs,
+          quote_state: quoteLifecycle?.status ?? null,
+          quote_expires_at: quoteLifecycle?.expiresAt ?? null,
+          quote_dismissed_at_ms: booking.quote_dismissed_at_ms ?? null,
           // Pickup-request round trip: whether the customer asked for the car
           // back and how the shop answered. Drives the status line on the card.
           pickupRequestedAtMs: booking.cancel_requested_at_ms ?? null,
@@ -706,7 +726,80 @@ export const cancelBooking = mutation({
       cancellationKind: kind,
     });
 
+    if (booking.status === "pending_quote" || booking.status === "quotes_ready") {
+      const now = Date.now();
+      const quoteType = booking.rotor_specs != null ? "rotor" : "tire";
+      const responses = await ctx.db
+        .query(quoteType === "tire" ? "tire_quote_responses" : "rotor_quote_responses")
+        .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+        .collect();
+      for (const response of responses) {
+        if (response.superseded_at == null) {
+          await ctx.db.patch(response._id, { superseded_at: now });
+        }
+        const holds = await ctx.db
+          .query("slot_holds")
+          .withIndex(
+            quoteType === "tire" ? "by_tire_quote_response" : "by_rotor_quote_response",
+            (q) =>
+              q.eq(
+                quoteType === "tire" ? "tire_quote_response_id" : "rotor_quote_response_id",
+                response._id,
+              ),
+          )
+          .collect();
+        for (const hold of holds) {
+          if (hold.status === "active") await ctx.db.delete(hold._id);
+        }
+      }
+    }
+
     return { cancelled: true, feeCents, kind };
+  },
+});
+
+export const getQuoteRequestAvailability = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const { booking } = await requireOwnedQuoteBooking(ctx, args.bookingId);
+    const lifecycle = await getBookingQuoteLifecycle(ctx, booking);
+    if (!lifecycle || (booking.status !== "pending_quote" && booking.status !== "quotes_ready")) {
+      return {
+        available: false as const,
+        reason: "unavailable" as const,
+        status: "cancelled" as const,
+        expiresAt: null,
+      };
+    }
+    if (lifecycle.status === "ready") {
+      return { available: true as const, ...lifecycle };
+    }
+    return {
+      available: false as const,
+      reason:
+        lifecycle.status === "expired"
+          ? ("expired" as const)
+          : lifecycle.status === "cancelled"
+            ? ("cancelled" as const)
+            : ("unavailable" as const),
+      ...lifecycle,
+    };
+  },
+});
+
+export const dismissExpiredQuoteRequest = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const { booking } = await requireOwnedQuoteBooking(ctx, args.bookingId);
+    if (booking.quote_dismissed_at_ms != null) return { dismissed: true };
+
+    const lifecycle = await getBookingQuoteLifecycle(ctx, booking);
+    if (!lifecycle || lifecycle.status !== "expired") {
+      throwQuoteUnavailable("unavailable");
+    }
+
+    await ctx.db.patch(booking._id, { quote_dismissed_at_ms: Date.now() });
+    return { dismissed: true };
   },
 });
 
@@ -1337,6 +1430,12 @@ export const create = mutation({
     // Optional fallback labor hours from the mobile pricing pipeline, used
     // only by `resolveBookingLaborMinutes` when no enrichment row exists.
     labor_hours: v.optional(v.float64()),
+    // Booked axle for a per_axle-scaled service (brakes). When the app sends
+    // the customer's Front/Rear/Both pick, the server's per-axle labor scaling
+    // + guard match what the app displayed. Absent → 1 axle (today's behavior).
+    booking_position: v.optional(
+      v.union(v.literal("front"), v.literal("rear"), v.literal("both")),
+    ),
     session_id: v.optional(v.string()),
     // StubHub-style slot hold acquired during checkout (convex/slotHolds.ts).
     // Verified + consumed atomically with the booking insert below.
@@ -1405,6 +1504,7 @@ export const create = mutation({
         {
           service_id: args.service_id,
           fallback_hours: args.labor_hours ?? null,
+          position: args.booking_position ?? null,
         },
       ],
     });
@@ -1428,6 +1528,9 @@ export const create = mutation({
       serviceIds: [args.service_id],
       laborCostDollars: args.labor_cost,
       expectMinutes: args.displayed_labor_minutes,
+      servicePositions: args.booking_position
+        ? { [String(args.service_id)]: args.booking_position }
+        : undefined,
     });
 
     const durationMinutes =
@@ -1558,6 +1661,8 @@ async function resolveBookingLaborMinutes(
     services: Array<{
       service_id: Id<"services">;
       fallback_hours: number | null;
+      /** Booked axle for per_axle-scaled services (brakes). Absent → 1 axle. */
+      position?: "front" | "rear" | "both" | null;
     }>;
   },
 ): Promise<number> {
@@ -1593,6 +1698,7 @@ async function resolveBookingLaborMinutes(
       vehicle_config_id: args.vehicleConfigId,
       service_id: svc.service_id,
       vehicle_tier: tier,
+      booking_position: svc.position ?? null,
     });
     if (res.ok) {
       totalHours += res.hours;
@@ -1642,6 +1748,10 @@ async function assertLaborCostMatchesDuration(
     serviceIds: Array<Id<"services">>;
     laborCostDollars: number;
     expectMinutes: number | undefined;
+    /** Booked axle per service (brakes) so the recomputed expectation applies
+     *  the SAME per_axle labor scaling the client used — otherwise a valid
+     *  both-axle booking looks "above engine". Absent → 1 axle. */
+    servicePositions?: Record<string, "front" | "rear" | "both">;
   },
 ): Promise<LaborCostCheckResult> {
   if (args.expectMinutes == null || args.expectMinutes <= 0) return undefined;
@@ -1662,6 +1772,7 @@ async function assertLaborCostMatchesDuration(
     vehicle_config_id: cfg._id,
     service_ids: args.serviceIds,
     shop_id: args.shopId,
+    service_positions: args.servicePositions,
   });
 
   // If ANY service was refused (e.g. CCB without absolute pricing, missing
@@ -1675,25 +1786,18 @@ async function assertLaborCostMatchesDuration(
     return;
   }
 
-  // Mirror the client's labor-hours rounding when the director toggle is on
-  // (laborTimes.ts ceil-to-15). Without this mirror the server computes raw
-  // hours (e.g. 0.6h) while the client submits the rounded value (0.75h),
-  // which makes a legitimate ±8% check fail at the boundary.
-  const settingsRow = await ctx.db
-    .query("director_settings")
-    .withIndex("by_key", (q: any) => q.eq("key", "global"))
-    .first();
-  const roundTo15 = settingsRow?.round_labor_times_to_15min ?? true;
-  const expectedLaborCost = roundTo15
-    ? Math.round(
-        series.quotes.reduce((sum, q) => {
-          if (!q.ok) return sum;
-          const roundedHours =
-            (Math.ceil((q.labor.hours * 60) / 15) * 15) / 60;
-          return sum + roundedHours * q.labor.rate;
-        }, 0) * 100,
-      ) / 100
-    : series.labor_cost_total;
+  // Compare against the engine's OWN labor total — series.labor_cost_total is
+  // the number buildQuote handed the client (useBookingQuoteFallback submits it
+  // verbatim) AND the 15-min-rounded figure the customer sees on Review & Pay
+  // (quotes.previewForBooking returns this exact value). So the expectation IS
+  // series.labor_cost_total in every case — naive and combined alike.
+  // Re-deriving it here with an extra ceil-to-15 is what let the two drift: it
+  // rounded a faithful client's estimate UP and hard-rejected it for the
+  // server's own rounding — e.g. a T4 tier-floor of 0.85h billed as 0.85h but
+  // re-rounded to 1.0h, throwing LABOR_COST_TIER_MISMATCH. Now every path uses
+  // one number. Downward tampering is still caught: a client >8% below
+  // labor_cost_total trips the reject below.
+  const expectedLaborCost = series.labor_cost_total;
   if (expectedLaborCost <= 0) return;
   const tolerance = expectedLaborCost * 0.08; // ±8% band per Pricing v2 spec
   const signedDelta = args.laborCostDollars - expectedLaborCost;
@@ -2020,11 +2124,29 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
     // (the mobile fallback resolves `vehicle_config_id` from an arbitrary
     // vehicle with the same engine, not the customer's own — see
     // `service_vehicle_specs.getByEngineAndService` step 2).
+    // Booked axle per service (brakes), so per_axle labor scaling matches the
+    // drawer's displayed estimate. Prefer explicit client variants; else derive
+    // from the customer's selected_service_options (same source as the parts
+    // snapshot below).
+    const laborPositionByServiceId = new Map<string, "front" | "rear" | "both">();
+    for (const variant of args.service_variants &&
+    args.service_variants.length > 0
+      ? args.service_variants.map((v) => ({
+          serviceId: v.service_id,
+          position: v.position,
+        }))
+      : deriveServiceVariantsFromOptions(args.selected_service_options)) {
+      laborPositionByServiceId.set(
+        String(variant.serviceId),
+        variant.position as "front" | "rear" | "both",
+      );
+    }
     const enrichmentLaborMinutes = await resolveBookingLaborMinutes(ctx, {
       vehicleConfigId: vehicle.vehicle_config_id ?? null,
       services: args.services.map((s) => ({
         service_id: s.service_id,
         fallback_hours: s.labor_hours ?? null,
+        position: laborPositionByServiceId.get(String(s.service_id)) ?? null,
       })),
     });
     const estimated_labor_minutes =
@@ -2047,6 +2169,7 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       serviceIds: args.services.map((s) => s.service_id),
       laborCostDollars: labor_cost,
       expectMinutes: args.displayed_labor_minutes,
+      servicePositions: Object.fromEntries(laborPositionByServiceId),
     });
 
     // ── Pre-Job Approval flow: disclosed range snapshot ──────────────
@@ -2071,6 +2194,7 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       shop_zip: shop?.zip ?? null,
       shop_id: args.shop_id,
       vehicle_config_id: vehicle.vehicle_config_id ?? null,
+      service_positions: Object.fromEntries(laborPositionByServiceId),
     });
 
     // Itemized parts snapshot — same per-unit prices the customer saw on
@@ -5015,8 +5139,13 @@ export async function resolveServiceNames(
   /** booking.custom_services — off-catalog lines, appended after the catalog
    *  ones. Without this a custom-only booking renders blank everywhere. */
   customServices?: unknown,
+  /** Pass `{ customerVisibleOnly: true }` from CUSTOMER-facing queries so a
+   *  line still `pending_confirmation` (staged but not yet approved) is hidden
+   *  from the driver's card. Omit everywhere else — shop/ops surfaces show
+   *  staged work. See customServiceNames + confirmStagedCustomServices. */
+  opts?: { customerVisibleOnly?: boolean },
 ) {
-  const custom = customServiceNames(customServices);
+  const custom = customServiceNames(customServices, opts);
   if (!serviceIds || serviceIds.length === 0) return custom;
   const names = await Promise.all(
     serviceIds.map(async (serviceId) => {
@@ -5813,13 +5942,15 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
       "oem_default"
     ),
     // A derived OR sanity-flagged minimum is tagged "estimated", never
-    // "oem_default" — neither is a clean OEM figure, and the tag is what
-    // downstream surfaces key on to avoid presenting it as the manufacturer's
-    // spec.
+    // "oem_default" — the tag is provenance, not trust: `derived_15pct_wear`
+    // (the standard 15%-wear threshold, operator policy Aug 2026) grades the
+    // inspection at full strength, but presenting it as the manufacturer's
+    // printed figure would be a lie the UI can't take back.
     "brakes.rotor_min_front_mm": buildSourceTag(
       null,
       vehicleConfig?.rotor_front_min_thickness_mm,
-      vehicleConfig?.rotor_front_min_quality === "derived_from_nominal" ||
+      vehicleConfig?.rotor_front_min_quality === "derived_15pct_wear" ||
+        vehicleConfig?.rotor_front_min_quality === "derived_from_nominal" ||
         vehicleConfig?.rotor_front_min_quality === "oem_spec_flagged"
         ? "estimated"
         : "oem_default"
@@ -5827,7 +5958,8 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
     "brakes.rotor_min_rear_mm": buildSourceTag(
       null,
       vehicleConfig?.rotor_rear_min_thickness_mm,
-      vehicleConfig?.rotor_rear_min_quality === "derived_from_nominal" ||
+      vehicleConfig?.rotor_rear_min_quality === "derived_15pct_wear" ||
+        vehicleConfig?.rotor_rear_min_quality === "derived_from_nominal" ||
         vehicleConfig?.rotor_rear_min_quality === "oem_spec_flagged"
         ? "estimated"
         : "oem_default"
@@ -6137,13 +6269,22 @@ async function validateTieredInspectionInput({
     }
   }
 
-  const findings = gatherFindings(state, { onlyCompletedZones: true });
+  // Per-vehicle rotor minimums (enrichment-derived) so findings + the derived
+  // rotor_condition grade against THIS car's replace-at figure, not the static
+  // fallback. Null axles fall back inside effectiveRotorRef.
+  const rotorMin = {
+    front: passportView.passport.brakes.rotor_min_front_mm ?? null,
+    rear: passportView.passport.brakes.rotor_min_rear_mm ?? null,
+  };
+
+  const findings = gatherFindings(state, { onlyCompletedZones: true, rotorMin });
   const canonicalInspection = {
     ...inspection,
     findings_attention: findings.attention,
     findings_monitor: findings.monitor,
   };
   const canonicalPrejob = derivePrejobFromInspection(state, {
+    rotorMin,
     mileage:
       typeof inspection.odometer === "number"
         ? inspection.odometer
@@ -6791,6 +6932,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeRotorQuoteResponseId,
     excludeSessionId,
     allowAfterClose,
     allowOutsideShopHours,
@@ -6803,6 +6945,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId?: any;
     excludeBookingId?: string;
     excludeTireQuoteResponseId?: string;
+    excludeRotorQuoteResponseId?: string;
     excludeSessionId?: string;
     allowAfterClose?: boolean;
     allowOutsideShopHours?: boolean;
@@ -6817,6 +6960,7 @@ async function resolveMechanicForWindow(
     excludeMechanicId,
     excludeBookingId,
     excludeTireQuoteResponseId,
+    excludeRotorQuoteResponseId,
     excludeSessionId,
     allowAfterClose,
     allowOutsideShopHours,
@@ -9493,6 +9637,8 @@ async function mapBookingListItem(ctx: any, booking: any) {
     partsCost: booking.parts_cost,
     totalCost: booking.total_cost,
     estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
+    combinedLaborSavedMinutes: booking.combined_labor_saved_minutes ?? null,
+    combinedLaborNotes: booking.combined_labor_notes ?? null,
     mechanicId: booking.mechanic_id ?? null,
     assignmentPreference: normalizeAssignmentPreference(
       booking.assignment_preference,
@@ -9543,6 +9689,8 @@ async function mapMechanicDashboardJob(ctx: any, booking: any) {
     serviceNames,
     vehiclePassportComplete,
     estimatedLaborMinutes: booking.estimated_labor_minutes ?? null,
+    combinedLaborSavedMinutes: booking.combined_labor_saved_minutes ?? null,
+    combinedLaborNotes: booking.combined_labor_notes ?? null,
     totalCost: booking.total_cost,
     assignmentPreference: normalizeAssignmentPreference(
       booking.assignment_preference,
@@ -10143,7 +10291,10 @@ export const listForMyShop = query({
       bookings = bookings.filter((booking) => booking.status === args.status);
     }
 
-    bookings.sort(compareBookingsBySchedule);
+    // "All Bookings" page shows newest scheduled first (latest → oldest), so
+    // invert the shared ascending comparator here rather than changing it
+    // globally (schedule/archive views still rely on ascending order).
+    bookings.sort((a, b) => compareBookingsBySchedule(b, a));
     return await Promise.all(bookings.map((booking) => mapBookingListItem(ctx, booking)));
   },
 });
@@ -12270,6 +12421,12 @@ export const createByShop = mutation({
     catalogEstimatedMinutes: v.optional(v.float64()),
     mechanicQuotedPrice: v.optional(v.float64()),
     catalogQuotedPrice: v.optional(v.float64()),
+    // Combined labor operations (convex/lib/combinedLabor.ts): minutes the
+    // drawer shaved off the naive per-service sum because co-booked services
+    // shared teardown, plus the customer-facing reasons. Client-computed with
+    // the same pure resolver the quote engine uses.
+    combinedLaborSavedMinutes: v.optional(v.float64()),
+    combinedLaborNotes: v.optional(v.array(v.string())),
     // Optional parts data-gathering: the mechanic's edits to the catalog's
     // parts/price/quantity guess shown in the drawer. Pure analytics — the
     // catalog reference is recomputed server-side, so the client sends ONLY
@@ -12584,6 +12741,14 @@ export const createByShop = mutation({
       // none/skip — pre-job then seeds from the catalog as before.
       priced_parts_snapshot: pricedSnapshot,
       estimated_labor_minutes: args.estimatedLaborMinutes,
+      combined_labor_saved_minutes:
+        args.combinedLaborSavedMinutes && args.combinedLaborSavedMinutes > 0
+          ? args.combinedLaborSavedMinutes
+          : undefined,
+      combined_labor_notes:
+        args.combinedLaborNotes && args.combinedLaborNotes.length > 0
+          ? args.combinedLaborNotes
+          : undefined,
       mechanic_id: resolvedMechanicId,
       scheduled_date: args.scheduledDate,
       scheduled_time: args.scheduledTime,
@@ -16359,6 +16524,80 @@ export const createTireQuoteRequest = mutation({
 });
 
 /**
+ * The customer's pre-authorized deposit, passed to the quote-accept mutations
+ * the same way `bookings.create` receives it. The mobile client authorizes the
+ * $20 hold up front (payments_stripe.preauthorizePaymentForBooking) and hands
+ * the resulting PI down so the payments row is created AT ACCEPT — exactly like
+ * a normal booking records it at create.
+ */
+const acceptQuotePreauthValidator = v.optional(
+  v.object({
+    stripe_payment_intent_id: v.string(),
+    idempotency_key: v.string(),
+    hold_amount_cents: v.number(),
+    payment_origin: v.optional(
+      v.union(
+        v.literal("card"),
+        v.literal("apple_pay"),
+        v.literal("google_pay"),
+      ),
+    ),
+  }),
+);
+
+/**
+ * Record the customer's pre-authorized deposit onto a just-confirmed quote
+ * booking — the payments-row insert `bookings.create` does for a normal booking
+ * (its `preauthorized_payment` branch), lifted here because a quote booking is
+ * created at request time and only gets a shop + price at accept. Without it a
+ * quote → job → added-scope booking had NO payments row, so the reauth actions
+ * threw "No payment row found". Idempotent by booking_id (an accept retry won't
+ * double-insert).
+ */
+async function recordPreauthorizedQuoteDeposit(
+  ctx: MutationCtx,
+  args: {
+    bookingId: Id<"bookings">;
+    userId: Id<"users">;
+    shopId: Id<"shops">;
+    amount: number;
+    now: number;
+    preauth: {
+      stripe_payment_intent_id: string;
+      idempotency_key: string;
+      hold_amount_cents: number;
+      payment_origin?: "card" | "apple_pay" | "google_pay";
+    };
+  },
+) {
+  const existing = await ctx.db
+    .query("payments")
+    .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+    .unique();
+  if (existing) return existing._id;
+  const paymentId = await ctx.db.insert("payments", {
+    booking_id: args.bookingId,
+    user_id: args.userId,
+    shop_id: args.shopId,
+    amount: args.amount,
+    payment_method: "card",
+    status: "processing",
+    stripe_payment_intent_id: args.preauth.stripe_payment_intent_id,
+    idempotency_key: args.preauth.idempotency_key,
+    hold_amount_cents: args.preauth.hold_amount_cents,
+    payment_origin: args.preauth.payment_origin,
+    created_at: args.now,
+    updated_at: args.now,
+  });
+  await ctx.scheduler.runAfter(0, internal.payment_status_history.log, {
+    payment_id: paymentId,
+    old_status: undefined,
+    new_status: "processing",
+  });
+  return paymentId;
+}
+
+/**
  * MUTATION: acceptTireQuote
  * The user picks one of the shop responses for their pending tire booking.
  * Fills in shop_id, costs, and pricing onto the booking, flips status to
@@ -16371,10 +16610,22 @@ export const acceptTireQuote = mutation({
     scheduled_date: v.string(),
     scheduled_time: v.string(),
     mechanic_id: v.optional(v.id("mechanics")),
+    hold_id: v.optional(v.id("slot_holds")),
+    session_id: v.optional(v.string()),
+    quote_revision: v.optional(v.number()),
+    // The $20 deposit the customer pre-authorized in the accept payment sheet,
+    // recorded onto the booking here (like every other booking flow). Optional
+    // so an accept without it still confirms — the hold then lands at the first
+    // reauth. See acceptQuotePreauthValidator.
+    preauthorized_payment: acceptQuotePreauthValidator,
   },
   handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.booking_id);
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (String(booking.user_id) !== String(currentUser._id)) {
+      throw new Error("Booking not found.");
+    }
     if (booking.status !== "quotes_ready" && booking.status !== "pending_quote") {
       const label =
         BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
@@ -16387,8 +16638,29 @@ export const acceptTireQuote = mutation({
     if (String(response.booking_id) !== String(args.booking_id)) {
       throw new Error("This quote doesn't belong to the selected request.");
     }
-    if (response.superseded_at != null) {
-      throw new Error("This quote has already been superseded.");
+    const now = Date.now();
+    const expectedRevision = args.quote_revision ?? 1;
+    const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.hold_id,
+      sessionId: args.session_id,
+      shopId: response.shop_id,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
+      heldBy: currentUser._id,
+      quoteType: "tire",
+      quoteResponseId: response._id,
+      quoteRevision: expectedRevision,
+    });
+    const quoteAvailability = getQuoteAvailability(response, {
+      expectedRevision,
+      now,
+    });
+    if (
+      !quoteAvailability.available &&
+      !(quoteAvailability.reason === "expired" && holdConsume.consumeHoldId)
+    ) {
+      throwQuoteUnavailable(quoteAvailability.reason);
     }
 
     // Trust boundary: the customer picks a slot on-device, but the shop's
@@ -16401,8 +16673,6 @@ export const acceptTireQuote = mutation({
     if (submittedEarlier) {
       throw new Error("Pick a time on or after the shop's earliest availability.");
     }
-
-    const now = Date.now();
 
     // Resolve the winning shop's "Tire Replacement" service so the
     // accepted booking carries a real `service_ids` entry — without it
@@ -16452,14 +16722,15 @@ export const acceptTireQuote = mutation({
       );
     }
 
-    const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
     const acceptedMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: response.shop_id,
       date: args.scheduled_date,
       startTime: args.scheduled_time,
       durationMinutes: acceptedDurationMinutes,
-      preferredMechanicId: args.mechanic_id ?? response.mechanic_id ?? undefined,
+      preferredMechanicId:
+        holdConsume.pinnedMechanicId ?? args.mechanic_id ?? response.mechanic_id ?? undefined,
       excludeTireQuoteResponseId: String(response._id),
+      excludeSessionId: holdConsume.excludeSessionId,
     });
 
     // Fill in the chosen shop + pricing + scheduled slot + service. Schedule
@@ -16475,9 +16746,30 @@ export const acceptTireQuote = mutation({
       scheduled_time: args.scheduled_time,
       estimated_labor_minutes: acceptedDurationMinutes,
       status: "confirmed",
+      // The customer agreed to the quoted total, so it IS the disclosed price
+      // band — capture up to it needs no further consent; added scope beyond it
+      // reauthorizes. Matches the normal pre-job-approval booking shape so the
+      // deposit / capture / mid-job flows treat a quote booking identically.
+      payment_approval_state: "none",
+      disclosed_range_low_cents: Math.round(response.total * 100),
+      disclosed_range_high_cents: Math.round(response.total * 100),
       updated_at: now,
       ...(attachServiceId ? { service_ids: [attachServiceId] } : {}),
     });
+
+    // Record the pre-authorized deposit onto the booking (like bookings.create),
+    // so a quote booking carries a payments row from acceptance instead of
+    // reaching the first hold with none.
+    if (args.preauthorized_payment) {
+      await recordPreauthorizedQuoteDeposit(ctx, {
+        bookingId: args.booking_id,
+        userId: booking.user_id,
+        shopId: response.shop_id,
+        amount: response.total,
+        now,
+        preauth: args.preauthorized_payment,
+      });
+    }
 
     // Supersede all other live responses for this booking.
     const siblings = await ctx.db
@@ -16490,6 +16782,13 @@ export const acceptTireQuote = mutation({
       await ctx.db.patch(sibling._id, { superseded_at: now });
     }
 
+    // The "a shop quoted your request" cards are stale once a quote is
+    // accepted — drop them from the customer's feed.
+    await resolveBookingNotifications(ctx, args.booking_id, {
+      categories: ["quote_received"],
+      reason: "superseded",
+    });
+
     await logBookingStatusChange(
       ctx,
       args.booking_id,
@@ -16498,6 +16797,8 @@ export const acceptTireQuote = mutation({
       booking.user_id,
       "tire_quote_accepted",
     );
+
+    await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     return args.booking_id;
   },
@@ -16530,24 +16831,27 @@ export const listOpenTireQuoteRequestsForShop = query({
       (b) => b.tire_specs != null,
     );
 
-    // Filter out bookings this shop has already quoted on or dismissed.
+    // Keep this shop's submitted response visible as Pending/Expired/Cancelled.
+    // Only an untouched dismissed request disappears from this shop's queue.
     const filtered = await Promise.all(
       candidates.map(async (booking) => {
-        const existing = await ctx.db
+        const responses = await ctx.db
           .query("tire_quote_responses")
           .withIndex("by_booking_and_shop", (q) =>
             q.eq("booking_id", booking._id).eq("shop_id", args.shopId),
           )
-          .filter((q) => q.eq(q.field("superseded_at"), undefined))
-          .first();
-        if (existing) return null;
+          .collect();
+        const existing = responses
+          .filter((response) => response.superseded_at == null)
+          .sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+        if (existing) return { booking, response: existing };
         const dismissed = await ctx.db
           .query("quote_request_dismissals")
           .withIndex("by_booking_and_shop", (q) =>
             q.eq("booking_id", booking._id).eq("shop_id", args.shopId),
           )
           .first();
-        return dismissed ? null : booking;
+        return dismissed ? null : { booking, response: null };
       }),
     );
 
@@ -16555,13 +16859,37 @@ export const listOpenTireQuoteRequestsForShop = query({
 
     // Join basic vehicle context for the shop dashboard cards.
     return Promise.all(
-      open.map(async (booking) => {
+      open.map(async ({ booking, response }) => {
         const vehicle = await ctx.db
           .query("vehicles")
           .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
           .first();
         const meta =
-          (vehicle?.metadata as { make?: string; model?: string } | undefined) ?? undefined;
+          (vehicle?.metadata as
+            | { make?: string; model?: string; trim?: string }
+            | undefined) ?? undefined;
+        // Resolve engine/trim/chassis label so the mechanic sees the full
+        // spec while building the quote (they source parts off this).
+        const label = vehicle ? await resolveVehicleLabel(ctx, booking.vin) : null;
+        const now = Date.now();
+        const checkoutHold = response
+          ? await getActiveQuoteCheckoutHold(
+              ctx,
+              "tire",
+              response._id,
+              getQuoteRevision(response),
+              now,
+            )
+          : null;
+        const quoteStatus = response
+          ? response.cancelled_at != null
+            ? "cancelled"
+            : checkoutHold != null
+              ? "pending"
+              : getQuoteHoldExpiresAt(response) <= now
+                ? "expired"
+                : "pending"
+          : "open";
         return {
           _id: booking._id,
           _creationTime: booking._creationTime,
@@ -16569,11 +16897,18 @@ export const listOpenTireQuoteRequestsForShop = query({
           tire_specs: booking.tire_specs,
           vin: booking.vin,
           submitted_at: booking.created_at ?? booking._creationTime,
+          quote_status: quoteStatus,
+          quote_response: response,
+          checkout_held: checkoutHold != null,
+          checkout_hold_expires_at: checkoutHold?.expires_at ?? null,
           vehicle: vehicle
             ? {
                 year: vehicle.year ?? null,
                 make: meta?.make ?? null,
                 model: meta?.model ?? null,
+                trim: meta?.trim ?? null,
+                spec_label: label?.spec_label ?? null,
+                image_url: vehicle.image_url ?? null,
               }
             : null,
         };
@@ -16669,10 +17004,19 @@ export const acceptRotorQuote = mutation({
     scheduled_date: v.string(),
     scheduled_time: v.string(),
     mechanic_id: v.optional(v.id("mechanics")),
+    hold_id: v.optional(v.id("slot_holds")),
+    session_id: v.optional(v.string()),
+    quote_revision: v.optional(v.number()),
+    // Same $20 pre-authorized deposit as the tire path — recorded at accept.
+    preauthorized_payment: acceptQuotePreauthValidator,
   },
   handler: async (ctx, args) => {
+    const currentUser = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.booking_id);
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (String(booking.user_id) !== String(currentUser._id)) {
+      throw new Error("Booking not found.");
+    }
     if (booking.status !== "quotes_ready" && booking.status !== "pending_quote") {
       const label =
         BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
@@ -16685,8 +17029,29 @@ export const acceptRotorQuote = mutation({
     if (String(response.booking_id) !== String(args.booking_id)) {
       throw new Error("This quote doesn't belong to the selected request.");
     }
-    if (response.superseded_at != null) {
-      throw new Error("This quote has already been superseded.");
+    const now = Date.now();
+    const expectedRevision = args.quote_revision ?? 1;
+    const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
+    const holdConsume = await resolveSlotHoldForConsume(ctx, {
+      holdId: args.hold_id,
+      sessionId: args.session_id,
+      shopId: response.shop_id,
+      date: args.scheduled_date,
+      startTime: args.scheduled_time,
+      heldBy: currentUser._id,
+      quoteType: "rotor",
+      quoteResponseId: response._id,
+      quoteRevision: expectedRevision,
+    });
+    const quoteAvailability = getQuoteAvailability(response, {
+      expectedRevision,
+      now,
+    });
+    if (
+      !quoteAvailability.available &&
+      !(quoteAvailability.reason === "expired" && holdConsume.consumeHoldId)
+    ) {
+      throwQuoteUnavailable(quoteAvailability.reason);
     }
 
     // Trust boundary: the customer picks a slot on-device, but the shop's
@@ -16699,8 +17064,6 @@ export const acceptRotorQuote = mutation({
     if (submittedEarlier) {
       throw new Error("Pick a time on or after the shop's earliest availability.");
     }
-
-    const now = Date.now();
 
     // Resolve "Rotor Replacement" service so the accepted booking carries
     // a real service_ids entry. Tolerate the legacy underscore slug too.
@@ -16745,13 +17108,15 @@ export const acceptRotorQuote = mutation({
     const padsSubtotal =
       (response.pad_price ?? 0) * (response.pad_quantity ?? response.quantity);
 
-    const acceptedDurationMinutes = response.estimated_duration_minutes ?? 30;
     const acceptedMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: response.shop_id,
       date: args.scheduled_date,
       startTime: args.scheduled_time,
       durationMinutes: acceptedDurationMinutes,
-      preferredMechanicId: args.mechanic_id ?? response.mechanic_id ?? undefined,
+      preferredMechanicId:
+        holdConsume.pinnedMechanicId ?? args.mechanic_id ?? response.mechanic_id ?? undefined,
+      excludeRotorQuoteResponseId: String(response._id),
+      excludeSessionId: holdConsume.excludeSessionId,
     });
 
     await ctx.db.patch(args.booking_id, {
@@ -16764,9 +17129,25 @@ export const acceptRotorQuote = mutation({
       scheduled_time: args.scheduled_time,
       estimated_labor_minutes: acceptedDurationMinutes,
       status: "confirmed",
+      // Quoted total IS the disclosed price band (see acceptTireQuote).
+      payment_approval_state: "none",
+      disclosed_range_low_cents: Math.round(response.total * 100),
+      disclosed_range_high_cents: Math.round(response.total * 100),
       updated_at: now,
       ...(attachServiceId ? { service_ids: [attachServiceId] } : {}),
     });
+
+    // Record the pre-authorized deposit onto the booking (like bookings.create).
+    if (args.preauthorized_payment) {
+      await recordPreauthorizedQuoteDeposit(ctx, {
+        bookingId: args.booking_id,
+        userId: booking.user_id,
+        shopId: response.shop_id,
+        amount: response.total,
+        now,
+        preauth: args.preauthorized_payment,
+      });
+    }
 
     const siblings = await ctx.db
       .query("rotor_quote_responses")
@@ -16778,6 +17159,13 @@ export const acceptRotorQuote = mutation({
       await ctx.db.patch(sibling._id, { superseded_at: now });
     }
 
+    // The "a shop quoted your request" cards are stale once a quote is
+    // accepted — drop them from the customer's feed.
+    await resolveBookingNotifications(ctx, args.booking_id, {
+      categories: ["quote_received"],
+      reason: "superseded",
+    });
+
     await logBookingStatusChange(
       ctx,
       args.booking_id,
@@ -16786,6 +17174,8 @@ export const acceptRotorQuote = mutation({
       booking.user_id,
       "rotor_quote_accepted",
     );
+
+    await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     return args.booking_id;
   },
@@ -16817,34 +17207,60 @@ export const listOpenRotorQuoteRequestsForShop = query({
 
     const filtered = await Promise.all(
       candidates.map(async (booking) => {
-        const existing = await ctx.db
+        const responses = await ctx.db
           .query("rotor_quote_responses")
           .withIndex("by_booking_and_shop", (q) =>
             q.eq("booking_id", booking._id).eq("shop_id", args.shopId),
           )
-          .filter((q) => q.eq(q.field("superseded_at"), undefined))
-          .first();
-        if (existing) return null;
+          .collect();
+        const existing = responses
+          .filter((response) => response.superseded_at == null)
+          .sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+        if (existing) return { booking, response: existing };
         const dismissed = await ctx.db
           .query("quote_request_dismissals")
           .withIndex("by_booking_and_shop", (q) =>
             q.eq("booking_id", booking._id).eq("shop_id", args.shopId),
           )
           .first();
-        return dismissed ? null : booking;
+        return dismissed ? null : { booking, response: null };
       }),
     );
 
     const open = filtered.filter((b): b is NonNullable<typeof b> => b != null);
 
     return Promise.all(
-      open.map(async (booking) => {
+      open.map(async ({ booking, response }) => {
         const vehicle = await ctx.db
           .query("vehicles")
           .withIndex("by_vin", (q) => q.eq("vin", booking.vin))
           .first();
         const meta =
-          (vehicle?.metadata as { make?: string; model?: string } | undefined) ?? undefined;
+          (vehicle?.metadata as
+            | { make?: string; model?: string; trim?: string }
+            | undefined) ?? undefined;
+        // Resolve engine/trim/chassis label so the mechanic sees the full
+        // spec while building the quote (they source parts off this).
+        const label = vehicle ? await resolveVehicleLabel(ctx, booking.vin) : null;
+        const now = Date.now();
+        const checkoutHold = response
+          ? await getActiveQuoteCheckoutHold(
+              ctx,
+              "rotor",
+              response._id,
+              getQuoteRevision(response),
+              now,
+            )
+          : null;
+        const quoteStatus = response
+          ? response.cancelled_at != null
+            ? "cancelled"
+            : checkoutHold != null
+              ? "pending"
+              : getQuoteHoldExpiresAt(response) <= now
+                ? "expired"
+                : "pending"
+          : "open";
         return {
           _id: booking._id,
           _creationTime: booking._creationTime,
@@ -16852,11 +17268,18 @@ export const listOpenRotorQuoteRequestsForShop = query({
           rotor_specs: booking.rotor_specs,
           vin: booking.vin,
           submitted_at: booking.created_at ?? booking._creationTime,
+          quote_status: quoteStatus,
+          quote_response: response,
+          checkout_held: checkoutHold != null,
+          checkout_hold_expires_at: checkoutHold?.expires_at ?? null,
           vehicle: vehicle
             ? {
                 year: vehicle.year ?? null,
                 make: meta?.make ?? null,
                 model: meta?.model ?? null,
+                trim: meta?.trim ?? null,
+                spec_label: label?.spec_label ?? null,
+                image_url: vehicle.image_url ?? null,
               }
             : null,
         };
@@ -16889,7 +17312,14 @@ export const getBookingByIdForCustomer = query({
       ? await ctx.db.get(booking.previous_mechanic_id)
       : null;
 
-    const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
+    // Customer's booking detail — hide off-catalog lines still awaiting their
+    // approval (staged mid-inspection). Shop surfaces omit this flag and see them.
+    const serviceNames = await resolveServiceNames(
+      ctx,
+      booking.service_ids,
+      booking.custom_services,
+      { customerVisibleOnly: true },
+    );
 
     const vehicle = booking.vin
       ? await ctx.db

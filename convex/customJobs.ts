@@ -36,6 +36,7 @@ import { summarizePartPrices, quoteUnitPrice } from "./part_prices";
 import { passesI1ReadGuardNamed, makeNameCached } from "./lib/makeIdentity";
 import { detectTier, resolveLaborHours } from "./lib/quoteEngine";
 import { resolveLaborRate, VehicleTier } from "./lib/vehicleTiers";
+import { isBrakeSlug, type AxlePosition } from "./lib/brakeScope";
 
 /**
  * Bump (or open) the cross-shop dedupe ledger row for a proposed service name.
@@ -133,6 +134,9 @@ export type CustomJobInput = {
   quoted_price_cents?: number | null;
   /** Set when the mechanic pressed a shop shortcut instead of typing. */
   shop_custom_service_id?: Id<"shop_custom_services"> | null;
+  /** Axle scope for a brake/rotor line (front/rear/both). Absent on non-brake
+   *  work. Mirrors the axle stamped on the booking's custom_services entry. */
+  axle?: AxlePosition | null;
 };
 
 /**
@@ -249,6 +253,7 @@ export async function recordCustomJobsForBooking(
           input.quoted_parts_cents ?? prior.quoted_parts_cents,
         category_id: input.category_id ?? prior.category_id,
         catalog_service_id: input.catalog_service_id ?? prior.catalog_service_id,
+        axle: input.axle ?? prior.axle,
         complaint: input.complaint?.trim() || prior.complaint,
         estimated_minutes:
           input.estimated_minutes ?? prior.estimated_minutes,
@@ -289,6 +294,7 @@ export async function recordCustomJobsForBooking(
       quoted_parts_cents: input.quoted_parts_cents ?? undefined,
       category_id: input.category_id ?? undefined,
       catalog_service_id: input.catalog_service_id ?? undefined,
+      axle: input.axle ?? undefined,
       complaint: input.complaint?.trim() || undefined,
       estimated_minutes: input.estimated_minutes ?? undefined,
       quoted_price_cents: input.quoted_price_cents ?? undefined,
@@ -582,6 +588,48 @@ export async function revertDeclinedMidJobWork(
   }
 
   return reverted;
+}
+
+/**
+ * Confirm the staged off-catalog lines the customer just approved.
+ *
+ * The mirror of revertDeclinedMidJobWork for the APPROVE path: an off-catalog
+ * line is written to `custom_services` with `pending_confirmation: true` at
+ * add-time (addCustomServiceForBooking) so it stays hidden from the customer's
+ * booking card until they say yes. When the customer approves the pre_job /
+ * mid_job estimate that carries it, that flag is cleared here so the line
+ * surfaces on their card as booked work.
+ *
+ * Clears the flag on EVERY still-pending line, because the estimate is a
+ * full-current-scope re-quote and the booking-level approval confirms that whole
+ * scope — the supported flow is stage → send once → approve (a line staged AFTER
+ * the estimate was sent isn't in what the customer approved, but that isn't the
+ * flow the inspection drives). Idempotent: a booking with nothing pending is a
+ * no-op. Returns the number of lines confirmed.
+ */
+export async function confirmStagedCustomServices(
+  ctx: any,
+  args: { bookingId: Id<"bookings">; now: number },
+): Promise<number> {
+  const booking: any = await ctx.db.get(args.bookingId);
+  if (!booking || !Array.isArray(booking.custom_services)) return 0;
+
+  let confirmed = 0;
+  const nextLines = booking.custom_services.map((line: any) => {
+    if (line && line.pending_confirmation === true) {
+      confirmed += 1;
+      const { pending_confirmation, ...rest } = line;
+      return rest;
+    }
+    return line;
+  });
+  if (confirmed > 0) {
+    await ctx.db.patch(args.bookingId, {
+      custom_services: nextLines,
+      updated_at: args.now,
+    });
+  }
+  return confirmed;
 }
 
 /**
@@ -882,6 +930,14 @@ const customServiceAddArgs = {
   // line's parts from the OEM catalog/enrichment so the scope dialog shows them
   // instead of an empty "Add part for X". Omitted for freeform work.
   catalogServiceId: v.optional(v.id("services")),
+  // Axle scope for a brake/rotor line the mechanic is adding. The add UI shows a
+  // Front / Rear / Front-and-rear picker for brake work; the value lands here.
+  // Omitted for non-brake work and when the mechanic doesn't narrow it — the
+  // handler defaults a brake/rotor line to "both" so the inspection's brake-axle
+  // scope never dead-ends on a line added off-catalog.
+  axle: v.optional(
+    v.union(v.literal("front"), v.literal("rear"), v.literal("both")),
+  ),
 } as const;
 
 /**
@@ -907,6 +963,7 @@ async function addCustomServiceForBooking(
     estimatedMinutes?: number;
     shopCustomServiceId?: Id<"shop_custom_services">;
     catalogServiceId?: Id<"services">;
+    axle?: AxlePosition;
   },
   opts: { source: string; assertStatus: (status: string) => void },
 ) {
@@ -962,9 +1019,22 @@ async function addCustomServiceForBooking(
     ? [...(booking as any).custom_services]
     : [];
   const matchKey = serviceMatchKey(name);
-  const alreadyThere = existingLines.some(
+  const priorLine = existingLines.find(
     (c: any) => serviceMatchKey(String(c.name)) === matchKey,
   );
+  const alreadyThere = priorLine != null;
+
+  // Axle scope for a brake/rotor line. Originally-booked brake work carries its
+  // axle in selected_service_options; a line added off-catalog has no such
+  // option, so resolveBrakeScopeForBooking reads the value stored here instead.
+  // The add UI offers a Front / Rear / Front-and-rear picker; an explicit pick
+  // wins, else keep the line's current axle on a re-add, else default a brake
+  // line to "both" so the inspection's brake-axle scope never dead-ends. Non-
+  // brake lines carry none. isBrakeSlug is the same predicate the resolver
+  // applies to booked services.
+  const lineAxle: AxlePosition | undefined = isBrakeSlug(name)
+    ? (args.axle ?? (priorLine?.axle as AxlePosition | undefined) ?? "both")
+    : undefined;
 
   // Labor minutes for the line. The mechanic's explicit value wins; otherwise,
   // for a CATALOG service, fall back to the OEM labor ladder — the same time a
@@ -995,9 +1065,28 @@ async function addCustomServiceForBooking(
     existingLines.push({
       name,
       duration_minutes: estimatedMinutes ?? undefined,
+      axle: lineAxle,
+      // Staged, NOT yet customer-confirmed. Every add here routes through a
+      // pre_job / mid_job estimate the customer must approve before any money
+      // moves, so the line stays hidden from customer-facing booking reads until
+      // that approval clears the flag (see applyApprovalDecision). Shop-facing
+      // surfaces still show it — the mechanic priced and sent it.
+      pending_confirmation: true,
     });
     await ctx.db.patch(args.bookingId, {
       custom_services: existingLines,
+      updated_at: now,
+    });
+  } else if (lineAxle && priorLine.axle !== lineAxle) {
+    // Re-add of an existing brake line whose axle changed (the mechanic narrowed
+    // Front-and-rear to a single axle, say). Keep the scheduling-copy line in
+    // sync so resolveBrakeScopeForBooking reflects the latest pick.
+    await ctx.db.patch(args.bookingId, {
+      custom_services: existingLines.map((c: any) =>
+        serviceMatchKey(String(c.name)) === matchKey
+          ? { ...c, axle: lineAxle }
+          : c,
+      ),
       updated_at: now,
     });
   }
@@ -1030,6 +1119,7 @@ async function addCustomServiceForBooking(
         // completion credit a maintenance anchor for an added *catalog* service
         // (and only that) — see the CUSTOM JOB INVARIANT in bookings.ts.
         catalog_service_id: catalogServiceId,
+        axle: lineAxle ?? null,
         complaint: args.complaint ?? null,
         estimated_minutes: estimatedMinutes,
         quoted_price_cents: fixedPriceCents ?? undefined,
@@ -1392,6 +1482,22 @@ export const listForBooking = query({
         : null;
     let servicesCache: any[] | null = null;
 
+    // Whether each off-catalog line is STILL awaiting the customer — read from
+    // the booking's custom_services scheduling copy, keyed by match_key.
+    // `pending_confirmation` is set true at add-time and cleared when an estimate
+    // carrying the line is approved (confirmStagedCustomServices), so it's the
+    // authoritative "confirmed vs staged" signal — independent of whether the
+    // line was linked to a mid-job approval. The work order reads this so a
+    // CONFIRMED pre-job-added line never renders as a draft.
+    const stagedByMatchKey = new Map<string, boolean>();
+    for (const line of ((booking as any)?.custom_services ?? []) as any[]) {
+      if (!line?.name) continue;
+      stagedByMatchKey.set(
+        serviceMatchKey(String(line.name)),
+        line.pending_confirmation === true,
+      );
+    }
+
     const out = [];
     for (const r of rows) {
       let parts = (r.parts ?? []) as Array<{
@@ -1455,6 +1561,9 @@ export const listForBooking = query({
         estimated_minutes: estimatedMinutes,
         actual_minutes: r.actual_minutes ?? null,
         status: r.status,
+        // False once the customer has approved an estimate carrying this line.
+        // Absent match (no scheduling-copy row) reads as confirmed, not staged.
+        pending_confirmation: stagedByMatchKey.get(r.match_key) ?? false,
       });
     }
     return out;

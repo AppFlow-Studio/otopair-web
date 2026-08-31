@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  canMarkFieldUnavailable,
   classify,
   createInspectionState,
+  deriveStateInspectionFailures,
   deriveTierInspectionScope,
   derivePrejobFromInspection,
   deriveSuggestedRecommendations,
+  effectiveRotorRef,
+  isNysSafetyField,
+  SERVICE_SLUGS,
   formatZonesForPdf,
   gatherFindings,
   getDirtyIncompleteZones,
@@ -924,5 +929,119 @@ describe("specPrefillFromPassport", () => {
     // A "select" bucket here silently blanks the field — every ENG spec must
     // land in the text bucket the fields read from.
     expect(eng.every((e) => e.bucket === "text")).toBe(true);
+  });
+});
+
+// Fresh state with the FRT horn tri set to the given value.
+function stateWithHorn(value: "g" | "y" | "r" | undefined): InspectionState {
+  const state = createInspectionState();
+  const frt = state.zones.FRT!;
+  if (value) frt.tri.horn = value;
+  frt.done = true;
+  return state;
+}
+
+describe("horn — NYS safety item (locked Aug 2026)", () => {
+  it("is a mandatory NYS safety field that can't be skipped", () => {
+    expect(isNysSafetyField("FRT", "horn")).toBe(true);
+    expect(canMarkFieldUnavailable("FRT", "horn")).toBe(false);
+  });
+
+  it("leaves the other FRT items skippable", () => {
+    expect(isNysSafetyField("FRT", "lamp")).toBe(false);
+    expect(canMarkFieldUnavailable("FRT", "lamp")).toBe(true);
+    expect(canMarkFieldUnavailable("FRT", "wipe")).toBe(true);
+  });
+
+  it("flags a red horn as an automatic state-inspection failure", () => {
+    expect(deriveStateInspectionFailures(stateWithHorn("r"))).toEqual([
+      { zoneId: "FRT", fieldKey: "horn", label: "Horn" },
+    ]);
+  });
+
+  it("does not flag a working (green) horn", () => {
+    expect(deriveStateInspectionFailures(stateWithHorn("g"))).toEqual([]);
+  });
+});
+
+describe("horn recommendation — two-stage diagnostic-first flow", () => {
+  it("recommends a Horn Diagnostic (not a repair) with soon urgency on failure", () => {
+    const recs = deriveSuggestedRecommendations(stateWithHorn("r"));
+    const horn = recs.find((r) => r.key === "horn");
+    expect(horn).toBeDefined();
+    expect(horn!.label).toBe("Horn Diagnostic");
+    expect(horn!.urgency).toBe("soon");
+    expect(horn!.reasons.join(" ")).toMatch(/NYS inspection failure/i);
+    expect(horn!.reasons.join(" ")).toMatch(/before a replacement/i);
+    // Never routes straight to a swap.
+    expect(recs.some((r) => /horn repair/i.test(r.label))).toBe(false);
+  });
+
+  it("recommends a lower-urgency diagnostic for an intermittent (yellow) horn", () => {
+    const recs = deriveSuggestedRecommendations(stateWithHorn("y"));
+    const horn = recs.find((r) => r.key === "horn");
+    expect(horn).toBeDefined();
+    expect(horn!.label).toBe("Horn Diagnostic");
+    expect(horn!.urgency).toBe("within_3_months");
+  });
+
+  it("makes no horn recommendation when the horn works", () => {
+    const recs = deriveSuggestedRecommendations(stateWithHorn("g"));
+    expect(recs.some((r) => r.key === "horn")).toBe(false);
+  });
+});
+
+describe("per-vehicle rotor minimum grading (enrichment nominal × 0.85)", () => {
+  it("effectiveRotorRef prefers the per-axle vehicle min, falls back to the field default", () => {
+    // Front corners read the front min, rear corners the rear.
+    expect(effectiveRotorRef("FL", 23, { front: 25, rear: 8 })).toBe(25);
+    expect(effectiveRotorRef("FR", 23, { front: 25, rear: 8 })).toBe(25);
+    expect(effectiveRotorRef("RR", 8, { front: 25, rear: 10 })).toBe(10);
+    // A null axle (no nominal sourced) falls back to the static field default.
+    expect(effectiveRotorRef("FL", 23, { front: null, rear: 10 })).toBe(23);
+    // No override at all → field default.
+    expect(effectiveRotorRef("FL", 23, null)).toBe(23);
+    expect(effectiveRotorRef("FL", 23, undefined)).toBe(23);
+  });
+
+  // A front rotor read at 24 mm: in spec against the 23 mm static default, but
+  // below a 25 mm per-vehicle minimum (a rotor whose OEM nominal is ~29.4 mm).
+  function stateWithFrontRotor(mm: string): InspectionState {
+    const state = createInspectionState();
+    const fl = state.zones.FL!;
+    fl.done = true;
+    fl.measures.rotor = mm;
+    fl.select.rotor_unit = "mm";
+    return state;
+  }
+
+  it("gatherFindings flags a rotor that passes the default but fails the per-vehicle min", () => {
+    const state = stateWithFrontRotor("24");
+    // Static fallback (23 mm): 24 mm is in spec → no rotor attention finding.
+    const baseline = gatherFindings(state);
+    expect(
+      baseline.attention.some((f) => /rotor/i.test(f.label)),
+    ).toBe(false);
+    // Per-vehicle min (25 mm): 24 mm is below → attention finding.
+    const graded = gatherFindings(state, { rotorMin: { front: 25, rear: null } });
+    expect(
+      graded.attention.some((f) => /brake rotor thickness · below min/i.test(f.label)),
+    ).toBe(true);
+  });
+
+  it("drives a Rotor Replacement recommendation off the per-vehicle min", () => {
+    const state = stateWithFrontRotor("24");
+    // No override → graded against 23 mm default → no recommendation.
+    expect(
+      deriveSuggestedRecommendations(state).some((r) => r.key === SERVICE_SLUGS.rotors),
+    ).toBe(false);
+    // Per-vehicle min 25 mm → below → "Rotor Replacement", soon.
+    const recs = deriveSuggestedRecommendations(state, {
+      rotorMin: { front: 25, rear: null },
+    });
+    const rotorRec = recs.find((r) => r.key === SERVICE_SLUGS.rotors);
+    expect(rotorRec).toBeDefined();
+    expect(rotorRec!.label).toBe("Rotor Replacement");
+    expect(rotorRec!.urgency).toBe("soon");
   });
 });

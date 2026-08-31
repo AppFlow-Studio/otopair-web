@@ -104,10 +104,25 @@ export const HALO_VARIANT_RULES: HaloVariantRule[] = [
     promotedModel: "AMG GT",
     hardwareStandard: true,
   },
-  // Any other AMG trim ("C 63 AMG", "E 53 AMG", "G 63", "GLE 63 S"). We keep
-  // model promotion as identity here because Mercedes catalog model names
-  // vary too much to hardcode safely — the LLM fallback can refine. The
-  // hardwareStandard flag still skips redundant amg_line package detection.
+  // Real AMG performance trims (badge 35/43/45/53/55/63/65, incl. "S"). Every
+  // catalog files these as their own "<Class> AMG" model line — verified against
+  // wheel-size.com GET /v2/models/?make=mercedes: A-Class AMG→a-class-amg,
+  // C-Class AMG→c-class-amg, GLE-Class AMG→gle-class-amg, … (consistent across
+  // all 30 AMG models). Decode reports them as trims of the base "-Class" model,
+  // so promote to "<base> AMG". Guarded by the badge number so cosmetic
+  // "AMG Line"/"AMG Styling" trims (no badge) fall through to mb-amg-generic
+  // (identity) and don't mis-route the catalog query to the AMG model.
+  {
+    ruleId: "mb-amg-performance",
+    make: "Mercedes-Benz",
+    trimPattern: /(?=.*\bAMG\b)(?=.*\b(?:35|43|45|53|55|63|65)\b)/i,
+    promotedModel: (base) => `${base} AMG`,
+    hardwareStandard: true,
+  },
+  // Any other AMG mention ("AMG Line", "AMG Styling", badge-less "G 63" edge
+  // cases). Model promotion stays identity — catalog naming varies too much to
+  // hardcode safely and the LLM fallback can refine. The hardwareStandard flag
+  // still skips redundant amg_line package detection.
   {
     ruleId: "mb-amg-generic",
     make: "Mercedes-Benz",

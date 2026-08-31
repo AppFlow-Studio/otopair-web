@@ -4,6 +4,10 @@ import type { NextRequest } from "next/server";
 
 const isPublicRoute = createRouteMatcher([
   "/",
+  // Metadata image route (app/opengraph-image.tsx) — extensionless, so the
+  // static-file matcher below doesn't skip it; without this the og:image
+  // request rewrites to sign-in and link previews show an HTML page.
+  "/opengraph-image(.*)",
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/accept-invite(.*)",

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "motion/react";
-import { APP_STORE_URL, PLAY_STORE_URL } from "../download-app";
+import { APP_STORE_URL, PLAY_STORE_URL, storeIsLive } from "../download-app";
 import { Reveal, serifDisplay } from "./reveal";
 
 const FOOTER_LINKS = [
@@ -11,27 +11,53 @@ const FOOTER_LINKS = [
   { href: "/contact", label: "Contact" },
 ] as const;
 
+/** One half of the platform pill. While its store URL is the "#" placeholder
+ *  it renders as a plain span — an href="#" here scroll-jumped visitors back
+ *  to the top of the page (site audit 2026-08-31). */
+function PillHalf({
+  href,
+  label,
+  className,
+  children,
+}: {
+  href: string;
+  label: string;
+  className: string;
+  children: React.ReactNode;
+}) {
+  if (!storeIsLive(href)) {
+    return (
+      <span title="Coming soon" aria-label={`${label} — coming soon`} className={className}>
+        {children}
+      </span>
+    );
+  }
+  return (
+    <motion.a whileTap={{ scale: 0.97 }} href={href} aria-label={label} className={className}>
+      {children}
+    </motion.a>
+  );
+}
+
 /** The V2 footer's platform control (node 354:756 `_ActionSheet-action`): one
  *  white pill, split "iPhone | Android", each half its own store link. */
 function PlatformPill() {
   return (
     <div className="flex items-stretch overflow-hidden rounded-full bg-white shadow-[0_14px_34px_rgba(43,84,120,0.18)]">
-      <motion.a
-        whileTap={{ scale: 0.97 }}
+      <PillHalf
         href={APP_STORE_URL}
-        aria-label="Download Otopair for iPhone on the App Store"
+        label="Download Otopair for iPhone on the App Store"
         className="flex items-center gap-2 py-3.5 pl-7 pr-6 text-[15px] font-medium text-[#1a1a1a] transition-colors hover:bg-black/[0.04] sm:py-4 sm:pl-9 sm:pr-7 sm:text-[16px]"
       >
         <svg viewBox="0 0 384 512" className="h-[15px] w-[15px] fill-current" aria-hidden>
           <path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141.2 4 184.8 4 273.5q0 39.3 14.4 81.2c12.8 36.7 59 126.7 107.2 125.2 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-82.5 102.6-119.3-65.2-30.7-61.7-90-61.7-91.9zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z" />
         </svg>
         iPhone
-      </motion.a>
+      </PillHalf>
       <span className="my-2 w-px bg-[#1a1a1a]/10" aria-hidden />
-      <motion.a
-        whileTap={{ scale: 0.97 }}
+      <PillHalf
         href={PLAY_STORE_URL}
-        aria-label="Get Otopair for Android on Google Play"
+        label="Get Otopair for Android on Google Play"
         className="flex items-center gap-2 py-3.5 pl-6 pr-7 text-[15px] font-medium text-[#1a1a1a] transition-colors hover:bg-black/[0.04] sm:py-4 sm:pl-7 sm:pr-9 sm:text-[16px]"
       >
         <svg viewBox="0 0 512 512" className="h-[15px] w-[15px]" aria-hidden>
@@ -47,7 +73,7 @@ function PlatformPill() {
           <path fill="#f43249" d="M84.6 471.2 271 284.8l64.2 64.2L104 479.5c-7.7 1.1-14.5-2.3-19.4-8.3z" />
         </svg>
         Android
-      </motion.a>
+      </PillHalf>
     </div>
   );
 }
@@ -80,8 +106,13 @@ export default function FooterCta() {
         </Reveal>
 
         <Reveal delay={0.12}>
-          <div className="mt-9 flex justify-center lg:mt-10">
+          <div className="mt-9 flex flex-col items-center gap-3 lg:mt-10">
             <PlatformPill />
+            {(!storeIsLive(APP_STORE_URL) || !storeIsLive(PLAY_STORE_URL)) && (
+              <p className="text-[13px] tracking-[0.04em] text-[#4B82A5]">
+                Coming soon to the App Store &amp; Google Play
+              </p>
+            )}
           </div>
         </Reveal>
 

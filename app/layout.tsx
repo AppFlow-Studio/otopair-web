@@ -110,8 +110,12 @@ const Jersey20s = Jersey_20({
 });
 
 export const metadata: Metadata = {
-  title: "Otopair",
-  description: "",
+  title: {
+    default: "Otopair — Car repair, price locked",
+    template: "%s — Otopair",
+  },
+  description:
+    "Tell Oto what your car is doing and book a verified shop nearby at a locked price — no negotiating, no surprises at pickup. Live in Staten Island, NYC.",
   // Emits <meta name="apple-mobile-web-app-capable" content="yes" /> so that,
   // when launched from an iOS home-screen shortcut, the site opens full-screen
   // (no Safari address/tool bars) like a standalone app.
@@ -121,12 +125,12 @@ export const metadata: Metadata = {
   icons: {
     icon: "/logo.png",
   },
+  // og/twitter images come from app/opengraph-image.tsx — never point this at
+  // a static asset again without checking the brand: the old hand-set image
+  // was the pre-rename repairconnectglasslogo.png (site audit 2026-08-31).
   openGraph: {
-    images: [
-      {
-        url: "/repairconnectglasslogo.png",
-      },
-    ],
+    siteName: "Otopair",
+    type: "website",
   },
 };
 

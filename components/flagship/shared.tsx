@@ -38,7 +38,11 @@ export function CountUp({
   const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true, margin: "0px 0px -10% 0px" });
   const reduce = useReducedMotionSafe();
-  const [val, setVal] = useState(0);
+  // The FINAL value is the initial render: the server markup (and any visitor
+  // whose JS/observer never fires) must show the real stat, never a shipped 0
+  // (site audit 2026-08-31). The count-up replaces it only once it actually
+  // starts.
+  const [val, setVal] = useState(to);
 
   useEffect(() => {
     if (!inView) return;

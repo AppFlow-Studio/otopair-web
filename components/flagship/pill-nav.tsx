@@ -12,13 +12,15 @@ type PillCta = { label: string; href: string };
 // spring hover the anchor CTA has.
 const MotionLink = motion.create(Link);
 
-// Home defaults. The section-anchor labels are Figma V1's verbatim (node
-// 302:886); "Partner with us" is the real entry point into the shops funnel and
-// routes to the partner page rather than a section.
+// Home defaults. Labels must name the section they land on — V1's verbatim
+// About/Careers/Services labels pointed at unrelated anchors ("Careers" landed
+// on the shop pitch; site audit 2026-08-31). "Partner with us" is the real
+// entry point into the shops funnel and routes to the partner page rather
+// than a section.
 const HOME_LINKS: PillLink[] = [
-  { label: "About", href: "#how-it-works" },
-  { label: "Careers", href: "#for-shops" },
-  { label: "Services", href: "#coverage" },
+  { label: "How it works", href: "#how-it-works" },
+  { label: "For shops", href: "#for-shops" },
+  { label: "Coverage", href: "#coverage" },
   { label: "Partner with us", href: "/partner-with-us" },
 ];
 const HOME_CTA: PillCta = { label: "Get Oto", href: "#get-oto" };

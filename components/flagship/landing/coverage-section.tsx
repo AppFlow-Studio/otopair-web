@@ -13,12 +13,14 @@ import { avgNearestMiles, mergeNetworkPins } from "./network-pins";
 
 const HAIRLINE = "rgba(26,26,26,0.12)";
 
+// Keep this current — a launch date in the past presented as future reads as
+// abandoned software (site audit 2026-08-31; the June 1 SI date shipped stale).
 const BOROUGHS = [
-  { num: "01.", name: "Staten Island", date: "June 1, 2026" },
-  { num: "02.", name: "Brooklyn", date: "Q3 2026" },
-  { num: "03.", name: "Queens", date: "Q4 2026" },
-  { num: "04.", name: "The Bronx", date: "Q1 2027" },
-  { num: "05.", name: "Manhattan", date: "Q2 2027" },
+  { num: "01.", name: "Staten Island", date: "Live now" },
+  { num: "02.", name: "Brooklyn", date: "Q4 2026" },
+  { num: "03.", name: "Queens", date: "Q1 2027" },
+  { num: "04.", name: "The Bronx", date: "Q2 2027" },
+  { num: "05.", name: "Manhattan", date: "Q3 2027" },
 ];
 
 type Signup = { name: string; when: string; badge: "Verified" | "Onboarding" };
@@ -275,7 +277,7 @@ export default function CoverageSection() {
                   <span className="text-[17px] text-[#777169]">live</span>
                 </p>
                 <p className="mt-1 text-[15px] leading-[26px] text-[#777169]">
-                  Staten Island - at launch
+                  Live across Staten Island
                 </p>
               </div>
 

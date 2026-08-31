@@ -5,10 +5,15 @@ import { motion } from "motion/react";
 
 /**
  * Store destinations. Both are placeholders until the real listings exist —
- * swapping them is the only change needed to make this CTA fully live.
+ * swapping them is the only change needed to make every badge surface fully
+ * live (this component and the footer's PlatformPill both read these).
  */
 export const APP_STORE_URL = "#";
 export const PLAY_STORE_URL = "#";
+
+/** A "#" placeholder must never render as a link — a dead badge that jumps to
+ *  the top of the page reads as broken software (site audit 2026-08-31). */
+export const storeIsLive = (url: string) => url !== "#";
 
 type Platform = "ios" | "android" | "other";
 
@@ -29,33 +34,47 @@ function detectPlatform(): Platform {
 /**
  * Official store badges at Figma V1's declared geometry (nodes 302:1101/1102):
  * 180x47 / 189x47 dark plates, rounded-[8px], 8px apart, with the standard
- * badge artwork the repo already ships.
+ * badge artwork the repo already ships. While the store URL is still the "#"
+ * placeholder the badge renders as a plain (non-link) plate — the caption in
+ * DownloadApp carries the "coming soon" message.
  */
 function StoreBadge({ store, size = "md" }: { store: "apple" | "google"; size?: "md" | "lg" }) {
   const scale = size === "lg" ? 1.18 : 1;
   const w = Math.round((store === "apple" ? 180 : 189) * scale);
   const h = Math.round(47 * scale);
   const href = store === "apple" ? APP_STORE_URL : PLAY_STORE_URL;
+  const label =
+    store === "apple" ? "Download Otopair on the App Store" : "Get Otopair on Google Play";
+  const art = (
+    <img
+      src={store === "apple" ? "/images/landing/badge-app-store.svg" : "/images/landing/badge-google-play.svg"}
+      alt=""
+      width={Math.round((store === "apple" ? 96 : 100) * scale)}
+      height={Math.round((store === "apple" ? 25 : 24) * scale)}
+    />
+  );
+
+  if (!storeIsLive(href)) {
+    return (
+      <span
+        title="Coming soon"
+        aria-label={`${label} — coming soon`}
+        className="flex items-center justify-center rounded-[8px] bg-[#1a1a1a]"
+        style={{ width: w, height: h }}
+      >
+        {art}
+      </span>
+    );
+  }
   return (
     <motion.a
       whileTap={{ scale: 0.97 }}
       href={href}
-      // While the store URLs are still the "#" placeholders, clicking a badge
-      // scroll-jumped the visitor back to the top of the page (audit P1,
-      // 2026-08-30). Swallow the jump until the real listings land.
-      onClick={(e) => {
-        if (href === "#") e.preventDefault();
-      }}
-      aria-label={store === "apple" ? "Download Otopair on the App Store" : "Get Otopair on Google Play"}
+      aria-label={label}
       className="flex items-center justify-center rounded-[8px] bg-[#1a1a1a] transition-transform duration-300 hover:scale-[1.03]"
       style={{ width: w, height: h }}
     >
-      <img
-        src={store === "apple" ? "/images/landing/badge-app-store.svg" : "/images/landing/badge-google-play.svg"}
-        alt=""
-        width={Math.round((store === "apple" ? 96 : 100) * scale)}
-        height={Math.round((store === "apple" ? 25 : 24) * scale)}
-      />
+      {art}
     </motion.a>
   );
 }
@@ -64,7 +83,8 @@ function StoreBadge({ store, size = "md" }: { store: "apple" | "google"; size?: 
  * Download CTA. The visitor never picks a platform (design review 2026-08-15,
  * W1): on iOS only the App Store badge renders, on Android only Google Play,
  * and desktop (or any agent we can't read) shows the official pair exactly as
- * the Figma V1 layout does.
+ * the Figma V1 layout does. Placeholder-URL badges get one shared muted
+ * "coming soon" caption instead of dead links.
  */
 export default function DownloadApp({
   className = "",
@@ -78,16 +98,30 @@ export default function DownloadApp({
   const platform = useSyncExternalStore(subscribeNoop, detectPlatform, getServerPlatform);
 
   if (platform === "other") {
+    const comingSoon = !storeIsLive(APP_STORE_URL) || !storeIsLive(PLAY_STORE_URL);
     return (
-      <div className={`flex flex-wrap items-center justify-center gap-2 ${className}`}>
-        <StoreBadge store="apple" size={size} />
-        <StoreBadge store="google" size={size} />
+      <div className={`flex flex-col items-center gap-2.5 ${className}`}>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <StoreBadge store="apple" size={size} />
+          <StoreBadge store="google" size={size} />
+        </div>
+        {comingSoon && (
+          <p className="text-[12px] tracking-[0.05em] text-[#777169]">
+            Coming soon to the App Store &amp; Google Play
+          </p>
+        )}
       </div>
     );
   }
+  const url = platform === "ios" ? APP_STORE_URL : PLAY_STORE_URL;
   return (
-    <div className={`flex items-center justify-center ${className}`}>
+    <div className={`flex flex-col items-center gap-2.5 ${className}`}>
       <StoreBadge store={platform === "ios" ? "apple" : "google"} size={size} />
+      {!storeIsLive(url) && (
+        <p className="text-[12px] tracking-[0.05em] text-[#777169]">
+          {platform === "ios" ? "Coming soon to the App Store" : "Coming soon on Google Play"}
+        </p>
+      )}
     </div>
   );
 }

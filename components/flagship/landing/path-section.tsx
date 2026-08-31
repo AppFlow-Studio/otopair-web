@@ -282,11 +282,14 @@ function VoiceIntakeCard(beat: Beat) {
 /* ------------------------------------------------------------------ */
 
 /** Same brake job, quoted by three shops from the landing's standing cast —
- *  labor hours × each shop's own rate, itemized parts, flat fee line. */
+ *  one flat labor line at each shop's own price (no hours-×-rate math on a
+ *  marketing page — design feedback 2026-08-31), itemized parts, and a
+ *  supplies-and-fees line. The differing labor totals alone carry the
+ *  "each shop sets its own price" story. */
 const QUOTES = [
   {
     shop: "Bay Ridge Motors",
-    labor: { line: "Labor · 2.5 hr x $96", amount: 240 },
+    labor: 240,
     parts: { line: "Front brake pads", amount: 84 },
     // $23 keeps this quote's computed total at the $347 the Secure
     // Authorization card holds — the two cards tell one story.
@@ -294,13 +297,13 @@ const QUOTES = [
   },
   {
     shop: "Eltingville Auto Care",
-    labor: { line: "Labor · 2.5 hr x $88", amount: 220 },
+    labor: 220,
     parts: { line: "Front brake pads", amount: 78 },
     fees: 20,
   },
   {
     shop: "Precision Motors",
-    labor: { line: "Labor · 2.5 hr x $102", amount: 255 },
+    labor: 255,
     parts: { line: "Front brake pads", amount: 92 },
     fees: 24,
   },
@@ -328,7 +331,7 @@ function PayCard(beat: Beat) {
   const [dir, setDir] = useState<1 | -1>(1);
   const [paged, setPaged] = useState(false);
   const q = QUOTES[idx];
-  const total = q.labor.amount + q.parts.amount + q.fees;
+  const total = q.labor + q.parts.amount + q.fees;
 
   const page = (d: 1 | -1) => {
     setDir(d);
@@ -396,15 +399,18 @@ function PayCard(beat: Beat) {
                 </div>
                 <div className="mt-3 space-y-1.5 text-[11.5px] text-[#777169]">
                   <motion.div className="flex justify-between" {...row(0)}>
-                    <span>{q.labor.line}</span>
-                    <span className="text-[#1a1a1a]">${q.labor.amount}</span>
+                    <span>Labor</span>
+                    <span className="text-[#1a1a1a]">${q.labor}</span>
                   </motion.div>
                   <motion.div className="flex justify-between" {...row(1)}>
                     <span>{q.parts.line}</span>
                     <span className="text-[#1a1a1a]">${q.parts.amount}</span>
                   </motion.div>
+                  {/* "Shop supplies & fees", never a bare fee line — three
+                      quotes with a pure fee row all near one ratio would let
+                      a reader back out the confidential service-fee rate. */}
                   <motion.div className="flex justify-between" {...row(2)}>
-                    <span>Fees</span>
+                    <span>Shop supplies &amp; fees</span>
                     <span className="text-[#1a1a1a]">${q.fees}</span>
                   </motion.div>
                 </div>
@@ -583,10 +589,12 @@ function MapArt({ shown, reduce, base }: Beat) {
  * 2026-08-30 when the section was matched to the frame verbatim.)
  */
 const AUTH_TIERS = [
-  // Resting state matches the Figma frame verbatim: the hold is already
-  // authorized, the payout note showing, bar most of the way (2026-08-30 —
-  // "exactly like the figma"). ↵ confirm settles it.
-  { status: "Authorized · held", note: "Job complete · paid out in 24 hours.", fill: 0.62, done: false, control: "confirm" },
+  // Resting state tells the SAME hold story as the Oto panel's Review & Pay
+  // screen — a $20 booking hold against the locked total, per the real
+  // Pre-Job Approval charge model in convex/payments_stripe.ts. The frame's
+  // "Authorized · held" read as a full-amount hold next to the $20 one
+  // (site audit 2026-08-31). ↵ confirm settles it.
+  { status: "Price locked · $20 held", note: "Nothing more moves until the job is done.", fill: 0.62, done: false, control: "confirm" },
   { status: "Confirmed", note: "Job complete · paid out in 24 hours.", fill: 1, done: true, control: "confirmed" },
 ] as const;
 

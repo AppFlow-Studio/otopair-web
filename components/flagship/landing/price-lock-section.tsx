@@ -33,7 +33,9 @@ const ROLES = [
   {
     num: "03.",
     title: "Oto",
-    body: "The intelligent layer that locks your quote. Triages symptoms. Identifies the right service.",
+    // Not a repeat of 01's triage lines (site audit 2026-08-31) — this row
+    // sells the layer itself, matching the panel's records-pull → booking arc.
+    body: "The intelligent layer that locks your quote. Reads your car's records. Books the right shop.",
   },
 ] as const;
 
@@ -475,10 +477,13 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                         John Wilson
                       </p>
                       <p className="mt-0.5 text-[11px] text-[#33383b] sm:text-[13px]">Oil Change</p>
+                      {/* An everyday car, deliberately — the Figma frame's
+                          Bugatti Chiron read as a joke against the premium-calm
+                          register (site audit 2026-08-31). */}
                       <p className="mt-1.5 text-[9px] leading-[1.35] text-[#8a9094] sm:text-[10.5px]">
-                        2021 Bugatti
+                        2021 Toyota
                         <br />
-                        Chiron · 5303
+                        Camry · 5303
                       </p>
                       <span className="absolute bottom-2 right-2 rounded-full bg-[#dbe3e8]/90 px-2 py-0.5 text-[8.5px] font-medium text-[#33383b] sm:bottom-2.5 sm:right-2.5 sm:text-[10px]">
                         12:50p

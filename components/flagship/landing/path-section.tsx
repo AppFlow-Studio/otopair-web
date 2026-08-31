@@ -89,7 +89,6 @@ function Pop({
 function PathCard({
   stage,
   controls,
-  badge,
   lead,
   copy,
   shown,
@@ -98,10 +97,6 @@ function PathCard({
 }: Beat & {
   stage: React.ReactNode;
   controls: React.ReactNode;
-  /** Optional pill that straddles the stage's bottom-left edge — the stage
-   *  clips its own children (overflow-hidden), so the straddle has to hang
-   *  off the outer card (Figma: "Comparing Shops"). */
-  badge?: React.ReactNode;
   lead: string;
   copy: string;
 }) {
@@ -116,14 +111,10 @@ function PathCard({
           the inset stage, which floats inside it with an even margin. The old
           blue-gradient outer card was so close to the stage color that the two
           read as one edge-to-edge blue slab (design feedback 2026-08-30). */}
-      <div className="relative flex flex-1 flex-col rounded-[18px] bg-[#f7fafd] p-3.5 shadow-[0_24px_50px_rgba(43,84,120,0.12)] ring-1 ring-[#e7eef5] sm:p-4">
-        <div className="relative flex-1 overflow-hidden rounded-[14px] bg-[linear-gradient(168deg,#9fcbef_0%,#c7e1f6_58%,#e9f3fb_100%)]">
+      <div className="relative flex flex-1 flex-col rounded-[20px] bg-[#fbfdfe] p-3.5 shadow-[0_18px_40px_rgba(43,84,120,0.10)] ring-1 ring-[#ecf2f8] sm:p-4">
+        <div className="relative flex-1 overflow-hidden rounded-[14px] bg-[linear-gradient(180deg,#a5cfef_0%,#cfe5f7_62%,#ecf5fc_100%)]">
           {stage}
         </div>
-        {/* The stage's bottom edge sits at 74px (60 controls + 14 padding).
-            The pill rides mostly ON the stage with its lip hanging off — set
-            high enough that it clears the pager row below (frame look). */}
-        {badge && <div className="absolute bottom-[68px] left-7 z-10">{badge}</div>}
         <div className="flex h-[60px] shrink-0 items-center justify-center">{controls}</div>
       </div>
       <Rise at={0.5} y={10} shown={shown} reduce={reduce} base={base}>
@@ -139,10 +130,13 @@ function ActionPill({
   onClick,
   children,
   label,
+  tone = "solid",
 }: {
   onClick: () => void;
   children: React.ReactNode;
   label: string;
+  /** The frame renders card 3's confirm a shade softer than card 1's talk. */
+  tone?: "solid" | "soft";
 }) {
   return (
     <motion.button
@@ -151,8 +145,12 @@ function ActionPill({
       onClick={onClick}
       whileHover={{ scale: 1.04 }}
       whileTap={{ scale: 0.95 }}
-      className="flex items-center gap-2 rounded-full px-6 py-2.5 text-[13px] font-medium text-white shadow-[0_10px_26px_rgba(82,153,254,0.45)]"
-      style={{ backgroundColor: BLUE }}
+      className={`flex items-center gap-2 rounded-full px-6 py-2.5 text-[13px] font-medium text-white ${
+        tone === "soft"
+          ? "shadow-[0_8px_20px_rgba(82,153,254,0.35)]"
+          : "shadow-[0_10px_26px_rgba(82,153,254,0.45)]"
+      }`}
+      style={{ backgroundColor: tone === "soft" ? "rgba(82,153,254,0.78)" : BLUE }}
     >
       {children}
     </motion.button>
@@ -221,15 +219,15 @@ function VoiceIntakeCard(beat: Beat) {
             shown={shown}
             reduce={reduce}
             base={base}
-            className="absolute -right-3 top-5 w-[62%]"
+            className="absolute -right-3 top-6 w-[62%]"
           >
-            <div className="rounded-l-[10px] bg-white/90 px-4 py-3 shadow-[0_8px_20px_rgba(43,84,120,0.08)]">
-              <p className="text-[11px] font-semibold text-[#1a1a1a]">Booking Suggestions</p>
-              <div className="mt-1.5 flex justify-between text-[10px] text-[#777169]">
+            <div className="rounded-l-[10px] bg-white/90 px-5 py-4 shadow-[0_8px_20px_rgba(43,84,120,0.08)]">
+              <p className="text-[12px] font-semibold text-[#1a1a1a]">Booking Suggestions</p>
+              <div className="mt-2 flex justify-between text-[10.5px] text-[#777169]">
                 <span>Service</span>
                 <span className="text-[#1a1a1a]">Front Brak…</span>
               </div>
-              <div className="mt-1 flex justify-between text-[10px] text-[#777169]">
+              <div className="mt-1.5 flex justify-between text-[10.5px] text-[#777169]">
                 <span>Earliest Slot</span>
                 <span className="text-[#1a1a1a]">Tomorrow,…</span>
               </div>
@@ -243,10 +241,13 @@ function VoiceIntakeCard(beat: Beat) {
             shown={shown}
             reduce={reduce}
             base={base}
-            className="absolute inset-x-4 top-[34%] sm:inset-x-5"
+            /* Anchored to the stage's BOTTOM, not floated at 34% — the frame
+               keeps only a slim gap under the transcript; a top anchor left a
+               dead blue field below it (design feedback 2026-08-31). */
+            className="absolute inset-x-4 bottom-4 sm:inset-x-5"
           >
             {/* Frosted glass, per the frame — the stage reads through it. */}
-            <div className="rounded-[16px] bg-white/40 px-5 py-4 shadow-[0_14px_34px_rgba(43,84,120,0.12)] backdrop-blur-lg">
+            <div className="rounded-[16px] border-[0.5px] border-white/50 bg-white/20 px-6 py-5 backdrop-blur-[35px]">
               <div className="flex items-center gap-2">
                 <motion.span
                   className="h-1.5 w-1.5 rounded-full"
@@ -258,7 +259,7 @@ function VoiceIntakeCard(beat: Beat) {
                   LISTENING
                 </span>
               </div>
-              <Waveform active={!reduce} bars={18} className="mt-2 h-[20px] text-[#7fb0f5]" />
+              <Waveform active={!reduce} bars={28} className="mt-2.5 h-[22px] text-[#8db8f5]" />
               <TypedTranscript shown={shown} reduce={reduce} startAt={base + 0.6} />
             </div>
           </Rise>
@@ -351,27 +352,13 @@ function PayCard(beat: Beat) {
       {...beat}
       lead="What you'll actually pay."
       copy="Labor, parts, and fees broken out line by line — the total you see is the total you pay. No padding, no surprises at pickup."
-      badge={
-        <Rise at={0.58} y={12} shown={shown} reduce={reduce} base={base}>
-          <div className="inline-flex items-center gap-2 rounded-full bg-white/85 px-4 py-2 shadow-[0_10px_24px_rgba(43,84,120,0.12)] backdrop-blur-sm">
-            <span className="text-[11px] font-medium text-[#1a1a1a]">Comparing Shops</span>
-            <span className="flex items-center gap-1">
-              {QUOTES.map((_, i) => (
-                <motion.span
-                  key={i}
-                  className="h-1.5 w-1.5 rounded-full"
-                  animate={{ backgroundColor: i === idx ? BLUE : "rgba(26,26,26,0.18)" }}
-                  transition={{ duration: 0.3 }}
-                />
-              ))}
-            </span>
-          </div>
-        </Rise>
-      }
       stage={
         <div className="absolute inset-0 flex flex-col justify-center px-6 sm:px-8">
-          {/* aria-live so paging announces the new quote to screen readers. */}
-          <div className="relative overflow-hidden" aria-live="polite">
+          {/* aria-live so paging announces the new quote to screen readers.
+              The clip wrapper carries the card's own radius — a square
+              overflow-hidden box crops the rounded bottom corners flat
+              (design feedback 2026-08-31). */}
+          <div className="relative overflow-hidden rounded-[14px]" aria-live="polite">
             {/* Direction must come through variants+custom: a plain exit prop
                 bakes `dir` from the render BEFORE the click, so reversing
                 direction would slide the outgoing card the wrong way. */}
@@ -380,19 +367,24 @@ function PayCard(beat: Beat) {
                 key={q.shop}
                 custom={dir}
                 variants={{
-                  enter: (d: 1 | -1) => ({ opacity: 0, x: paged ? d * 56 : 0, y: paged ? 0 : 16 }),
-                  center: { opacity: 1, x: 0, y: 0 },
-                  exit: (d: 1 | -1) => ({ opacity: 0, x: d * -56 }),
+                  enter: (d: 1 | -1) =>
+                    paged
+                      ? { opacity: 0, x: d * 40, y: 0, scale: 0.985 }
+                      : { opacity: 0, x: 0, y: 16, scale: 1 },
+                  center: { opacity: 1, x: 0, y: 0, scale: 1 },
+                  exit: (d: 1 | -1) => ({ opacity: 0, x: d * -40, scale: 0.985 }),
                 }}
                 initial="enter"
                 animate={shown ? "center" : "enter"}
                 exit="exit"
                 transition={{
                   delay: paged || reduce ? 0 : base + 0.22,
-                  duration: reduce ? 0.4 : 0.45,
+                  // A touch slower than the old 0.45s snap, with a smaller
+                  // slide — the swap glides instead of flicking (2026-08-31).
+                  duration: reduce ? 0.4 : 0.6,
                   ease: EASE,
                 }}
-                className="rounded-[14px] bg-white/60 px-6 py-5 shadow-[0_14px_34px_rgba(43,84,120,0.12)] backdrop-blur-lg"
+                className="rounded-[16px] bg-white/95 px-6 py-5 shadow-[0_14px_34px_rgba(43,84,120,0.12)]"
               >
                 <div className="flex items-baseline justify-between">
                   <p className="text-[15px] text-[#1a1a1a]" style={serif}>
@@ -427,6 +419,30 @@ function PayCard(beat: Beat) {
             </AnimatePresence>
           </div>
 
+          {/* Comparing Shops + live dots — bottom-left ON the stage, per the
+              frame (2026-08-31; an earlier read had it straddling the edge). */}
+          <Rise
+            at={0.58}
+            y={12}
+            shown={shown}
+            reduce={reduce}
+            base={base}
+            className="absolute bottom-4 left-5"
+          >
+            <div className="inline-flex items-center gap-2 rounded-full border-[0.5px] border-white/50 bg-white/20 px-4 py-2 backdrop-blur-[35px]">
+              <span className="text-[11px] font-medium text-[#1a1a1a]">Comparing Shops</span>
+              <span className="flex items-center gap-1">
+                {QUOTES.map((_, i) => (
+                  <motion.span
+                    key={i}
+                    className="h-1.5 w-1.5 rounded-full"
+                    animate={{ backgroundColor: i === idx ? BLUE : "rgba(26,26,26,0.18)" }}
+                    transition={{ duration: 0.3 }}
+                  />
+                ))}
+              </span>
+            </div>
+          </Rise>
         </div>
       }
       controls={
@@ -448,102 +464,115 @@ function PayCard(beat: Beat) {
 /*  Card 3 — Secure Authorization                                      */
 /* ------------------------------------------------------------------ */
 
-/** The booked shop's neighborhood. The Figma frame shows a real street map —
- *  organic curves, varied road weights — with the brand's 3D glass pins, not
- *  a sparse abstract grid with dots (design feedback 2026-08-30). Streets
- *  draw themselves in, then the pins drop. */
-function MapArt({ shown, reduce, base }: Beat) {
-  const draw = (i: number) => ({
-    initial: reduce ? { opacity: 0 } : { pathLength: 0, opacity: 0 },
-    animate: shown ? (reduce ? { opacity: 1 } : { pathLength: 1, opacity: 1 }) : undefined,
-    transition: { delay: reduce ? 0 : base + 0.14 + i * 0.04, duration: reduce ? 0.4 : 0.9, ease: EASE },
-  });
-  // The frame's map is a dense real-city network, not a sparse sketch —
-  // deterministic wavy streets at three weights (no randomness: resume-safe
-  // and stable between renders).
-  const wave = (i: number, k: number) => ((i * 37 + k * 13) % 17) - 8;
-  const horizontals = Array.from({ length: 11 }, (_, i) => {
-    const y = 12 + i * 28 + wave(i, 1);
-    return `M-10 ${y} C ${55 + ((i * 29) % 45)} ${y + wave(i, 2)}, ${190 + ((i * 53) % 55)} ${y - wave(i, 3)}, 410 ${y + wave(i, 4)}`;
-  });
-  const verticals = Array.from({ length: 10 }, (_, i) => {
-    const x = 18 + i * 41 + wave(i, 5);
-    return `M${x} -10 C ${x + wave(i, 6)} 70, ${x - wave(i, 7)} 190, ${x + wave(i, 8)} 310`;
-  });
-  const diagonals = [
-    "M-10 30 C 90 70, 210 150, 410 250",
-    "M60 -10 C 130 80, 260 160, 410 200",
-    "M-10 250 C 120 220, 260 140, 410 40",
-    "M200 310 C 250 220, 330 120, 410 90",
-  ];
-  // The booked shop gets the big pin; the runner-up sits smaller, further out.
-  // Both live in the top strip of the stage — the $347 card overlays the
-  // bottom ~60%, so anything below y≈100 hides behind it.
-  const pins = [
-    { cx: 132, cy: 92, w: 46 },
-    { cx: 308, cy: 60, w: 30 },
-  ];
+/** A real map preview of Bay Ridge, Brooklyn — the story's neighborhood
+ *  (Bay Ridge Motors) — real Mapbox data, recolored to the frame's palette:
+ *  blue ground, white roads (design feedback 2026-08-31). dark-v11 (near-
+ *  black ground, bright roads) is grayscaled + brightness-boosted, then
+ *  SCREEN-blended over a vertical donor gradient: full-strength blue at the
+ *  top, dissolving into the stage's own pale gradient behind the $347 card
+ *  (design feedback 2026-08-31 — "top unfaded, bottom fades"). A mask fades
+ *  the white roads out on the same run. light-v11 can't be the donor — its
+ *  ground sits 0.06 luminance below its roads, inseparable by filters. One
+ *  Static Images request, no map runtime. */
+const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
+const MAP_PREVIEW_URL = `https://api.mapbox.com/styles/v1/mapbox/dark-v11/static/-74.028,40.629,13.9/780x520@2x?logo=false&attribution=false&access_token=${MAPBOX_TOKEN}`;
+
+
+/* The coverage map's teardrop pin, duplicated from coverage-map.tsx (paths
+ * verbatim) — importing from that module would drag mapbox-gl into this
+ * chunk. Same shape, but faded into the preview's palette — lighter blues,
+ * soft shadow, a touch of transparency — so the pins sit IN the muted map
+ * instead of popping at full saturation over it (design feedback
+ * 2026-08-31, twice: not glassy-see-through, not loud-solid either). */
+const PIN_BODY_D =
+  "M90 15.192C85.5727 11.1575 80.3846 8.04754 74.7397 6.04433C69.0948 4.04111 63.1068 3.185 57.1267 3.52619C51.1467 3.86738 45.2949 5.39899 39.9145 8.03124C34.534 10.6635 29.7333 14.3434 25.7936 18.8552C21.8539 23.367 18.8546 28.62 16.9716 34.3061C15.0885 39.9922 14.3596 45.997 14.8275 51.9685C15.2954 57.94 16.9508 63.7579 19.6965 69.0813C22.4423 74.4047 26.2231 79.1264 30.8175 82.9695C41.3211 91.7021 50.0973 102.324 56.6925 114.286C57.0149 114.881 57.4927 115.379 58.0751 115.725C58.6574 116.071 59.3226 116.252 60 116.251C60.6769 116.25 61.341 116.067 61.922 115.72C62.503 115.372 62.9792 114.874 63.3 114.278L63.6075 113.701C70.2501 101.884 79.0081 91.388 89.445 82.737C94.2816 78.5572 98.1713 73.394 100.854 67.592C103.538 61.7899 104.953 55.4823 105.005 49.0901C105.058 42.6978 103.747 36.3679 101.159 30.5225C98.5716 24.6771 94.7673 19.4507 90 15.192ZM60 67.5007C56.2916 67.5007 52.6665 66.4011 49.5831 64.3408C46.4996 62.2805 44.0964 59.3522 42.6773 55.9261C41.2581 52.5 40.8868 48.7299 41.6103 45.0928C42.3337 41.4557 44.1195 38.1147 46.7417 35.4925C49.364 32.8703 52.7049 31.0845 56.3421 30.361C59.9792 29.6376 63.7492 30.0089 67.1753 31.428C70.6014 32.8472 73.5298 35.2504 75.5901 38.3338C77.6503 41.4172 78.75 45.0424 78.75 48.7508C78.744 53.7217 76.7667 58.4874 73.2517 62.0024C69.7367 65.5174 64.971 67.4948 60 67.5007Z";
+const PIN_WRENCH_D =
+  "M52.0381 16.9834C57.4005 15.6352 63.018 15.6743 68.3614 17.0957C68.9752 17.2602 69.5351 17.5829 69.9844 18.0322C70.4338 18.4816 70.7574 19.0414 70.9219 19.6553C71.0871 20.2716 71.0863 20.9212 70.92 21.5371C70.7536 22.1529 70.4274 22.7138 69.9747 23.1631L56.0977 37.04L58.0176 50.4814L71.459 52.4014L85.336 38.5244C85.7853 38.0717 86.3462 37.7454 86.962 37.5791C87.5779 37.4128 88.2275 37.412 88.8438 37.5771C89.4577 37.7417 90.0175 38.0653 90.4669 38.5146C90.9162 38.964 91.2389 39.5239 91.4034 40.1377C92.683 44.9133 92.8553 49.9072 91.9229 54.7422C88.854 69.5523 75.7355 80.6836 60.0157 80.6836C42.0185 80.6835 27.429 66.0939 27.4288 48.0967C27.4288 47.4476 27.4499 46.8028 27.4874 46.1631C27.6786 43.5991 28.1727 41.0565 28.9678 38.5898C30.6642 33.3272 33.6724 28.5824 37.7081 24.8027C41.7439 21.023 46.6756 18.3317 52.0381 16.9834Z";
+
+function PinMark({ size, uid }: { size: number; uid: string }) {
   return (
     <svg
-      viewBox="0 0 400 300"
-      className="absolute inset-0 h-full w-full"
-      preserveAspectRatio="xMidYMid slice"
+      width={size}
+      height={size}
+      viewBox="0 0 120 120"
+      fill="none"
       aria-hidden
+      className="opacity-90 [filter:drop-shadow(0_2px_3px_rgba(43,84,120,0.25))]"
     >
-      <g fill="none" strokeLinecap="round">
-        {horizontals.map((d, i) => (
-          <motion.path
-            key={d}
-            d={d}
-            stroke={`rgba(255,255,255,${i % 3 === 0 ? 0.8 : 0.5})`}
-            strokeWidth={i % 3 === 0 ? 2 : 1.1}
-            {...draw(i % 6)}
-          />
-        ))}
-        {verticals.map((d, i) => (
-          <motion.path
-            key={d}
-            d={d}
-            stroke={`rgba(255,255,255,${i % 3 === 1 ? 0.75 : 0.45})`}
-            strokeWidth={i % 3 === 1 ? 1.8 : 1}
-            {...draw((i + 2) % 6)}
-          />
-        ))}
-        {diagonals.map((d, i) => (
-          <motion.path
-            key={d}
-            d={d}
-            stroke="rgba(255,255,255,0.4)"
-            strokeWidth="1.2"
-            {...draw((i + 4) % 6)}
-          />
-        ))}
-      </g>
+      <path d={PIN_BODY_D} fill={`url(#pb${uid})`} />
+      <circle cx="60" cy="48" r="30" fill={`url(#pr${uid})`} />
+      <path d={PIN_WRENCH_D} fill={`url(#pg${uid})`} />
+      <defs>
+        <linearGradient id={`pb${uid}`} x1="60" y1="3" x2="60" y2="116" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#79ADF3" />
+          <stop offset="1" stopColor="#9AC4F8" />
+        </linearGradient>
+        <linearGradient id={`pr${uid}`} x1="60" y1="18" x2="60" y2="78" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#79ADF3" />
+          <stop offset="1" stopColor="#9AC4F8" />
+        </linearGradient>
+        <linearGradient id={`pg${uid}`} x1="60" y1="16" x2="60" y2="81" gradientUnits="userSpaceOnUse">
+          <stop stopColor="#EBF4FF" />
+          <stop offset="1" stopColor="#fff" />
+        </linearGradient>
+      </defs>
+    </svg>
+  );
+}
+
+function MapArt({ shown, reduce, base }: Beat) {
+  // The booked shop gets the big pin; the runner-up sits smaller, further
+  // out. Both in the top strip — the $347 card overlays the lower half.
+  const pins = [
+    { left: "37%", top: "31%", w: 44 },
+    { left: "70.5%", top: "19%", w: 30 },
+  ];
+  return (
+    <div className="absolute inset-0" aria-hidden>
+      {/* Donor for the screen blend: saturated up top where the map should
+          read at full strength, gone by ~85% where the stage takes over. */}
+      <div
+        className="absolute inset-0 bg-[linear-gradient(180deg,#91c5eb_0%,#b7d8f3_55%,transparent_85%)]"
+      />
+      <motion.img
+        src={MAP_PREVIEW_URL}
+        alt=""
+        loading="lazy"
+        className="absolute inset-0 h-full w-full object-cover mix-blend-screen [mask-image:linear-gradient(180deg,black_0%,black_55%,transparent_92%)]"
+        style={{ filter: "grayscale(1) brightness(2.6) contrast(1.9)" }}
+        initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 1.06 }}
+        animate={shown ? { opacity: 1, scale: 1 } : undefined}
+        transition={{ delay: reduce ? 0 : base + 0.15, duration: reduce ? 0.4 : 1.1, ease: EASE }}
+      />
       {pins.map((p, i) => (
-        <motion.g
+        <motion.span
           key={i}
+          className="absolute block"
+          style={{
+            left: p.left,
+            top: p.top,
+            width: p.w,
+            height: p.w,
+            // Anchor the teardrop's tip on the spot.
+            marginLeft: -p.w / 2,
+            marginTop: -p.w,
+          }}
           initial={reduce ? { opacity: 0 } : { opacity: 0, scale: 0, y: -12 }}
           animate={shown ? { opacity: 1, scale: 1, y: 0 } : undefined}
-          style={{ transformOrigin: `${p.cx}px ${p.cy}px` }}
           transition={
             reduce
               ? { duration: 0.4 }
               : { delay: base + 0.62 + i * 0.12, type: "spring", stiffness: 300, damping: 16 }
           }
         >
-          {/* White marker dot under the mark, like the frame's map pins. */}
-          <circle cx={p.cx} cy={p.cy} r={p.w * 0.3} fill="white" opacity="0.95" />
-          {/* Anchor the pin's tip (bottom-center of the mark) on the spot. */}
-          <image
-            href="/pin-logo-3d.png"
-            x={p.cx - p.w / 2}
-            y={p.cy - p.w * 0.88}
-            width={p.w}
-            height={p.w}
-          />
-        </motion.g>
+          <PinMark size={p.w} uid={`path${i}`} />
+        </motion.span>
       ))}
-    </svg>
+      {/* Required credit when the API logo is off. */}
+      <span className="absolute bottom-1.5 right-2.5 text-[6.5px] tracking-wide text-[#3a556e]/55">
+        © Mapbox © OpenStreetMap
+      </span>
+    </div>
   );
 }
 
@@ -557,7 +586,7 @@ const AUTH_TIERS = [
   // Resting state matches the Figma frame verbatim: the hold is already
   // authorized, the payout note showing, bar most of the way (2026-08-30 —
   // "exactly like the figma"). ↵ confirm settles it.
-  { status: "Authorized · held", note: "Job complete · paid out in 24 hours.", fill: 0.85, done: false, control: "confirm" },
+  { status: "Authorized · held", note: "Job complete · paid out in 24 hours.", fill: 0.62, done: false, control: "confirm" },
   { status: "Confirmed", note: "Job complete · paid out in 24 hours.", fill: 1, done: true, control: "confirmed" },
 ] as const;
 
@@ -580,13 +609,15 @@ function AuthCard(beat: Beat) {
             shown={shown}
             reduce={reduce}
             base={base}
-            className="absolute inset-x-4 top-[57%] -translate-y-1/2 sm:inset-x-5"
+            /* Bottom-anchored and wide — the frame parks the card low over
+               the map with a slim inset, not floated mid-stage (2026-08-31). */
+            className="absolute inset-x-4 bottom-4 sm:inset-x-5"
           >
-            <div className="rounded-[14px] bg-white/55 px-5 py-4 shadow-[0_14px_34px_rgba(43,84,120,0.14)] backdrop-blur-lg">
+            <div className="rounded-[16px] border-[0.5px] border-white/50 bg-white/20 px-5 py-4 backdrop-blur-[35px]">
               <p className="text-[22px] leading-none text-[#1a1a1a]" style={{ ...serif, fontWeight: 500 }}>
                 $347
               </p>
-              <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-[#e9f1fa]/80 px-2.5 py-1">
+              <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/55 px-2.5 py-1 ring-1 ring-white/70">
                 <motion.span
                   className="h-1.5 w-1.5 rounded-full"
                   animate={{
@@ -654,7 +685,7 @@ function AuthCard(beat: Beat) {
       controls={
         <Pop at={0.7} shown={shown} reduce={reduce} base={base}>
           {tier === 0 ? (
-            <ActionPill onClick={() => setTier(1)} label="Confirm the booking demo">
+            <ActionPill onClick={() => setTier(1)} label="Confirm the booking demo" tone="soft">
               <CornerDownLeft className="h-3.5 w-3.5" strokeWidth={2.2} />
               confirm
             </ActionPill>
@@ -721,15 +752,15 @@ export default function PathSection() {
           meet it. Row gap is 0 because the caption carries its own `mt-4`. */}
       <div
         ref={rowRef}
-        className="mt-10 grid grid-cols-1 gap-6 lg:mt-14 lg:grid-cols-3 lg:grid-rows-[minmax(380px,1fr)_auto] lg:gap-x-5 lg:gap-y-0"
+        className="mt-10 grid grid-cols-1 gap-6 lg:mt-14 lg:grid-cols-3 lg:grid-rows-[minmax(348px,1fr)_auto] lg:gap-x-5 lg:gap-y-0"
       >
-        <div className="min-h-[440px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
+        <div className="min-h-[410px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
           <VoiceIntakeCard shown={shown} reduce={reduce} base={LEAD[0]} />
         </div>
-        <div className="min-h-[440px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
+        <div className="min-h-[410px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
           <PayCard shown={shown} reduce={reduce} base={LEAD[1]} />
         </div>
-        <div className="min-h-[440px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
+        <div className="min-h-[410px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
           <AuthCard shown={shown} reduce={reduce} base={LEAD[2]} />
         </div>
       </div>

@@ -58,6 +58,7 @@ import type * as dataTires from "../dataTires.js";
 import type * as dataVehicleResolve from "../dataVehicleResolve.js";
 import type * as dataVerification from "../dataVerification.js";
 import type * as dataVins from "../dataVins.js";
+import type * as decodeCardSpecs from "../decodeCardSpecs.js";
 import type * as devOnly_ageOilRecord from "../devOnly/ageOilRecord.js";
 import type * as devOnly_auditConfigs from "../devOnly/auditConfigs.js";
 import type * as devOnly_auditCoreRoles from "../devOnly/auditCoreRoles.js";
@@ -687,6 +688,7 @@ declare const fullApi: ApiFromModules<{
   dataVehicleResolve: typeof dataVehicleResolve;
   dataVerification: typeof dataVerification;
   dataVins: typeof dataVins;
+  decodeCardSpecs: typeof decodeCardSpecs;
   "devOnly/ageOilRecord": typeof devOnly_ageOilRecord;
   "devOnly/auditConfigs": typeof devOnly_auditConfigs;
   "devOnly/auditCoreRoles": typeof devOnly_auditCoreRoles;

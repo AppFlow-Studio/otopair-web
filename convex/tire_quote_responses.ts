@@ -212,7 +212,6 @@ export const requote = mutation({
       estimated_duration_minutes: args.estimated_duration_minutes,
       revision: revision + 1,
       modified_at: now,
-      expires_at: now + QUOTE_HOLD_DURATION_MS,
     });
     return response._id;
   },

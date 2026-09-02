@@ -225,7 +225,6 @@ export const requote = mutation({
       pad_quantity: args.pad_quantity,
       revision: revision + 1,
       modified_at: now,
-      expires_at: now + QUOTE_HOLD_DURATION_MS,
     });
     return response._id;
   },

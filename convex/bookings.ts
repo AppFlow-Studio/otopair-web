@@ -9417,6 +9417,33 @@ export async function applyBookingStatusTransition(
 
   await ctx.db.patch(booking._id, patch);
 
+  /*
+   * Clear any outstanding "customer hasn't checked in" alerts.
+   *
+   * processCustomerLateMonitors raises customer_late_* outbox rows every
+   * minute while a confirmed booking has no arrival, but nothing ever
+   * resolved them — so the customer's home banner kept insisting the car
+   * hadn't arrived long after it had, and the shop kept a stale alert. Any
+   * transition out of the awaiting-arrival states settles the question:
+   * either the car turned up, or the booking is over.
+   */
+  if (newStatus !== "confirmed" && newStatus !== "pending") {
+    const staleLate = await ctx.db
+      .query("notification_outbox")
+      .withIndex("by_booking_id", (q: any) => q.eq("booking_id", booking._id))
+      .collect();
+    const now = Date.now();
+    for (const row of staleLate) {
+      if (
+        typeof row.category === "string" &&
+        row.category.startsWith("customer_late") &&
+        row.resolved_at == null
+      ) {
+        await ctx.db.patch(row._id, { resolved_at: now });
+      }
+    }
+  }
+
   if (
     ["cancelled", "no_show", "completed"].includes(newStatus) &&
     booking.time_slot_id

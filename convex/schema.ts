@@ -6547,6 +6547,36 @@ export default defineSchema({
     .index("by_vehicle_config", ["vehicle_config_id"])
     .index("by_tier", ["tier_id"]),
 
+  // Director-authored make/model/trim → tier rules. A live, no-deploy layer
+  // that sits ABOVE the hardcoded ASSIGNMENT_RULES engine (convex/seeds/
+  // seedPricing.ts): consulted first by lib/tierResolver.ts so a rule applies
+  // to every future onboarded car AND (via directorPricing.retierConfigs) to
+  // already-onboarded matching configs. Per-config manual overrides
+  // (vehicle_configs.pricing_tier_source === "manual") always win over rules.
+  //
+  // Matching mirrors matchRule: make_key equality, model_includes/trim_includes
+  // substring (lowercased), optional inclusive year range. Most-specific rule
+  // wins (trim-scoped > model-scoped > make-only), tie-broken by newest.
+  pricing_tier_rules: defineTable({
+    // Display make ("Mercedes-Benz") + normalized identity key (makeKeyOf).
+    make: v.string(),
+    make_key: v.string(),
+    // Optional narrowers — substring match against the model / trim name.
+    model_includes: v.optional(v.string()),
+    trim_includes: v.optional(v.string()),
+    year_min: v.optional(v.number()),
+    year_max: v.optional(v.number()),
+    tier: tierValidator,
+    enabled: v.boolean(),
+    note: v.optional(v.string()),
+    created_by: v.optional(v.id("director_users")),
+    actor_name: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_make_key", ["make_key"])
+    .index("by_enabled", ["enabled"]),
+
   // CCB carve-out — absolute price bands (cents), not multiplied. Keyed by
   // service_id (e.g. a future "ccb_pad_replacement_front_pair" service row).
   ccb_absolute_prices: defineTable({

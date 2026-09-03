@@ -60,6 +60,10 @@ import {
   completeCustomJobsForBooking,
 } from "./customJobs";
 import { serviceMatchKey } from "./lib/serviceMatch";
+import {
+  parseAgreedLaborAllocations,
+  resolveAgreedLaborLines,
+} from "./lib/laborBreakdown";
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
@@ -10849,11 +10853,12 @@ export const getJobDetail = query({
     // by construction. Legacy rows predate the breakdown; fall back to the
     // booking's original base estimate (also base-only), never the conflated
     // total. Custom-job lines seed their own labor from custom_jobs separately.
-    const recordedBaseLaborHours = Array.isArray(agreedApproval?.labor_allocations)
-      ? (agreedApproval.labor_allocations as any[]).find(
-          (a: any) => a?.line_key === "base",
-        )?.hours
-      : undefined;
+    // Parse the agreed per-line labor once via the shared reader. `baseHours`
+    // seeds the BASE line (base-only, not the conflated whole-approval total);
+    // `recordedByKey` (custom-job id → hours) seeds each custom line, gated
+    // below on "not touched since the agreement".
+    const { baseHours: recordedBaseLaborHours, byLineKey: recordedByKey } =
+      parseAgreedLaborAllocations(agreedApproval?.labor_allocations);
     const effectiveEstimatedLaborMinutes: number | null =
       typeof recordedBaseLaborHours === "number"
         ? hoursToMinutes(recordedBaseLaborHours)
@@ -10873,21 +10878,8 @@ export const getJobDetail = query({
     // client applies it only in the post-job flow.
     const customLaborOverridesMinutes: Record<string, number> = {};
     {
-      const agreedAllocs = Array.isArray(agreedApproval?.labor_allocations)
-        ? (agreedApproval.labor_allocations as any[])
-        : [];
       const agreedSubmittedAtMs = (agreedApproval?.submitted_at_ms ??
         agreedApproval?._creationTime) as number | undefined;
-      const recordedByKey = new Map<string, number>();
-      for (const a of agreedAllocs) {
-        if (
-          a?.line_key &&
-          a.line_key !== "base" &&
-          typeof a.hours === "number"
-        ) {
-          recordedByKey.set(String(a.line_key), a.hours);
-        }
-      }
       if (recordedByKey.size > 0 && agreedSubmittedAtMs != null) {
         const customRows = await ctx.db
           .query("custom_jobs")
@@ -17510,19 +17502,6 @@ export const getReceipt = query({
     // below can still attribute labor to the line instead of dumping the whole
     // labor subtotal onto the original service's row. Keyed on the same
     // match_key the display copy dedupes on.
-    const customJobMinutesByKey = new Map<string, number>();
-    for (const c of customJobRows) {
-      if (c.status === "declined") continue;
-      const key = c.match_key ?? serviceMatchKey(String(c.name));
-      const mins =
-        typeof c.estimated_minutes === "number" && c.estimated_minutes > 0
-          ? c.estimated_minutes
-          : null;
-      if (mins != null && !customJobMinutesByKey.has(key)) {
-        customJobMinutesByKey.set(key, mins);
-      }
-    }
-
     const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
     const mechanic = booking.mechanic_id
       ? await ctx.db.get(booking.mechanic_id)
@@ -17555,75 +17534,65 @@ export const getReceipt = query({
       labor_hours: number | null;
       labor_cost: number | null;
     };
-    const serviceLines: ServiceLine[] = [];
-    let totalHours = 0;
-    const rawServices: Array<{ name: string; hours: number | null }> = [];
+    // Booked (catalog) services — name + catalog default hours. The per-line
+    // AGREED split lives in resolveAgreedLaborLines (the single reader shared
+    // with the post-job Labor step's seeding), so both derive per-line labor
+    // from the same canonical source instead of a hand-rolled copy that drifts.
+    const baseServices: Array<{ name: string; catalogHours: number | null }> =
+      [];
     if (Array.isArray(booking.service_ids)) {
       for (const sid of booking.service_ids) {
         const svc: any = await ctx.db.get(sid);
         if (!svc) continue;
-        const hours: number | null =
-          typeof svc.default_labor_hours === "number"
-            ? svc.default_labor_hours
-            : null;
-        if (hours != null) totalHours += hours;
-        rawServices.push({ name: svc.name ?? "Service", hours });
+        baseServices.push({
+          name: svc.name ?? "Service",
+          catalogHours:
+            typeof svc.default_labor_hours === "number"
+              ? svc.default_labor_hours
+              : null,
+        });
       }
     }
-    // Off-catalog lines join the SAME list, before the split below, so labor is
-    // apportioned across everything the customer is paying for.
-    //
-    // They used to be appended after the split with labor_cost: null, which put
-    // a $0 line on the receipt next to labor that appeared from nowhere in the
-    // totals — and on a custom-only job the split had nothing to divide across
-    // at all, so every line read $0 against a real charge.
-    //
-    // A custom line has no catalog default_labor_hours; the mechanic's own
-    // estimate is the honest stand-in.
-    if (Array.isArray((booking as any).custom_services)) {
-      for (const c of (booking as any).custom_services) {
-        const name = typeof c?.name === "string" ? c.name.trim() : "";
-        if (!name) continue;
-        // Declined mid-job lines are reverted off `custom_services` at decline
-        // time; this is the belt-and-suspenders guard so a declined line can
-        // never become a charged receipt row (or steal labor apportionment)
-        // even on a legacy/edge booking where the strip didn't run.
-        if (declinedMatchKeys.has(serviceMatchKey(name))) continue;
-        const mins =
-          typeof c?.duration_minutes === "number" && c.duration_minutes > 0
-            ? c.duration_minutes
-            : (customJobMinutesByKey.get(serviceMatchKey(name)) ?? null);
-        const hours = mins != null ? mins / 60 : null;
-        if (hours != null) totalHours += hours;
-        rawServices.push({ name, hours });
-      }
-    }
-    // Labor to split across service lines — the agreed approval labor when
-    // present, else the booking's labor_cost. Keeps each service row's labor
-    // consistent with the Labor row in the totals stack below.
+    // Off-catalog lines share the split so labor is apportioned across
+    // everything the customer pays for. Declined mid-job lines are reverted off
+    // `custom_services` at decline time; this guard drops any that slipped
+    // through so a declined line can never bill or steal apportionment.
+    const customServices: Array<{
+      name: string;
+      durationMinutes: number | null;
+    }> = Array.isArray((booking as any).custom_services)
+      ? ((booking as any).custom_services as any[])
+          .filter((c: any) => {
+            const name = typeof c?.name === "string" ? c.name.trim() : "";
+            return name && !declinedMatchKeys.has(serviceMatchKey(name));
+          })
+          .map((c: any) => ({
+            name: String(c.name).trim(),
+            durationMinutes:
+              typeof c?.duration_minutes === "number"
+                ? c.duration_minutes
+                : null,
+          }))
+      : [];
+    // Labor to split — the agreed approval labor when present, else the
+    // booking's labor_cost. Keeps each line consistent with the Labor row below.
     const laborSubtotal: number | null =
       finalApproval != null
         ? finalApproval.labor_cents! / 100
         : (booking.labor_cost ?? null);
-    const bookingLaborCost = laborSubtotal;
-    for (const s of rawServices) {
-      let lineCost: number | null = null;
-      if (
-        bookingLaborCost != null &&
-        s.hours != null &&
-        totalHours > 0
-      ) {
-        lineCost = (bookingLaborCost * s.hours) / totalHours;
-      } else if (rawServices.length === 1 && bookingLaborCost != null) {
-        lineCost = bookingLaborCost;
-      }
-      serviceLines.push({
-        type: "service",
-        name: s.name,
-        labor_hours: s.hours,
-        labor_cost: lineCost,
-      });
-    }
+    const { lines: resolvedLaborLines } = resolveAgreedLaborLines({
+      baseServices,
+      customServices,
+      customJobs: customJobRows as any,
+      allocations: (finalApproval as any)?.labor_allocations ?? null,
+      laborSubtotalDollars: laborSubtotal,
+    });
+    const serviceLines: ServiceLine[] = resolvedLaborLines.map((l) => ({
+      type: "service",
+      name: l.name,
+      labor_hours: l.laborHours,
+      labor_cost: l.laborCost,
+    }));
 
     // Parts line items — prefer the approved pre-job estimate snapshot, which
     // carries the prices + quantities the customer agreed to (including any

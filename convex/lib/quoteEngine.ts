@@ -15,7 +15,7 @@
 import { Doc, Id } from "../_generated/dataModel";
 import { QueryCtx } from "../_generated/server";
 import { resolveLaborRate, VehicleTier } from "./vehicleTiers";
-import { ASSIGNMENT_RULES, matchRule } from "../seeds/seedPricing";
+import { resolveTierForConfig } from "./tierResolver";
 import {
   resolveServiceUnitCount,
   resolveLaborUnitCount,
@@ -26,7 +26,6 @@ import {
 // labor aggregator so both compute the same tier floor).
 export { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig } from "./laborFallback";
 import { CAMRY_FWD_CONFIG_KEY, getCamryFwdConfig, computeLaborTierFloorHours } from "./laborFallback";
-import { withinGuardrail } from "./laborBands";
 import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "./laborConstants";
 import { aggregatePartsBand, type PartsRoleInput } from "./partsBand";
 import { resolveRoleQuantity, type VehicleSpecBundle } from "./partRoleQuantity";
@@ -408,13 +407,17 @@ async function resolveBaseLaborHours(
     };
   }
 
-  // Both raw and floor present — reconcile per Round 6 policy (guardrail-aware).
+  // Both raw and floor present — reconcile. Policy (Sep 2026): ALWAYS round UP
+  // to the tier floor. The Camry × tier multiplier is the minimum realistic
+  // time for the tier, so any book/aggregated/sibling value below it is
+  // substituted. (Previously a 15-min guardrail kept small shortfalls, which
+  // hid the tier premium on short services — e.g. a T2/T3 oil change collapsed
+  // back to the ~30-min Camry book time regardless of tier.)
   const r = raw!;
   const f = floor!;
-  // Empirical (real post-job actuals, ≥ the quote sample gate) is the highest-
-  // trust source — it bypasses the floor entirely; a Camry estimate must never
-  // override measured times. (Decision Jun-13: the floor applies to book/aggregated
-  // data, not empirical.)
+  // Empirical (real post-job actuals, ≥ the quote sample gate) stays
+  // authoritative — measured shop time is never inflated to a modeled floor.
+  // (Decision Jun-13: the floor applies to book/aggregated data, not empirical.)
   if (r.source === "empirical") {
     return {
       ok: true,
@@ -425,18 +428,7 @@ async function resolveBaseLaborHours(
     };
   }
   if (r.hours < f.hours) {
-    if (withinGuardrail(r.hours, f.hours)) {
-      // Raw is within 15 min of the floor — real value is credible; don't inflate.
-      return {
-        ok: true,
-        hours: r.hours,
-        source: r.source,
-        confidence: r.confidence,
-        raw_hours: r.hours,
-        tier_floor_applied: false,
-      };
-    }
-    // Raw is more than 15 min below the floor — substitute floor value.
+    // Below the tier floor → round up to it.
     return {
       ok: true,
       hours: f.hours,
@@ -1035,30 +1027,20 @@ function refuse(reason: string): Quote {
   };
 }
 
-// ─── detectTier — read-only ASSIGNMENT_RULES walk ───────────────────────────
-// Used when vehicle_configs.pricing_tier is null. Pure: returns the tier or
-// null without writing. The persisting write happens in quotes:previewForBooking.
+// ─── detectTier — read-only tier resolution ─────────────────────────────────
+// Used when vehicle_configs.pricing_tier is null. Read-only: returns the tier
+// or null without writing. Delegates to lib/tierResolver so Director
+// pricing_tier_rules win over the hardcoded ASSIGNMENT_RULES here too — a rule
+// change reprices fresh quotes immediately. The persisting write happens in
+// quotes:previewForBooking (and now at config creation).
 
 export async function detectTier(
   ctx: QueryCtx,
   cfg: Doc<"vehicle_configs">,
 ): Promise<VehicleTier | null> {
   if (cfg.pricing_tier) return cfg.pricing_tier as VehicleTier;
-  const [make, model] = await Promise.all([
-    ctx.db.get(cfg.make_id),
-    ctx.db.get(cfg.model_id),
-  ]);
-  if (!make || !model) return null;
-  const matchCtx = {
-    make: make.name,
-    model: (model as any).name ?? "",
-    trim: cfg.trim_name ?? "",
-    year: cfg.year,
-  };
-  for (const rule of ASSIGNMENT_RULES) {
-    if (matchRule(rule, matchCtx)) return rule.tier;
-  }
-  return null;
+  const res = await resolveTierForConfig(ctx.db, cfg);
+  return res.tier;
 }
 
 // ─── resolveVehicleConfigFromVin ────────────────────────────────────────────

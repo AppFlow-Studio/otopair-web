@@ -86,6 +86,7 @@ import {
   INSPECTION_ZONES_BY_ID,
   requiredZonesForBooking,
   requiresRotorStampPhoto,
+  scheduleCopyDestinationNavigation,
   toggleInspectionTreadMode,
   TRI_LABELS,
   triLabelFor,
@@ -614,17 +615,19 @@ function MultiPointInspectionDialogBody({
   // surfaces at the diagram the instant a corner is marked complete (the locked
   // rule: mirror a wheel only after its inspection is fully complete).
   // `copyPromptCopied` flips the bar from its offer state to a brief "Copied ✓"
-  // confirmation that auto-clears after a beat — the mechanic stays on the diagram.
+  // confirmation before opening the copied-to corner.
   const [copyPromptFor, setCopyPromptFor] = useState<CornerZoneId | null>(null);
   const [copyPromptCopied, setCopyPromptCopied] = useState(false);
   useEffect(() => {
-    if (!copyPromptCopied) return;
-    const timer = window.setTimeout(() => {
+    if (!copyPromptCopied || !copyPromptFor) return;
+    const destination = OPPOSITE_CORNER[copyPromptFor];
+    return scheduleCopyDestinationNavigation(destination, () => {
       setCopyPromptFor(null);
       setCopyPromptCopied(false);
-    }, 2000);
-    return () => window.clearTimeout(timer);
-  }, [copyPromptCopied]);
+      pendingZoneScrollRef.current = "smooth";
+      setActiveZone(destination);
+    });
+  }, [copyPromptCopied, copyPromptFor]);
   const [hydrated, setHydrated] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const [showBrakeFluidGuide, setShowBrakeFluidGuide] = useState(false);

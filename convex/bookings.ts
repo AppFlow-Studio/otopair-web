@@ -17523,6 +17523,34 @@ export const getReceipt = query({
       }
     }
 
+    // Agreed per-line labor hours from the final approval. `line_key` "base" is
+    // the booked service(s) lump; every other key is a custom-job id. This is
+    // the labor the customer AGREED to for each line — including a mid-job edit
+    // to a line's hours (e.g. the mechanic setting the oil change to 0.4h) — so
+    // it must win over the line's ORIGINAL estimate when the receipt shows and
+    // attributes per-line labor. Reading `custom_jobs.estimated_minutes` (the
+    // pre-edit estimate) here printed the stale time — e.g. 0.2833h instead of
+    // the agreed 0.4h — and then mis-split the labor dollars by that stale ratio
+    // (the agreed hours still landed in the Labor subtotal, so only the per-line
+    // split was wrong, which is why the totals looked right but the lines didn't).
+    const laborAllocByLineKey = new Map<string, number>();
+    if (Array.isArray((finalApproval as any)?.labor_allocations)) {
+      for (const a of (finalApproval as any).labor_allocations as any[]) {
+        if (a?.line_key != null && typeof a.hours === "number") {
+          laborAllocByLineKey.set(String(a.line_key), a.hours);
+        }
+      }
+    }
+    const baseAllocHours = laborAllocByLineKey.get("base");
+    // match_key → custom-job id, so a custom_services display line (keyed by
+    // name/match_key) can find its allocation (keyed by custom-job id).
+    const customJobIdByKey = new Map<string, string>();
+    for (const c of customJobRows) {
+      if (c.status === "declined") continue;
+      const key = c.match_key ?? serviceMatchKey(String(c.name));
+      if (!customJobIdByKey.has(key)) customJobIdByKey.set(key, String(c._id));
+    }
+
     const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
     const mechanic = booking.mechanic_id
       ? await ctx.db.get(booking.mechanic_id)
@@ -17558,17 +17586,41 @@ export const getReceipt = query({
     const serviceLines: ServiceLine[] = [];
     let totalHours = 0;
     const rawServices: Array<{ name: string; hours: number | null }> = [];
+    // Booked (catalog) services carry a single "base" labor lump on the
+    // approval. When it's present it wins over the catalog defaults (the
+    // mechanic can revise base labor pre/mid-job); distribute it across the
+    // booked lines in proportion to their catalog hours so the lines still read
+    // naturally and sum to the agreed base.
+    const baseCatalog: Array<{ name: string; catalogHours: number | null }> = [];
     if (Array.isArray(booking.service_ids)) {
       for (const sid of booking.service_ids) {
         const svc: any = await ctx.db.get(sid);
         if (!svc) continue;
-        const hours: number | null =
-          typeof svc.default_labor_hours === "number"
-            ? svc.default_labor_hours
-            : null;
-        if (hours != null) totalHours += hours;
-        rawServices.push({ name: svc.name ?? "Service", hours });
+        baseCatalog.push({
+          name: svc.name ?? "Service",
+          catalogHours:
+            typeof svc.default_labor_hours === "number"
+              ? svc.default_labor_hours
+              : null,
+        });
       }
+    }
+    const catalogHoursSum = baseCatalog.reduce(
+      (s, b) => s + (b.catalogHours ?? 0),
+      0,
+    );
+    for (const b of baseCatalog) {
+      let hours: number | null = b.catalogHours;
+      if (baseAllocHours != null) {
+        hours =
+          catalogHoursSum > 0 && b.catalogHours != null
+            ? baseAllocHours * (b.catalogHours / catalogHoursSum)
+            : baseCatalog.length === 1
+              ? baseAllocHours
+              : b.catalogHours;
+      }
+      if (hours != null) totalHours += hours;
+      rawServices.push({ name: b.name, hours });
     }
     // Off-catalog lines join the SAME list, before the split below, so labor is
     // apportioned across everything the customer is paying for.
@@ -17589,11 +17641,22 @@ export const getReceipt = query({
         // never become a charged receipt row (or steal labor apportionment)
         // even on a legacy/edge booking where the strip didn't run.
         if (declinedMatchKeys.has(serviceMatchKey(name))) continue;
-        const mins =
-          typeof c?.duration_minutes === "number" && c.duration_minutes > 0
-            ? c.duration_minutes
-            : (customJobMinutesByKey.get(serviceMatchKey(name)) ?? null);
-        const hours = mins != null ? mins / 60 : null;
+        const key = serviceMatchKey(name);
+        // The labor AGREED for this line (a mid-job hours edit lands here) wins
+        // over its original add-time estimate.
+        const jobId = customJobIdByKey.get(key);
+        const allocHours =
+          jobId != null ? laborAllocByLineKey.get(jobId) : undefined;
+        let hours: number | null;
+        if (typeof allocHours === "number") {
+          hours = allocHours;
+        } else {
+          const mins =
+            typeof c?.duration_minutes === "number" && c.duration_minutes > 0
+              ? c.duration_minutes
+              : (customJobMinutesByKey.get(key) ?? null);
+          hours = mins != null ? mins / 60 : null;
+        }
         if (hours != null) totalHours += hours;
         rawServices.push({ name, hours });
       }
@@ -17620,7 +17683,10 @@ export const getReceipt = query({
       serviceLines.push({
         type: "service",
         name: s.name,
-        labor_hours: s.hours,
+        // Round DISPLAY hours to 2 dp so the receipt reads "0.4 HRS", not
+        // "0.2833333333333333 HRS". The dollar split above uses full-precision
+        // hours, so labor_cost still reconciles exactly to the Labor subtotal.
+        labor_hours: s.hours != null ? Math.round(s.hours * 100) / 100 : null,
         labor_cost: lineCost,
       });
     }

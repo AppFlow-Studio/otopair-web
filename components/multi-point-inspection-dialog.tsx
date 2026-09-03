@@ -25,12 +25,15 @@ import {
   Copy,
   Download,
   EyeOff,
+  Info,
   Loader2,
   Plus,
   RotateCcw,
   Trash2,
   Wrench,
+  X,
 } from "lucide-react";
+import Image from "next/image";
 import { useMutation, useQuery, useAction } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import { api } from "@/convex/_generated/api";
@@ -624,6 +627,7 @@ function MultiPointInspectionDialogBody({
   }, [copyPromptCopied]);
   const [hydrated, setHydrated] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [showBrakeFluidGuide, setShowBrakeFluidGuide] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<ZoneId, { fieldKey: string; message: string }>>
@@ -1950,6 +1954,12 @@ function MultiPointInspectionDialogBody({
         maxWidthClassName="max-w-2xl"
         mobileFullBleed
         sideRailSlotId={INSPECTION_SIDE_RAIL_ID}
+        sideGuide={
+          showBrakeFluidGuide ? (
+            <BrakeFluidGuideCard onClose={() => setShowBrakeFluidGuide(false)} />
+          ) : null
+        }
+        disableEscape={showBrakeFluidGuide}
         contentClassName="min-h-0 flex-1 overflow-y-auto px-5 pb-4 sm:px-6 sm:pb-5"
         headerBadge={
           isFirstVisit ? (
@@ -2346,6 +2356,7 @@ function MultiPointInspectionDialogBody({
                     setPhotoToRemove({ zoneId: activeZone, storageId })
                   }
                   onToggleDone={() => handleToggleZone(activeZone)}
+                  onOpenBrakeFluidGuide={() => setShowBrakeFluidGuide(true)}
                   onPrevious={() => {
                     const index = NAV_ZONE_IDS.indexOf(activeZone);
                     openZoneAtTop(
@@ -2394,6 +2405,10 @@ function MultiPointInspectionDialogBody({
           </div>
         )}
       </SurveyDialogShell>
+      <BrakeFluidLevelGuide
+        open={showBrakeFluidGuide}
+        onClose={() => setShowBrakeFluidGuide(false)}
+      />
       <ConfirmationDialog
         open={photoToRemove !== null}
         title="Remove this photo?"
@@ -2930,6 +2945,7 @@ function ZonePanel({
   onPhoto,
   onRemovePhoto,
   onToggleDone,
+  onOpenBrakeFluidGuide,
   onPrevious,
   onNext,
   fieldSaveState,
@@ -2958,6 +2974,7 @@ function ZonePanel({
   onPhoto: (file: File, tag?: "general" | "rotor_stamp") => void;
   onRemovePhoto: (storageId: string) => void;
   onToggleDone: () => void;
+  onOpenBrakeFluidGuide: () => void;
   onPrevious: () => void;
   onNext: () => void;
   /** Per-field autosave state, keyed `${zoneId}::${fieldKey}`. */
@@ -3226,6 +3243,7 @@ function ZonePanel({
                 onSharedText(key, value);
               }}
               saveState={fieldSaveState[`${zoneId}::${field.key}`]}
+              onOpenBrakeFluidGuide={onOpenBrakeFluidGuide}
             />
           </div>
         );
@@ -3350,6 +3368,79 @@ function ZonePanel({
   );
 }
 
+function BrakeFluidLevelGuide({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <SurveyDialogShell
+      open={open}
+      onClose={onClose}
+      title="Brake fluid level guide"
+      description="Match the fluid line to the nearest marked level."
+      maxWidthClassName="max-w-xl"
+      mobileFullBleed
+      outerClassName="2xl:hidden"
+      contentClassName="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6 sm:py-5"
+    >
+      <BrakeFluidGuideContent />
+    </SurveyDialogShell>
+  );
+}
+
+function BrakeFluidGuideCard({ onClose }: { onClose: () => void }) {
+  return (
+    <aside className="pointer-events-auto w-[26rem] overflow-hidden rounded-2xl border border-primary/10 bg-card shadow-[0_24px_60px_-12px_rgba(15,23,42,0.22)]">
+      <div className="flex items-start justify-between gap-3 border-b border-primary/10 px-4 py-3.5">
+        <div>
+          <h3 className="text-[15px] font-semibold text-foreground">
+            Brake fluid level guide
+          </h3>
+          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+            Match the fluid line to the nearest marked level.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="-m-1 rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          aria-label="Close brake fluid level guide"
+        >
+          <X className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="p-3">
+        <BrakeFluidGuideContent />
+      </div>
+    </aside>
+  );
+}
+
+function BrakeFluidGuideContent() {
+  return (
+    <div className="space-y-3">
+      <div className="overflow-hidden rounded-xl border border-primary/10 bg-muted/30 p-1">
+        <Image
+          src="/brake-fluid-diagram-3.png"
+          alt="Brake fluid reservoir diagram showing Max, High, Mid, Low, and Min levels"
+          width={1536}
+          height={1008}
+          sizes="(max-width: 640px) 100vw, 352px"
+          className="h-auto w-full object-contain"
+        />
+      </div>
+      <p className="rounded-lg border border-primary/10 bg-primary/[0.03] px-3 py-2 text-[12px] leading-5 text-muted-foreground">
+        Read the fluid surface against the reservoir markings. Select the closest
+        of the five levels; use <span className="font-medium text-foreground">Min</span>{" "}
+        only when it is at the minimum mark.
+      </p>
+    </div>
+  );
+}
+
 function FieldRow({
   zoneId,
   field,
@@ -3364,6 +3455,7 @@ function FieldRow({
   onPatch,
   onSharedText,
   saveState,
+  onOpenBrakeFluidGuide,
 }: {
   zoneId: ZoneId;
   field: InspectionField;
@@ -3383,6 +3475,7 @@ function FieldRow({
   onSharedText: (key: string, value: string) => void;
   /** Autosave state for this field's last edit (spinner / check / retry). */
   saveState?: FieldSaveState;
+  onOpenBrakeFluidGuide: () => void;
 }) {
   const clearUnavailable = () => {
     const statuses = { ...zs.statuses };
@@ -3742,27 +3835,40 @@ function FieldRow({
     return (
       <div className="border-b border-primary/10">
         <Row label={field.label} required={required} saveState={saveState}>
-          <div className="flex w-44 flex-col items-end gap-1">
-            <CompactSelect
-              id={`inspection-${zoneId}-${field.key}`}
-              ariaLabel={field.label}
-              value={isOtherMode ? OTHER_INSPECTION_OPTION : value}
-              options={selectOptions}
-              className="w-44"
-              isDisabled={measurementNotTaken}
-              onChange={writeSelect}
-            />
-            {isOtherMode ? (
-              <input
-                id={`inspection-${zoneId}-${field.key}-other`}
-                aria-label={`Custom ${field.label.toLowerCase()}`}
-                value={value === OTHER_INSPECTION_OPTION ? "" : value}
-                placeholder={`Enter ${field.label.toLowerCase()}`}
-                onChange={(event) => writeSelect(event.target.value)}
-                className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
-              />
+          <div className="flex items-center gap-1">
+            {field.key === "bf_level" ? (
+              <button
+                type="button"
+                onClick={onOpenBrakeFluidGuide}
+                className="shrink-0 p-1 text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                aria-label="How to read brake fluid level"
+                title="How to read brake fluid level"
+              >
+                <Info className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
             ) : null}
-            {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
+            <div className="flex w-44 flex-col items-end gap-1">
+              <CompactSelect
+                id={`inspection-${zoneId}-${field.key}`}
+                ariaLabel={field.label}
+                value={isOtherMode ? OTHER_INSPECTION_OPTION : value}
+                options={selectOptions}
+                className="w-44"
+                isDisabled={measurementNotTaken}
+                onChange={writeSelect}
+              />
+              {isOtherMode ? (
+                <input
+                  id={`inspection-${zoneId}-${field.key}-other`}
+                  aria-label={`Custom ${field.label.toLowerCase()}`}
+                  value={value === OTHER_INSPECTION_OPTION ? "" : value}
+                  placeholder={`Enter ${field.label.toLowerCase()}`}
+                  onChange={(event) => writeSelect(event.target.value)}
+                  className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+                />
+              ) : null}
+              {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
+            </div>
           </div>
           {isMeasurementMethod || field.key === "rotor_applicable"
             ? null

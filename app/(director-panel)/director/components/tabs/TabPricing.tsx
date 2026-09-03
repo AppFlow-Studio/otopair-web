@@ -13,11 +13,13 @@ import { MultiplierMatrix, type MatrixCell, type MatrixColumn, type MatrixRow } 
 import { BaselinesTable } from './pricing/BaselinesTable'
 import { VehicleConfigTierModal } from './pricing/VehicleConfigTierModal'
 import { FallbackHistoryModal } from './pricing/FallbackHistoryModal'
+import { TierRulesSection } from './pricing/TierRulesTable'
 
-type SubTab = 'overview' | 'multipliers' | 'baselines' | 'assignments'
+type SubTab = 'overview' | 'tierRules' | 'multipliers' | 'baselines' | 'assignments'
 
 const SUB_TABS: { id: SubTab; label: string }[] = [
   { id: 'overview',    label: 'Overview' },
+  { id: 'tierRules',   label: 'Make / model tiers' },
   { id: 'multipliers', label: 'Multipliers' },
   { id: 'baselines',   label: 'Baselines' },
   { id: 'assignments', label: 'Vehicle assignments' },
@@ -60,18 +62,32 @@ export const TabPricing = () => {
       {sub === 'overview' && (
         overview === undefined
           ? <LoadingBlock />
-          : <TierOverviewGrid
-              tiers={overview.tiers}
-              vehicleCounts={overview.vehicleCounts}
-              configCounts={overview.configCounts}
-              unassignedVehicles={overview.unassignedVehicles}
-              unassignedConfigs={overview.unassignedConfigs}
-              totalVehicles={overview.totalVehicles}
-              totalConfigs={overview.totalConfigs}
-              onPickTier={handlePickTier}
-            />
+          : <>
+              {overview.unassignedConfigs > 0 && (
+                <div style={{ display:'flex', alignItems:'center', gap:10, padding:'10px 14px', marginBottom:12,
+                  background:'var(--red-50)', border:'1px solid #FECACA', borderRadius:10 }}>
+                  <Badge tone="red" dot>Needs review</Badge>
+                  <span style={{ fontSize:13, color:'var(--slate-700)' }}>
+                    {overview.unassignedConfigs.toLocaleString()} config(s) match no tier rule and can’t be priced.
+                  </span>
+                  <span style={{ flex:1 }} />
+                  <Button size="sm" onClick={() => setSub('tierRules')}>Manage tier rules</Button>
+                </div>
+              )}
+              <TierOverviewGrid
+                tiers={overview.tiers}
+                vehicleCounts={overview.vehicleCounts}
+                configCounts={overview.configCounts}
+                unassignedVehicles={overview.unassignedVehicles}
+                unassignedConfigs={overview.unassignedConfigs}
+                totalVehicles={overview.totalVehicles}
+                totalConfigs={overview.totalConfigs}
+                onPickTier={handlePickTier}
+              />
+            </>
       )}
 
+      {sub === 'tierRules'    && <TierRulesSection unassignedConfigs={overview?.unassignedConfigs} />}
       {sub === 'multipliers'  && <MultipliersSection />}
       {sub === 'baselines'    && <BaselinesTable />}
       {sub === 'assignments'  && <AssignmentsSection initialTier={pickedTier} />}

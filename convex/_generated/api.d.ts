@@ -205,6 +205,7 @@ import type * as lib_intervals from "../lib/intervals.js";
 import type * as lib_job_actuals from "../lib/job_actuals.js";
 import type * as lib_knownIssueEvents from "../lib/knownIssueEvents.js";
 import type * as lib_laborBands from "../lib/laborBands.js";
+import type * as lib_laborBreakdown from "../lib/laborBreakdown.js";
 import type * as lib_laborConstants from "../lib/laborConstants.js";
 import type * as lib_laborFallback from "../lib/laborFallback.js";
 import type * as lib_labor_aggregation from "../lib/labor_aggregation.js";
@@ -837,6 +838,7 @@ declare const fullApi: ApiFromModules<{
   "lib/job_actuals": typeof lib_job_actuals;
   "lib/knownIssueEvents": typeof lib_knownIssueEvents;
   "lib/laborBands": typeof lib_laborBands;
+  "lib/laborBreakdown": typeof lib_laborBreakdown;
   "lib/laborConstants": typeof lib_laborConstants;
   "lib/laborFallback": typeof lib_laborFallback;
   "lib/labor_aggregation": typeof lib_labor_aggregation;

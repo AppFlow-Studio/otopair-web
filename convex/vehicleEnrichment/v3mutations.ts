@@ -21,6 +21,7 @@ import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import type { ExistenceVerdict } from "./partIndex";
 import { isRunStale, RUN_IN_PROGRESS_STATUSES, stripVerifiedFields } from "./runFence";
 import { WEAR_ITEM_SERVICE_SLUGS, parseFrontWiperSizes } from "./types";
+import { resolveTierForVehicle } from "../lib/tierResolver";
 
 /**
  * Family-aware make compatibility for WRITE paths. The strict id-equality
@@ -206,6 +207,27 @@ export const upsertVehicleConfig = internalMutation({
     enrichment_version: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const now = Date.now();
+
+    // Resolve pricing tier at the config-creation chokepoint so every onboarded
+    // car is tiered immediately (or left null → surfaced as "Needs review"),
+    // not only lazily at first quote. Director rules win over the hardcoded
+    // engine (lib/tierResolver). Never clears a set tier with a null result,
+    // and never touches a director's manual pin (pricing_tier_source==="manual").
+    const [makeRow, modelRow] = await Promise.all([
+      ctx.db.get(args.make_id),
+      ctx.db.get(args.model_id),
+    ]);
+    const tierRes =
+      makeRow && modelRow
+        ? await resolveTierForVehicle(ctx.db, {
+            make: (makeRow as { name?: string }).name ?? "",
+            model: (modelRow as { name?: string }).name ?? "",
+            trim: args.trim_name ?? "",
+            year: args.year,
+          })
+        : { tier: null, source: null };
+
     const existing = await ctx.db
       .query("vehicle_configs")
       .withIndex("by_config_key", (q) => q.eq("config_key", args.config_key))
@@ -225,8 +247,13 @@ export const upsertVehicleConfig = internalMutation({
         enrichment_status: args.enrichment_status,
         fill_rate: args.fill_rate,
         enrichment_version: args.enrichment_version,
-        last_enriched_at: Date.now(),
+        last_enriched_at: now,
       };
+      if (existing.pricing_tier_source !== "manual" && tierRes.tier) {
+        patch.pricing_tier = tierRes.tier;
+        patch.pricing_tier_source = tierRes.source ?? undefined;
+        patch.pricing_tier_set_at = now;
+      }
       // Only set nhtsa_vin_key if not already populated — first writer wins so
       // the original NHTSA fingerprint stays stable even if a later enrichment
       // run computes a slightly different one (shouldn't happen, but safe).
@@ -259,8 +286,15 @@ export const upsertVehicleConfig = internalMutation({
       enrichment_status: args.enrichment_status,
       fill_rate: args.fill_rate,
       enrichment_version: args.enrichment_version,
+      ...(tierRes.tier
+        ? {
+            pricing_tier: tierRes.tier,
+            pricing_tier_source: tierRes.source ?? undefined,
+            pricing_tier_set_at: now,
+          }
+        : {}),
       verification_count: 0,
-      created_at: Date.now(),
+      created_at: now,
     });
   },
 });

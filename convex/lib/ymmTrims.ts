@@ -20,6 +20,7 @@
 import {
   carApiModelsForMakeYear,
   carApiYmmtCatalog,
+  modelNamesMatch,
 } from "./carApi";
 import { marketCheckTrimFacets } from "./marketCheck";
 
@@ -54,7 +55,13 @@ function deriveFamilyToken(model: string): string {
  */
 function matchesFamily(modelName: string, familyToken: string): boolean {
   if (!familyToken) return false;
-  return new RegExp(`^${familyToken}\\d`).test(tightKey(modelName));
+  // A leading "AMG" is a sub-brand, not part of the family name. Car API files
+  // these as "AMG GLE 63 S", which flattens to `amggle63s` and fails a
+  // `^gle\d` test — so every AMG variant used to drop out of the expansion.
+  // That did not show while GLE wrongly resolved to E-Class and never reached
+  // this path; now that it does, the AMG trims have to come with it.
+  const key = tightKey(modelName).replace(/^amg/, "");
+  return new RegExp(`^${familyToken}\\d`).test(key);
 }
 
 /** "GLE350" → "GLE 350", "GLE63 AMG S" → "GLE 63 AMG S". */
@@ -123,10 +130,10 @@ export async function fetchYmmTrimsFromProviders(args: {
   const target = tightKey(model);
   const resolved =
     carApiModels.find((m) => tightKey(m) === target) ??
-    carApiModels.find((m) => {
-      const n = tightKey(m);
-      return n.includes(target) || target.includes(n);
-    }) ??
+    // Token-boundary match, not a raw substring one — see modelNamesMatch.
+    // `"gleclass".includes("eclass")` was true, so a GLE resolved to E-Class
+    // and the trim picker offered E 450s.
+    carApiModels.find((m) => modelNamesMatch(m, model)) ??
     null;
 
   let carApiTrims: string[];

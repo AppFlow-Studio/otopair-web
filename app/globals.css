@@ -658,15 +658,17 @@ body {
    type sizes and the full-bleed bands all match the phone design instead of
    8px captions floating across 700px-wide cards (design feedback 2026-09-03,
    "the scaling for tablets looks horrible"). Media queries still see the real
-   viewport, so the `max-tab:` phone rules apply as before. Stepped, not
-   continuous, so there is no JS and no layout flash on load. */
+   viewport, so the `max-tab:` phone rules apply as before. Stepped first-paint fallback for
+   components/flagship/landing/tablet-scale.tsx, which refines it continuously:
+   zoom = min(1.75, (viewport / 402) ^ 0.7) — damped so tablets are neither
+   the 1.9× blow-up nor a stretched phone layout. */
 @media (min-width: 40rem) and (max-width: 63.99rem) {
   .landing-tablet-scale {
-    zoom: 1.6;
+    zoom: 1.38;
   }
 }
 @media (min-width: 48rem) and (max-width: 63.99rem) {
   .landing-tablet-scale {
-    zoom: 1.9;
+    zoom: 1.57;
   }
 }

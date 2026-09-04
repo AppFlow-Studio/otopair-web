@@ -1,4 +1,5 @@
 import PillNav from "@/components/flagship/pill-nav";
+import TabletScale from "@/components/flagship/landing/tablet-scale";
 import FlagshipHero from "@/components/flagship/flagship-hero";
 import WhyOtoSection from "@/components/flagship/landing/why-oto-section";
 import PriceLockSection from "@/components/flagship/landing/price-lock-section";
@@ -10,7 +11,7 @@ import FooterCta from "@/components/flagship/landing/footer-cta";
 
 export default function Home() {
   return (
-    <main className="landing-tablet-scale min-h-screen w-full bg-white">
+    <TabletScale className="min-h-screen w-full bg-white">
       {/* The fixed glass nav must NOT live inside the hero: the hero section
           is overflow-hidden, and Chromium drops a backdrop-filter's backdrop
           for a fixed element inside a scrolled overflow-clipped ancestor —
@@ -34,6 +35,6 @@ export default function Home() {
           <FooterCta />
         </div>
       </div>
-    </main>
+    </TabletScale>
   );
 }

@@ -10,7 +10,7 @@ import FooterCta from "@/components/flagship/landing/footer-cta";
 
 export default function Home() {
   return (
-    <main className="min-h-screen w-full bg-white">
+    <main className="landing-tablet-scale min-h-screen w-full bg-white">
       {/* The fixed glass nav must NOT live inside the hero: the hero section
           is overflow-hidden, and Chromium drops a backdrop-filter's backdrop
           for a fixed element inside a scrolled overflow-clipped ancestor —

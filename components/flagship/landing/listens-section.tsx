@@ -210,7 +210,7 @@ function CopyPanel({
               className={
                 phone
                   ? "mt-[15px] text-[30px] leading-[41px] text-white"
-                  : "mt-5 text-[28px] leading-[1.15] text-white sm:text-[36px] sm:leading-[41px]"
+                  : "mt-5 text-[28px] leading-[1.15] text-white tab:text-[36px] tab:leading-[41px]"
               }
               style={
                 phone
@@ -228,7 +228,7 @@ function CopyPanel({
                   ? // 284, not the frame's 275: Inter sets ~3% wider than
                     // Suisse, and 9px is what keeps the frame's three lines.
                     "mt-4 max-w-[284px] text-[14px] font-normal leading-[23px] tracking-[0.7px] text-white"
-                  : "mt-4 max-w-[300px] text-[14px] font-medium leading-[1.5] text-white/90 sm:text-[15px]"
+                  : "mt-4 max-w-[300px] text-[14px] font-medium leading-[1.5] text-white/90 tab:text-[15px]"
               }
             >
               {story.body}
@@ -272,7 +272,7 @@ function Bubble({
     >
       {/* Figma's bubbles are flat and glassy: radius 10, wide padding. */}
       <div
-        className={`rounded-[10px] px-6 py-4 text-[12px] leading-snug text-[#1a1a1a] shadow-[0_10px_30px_rgba(0,0,0,0.10)] backdrop-blur-md sm:px-9 sm:py-5 sm:text-[13.5px] ${
+        className={`rounded-[10px] px-6 py-4 text-[12px] leading-snug text-[#1a1a1a] shadow-[0_10px_30px_rgba(0,0,0,0.10)] backdrop-blur-md tab:px-9 tab:py-5 tab:text-[13.5px] ${
           tone === "ask" ? "bg-white/45" : "bg-white/40"
         }`}
       >
@@ -661,16 +661,16 @@ export default function ListensSection() {
   return (
     <section
       ref={ref}
-      // Below sm: the mobile frame's 27px side inset and 45px gap under the
+      // Below tab: the mobile frame's 27px side inset and 45px gap under the
       // coverage card. sm and up are unchanged.
-      className="mx-auto w-full max-w-[1440px] px-[27px] pt-[45px] sm:px-10 sm:pt-28 lg:px-[78px]"
+      className="mx-auto w-full max-w-[1440px] px-[27px] pt-[45px] tab:px-10 tab:pt-28 lg:px-[78px]"
     >
       <div>
         <div>
           {/* ---- Phone (<sm): the mobile frame's one tall card (390:3176) —
               frosted copy block over the top 345px, crisp photo below. ---- */}
           <div
-            className="relative w-full overflow-hidden rounded-[20px] bg-[#141e29] sm:hidden"
+            className="relative w-full overflow-hidden rounded-[20px] bg-[#141e29] tab:hidden"
             style={{ height: PHONE.height }}
           >
             <AnimatePresence initial={false}>
@@ -754,7 +754,7 @@ export default function ListensSection() {
           </div>
 
           {/* ---- Tablet (sm to lg): same rotation as a single tall card ---- */}
-          <div className="relative hidden aspect-[624/690] max-h-[560px] w-full overflow-hidden rounded-[24px] bg-[#141e29] sm:block lg:hidden">
+          <div className="relative hidden aspect-[624/690] max-h-[560px] w-full overflow-hidden rounded-[24px] bg-[#141e29] tab:block lg:hidden">
             <AnimatePresence initial={false}>
               <motion.div
                 key={story.id}

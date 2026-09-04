@@ -22,9 +22,9 @@ const EASE = [0.22, 1, 0.36, 1] as const;
    minimums, not content-driven gaps, so the rhythm matches the frame even
    though the live descriptions run a line longer than the placeholder copy. */
 const MOBILE_ROW_MIN_H = [
-  "max-sm:min-h-[96px]",
-  "max-sm:min-h-[93.5px]",
-  "max-sm:min-h-[77.5px]",
+  "max-tab:min-h-[96px]",
+  "max-tab:min-h-[93.5px]",
+  "max-tab:min-h-[77.5px]",
 ] as const;
 
 /* ------------------------------------------------------------------ */
@@ -110,7 +110,7 @@ function StepNode({ n, state }: { n: number; state: "done" | "active" | "todo" }
   const dark = state !== "todo";
   return (
     <motion.span
-      className="z-[2] flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-medium sm:h-9 sm:w-9 sm:text-[14px]"
+      className="z-[2] flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-medium tab:h-9 tab:w-9 tab:text-[14px]"
       initial={false}
       animate={{
         backgroundColor: dark ? "#1a1a1a" : "rgba(255,255,255,0.65)",
@@ -149,22 +149,22 @@ function JobSheet({
   return (
     <div>
       {/* Title (serif, like every headline on the shelf) */}
-      <p className="text-[20px] leading-[26px] text-[#1a1a1a] sm:text-[25px] sm:leading-[32px]" style={serif}>
+      <p className="text-[20px] leading-[26px] text-[#1a1a1a] tab:text-[25px] tab:leading-[32px]" style={serif}>
         Oil Change - John Wilson
       </p>
 
       {/* JOB PROGRESS + CONFIRMED pill */}
-      <div className="mt-5 flex items-center justify-between sm:mt-7">
-        <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-[#33383b] sm:text-[12px]">
+      <div className="mt-5 flex items-center justify-between tab:mt-7">
+        <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-[#33383b] tab:text-[12px]">
           Job Progress
         </span>
-        <span className="rounded-full bg-[#dbe3e8]/90 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.06em] text-[#33383b] sm:text-[9.5px]">
+        <span className="rounded-full bg-[#dbe3e8]/90 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.06em] text-[#33383b] tab:text-[9.5px]">
           Confirmed
         </span>
       </div>
 
       {/* Stepper — 4 nodes, connectors fill as steps complete */}
-      <div className="relative mt-3 flex items-center sm:mt-4">
+      <div className="relative mt-3 flex items-center tab:mt-4">
         {[1, 2, 3, 4].map((n) => (
           <Fragment key={n}>
             {n > 1 && (
@@ -181,26 +181,26 @@ function JobSheet({
           </Fragment>
         ))}
       </div>
-      <p className="mt-2 text-[10px] text-[#8a9094] sm:text-[12.5px]">Mileage unknown</p>
+      <p className="mt-2 text-[10px] text-[#8a9094] tab:text-[12.5px]">Mileage unknown</p>
 
       {/* Services scope row */}
-      <div className="mt-4 flex items-center justify-between rounded-[4px] bg-white/35 px-4 py-3 sm:mt-5 sm:px-6 sm:py-4">
+      <div className="mt-4 flex items-center justify-between rounded-[4px] bg-white/35 px-4 py-3 tab:mt-5 tab:px-6 tab:py-4">
         <div>
-          <p className="text-[9px] font-medium uppercase tracking-[0.1em] text-[#8a9094] sm:text-[10.5px]">
+          <p className="text-[9px] font-medium uppercase tracking-[0.1em] text-[#8a9094] tab:text-[10.5px]">
             Services
           </p>
-          <p className="mt-1 text-[14px] font-semibold tracking-[-0.01em] text-[#1a1a1a] sm:text-[16.5px]">
+          <p className="mt-1 text-[14px] font-semibold tracking-[-0.01em] text-[#1a1a1a] tab:text-[16.5px]">
             This job&apos;s scope
           </p>
         </div>
-        <span className="text-[10px] text-[#6b7280] sm:text-[12px]">1 Service · 0 parts ⌄</span>
+        <span className="text-[10px] text-[#6b7280] tab:text-[12px]">1 Service · 0 parts ⌄</span>
       </div>
 
       {/* Vehicle condition */}
-      <p className="mt-4 text-[10px] font-medium uppercase tracking-[0.1em] text-[#33383b] sm:mt-5 sm:text-[12px]">
+      <p className="mt-4 text-[10px] font-medium uppercase tracking-[0.1em] text-[#33383b] tab:mt-5 tab:text-[12px]">
         Vehicle Condition
       </p>
-      <div className="relative mt-2 rounded-[4px] bg-white/35 px-4 py-3 sm:px-6 sm:py-4">
+      <div className="relative mt-2 rounded-[4px] bg-white/35 px-4 py-3 tab:px-6 tab:py-4">
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={ready ? "ready" : "building"}
@@ -209,29 +209,29 @@ function JobSheet({
             exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
             transition={{ duration: 0.35, ease: EASE }}
           >
-            <p className="text-[13px] font-semibold tracking-[-0.01em] text-[#1a1a1a] sm:text-[15px]">
+            <p className="text-[13px] font-semibold tracking-[-0.01em] text-[#1a1a1a] tab:text-[15px]">
               {ready ? "Vehicle profile ready" : "Building vehicle profile - 5 mins"}
             </p>
-            <p className="mt-1 max-w-[340px] text-[10.5px] leading-[1.4] text-[#6b7280] sm:text-[12.5px]">
+            <p className="mt-1 max-w-[340px] text-[10.5px] leading-[1.4] text-[#6b7280] tab:text-[12.5px]">
               {ready
                 ? "Engine, fluids, and chassis data loaded."
                 : "First time we're seeing this VIN — fetching engine, fluids, and chassis data."}
             </p>
           </motion.div>
         </AnimatePresence>
-        <span className="absolute right-3 top-3 rounded-full bg-[#dbe3e8]/90 px-2 py-0.5 text-[7.5px] font-medium uppercase tracking-[0.05em] text-[#33383b] sm:text-[9px]">
+        <span className="absolute right-3 top-3 rounded-full bg-[#dbe3e8]/90 px-2 py-0.5 text-[7.5px] font-medium uppercase tracking-[0.05em] text-[#33383b] tab:text-[9px]">
           {showComplete ? "Complete" : "2 left"}
         </span>
       </div>
 
       {/* Action button — appears with step 2, turns white when pressed,
           becomes COMPLETE for the final step (per screens 2/5/7/8). */}
-      <div className="mt-4 h-[44px] sm:mt-5 sm:h-[52px]">
+      <div className="mt-4 h-[44px] tab:mt-5 tab:h-[52px]">
         <AnimatePresence mode="wait" initial={false}>
           {(showStart || showComplete) && (
             <motion.div
               key={showComplete ? "complete" : startPressed ? "start-white" : "start-black"}
-              className="relative flex h-full w-full items-center justify-center rounded-[4px] text-[11px] font-medium uppercase tracking-[0.12em] sm:text-[13px]"
+              className="relative flex h-full w-full items-center justify-center rounded-[4px] text-[11px] font-medium uppercase tracking-[0.12em] tab:text-[13px]"
               initial={reduce ? { opacity: 0 } : { opacity: 0, y: 10 }}
               animate={{
                 opacity: 1,
@@ -349,11 +349,11 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                 {/* Date pager row (V1 385:258/259) */}
                 <motion.div className="flex items-center" {...rise(at("date"))}>
                   <span className="px-1 text-[16px] text-[#1a1a1a]">‹</span>
-                  <span className="relative mx-2 h-[30px] overflow-hidden sm:h-[34px]">
+                  <span className="relative mx-2 h-[30px] overflow-hidden tab:h-[34px]">
                     <AnimatePresence mode="popLayout" initial={false}>
                       <motion.span
                         key={june22 ? "22" : "21"}
-                        className="block whitespace-nowrap text-[21px] leading-[30px] text-[#1a1a1a] sm:text-[26px] sm:leading-[34px]"
+                        className="block whitespace-nowrap text-[21px] leading-[30px] text-[#1a1a1a] tab:text-[26px] tab:leading-[34px]"
                         style={serif}
                         initial={reduce ? { opacity: 0 } : { opacity: 0, y: 22 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -376,16 +376,16 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                       />
                     )}
                   </span>
-                  <span className="ml-auto flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.1em] text-[#1a1a1a] sm:text-[13px]">
+                  <span className="ml-auto flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.1em] text-[#1a1a1a] tab:text-[13px]">
                     All Mechanics <span className="text-[9px]">⌄</span>
                   </span>
                 </motion.div>
 
                 {/* Column headers — TIME (EST) enters FIRST (the notes layer's
                     "time appears first"), then the mechanics in order. */}
-                <div className="mt-7 grid grid-cols-[64px_repeat(3,1fr)] gap-2 sm:mt-10 sm:grid-cols-[96px_repeat(3,1fr)] sm:gap-[14px]">
+                <div className="mt-7 grid grid-cols-[64px_repeat(3,1fr)] gap-2 tab:mt-10 tab:grid-cols-[96px_repeat(3,1fr)] tab:gap-[14px]">
                   <motion.div
-                    className="flex h-[56px] items-center justify-center bg-[#1a1a1a] text-[9px] font-medium uppercase tracking-[0.08em] text-[#cfcfcf] sm:h-[74px] sm:text-[12px]"
+                    className="flex h-[56px] items-center justify-center bg-[#1a1a1a] text-[9px] font-medium uppercase tracking-[0.08em] text-[#cfcfcf] tab:h-[74px] tab:text-[12px]"
                     {...rise(at("time"))}
                   >
                     Time (EST)
@@ -393,13 +393,13 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                   {MECHS.map((name, i) => (
                     <motion.div
                       key={name}
-                      className="flex h-[56px] flex-col items-center justify-center bg-white/55 sm:h-[74px]"
+                      className="flex h-[56px] flex-col items-center justify-center bg-white/55 tab:h-[74px]"
                       {...rise(at("cols"), i * 0.13)}
                     >
-                      <span className="text-[11px] font-semibold tracking-[-0.01em] text-[#1a1a1a] sm:text-[14px]">
+                      <span className="text-[11px] font-semibold tracking-[-0.01em] text-[#1a1a1a] tab:text-[14px]">
                         {name}
                       </span>
-                      <span className="relative mt-0.5 h-[16px] text-[10px] sm:text-[12.5px]">
+                      <span className="relative mt-0.5 h-[16px] text-[10px] tab:text-[12.5px]">
                         <AnimatePresence mode="popLayout" initial={false}>
                           <motion.span
                             key={i === 0 && june22 ? "job" : "avail"}
@@ -419,15 +419,15 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                 </div>
 
                 {/* Hour rows — cascade in after the columns. */}
-                <div className="relative mt-3 sm:mt-4">
+                <div className="relative mt-3 tab:mt-4">
                   {HOURS.map((h, i) => (
                     <motion.div
                       key={h}
-                      className="relative flex h-[38px] items-center sm:h-[49px]"
+                      className="relative flex h-[38px] items-center tab:h-[49px]"
                       {...rise(at("rows"), i * 0.05)}
                     >
                       {i > 0 && <span className="absolute inset-x-0 top-0 h-px bg-white/60" />}
-                      <span className="pl-2 text-[10.5px] tracking-[0.02em] text-[#33383b] sm:pl-[22px] sm:text-[14px]">
+                      <span className="pl-2 text-[10.5px] tracking-[0.02em] text-[#33383b] tab:pl-[22px] tab:text-[14px]">
                         {h}
                       </span>
                     </motion.div>
@@ -437,13 +437,13 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                       fades in and blue line reveals/slides from left to
                       right, time 12:56 fades in") */}
                   <motion.div
-                    className="pointer-events-none absolute inset-x-0 top-[35px] z-10 sm:top-[46px]"
+                    className="pointer-events-none absolute inset-x-0 top-[35px] z-10 tab:top-[46px]"
                     initial={false}
                     animate={{ opacity: at("land") ? 1 : 0 }}
                     transition={{ duration: reduce ? 0.2 : 0.35, ease: EASE, delay: reduce ? 0 : 0.3 }}
                   >
                     <motion.span
-                      className="absolute -top-[13px] left-[18px] text-[8.5px] font-medium text-[#5299fe] sm:left-[24px] sm:text-[10px]"
+                      className="absolute -top-[13px] left-[18px] text-[8.5px] font-medium text-[#5299fe] tab:left-[24px] tab:text-[10px]"
                       initial={false}
                       animate={{ opacity: at("land") ? 1 : 0 }}
                       transition={{ duration: 0.4, ease: EASE, delay: reduce ? 0 : 1.0 }}
@@ -463,7 +463,7 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                       beat it turns almost white with a drop shadow (frame-4,
                       note: "kinda like a click effect"). */}
                   <motion.div
-                    className="absolute left-[72px] top-[48px] z-20 w-[calc((100%-64px-3*8px)/3)] sm:left-[110px] sm:top-[62px] sm:w-[calc((100%-96px-3*14px)/3)]"
+                    className="absolute left-[72px] top-[48px] z-20 w-[calc((100%-64px-3*8px)/3)] tab:left-[110px] tab:top-[62px] tab:w-[calc((100%-96px-3*14px)/3)]"
                     initial={false}
                     animate={
                       reduce
@@ -473,7 +473,7 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                     transition={{ duration: 0.65, ease: EASE, delay: reduce ? 0 : 0.2 }}
                   >
                     <motion.div
-                      className="relative h-[128px] border border-white/70 p-2.5 sm:h-[164px] sm:p-3.5"
+                      className="relative h-[128px] border border-white/70 p-2.5 tab:h-[164px] tab:p-3.5"
                       initial={false}
                       animate={{
                         backgroundColor: at("press") ? "rgba(255,255,255,0.94)" : "rgba(255,255,255,0.55)",
@@ -484,19 +484,19 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                       }}
                       transition={{ duration: 0.55, ease: EASE }}
                     >
-                      <p className="text-[12.5px] font-semibold tracking-[-0.01em] text-[#1a1a1a] sm:text-[15px]">
+                      <p className="text-[12.5px] font-semibold tracking-[-0.01em] text-[#1a1a1a] tab:text-[15px]">
                         John Wilson
                       </p>
-                      <p className="mt-0.5 text-[11px] text-[#33383b] sm:text-[13px]">Oil Change</p>
+                      <p className="mt-0.5 text-[11px] text-[#33383b] tab:text-[13px]">Oil Change</p>
                       {/* An everyday car, deliberately — the Figma frame's
                           Bugatti Chiron read as a joke against the premium-calm
                           register (site audit 2026-08-31). */}
-                      <p className="mt-1.5 text-[9px] leading-[1.35] text-[#8a9094] sm:text-[10.5px]">
+                      <p className="mt-1.5 text-[9px] leading-[1.35] text-[#8a9094] tab:text-[10.5px]">
                         2021 Toyota
                         <br />
                         Camry · 5303
                       </p>
-                      <span className="absolute bottom-2 right-2 rounded-full bg-[#dbe3e8]/90 px-2 py-0.5 text-[8.5px] font-medium text-[#33383b] sm:bottom-2.5 sm:right-2.5 sm:text-[10px]">
+                      <span className="absolute bottom-2 right-2 rounded-full bg-[#dbe3e8]/90 px-2 py-0.5 text-[8.5px] font-medium text-[#33383b] tab:bottom-2.5 tab:right-2.5 tab:text-[10px]">
                         12:50p
                       </span>
                     </motion.div>
@@ -534,8 +534,8 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
               >
                 {/* Final state (shop portal screen 9): the sheet collapses to
                     a small centered Complete card. */}
-                <div className="flex w-[300px] flex-col items-center bg-white/35 px-8 py-9 sm:w-[330px]">
-                  <p className="text-[15px] text-[#1a1a1a] sm:text-[16px]" style={serif}>
+                <div className="flex w-[300px] flex-col items-center bg-white/35 px-8 py-9 tab:w-[330px]">
+                  <p className="text-[15px] text-[#1a1a1a] tab:text-[16px]" style={serif}>
                     Oil Change - John Wilson
                   </p>
                   <motion.span
@@ -546,7 +546,7 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                   >
                     ✓
                   </motion.span>
-                  <p className="mt-3 text-[15px] text-[#1a1a1a] sm:text-[16px]" style={serif}>
+                  <p className="mt-3 text-[15px] text-[#1a1a1a] tab:text-[16px]" style={serif}>
                     Complete
                   </p>
                 </div>
@@ -561,11 +561,11 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
           cycle, so the subtitle blinks out between beats. The crossfade
           keeps a line on screen at all times, and `relative` gives the
           exiting chip something to pin to while it fades. */}
-      <div className="relative flex h-8 shrink-0 items-center justify-center sm:h-9">
+      <div className="relative flex h-8 shrink-0 items-center justify-center tab:h-9">
         <AnimatePresence mode="popLayout" initial={false}>
           <motion.span
             key={SHOP_CAPTIONS[beat]}
-            className="whitespace-nowrap rounded-full border-[0.5px] border-white/50 bg-white/20 px-5 py-1.5 text-[12px] tracking-[0.03em] text-[#1a1a1a] backdrop-blur-[35px] sm:text-[13px] lg:px-6 lg:py-2 lg:text-[13.5px]"
+            className="whitespace-nowrap rounded-full border-[0.5px] border-white/50 bg-white/20 px-5 py-1.5 text-[12px] tracking-[0.03em] text-[#1a1a1a] backdrop-blur-[35px] tab:text-[13px] lg:px-6 lg:py-2 lg:text-[13.5px]"
             initial={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
             animate={{ opacity: active ? 1 : 0, y: 0 }}
             exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
@@ -598,7 +598,7 @@ function PriceLockCard({
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "0px 0px -12% 0px" }}
       transition={{ duration: 0.9, ease: EASE }}
-      className="relative h-[440px] w-full sm:h-[560px] lg:h-[clamp(400px,calc(100vh_-_400px),640px)]"
+      className="relative h-[440px] w-full tab:h-[560px] lg:h-[clamp(400px,calc(100vh_-_400px),640px)]"
     >
       {[0, 1, 2].map((i) => (
         <div
@@ -659,7 +659,7 @@ export default function PriceLockSection() {
   // first render; nothing mobile-only is in the HTML, so no hydration drift.
   const [mobile, setMobile] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 639.98px)");
+    const mq = window.matchMedia("(max-width: 1023.98px)");
     const sync = () => setMobile(mq.matches);
     sync();
     mq.addEventListener("change", sync);
@@ -761,7 +761,7 @@ export default function PriceLockSection() {
       id="how-it-works"
       // Mobile frame: 27px side insets, headline 43px under the why-drivers
       // tiles (390:3244 at y1177). sm+ keeps its own padding untouched.
-      className="mx-auto w-full max-w-[1440px] px-[27px] pt-[43px] sm:px-10 sm:pt-16 lg:px-[78px]"
+      className="mx-auto w-full max-w-[1440px] px-[27px] pt-[43px] tab:px-10 tab:pt-16 lg:px-[78px]"
     >
       {/* V1's gradient card (node 302:1074 — section 2's 1269x642 card
           rotated 180°: white fading to #95C7E7, radius 40). The rail sits 76px
@@ -780,7 +780,7 @@ export default function PriceLockSection() {
           normal flow — they collapse out and drag the pin. */}
       {/* `relative` anchors motion's useScroll offset math (it warns on
           static targets). */}
-      <div ref={runwayRef} className="relative mt-0 sm:mt-3 lg:h-[280vh]">
+      <div ref={runwayRef} className="relative mt-0 tab:mt-3 lg:h-[280vh]">
         {/* Natural height + fixed top offset, NOT h-screen centering — the
             centered box padded (viewport − composition)/2 of slack under the
             card at release, inflating the gap to the payout section on tall
@@ -806,7 +806,7 @@ export default function PriceLockSection() {
               serifDisplay style below sm only; sm+ is untouched. */}
           <Reveal>
             <h2
-              className={`mx-auto max-w-[912px] text-center text-[38px] leading-[1.19] text-[#1a1a1a] max-sm:text-[28px] max-sm:leading-[28px] max-sm:font-normal! max-sm:[font-size-adjust:none]! sm:text-[50px] ${
+              className={`mx-auto max-w-[912px] text-center text-[38px] leading-[1.19] text-[#1a1a1a] max-tab:text-[28px] max-tab:leading-[28px] max-tab:font-normal! max-tab:[font-size-adjust:none]! tab:text-[50px] ${
                 shortPin ? "lg:text-[44px] lg:leading-[52px]" : "lg:text-[57px] lg:leading-[68px]"
               }`}
               style={serifDisplay}
@@ -829,22 +829,22 @@ export default function PriceLockSection() {
               headline; the accordion then starts 36px under the caption —
               the old fixed 38px box left a 58px hole (design feedback
               2026-09-03, "fix google play spacing"). */}
-          <Reveal delay={0.1} className="mt-[28px] sm:hidden">
+          <Reveal delay={0.1} className="mt-[28px] tab:hidden">
             <DownloadApp size="sm" />
           </Reveal>
 
           {/* No gradient card on mobile — the frame's blue is a full-bleed foot
               band behind the lower rows (390:3178), painted inside the list. */}
-          <div className="mx-auto mt-[21px] w-full max-w-[1269px] sm:mt-12 sm:overflow-clip sm:rounded-[40px] sm:bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] lg:mt-0">
+          <div className="mx-auto mt-[21px] w-full max-w-[1269px] tab:mt-12 tab:overflow-clip tab:rounded-[40px] tab:bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] lg:mt-0">
             {/* pb keeps the phone mock + caption chips off the card's bottom
                 edge on every step (design feedback 2026-08-24, item 4). */}
             <div
-              className={`grid grid-cols-1 sm:gap-12 sm:px-10 sm:pt-10 sm:pb-16 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:pt-5 lg:pl-[76px] lg:pr-[27px] ${
+              className={`grid grid-cols-1 tab:gap-12 tab:px-10 tab:pt-10 tab:pb-16 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:pt-5 lg:pl-[76px] lg:pr-[27px] ${
                 shortPin ? "lg:pb-10" : "lg:pb-20"
               }`}
             >
               {/* The story stage — sm+ only; mobile mounts a panel per open row. */}
-              <div className="hidden sm:block lg:order-2">
+              <div className="hidden tab:block lg:order-2">
                 {!mobile && (
                   <PriceLockCard active={active} reduce={reduce} resetToken={resetToken} />
                 )}
@@ -854,14 +854,14 @@ export default function PriceLockSection() {
                   story advances (scroll or hand-off), never on hover/click.
                   On mobile they're the accordion (390:3296): block starts
                   1358, "01." at +65, block ends 1690 + 22px of band foot. */}
-              <div ref={listRef} className="relative max-sm:pt-[15px] max-sm:pb-[22px] lg:order-1">
+              <div ref={listRef} className="relative max-tab:pt-[15px] max-tab:pb-[22px] lg:order-1">
                 {/* Full-bleed foot band (390:3178): white → #95C7E7, 226px
                     from block +128 to the block's end, 40px bottom corners.
                     `bottom-0` rather than a fixed height so an expanded row's
                     panel stays on the blue. */}
                 <div
                   aria-hidden
-                  className="pointer-events-none absolute -inset-x-[27px] top-[78px] bottom-0 rounded-b-[40px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] sm:hidden"
+                  className="pointer-events-none absolute -inset-x-[27px] top-[78px] bottom-0 rounded-b-[40px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] tab:hidden"
                 />
                 {ROLES.map((role, i) => {
                   const on = active === i;
@@ -875,19 +875,19 @@ export default function PriceLockSection() {
                     <div
                       key={role.num}
                       aria-current={(!mobile && on) || undefined}
-                      className={`relative flex flex-col justify-center rounded-[16px] px-0 [transition:filter_400ms_ease] max-sm:justify-start max-sm:py-0 max-sm:[filter:none]! lg:h-[33.333%] lg:px-8 ${
+                      className={`relative flex flex-col justify-center rounded-[16px] px-0 [transition:filter_400ms_ease] max-tab:justify-start max-tab:py-0 max-tab:[filter:none]! lg:h-[33.333%] lg:px-8 ${
                         shortPin ? "py-4" : "py-8"
                       }`}
                       style={{ filter: on ? "blur(0px)" : "blur(5px)" }}
                     >
-                      {/* Row header. `sm:contents` dissolves the wrapper on
+                      {/* Row header. `tab:contents` dissolves the wrapper on
                           sm+ so the desktop flex column is byte-identical;
                           on mobile it's the fixed-pitch header and the tap
                           target's positioning box. */}
-                      <div className={`relative sm:contents ${MOBILE_ROW_MIN_H[i]}`}>
-                        <div className="flex items-start justify-between sm:contents">
+                      <div className={`relative tab:contents ${MOBILE_ROW_MIN_H[i]}`}>
+                        <div className="flex items-start justify-between tab:contents">
                           <p
-                            className="text-[17px] tracking-[0.05em] [transition:color_350ms_ease] max-sm:text-[11px] max-sm:leading-[11px] max-sm:tracking-[0.55px] max-sm:text-[#1a1a1a]!"
+                            className="text-[17px] tracking-[0.05em] [transition:color_350ms_ease] max-tab:text-[11px] max-tab:leading-[11px] max-tab:tracking-[0.55px] max-tab:text-[#1a1a1a]!"
                             style={{ color: on ? "rgb(119,113,105)" : "rgba(119,113,105,0.35)" }}
                           >
                             {role.num}
@@ -897,25 +897,25 @@ export default function PriceLockSection() {
                               overlay button below is the control. */}
                           <span
                             aria-hidden
-                            className="text-[10px] leading-[13px] tracking-[0.5px] text-black sm:hidden"
+                            className="text-[10px] leading-[13px] tracking-[0.5px] text-black tab:hidden"
                           >
                             {isOpen ? "−" : "+"}
                           </span>
                         </div>
                         <div
-                          className="mt-3 h-px w-full [transition:background-color_350ms_ease] max-sm:mt-[5px] max-sm:h-[0.5px] max-sm:bg-[#1a1a1a]!"
+                          className="mt-3 h-px w-full [transition:background-color_350ms_ease] max-tab:mt-[5px] max-tab:h-[0.5px] max-tab:bg-[#1a1a1a]!"
                           style={{ backgroundColor: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.18)" }}
                         />
-                        <div className="mt-5 flex flex-col gap-2 max-sm:mt-[4.5px] max-sm:flex-row max-sm:items-start max-sm:gap-0 sm:flex-row sm:items-start sm:gap-8">
+                        <div className="mt-5 flex flex-col gap-2 max-tab:mt-[4.5px] max-tab:flex-row max-tab:items-start max-tab:gap-0 tab:flex-row tab:items-start tab:gap-8">
                           <h3
-                            className="w-[130px] shrink-0 text-[25px] [transition:color_350ms_ease] max-sm:w-[131px] max-sm:text-[20px] max-sm:leading-[28px] max-sm:tracking-[0.374px] max-sm:text-[#1a1a1a]!"
+                            className="w-[130px] shrink-0 text-[25px] [transition:color_350ms_ease] max-tab:w-[131px] max-tab:text-[20px] max-tab:leading-[28px] max-tab:tracking-[0.374px] max-tab:text-[#1a1a1a]!"
                             style={{ ...serif, color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
                           >
                             {word}
-                            {dot && <span className="max-sm:hidden">.</span>}
+                            {dot && <span className="max-tab:hidden">.</span>}
                           </h3>
                           <p
-                            className="max-w-[320px] text-[17px] leading-[23px] tracking-[0.05em] [transition:color_350ms_ease] max-sm:mt-2 max-sm:min-w-0 max-sm:max-w-none max-sm:flex-1 max-sm:text-[10px] max-sm:leading-[12px] max-sm:tracking-[0.5px] max-sm:text-[#1a1a1a]!"
+                            className="max-w-[320px] text-[17px] leading-[23px] tracking-[0.05em] [transition:color_350ms_ease] max-tab:mt-2 max-tab:min-w-0 max-tab:max-w-none max-tab:flex-1 max-tab:text-[10px] max-tab:leading-[12px] max-tab:tracking-[0.5px] max-tab:text-[#1a1a1a]!"
                             style={{ color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
                           >
                             {role.body}
@@ -927,7 +927,7 @@ export default function PriceLockSection() {
                             every row collapsed; opening one closes the rest. */}
                         <button
                           type="button"
-                          className="absolute inset-0 rounded-[6px] sm:hidden"
+                          className="absolute inset-0 rounded-[6px] tab:hidden"
                           aria-expanded={isOpen}
                           aria-controls={panelId}
                           aria-label={`${isOpen ? "Hide" : "Show"} the ${word} story`}

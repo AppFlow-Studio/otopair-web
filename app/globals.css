@@ -208,6 +208,13 @@ body {
 }
 
 @theme inline {
+  /* `tab:` — the flagship landing's "desktop from here" breakpoint. Phones
+     AND tablets share the mobile layout (design feedback 2026-09-03), so the
+     desktop layouts start at 1024. It is 0.01rem UNDER `lg` on purpose: the
+     landing's desktop rules are written as `tab:` (was `sm:`) with `lg:`
+     refinements on top, and Tailwind orders breakpoint variants by size, so
+     `lg:` keeps overriding `tab:` exactly as it overrode `sm:`. */
+  --breakpoint-tab: 63.99rem;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -642,5 +649,24 @@ body {
   .oto-pin__poi,
   .oto-pin__poi svg {
     transition: none;
+  }
+}
+
+/* Tablets (640–1023px) get the phone landing layout, SCALED — not stretched.
+   `zoom` makes the wrapper lay out at viewport/zoom CSS px (≈ the phone
+   frame's 402 at 768 wide) and renders it at tablet size, so proportions,
+   type sizes and the full-bleed bands all match the phone design instead of
+   8px captions floating across 700px-wide cards (design feedback 2026-09-03,
+   "the scaling for tablets looks horrible"). Media queries still see the real
+   viewport, so the `max-tab:` phone rules apply as before. Stepped, not
+   continuous, so there is no JS and no layout flash on load. */
+@media (min-width: 40rem) and (max-width: 63.99rem) {
+  .landing-tablet-scale {
+    zoom: 1.6;
+  }
+}
+@media (min-width: 48rem) and (max-width: 63.99rem) {
+  .landing-tablet-scale {
+    zoom: 1.9;
   }
 }

@@ -95,11 +95,11 @@ function HeroInner() {
   const inView = useInView(sectionRef, { amount: 0.05 });
   // Below sm the engaged hero swaps the big orb for the small one inside the
   // glass card (see MobileHeroCard) — this only gates the hidden orb's rAF
-  // work; the visibility itself is CSS (max-sm:hidden), so SSR and the first
+  // work; the visibility itself is CSS (max-tab:hidden), so SSR and the first
   // client paint agree.
   const [mobile, setMobile] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 639.98px)");
+    const mq = window.matchMedia("(max-width: 1023.98px)");
     const sync = () => setMobile(mq.matches);
     sync();
     mq.addEventListener("change", sync);
@@ -210,7 +210,7 @@ function HeroInner() {
     oto.step === "shops" ||
     oto.step === "datetime" ||
     oto.step === "confirmed";
-  // Below sm: once anything has been said or shown, the glass card grows up
+  // Below tab: once anything has been said or shown, the glass card grows up
   // over the headline (Figma frame 4). Drives the card's margin and lifts
   // the stage above the headline block's z-20.
   const mobileConversation = active && (oto.messages.length > 0 || oto.thinking || hasCard);
@@ -246,7 +246,7 @@ function HeroInner() {
       // wash runs #86C9E7 → white by 381px (44.7% of the frame's 852 hero)
       // and the block is purely content-sized — the frame's hero ends at
       // 852 where "Now onboarding" begins, with no floor to pad it.
-      className="relative flex min-h-0 w-full flex-col overflow-hidden bg-[linear-gradient(to_bottom,#86C9E7_0px,#FFFFFF_381px)] sm:min-h-[720px] sm:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_600px)]"
+      className="relative flex min-h-0 w-full flex-col overflow-hidden bg-[linear-gradient(to_bottom,#86C9E7_0px,#FFFFFF_381px)] tab:min-h-[720px] tab:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_600px)]"
     >
       {/* PillNav is rendered by the page, ABOVE this section — a fixed
           backdrop-blur inside this overflow-hidden section lost its blur on
@@ -268,12 +268,12 @@ function HeroInner() {
           iPhone | Android pill at y 272 (16px under the subhead's 48px box).
           The block's pb goes to 0 here: the stage carries the frame's 99px
           pill → orb gap itself. */}
-      <div className="relative z-20 flex flex-col items-center px-2 pb-0 pt-[142px] text-center sm:px-6 sm:pb-6 sm:pt-[150px]">
+      <div className="relative z-20 flex flex-col items-center px-2 pb-0 pt-[142px] text-center tab:px-6 tab:pb-6 tab:pt-[150px]">
         {/* Figma V1's declared type (node 302:901): 60px / 65px line-height /
             #1a1a1a / 683px measure / no tracking. V1 sets it in Romie, which
             we don't license — Petrona is the standing substitute. */}
         <h1
-          className="max-w-[385px] text-[28px] leading-[28px] text-[#1a1a1a] sm:max-w-[683px] sm:text-[48px] sm:leading-[1.08] md:text-[60px] md:leading-[65px]"
+          className="max-w-[385px] text-[28px] leading-[28px] text-[#1a1a1a] tab:max-w-[683px] tab:text-[60px] tab:leading-[65px]"
           style={serifDisplay}
         >
           No more phone tag with mechanics
@@ -285,14 +285,14 @@ function HeroInner() {
             frame's 336 measure it broke to three lines. −0.25px brings it to
             ~331 — the frame's two lines, break after "nearby." — at 360, 390
             and 430 alike. Invisible at this size; drops away from sm. */}
-        <p className="mt-[26px] max-w-[336px] text-[14px] leading-[16px] tracking-[-0.25px] text-[#777169] sm:mt-5 sm:max-w-[487px] sm:text-[18px] sm:leading-[25px] sm:tracking-normal">
+        <p className="mt-[26px] max-w-[336px] text-[14px] leading-[16px] tracking-[-0.25px] text-[#777169] tab:mt-5 tab:max-w-[487px] tab:text-[18px] tab:leading-[25px] tab:tracking-normal">
           Talk to Oto. Get fixed prices from real shops nearby.
           <br /> Book in 90 seconds.
         </p>
 
         {/* Mobile only — the frame's 198×37 split pill (390:3183). Desktop
             has no store control in the hero. */}
-        <PlatformPill size="sm" className="mt-4 sm:hidden" />
+        <PlatformPill size="sm" className="mt-4 tab:hidden" />
       </div>
 
       {/* Content stage. The orb is the centerpiece: large, and it sits BEHIND
@@ -306,8 +306,8 @@ function HeroInner() {
           from the pill down to the orb's crown (y 309 → 408), 41px from the
           idle bar's foot to the hero's end (811 → 852). */}
       <div
-        className={`relative z-10 mx-auto flex w-full max-w-[1180px] flex-1 items-center justify-center px-[27px] pb-[41px] pt-[99px] sm:px-6 sm:pb-10 sm:pt-0 ${
-          mobileConversation ? "max-sm:z-30" : ""
+        className={`relative z-10 mx-auto flex w-full max-w-[1180px] flex-1 items-center justify-center px-[27px] pb-[41px] pt-[99px] tab:px-6 tab:pb-10 tab:pt-0 ${
+          mobileConversation ? "max-tab:z-30" : ""
         }`}
       >
         <div className="relative flex w-full flex-col items-center justify-center gap-8 lg:flex-row lg:items-center lg:justify-center lg:gap-0">
@@ -333,7 +333,7 @@ function HeroInner() {
               <motion.div
                 key="chat"
                 {...slide(-1, 0.06)}
-                className="relative z-10 order-2 hidden h-[420px] w-full shrink-0 sm:block sm:h-[460px] lg:order-1 lg:-mr-20 lg:h-[530px] lg:w-[380px] xl:-mr-16 xl:w-[440px]"
+                className="relative z-10 order-2 hidden h-[420px] w-full shrink-0 tab:block tab:h-[460px] lg:order-1 lg:-mr-20 lg:h-[530px] lg:w-[380px] xl:-mr-16 xl:w-[440px]"
               >
                 <ChatCard
                   messages={oto.messages}
@@ -360,8 +360,8 @@ function HeroInner() {
               1.18× rise of ~22px + the 10px float never nears the subhead),
               and a state-dependent margin would jump the card. */}
           <div
-            className={`order-1 flex w-full shrink-0 flex-col items-center transition-[margin-top] duration-500 ease-out sm:w-auto lg:order-2 ${
-              active ? "relative z-0 sm:mt-8 lg:mt-0" : "relative z-10"
+            className={`order-1 flex w-full shrink-0 flex-col items-center transition-[margin-top] duration-500 ease-out tab:w-auto lg:order-2 ${
+              active ? "relative z-0 tab:mt-8 lg:mt-0" : "relative z-10"
             }`}
           >
             {/* Orb box: 280 → 360 from sm (design feedback 2026-09-03, "enlarge
@@ -379,7 +379,7 @@ function HeroInner() {
             <motion.div
               animate={{ scale: active && !mobile ? 1.18 : 1 }}
               transition={{ type: "spring", stiffness: 140, damping: 20 }}
-              className="h-[247px] w-[247px] sm:h-[360px] sm:w-[360px]"
+              className="h-[247px] w-[247px] tab:h-[360px] tab:w-[360px]"
             >
               <OtoOrb
                 active={orbActive}
@@ -397,7 +397,7 @@ function HeroInner() {
                 onSend={oto.sendText}
                 onMic={oto.startVoice}
                 listening={oto.isSpeaking}
-                className="mt-[117px] w-full sm:hidden"
+                className="mt-[117px] w-full tab:hidden"
               />
             )}
 
@@ -414,7 +414,7 @@ function HeroInner() {
                 initial={reduce ? { opacity: 0 } : { opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-                className={`relative z-10 w-full transition-[margin-top] duration-[450ms] ease-out sm:hidden ${
+                className={`relative z-10 w-full transition-[margin-top] duration-[450ms] ease-out tab:hidden ${
                   mobileConversation ? "-mt-[426px]" : "-mt-[171px]"
                 }`}
               >
@@ -442,7 +442,7 @@ function HeroInner() {
               </motion.div>
             )}
 
-            {active && <StatusPill oto={oto} className="mt-5 hidden h-7 sm:block" />}
+            {active && <StatusPill oto={oto} className="mt-5 hidden h-7 tab:block" />}
 
             <AnimatePresence>
               {!active && (
@@ -452,7 +452,7 @@ function HeroInner() {
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -14, transition: { duration: 0.25 } }}
                   transition={{ duration: 0.5, delay: 0.1 }}
-                  className="mt-4 hidden w-full flex-col items-center sm:flex"
+                  className="mt-4 hidden w-full flex-col items-center tab:flex"
                 >
                   <VoiceBar
                     onSend={oto.sendText}
@@ -489,7 +489,7 @@ function HeroInner() {
               <motion.div
                 key="canvas"
                 {...slide(1, 0.12)}
-                className="relative z-10 order-3 flex w-full shrink-0 items-center justify-center max-sm:hidden lg:order-3 lg:-ml-20 lg:h-[530px] lg:w-[380px] xl:-ml-16 xl:w-[440px]"
+                className="relative z-10 order-3 flex w-full shrink-0 items-center justify-center max-tab:hidden lg:order-3 lg:-ml-20 lg:h-[530px] lg:w-[380px] xl:-ml-16 xl:w-[440px]"
               >
                 {/* Audio-reactive ring — pulses with Oto's voice while it narrates. */}
                 <motion.div

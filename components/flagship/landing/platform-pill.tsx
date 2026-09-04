@@ -68,16 +68,16 @@ export default function PlatformPill({
   const sm = size === "sm";
   const half = sm
     ? "flex items-center justify-center gap-[6px] text-[12px] leading-[22px] text-[#1a1a1a] transition-colors hover:bg-black/[0.04]"
-    : "flex items-center gap-2 text-[15px] font-medium text-[#1a1a1a] transition-colors hover:bg-black/[0.04] sm:text-[16px]";
+    : "flex items-center gap-2 text-[15px] font-medium text-[#1a1a1a] transition-colors hover:bg-black/[0.04] tab:text-[16px]";
   const mark = sm ? "h-[12px] w-[10px]" : "h-[15px] w-[15px]";
   // Split pair: each half fills its side. Single: symmetric padding, the pill
   // shrinks to the one label.
   const applePad = sm
     ? single ? "px-7" : "flex-1 pl-1"
-    : single ? "py-3.5 px-9 sm:py-4 sm:px-11" : "py-3.5 pl-7 pr-6 sm:py-4 sm:pl-9 sm:pr-7";
+    : single ? "py-3.5 px-9 tab:py-4 tab:px-11" : "py-3.5 pl-7 pr-6 tab:py-4 tab:pl-9 tab:pr-7";
   const androidPad = sm
     ? single ? "px-7" : "flex-1 pr-1"
-    : single ? "py-3.5 px-9 sm:py-4 sm:px-11" : "py-3.5 pl-6 pr-7 sm:py-4 sm:pl-7 sm:pr-9";
+    : single ? "py-3.5 px-9 tab:py-4 tab:px-11" : "py-3.5 pl-6 pr-7 tab:py-4 tab:pl-7 tab:pr-9";
 
   return (
     <div

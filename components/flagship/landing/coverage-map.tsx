@@ -428,14 +428,14 @@ export default function CoverageMap({
       <form
         role="search"
         onSubmit={search}
-        className="absolute left-4 right-4 top-4 flex h-[54px] items-center gap-3 rounded-[8px] border border-white/60 bg-white/80 px-4 shadow-[0_4px_16px_rgba(20,40,80,0.10)] backdrop-blur-md max-sm:left-2 max-sm:right-2 max-sm:top-[13px] max-sm:h-[30px] max-sm:gap-[7px] max-sm:border-0 max-sm:bg-white/70 max-sm:pl-[10px] max-sm:pr-0 sm:left-8 sm:right-8 sm:top-6"
+        className="absolute left-4 right-4 top-4 flex h-[54px] items-center gap-3 rounded-[8px] border border-white/60 bg-white/80 px-4 shadow-[0_4px_16px_rgba(20,40,80,0.10)] backdrop-blur-md max-tab:left-2 max-tab:right-2 max-tab:top-[13px] max-tab:h-[30px] max-tab:gap-[7px] max-tab:border-0 max-tab:bg-white/70 max-tab:pl-[10px] max-tab:pr-0 tab:left-8 tab:right-8 tab:top-6"
       >
         <svg
           width={18}
           height={18}
           viewBox="0 0 18 18"
           fill="none"
-          className="shrink-0 text-[#1a1a1a] max-sm:h-[11px] max-sm:w-[11px] max-sm:text-[#777169]"
+          className="shrink-0 text-[#1a1a1a] max-tab:h-[11px] max-tab:w-[11px] max-tab:text-[#777169]"
           aria-hidden
         >
           <circle cx="7.5" cy="7.5" r="5.5" stroke="currentColor" strokeWidth="1.4" />
@@ -449,13 +449,13 @@ export default function CoverageMap({
           }}
           placeholder="Find your nearest shop — type any NYC address"
           aria-label="Find your nearest shop — type any NYC address"
-          className="h-full flex-1 truncate bg-transparent text-[13px] tracking-[0.05em] text-[#1a1a1a] placeholder:text-[#777169] focus:outline-none max-sm:text-[16px] max-sm:tracking-normal max-sm:placeholder:text-[8px] max-sm:placeholder:tracking-[0.4px]"
+          className="h-full flex-1 truncate bg-transparent text-[13px] tracking-[0.05em] text-[#1a1a1a] placeholder:text-[#777169] focus:outline-none max-tab:text-[16px] max-tab:tracking-normal max-tab:placeholder:text-[8px] max-tab:placeholder:tracking-[0.4px]"
         />
         <button
           type="submit"
           aria-label="Search"
           disabled={searching}
-          className="text-[20px] font-light leading-none text-[#1a1a1a] transition-transform duration-200 hover:translate-x-0.5 hover:-translate-y-0.5 disabled:opacity-50 max-sm:flex max-sm:h-full max-sm:items-center max-sm:px-[6px] max-sm:text-[13px] max-sm:text-[#777169]"
+          className="text-[20px] font-light leading-none text-[#1a1a1a] transition-transform duration-200 hover:translate-x-0.5 hover:-translate-y-0.5 disabled:opacity-50 max-tab:flex max-tab:h-full max-tab:items-center max-tab:px-[6px] max-tab:text-[13px] max-tab:text-[#777169]"
         >
           {searching ? "…" : "↗"}
         </button>
@@ -463,7 +463,7 @@ export default function CoverageMap({
 
       {/* Live suggestions — shops in the network + street/address matches */}
       {suggestions.length > 0 && (
-        <div className="absolute left-4 right-4 top-[74px] z-20 overflow-hidden rounded-[8px] border border-white/60 bg-white/90 shadow-[0_10px_30px_rgba(20,40,80,0.14)] backdrop-blur-md max-sm:left-2 max-sm:right-2 max-sm:top-[47px] sm:left-8 sm:right-8 sm:top-[88px]">
+        <div className="absolute left-4 right-4 top-[74px] z-20 overflow-hidden rounded-[8px] border border-white/60 bg-white/90 shadow-[0_10px_30px_rgba(20,40,80,0.14)] backdrop-blur-md max-tab:left-2 max-tab:right-2 max-tab:top-[47px] tab:left-8 tab:right-8 tab:top-[88px]">
           {suggestions.map((s) =>
             s.kind === "shop" ? (
               <button
@@ -510,7 +510,7 @@ export default function CoverageMap({
       )}
 
       {/* Result / error chip — clickable when it points at a shop */}
-      <div aria-live="polite" className="pointer-events-none absolute bottom-4 left-4 right-4 sm:bottom-6 sm:left-8 sm:right-auto">
+      <div aria-live="polite" className="pointer-events-none absolute bottom-4 left-4 right-4 tab:bottom-6 tab:left-8 tab:right-auto">
         {notice &&
           (notice.shop ? (
             <button
@@ -541,28 +541,28 @@ export default function CoverageMap({
           zooms there) and only shows once the camera has left the resting
           frame — the phone frame's map is bare. */}
       <div
-        className={`absolute bottom-8 right-3 z-10 flex flex-col overflow-hidden rounded-[8px] border border-white/60 bg-white/80 shadow-[0_4px_16px_rgba(20,40,80,0.10)] backdrop-blur-md max-sm:top-[51px] max-sm:right-2 max-sm:bottom-auto sm:right-4 ${
-          away ? "" : "max-sm:hidden"
+        className={`absolute bottom-8 right-3 z-10 flex flex-col overflow-hidden rounded-[8px] border border-white/60 bg-white/80 shadow-[0_4px_16px_rgba(20,40,80,0.10)] backdrop-blur-md max-tab:top-[51px] max-tab:right-2 max-tab:bottom-auto tab:right-4 ${
+          away ? "" : "max-tab:hidden"
         }`}
       >
         <button
           type="button"
           onClick={() => zoomStep(1)}
           aria-label="Zoom in"
-          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07] max-sm:hidden"
+          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07] max-tab:hidden"
         >
           <Plus className="h-3.5 w-3.5" strokeWidth={2.2} />
         </button>
-        <span className="h-px bg-[#1a1a1a]/12 max-sm:hidden" />
+        <span className="h-px bg-[#1a1a1a]/12 max-tab:hidden" />
         <button
           type="button"
           onClick={() => zoomStep(-1)}
           aria-label="Zoom out"
-          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07] max-sm:hidden"
+          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07] max-tab:hidden"
         >
           <Minus className="h-3.5 w-3.5" strokeWidth={2.2} />
         </button>
-        <span className="h-px bg-[#1a1a1a]/12 max-sm:hidden" />
+        <span className="h-px bg-[#1a1a1a]/12 max-tab:hidden" />
         <button
           type="button"
           onClick={flyOverview}

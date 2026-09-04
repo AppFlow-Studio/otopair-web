@@ -29,7 +29,7 @@ import { useReducedMotionSafe } from "../shared";
  *    value 26px Petrona 400 at (28,0), caption 8/11 at (28,41); no tile
  *    background, no dividers
  *  - no store badges; the section ends at the bottom of the tiles
- * Every `max-sm:` class below is that frame; nothing ≥sm changes.
+ * Every `max-tab:` class below is that frame; nothing ≥sm changes.
  */
 
 const STATS: {
@@ -61,7 +61,7 @@ const statSerif = { fontFamily: "var(--font-Literata)" } as const;
  * Romie Regular/Medium at literal sizes — i.e. Petrona 400/500 with no cap
  * normalisation — while ≥sm keeps the desktop faces above. Inline styles win
  * over classes, so the mobile overrides ride on custom properties that only
- * `max-sm:` classes define; the var() fallbacks are the exact desktop values,
+ * `max-tab:` classes define; the var() fallbacks are the exact desktop values,
  * so ≥sm computes to precisely what it did before.
  */
 const tickerStyle = {
@@ -76,13 +76,13 @@ const titleStyle = {
 } as React.CSSProperties;
 
 const MOBILE_VALUE =
-  "max-sm:text-[26px] max-sm:leading-[38px] max-sm:[--wo-ff:var(--font-Petrona)] max-sm:[--wo-w:400]";
+  "max-tab:text-[26px] max-tab:leading-[38px] max-tab:[--wo-ff:var(--font-Petrona)] max-tab:[--wo-w:400]";
 
 function valueClass(digits?: boolean) {
   return (
     (digits
-      ? "text-[48px] leading-none tracking-[0.374px] text-[#1a1a1a] sm:text-[60px] lg:text-[70px]"
-      : "text-[50px] leading-none tracking-[0.374px] text-[#1a1a1a] sm:text-[62px] lg:text-[73px]") +
+      ? "text-[48px] leading-none tracking-[0.374px] text-[#1a1a1a] tab:text-[60px] lg:text-[70px]"
+      : "text-[50px] leading-none tracking-[0.374px] text-[#1a1a1a] tab:text-[62px] lg:text-[73px]") +
     " " +
     MOBILE_VALUE
   );
@@ -104,7 +104,7 @@ export default function WhyOtoSection() {
           too small on a phone, design feedback 2026-09-03). */}
       <Reveal>
         <p
-          className="pt-2 pb-7 text-center text-[19px] leading-[1.6] text-[#4B82A5] sm:text-[24px] lg:text-[28px] max-sm:pt-0 max-sm:pb-[9px] max-sm:text-[15px] max-sm:leading-[45px] max-sm:[--wo-w:500]"
+          className="pt-2 pb-7 text-center text-[19px] leading-[1.6] text-[#4B82A5] tab:text-[24px] lg:text-[28px] max-tab:pt-0 max-tab:pb-[9px] max-tab:text-[15px] max-tab:leading-[45px] max-tab:[--wo-w:500]"
           style={tickerStyle}
         >
           Now onboarding · Staten Island, NYC
@@ -116,13 +116,13 @@ export default function WhyOtoSection() {
           (390:3179) — the tiles run past its bottom edge onto white. */}
       <Reveal y={32}>
         <div
-          className="mx-auto w-[calc(100%-32px)] max-w-[1269px] overflow-clip rounded-[28px] bg-[linear-gradient(to_bottom,#95C7E7,#FFFFFF)] sm:w-[calc(100%-80px)] sm:rounded-[40px] max-sm:w-full max-sm:rounded-t-[40px] max-sm:rounded-b-none max-sm:bg-no-repeat max-sm:[background-size:100%_226px]"
+          className="mx-auto w-[calc(100%-32px)] max-w-[1269px] overflow-clip rounded-[28px] bg-[linear-gradient(to_bottom,#95C7E7,#FFFFFF)] tab:w-[calc(100%-80px)] tab:rounded-[40px] max-tab:w-full max-tab:rounded-t-[40px] max-tab:rounded-b-none max-tab:bg-no-repeat max-tab:[background-size:100%_226px]"
         >
           {/* Heading — per-word reveal (motion-primitives pattern).
               Mobile: 25/75 Petrona 400, one line, top of the band (390:3230). */}
           <TextEffect
             as="h2"
-            className="mx-auto block max-w-[969px] px-6 pt-14 text-center text-[32px] leading-[1.3] text-[#1a1a1a] sm:text-[44px] lg:pt-[82px] lg:text-[52px] lg:leading-[75px] lg:tracking-[-0.01em] max-sm:px-2 max-sm:pt-0 max-sm:text-[25px] max-sm:leading-[75px] max-sm:[--wo-w:400] max-sm:[--wo-fsa:none]"
+            className="mx-auto block max-w-[969px] px-6 pt-14 text-center text-[32px] leading-[1.3] text-[#1a1a1a] tab:text-[44px] lg:pt-[82px] lg:text-[52px] lg:leading-[75px] lg:tracking-[-0.01em] max-tab:px-2 max-tab:pt-0 max-tab:text-[25px] max-tab:leading-[75px] max-tab:[--wo-w:400] max-tab:[--wo-fsa:none]"
             style={titleStyle}
           >
             Why drivers download Oto
@@ -133,7 +133,7 @@ export default function WhyOtoSection() {
               Mobile: 2x2 tiles, 72px rows / 9px gap, 62px column gap on a
               20px inset so the right column lands at 50%+31px (390:3232–43). */}
           <motion.div
-            className="mx-auto mt-10 grid max-w-[1240px] grid-cols-2 gap-y-12 px-5 sm:px-10 lg:mt-[50px] lg:grid-cols-4 lg:gap-y-0 max-sm:mt-0 max-sm:gap-x-[62px] max-sm:gap-y-[9px]"
+            className="mx-auto mt-10 grid max-w-[1240px] grid-cols-2 gap-y-12 px-5 tab:px-10 lg:mt-[50px] lg:grid-cols-4 lg:gap-y-0 max-tab:mt-0 max-tab:gap-x-[62px] max-tab:gap-y-[9px]"
             initial={reduce ? undefined : "hidden"}
             whileInView={reduce ? undefined : "visible"}
             viewport={{ once: true, margin: "0px 0px -12% 0px" }}
@@ -142,7 +142,7 @@ export default function WhyOtoSection() {
             {STATS.map((stat, i) => (
               <motion.div
                 key={stat.value}
-                className="relative flex flex-col px-5 sm:px-8 lg:px-10 max-sm:h-[72px] max-sm:pl-[28px] max-sm:pr-0"
+                className="relative flex flex-col px-5 tab:px-8 lg:px-10 max-tab:h-[72px] max-tab:pl-[28px] max-tab:pr-0"
                 variants={{
                   hidden: { opacity: 0, y: 18, filter: "blur(4px)" },
                   visible: {
@@ -157,7 +157,7 @@ export default function WhyOtoSection() {
                     the mobile frame has none. */}
                 {i % 2 === 1 && (
                   <motion.span
-                    className="pointer-events-none absolute left-0 top-1/2 h-[83px] w-px -translate-y-1/2 bg-[#1a1a1a]/20 max-sm:hidden lg:hidden"
+                    className="pointer-events-none absolute left-0 top-1/2 h-[83px] w-px -translate-y-1/2 bg-[#1a1a1a]/20 max-tab:hidden lg:hidden"
                     variants={{ hidden: { scaleY: 0 }, visible: { scaleY: 1, transition: { duration: 0.5, delay: 0.35 } } }}
                   />
                 )}
@@ -169,7 +169,7 @@ export default function WhyOtoSection() {
                 )}
 
                 {/* Mobile: the value box is the 41px the caption sits below. */}
-                <div className="flex h-[50px] items-end sm:h-[62px] lg:h-[73px] max-sm:h-[41px] max-sm:items-start">
+                <div className="flex h-[50px] items-end tab:h-[62px] lg:h-[73px] max-tab:h-[41px] max-tab:items-start">
                   {stat.ticker ? (
                     <NumberTicker
                       value={stat.ticker.to}
@@ -184,7 +184,7 @@ export default function WhyOtoSection() {
                     </span>
                   )}
                 </div>
-                <span className="mt-4 text-[14px] leading-[20px] tracking-[0.05em] text-[#777169] sm:text-[15px] max-sm:mt-0 max-sm:whitespace-nowrap max-sm:text-[8px] max-sm:leading-[11px] max-sm:tracking-[0.4px]">
+                <span className="mt-4 text-[14px] leading-[20px] tracking-[0.05em] text-[#777169] tab:text-[15px] max-tab:mt-0 max-tab:whitespace-nowrap max-tab:text-[8px] max-tab:leading-[11px] max-tab:tracking-[0.4px]">
                   {stat.lines[0]}
                   <br />
                   {stat.lines[1]}
@@ -195,7 +195,7 @@ export default function WhyOtoSection() {
 
           {/* CTA row (W1: single device-detecting download). The mobile frame
               carries no badges here — they live in the price-lock section. */}
-          <Reveal delay={0.15} className="max-sm:hidden">
+          <Reveal delay={0.15} className="max-tab:hidden">
             <div className="mt-10 flex flex-wrap items-center justify-center gap-3 lg:mt-[44px]">
               <DownloadApp />
             </div>
@@ -204,7 +204,7 @@ export default function WhyOtoSection() {
           {/* Breathing room under the badges — V1's ~170px read as dead card
               on screen; halved (design feedback 2026-08-30). Mobile ends on
               the tiles. */}
-          <div className="h-16 lg:h-[88px] max-sm:hidden" aria-hidden />
+          <div className="h-16 lg:h-[88px] max-tab:hidden" aria-hidden />
         </div>
       </Reveal>
     </section>

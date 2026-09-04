@@ -30,8 +30,8 @@ const HOME_CTA: PillCta = { label: "Get Oto", href: "#get-oto" };
 // funnels signed-out visitors through Clerk sign-in first, then into the portal.
 const HOME_SHOP_SIGN_IN: PillLink = { label: "Shop sign-in", href: "/shop" };
 
-// Glass recipe shared by the ≥sm pill (Figma V1 node 302:1212), the <sm bar
-// (mobile frame node 390:3223) and the <sm menu sheet: white @ 20%, 0.5px
+// Glass recipe shared by the ≥lg pill (Figma V1 node 302:1212), the <lg bar
+// (mobile frame node 390:3223) and the <lg menu sheet: white @ 20%, 0.5px
 // white @ 50% edge, 35px backdrop blur, no shadow.
 const GLASS = "border-white/50 bg-white/20 backdrop-blur-[35px]";
 
@@ -39,7 +39,7 @@ const GLASS = "border-white/50 bg-white/20 backdrop-blur-[35px]";
  * Floating glass pill nav — fixed and always visible (2026-08-31; it used to
  * hide on scroll-down and reveal on scroll-up).
  *
- * Below `sm` (640px) it is not a pill: the mobile frame (node 390:3223) runs a
+ * Below `lg` (1024px) — phones AND tablets, the 810px pill cannot fit under ~860 — it is not a pill: the mobile frame (node 390:3223) runs a
  * full-bleed 59px glass BAR — pin mark at x 18.5, the 101x28 "Get Oto" plate
  * ending 60px from the right edge, and a two-line hamburger at x 359.5–379.5
  * (frame width 402). Figma has no open state, so the menu is ours: a glass
@@ -66,7 +66,7 @@ export default function PillNav({
   const close = useCallback(() => setOpen(false), []);
 
   // Dismissal: outside tap, Escape, scrolling more than 40px from where the
-  // sheet opened, or crossing up into `sm` (the pill's own links take over
+  // sheet opened, or crossing up into `lg` (the pill's own links take over
   // there and the sheet has nowhere to live).
   useEffect(() => {
     if (!open) return;
@@ -80,7 +80,7 @@ export default function PillNav({
     const onScroll = () => {
       if (Math.abs(window.scrollY - startY) > 40) close();
     };
-    const mq = window.matchMedia("(min-width: 640px)");
+    const mq = window.matchMedia("(min-width: 1024px)");
     const onMq = () => {
       if (mq.matches) close();
     };
@@ -97,12 +97,12 @@ export default function PillNav({
   }, [open, close]);
 
   // Mobile frame: 101x28 plate, r40, #1a1a1a, 13/22 label, -10px 8px 10px
-  // rgba(26,26,26,.4) shadow. ≥sm keeps V1's h-9 / min-w-150 / 15px plate and
+  // rgba(26,26,26,.4) shadow. ≥lg keeps V1's h-9 / min-w-150 / 15px plate and
   // its blue-tinted shadow.
   const ctaClass =
     // No shadow below sm — Figma declares one on the plate, but on the glass
     // bar it read as a smear (design feedback 2026-09-03).
-    "group relative flex h-[28px] w-[101px] shrink-0 items-center justify-center gap-2 rounded-[40px] border border-[#1a1a1a] bg-[#1a1a1a] px-4 text-[13px] leading-[22px] text-white shadow-none transition-colors hover:border-[#333] hover:bg-[#333] sm:h-9 sm:w-auto sm:min-w-[150px] sm:px-5 sm:text-[15px] sm:shadow-[-5px_10px_20px_rgba(70,127,237,0.17)]";
+    "group relative flex h-[28px] w-[101px] shrink-0 items-center justify-center gap-2 rounded-[40px] border border-[#1a1a1a] bg-[#1a1a1a] px-4 text-[13px] leading-[22px] text-white shadow-none transition-colors hover:border-[#333] hover:bg-[#333] lg:h-9 lg:w-auto lg:min-w-[150px] lg:px-5 lg:text-[15px] lg:shadow-[-5px_10px_20px_rgba(70,127,237,0.17)]";
   const ctaInner = (
     <>
       {/* V1 floats the pin over the button rather than putting it in flow, so
@@ -118,7 +118,7 @@ export default function PillNav({
         width={22}
         height={22}
         aria-hidden
-        className="absolute left-[6px] top-1/2 h-[18px] w-[18px] -translate-y-1/2 object-contain sm:left-[20px] sm:h-[22px] sm:w-[22px]"
+        className="absolute left-[6px] top-1/2 h-[18px] w-[18px] -translate-y-1/2 object-contain lg:left-[20px] lg:h-[22px] lg:w-[22px]"
       />
       {cta.label}
     </>
@@ -148,9 +148,9 @@ export default function PillNav({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-      className="fixed inset-x-0 top-0 z-50 sm:flex sm:justify-center sm:px-4 sm:pt-4"
+      className="fixed inset-x-0 top-0 z-50 lg:flex lg:justify-center lg:px-4 lg:pt-4"
     >
-      {/* ≥sm values are Figma V1's declared layer props (node 302:1212): r100,
+      {/* ≥lg values are Figma V1's declared layer props (node 302:1212): r100,
           white @ 20%, 0.5px white @ 50% edge, 35px backdrop blur, no shadow on
           the pill. The V1 pill holds 3 destinations with wide air between them;
           we carry 5, so the pill widens to 810px and the link gap grows to keep
@@ -158,12 +158,12 @@ export default function PillNav({
           (design feedback 2026-08-30). 810, not 800: the audit's longer link
           labels (How it works / For shops / Coverage) overflowed the 800px
           pill by ~10px, which ate the button's 17px right inset down to 7.
-          <sm is the mobile frame's edge-to-edge 59px bar with only a bottom
+          <lg is the mobile frame's edge-to-edge 59px bar with only a bottom
           hairline; insets 18.5 (mark) / 10.5 (44px hamburger hit box, whose
           20px lines then land at the frame's x 359.5) and 1px top padding so
           the content centres on the frame's y 30. */}
       <nav
-        className="relative isolate flex h-[59px] w-full items-center justify-between gap-4 pl-[18.5px] pr-[10.5px] pt-px sm:h-[69px] sm:max-w-[810px] sm:pl-[30px] sm:pr-[17px] sm:pt-0"
+        className="relative isolate flex h-[59px] w-full items-center justify-between gap-4 pl-[18.5px] pr-[10.5px] pt-px lg:h-[69px] lg:max-w-[810px] lg:pl-[30px] lg:pr-[17px] lg:pt-0"
       >
         {/* The glass is its OWN element, behind the content (-z-10 inside the
             nav's isolated stacking context). When the blur lived on the nav
@@ -175,7 +175,7 @@ export default function PillNav({
             repaint on top and the backdrop is only ever re-rendered whole. */}
         <span
           aria-hidden
-          className={`pointer-events-none absolute inset-0 -z-10 border-b-[0.5px] ${GLASS} sm:rounded-[100px] sm:border-[0.5px]`}
+          className={`pointer-events-none absolute inset-0 -z-10 border-b-[0.5px] ${GLASS} lg:rounded-[100px] lg:border-[0.5px]`}
         />
         <Link href="/" className="flex items-center" aria-label="Otopair home">
           {/* Layout box sized to the mark's presence: 17x21 in the mobile
@@ -184,19 +184,19 @@ export default function PillNav({
               200px logo.png read as a blurry blob at this size, 2026-08-30)
               carries transparent padding, so the image is scaled to 31px /
               48px and centred. */}
-          <span className="relative block h-[21px] w-[17px] shrink-0 transition-opacity hover:opacity-80 sm:h-[34px] sm:w-[28px]">
+          <span className="relative block h-[21px] w-[17px] shrink-0 transition-opacity hover:opacity-80 lg:h-[34px] lg:w-[28px]">
             <Image
               src="/pin-logo-3d.png"
               alt="Otopair"
               width={48}
               height={48}
               priority
-              className="absolute left-1/2 top-1/2 h-[31px] w-[31px] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain sm:h-[48px] sm:w-[48px]"
+              className="absolute left-1/2 top-1/2 h-[31px] w-[31px] max-w-none -translate-x-1/2 -translate-y-1/2 object-contain lg:h-[48px] lg:w-[48px]"
             />
           </span>
         </Link>
 
-        <ul className="hidden items-center gap-9 sm:flex">
+        <ul className="hidden items-center gap-9 lg:flex">
           {links.map((l) => (
             <li key={l.label} className="whitespace-nowrap">
               <UnderlineLink
@@ -212,13 +212,13 @@ export default function PillNav({
         {/* 5.5px: the frame's gap between the plate's right edge (x 342) and
             the hamburger hit box (lines at 359.5 minus the 12px inset that
             centres them in 44px). */}
-        <div className="flex items-center gap-[5.5px] sm:gap-4">
+        <div className="flex items-center gap-[5.5px] lg:gap-4">
           {shopSignIn && (
             /* Hide via a wrapper: UnderlineLink's base class ends in
                `inline-block`, which ties with `hidden` at equal specificity
                and wins on stylesheet order — so the link itself can't be
                responsive-hidden reliably (audit P2, 2026-08-30). */
-            <span className="hidden sm:block">
+            <span className="hidden lg:block">
               <UnderlineLink
                 href={shopSignIn.href}
                 className="whitespace-nowrap text-[15px] leading-[28px] text-[#1a1a1a] transition-colors hover:text-[#1a1a1a]/70"
@@ -247,7 +247,7 @@ export default function PillNav({
             aria-controls={sheetId}
             aria-label={open ? "Close menu" : "Open menu"}
             onClick={() => setOpen((v) => !v)}
-            className="flex h-11 w-11 shrink-0 items-center justify-center sm:hidden"
+            className="flex h-11 w-11 shrink-0 items-center justify-center lg:hidden"
           >
             {/* mt-[2px]: the frame draws the lines at y 26.5/33.5, ~1px below
                 the bar's content centre where the mark and plate sit. */}
@@ -282,7 +282,7 @@ export default function PillNav({
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             transition={{ duration: reduce ? 0 : 0.2, ease: "easeOut" }}
-            className={`rounded-b-[20px] border-[0.5px] border-t-0 px-[27px] py-4 ${GLASS} sm:hidden`}
+            className={`rounded-b-[20px] border-[0.5px] border-t-0 px-[27px] py-4 ${GLASS} lg:hidden`}
           >
             <ul className="flex flex-col">
               {sheetRows.map((l) => (

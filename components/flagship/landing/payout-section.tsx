@@ -57,7 +57,7 @@ export default function PayoutSection() {
   return (
     <section
       id="for-shops"
-      className="mx-auto w-full max-w-[1440px] px-[27px] pt-[69px] sm:px-10 sm:pt-28 lg:px-[78px]"
+      className="mx-auto w-full max-w-[1440px] px-[27px] pt-[69px] tab:px-10 tab:pt-28 lg:px-[78px]"
     >
       {/* V1's content box: 1190 wide, centred — 125px in from a 1440 page. */}
       <div className="mx-auto w-full max-w-[1190px]">
@@ -68,7 +68,7 @@ export default function PayoutSection() {
             is out of the accessibility tree. */}
         <Reveal>
           <h2
-            className="pl-[6px] text-[28px] leading-[28px] text-[#1a1a1a] sm:hidden"
+            className="pl-[6px] text-[28px] leading-[28px] text-[#1a1a1a] tab:hidden"
             style={serif}
           >
             You keep 100% of your rate.
@@ -77,14 +77,14 @@ export default function PayoutSection() {
               Cap-normalized Petrona sets that line at V1's own 552px; the next
               word pushes it past 700. */}
           <h2
-            className="hidden max-w-[580px] text-[40px] leading-[1.05] text-[#1a1a1a] sm:block sm:text-[54px] lg:text-[68px] lg:leading-[68px]"
+            className="hidden max-w-[580px] text-[40px] leading-[1.05] text-[#1a1a1a] tab:block tab:text-[54px] lg:text-[68px] lg:leading-[68px]"
             style={serifDisplay}
           >
             You keep 100% of your rate.
           </h2>
         </Reveal>
 
-        <div className="mt-10 grid grid-cols-1 gap-5 max-sm:mt-[32px] max-sm:gap-[15px] lg:mt-[40px] lg:grid-cols-3 lg:gap-[20px]">
+        <div className="mt-10 grid grid-cols-1 gap-5 max-tab:mt-[32px] max-tab:gap-[15px] lg:mt-[40px] lg:grid-cols-3 lg:gap-[20px]">
           {/* Cards follow the headline rather than racing it: 0.15s lead, then
               0.09s apart — the same rhythm section 2 gives its stats
               (delayChildren 0.15 / staggerChildren 0.09). At i * 0.1 the first
@@ -95,22 +95,22 @@ export default function PayoutSection() {
                   body (still two lines at 360); min-h holds 152 should a body
                   ever fit one line, and a three-line body simply grows it. */}
               <div
-                className="h-full rounded-[16px] bg-[#EBF5FB] px-7 pb-[26px] pt-[22px] max-sm:min-h-[152px] max-sm:rounded-[20px] max-sm:bg-[rgba(157,203,233,0.2)] max-sm:pt-[26px] max-sm:pr-[17px] max-sm:pb-[24px] max-sm:pl-[21px]"
+                className="h-full rounded-[16px] bg-[#EBF5FB] px-7 pb-[26px] pt-[22px] max-tab:min-h-[152px] max-tab:rounded-[20px] max-tab:bg-[rgba(157,203,233,0.2)] max-tab:pt-[26px] max-tab:pr-[17px] max-tab:pb-[24px] max-tab:pl-[21px]"
                 style={{ color: BLUE }}
               >
                 {/* Weight lives in classes (Romie Medium → 500 on the phone
                     frame, V1's Regular → 400 above) so `serif`'s inline 400
                     can't pin it across breakpoints. */}
                 <p
-                  className="text-[24px] font-normal leading-[26px] max-sm:text-[20px] max-sm:font-medium max-sm:leading-[28px] lg:text-[26px] lg:leading-[28px]"
+                  className="text-[24px] font-normal leading-[26px] max-tab:text-[20px] max-tab:font-medium max-tab:leading-[28px] lg:text-[26px] lg:leading-[28px]"
                   style={{ fontFamily: serif.fontFamily }}
                 >
                   {col.stat}
                 </p>
-                <p className="mt-[15px] text-[14px] font-semibold leading-[20px] max-sm:mt-[8px] max-sm:text-[13px] max-sm:leading-[23px]">
+                <p className="mt-[15px] text-[14px] font-semibold leading-[20px] max-tab:mt-[8px] max-tab:text-[13px] max-tab:leading-[23px]">
                   {col.label}
                 </p>
-                <p className="mt-[13px] text-[15px] leading-[23px] max-sm:mt-[7px] max-sm:text-[13px] max-sm:leading-[18px] lg:max-w-[258px]">
+                <p className="mt-[13px] text-[15px] leading-[23px] max-tab:mt-[7px] max-tab:text-[13px] max-tab:leading-[18px] lg:max-w-[258px]">
                   {col.body}
                 </p>
               </div>

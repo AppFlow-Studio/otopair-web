@@ -100,10 +100,11 @@ export default function WhyOtoSection() {
   return (
     <section className="w-full">
       {/* Ticker — blue serif floating on white, no rule (V1 302:1005).
-          Mobile: 12/45 Petrona 500 in a 54px block (390:3231). */}
+          Mobile: 15/45 Petrona 500 in a 54px block (390:3231 says 12px —
+          too small on a phone, design feedback 2026-09-03). */}
       <Reveal>
         <p
-          className="pt-2 pb-7 text-center text-[19px] leading-[1.6] text-[#4B82A5] sm:text-[24px] lg:text-[28px] max-sm:pt-0 max-sm:pb-[9px] max-sm:text-[12px] max-sm:leading-[45px] max-sm:[--wo-w:500]"
+          className="pt-2 pb-7 text-center text-[19px] leading-[1.6] text-[#4B82A5] sm:text-[24px] lg:text-[28px] max-sm:pt-0 max-sm:pb-[9px] max-sm:text-[15px] max-sm:leading-[45px] max-sm:[--wo-w:500]"
           style={tickerStyle}
         >
           Now onboarding · Staten Island, NYC

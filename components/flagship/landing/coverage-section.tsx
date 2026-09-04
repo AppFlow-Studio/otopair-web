@@ -13,6 +13,19 @@ import { avgNearestMiles, mergeNetworkPins } from "./network-pins";
 
 const HAIRLINE = "rgba(26,26,26,0.12)";
 
+/* Stats-card type. Base classes are the ≥sm sidebar exactly as before; the
+   `max-sm:` additions are the phone frame's 28/26/26 line grid (label 13/28,
+   value 40 Romie-Medium → Petrona 500 on a 26 line, unit 17/26, sub 15/26). */
+const STAT_LABEL = "text-[13px] tracking-[0.05em] text-[#777169] max-sm:leading-[28px]";
+const STAT_LINE = "mt-2 flex items-baseline gap-1.5 max-sm:mt-[15px] max-sm:h-[26px]";
+const STAT_VALUE = "text-[40px] leading-none text-[#1a1a1a] max-sm:leading-[26px] max-sm:font-medium!";
+const STAT_UNIT = "text-[17px] text-[#777169] max-sm:leading-[26px]";
+const STAT_SUB = "mt-1 text-[15px] leading-[26px] text-[#777169] max-sm:mt-0";
+// ≥sm the blocks separate with a full-width border-top (inline style); the
+// frame draws a 260-wide white 1.5px rule instead, so the border drops below sm.
+const STAT_BLOCK = "mt-7 px-6 pt-7 max-sm:mt-[26px] max-sm:border-t-0! max-sm:px-[44px] max-sm:pt-0";
+const STAT_RULE = "mx-[44px] mt-[32px] h-[1.5px] w-[260px] max-w-[calc(100%-88px)] bg-white sm:hidden";
+
 // Keep this current — a launch date in the past presented as future reads as
 // abandoned software (site audit 2026-08-31; the June 1 SI date shipped stale).
 const BOROUGHS = [
@@ -194,14 +207,19 @@ export default function CoverageSection() {
   return (
     <section
       id="coverage"
-      className="mx-auto w-full max-w-[1440px] px-4 pt-20 sm:px-10 sm:pt-28 lg:px-[78px]"
+      className="mx-auto w-full max-w-[1440px] px-4 pt-20 max-sm:px-[27px] max-sm:pt-[60px] sm:px-10 sm:pt-28 lg:px-[78px]"
     >
+      {/* Mobile (below sm) follows the Figma phone frame (iPhone 16 & 17 Pro - 7,
+          nodes 390:3246 / 390:3324 / 390:4473): left-set 28px headline, the
+          borough ladder dropped, the map at a 22px inset, then one rounded
+          stats card at a 28px inset. Every mobile value rides a `max-sm:`
+          variant so the ≥640 layout is untouched. */}
       {/* V1's content box for this band is the same centred 1190 as the payout
           section — measured off the render: bar 121->1303, sidebar ends 1305. */}
       <div className="mx-auto w-full max-w-[1190px]">
         <Reveal>
           <h2
-            className="max-w-[760px] text-[40px] leading-[1.02] text-[#1a1a1a] sm:text-[54px] lg:text-[68px] lg:leading-[68px]"
+            className="max-w-[760px] text-[40px] leading-[1.02] text-[#1a1a1a] max-sm:text-[28px] max-sm:leading-[28px] max-sm:font-normal! max-sm:[font-size-adjust:none]! sm:text-[54px] lg:text-[68px] lg:leading-[68px]"
             style={serifDisplay}
           >
             Network coverage across NYC boroughs
@@ -211,7 +229,7 @@ export default function CoverageSection() {
         {/* Rollout timeline. V1 carries the numbers on ONE pale bar (26px tall,
             r8, #EBF5FB) and sets the boroughs on plain white beneath it — no
             grid box, no vertical dividers, no second tinted block. */}
-        <Reveal delay={0.1}>
+        <Reveal delay={0.1} className="max-sm:hidden">
           <div className="mt-10 sm:mt-12 lg:mt-[48px]">
             <div className="hidden lg:block">
               <div className="grid grid-cols-5 rounded-[8px] bg-[#EBF5FB]">
@@ -256,10 +274,11 @@ export default function CoverageSection() {
             welding them into one bordered panel, and the sidebar carries the
             same #EBF5FB tint as the bar above. */}
         <Reveal delay={0.15}>
-          <div className="mt-8 grid grid-cols-1 gap-6 lg:mt-[40px] lg:grid-cols-[minmax(0,1fr)_250px] lg:gap-[41px]">
+          <div className="mt-8 grid grid-cols-1 gap-6 max-sm:mt-[25px] max-sm:gap-[44px] lg:mt-[40px] lg:grid-cols-[minmax(0,1fr)_250px] lg:gap-[41px]">
+            {/* Frame: map at x=22 (5px outside the 27px text inset), 342 tall. */}
             <div
               ref={mapCellRef}
-              className="relative h-[380px] overflow-hidden rounded-[8px] sm:h-[520px] lg:h-auto lg:min-h-[720px]"
+              className="relative h-[380px] overflow-hidden rounded-[8px] max-sm:-mx-[5px] max-sm:h-[342px] sm:h-[520px] lg:h-auto lg:min-h-[720px]"
             >
               {/* One loader from arrival through the deferred boot to the
                   map's own idle event — the static still is now only the
@@ -267,60 +286,66 @@ export default function CoverageSection() {
               {booted ? <CoverageMap fallback={<MapImageFallback />} /> : <MapLoading />}
             </div>
 
-            <div className="flex flex-col overflow-hidden rounded-[8px] bg-[#EBF5FB]">
-              <div className="px-6 pt-7">
-                <p className="text-[13px] tracking-[0.05em] text-[#777169]">VERIFIED SHOPS</p>
-                <p className="mt-2 flex items-baseline gap-1.5">
-                  <span className="text-[40px] leading-none text-[#1a1a1a]" style={serif}>
+            {/* Frame card (390:4473): x=28, r20, content at a 44px inset,
+                stat blocks on 28/26/26 line grids, white 1.5px rules 260 wide
+                (Figma's Line 11/12 assets), the LIVE SIGNUPS strip 45 tall. */}
+            <div className="flex flex-col overflow-hidden rounded-[8px] bg-[#EBF5FB] max-sm:mx-px max-sm:rounded-[20px]">
+              <div className="px-6 pt-7 max-sm:px-[44px] max-sm:pt-[32px]">
+                <p className={STAT_LABEL}>VERIFIED SHOPS</p>
+                <p className={`${STAT_LINE} max-sm:gap-[9px]`}>
+                  <span className={STAT_VALUE} style={serif}>
                     <CountUp to={23} />
                   </span>
-                  <span className="text-[17px] text-[#777169]">live</span>
+                  <span className={STAT_UNIT}>live</span>
                 </p>
-                <p className="mt-1 text-[15px] leading-[26px] text-[#777169]">
-                  Live across Staten Island
-                </p>
+                <p className={STAT_SUB}>Live across Staten Island</p>
               </div>
 
-              <div className="mt-7 px-6 pt-7" style={{ borderTop: `1px solid ${HAIRLINE}` }}>
-                <p className="text-[13px] tracking-[0.05em] text-[#777169]">AVG. DISTANCE</p>
-                <p className="mt-2 flex items-baseline gap-1.5">
-                  <span className="text-[40px] leading-none text-[#1a1a1a]" style={serif}>
+              <div aria-hidden className={STAT_RULE} />
+              <div className={STAT_BLOCK} style={{ borderTop: `1px solid ${HAIRLINE}` }}>
+                <p className={STAT_LABEL}>AVG. DISTANCE</p>
+                <p className={`${STAT_LINE} max-sm:gap-[5px]`}>
+                  <span className={STAT_VALUE} style={serif}>
                     <CountUp to={avgMi} decimals={1} />
                   </span>
-                  <span className="text-[17px] text-[#777169]">mi</span>
+                  <span className={STAT_UNIT}>mi</span>
                 </p>
-                <p className="mt-1 text-[15px] leading-[26px] text-[#777169]">
-                  Within the live network
-                </p>
+                <p className={STAT_SUB}>Within the live network</p>
               </div>
 
-              <div className="mt-7 px-6 pt-7" style={{ borderTop: `1px solid ${HAIRLINE}` }}>
-                <p className="text-[13px] tracking-[0.05em] text-[#777169]">CAR OWNERSHIP</p>
-                <p className="mt-2 flex items-baseline gap-1.5">
-                  <span className="text-[40px] leading-none text-[#1a1a1a]" style={serif}>
+              <div aria-hidden className={STAT_RULE} />
+              <div className={STAT_BLOCK} style={{ borderTop: `1px solid ${HAIRLINE}` }}>
+                <p className={STAT_LABEL}>CAR OWNERSHIP</p>
+                <p className={`${STAT_LINE} max-sm:gap-[5px]`}>
+                  <span className={STAT_VALUE} style={serif}>
                     <CountUp to={83} />
                   </span>
-                  <span className="text-[17px] text-[#777169]">%</span>
+                  <span className={STAT_UNIT}>%</span>
                 </p>
-                <p className="mt-1 text-[15px] leading-[26px] text-[#777169]">
-                  Highest borough in NYC
-                </p>
+                <p className={STAT_SUB}>Highest borough in NYC</p>
               </div>
 
               {/* V1's signups header is the section's blue (#4B82A5), not the
-                  ink bar this used to carry. */}
-              <div className="mt-8 flex items-center gap-2 bg-[#4B82A5] px-6 py-3">
-                <span className="h-1.5 w-1.5 rounded-full bg-white/85" />
-                <span className="text-[13px] tracking-[0.08em] text-white">LIVE SIGNUPS</span>
+                  ink bar this used to carry. The phone frame sets it 45 tall
+                  with the label alone (no dot) at a 45px inset. */}
+              <div className="mt-8 flex items-center gap-2 bg-[#4B82A5] px-6 py-3 max-sm:h-[45px] max-sm:px-[45px] max-sm:py-0">
+                <span className="h-1.5 w-1.5 rounded-full bg-white/85 max-sm:hidden" />
+                <span className="text-[13px] tracking-[0.08em] text-white max-sm:text-[15px] max-sm:leading-[28px] max-sm:tracking-[0.05em]">
+                  LIVE SIGNUPS
+                </span>
               </div>
 
-              <div className="flex-1 px-6 pb-8 pt-6">
+              {/* Frame rows: name (15/28) with the time (12/28) tucked 9px up
+                  into its line box, then a 227x20 pill 2px under — 21px apart. */}
+              <div className="flex-1 px-6 pb-8 pt-6 max-sm:px-[44px] max-sm:pb-[41px] max-sm:pt-[29px]">
                 {signups.map((s, i) => (
-                  <div key={i} className={i > 0 ? "mt-6" : ""}>
-                    <p className="text-[15px] tracking-[0.05em] text-[#1a1a1a]">{s.name}</p>
-                    <p className="text-[12px] tracking-[0.05em] text-[#777169]/60">{s.when}</p>
+                  <div key={i} className={i > 0 ? "mt-6 max-sm:mt-[21px]" : ""}>
+                    <p className="text-[15px] tracking-[0.05em] text-[#1a1a1a] max-sm:leading-[28px]">{s.name}</p>
+                    <p className="text-[12px] tracking-[0.05em] text-[#777169]/60 max-sm:-mt-[9px] max-sm:leading-[28px] max-sm:text-[#777169]/50">
+                      {s.when}
+                    </p>
                     <span
-                      className={`mt-2 inline-block w-full rounded-[10px] px-3.5 py-0.5 text-[12px] font-medium tracking-[0.05em] ${
+                      className={`mt-2 inline-block w-full rounded-[10px] px-3.5 py-0.5 text-[12px] font-medium tracking-[0.05em] max-sm:mt-[2px] max-sm:block max-sm:h-[20px] max-sm:w-[227px] max-sm:max-w-full max-sm:px-[19px] max-sm:py-0 max-sm:leading-[20px] ${
                         s.badge === "Verified"
                           ? "bg-[#457942]/20 text-[#457942]"
                           : "bg-[#777169]/20 text-[#777169]"

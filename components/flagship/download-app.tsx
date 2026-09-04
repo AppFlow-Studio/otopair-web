@@ -15,7 +15,7 @@ export const PLAY_STORE_URL = "#";
  *  the top of the page reads as broken software (site audit 2026-08-31). */
 export const storeIsLive = (url: string) => url !== "#";
 
-type Platform = "ios" | "android" | "other";
+export type Platform = "ios" | "android" | "other";
 
 /** Reads the platform once on the client. SSR always renders the neutral state. */
 const subscribeNoop = () => () => {};
@@ -31,6 +31,13 @@ function detectPlatform(): Platform {
   return "other";
 }
 
+/** The visitor's platform — "other" on the server, during hydration, and on
+ *  desktop. Shared by every store control (badges here, PlatformPill) so
+ *  they all agree on which store to show (design review 2026-08-15, W1). */
+export function usePlatform(): Platform {
+  return useSyncExternalStore(subscribeNoop, detectPlatform, getServerPlatform);
+}
+
 /**
  * Official store badges at Figma V1's declared geometry (nodes 302:1101/1102):
  * 180x47 / 189x47 dark plates, rounded-[8px], 8px apart, with the standard
@@ -38,8 +45,9 @@ function detectPlatform(): Platform {
  * placeholder the badge renders as a plain (non-link) plate — the caption in
  * DownloadApp carries the "coming soon" message.
  */
-function StoreBadge({ store, size = "md" }: { store: "apple" | "google"; size?: "md" | "lg" }) {
-  const scale = size === "lg" ? 1.18 : 1;
+function StoreBadge({ store, size = "md" }: { store: "apple" | "google"; size?: "sm" | "md" | "lg" }) {
+  // sm = the mobile frame's 145×38 / 152×38 plates (node 390:3247), i.e. 0.8×.
+  const scale = size === "lg" ? 1.18 : size === "sm" ? 0.8 : 1;
   const w = Math.round((store === "apple" ? 180 : 189) * scale);
   const h = Math.round(47 * scale);
   const href = store === "apple" ? APP_STORE_URL : PLAY_STORE_URL;
@@ -91,11 +99,11 @@ export default function DownloadApp({
   size = "md",
 }: {
   className?: string;
-  size?: "md" | "lg";
+  size?: "sm" | "md" | "lg";
   /** Kept for call-site compatibility; badges are always the official dark plates. */
   tone?: "dark" | "light";
 }) {
-  const platform = useSyncExternalStore(subscribeNoop, detectPlatform, getServerPlatform);
+  const platform = usePlatform();
 
   if (platform === "other") {
     const comingSoon = !storeIsLive(APP_STORE_URL) || !storeIsLive(PLAY_STORE_URL);

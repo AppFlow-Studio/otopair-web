@@ -90,7 +90,9 @@ export default function DebugTriggers({ oto }: { oto: OtoAgent }) {
   const [open, setOpen] = useState(true);
 
   return (
-    <div className="fixed right-2 top-1/2 z-[70] -translate-y-1/2">
+    // max-lg:hidden — on a phone-sized preview the panel covered half the
+    // page and swallowed wheel scrolling (2026-09-03).
+    <div className="fixed right-2 top-1/2 z-[70] -translate-y-1/2 max-lg:hidden">
       {open ? (
         <div className="max-h-[86vh] w-[148px] space-y-3 overflow-y-auto rounded-xl border border-[#1a1a1a]/10 bg-[#eceae6]/95 p-2 shadow-[0_10px_30px_rgba(0,0,0,0.12)] backdrop-blur [scrollbar-width:thin]">
         <button type="button" onClick={() => setOpen(false)} className={`${BTN} text-center font-semibold`}>

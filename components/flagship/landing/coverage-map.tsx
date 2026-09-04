@@ -13,6 +13,13 @@ import { mergeNetworkPins, milesBetween, type Pin } from "./network-pins";
 
 const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
 
+/* Below sm the camera cluster only appears once the camera has actually left
+   the resting frame (a dive, a pinch, a two-finger drag) — the phone frame
+   shows the map bare, and the "back out" button is the one control that still
+   earns its place there. These are the "has it moved" thresholds. */
+const AWAY_ZOOM = 0.25;
+const AWAY_MILES = 0.6;
+
 const SI_CENTER: [number, number] = [-74.1385, 40.5885];
 
 /* Camera framing. The map opens directly on the borough-wide coverage frame.
@@ -114,6 +121,8 @@ export default function CoverageMap({
   // is what made the map look like it was assembling itself in public. `idle`
   // is the real "nothing left to draw" signal, so that is what uncovers it.
   const [settled, setSettled] = useState(false);
+  // Camera off the resting frame — gates the mobile-only control cluster.
+  const [away, setAway] = useState(false);
 
   const [q, setQ] = useState("");
   const [searching, setSearching] = useState(false);
@@ -148,6 +157,10 @@ export default function CoverageMap({
           [-74.62, 40.32],
           [-73.28, 41.08],
         ],
+        // One-finger drag scrolls the page (two fingers pan/pinch the map), so
+        // the map can never trap a phone mid-scroll. Wheel zoom is disabled
+        // below regardless, so the desktop wheel path is unchanged.
+        cooperativeGestures: true,
       });
     } catch {
       setFailed(true);
@@ -184,6 +197,17 @@ export default function CoverageMap({
     };
     map.on("zoom", syncZoomClass);
     syncZoomClass();
+
+    // Has the camera left the resting frame? Settles on every moveend, so a
+    // pinch, a drag, a dive or the way back all keep the mobile cluster honest.
+    const syncAway = () => {
+      const c = map.getCenter();
+      const drifted =
+        Math.abs(map.getZoom() - RESTING_CAMERA.zoom) > AWAY_ZOOM ||
+        milesBetween(c.lat, c.lng, RESTING_CAMERA.center[1], RESTING_CAMERA.center[0]) > AWAY_MILES;
+      setAway(drifted);
+    };
+    map.on("moveend", syncAway);
 
     map.on("load", () => setReady(true));
     map.once("idle", () => setSettled(true));
@@ -392,15 +416,30 @@ export default function CoverageMap({
       >
         <div ref={containerRef} className="h-full w-full" aria-label="Live map of the Otopair shop network" />
 
-      {/* Glass search bar — now a real address search */}
+      {/* Glass search bar — now a real address search. Below sm it is the
+          phone frame's pill (390:3612): 30 tall, 13 from the top, 8px in,
+          frosted white over the map, an 11px glass at left 10, the 8px
+          placeholder starting at 28, the arrow (13px, #777169) at the right.
+          Figma declares the fill at 20% white, but that is over its white
+          artboard where it renders solid; over the real basemap 20% leaves the
+          8px placeholder unreadable, so it runs at 70% to match the render.
+          The typed value stays 16px there: anything smaller makes iOS zoom
+          the page on focus. */}
       <form
         role="search"
         onSubmit={search}
-        className="absolute left-4 right-4 top-4 flex h-[54px] items-center gap-3 rounded-[8px] border border-white/60 bg-white/80 px-4 shadow-[0_4px_16px_rgba(20,40,80,0.10)] backdrop-blur-md sm:left-8 sm:right-8 sm:top-6"
+        className="absolute left-4 right-4 top-4 flex h-[54px] items-center gap-3 rounded-[8px] border border-white/60 bg-white/80 px-4 shadow-[0_4px_16px_rgba(20,40,80,0.10)] backdrop-blur-md max-sm:left-2 max-sm:right-2 max-sm:top-[13px] max-sm:h-[30px] max-sm:gap-[7px] max-sm:border-0 max-sm:bg-white/70 max-sm:pl-[10px] max-sm:pr-0 sm:left-8 sm:right-8 sm:top-6"
       >
-        <svg width={18} height={18} viewBox="0 0 18 18" fill="none" className="shrink-0" aria-hidden>
-          <circle cx="7.5" cy="7.5" r="5.5" stroke="#1a1a1a" strokeWidth="1.4" />
-          <path d="M11.6 11.6 L16 16" stroke="#1a1a1a" strokeWidth="1.4" strokeLinecap="round" />
+        <svg
+          width={18}
+          height={18}
+          viewBox="0 0 18 18"
+          fill="none"
+          className="shrink-0 text-[#1a1a1a] max-sm:h-[11px] max-sm:w-[11px] max-sm:text-[#777169]"
+          aria-hidden
+        >
+          <circle cx="7.5" cy="7.5" r="5.5" stroke="currentColor" strokeWidth="1.4" />
+          <path d="M11.6 11.6 L16 16" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
         </svg>
         <input
           value={q}
@@ -410,13 +449,13 @@ export default function CoverageMap({
           }}
           placeholder="Find your nearest shop — type any NYC address"
           aria-label="Find your nearest shop — type any NYC address"
-          className="h-full flex-1 truncate bg-transparent text-[13px] tracking-[0.05em] text-[#1a1a1a] placeholder:text-[#777169] focus:outline-none"
+          className="h-full flex-1 truncate bg-transparent text-[13px] tracking-[0.05em] text-[#1a1a1a] placeholder:text-[#777169] focus:outline-none max-sm:text-[16px] max-sm:tracking-normal max-sm:placeholder:text-[8px] max-sm:placeholder:tracking-[0.4px]"
         />
         <button
           type="submit"
           aria-label="Search"
           disabled={searching}
-          className="text-[20px] font-light leading-none text-[#1a1a1a] transition-transform duration-200 hover:translate-x-0.5 hover:-translate-y-0.5 disabled:opacity-50"
+          className="text-[20px] font-light leading-none text-[#1a1a1a] transition-transform duration-200 hover:translate-x-0.5 hover:-translate-y-0.5 disabled:opacity-50 max-sm:flex max-sm:h-full max-sm:items-center max-sm:px-[6px] max-sm:text-[13px] max-sm:text-[#777169]"
         >
           {searching ? "…" : "↗"}
         </button>
@@ -424,7 +463,7 @@ export default function CoverageMap({
 
       {/* Live suggestions — shops in the network + street/address matches */}
       {suggestions.length > 0 && (
-        <div className="absolute left-4 right-4 top-[74px] z-20 overflow-hidden rounded-[8px] border border-white/60 bg-white/90 shadow-[0_10px_30px_rgba(20,40,80,0.14)] backdrop-blur-md sm:left-8 sm:right-8 sm:top-[88px]">
+        <div className="absolute left-4 right-4 top-[74px] z-20 overflow-hidden rounded-[8px] border border-white/60 bg-white/90 shadow-[0_10px_30px_rgba(20,40,80,0.14)] backdrop-blur-md max-sm:left-2 max-sm:right-2 max-sm:top-[47px] sm:left-8 sm:right-8 sm:top-[88px]">
           {suggestions.map((s) =>
             s.kind === "shop" ? (
               <button
@@ -496,26 +535,34 @@ export default function CoverageMap({
           ))}
       </div>
 
-      {/* Camera controls — zoom, and the way back out of a dive */}
-      <div className="absolute bottom-8 right-3 z-10 flex flex-col overflow-hidden rounded-[8px] border border-white/60 bg-white/80 shadow-[0_4px_16px_rgba(20,40,80,0.10)] backdrop-blur-md sm:right-4">
+      {/* Camera controls — zoom, and the way back out of a dive. Below sm the
+          result chip owns the bottom edge (site audit P2: the two collided),
+          so the cluster sits under the search pill instead, loses +/− (pinch
+          zooms there) and only shows once the camera has left the resting
+          frame — the phone frame's map is bare. */}
+      <div
+        className={`absolute bottom-8 right-3 z-10 flex flex-col overflow-hidden rounded-[8px] border border-white/60 bg-white/80 shadow-[0_4px_16px_rgba(20,40,80,0.10)] backdrop-blur-md max-sm:top-[51px] max-sm:right-2 max-sm:bottom-auto sm:right-4 ${
+          away ? "" : "max-sm:hidden"
+        }`}
+      >
         <button
           type="button"
           onClick={() => zoomStep(1)}
           aria-label="Zoom in"
-          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07]"
+          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07] max-sm:hidden"
         >
           <Plus className="h-3.5 w-3.5" strokeWidth={2.2} />
         </button>
-        <span className="h-px bg-[#1a1a1a]/12" />
+        <span className="h-px bg-[#1a1a1a]/12 max-sm:hidden" />
         <button
           type="button"
           onClick={() => zoomStep(-1)}
           aria-label="Zoom out"
-          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07]"
+          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07] max-sm:hidden"
         >
           <Minus className="h-3.5 w-3.5" strokeWidth={2.2} />
         </button>
-        <span className="h-px bg-[#1a1a1a]/12" />
+        <span className="h-px bg-[#1a1a1a]/12 max-sm:hidden" />
         <button
           type="button"
           onClick={flyOverview}

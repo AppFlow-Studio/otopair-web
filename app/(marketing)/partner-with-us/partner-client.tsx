@@ -52,6 +52,11 @@ export default function PartnerClient() {
       {/* Same floating glass pill nav as the flagship home hero. */}
       <PillNav links={NAV_LINKS} cta={NAV_CTA} shopSignIn={null} />
 
+      {/* isolate: flattens the glass cards below into one surface so the fixed
+          pill's backdrop-filter can blur them (Chromium skips nested
+          backdrop-filter elements otherwise — 2026-09-03). */}
+      <div className="isolate">
+
       {/* ---------- Hero ---------- */}
       {/* Cool blue → white wash, matching the home hero, so the glass nav reads
           against blue exactly as it does on the landing page. */}
@@ -228,6 +233,7 @@ export default function PartnerClient() {
           </div>
         </div>
       </footer>
+      </div>
     </div>
   );
 }

@@ -10,11 +10,22 @@ import {
 } from "motion/react";
 import { useLenis } from "lenis/react";
 import { useReducedMotionSafe } from "../shared";
+import DownloadApp from "../download-app";
 import { Reveal, serif, serifDisplay } from "./reveal";
 import DriversPanel from "./drivers-panel";
 import OtoPanel from "./oto-panel";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
+
+/* Mobile accordion row pitches (Figma 390:3296, a 332px block): "01." sits at
+   +65, "02." at +161, "03." at +254.5 → 96 / 93.5 / 77.5 per row header. Fixed
+   minimums, not content-driven gaps, so the rhythm matches the frame even
+   though the live descriptions run a line longer than the placeholder copy. */
+const MOBILE_ROW_MIN_H = [
+  "max-sm:min-h-[96px]",
+  "max-sm:min-h-[93.5px]",
+  "max-sm:min-h-[77.5px]",
+] as const;
 
 /* ------------------------------------------------------------------ */
 /* The three roles — hovering one swaps the graphic on the right.      */
@@ -638,6 +649,24 @@ export default function PriceLockSection() {
     return () => mq.removeEventListener("change", sync);
   }, []);
 
+  // ── Mobile (< sm): the frame has no story stage ──
+  // Below 640px the Figma mobile frame (390:3296) is a compact accordion:
+  // three role rows, all collapsed, and no phone stage at all. The stage is
+  // CSS-hidden there from the first paint and unmounted once we know the
+  // viewport (so its story clocks don't run under a display:none); tapping a
+  // row's "+" mounts that role's panel beneath it instead — one at a time.
+  // SSR renders the desktop shape (`mobile` false), matching the client's
+  // first render; nothing mobile-only is in the HTML, so no hydration drift.
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 639.98px)");
+    const sync = () => setMobile(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  const [open, setOpen] = useState<number | null>(null);
+
   // Short-desktop compact mode: the pinned composition must fit one
   // viewport, and the card's height is driven by the role rows' type +
   // padding — so on sub-1000px-tall screens the headline, row padding and
@@ -705,6 +734,8 @@ export default function PriceLockSection() {
   // they timed past (design feedback 2026-08-31). Forward jumps only.
   const lenis = useLenis();
   useEffect(() => {
+    // No reel on mobile — the rows are an accordion the visitor drives.
+    if (mobile) return;
     if (reduce || !listInView || resetToken === 0) return;
     if (active >= ROLES.length - 1) return;
     const t = window.setTimeout(() => {
@@ -723,12 +754,14 @@ export default function PriceLockSection() {
     }, STORY_MS[active]);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, listInView, reduce, resetToken, pinnedMode]);
+  }, [active, listInView, reduce, resetToken, pinnedMode, mobile]);
 
   return (
     <section
       id="how-it-works"
-      className="mx-auto w-full max-w-[1440px] px-4 pt-12 sm:px-10 sm:pt-16 lg:px-[78px]"
+      // Mobile frame: 27px side insets, headline 43px under the why-drivers
+      // tiles (390:3244 at y1177). sm+ keeps its own padding untouched.
+      className="mx-auto w-full max-w-[1440px] px-[27px] pt-[43px] sm:px-10 sm:pt-16 lg:px-[78px]"
     >
       {/* V1's gradient card (node 302:1074 — section 2's 1269x642 card
           rotated 180°: white fading to #95C7E7, radius 40). The rail sits 76px
@@ -747,7 +780,7 @@ export default function PriceLockSection() {
           normal flow — they collapse out and drag the pin. */}
       {/* `relative` anchors motion's useScroll offset math (it warns on
           static targets). */}
-      <div ref={runwayRef} className="relative mt-2 sm:mt-3 lg:h-[280vh]">
+      <div ref={runwayRef} className="relative mt-0 sm:mt-3 lg:h-[280vh]">
         {/* Natural height + fixed top offset, NOT h-screen centering — the
             centered box padded (viewport − composition)/2 of slack under the
             card at release, inflating the gap to the payout section on tall
@@ -768,9 +801,12 @@ export default function PriceLockSection() {
           {/* Centered three-line headline (V1 302:1149: 912x204 box, 68px
               line pitch, page-centered; steps down a size when the pin is
               height-bound) */}
+          {/* Mobile (390:3244): 28/28 Romie Regular → Petrona 400, no display
+              cut and no cap normalisation — the `!` overrides beat the inline
+              serifDisplay style below sm only; sm+ is untouched. */}
           <Reveal>
             <h2
-              className={`mx-auto max-w-[912px] text-center text-[38px] leading-[1.19] text-[#1a1a1a] sm:text-[50px] ${
+              className={`mx-auto max-w-[912px] text-center text-[38px] leading-[1.19] text-[#1a1a1a] max-sm:text-[28px] max-sm:leading-[28px] max-sm:font-normal! max-sm:[font-size-adjust:none]! sm:text-[50px] ${
                 shortPin ? "lg:text-[44px] lg:leading-[52px]" : "lg:text-[57px] lg:leading-[68px]"
               }`}
               style={serifDisplay}
@@ -783,57 +819,150 @@ export default function PriceLockSection() {
             </h2>
           </Reveal>
 
-          <div className="mx-auto mt-10 w-full max-w-[1269px] overflow-clip rounded-[28px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] sm:mt-12 sm:rounded-[40px] lg:mt-0">
+          {/* Mobile only (390:3247): the two black store plates 38px under the
+              headline. The box is exactly the plates' 38px — DownloadApp's
+              "coming soon" caption hangs below into the accordion block's
+              empty top (the frame's block starts 21px under the plates with
+              its first row 65px further down), so the rows' positions don't
+              depend on whether the caption renders. */}
+          {/* Content-sized (badge + its coming-soon caption), 28px under the
+              headline; the accordion then starts 36px under the caption —
+              the old fixed 38px box left a 58px hole (design feedback
+              2026-09-03, "fix google play spacing"). */}
+          <Reveal delay={0.1} className="mt-[28px] sm:hidden">
+            <DownloadApp size="sm" />
+          </Reveal>
+
+          {/* No gradient card on mobile — the frame's blue is a full-bleed foot
+              band behind the lower rows (390:3178), painted inside the list. */}
+          <div className="mx-auto mt-[21px] w-full max-w-[1269px] sm:mt-12 sm:overflow-clip sm:rounded-[40px] sm:bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] lg:mt-0">
             {/* pb keeps the phone mock + caption chips off the card's bottom
                 edge on every step (design feedback 2026-08-24, item 4). */}
             <div
-              className={`grid grid-cols-1 gap-12 px-5 pt-10 pb-16 sm:px-10 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:pt-5 lg:pl-[76px] lg:pr-[27px] ${
+              className={`grid grid-cols-1 sm:gap-12 sm:px-10 sm:pt-10 sm:pb-16 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:pt-5 lg:pl-[76px] lg:pr-[27px] ${
                 shortPin ? "lg:pb-10" : "lg:pb-20"
               }`}
             >
-              {/* The story stage */}
-              <div className="lg:order-2">
-                <PriceLockCard active={active} reduce={reduce} resetToken={resetToken} />
+              {/* The story stage — sm+ only; mobile mounts a panel per open row. */}
+              <div className="hidden sm:block lg:order-2">
+                {!mobile && (
+                  <PriceLockCard active={active} reduce={reduce} resetToken={resetToken} />
+                )}
               </div>
 
-              {/* Numbered roles — display only: they light up as the story
-                  advances (scroll or hand-off), never on hover/click. */}
-              <div ref={listRef} className="relative lg:order-1">
+              {/* Numbered roles — display only on sm+: they light up as the
+                  story advances (scroll or hand-off), never on hover/click.
+                  On mobile they're the accordion (390:3296): block starts
+                  1358, "01." at +65, block ends 1690 + 22px of band foot. */}
+              <div ref={listRef} className="relative max-sm:pt-[15px] max-sm:pb-[22px] lg:order-1">
+                {/* Full-bleed foot band (390:3178): white → #95C7E7, 226px
+                    from block +128 to the block's end, 40px bottom corners.
+                    `bottom-0` rather than a fixed height so an expanded row's
+                    panel stays on the blue. */}
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute -inset-x-[27px] top-[78px] bottom-0 rounded-b-[40px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] sm:hidden"
+                />
                 {ROLES.map((role, i) => {
                   const on = active === i;
+                  const isOpen = mobile && open === i;
+                  const panelId = `how-it-works-panel-${i}`;
+                  // Mobile frame drops the trailing period ("Drivers", "The
+                  // Shops"); the word itself is the live site's.
+                  const dot = role.title.endsWith(".");
+                  const word = dot ? role.title.slice(0, -1) : role.title;
                   return (
                     <div
                       key={role.num}
-                      aria-current={on || undefined}
-                      className={`relative flex flex-col justify-center rounded-[16px] px-0 [transition:filter_400ms_ease] lg:h-[33.333%] lg:px-8 ${
+                      aria-current={(!mobile && on) || undefined}
+                      className={`relative flex flex-col justify-center rounded-[16px] px-0 [transition:filter_400ms_ease] max-sm:justify-start max-sm:py-0 max-sm:[filter:none]! lg:h-[33.333%] lg:px-8 ${
                         shortPin ? "py-4" : "py-8"
                       }`}
                       style={{ filter: on ? "blur(0px)" : "blur(5px)" }}
                     >
-                      <p
-                        className="text-[17px] tracking-[0.05em] [transition:color_350ms_ease]"
-                        style={{ color: on ? "rgb(119,113,105)" : "rgba(119,113,105,0.35)" }}
-                      >
-                        {role.num}
-                      </p>
-                      <div
-                        className="mt-3 h-px w-full [transition:background-color_350ms_ease]"
-                        style={{ backgroundColor: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.18)" }}
-                      />
-                      <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-8">
-                        <h3
-                          className="w-[130px] shrink-0 text-[25px] [transition:color_350ms_ease]"
-                          style={{ ...serif, color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
-                        >
-                          {role.title}
-                        </h3>
-                        <p
-                          className="max-w-[320px] text-[17px] leading-[23px] tracking-[0.05em] [transition:color_350ms_ease]"
-                          style={{ color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
-                        >
-                          {role.body}
-                        </p>
+                      {/* Row header. `sm:contents` dissolves the wrapper on
+                          sm+ so the desktop flex column is byte-identical;
+                          on mobile it's the fixed-pitch header and the tap
+                          target's positioning box. */}
+                      <div className={`relative sm:contents ${MOBILE_ROW_MIN_H[i]}`}>
+                        <div className="flex items-start justify-between sm:contents">
+                          <p
+                            className="text-[17px] tracking-[0.05em] [transition:color_350ms_ease] max-sm:text-[11px] max-sm:leading-[11px] max-sm:tracking-[0.55px] max-sm:text-[#1a1a1a]!"
+                            style={{ color: on ? "rgb(119,113,105)" : "rgba(119,113,105,0.35)" }}
+                          >
+                            {role.num}
+                          </p>
+                          {/* The frame's "+" (390:3306): 10/13, x367. Becomes
+                              "−" while the row is open. Decorative — the
+                              overlay button below is the control. */}
+                          <span
+                            aria-hidden
+                            className="text-[10px] leading-[13px] tracking-[0.5px] text-black sm:hidden"
+                          >
+                            {isOpen ? "−" : "+"}
+                          </span>
+                        </div>
+                        <div
+                          className="mt-3 h-px w-full [transition:background-color_350ms_ease] max-sm:mt-[5px] max-sm:h-[0.5px] max-sm:bg-[#1a1a1a]!"
+                          style={{ backgroundColor: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.18)" }}
+                        />
+                        <div className="mt-5 flex flex-col gap-2 max-sm:mt-[4.5px] max-sm:flex-row max-sm:items-start max-sm:gap-0 sm:flex-row sm:items-start sm:gap-8">
+                          <h3
+                            className="w-[130px] shrink-0 text-[25px] [transition:color_350ms_ease] max-sm:w-[131px] max-sm:text-[20px] max-sm:leading-[28px] max-sm:tracking-[0.374px] max-sm:text-[#1a1a1a]!"
+                            style={{ ...serif, color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
+                          >
+                            {word}
+                            {dot && <span className="max-sm:hidden">.</span>}
+                          </h3>
+                          <p
+                            className="max-w-[320px] text-[17px] leading-[23px] tracking-[0.05em] [transition:color_350ms_ease] max-sm:mt-2 max-sm:min-w-0 max-sm:max-w-none max-sm:flex-1 max-sm:text-[10px] max-sm:leading-[12px] max-sm:tracking-[0.5px] max-sm:text-[#1a1a1a]!"
+                            style={{ color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
+                          >
+                            {role.body}
+                          </p>
+                        </div>
+                        {/* Mobile disclosure control: the whole row header is
+                            the hit area (the 10px "+" alone is no touch
+                            target). Progressive disclosure — the frame shows
+                            every row collapsed; opening one closes the rest. */}
+                        <button
+                          type="button"
+                          className="absolute inset-0 rounded-[6px] sm:hidden"
+                          aria-expanded={isOpen}
+                          aria-controls={panelId}
+                          aria-label={`${isOpen ? "Hide" : "Show"} the ${word} story`}
+                          onClick={() => setOpen((o) => (o === i ? null : i))}
+                        />
                       </div>
+
+                      {/* The role's story, mounted only while open (fresh
+                          story clock each time), at today's mobile scale. */}
+                      {mobile && (
+                        <AnimatePresence initial={false}>
+                          {isOpen && (
+                            <motion.div
+                              key="panel"
+                              id={panelId}
+                              role="region"
+                              aria-label={`${word} story`}
+                              className="overflow-hidden"
+                              initial={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
+                              animate={reduce ? { opacity: 1 } : { height: "auto", opacity: 1 }}
+                              exit={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
+                              transition={{ duration: reduce ? 0.2 : 0.55, ease: EASE }}
+                            >
+                              {/* 440px = today's mobile stage height; the
+                                  bottom margin keeps the caption chip off
+                                  the next row's number line. */}
+                              <div className="relative mb-6 h-[440px] w-full">
+                                {i === 0 && <DriversPanel active reduce={reduce} />}
+                                {i === 1 && <ShopsPanel active reduce={reduce} />}
+                                {i === 2 && <OtoPanel active reduce={reduce} />}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      )}
                     </div>
                   );
                 })}

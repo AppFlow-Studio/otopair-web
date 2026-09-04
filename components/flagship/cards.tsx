@@ -159,7 +159,10 @@ export function VehicleCard({
         );
 
   return (
-    <div className={`${CARD} flex max-h-[70vh] flex-col lg:max-h-[460px]`}>
+    // The lg+ cap mirrors the hero canvas panel's fixed height
+    // (flagship-hero.tsx, lg:h-[530px]) so the specs list fills the frame
+    // instead of stopping 70px short of it — keep the two in step.
+    <div className={`${CARD} flex max-h-[70vh] flex-col lg:max-h-[530px]`}>
       <Step delay={0.05} className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Car className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />

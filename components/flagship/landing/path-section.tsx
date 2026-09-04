@@ -24,6 +24,15 @@ import { Reveal, serif, serifDisplay } from "./reveal";
  * images: one section-level clock assembles each card's contents piece by
  * piece — panel, then rows, then controls — with the three cards cascading.
  * Reduced motion collapses all of it to plain fades.
+ *
+ * Below `sm` the section follows the phone frame instead (Figma "iPhone 16 &
+ * 17 Pro - 7", nodes 390:4516 + 390:4041–4147, 2026-09-03): a centred 28px
+ * title, then the three cards stacked at the 27px inset — 300/302/302px tall,
+ * near-white, radius 30, no chrome — each holding a blue stage with the
+ * frame's own small-type mocks (8–11px), the control under the stage, and
+ * the caption under the card. Everything mobile is a `max-sm:` class; every
+ * `sm:` class restores today's larger layouts verbatim, so ≥640px is
+ * untouched.
  */
 
 const EASE = [0.22, 1, 0.36, 1] as const;
@@ -33,6 +42,23 @@ const BLUE = "#5299fe";
 const LEAD = [0, 0.12, 0.24] as const;
 
 type Beat = { shown: boolean; reduce: boolean; base: number };
+
+/** Phone-frame geometry that differs card to card (the frame's three cards
+ *  are 300/302/302 tall with 226/228/227 stages, and the control row's slot
+ *  height/offset follows from those). All `max-sm:` classes. */
+type MobileChrome = { card: string; stage: string; controls: string };
+
+/** The frame's glass-panel fill: a white gradient, no blur (the phone frame
+ *  draws its panels as a plain 32%→5.6% white wash — and a backdrop-blur
+ *  under a transform entrance judders, which is a standing rule). */
+const GLASS_48 =
+  "max-sm:bg-[linear-gradient(48deg,rgba(255,255,255,0.32)_10.4%,rgba(255,255,255,0.056)_77.1%)]";
+const GLASS_41 =
+  "max-sm:bg-[linear-gradient(41deg,rgba(255,255,255,0.32)_10.4%,rgba(255,255,255,0.056)_77.1%)]";
+const GLASS_28 =
+  "max-sm:bg-[linear-gradient(28.5deg,rgba(255,255,255,0.32)_10.4%,rgba(255,255,255,0.056)_77.1%)]";
+/** The frame renders each glass panel over a soft blurred "shadow" layer. */
+const GLASS_SHADOW = "max-sm:shadow-[0_10px_24px_rgba(43,84,120,0.10)]";
 
 /** Fade + rise, `at` seconds into this card's slot of the section clock. */
 function Rise({
@@ -91,6 +117,7 @@ function PathCard({
   controls,
   lead,
   copy,
+  mobile,
   shown,
   reduce,
   base,
@@ -99,6 +126,7 @@ function PathCard({
   controls: React.ReactNode;
   lead: string;
   copy: string;
+  mobile: MobileChrome;
 }) {
   return (
     <motion.div
@@ -110,15 +138,26 @@ function PathCard({
       {/* Figma 354:95: the outer card is NEAR-WHITE — the blue lives only in
           the inset stage, which floats inside it with an even margin. The old
           blue-gradient outer card was so close to the stage color that the two
-          read as one edge-to-edge blue slab (design feedback 2026-08-30). */}
-      <div className="relative flex flex-1 flex-col rounded-[20px] bg-[#fbfdfe] p-3.5 shadow-[0_18px_40px_rgba(43,84,120,0.10)] ring-1 ring-[#ecf2f8] sm:p-4">
-        <div className="relative flex-1 overflow-hidden rounded-[14px] bg-[linear-gradient(180deg,#a5cfef_0%,#cfe5f7_62%,#ecf5fc_100%)]">
+          read as one edge-to-edge blue slab (design feedback 2026-08-30).
+          The phone frame goes further: #f7fbfd, radius 30, no ring, no shadow,
+          the stage at a 19px inset. */}
+      <div
+        className={`relative flex flex-1 flex-col max-sm:rounded-[30px] max-sm:bg-[#f7fbfd] max-sm:px-[19px] max-sm:pb-0 sm:rounded-[20px] sm:bg-[#fbfdfe] sm:p-4 sm:shadow-[0_18px_40px_rgba(43,84,120,0.10)] sm:ring-1 sm:ring-[#ecf2f8] ${mobile.card}`}
+      >
+        <div
+          className={`relative overflow-hidden max-sm:flex-none max-sm:rounded-[20px] sm:flex-1 sm:rounded-[14px] sm:bg-[linear-gradient(180deg,#a5cfef_0%,#cfe5f7_62%,#ecf5fc_100%)] ${mobile.stage}`}
+        >
           {stage}
         </div>
-        <div className="flex h-[60px] shrink-0 items-center justify-center">{controls}</div>
+        <div className={`flex shrink-0 items-center justify-center sm:h-[60px] ${mobile.controls}`}>
+          {controls}
+        </div>
       </div>
       <Rise at={0.5} y={10} shown={shown} reduce={reduce} base={base}>
-        <p className="mt-4 text-[14px] leading-[1.55] text-[#777169] sm:text-[15px]">
+        {/* Phone frame: the caption sits 22px under the card at the full
+            27px-inset width, 14/23 — the next card follows at a fixed gap
+            (the grid's gap-y below). */}
+        <p className="text-[14px] text-[#777169] max-sm:mt-[22px] max-sm:leading-[23px] sm:mt-4 sm:text-[15px] sm:leading-[1.55]">
           <span className="font-semibold text-[#1a1a1a]">{lead}</span> {copy}
         </p>
       </Rise>
@@ -131,12 +170,15 @@ function ActionPill({
   children,
   label,
   tone = "solid",
+  mobileWidth,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   label: string;
   /** The frame renders card 3's confirm a shade softer than card 1's talk. */
   tone?: "solid" | "soft";
+  /** Phone frame: talk is a 62x34 plate, confirm a 100x34 one. */
+  mobileWidth: string;
 }) {
   return (
     <motion.button
@@ -145,12 +187,13 @@ function ActionPill({
       onClick={onClick}
       whileHover={{ scale: 1.04 }}
       whileTap={{ scale: 0.95 }}
-      className={`flex items-center gap-2 rounded-full px-6 py-2.5 text-[13px] font-medium text-white ${
+      /* Phone frame: a rounded-10 #5299fe plate with a 2px/5px 10% drop, the
+         label 14px Light — both cards' buttons solid (no soft tone there). */
+      className={`flex items-center justify-center text-white max-sm:h-[34px] max-sm:gap-[6px] max-sm:rounded-[10px] max-sm:bg-[#5299fe] max-sm:text-[14px] max-sm:font-light max-sm:shadow-[0_2px_5px_rgba(0,0,0,0.1)] sm:gap-2 sm:rounded-full sm:px-6 sm:py-2.5 sm:text-[13px] sm:font-medium ${mobileWidth} ${
         tone === "soft"
-          ? "shadow-[0_8px_20px_rgba(82,153,254,0.35)]"
-          : "shadow-[0_10px_26px_rgba(82,153,254,0.45)]"
+          ? "sm:bg-[rgba(82,153,254,0.78)] sm:shadow-[0_8px_20px_rgba(82,153,254,0.35)]"
+          : "sm:bg-[#5299fe] sm:shadow-[0_10px_26px_rgba(82,153,254,0.45)]"
       }`}
-      style={{ backgroundColor: tone === "soft" ? "rgba(82,153,254,0.78)" : BLUE }}
     >
       {children}
     </motion.button>
@@ -180,7 +223,8 @@ function TypedTranscript({ shown, reduce, startAt }: { shown: boolean; reduce: b
   }, [shown, reduce, startAt, n]);
 
   return (
-    <p className="mt-3 min-h-[2.6em] text-[13px] leading-[1.4] text-[#1a1a1a] sm:text-[14px]">
+    /* Phone frame 390:4060: 11/16, +0.44 tracking, a 235px column. */
+    <p className="text-[#1a1a1a] max-sm:mt-[16px] max-sm:w-[235px] max-sm:max-w-full max-sm:text-[11px] max-sm:leading-[16px] max-sm:tracking-[0.44px] sm:mt-3 sm:min-h-[2.6em] sm:text-[14px] sm:leading-[1.4]">
       {reduce ? TRANSCRIPT : TRANSCRIPT.slice(0, n)}
       <motion.span
         className="ml-[1px] inline-block h-[1em] w-[1.5px] translate-y-[2px] bg-[#1a1a1a]"
@@ -209,9 +253,18 @@ function VoiceIntakeCard(beat: Beat) {
       {...beat}
       lead="Voice Intake."
       copy="You describe the car and the symptom out loud. Transcribed in-stream — no form, no typing."
+      // Frame 390:4041/4044: 300 tall, stage 226 at y 18 (178° #86c9e7→white),
+      // the talk plate centred in the 56px left under the stage (top 254).
+      mobile={{
+        card: "max-sm:h-[300px] max-sm:pt-[18px]",
+        stage: "max-sm:h-[226px] max-sm:bg-[linear-gradient(178deg,#86c9e7_2.3%,#fff_127%)]",
+        controls: "max-sm:h-[56px]",
+      }}
       stage={
         <div className="absolute inset-0">
-          {/* Booking Suggestions slides in from the right edge it's tucked into. */}
+          {/* Booking Suggestions slides in from the right edge it's tucked into.
+              Phone frame 390:4050: 154x63 flush with the stage's right edge at
+              y 24, 60% white, left corners only. */}
           <Rise
             at={0.2}
             x={26}
@@ -219,16 +272,20 @@ function VoiceIntakeCard(beat: Beat) {
             shown={shown}
             reduce={reduce}
             base={base}
-            className="absolute -right-3 top-6 w-[62%]"
+            className="absolute max-sm:right-0 max-sm:top-[24px] max-sm:w-[154px] sm:-right-3 sm:top-6 sm:w-[62%]"
           >
-            <div className="rounded-l-[10px] bg-white/90 px-5 py-4 shadow-[0_8px_20px_rgba(43,84,120,0.08)]">
-              <p className="text-[12px] font-semibold text-[#1a1a1a]">Booking Suggestions</p>
-              <div className="mt-2 flex justify-between text-[10.5px] text-[#777169]">
-                <span>Service</span>
+            <div className="rounded-l-[10px] max-sm:h-[63px] max-sm:bg-white/60 max-sm:px-[15px] max-sm:pt-[8px] sm:bg-white/90 sm:px-5 sm:py-4 sm:shadow-[0_8px_20px_rgba(43,84,120,0.08)]">
+              <p className="text-[#1a1a1a] max-sm:text-[10px] max-sm:leading-[20px] max-sm:font-normal max-sm:tracking-[0.5px] sm:text-[12px] sm:font-semibold">
+                Booking Suggestions
+              </p>
+              {/* Rows 8/16 at +28 and +42 — the value column starts at x 112,
+                  so the values run off the stage's edge like the frame's. */}
+              <div className="flex text-[#777169] max-sm:text-[8px] max-sm:leading-[16px] max-sm:tracking-[0.4px] max-sm:whitespace-nowrap sm:mt-2 sm:justify-between sm:text-[10.5px]">
+                <span className="max-sm:w-[97px] max-sm:shrink-0">Service</span>
                 <span className="text-[#1a1a1a]">Front Brak…</span>
               </div>
-              <div className="mt-1.5 flex justify-between text-[10.5px] text-[#777169]">
-                <span>Earliest Slot</span>
+              <div className="flex text-[#777169] max-sm:-mt-[2px] max-sm:text-[8px] max-sm:leading-[16px] max-sm:tracking-[0.4px] max-sm:whitespace-nowrap sm:mt-1.5 sm:justify-between sm:text-[10.5px]">
+                <span className="max-sm:w-[97px] max-sm:shrink-0">Earliest Slot</span>
                 <span className="text-[#1a1a1a]">Tomorrow,…</span>
               </div>
             </div>
@@ -243,23 +300,35 @@ function VoiceIntakeCard(beat: Beat) {
             base={base}
             /* Anchored to the stage's BOTTOM, not floated at 34% — the frame
                keeps only a slim gap under the transcript; a top anchor left a
-               dead blue field below it (design feedback 2026-08-31). */
-            className="absolute inset-x-4 bottom-4 sm:inset-x-5"
+               dead blue field below it (design feedback 2026-08-31).
+               Phone frame 390:4059: 128 tall at (12, 82), 8px off the right. */
+            className="absolute max-sm:left-[12px] max-sm:right-[8px] max-sm:top-[82px] sm:inset-x-5 sm:bottom-4"
           >
             {/* Frosted glass, per the frame — the stage reads through it. */}
-            <div className="rounded-[16px] border-[0.5px] border-white/50 bg-white/20 px-6 py-5 backdrop-blur-[35px]">
-              <div className="flex items-center gap-2">
+            <div
+              className={`max-sm:h-[128px] max-sm:rounded-[15px] max-sm:px-[21px] max-sm:pt-[18px] ${GLASS_48} ${GLASS_SHADOW} sm:rounded-[16px] sm:border-[0.5px] sm:border-white/50 sm:bg-white/20 sm:px-6 sm:py-5 sm:backdrop-blur-[35px]`}
+            >
+              <div className="flex items-center max-sm:gap-[9px] max-sm:pl-[2px] sm:gap-2">
                 <motion.span
-                  className="h-1.5 w-1.5 rounded-full"
+                  className="rounded-full max-sm:h-[5px] max-sm:w-[5px] sm:h-1.5 sm:w-1.5"
                   style={{ backgroundColor: BLUE }}
                   animate={reduce || !shown ? undefined : { opacity: [1, 0.35, 1] }}
                   transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
                 />
-                <span className="text-[9px] font-medium tracking-[0.14em]" style={{ color: BLUE }}>
+                <span
+                  className="max-sm:text-[11px] max-sm:leading-[20px] max-sm:font-normal max-sm:tracking-[0.55px] sm:text-[9px] sm:font-medium sm:tracking-[0.14em]"
+                  style={{ color: BLUE }}
+                >
                   LISTENING
                 </span>
               </div>
-              <Waveform active={!reduce} bars={28} className="mt-2.5 h-[22px] text-[#8db8f5]" />
+              {/* Phone frame: five 19.6px glyphs = a 102px run; the first 19
+                  of the 28 bars measure the same (19×2.5 + 18×3 = 101.5). */}
+              <Waveform
+                active={!reduce}
+                bars={28}
+                className="max-sm:mt-[6px] max-sm:ml-[3px] max-sm:h-[15px] max-sm:text-[#5299fe] max-sm:[&>span:nth-child(n+20)]:hidden sm:mt-2.5 sm:h-[22px] sm:text-[#8db8f5]"
+              />
               <TypedTranscript shown={shown} reduce={reduce} startAt={base + 0.6} />
             </div>
           </Rise>
@@ -267,8 +336,8 @@ function VoiceIntakeCard(beat: Beat) {
       }
       controls={
         <Pop at={0.62} shown={shown} reduce={reduce} base={base}>
-          <ActionPill onClick={talk} label="Start talking to Oto">
-            <span className="h-1.5 w-1.5 rounded-full bg-white" />
+          <ActionPill onClick={talk} label="Start talking to Oto" mobileWidth="max-sm:w-[62px]">
+            <span className="rounded-full bg-white max-sm:h-2 max-sm:w-2 sm:h-1.5 sm:w-1.5" />
             talk
           </ActionPill>
         </Pop>
@@ -318,9 +387,11 @@ function PagerButton({ dir, onClick }: { dir: -1 | 1; onClick: () => void }) {
       onClick={onClick}
       whileHover={{ scale: 1.06 }}
       whileTap={{ scale: 0.92 }}
-      className="flex h-9 w-[44px] items-center justify-center rounded-[8px] bg-white text-[#1a1a1a] shadow-[0_6px_16px_rgba(43,84,120,0.12)] ring-1 ring-[#e7eef5]"
+      /* Phone frame 390:4113/4114: 49x34 white squares, radius 10, a 2/5px 5%
+         drop, the arrow a 13px glyph. */
+      className="flex items-center justify-center bg-white text-[#1a1a1a] max-sm:h-[34px] max-sm:w-[49px] max-sm:rounded-[10px] max-sm:shadow-[0_2px_5px_rgba(0,0,0,0.05)] sm:h-9 sm:w-[44px] sm:rounded-[8px] sm:shadow-[0_6px_16px_rgba(43,84,120,0.12)] sm:ring-1 sm:ring-[#e7eef5]"
     >
-      <Icon className="h-4 w-4" strokeWidth={2} />
+      <Icon className="max-sm:h-[13px] max-sm:w-[13px] sm:h-4 sm:w-4" strokeWidth={2} />
     </motion.button>
   );
 }
@@ -355,13 +426,22 @@ function PayCard(beat: Beat) {
       {...beat}
       lead="What you'll actually pay."
       copy="Labor, parts, and fees broken out line by line — the total you see is the total you pay. No padding, no surprises at pickup."
+      // Frame 390:4110/4112: 302 tall, stage 228 at y 19 (171° #86c9e7→white),
+      // the pager squares centred in the 52px row under it (top 256).
+      mobile={{
+        card: "max-sm:h-[302px] max-sm:pt-[19px]",
+        stage: "max-sm:h-[228px] max-sm:bg-[linear-gradient(171deg,#86c9e7_9%,#fff_117%)]",
+        controls: "max-sm:h-[52px]",
+      }}
       stage={
-        <div className="absolute inset-0 flex flex-col justify-center px-6 sm:px-8">
+        /* Phone frame 390:4130: the quote card sits at (23, 27) in the stage,
+           not centred. */
+        <div className="absolute inset-0 flex flex-col max-sm:justify-start max-sm:px-[23px] max-sm:pt-[27px] sm:justify-center sm:px-8">
           {/* aria-live so paging announces the new quote to screen readers.
               The clip wrapper carries the card's own radius — a square
               overflow-hidden box crops the rounded bottom corners flat
               (design feedback 2026-08-31). */}
-          <div className="relative overflow-hidden rounded-[14px]" aria-live="polite">
+          <div className="relative overflow-hidden max-sm:rounded-[10px] sm:rounded-[14px]" aria-live="polite">
             {/* Direction must come through variants+custom: a plain exit prop
                 bakes `dir` from the render BEFORE the click, so reversing
                 direction would slide the outgoing card the wrong way. */}
@@ -387,17 +467,25 @@ function PayCard(beat: Beat) {
                   duration: reduce ? 0.4 : 0.6,
                   ease: EASE,
                 }}
-                className="rounded-[16px] bg-white/95 px-6 py-5 shadow-[0_14px_34px_rgba(43,84,120,0.12)]"
+                /* Phone frame: 143 tall, 50% white, radius 10, 15/16px sides;
+                   the rows are 8/20 with a 0.5px hairline at +109 and an
+                   11px Total at +114. */
+                className="max-sm:h-[143px] max-sm:rounded-[10px] max-sm:bg-white/50 max-sm:pl-[15px] max-sm:pr-[16px] max-sm:pt-[17px] sm:rounded-[16px] sm:bg-white/95 sm:px-6 sm:py-5 sm:shadow-[0_14px_34px_rgba(43,84,120,0.12)]"
               >
-                <div className="flex items-baseline justify-between">
-                  <p className="text-[15px] text-[#1a1a1a]" style={serif}>
+                <div className="flex justify-between max-sm:items-center max-sm:leading-[20px] sm:items-baseline">
+                  {/* The phone frame sets the shop name in the sans (Book),
+                      not the serif. */}
+                  <p
+                    className="text-[#1a1a1a] max-sm:text-[11px] max-sm:leading-[20px] max-sm:tracking-[0.55px] max-sm:font-sans! sm:text-[15px]"
+                    style={serif}
+                  >
                     {q.shop}
                   </p>
-                  <span className="text-[9px] font-medium tracking-[0.03em] text-[#8a9094]">
+                  <span className="max-sm:text-[8px] max-sm:leading-[20px] max-sm:font-normal max-sm:tracking-[0.4px] max-sm:text-[#777169] sm:text-[9px] sm:font-medium sm:tracking-[0.03em] sm:text-[#8a9094]">
                     Verified Shop
                   </span>
                 </div>
-                <div className="mt-3 space-y-1.5 text-[11.5px] text-[#777169]">
+                <div className="text-[#777169] max-sm:mt-[5px] max-sm:space-y-[1.5px] max-sm:text-[8px] max-sm:leading-[20px] max-sm:tracking-[0.4px] sm:mt-3 sm:space-y-1.5 sm:text-[11.5px]">
                   <motion.div className="flex justify-between" {...row(0)}>
                     <span>Labor</span>
                     <span className="text-[#1a1a1a]">${q.labor}</span>
@@ -415,7 +503,7 @@ function PayCard(beat: Beat) {
                   </motion.div>
                 </div>
                 <motion.div
-                  className="mt-3 flex justify-between border-t border-[#1a1a1a]/10 pt-2.5 text-[13px] font-semibold text-[#1a1a1a]"
+                  className="flex justify-between border-t text-[#1a1a1a] max-sm:mt-[4px] max-sm:border-t-[0.5px] max-sm:border-[#777169]/30 max-sm:pt-[4px] max-sm:text-[11px] max-sm:leading-[20px] max-sm:font-normal max-sm:tracking-[0.55px] sm:mt-3 sm:border-[#1a1a1a]/10 sm:pt-2.5 sm:text-[13px] sm:font-semibold"
                   {...row(3)}
                 >
                   <span>Total</span>
@@ -426,24 +514,32 @@ function PayCard(beat: Beat) {
           </div>
 
           {/* Comparing Shops + live dots — bottom-left ON the stage, per the
-              frame (2026-08-31; an earlier read had it straddling the edge). */}
+              frame (2026-08-31; an earlier read had it straddling the edge).
+              Phone frame 390:4121: a 147x31 radius-8 glass chip at (22, 178),
+              9px label, the three 5px dots at x 108. */}
           <Rise
             at={0.58}
             y={12}
             shown={shown}
             reduce={reduce}
             base={base}
-            className="absolute bottom-4 left-5"
+            className="absolute max-sm:bottom-[19px] max-sm:left-[22px] sm:bottom-4 sm:left-5"
           >
-            <div className="inline-flex items-center gap-2 rounded-full border-[0.5px] border-white/50 bg-white/20 px-4 py-2 backdrop-blur-[35px]">
-              <span className="text-[11px] font-medium text-[#1a1a1a]">Comparing Shops</span>
-              <span className="flex items-center gap-1">
+            <div
+              className={`inline-flex items-center max-sm:relative max-sm:h-[31px] max-sm:w-[147px] max-sm:rounded-[8px] max-sm:pl-[14px] ${GLASS_28} max-sm:shadow-[0_6px_16px_rgba(43,84,120,0.08)] sm:gap-2 sm:rounded-full sm:border-[0.5px] sm:border-white/50 sm:bg-white/20 sm:px-4 sm:py-2 sm:backdrop-blur-[35px]`}
+            >
+              <span className="text-[#1a1a1a] max-sm:text-[9px] max-sm:leading-[20px] max-sm:font-normal max-sm:tracking-[0.45px] max-sm:whitespace-nowrap sm:text-[11px] sm:font-medium">
+                Comparing Shops
+              </span>
+              <span className="flex items-center max-sm:absolute max-sm:left-[108px] max-sm:top-[14px] max-sm:gap-[5px] sm:gap-1">
                 {QUOTES.map((_, i) => (
-                  <motion.span
+                  <span
                     key={i}
-                    className="h-1.5 w-1.5 rounded-full"
-                    animate={{ backgroundColor: i === idx ? BLUE : "rgba(26,26,26,0.18)" }}
-                    transition={{ duration: 0.3 }}
+                    className={`rounded-full transition-colors duration-300 max-sm:h-[5px] max-sm:w-[5px] sm:h-1.5 sm:w-1.5 ${
+                      i === idx
+                        ? "bg-[#5299fe]"
+                        : "max-sm:bg-[rgba(81,152,254,0.2)] sm:bg-[rgba(26,26,26,0.18)]"
+                    }`}
                   />
                 ))}
               </span>
@@ -453,9 +549,9 @@ function PayCard(beat: Beat) {
       }
       controls={
         <Pop at={0.66} shown={shown} reduce={reduce} base={base}>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center max-sm:gap-[27px] sm:gap-4">
             <PagerButton dir={-1} onClick={() => page(-1)} />
-            <span className="min-w-[30px] text-center text-[13px] text-[#1a1a1a] tabular-nums">
+            <span className="text-center text-[13px] text-[#1a1a1a] tabular-nums max-sm:min-w-[21px] max-sm:font-light sm:min-w-[30px]">
               {idx + 1}/{QUOTES.length}
             </span>
             <PagerButton dir={1} onClick={() => page(1)} />
@@ -608,6 +704,13 @@ function AuthCard(beat: Beat) {
       {...beat}
       lead="Secure Authorization."
       copy="Apple Pay, Google Pay and Stripe. Your money doesn't move until the job is done."
+      // Frame 390:4142/4149: 302 tall, stage 227 at y 18 (178° #86c9e7→white),
+      // the confirm plate 7px under the stage (top 252).
+      mobile={{
+        card: "max-sm:h-[302px] max-sm:pt-[18px]",
+        stage: "max-sm:h-[227px] max-sm:bg-[linear-gradient(178deg,#86c9e7_2.3%,#fff_127%)]",
+        controls: "max-sm:h-[57px] max-sm:items-start max-sm:pt-[7px]",
+      }}
       stage={
         <div className="absolute inset-0">
           <MapArt {...beat} />
@@ -618,16 +721,31 @@ function AuthCard(beat: Beat) {
             reduce={reduce}
             base={base}
             /* Bottom-anchored and wide — the frame parks the card low over
-               the map with a slim inset, not floated mid-stage (2026-08-31). */
-            className="absolute inset-x-4 bottom-4 sm:inset-x-5"
+               the map with a slim inset, not floated mid-stage (2026-08-31).
+               Phone frame 390:4440: 98 tall at a 12px side inset, 15 off the
+               bottom. */
+            className="absolute max-sm:bottom-[15px] max-sm:left-[12px] max-sm:right-[12px] sm:inset-x-5 sm:bottom-4"
           >
-            <div className="rounded-[16px] border-[0.5px] border-white/50 bg-white/20 px-5 py-4 backdrop-blur-[35px]">
-              <p className="text-[22px] leading-none text-[#1a1a1a]" style={{ ...serif, fontWeight: 500 }}>
+            {/* min-h rather than a fixed 98: the live note is longer than the
+                frame's, and wraps to two lines on narrower phones — the card
+                grows upward over the map instead of clipping. */}
+            <div
+              className={`max-sm:min-h-[98px] max-sm:rounded-[10px] max-sm:px-[21px] max-sm:pt-[15px] max-sm:pb-[9px] ${GLASS_41} ${GLASS_SHADOW} sm:rounded-[16px] sm:border-[0.5px] sm:border-white/50 sm:bg-white/20 sm:px-5 sm:py-4 sm:backdrop-blur-[35px]`}
+            >
+              {/* The phone frame sets the amount in the sans (Book 16/20,
+                  +0.8), not the serif. */}
+              <p
+                className="text-[#1a1a1a] max-sm:text-[16px] max-sm:leading-[20px] max-sm:tracking-[0.8px] max-sm:font-sans! max-sm:font-normal! sm:text-[22px] sm:leading-none"
+                style={{ ...serif, fontWeight: 500 }}
+              >
                 $347
               </p>
-              <div className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/55 px-2.5 py-1 ring-1 ring-white/70">
+              {/* Phone frame 390:4441: a 16px-tall 10%-white pill, 4px dot,
+                  8px text. Auto width — the live status is longer than the
+                  frame's "Authorized · held". */}
+              <div className="inline-flex items-center rounded-full max-sm:mt-[4px] max-sm:h-[16px] max-sm:gap-[5px] max-sm:bg-white/10 max-sm:px-[10px] max-sm:ring-[0.5px] max-sm:ring-white/60 sm:mt-2 sm:gap-1.5 sm:bg-white/55 sm:px-2.5 sm:py-1 sm:ring-1 sm:ring-white/70">
                 <motion.span
-                  className="h-1.5 w-1.5 rounded-full"
+                  className="rounded-full max-sm:h-1 max-sm:w-1 sm:h-1.5 sm:w-1.5"
                   animate={{
                     backgroundColor: t.done ? "#22c55e" : BLUE,
                     // A tier still in flight pulses; the settled ones sit still.
@@ -645,15 +763,17 @@ function AuthCard(beat: Beat) {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -6 }}
                     transition={{ duration: 0.28, ease: EASE }}
-                    className="text-[9.5px] font-medium tracking-[0.04em] text-[#33383b]"
+                    className="max-sm:text-[8px] max-sm:leading-[16px] max-sm:font-normal max-sm:tracking-[0.4px] max-sm:whitespace-nowrap max-sm:text-[#1a1a1a] sm:text-[9.5px] sm:font-medium sm:tracking-[0.04em] sm:text-[#33383b]"
                   >
                     {t.status}
                   </motion.span>
                 </AnimatePresence>
               </div>
 
-              {/* Progress line — a single unbroken bar, per the frame. */}
-              <div className="relative mt-3 h-[3px] overflow-hidden rounded-full bg-[#1a1a1a]/10">
+              {/* Progress line — a single unbroken bar, per the frame. The
+                  phone frame's track is 50% white, 244 of the 248 content
+                  width, 3px. */}
+              <div className="relative h-[3px] overflow-hidden rounded-full max-sm:mx-[2px] max-sm:mt-[10px] max-sm:bg-white/50 sm:mt-3 sm:bg-[#1a1a1a]/10">
                 <motion.div
                   className="h-full origin-left rounded-full"
                   animate={{
@@ -672,7 +792,7 @@ function AuthCard(beat: Beat) {
                 />
               </div>
 
-              <div className="mt-3 min-h-[1.4em]">
+              <div className="max-sm:mt-[1px] sm:mt-3 sm:min-h-[1.4em]">
                 <AnimatePresence mode="popLayout" initial={false}>
                   <motion.p
                     key={t.note}
@@ -680,7 +800,7 @@ function AuthCard(beat: Beat) {
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -5 }}
                     transition={{ duration: 0.28, ease: EASE }}
-                    className="text-[11.5px] text-[#33383b]"
+                    className="max-sm:text-[11px] max-sm:leading-[20px] max-sm:tracking-[0.55px] max-sm:text-[#1a1a1a] sm:text-[11.5px] sm:text-[#33383b]"
                   >
                     {t.note}
                   </motion.p>
@@ -693,8 +813,13 @@ function AuthCard(beat: Beat) {
       controls={
         <Pop at={0.7} shown={shown} reduce={reduce} base={base}>
           {tier === 0 ? (
-            <ActionPill onClick={() => setTier(1)} label="Confirm the booking demo" tone="soft">
-              <CornerDownLeft className="h-3.5 w-3.5" strokeWidth={2.2} />
+            <ActionPill
+              onClick={() => setTier(1)}
+              label="Confirm the booking demo"
+              tone="soft"
+              mobileWidth="max-sm:w-[100px]"
+            >
+              <CornerDownLeft className="max-sm:h-[13px] max-sm:w-[13px] sm:h-3.5 sm:w-3.5" strokeWidth={2.2} />
               confirm
             </ActionPill>
           ) : (
@@ -703,7 +828,7 @@ function AuthCard(beat: Beat) {
               initial={{ opacity: 0, scale: 0.94 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.3, ease: EASE }}
-              className="flex items-center gap-2 rounded-full bg-white px-6 py-2.5 text-[13px] font-medium text-[#1a1a1a] shadow-[0_8px_22px_rgba(43,84,120,0.14)]"
+              className="flex items-center bg-white text-[#1a1a1a] max-sm:h-[34px] max-sm:w-[100px] max-sm:justify-center max-sm:gap-[6px] max-sm:rounded-[10px] max-sm:text-[14px] max-sm:font-light max-sm:shadow-[0_2px_5px_rgba(0,0,0,0.05)] sm:gap-2 sm:rounded-full sm:px-6 sm:py-2.5 sm:text-[13px] sm:font-medium sm:shadow-[0_8px_22px_rgba(43,84,120,0.14)]"
             >
               {t.done ? (
                 <span className="text-[#22c55e]">✓</span>
@@ -735,14 +860,20 @@ export default function PathSection() {
   const shown = useInView(rowRef, { once: true, margin: "0px 0px -12% 0px" });
 
   return (
-    <section className="mx-auto w-full max-w-[1440px] px-4 pt-20 sm:px-10 sm:pt-28 lg:px-[78px]">
+    /* Phone frame: the 27px side inset, the title 60px under the listens
+       card. */
+    <section className="mx-auto w-full max-w-[1440px] px-[27px] pt-[60px] sm:px-10 sm:pt-28 lg:px-[78px]">
       <Reveal>
+        {/* Phone frame 390:4516: one centred 28/28 line in the text weight
+            (Romie Regular → Petrona 400); the display cut's 250 weight and
+            cap-height normalisation are desktop-only, as in the sibling
+            sections. */}
         <h2
-          className="max-w-[600px] text-[40px] leading-[1.0] text-[#1a1a1a] sm:text-[54px] lg:text-[68px]"
+          className="max-w-[600px] text-[#1a1a1a] max-sm:mx-auto max-sm:max-w-none max-sm:text-center max-sm:text-[28px] max-sm:leading-[28px] max-sm:font-normal! max-sm:[font-size-adjust:none]! sm:text-[54px] sm:leading-[1.0] lg:text-[68px]"
           style={serifDisplay}
         >
-          The whole path,
-          <br />
+          The whole path,{" "}
+          <br className="max-sm:hidden" />
           shown.
         </h2>
       </Reveal>
@@ -757,18 +888,22 @@ export default function PathSection() {
           longer caption lengthens the column instead of eating the stage. 380px
           is the height the stages already rendered at with 2-line captions —
           the middle one now matches them instead of the other two shrinking to
-          meet it. Row gap is 0 because the caption carries its own `mt-4`. */}
+          meet it. Row gap is 0 because the caption carries its own `mt-4`.
+
+          Phone frame: the cards start 26px under the title (top 54 from the
+          title's top) and each caption's text runs 68px into the next card
+          (card 1 bottom → card 2 top is 136 = 22 + two 23px lines + 68). */}
       <div
         ref={rowRef}
-        className="mt-10 grid grid-cols-1 gap-6 lg:mt-14 lg:grid-cols-3 lg:grid-rows-[minmax(348px,1fr)_auto] lg:gap-x-5 lg:gap-y-0"
+        className="grid grid-cols-1 max-sm:mt-[26px] max-sm:gap-y-[68px] sm:mt-10 sm:gap-6 lg:mt-14 lg:grid-cols-3 lg:grid-rows-[minmax(348px,1fr)_auto] lg:gap-x-5 lg:gap-y-0"
       >
-        <div className="min-h-[410px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
+        <div className="sm:min-h-[410px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
           <VoiceIntakeCard shown={shown} reduce={reduce} base={LEAD[0]} />
         </div>
-        <div className="min-h-[410px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
+        <div className="sm:min-h-[410px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
           <PayCard shown={shown} reduce={reduce} base={LEAD[1]} />
         </div>
-        <div className="min-h-[410px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
+        <div className="sm:min-h-[410px] lg:row-span-2 lg:grid lg:min-h-0 lg:grid-rows-subgrid">
           <AuthCard shown={shown} reduce={reduce} base={LEAD[2]} />
         </div>
       </div>

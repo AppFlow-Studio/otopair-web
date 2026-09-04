@@ -736,9 +736,11 @@ function computeHybridStatus(
   const ratio = Math.max(mileageRatio, timeRatio);
   const percentUsed = Math.min(Math.round(ratio * 100), 100);
 
-  // Quick Check v2 §7 step 4. The band carries the spec's four-way split;
-  // `status` stays the three-value display value the tracker renders, so
-  // needs_attention keeps meaning "a human graded this yellow".
+  // Quick Check v2 §7 step 4. Each of the four bands now has its own status
+  // (Ahmad, 2026-09-04): OVERDUE → needs_attention, SEVERELY OVERDUE →
+  // overdue. `needs_attention` therefore also carries interval-overdue —
+  // mechanic-flagged items keep their shop badge on the card so the two
+  // stay tellable apart.
   const band = ratioToBand(ratio);
   const status = BAND_TO_STATUS[band];
 

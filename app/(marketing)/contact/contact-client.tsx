@@ -49,8 +49,9 @@ const LANES = [
   },
   {
     title: "Car data & API",
-    body: "Access to the vehicle-data asset, full reports, developer keys.",
-    action: { label: `Email ${DATA_EMAIL}`, href: `mailto:${DATA_EMAIL}?subject=Data%20API%20access` },
+    body: "The vehicle-data catalogue is published as OtoIndex. Sandbox and docs first, then request a key.",
+    action: { label: "The developer hand-off", href: "/developers" },
+    secondary: { label: `Email ${DATA_EMAIL}`, href: `mailto:${DATA_EMAIL}?subject=Data%20API%20access` },
   },
   {
     title: "Press & partnerships",

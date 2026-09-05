@@ -85,12 +85,30 @@ logo; `project` places real shops as pins on the phone map).
 | /security, /accessibility, /privacy, /terms | | documents | none (type only) | | | |
 | /apply | hero | Apply to partner | the three-step form on a paper plate | | | shell |
 | /car-data | body | the lookup tool | none (tool on the paper plate) | | | |
-| /developers | body | the portal | none (tool on the paper plate) | | | |
+| /developers | hero | The car data as an API | a terminal block with real keyless requests | | | shell |
+| /developers | 1 | What comes back | none (four rows) | | | |
+| /developers | 2 | Try it without an account | the endpoint list beside a second terminal | | | |
+| /developers | 3 | Docs and access | none (four link cards) | | | |
 
 Rule checks: no two consecutive rows share a device; the six openers are
 map / full sheet / category list / form / low sheet with browse card /
 shop page; every page has one row with motion beyond reveal (the rail
 draw, the tab loop, the live map).
+
+## OtoIndex, the sibling product
+
+The car-data API is its own product on its own origin: the `oto-facts`
+repo, `next dev -p 3100`, whose layout declares Otopair as its parent
+organization. `/developers` on otopair.com is the hand-off to it, not a
+second portal: what the API returns, the keyless sandbox anyone can curl,
+where the docs live, and how access is granted. Every URL resolves
+through `lib/otoindex.ts`, which reads `NEXT_PUBLIC_OTOINDEX_URL` and
+falls back to `http://localhost:3100` in development and to the sibling's
+own declared default in production, because the brand and domain are not
+decided yet. Set one variable in each repo when they are.
+
+The Clerk and Convex account island stays below the fold for people who
+minted a key through Otopair before the split.
 
 ## Designed for release, populated in development
 

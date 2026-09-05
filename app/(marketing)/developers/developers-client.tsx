@@ -1,9 +1,16 @@
 "use client";
 
-// Developer portal (client half). Signed out: marketing-brand landing with
-// Clerk sign-up/sign-in (modal). Signed in: the dashboard — key card
-// (mint/rotate/revoke, plaintext shown exactly once), quickstart cURL,
-// 30-day usage chart, and the full endpoint Reference.
+// The account island on /developers (2026-09-05). The public half of the
+// page is now the hand-off to OtoIndex and is server-rendered in page.tsx;
+// this file only carries what needs Clerk and Convex:
+//
+//   signed out  → one line for people who already hold a key minted here
+//   signed in   → the dashboard: key card (mint/rotate/revoke, plaintext
+//                 shown exactly once), quickstart cURL, 30-day usage chart
+//                 and the endpoint Reference
+//
+// Key minting stays here for existing holders. OtoIndex owns issuing keys
+// from launch; nothing about the Convex devPortal contract changed.
 
 import { useState } from "react";
 import { SignedIn, SignedOut, SignInButton, SignUpButton, UserButton } from "@clerk/nextjs";
@@ -11,13 +18,13 @@ import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Reference } from "./Reference";
 import { baseUrl } from "./shared";
+import { OTOINDEX } from "@/lib/otoindex";
 
 const ink = "#1a1a1a";
 const muted = "#6b655d";
 const serif = { fontFamily: "var(--font-Petrona)", fontWeight: 400 } as const;
 const CARD = "rounded-[28px] bg-[#f7f6f3] p-6 shadow-[inset_0_0_0_1px_rgba(26,26,26,0.06)] tab:p-8";
 const BTN_PRIMARY = "inline-flex h-12 items-center justify-center rounded-full bg-[#1a1a1a] px-6 text-[15px] font-medium text-white transition-[transform,box-shadow] duration-300 hover:-translate-y-px hover:shadow-[0_16px_36px_-14px_rgba(26,26,26,0.55)]";
-const BTN_OUTLINE = "inline-flex h-12 items-center justify-center rounded-full border border-[#1a1a1a]/20 bg-white px-6 text-[15px] font-medium text-[#1a1a1a] transition-colors hover:border-[#1a1a1a]";
 const BTN_OUTLINE_SM = "inline-flex h-11 items-center justify-center rounded-full border border-[#1a1a1a]/20 bg-white px-5 text-[14px] font-medium text-[#1a1a1a] transition-colors hover:border-[#1a1a1a]";
 
 type DevKeyInfo = {
@@ -36,7 +43,7 @@ export function DevelopersClient() {
   return (
     <div className="w-full min-w-0 [&_.grid>*]:min-w-0 [&_pre]:max-w-full">
       <SignedOut>
-        <Landing />
+        <SignedOutNote />
       </SignedOut>
       <SignedIn>
         <Dashboard />
@@ -45,28 +52,22 @@ export function DevelopersClient() {
   );
 }
 
-function Landing() {
+/** Signed out: the page above has already handed the reader to OtoIndex, so
+ *  this is only for someone who minted a key here before that. */
+function SignedOutNote() {
   return (
-    <div>
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-        <SignUpButton mode="modal">
-          <button className={BTN_PRIMARY}>Create free account</button>
-        </SignUpButton>
-        <SignInButton mode="modal">
-          <button className={BTN_OUTLINE}>Sign in</button>
-        </SignInButton>
-        <p className="text-[13px]" style={{ color: muted }}>
-          Free tier: one key, all read scopes, 60 requests a minute. No card required.
-        </p>
-      </div>
-
-      {/* The docs are the sales pitch: shown signed-out too. */}
-      <div className="mt-14 border-t border-[#1a1a1a]/10 pt-14">
-        <h2 className="serif-display mb-6 text-[32px] leading-[1.04] tracking-[-0.01em] text-[#1a1a1a] tab:text-[38px]">
-          The API
-        </h2>
-        <Reference />
-      </div>
+    <div className="flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-[#1a1a1a]/10 pt-8">
+      <p className="text-[15px]" style={{ color: muted }}>
+        Already hold a key issued through Otopair?
+      </p>
+      <SignInButton mode="modal">
+        <button className={BTN_OUTLINE_SM}>Sign in to manage it</button>
+      </SignInButton>
+      <SignUpButton mode="modal">
+        <button className="text-[14px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+          Create an account
+        </button>
+      </SignUpButton>
     </div>
   );
 }
@@ -115,7 +116,7 @@ function Dashboard() {
     <div className="space-y-8">
       <div className="flex items-center gap-3">
         <h2 className="text-[28px]" style={{ ...serif, color: ink }}>
-          Developer dashboard
+          Your developer account
         </h2>
         <span className="ml-auto">
           <UserButton />
@@ -239,11 +240,22 @@ function Dashboard() {
         )}
       </div>
 
-      {/* Reference */}
+      {/* Reference. OtoIndex owns the public docs; this copy stays for the
+          people signed in here, with the canonical link on top. */}
       <div>
-        <h2 className="serif-display mb-6 text-[32px] leading-[1.04] tracking-[-0.01em] text-[#1a1a1a] tab:text-[38px]">
+        <h2 className="serif-display mb-3 text-[32px] leading-[1.04] tracking-[-0.01em] text-[#1a1a1a] tab:text-[38px]">
           Reference
         </h2>
+        <p className="mb-6 text-[15px]" style={{ color: muted }}>
+          The interactive reference, with authentication, errors and rate limits, lives on{" "}
+          <a
+            href={OTOINDEX.docs}
+            className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
+          >
+            the OtoIndex docs
+          </a>
+          .
+        </p>
         <Reference />
       </div>
     </div>

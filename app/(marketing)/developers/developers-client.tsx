@@ -14,9 +14,11 @@ import { baseUrl } from "./shared";
 
 const ink = "#1a1a1a";
 const muted = "#6b655d";
-const CARD = "rounded-2xl border border-[#dcd8d0] bg-[#f7f5f1] p-6";
-const BTN_PRIMARY =
-  "rounded-xl bg-gradient-to-r from-[rgba(59,130,246,1)] to-[rgba(37,99,235,1)] px-6 py-3 text-[15px] font-semibold text-white shadow-md transition hover:brightness-110";
+const serif = { fontFamily: "var(--font-Petrona)", fontWeight: 400 } as const;
+const CARD = "rounded-[28px] bg-[#f7f6f3] p-6 shadow-[inset_0_0_0_1px_rgba(26,26,26,0.06)] tab:p-8";
+const BTN_PRIMARY = "inline-flex h-12 items-center justify-center rounded-full bg-[#1a1a1a] px-6 text-[15px] font-medium text-white transition-[transform,box-shadow] duration-300 hover:-translate-y-px hover:shadow-[0_16px_36px_-14px_rgba(26,26,26,0.55)]";
+const BTN_OUTLINE = "inline-flex h-12 items-center justify-center rounded-full border border-[#1a1a1a]/20 bg-white px-6 text-[15px] font-medium text-[#1a1a1a] transition-colors hover:border-[#1a1a1a]";
+const BTN_OUTLINE_SM = "inline-flex h-11 items-center justify-center rounded-full border border-[#1a1a1a]/20 bg-white px-5 text-[14px] font-medium text-[#1a1a1a] transition-colors hover:border-[#1a1a1a]";
 
 type DevKeyInfo = {
   id: string;
@@ -32,53 +34,35 @@ type DevUsageDay = { date: string; requests: number; errors: number };
 
 export function DevelopersClient() {
   return (
-    <main className="min-h-screen w-full bg-[#eceae6] px-4 pb-24 pt-28 md:pt-32">
-      <div className="mx-auto max-w-4xl">
-        <SignedOut>
-          <Landing />
-        </SignedOut>
-        <SignedIn>
-          <Dashboard />
-        </SignedIn>
-      </div>
-    </main>
+    <div className="w-full min-w-0 [&_.grid>*]:min-w-0 [&_pre]:max-w-full">
+      <SignedOut>
+        <Landing />
+      </SignedOut>
+      <SignedIn>
+        <Dashboard />
+      </SignedIn>
+    </div>
   );
 }
 
 function Landing() {
   return (
-    <div className="text-center">
-      <h1
-        className="text-4xl leading-tight md:text-5xl"
-        style={{ fontFamily: "var(--font-Lora)", color: ink }}
-      >
-        Build on real car data.
-      </h1>
-      <p className="mx-auto mt-4 max-w-xl text-[15px]" style={{ color: muted }}>
-        Maintenance specs, OEM service intervals, exact-fit parts, real-world labor times
-        and vehicle images — by VIN, year/make/model, or config key. Every value carries
-        tracked provenance. Sign up and mint your key in under a minute.
-      </p>
-      <div className="mt-8 flex justify-center gap-3">
+    <div>
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
         <SignUpButton mode="modal">
           <button className={BTN_PRIMARY}>Create free account</button>
         </SignUpButton>
         <SignInButton mode="modal">
-          <button
-            className="rounded-xl border border-[#1a1a1a] px-6 py-3 text-[15px] font-semibold transition hover:bg-[#1a1a1a] hover:text-white"
-            style={{ color: ink }}
-          >
-            Sign in
-          </button>
+          <button className={BTN_OUTLINE}>Sign in</button>
         </SignInButton>
+        <p className="text-[13px]" style={{ color: muted }}>
+          Free tier: one key, all read scopes, 60 requests a minute. No card required.
+        </p>
       </div>
-      <p className="mt-3 text-[12px]" style={{ color: muted }}>
-        Free tier: one key · all read scopes · 60 requests/min. No card required.
-      </p>
 
-      {/* The docs are the sales pitch — show them signed-out too. */}
-      <div className="mt-14 text-left">
-        <h2 className="mb-4 text-xl" style={{ fontFamily: "var(--font-Lora)", color: ink }}>
+      {/* The docs are the sales pitch: shown signed-out too. */}
+      <div className="mt-14 border-t border-[#1a1a1a]/10 pt-14">
+        <h2 className="serif-display mb-6 text-[32px] leading-[1.04] tracking-[-0.01em] text-[#1a1a1a] tab:text-[38px]">
           The API
         </h2>
         <Reference />
@@ -107,7 +91,7 @@ function Dashboard() {
       setBusy(false);
     } catch (e) {
       setBusy(false);
-      setError(e instanceof Error ? e.message : "Minting failed — try again.");
+      setError(e instanceof Error ? e.message : "Minting failed. Try again.");
     }
   };
 
@@ -130,9 +114,9 @@ function Dashboard() {
   return (
     <div className="space-y-8">
       <div className="flex items-center gap-3">
-        <h1 className="text-3xl" style={{ fontFamily: "var(--font-Lora)", color: ink }}>
+        <h2 className="text-[28px]" style={{ ...serif, color: ink }}>
           Developer dashboard
-        </h1>
+        </h2>
         <span className="ml-auto">
           <UserButton />
         </span>
@@ -144,12 +128,12 @@ function Dashboard() {
           Your API key
         </h2>
         {key === undefined ? (
-          <div className="mt-3 h-14 animate-pulse rounded-xl bg-[#e5e1da]" />
+          <div className="mt-3 h-14 animate-pulse rounded-[16px] bg-[#1a1a1a]/[0.05]" />
         ) : minted ? (
           <div className="mt-3">
             <div className="rounded-xl border border-emerald-300 bg-emerald-50 p-4">
               <div className="text-[12px] font-semibold text-emerald-800">
-                Copy it now — this is the ONLY time the full key is shown. We store only
+                Copy it now. This is the only time the full key is shown; we store only
                 its hash.
               </div>
               <div className="mt-2 flex items-center gap-2">
@@ -162,7 +146,7 @@ function Dashboard() {
                     setCopied(true);
                     setTimeout(() => setCopied(false), 1500);
                   }}
-                  className="shrink-0 rounded-lg bg-slate-900 px-3 py-2 text-[13px] font-semibold text-white"
+                  className="shrink-0 rounded-full bg-[#1a1a1a] px-4 py-2 text-[13px] font-medium text-white"
                 >
                   {copied ? "Copied ✓" : "Copy"}
                 </button>
@@ -192,18 +176,13 @@ function Dashboard() {
               </span>
             </div>
             <div className="mt-3 flex gap-2">
-              <button
-                onClick={doMint}
-                disabled={busy}
-                className="rounded-lg border border-[#1a1a1a] px-4 py-2 text-[13px] font-semibold transition hover:bg-[#1a1a1a] hover:text-white disabled:opacity-60"
-                style={{ color: ink }}
-              >
+              <button onClick={doMint} disabled={busy} className={`${BTN_OUTLINE_SM} disabled:opacity-60`}>
                 {busy ? "Working…" : "Rotate key"}
               </button>
               <button
                 onClick={doRevoke}
                 disabled={busy}
-                className="rounded-lg border border-red-400 px-4 py-2 text-[13px] font-semibold text-red-600 transition hover:bg-red-600 hover:text-white disabled:opacity-60"
+                className="inline-flex h-11 items-center justify-center rounded-full border border-[#b04a3a]/40 px-5 text-[14px] font-medium text-[#b04a3a] transition-colors hover:border-[#b04a3a] disabled:opacity-60"
               >
                 Revoke
               </button>
@@ -230,13 +209,13 @@ function Dashboard() {
       {/* Usage */}
       <div className={CARD}>
         <h2 className="text-[15px] font-semibold" style={{ color: ink }}>
-          Usage — last 30 days
+          Usage, last 30 days
         </h2>
         {usage === undefined ? (
-          <div className="mt-3 h-20 animate-pulse rounded-xl bg-[#e5e1da]" />
+          <div className="mt-3 h-20 animate-pulse rounded-[16px] bg-[#1a1a1a]/[0.05]" />
         ) : usage.length === 0 ? (
           <p className="mt-3 text-[14px]" style={{ color: muted }}>
-            No requests yet — the chart draws with your first call.
+            No requests yet. The chart draws with your first call.
           </p>
         ) : (
           <div className="mt-4 flex items-end gap-1 overflow-x-auto pb-1">
@@ -249,10 +228,10 @@ function Dashboard() {
                   title={`${d.date}: ${d.requests} requests, ${d.errors} errors`}
                 >
                   <div
-                    className="w-3.5 rounded-t-sm bg-blue-500"
+                    className="w-3.5 rounded-t-sm bg-[#4B82A5]"
                     style={{ height: 4 + (d.requests / max) * 70 }}
                   />
-                  {d.errors > 0 && <div className="mt-0.5 h-1 w-3.5 rounded-sm bg-red-500" />}
+                  {d.errors > 0 && <div className="mt-0.5 h-1 w-3.5 rounded-sm bg-[#b04a3a]" />}
                 </div>
               );
             })}
@@ -262,7 +241,7 @@ function Dashboard() {
 
       {/* Reference */}
       <div>
-        <h2 className="mb-4 text-xl" style={{ fontFamily: "var(--font-Lora)", color: ink }}>
+        <h2 className="serif-display mb-6 text-[32px] leading-[1.04] tracking-[-0.01em] text-[#1a1a1a] tab:text-[38px]">
           Reference
         </h2>
         <Reference />

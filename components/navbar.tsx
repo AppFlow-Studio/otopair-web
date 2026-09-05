@@ -34,11 +34,12 @@ function Navbar() {
     const [name, setName] = useState('')
     const [submitted, setSubmitted] = useState(false)
     const isHome = pathname === "/"
-    // Every flagship page (home, partner, and all the PageShell pages — legal,
-    // coverage, boroughs, shops, services, trust, help…) ships its own
-    // floating glass pill nav, so this legacy chrome stands down everywhere
-    // except the three older marketing routes that still rely on it.
-    const LEGACY_CHROME_ROUTES = ["/apply", "/car-data", "/developers"]
+    // Every marketing page ships its own floating glass pill nav (PageShell,
+    // the home page, the partner page). Since 2026-09-05 that includes the
+    // last three older routes (/apply, /car-data, /developers), so this
+    // legacy chrome stands down everywhere. The list stays so a future
+    // route without the shell can opt back in.
+    const LEGACY_CHROME_ROUTES: string[] = []
     const hideChrome =
         isHome || !LEGACY_CHROME_ROUTES.some((p) => pathname === p || pathname.startsWith(p + "/"))
 

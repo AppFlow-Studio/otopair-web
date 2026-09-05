@@ -4,8 +4,8 @@ import { useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
 import { CheckCircle2, ChevronLeft, Loader2 } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { PopIn, serif } from "@/components/flagship/landing/reveal";
+import { PillButton, PillLink } from "@/components/flagship/pill-button";
+import { serif } from "@/components/flagship/landing/reveal";
 import { useAddressAutocomplete } from "./use-address-autocomplete";
 
 const STEPS = [
@@ -15,8 +15,8 @@ const STEPS = [
 ] as const;
 
 const inputClass =
-  "w-full rounded-xl border border-[#1a1a1a]/12 bg-white px-4 py-3 text-[16px] text-[#1a1a1a] placeholder-[#777169] transition focus:border-[#5299fe]/50 focus:outline-none focus:ring-2 focus:ring-[#5299fe]/40";
-const labelClass = "mb-1.5 block text-[14px] font-medium text-[#1a1a1a]";
+  "h-12 w-full rounded-full border border-[#1a1a1a]/12 bg-white px-5 text-[15px] text-[#1a1a1a] outline-none placeholder:text-[#8f8a82] focus-visible:border-[#4B82A5] focus-visible:ring-2 focus-visible:ring-[#4B82A5]/30";
+const labelClass = "mb-1.5 block text-[13px] tracking-[0.02em] text-[#4c5661]";
 
 export default function ApplyForm() {
   const [step, setStep] = useState(0);
@@ -98,12 +98,12 @@ export default function ApplyForm() {
   const isLast = step === STEPS.length - 1;
 
   return (
-    <div className="mx-auto flex min-h-screen w-full max-w-[560px] flex-col items-center justify-center px-5 py-28">
-      <PopIn className="w-full">
-        <div className="w-full rounded-3xl border border-[#1a1a1a]/8 bg-white p-8 shadow-[0_20px_60px_rgba(0,0,0,0.08)] sm:p-10">
+    <div className="w-full">
+      <div className="w-full">
+        <div className="w-full rounded-[28px] bg-[#f7f6f3] p-6 tab:rounded-[40px] sm:p-8" style={{ boxShadow: "inset 0 0 0 1px rgba(26,26,26,0.06)" }}>
           {submitted ? (
             <div className="flex flex-col items-center py-6 text-center">
-              <CheckCircle2 className="size-12 text-[#457942]" strokeWidth={1.5} />
+              <CheckCircle2 className="size-12 text-[#4B82A5]" strokeWidth={1.5} />
               <h1 className="mt-5 text-[28px] text-[#1a1a1a]" style={serif}>
                 Application received
               </h1>
@@ -111,9 +111,9 @@ export default function ApplyForm() {
                 We&apos;ve emailed a receipt to <span className="text-[#1a1a1a]">{businessEmail}</span>.
                 If approved, you&apos;ll get a private invite to set up your shop.
               </p>
-              <Button asChild size="lg" className="mt-7 bg-[#5299fe] text-white hover:bg-[#5299fe]/90">
-                <Link href="/">Back to home</Link>
-              </Button>
+              <PillLink href="/for-shops" className="mt-7">
+                See the dashboard tour
+              </PillLink>
             </div>
           ) : (
             <>
@@ -126,10 +126,10 @@ export default function ApplyForm() {
                       <span
                         className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[13px] font-semibold transition-colors ${
                           state === "active"
-                            ? "bg-[#5299fe] text-white"
+                            ? "bg-[#1a1a1a] text-white"
                             : state === "done"
-                              ? "bg-[#1a1a1a] text-white"
-                              : "bg-[#1a1a1a]/10 text-[#777169]"
+                              ? "bg-[#4B82A5] text-white"
+                              : "bg-white text-[#777169] ring-1 ring-[#1a1a1a]/10"
                         }`}
                       >
                         {state === "done" ? "✓" : i + 1}
@@ -137,7 +137,7 @@ export default function ApplyForm() {
                       {i < STEPS.length - 1 && (
                         <span
                           className={`mx-2 h-px flex-1 transition-colors ${
-                            i < step ? "bg-[#1a1a1a]" : "bg-[#1a1a1a]/10"
+                            i < step ? "bg-[#4B82A5]" : "bg-[#1a1a1a]/10"
                           }`}
                         />
                       )}
@@ -146,9 +146,9 @@ export default function ApplyForm() {
                 })}
               </div>
 
-              <h1 className="text-[26px] text-[#1a1a1a]" style={serif}>
+              <h2 className="text-[26px] text-[#1a1a1a]" style={serif}>
                 {STEPS[step].title}
-              </h1>
+              </h2>
               <p className="mt-1 text-[14px] text-[#777169]">{STEPS[step].helper}</p>
 
               <form onSubmit={handleContinue} className="mt-7">
@@ -252,7 +252,7 @@ export default function ApplyForm() {
                           onBlur={() => window.setTimeout(() => address.clear(), 150)}
                         />
                         {(address.loading || address.suggestions.length > 0) && (
-                          <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-[#1a1a1a]/12 bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)]">
+                          <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-[18px] border border-[#1a1a1a]/12 bg-white shadow-[0_12px_40px_rgba(0,0,0,0.14)]">
                             {address.loading && address.suggestions.length === 0 ? (
                               <div className="flex items-center gap-2 px-4 py-3 text-[14px] text-[#777169]">
                                 <Loader2 className="size-4 animate-spin" />
@@ -291,42 +291,47 @@ export default function ApplyForm() {
                   </motion.div>
                 </AnimatePresence>
 
-                {error && <p className="mt-4 text-[14px] text-red-600">{error}</p>}
+                {error && (
+                  <p role="alert" className="mt-4 text-[14px] text-[#b04a3a]">
+                    {error}
+                  </p>
+                )}
 
-                <div className="mt-8 flex gap-3">
+                <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">
+                  <PillButton type="submit" disabled={loading}>
+                    {loading ? (
+                      <span className="inline-flex items-center gap-2">
+                        <Loader2 className="size-4 animate-spin" />
+                        {isLast ? "Submitting…" : "Working…"}
+                      </span>
+                    ) : isLast ? (
+                      "Submit application"
+                    ) : (
+                      "Continue"
+                    )}
+                  </PillButton>
                   {step > 0 && (
-                    <Button
+                    <button
                       type="button"
-                      variant="ghost"
-                      size="lg"
                       onClick={goBack}
                       disabled={loading}
-                      className="text-[#1a1a1a]"
+                      className="inline-flex items-center gap-1 text-[14px] text-[#4c5661] underline decoration-[#1a1a1a]/25 underline-offset-[4px] transition-colors hover:text-[#1a1a1a] hover:decoration-[#1a1a1a] disabled:opacity-60"
                     >
                       <ChevronLeft className="size-4" />
                       Back
-                    </Button>
+                    </button>
                   )}
-                  <Button
-                    type="submit"
-                    size="lg"
-                    disabled={loading}
-                    className="flex-1 bg-[#5299fe] text-white hover:bg-[#5299fe]/90"
-                  >
-                    {loading && <Loader2 className="size-4 animate-spin" />}
-                    {isLast ? "Submit application" : "Continue"}
-                  </Button>
                 </div>
               </form>
             </>
           )}
         </div>
-      </PopIn>
+      </div>
 
       {!submitted && (
-        <p className="mt-6 text-center text-[13px] text-[#777169]">
+        <p className="mt-4 text-[13px] text-[#4c5661]">
           Already have an account?{" "}
-          <Link href="/dashboard" className="text-[#5299fe] underline-offset-4 hover:underline">
+          <Link href="/dashboard" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
             Sign in
           </Link>
         </p>

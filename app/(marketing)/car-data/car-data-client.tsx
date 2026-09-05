@@ -1,7 +1,7 @@
 "use client";
 
-// Public car-data lookup (client half). Marketing brand: #eceae6 canvas,
-// Lora display headline, ink #1a1a1a. Input: VIN (assisted by the public
+// Public car-data lookup (client half). Rendered inside the page shell
+// (design pass 2026-09-05): the site's paper plate, pills and fields. Input: VIN (assisted by the public
 // /api/vin NHTSA decode) or Year/Make/Model[/Trim]. Output: the teaser —
 // identity + render + headline specs with layer badges, two sample
 // intervals, and the locked-counts card that IS the call to action.
@@ -46,6 +46,11 @@ const LAYER_TINT: Record<string, string> = {
 
 const ink = "#1a1a1a";
 const muted = "#6b655d";
+const serif = { fontFamily: "var(--font-Petrona)", fontWeight: 400 } as const;
+const BTN = "inline-flex h-12 items-center justify-center rounded-full bg-[#1a1a1a] px-6 text-[15px] font-medium text-white transition-[transform,box-shadow] duration-300 hover:-translate-y-px hover:shadow-[0_16px_36px_-14px_rgba(26,26,26,0.55)]";
+const BTN_OUT = "inline-flex h-12 items-center justify-center rounded-full border border-[#1a1a1a]/20 bg-white px-6 text-[15px] font-medium text-[#1a1a1a] transition-colors hover:border-[#1a1a1a]";
+const BTN_SM = "inline-flex h-11 items-center justify-center rounded-full bg-[#1a1a1a] px-5 text-[14px] font-medium text-white transition-[transform,box-shadow] duration-300 hover:-translate-y-px";
+const BTN_OUT_SM = "inline-flex h-11 items-center justify-center rounded-full border border-[#1a1a1a]/20 bg-white px-5 text-[14px] font-medium text-[#1a1a1a] transition-colors hover:border-[#1a1a1a]";
 
 export function CarDataClient() {
   const [mode, setMode] = useState<"vin" | "ymmt">("ymmt");
@@ -82,28 +87,14 @@ export function CarDataClient() {
   };
 
   const inputCls =
-    "rounded-xl border border-[#d8d4cc] bg-white/80 px-4 py-3 text-[15px] outline-none focus:border-[#2f7bff] placeholder:text-[#a09a90]";
+    "h-12 rounded-full border border-[#1a1a1a]/12 bg-white px-5 text-[15px] text-[#1a1a1a] outline-none placeholder:text-[#8f8a82] focus-visible:border-[#4B82A5] focus-visible:ring-2 focus-visible:ring-[#4B82A5]/30";
 
   return (
-    <main className="min-h-screen w-full bg-[#eceae6] px-4 pb-24 pt-28 md:pt-32">
+    <div className="w-full">
       <div className="mx-auto max-w-3xl">
-        {/* Headline */}
-        <h1
-          className="text-center text-4xl leading-tight md:text-5xl"
-          style={{ fontFamily: "var(--font-Lora)", color: ink }}
-        >
-          Every spec. Every interval.
-          <br />
-          Your exact car.
-        </h1>
-        <p className="mx-auto mt-4 max-w-xl text-center text-[15px]" style={{ color: muted }}>
-          Maintenance data built from OEM sources and verified by working mechanics —
-          fluid specs, service intervals, parts and real-world labor times.
-        </p>
-
         {/* Lookup card */}
-        <div className="mt-10 rounded-2xl border border-[#dcd8d0] bg-[#f7f5f1] p-6 shadow-sm">
-          <div className="flex gap-1 rounded-xl bg-[#e5e1da] p-1">
+        <div className="rounded-[28px] bg-[#f7f6f3] p-6 tab:rounded-[40px] tab:p-8" style={{ boxShadow: "inset 0 0 0 1px rgba(26,26,26,0.06)" }}>
+          <div className="flex gap-1 rounded-full bg-[#1a1a1a]/[0.06] p-1">
             {(["ymmt", "vin"] as const).map((m) => (
               <button
                 key={m}
@@ -112,8 +103,8 @@ export function CarDataClient() {
                   setArmed(false);
                   setPickedKey(null);
                 }}
-                className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition ${
-                  mode === m ? "bg-white text-[#1a1a1a] shadow-sm" : "text-[#6b655d]"
+                className={`flex-1 rounded-full px-4 py-2 text-[14px] font-medium transition ${
+                  mode === m ? "bg-white text-[#1a1a1a] shadow-[0_1px_3px_rgba(26,26,26,0.08)]" : "text-[#6b655d]"
                 }`}
               >
                 {m === "ymmt" ? "Year / Make / Model" : "VIN"}
@@ -135,7 +126,7 @@ export function CarDataClient() {
               />
               <button
                 onClick={search}
-                className="shrink-0 rounded-xl bg-gradient-to-r from-[rgba(59,130,246,1)] to-[rgba(37,99,235,1)] px-6 py-3 text-[15px] font-semibold text-white shadow-md transition hover:brightness-110"
+                className={`shrink-0 ${BTN}`}
               >
                 Look up
               </button>
@@ -188,7 +179,7 @@ export function CarDataClient() {
               />
               <button
                 onClick={search}
-                className="col-span-2 rounded-xl bg-gradient-to-r from-[rgba(59,130,246,1)] to-[rgba(37,99,235,1)] px-6 py-3 text-[15px] font-semibold text-white shadow-md transition hover:brightness-110 sm:col-span-1"
+                className={`col-span-2 sm:col-span-1 ${BTN}`}
               >
                 Look up
               </button>
@@ -200,23 +191,23 @@ export function CarDataClient() {
         {lookupArgs && (
           <div className="mt-8">
             {result === undefined ? (
-              <div className="h-64 animate-pulse rounded-2xl bg-[#e5e1da]" />
+              <div className="h-64 animate-pulse rounded-[28px] bg-[#1a1a1a]/[0.05]" />
             ) : result === null ? (
-              <div className="rounded-2xl border border-[#e6c9a0] bg-[#faf3e6] p-6 text-center text-[15px]" style={{ color: "#8a6d3b" }}>
-                We don&apos;t have that vehicle in the catalog yet. Coverage grows every
-                week — join the waitlist below and we&apos;ll let you know.
+              <div className="rounded-[28px] bg-[#f7f6f3] p-6 text-center text-[15px] text-[#4c5661]" style={{ boxShadow: "inset 0 0 0 1px rgba(26,26,26,0.06)" }}>
+                We don&apos;t have that vehicle in the catalog yet. Coverage grows every week; email
+                data@otopair.com and we will let you know when it lands.
               </div>
             ) : result.object === "multiple_matches" ? (
-              <div className="rounded-2xl border border-[#dcd8d0] bg-[#f7f5f1] p-6">
+              <div className="rounded-[28px] bg-[#f7f6f3] p-6" style={{ boxShadow: "inset 0 0 0 1px rgba(26,26,26,0.06)" }}>
                 <p className="text-[15px] font-semibold" style={{ color: ink }}>
-                  A few configurations match — pick yours:
+                  A few configurations match. Pick yours:
                 </p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {result.matches.map((m) => (
                     <button
                       key={m.config_key}
                       onClick={() => setPickedKey(m.config_key)}
-                      className="rounded-full border border-[#d8d4cc] bg-white px-3.5 py-1.5 font-mono text-[12px] text-[#1a1a1a] transition hover:border-[#2f7bff]"
+                      className="rounded-full border border-[#1a1a1a]/12 bg-white px-3.5 py-1.5 font-mono text-[12px] text-[#1a1a1a] transition hover:border-[#4B82A5]"
                     >
                       {m.label}
                     </button>
@@ -230,20 +221,22 @@ export function CarDataClient() {
         )}
 
         {/* Bottom CTA strip */}
-        <div className="mt-16 text-center">
-          <p className="text-[13px]" style={{ color: muted }}>
+        <div className="mt-16 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-[#1a1a1a]/10 pt-8">
+          <p className="text-[15px]" style={{ color: muted }}>
             Building something with car data?
           </p>
+          <a href="/developers" className={BTN_OUT}>
+            The developer portal
+          </a>
           <a
             href="mailto:data@otopair.com?subject=Data%20API%20access"
-            className="mt-2 inline-block rounded-xl border border-[#1a1a1a] px-6 py-3 text-[15px] font-semibold transition hover:bg-[#1a1a1a] hover:text-white"
-            style={{ color: ink }}
+            className="text-[14px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
           >
-            Talk to us about API access
+            Or email data@otopair.com
           </a>
         </div>
       </div>
-    </main>
+    </div>
   );
 }
 
@@ -254,23 +247,23 @@ function TeaserCard({ t }: { t: Extract<NonNullable<Teaser>, { object: "teaser" 
     t.locked.part_fitments +
     t.locked.empirical_labor_services;
   return (
-    <div className="overflow-hidden rounded-2xl border border-[#dcd8d0] bg-white shadow-sm">
+    <div className="overflow-hidden rounded-[28px] bg-white ring-1 ring-[#1a1a1a]/[0.08] shadow-[0_1px_2px_rgba(26,26,26,0.04)]">
       {/* Identity band */}
-      <div className="flex flex-wrap items-center gap-5 border-b border-[#eceae6] bg-[#f7f5f1] p-6">
+      <div className="flex flex-wrap items-center gap-5 border-b border-[#1a1a1a]/8 bg-[#f7f6f3] p-6">
         {t.image_url ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={t.image_url}
             alt={`${t.config.year} ${t.config.make} ${t.config.model}`}
-            className="h-24 w-40 rounded-xl bg-white object-contain"
+            className="h-24 w-40 rounded-[16px] bg-white object-contain"
           />
         ) : (
-          <div className="flex h-24 w-40 items-center justify-center rounded-xl border border-dashed border-[#d8d4cc] text-[12px] text-[#a09a90]">
+          <div className="flex h-24 w-40 items-center justify-center rounded-[16px] border border-dashed border-[#1a1a1a]/15 text-[12px] text-[#8f8a82]">
             render coming soon
           </div>
         )}
         <div>
-          <div className="text-2xl font-semibold" style={{ fontFamily: "var(--font-Lora)", color: ink }}>
+          <div className="text-[24px]" style={{ ...serif, color: ink }}>
             {t.config.year} {t.config.make} {t.config.model}
           </div>
           <div className="mt-1 text-[14px]" style={{ color: muted }}>
@@ -284,13 +277,13 @@ function TeaserCard({ t }: { t: Extract<NonNullable<Teaser>, { object: "teaser" 
       <div className="p-6">
         {t.headline_specs.length === 0 && t.sample_intervals.length === 0 ? (
           <p className="text-[14px]" style={{ color: muted }}>
-            This configuration is in the catalog but its enrichment is still filling in —
-            check back soon.
+            This configuration is in the catalog but its enrichment is still filling in.
+            Check back soon.
           </p>
         ) : (
           <div className="grid gap-x-8 gap-y-2 sm:grid-cols-2">
             {t.headline_specs.map((s) => (
-              <div key={s.label} className="flex items-center justify-between border-b border-[#f1efe9] py-2">
+              <div key={s.label} className="flex items-center justify-between border-b border-[#1a1a1a]/8 py-2">
                 <span className="text-[13px]" style={{ color: muted }}>
                   {s.label}
                 </span>
@@ -307,7 +300,7 @@ function TeaserCard({ t }: { t: Extract<NonNullable<Teaser>, { object: "teaser" 
               </div>
             ))}
             {t.sample_intervals.map((iv) => (
-              <div key={iv.name} className="flex items-center justify-between border-b border-[#f1efe9] py-2">
+              <div key={iv.name} className="flex items-center justify-between border-b border-[#1a1a1a]/8 py-2">
                 <span className="text-[13px]" style={{ color: muted }}>
                   {iv.name} interval
                 </span>
@@ -320,9 +313,9 @@ function TeaserCard({ t }: { t: Extract<NonNullable<Teaser>, { object: "teaser" 
         )}
 
         {/* Locked card — the CTA */}
-        <div className="mt-6 rounded-xl border border-[#e0dcd4] bg-[#faf9f6] p-5">
+        <div className="mt-6 rounded-[20px] bg-[#f7f6f3] p-5" style={{ boxShadow: "inset 0 0 0 1px rgba(26,26,26,0.06)" }}>
           <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[14px]" style={{ color: ink }}>
-            <span className="font-semibold">🔒 In the full report:</span>
+            <span className="font-semibold">In the full report:</span>
             <span>{t.locked.specs_served} maintenance specs</span>
             <span>{t.locked.intervals} OEM service intervals</span>
             <span>{t.locked.part_fitments} exact-fit OEM parts</span>
@@ -332,20 +325,19 @@ function TeaserCard({ t }: { t: Extract<NonNullable<Teaser>, { object: "teaser" 
           </div>
           <p className="mt-2 text-[13px]" style={{ color: muted }}>
             {lockedTotal > 0
-              ? "Every value carries its source and confidence — OEM documents, verified mechanic data, and measurements from real jobs."
+              ? "Every value carries its source and confidence: OEM documents, verified mechanic data, and measurements from real jobs."
               : "This configuration is still enriching."}
           </p>
           <div className="mt-4 flex flex-wrap gap-3">
             <a
               href="mailto:data@otopair.com?subject=Full%20vehicle%20report"
-              className="rounded-xl bg-gradient-to-r from-[rgba(59,130,246,1)] to-[rgba(37,99,235,1)] px-5 py-2.5 text-[14px] font-semibold text-white shadow-md transition hover:brightness-110"
+              className={BTN_SM}
             >
               Get the full report
             </a>
             <a
               href="mailto:data@otopair.com?subject=Data%20API%20access"
-              className="rounded-xl border border-[#1a1a1a] px-5 py-2.5 text-[14px] font-semibold transition hover:bg-[#1a1a1a] hover:text-white"
-              style={{ color: ink }}
+              className={BTN_OUT_SM}
             >
               API access
             </a>

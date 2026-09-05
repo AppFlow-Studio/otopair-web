@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import PageShell from "@/components/flagship/page-shell";
 import { DevelopersClient } from "./developers-client";
 
 // Self-serve developer portal — Clerk sign-up → mint your own Data-API key →
@@ -12,6 +13,24 @@ export const metadata: Metadata = {
   alternates: { canonical: "/developers" },
 };
 
+/**
+ * Design pass 2026-09-05: the portal on the page shell (nav, hero, closing
+ * band), the beige canvas and the app's blue gone. Sign-up, key minting and
+ * the Reference are untouched; the signed-out hero copy moved up here.
+ */
 export default function DevelopersPage() {
-  return <DevelopersClient />;
+  return (
+    <PageShell
+      title="Build on real car data."
+      lede="Maintenance specs, OEM service intervals, exact-fit parts, real-world labor times and vehicle images, by VIN, year, make and model, or config key. Every value carries tracked provenance. Sign up and mint your key in under a minute."
+      crumbs={[
+        { name: "Home", href: "/" },
+        { name: "Developers", href: "/developers" },
+      ]}
+      heroAlign="start"
+      width="wide"
+    >
+      <DevelopersClient />
+    </PageShell>
+  );
 }

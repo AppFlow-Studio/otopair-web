@@ -74,6 +74,14 @@ logo; `project` places real shops as pins on the phone map).
 | /help | hero | Answers, before you have to ask | phone: Bookings with an approval waiting | | reveal | shell |
 | /help | 1..5 | one list per category | none: question rows | | | |
 | /contact | hero | Talk to a person | the working form on a paper plate | | | shell |
+| /cancellation-policy | §7 | unanswered estimate | none | the payment lifecycle rows | reveal | pale |
+| /how-shops-are-verified | §5 | what a shop sets up | browser (rates page) | | reveal | paper |
+| /trust-and-safety | §2 | how the price is protected | phone: approve estimate | | reveal | pale |
+| /warranty | §3 | what Otopair keeps | phone: receipt | | reveal | pale |
+| /security, /accessibility, /privacy, /terms | | documents | none (type only) | | | |
+| /apply | hero | Apply to partner | the three-step form on a paper plate | | | shell |
+| /car-data | body | the lookup tool | none (tool on the paper plate) | | | |
+| /developers | body | the portal | none (tool on the paper plate) | | | |
 
 Rule checks: no two consecutive rows share a device; the six openers are
 map / full sheet / category list / form / low sheet with browse card /

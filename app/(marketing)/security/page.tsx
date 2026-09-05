@@ -93,7 +93,7 @@ export default function SecurityPage() {
         ]}
       />
 
-      <Section id="signin" title="How do I sign in?">
+      <Section first id="signin" title="How do I sign in?">
         <p>
           Through Clerk, a dedicated authentication provider, whether you are a driver in the app or a
           shop owner or staff member on the web dashboard. Clerk handles your credentials and issues a

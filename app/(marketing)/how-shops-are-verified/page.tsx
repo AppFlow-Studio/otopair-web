@@ -92,7 +92,7 @@ export default function HowShopsAreVerifiedPage() {
         ]}
       />
 
-      <Section id="apply" title="How does a shop apply?">
+      <Section first id="apply" title="How does a shop apply?">
         <p>
           Through the <Link href="/apply">application form</Link>, with five things: the shop&rsquo;s
           legal name, the owner&rsquo;s full name, a business email, a phone number and the street

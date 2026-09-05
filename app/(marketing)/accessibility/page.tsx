@@ -30,7 +30,7 @@ export default function AccessibilityPage() {
         { name: "Accessibility", href: "/accessibility" },
       ]}
     >
-      <Section id="standard" title="What standard are we working to?">
+      <Section first id="standard" title="What standard are we working to?">
         <p>
           WCAG 2.1 level AA is the target for the website and the driver app. We have not completed a
           third-party audit against it, and we do not claim conformance until one says so. What follows is

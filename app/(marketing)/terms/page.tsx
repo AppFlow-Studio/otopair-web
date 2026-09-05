@@ -59,7 +59,7 @@ export default function TermsPage() {
           "Problems go to the shop first, then to support. Otopair can hold a payout while it reviews.",
         ]}
       />
-      <Section id="what" title="What is Otopair?">
+      <Section first id="what" title="What is Otopair?">
         <p>
           Otopair is a marketplace. It connects drivers with independent repair shops that Otopair
           has verified, shows a price the shop set, and locks that price when you book. The shop, not

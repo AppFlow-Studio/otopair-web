@@ -335,7 +335,7 @@ export default async function ShopPage({ params }: { params: Params }) {
     >
       <JsonLd data={jsonLd} />
 
-      <Section id="services" title={`What services does ${shop.name} offer on Otopair?`}>
+      <Section first id="services" title={`What services does ${shop.name} offer on Otopair?`}>
         {shop.services.length === 0 ? (
           <p>
             {shop.name} has not listed its services here yet; the services it offers are shown in the

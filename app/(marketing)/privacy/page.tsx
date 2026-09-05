@@ -57,7 +57,7 @@ export default function PrivacyPage() {
           </Fragment>,
         ]}
       />
-      <Section id="who" title="Who is responsible for my data?">
+      <Section first id="who" title="Who is responsible for my data?">
         <p>
           {LEGAL_NAME}, based in {LOCALITY.city}, {LOCALITY.region}, operates {SITE_NAME} and is the
           controller of the personal information described here. Questions about this policy go to{" "}

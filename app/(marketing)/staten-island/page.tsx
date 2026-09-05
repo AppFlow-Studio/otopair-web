@@ -67,6 +67,14 @@ const ANSWER =
 export default async function StatenIslandPage() {
   const shops = (await listPublicShops()).filter(onStatenIsland);
   const served = new Set(shops.map((s) => s.neighborhood).filter((n): n is string => !!n));
+  // Neighborhoods split by whether a verified shop actually sits in them, in
+  // the roster's own north-to-south order. The first shop found is the one
+  // named; a second shop in the same neighborhood is reachable from its page.
+  const withShop = STATEN_ISLAND_NEIGHBORHOODS.filter((n) => served.has(n)).map((name) => ({
+    name,
+    shop: shops.find((sh) => sh.neighborhood === name)!,
+  }));
+  const rest = STATEN_ISLAND_NEIGHBORHOODS.filter((n) => !served.has(n));
   const local = topLocalServices();
   const mapSrc = staticMapSrc(STATEN_ISLAND_PHONE, 390, 844);
 
@@ -154,34 +162,71 @@ export default async function StatenIslandPage() {
       {/* ---------- The ten local service pages, beside the app's four lists ---------- */}
       <HubServices local={local.map((s) => ({ slug: s.slug, name: s.name, description: s.description }))} />
 
-      {/* ---------- Neighborhoods: a plain list, the served ones in ink ---------- */}
+      {/* ---------- Neighborhoods ----------
+          Was a 56-name list in four columns with the served ones bolded: the
+          only signal was font weight, which reads as an accident rather than
+          as data, and the whole block sat on bare white with nothing holding
+          it (design feedback 2026-09-05). It is now one object on a paper
+          plate, and the two states are labelled instead of implied — the
+          neighborhoods with a shop name that shop and link to it, the rest
+          are the quiet roster underneath. The count is computed, never
+          typed. Deliberately NOT grouped by shore: the north/mid/east/south
+          lines are contested at the margins (Todt Hill, Richmondtown) and a
+          local page is read by people who would notice us guessing. */}
       <section id="neighborhoods" className="scroll-mt-28">
         <Reveal>
           <h2 className={H2}>Which neighborhoods does Otopair cover?</h2>
           <p className={`mt-6 ${PROSE}`}>
-            The whole island, from St. George to Tottenville. A shop&rsquo;s profile names the neighborhood it sits in;
-            the names in ink below have at least one verified shop today, and the rest are served by the nearest shop on
-            the map. Neighborhood pages will open as verified shops come online in each one.
+            The whole island, from St. George to Tottenville. A shop&rsquo;s profile names the neighborhood it sits in,
+            and every other neighborhood books the nearest shop on the map. Neighborhood pages will open as verified
+            shops come online in each one.
           </p>
         </Reveal>
-        {/* The whole roster settles as one: it is a set of place names in CSS
-            columns, not a rank, and per-name motion would read as a slideshow
-            (a wrapper between the <ul> and its <li>s would break the columns
-            anyway). */}
-        <Reveal delay={0.08}>
-          <ul
-            className="mt-6 columns-2 gap-x-10 text-[15px] leading-[2] sm:columns-3 lg:columns-4"
-            aria-label="Staten Island neighborhoods"
-          >
-            {STATEN_ISLAND_NEIGHBORHOODS.map((n) => {
-              const on = served.has(n);
-              return (
-                <li key={n} className={on ? "font-medium text-[#1a1a1a]" : "text-[#777169]"}>
-                  {n}
-                </li>
-              );
-            })}
-          </ul>
+        <Reveal delay={0.08} className="mt-8">
+          <div className="rounded-[28px] bg-[#f7f6f3] p-6 shadow-[inset_0_0_0_1px_rgba(26,26,26,0.06)] tab:rounded-[40px] tab:p-10">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <span className="serif-text text-[34px] leading-none text-[#1a1a1a] [font-variant-numeric:tabular-nums] tab:text-[42px]">
+                {withShop.length}
+              </span>
+              <span className="text-[15px] leading-[1.5] text-[#4c5661]">
+                of {STATEN_ISLAND_NEIGHBORHOODS.length} neighborhoods have a verified shop in them today.
+              </span>
+            </div>
+
+            {withShop.length > 0 && (
+              <ul className="mt-7 grid gap-x-10 gap-y-0 sm:grid-cols-2 lg:grid-cols-3">
+                {withShop.map(({ name, shop }) => (
+                  <li key={name} className="min-w-0 border-t border-[#1a1a1a]/10 py-4">
+                    <span className="flex items-center gap-2">
+                      <span aria-hidden className="h-[7px] w-[7px] shrink-0 rounded-full bg-[#4B82A5]" />
+                      <span className="truncate text-[16px] font-medium text-[#1a1a1a]">{name}</span>
+                    </span>
+                    <Link
+                      href={`/shops/${shop.slug}`}
+                      className="mt-1 block truncate pl-[15px] text-[14px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
+                    >
+                      {shop.name}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            <p className="mt-9 text-[12px] uppercase tracking-[0.14em] text-[#777169]">
+              Served by the nearest shop
+            </p>
+            {/* The roster settles as one block: these are place names in CSS
+                columns, not a rank, and a wrapper between the <ul> and its
+                <li>s would break the columns anyway. */}
+            <ul
+              className="mt-4 columns-2 gap-x-10 text-[14.5px] leading-[1.95] text-[#6b655d] sm:columns-3 lg:columns-4"
+              aria-label="Staten Island neighborhoods served by the nearest shop"
+            >
+              {rest.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          </div>
         </Reveal>
       </section>
 

@@ -93,7 +93,7 @@ export default function TrustAndSafetyPage() {
         ]}
       />
 
-      <Section id="shops" title="How do shops get on Otopair?">
+      <Section first id="shops" title="How do shops get on Otopair?">
         <p>
           By application, reviewed by hand. A shop applies with its legal name, owner, business email,
           phone and street address; a person at {SITE_NAME} approves or declines it; the owner claims

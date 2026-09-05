@@ -403,11 +403,25 @@ function useActiveSection(items: TocItem[]) {
 export function Section({
   id,
   title,
+  eyebrow,
+  facts,
+  first = false,
   children,
   after,
 }: {
   id?: string;
   title: string;
+  /** A three-or-four-word label above the title, for a section whose subject
+   *  is not obvious from the question alone. Use sparingly. */
+  eyebrow?: string;
+  /** The numbers this section turns on, shown on a rule under the heading
+   *  instead of being buried mid-paragraph. Two to four. */
+  facts?: FactItem[];
+  /** The first section on the page: no top rule, no top padding. This has to
+   *  be passed, not detected — Reveal wraps every section, so the section is
+   *  always its wrapper's only child and a `first:` variant would match on
+   *  every one of them. */
+  first?: boolean;
   children: ReactNode;
   /** A block that belongs to the section but not to its prose: a ladder,
    *  a tile grid, a gallery. Rendered after the copy, outside the Prose
@@ -418,18 +432,69 @@ export function Section({
     <Reveal>
       <section
         id={id}
-        className="shell-section scroll-mt-28 border-t border-[#1a1a1a]/10 py-10 first:border-t-0 first:pt-0 tab:py-14"
+        className={`shell-section scroll-mt-28 ${
+          first ? "pb-10 tab:pb-14" : "border-t border-[#1a1a1a]/10 py-10 tab:py-14"
+        }`}
       >
+        {eyebrow && (
+          <p className="mb-3 text-[12px] uppercase tracking-[0.14em] text-[#777169]">{eyebrow}</p>
+        )}
         <h2
           className="text-[24px] leading-[1.15] tracking-[-0.01em] text-[#1a1a1a] [text-wrap:balance] tab:text-[28px]"
           style={serif}
         >
           {title}
         </h2>
+        {facts && <Facts items={facts} />}
         <Prose>{children}</Prose>
         {after && <div className="mt-8">{after}</div>}
       </section>
     </Reveal>
+  );
+}
+
+export type FactItem = {
+  /** The figure itself, or a short absolute like "None" or "Stripe". */
+  value: string;
+  /** What the figure is. Six words at most. */
+  label: string;
+};
+
+/** The numbers a section turns on, on one rule. The app shows a driver their
+ *  money as figures, not sentences; a page explaining that money should do
+ *  the same instead of leaving "$20" and "24 hours" to be found mid-clause. */
+export function Facts({ items }: { items: FactItem[] }) {
+  return (
+    <dl className="mt-6 grid gap-x-8 gap-y-5 border-y border-[#1a1a1a]/10 py-5 sm:grid-cols-2 tab:grid-cols-[repeat(auto-fit,minmax(0,1fr))]">
+      {items.map((f) => (
+        <div key={f.label} className="min-w-0">
+          <dt className="sr-only">{f.label}</dt>
+          <dd className="m-0">
+            <span
+              className="block text-[26px] leading-none text-[#1a1a1a] [font-variant-numeric:tabular-nums] tab:text-[30px]"
+              style={serif}
+            >
+              {f.value}
+            </span>
+            <span className="mt-2 block text-[13.5px] leading-[1.4] text-[#777169]">{f.label}</span>
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/** The one sentence in a section that is the rule rather than the
+ *  explanation. A left rule and the display serif lift it out of the
+ *  paragraph flow without turning it into a coloured box. */
+export function Note({ children }: { children: ReactNode }) {
+  return (
+    <p
+      className="my-7 border-l-2 border-[#4B82A5] pl-5 text-[19px] leading-[1.45] text-[#1a1a1a] [text-wrap:pretty] tab:text-[21px]"
+      style={serif}
+    >
+      {children}
+    </p>
   );
 }
 
@@ -440,14 +505,22 @@ export function Prose({ children }: { children: ReactNode }) {
   return (
     <div
       className={[
-        "mt-4 text-[17px] leading-[1.65] text-[#4c5661] [text-wrap:pretty]",
-        "[&_p+p]:mt-4 [&_p+ul]:mt-3 [&_ul+p]:mt-4 [&_p+address]:mt-4 [&_p+ol]:mt-3 [&_ol+p]:mt-4 [&_p+dl]:mt-4 [&_p+table]:mt-4 [&_table+p]:mt-4",
+        "mt-5 max-w-[68ch] text-[16.5px] leading-[1.68] text-[#5b6773] [text-wrap:pretty]",
+        // The answer, set as the answer. Every section on these pages leads
+        // with the sentence that answers its heading (site audit 2026-08-31
+        // §5.2); until now it was set identically to the detail behind it.
+        "[&>p:first-child]:text-[19px] [&>p:first-child]:leading-[1.55] [&>p:first-child]:text-[#2f3a45] [&>p:first-child]:max-w-[58ch] tab:[&>p:first-child]:text-[20px]",
+        "[&_p+p]:mt-5 [&_p+ul]:mt-4 [&_ul+p]:mt-5 [&_p+address]:mt-5 [&_p+ol]:mt-4 [&_ol+p]:mt-5 [&_p+dl]:mt-5 [&_p+table]:mt-5 [&_table+p]:mt-5",
         "[&_ul]:flex [&_ul]:flex-col [&_ul]:gap-2 [&_ul]:pl-5 [&_ul>li]:relative",
         "[&_ul>li]:before:absolute [&_ul>li]:before:-left-5 [&_ul>li]:before:top-[0.85em] [&_ul>li]:before:h-px [&_ul>li]:before:w-2.5 [&_ul>li]:before:bg-[#4B82A5]",
         "[&_ol]:flex [&_ol]:flex-col [&_ol]:gap-2 [&_ol]:pl-7 [&_ol]:[list-style:decimal-leading-zero] [&_ol>li]:pl-1 [&_ol>li::marker]:text-[#4B82A5]",
         "[&_strong]:font-medium [&_strong]:text-[#1a1a1a]",
+        // Run-in term: a list item that opens with a term reads as a
+        // definition, not as a sentence that happens to start in bold.
+        "[&_li>strong:first-child]:font-semibold [&_li>strong:first-child]:tracking-[-0.005em]",
+        "[&_ul>li]:leading-[1.6]",
         "[&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5] [&_a:focus-visible]:rounded-sm [&_a:focus-visible]:outline-2 [&_a:focus-visible]:outline-offset-2 [&_a:focus-visible]:outline-[#4B82A5]",
-        "[&_h3]:mt-6 [&_h3]:text-[19px] [&_h3]:leading-snug [&_h3]:text-[#1a1a1a]",
+        "[&_h3]:mt-8 [&_h3]:text-[17px] [&_h3]:font-semibold [&_h3]:leading-snug [&_h3]:tracking-[-0.005em] [&_h3]:text-[#1a1a1a]",
         "[&_table]:w-full [&_table]:border-collapse [&_table]:text-[15px] [&_th]:py-2 [&_th]:pr-4 [&_th]:text-left [&_th]:text-[12px] [&_th]:tracking-[0.1em] [&_th]:text-[#777169] [&_th]:font-normal [&_th]:uppercase [&_td]:border-t [&_td]:border-[#1a1a1a]/10 [&_td]:py-3 [&_td]:pr-4 [&_td]:align-top",
       ].join(" ")}
     >

@@ -82,7 +82,7 @@ export default function DealershipVsIndependentGuide() {
         ]}
       />
 
-      <Section id="difference" title="What is the real difference?">
+      <Section first id="difference" title="What is the real difference?">
         <p>
           Who they answer to, and what they specialize in. A dealership&rsquo;s service department is
           franchised by one manufacturer: its technicians are trained on that brand, it runs the

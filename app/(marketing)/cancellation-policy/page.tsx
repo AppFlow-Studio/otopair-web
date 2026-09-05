@@ -81,7 +81,7 @@ export default function CancellationPolicyPage() {
         ]}
       />
 
-      <Section id="free" title="When is cancelling free?">
+      <Section first id="free" title="When is cancelling free?">
         <p>
           Any time up to 24 hours before your appointment. Cancel from the booking in the app and the
           $20 hold is released in full; nothing is charged. The booking screen tells you whether

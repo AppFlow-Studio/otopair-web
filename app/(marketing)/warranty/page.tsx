@@ -81,7 +81,7 @@ export default function WarrantyPage() {
         ]}
       />
 
-      <Section id="otopair" title="Does Otopair warrant repairs?">
+      <Section first id="otopair" title="Does Otopair warrant repairs?">
         <p>
           No. Otopair is a marketplace: it connects you with a verified independent shop, locks the
           price the shop set, holds and settles payment, and keeps the record. The shop, not

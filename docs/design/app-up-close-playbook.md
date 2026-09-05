@@ -4,6 +4,11 @@ How the six Otopair product pages were rebuilt on 2026-09-05, written so the
 same method can be run on another product with another codebase. The method
 is what transfers; the Otopair specifics are examples.
 
+> This file is the Otopair case study. The project-agnostic method, with
+> templates and component skeletons, lives in the `app-up-close` skill
+> (`~/.claude/skills/app-up-close/`): brief template, composition matrix,
+> device system, verification scripts, Claude Design procedure.
+
 ## 0. The result, in one paragraph
 
 Six marketing pages (how it works, pricing, the AI assistant, a proprietary

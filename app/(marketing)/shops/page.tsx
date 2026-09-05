@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
-import { PillLink, TextLink } from "@/components/flagship/pill-button";
+import { TextLink } from "@/components/flagship/pill-button";
 import { HeroPhone, ShopsVerified } from "@/components/flagship/local-sections";
-import { DirectoryWithMap } from "@/components/flagship/product/local";
+import { ShopDirectory, ShopSearch } from "@/components/flagship/shop-finder";
 import { SelectServicesScreen } from "@/components/flagship/product/screens/browse";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -25,12 +25,14 @@ export const revalidate = 300;
 /**
  * /shops (design pass 2026-09-05, the app up close): the public directory
  * of verified, bookable shops, fed only by lib/public-shops.ts (verified +
- * active + bookable + on the island, projected fields). The hero is the
- * app browsing shops on the island map, with the real shops as pins and
- * the first one's browse card floating over the low sheet; the directory
- * is that card's anatomy at reading size, one per shop; "what verified
- * means" lifts the four checks out beside the dashboard page they are
- * read from. Stand-in shop names from the landing never appear here.
+ * active + bookable + on the island, projected fields). The hero carries
+ * the search bar (name, neighborhood, address or service; the query lives
+ * in ?q= so a filtered view is a link) beside the app browsing shops on
+ * the island map, with the shops as pins and the first one's browse card.
+ * The directory is the list beside a sticky map with numbered pins,
+ * filtered live by the search; "what verified means" lifts the four
+ * checks out beside the dashboard page they are read from. Stand-in shop
+ * names from the landing never appear here.
  *
  * Grouping: past six shops the list is bucketed by nearest Staten Island
  * neighborhood (north to south, lib/coverage.ts order) with a jump list;
@@ -122,8 +124,8 @@ export default async function ShopsDirectoryPage() {
         { name: "Shops", href: "/shops" },
       ]}
       hero={
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-          <PillLink href="/download">Get notified at launch</PillLink>
+        <div className="flex w-full flex-col items-start gap-4">
+          <ShopSearch count={count} />
           <TextLink href="/how-shops-are-verified">How shops are verified</TextLink>
         </div>
       }
@@ -153,55 +155,25 @@ export default async function ShopsDirectoryPage() {
         }}
       />
 
-      {/* ---------- The directory ---------- */}
+      {/* ---------- The directory, filtered by the search ---------- */}
       <section id="directory" className="scroll-mt-28">
-        <h2 className={H2}>
-          {count === 0
-            ? "Verified shops are being onboarded now."
-            : count === 1
-              ? "One verified shop, bookable today."
-              : `${count} verified shops, bookable today.`}
-        </h2>
         {count === 0 ? (
-          <div className={`mt-6 ${PROSE}`}>
-            <p>
-              No shop is listed until it has passed Otopair&rsquo;s review and can take a booking, so this page stays
-              empty rather than showing names that are not ready. Check back soon, or leave your email on the{" "}
-              <Link href="/download">download page</Link> and Oto will show you the first shops the day they go live.
-            </p>
-            <p>
-              Run a repair shop in New York City? <Link href="/partner-with-us">See how the network works for shops</Link>{" "}
-              or <Link href="/apply">apply in two minutes</Link>.
-            </p>
-          </div>
+          <>
+            <h2 className={H2}>Verified shops are being onboarded now.</h2>
+            <div className={`mt-6 ${PROSE}`}>
+              <p>
+                No shop is listed until it has passed Otopair&rsquo;s review and can take a booking, so this page stays
+                empty rather than showing names that are not ready. Check back soon, or leave your email on the{" "}
+                <Link href="/download">download page</Link> and Oto will show you the first shops the day they go live.
+              </p>
+              <p>
+                Run a repair shop in New York City? <Link href="/partner-with-us">See how the network works for shops</Link>{" "}
+                or <Link href="/apply">apply in two minutes</Link>.
+              </p>
+            </div>
+          </>
         ) : (
-          <p className={`mt-6 ${PROSE}`}>
-            Each card is the shop as the app shows it, and leads to the shop&rsquo;s own page: the services it has
-            switched on, its hours for all seven days, and where it is. The list is live.
-          </p>
-        )}
-
-        {count > 0 && (
-          <div className="mt-10">
-            {grouped && (
-              <nav aria-label="Neighborhoods" className="mb-8">
-                <ul className="flex flex-wrap gap-2">
-                  {grouped.map((g) => (
-                    <li key={g.id}>
-                      <a
-                        href={`#${g.id}`}
-                        className="inline-flex h-9 items-center gap-2 rounded-full border border-[#1a1a1a]/10 bg-white px-4 text-[14px] text-[#1a1a1a] transition-colors hover:border-[#4B82A5]/50"
-                      >
-                        {g.label}
-                        <span className="text-[12px] text-[#777169]">{g.shops.length}</span>
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </nav>
-            )}
-            <DirectoryWithMap shops={shops} groups={grouped ?? undefined} />
-          </div>
+          <ShopDirectory shops={shops} groups={grouped} />
         )}
       </section>
 

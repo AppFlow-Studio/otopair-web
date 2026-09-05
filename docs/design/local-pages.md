@@ -47,7 +47,7 @@ logo; `project` places real shops as pins on the phone map).
 | /brooklyn etc. | 1 | What opens on day one | phone: the Oto conversation (no shop names) | driver / shop columns | reveal | sky |
 | /brooklyn etc. | 2 | Where it sits on the ladder | none: borough rail, this borough marked | | draw | pale |
 | /brooklyn etc. | 3 | FAQ | | | | |
-| /shops | hero | Shops you can book | phone: Select Services (low snap) over the island, real pins, the first shop's browse card | | reveal | shell |
+| /shops | hero | Shops you can book | the search bar (name, neighborhood, address, service; the query lives in ?q=) beside the phone: Select Services (low snap) over the island, real pins, the first shop's browse card | | reveal | shell |
 | /shops | 1 | N verified shops | none: numbered browse cards beside a sticky static map with numbered pins; grouped past six | the map's pins follow the hovered card | stagger, pin highlight | |
 | /shops | 2 | What verified means | browser (rates page) | the four checks | reveal | paper |
 | /shops | 3 | booking + FAQ | | | | |
@@ -97,6 +97,13 @@ a production build never reads them; `SHOP_FIXTURES=0` in `.env.local`
 shows the honest empty states). Every live object still has that empty
 state: the CLOSEST SHOP card's own "Finding nearby shops..." copy, no
 pins, no browse card, prose in place of the directory.
+
+The finder (`components/flagship/shop-finder.tsx`): the hero's search bar
+writes `?q=` (debounced, no scroll, no history entry) and the directory
+reads it back, so the two halves stay in step through the URL and a
+filtered view is a shareable link. Every word typed must appear in the
+shop's name, neighborhood, address or one of its services; a filtered
+result renders flat, the full directory keeps its neighborhood groups.
 
 The directory itself (`DirectoryWithMap`): the list of browse cards, each
 numbered, with the shop's services and today's hours, beside a sticky

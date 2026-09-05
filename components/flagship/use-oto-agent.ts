@@ -67,13 +67,13 @@ const MYCAR_RE =
 // Short, natural demo-mode acknowledgements (live agent speaks its own words).
 const DEMO_LINES: Record<DemoFeature, string> = {
   service_catalog: "Here's everything you can book at launch.",
-  pricing: "Here's how pricing works — every charge is its own line, including our 7% fee.",
+  pricing: "Here's how pricing works — every line is shown before you confirm, and the total is locked.",
   health_score: "Here's how the Vehicle Health Score keeps your car protected.",
   tires: "Tires work a little differently — you pick a tier and nearby shops send live quotes.",
-  ratings: "Every mechanic is rated by real customers and vetted in person before they go live.",
+  ratings: "Every shop is reviewed and approved before it goes live, and rated only by drivers who completed a job there.",
   rewards: "You earn real dollar credit — Ownership Credit — on every booking. No points, no hoops.",
   overview: "Here's Otopair in a nutshell.",
-  coverage: "Here's where Otopair is launching.",
+  coverage: "Here's where Otopair is live, and where it goes next.",
   payments: "Here's how payments work — pay your way, securely.",
   service_history: "You can upload past records — here's why it makes everything more accurate.",
   checkin: "Every 90 days there's a soft check-in to keep things accurate — never a push.",

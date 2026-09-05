@@ -6,9 +6,10 @@ import { DevelopersClient } from "./developers-client";
 // (every function ctx.auth-gated; free tier: one key, 60 req/min).
 
 export const metadata: Metadata = {
-  title: "Developers — Otopair Car Data API",
+  title: { absolute: "Developers — Otopair Car Data API" },
   description:
     "Self-serve API access to Otopair's vehicle-data asset: maintenance specs, OEM service intervals, exact-fit parts, real-world labor times and vehicle images — by VIN, year/make/model, or config key.",
+  alternates: { canonical: "/developers" },
 };
 
 export default function DevelopersPage() {

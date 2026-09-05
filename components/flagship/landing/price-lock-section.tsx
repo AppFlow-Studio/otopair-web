@@ -39,7 +39,7 @@ const ROLES = [
   {
     num: "02.",
     title: "The Shops.",
-    body: "Real-time scheduling, recalculated as bays fill. Two-way ratings. 24-hour Stripe payouts.",
+    body: "Real-time scheduling, recalculated as bays fill. Verified-booking ratings. Daily Stripe payouts.",
   },
   {
     num: "03.",
@@ -94,7 +94,7 @@ const SHOP_CAPTIONS: Record<ShopBeat, string> = {
   // Step 4 lights up and the COMPLETE button appears.
   step4: "Last step — one tap closes the job.",
   alldone: "Last step — one tap closes the job.",
-  complete: "Job complete — paid out within 24 hours.",
+  complete: "Job complete — paid out on Stripe's daily schedule.",
 };
 
 /* Restart time for the full story loop — mirrored in STORY_MS. */
@@ -598,7 +598,14 @@ function PriceLockCard({
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "0px 0px -12% 0px" }}
       transition={{ duration: 0.9, ease: EASE }}
-      className="relative h-[440px] w-full tab:h-[560px] lg:h-[clamp(400px,calc(100vh_-_400px),640px)]"
+      // lg floor = what the tallest panel paints: the phone at its lg scale
+      // (486 × 1.16 = 564px) + the 36px caption row + 8px panel padding =
+      // 608, plus 12px of air. Below that the stage used to keep shrinking
+      // (down to 400px) while the phone kept its size, so on ~970px-tall
+      // screens the tab bar clipped at the card edge and the caption sat on
+      // the phone (2026-09-05). The stage now holds; the fit-scale below
+      // shrinks the whole pinned composition on short laptops instead.
+      className="relative h-[440px] w-full tab:h-[560px] lg:h-[clamp(620px,calc(100vh_-_400px),640px)]"
     >
       {[0, 1, 2].map((i) => (
         <div
@@ -687,6 +694,10 @@ export default function PriceLockSection() {
   // visually — layout (and the sticky release point) stay untouched.
   const stickyRef = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState(1);
+  // The composition's layout height, pre-transform: the sticky box is
+  // sized to `stickyH * fit` so the pin releases where the painted block
+  // ends, not where the unscaled one would.
+  const [stickyH, setStickyH] = useState(0);
   useEffect(() => {
     if (!pinnedMode) {
       setFit(1);
@@ -695,11 +706,19 @@ export default function PriceLockSection() {
     const measure = () => {
       const h = stickyRef.current?.offsetHeight ?? 0; // layout height, pre-transform
       const top = shortPin ? 88 : 104;
+      setStickyH(h);
       setFit(Math.min(1, (window.innerHeight - top - 12) / Math.max(1, h)));
     };
     measure();
     window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
+    // Fonts, images and the stage clamp can all change the layout height
+    // after mount; re-measure on any size change of the block itself.
+    const ro = typeof ResizeObserver !== "undefined" && stickyRef.current ? new ResizeObserver(measure) : null;
+    if (ro && stickyRef.current) ro.observe(stickyRef.current);
+    return () => {
+      window.removeEventListener("resize", measure);
+      ro?.disconnect();
+    };
   }, [pinnedMode, shortPin]);
 
   const runwayRef = useRef<HTMLDivElement>(null);
@@ -787,11 +806,19 @@ export default function PriceLockSection() {
             monitors (design feedback 2026-08-31, "I hate that you're forcing
             spacing"). Released flush with the runway's end, the next section
             follows at its own padding — constant everywhere. */}
+        {/* Two boxes, not one: the OUTER is what sticks and it takes the
+            scaled height, so the pin's arithmetic matches what is painted;
+            the INNER carries the transform. With the transform on the sticky
+            box itself its layout height stayed full-size, and on short
+            viewports the runway's end pushed the (still "tall") box up
+            behind the nav in zone 3 (2026-09-05). */}
+        <div
+          className={`lg:sticky ${shortPin ? "lg:top-[88px]" : "lg:top-[104px]"}`}
+          style={pinnedMode && fit < 1 && stickyH > 0 ? { height: Math.round(stickyH * fit) } : undefined}
+        >
         <div
           ref={stickyRef}
-          className={`lg:sticky lg:flex lg:flex-col lg:items-center ${
-            shortPin ? "lg:top-[88px] lg:gap-7" : "lg:top-[104px] lg:gap-12"
-          }`}
+          className={`lg:flex lg:flex-col lg:items-center ${shortPin ? "lg:gap-7" : "lg:gap-12"}`}
           style={
             pinnedMode && fit < 1
               ? { transform: `scale(${fit})`, transformOrigin: "top center" }
@@ -969,6 +996,7 @@ export default function PriceLockSection() {
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </section>

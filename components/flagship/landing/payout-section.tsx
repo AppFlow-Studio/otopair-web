@@ -38,9 +38,9 @@ const COLUMNS = [
     body: "You set your hourly. The customer pays it in full. We never touch it.",
   },
   {
-    stat: "24hr",
+    stat: "Daily",
     label: "To your account",
-    body: "Stripe Connect Express. Paid the day after the job is verified.",
+    body: "Stripe Connect Express. Daily payouts on Stripe's rolling schedule, once the job is complete.",
   },
   {
     stat: "$0",

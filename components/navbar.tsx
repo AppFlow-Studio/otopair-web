@@ -34,9 +34,13 @@ function Navbar() {
     const [name, setName] = useState('')
     const [submitted, setSubmitted] = useState(false)
     const isHome = pathname === "/"
-    // The flagship home hero and the partner page each ship their own floating
-    // glass pill nav, so the global chrome stands down on both routes.
-    const hideChrome = isHome || pathname === "/partner-with-us"
+    // Every flagship page (home, partner, and all the PageShell pages — legal,
+    // coverage, boroughs, shops, services, trust, help…) ships its own
+    // floating glass pill nav, so this legacy chrome stands down everywhere
+    // except the three older marketing routes that still rely on it.
+    const LEGACY_CHROME_ROUTES = ["/apply", "/car-data", "/developers"]
+    const hideChrome =
+        isHome || !LEGACY_CHROME_ROUTES.some((p) => pathname === p || pathname.startsWith(p + "/"))
 
     useEffect(() => {
         if (!isHome) {

@@ -691,7 +691,7 @@ const AUTH_TIERS = [
   // "Authorized · held" read as a full-amount hold next to the $20 one
   // (site audit 2026-08-31). ↵ confirm settles it.
   { status: "Price locked · $20 held", note: "Nothing more moves until the job is done.", fill: 0.62, done: false, control: "confirm" },
-  { status: "Confirmed", note: "Job complete · paid out in 24 hours.", fill: 1, done: true, control: "confirmed" },
+  { status: "Confirmed", note: "Job complete · paid out on Stripe's schedule.", fill: 1, done: true, control: "confirmed" },
 ] as const;
 
 function AuthCard(beat: Beat) {

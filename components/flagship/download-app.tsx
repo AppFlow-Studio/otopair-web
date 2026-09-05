@@ -88,6 +88,34 @@ function StoreBadge({ store, size = "md" }: { store: "apple" | "google"; size?: 
 }
 
 /**
+ * The two stores as neutral plates while the listings are placeholders: the
+ * store's name and "Coming soon", at the badge geometry so a launch swaps
+ * plates for badges without moving anything. Never a dimmed official badge;
+ * the store guidelines do not allow the artwork to be altered. Used under
+ * the launch waitlist on /download (design pass 2026-09-05).
+ */
+export function ComingSoonPlates({ className = "" }: { className?: string }) {
+  const plates: { store: "apple" | "google"; name: string; w: number }[] = [
+    { store: "apple", name: "App Store", w: 180 },
+    { store: "google", name: "Google Play", w: 189 },
+  ];
+  return (
+    <ul className={`flex flex-wrap items-center justify-center gap-2 ${className}`} aria-label="Store listings">
+      {plates.map((p) => (
+        <li
+          key={p.store}
+          className="flex h-[47px] flex-col items-center justify-center rounded-[8px] border border-[#1a1a1a]/12 bg-white/70 leading-none"
+          style={{ width: p.w }}
+        >
+          <span className="text-[13px] font-medium text-[#1a1a1a]">{p.name}</span>
+          <span className="mt-1 text-[11px] tracking-[0.06em] text-[#777169]">Coming soon</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
  * Download CTA. The visitor never picks a platform (design review 2026-08-15,
  * W1): on iOS only the App Store badge renders, on Android only Google Play,
  * and desktop (or any agent we can't read) shows the official pair exactly as

@@ -2,8 +2,17 @@
 
 import Link from "next/link";
 import { APP_STORE_URL, PLAY_STORE_URL, storeIsLive, usePlatform } from "../download-app";
-import { Reveal, serifDisplay } from "./reveal";
+import { Reveal, serif, serifDisplay } from "./reveal";
 import PlatformPill from "./platform-pill";
+import {
+  LEGAL_NAME,
+  LOCALITY,
+  PHONE_E164,
+  POSTAL_ADDRESS,
+  SITE_NAME,
+  SUPPORT_EMAIL,
+  formatPhone,
+} from "@/lib/site";
 
 const FOOTER_LINKS = [
   { href: "/privacy", label: "Privacy" },
@@ -28,7 +37,22 @@ const FOOTER_LINKS = [
  * desktop row's order). The gradient there ends at 94% and the offsets are
  * exact, so the band lands on the frame's 345px. Nothing at ≥sm changes.
  */
-export default function FooterCta() {
+export default function FooterCta({
+  title = "Available whenever you need it",
+  action,
+  anchorId = "get-oto",
+  className = "mt-[92px] tab:mt-36",
+}: {
+  /** Closing line. The home page keeps the default; shop-facing pages pass
+   *  their own so the band, NAP block and links stay one component. */
+  title?: string;
+  /** Replaces the store pill + caption (e.g. the partner page's Apply CTA). */
+  action?: React.ReactNode;
+  anchorId?: string;
+  /** Outer top margin. The home page keeps the Figma run-in; the page shell
+   *  passes a shorter one because its pages end on a rule, not a section. */
+  className?: string;
+} = {}) {
   // The caption under the pill names only the store the visitor will use
   // (phones show a single half — design feedback 2026-09-03).
   const platform = usePlatform();
@@ -40,10 +64,10 @@ export default function FooterCta() {
         : (!storeIsLive(APP_STORE_URL) || !storeIsLive(PLAY_STORE_URL)) &&
           "Coming soon to the App Store & Google Play";
   return (
-    <footer className="mt-[92px] w-full tab:mt-36">
+    <footer className={`w-full ${className}`}>
       {/* id="get-oto" — the PillNav CTA and hero store buttons anchor here. */}
       <div
-        id="get-oto"
+        id={anchorId}
         className="relative flex w-full flex-col overflow-hidden bg-[linear-gradient(to_bottom,#FFFFFF_0%,#95C7E7_94%)] px-[27px] pt-[56px] tab:bg-[linear-gradient(to_bottom,#FFFFFF_0%,#95C7E7_100%)] tab:px-10 tab:pt-24 lg:min-h-[432px] lg:pt-[110px]"
       >
         <Reveal>
@@ -65,7 +89,7 @@ export default function FooterCta() {
               fontSizeAdjust: "var(--fsa)",
             }}
           >
-            Available whenever you need it
+            {title}
           </h2>
         </Reveal>
 
@@ -75,22 +99,57 @@ export default function FooterCta() {
               frame's literal offsets (+122 / +242) left the caption hugging the
               pill under a 59px hole (design feedback 2026-09-03). */}
           <div className="mt-[32px] flex flex-col items-center gap-[12px] tab:mt-9 tab:gap-3 lg:mt-10">
-            <PlatformPill size="sm" className="tab:hidden" />
-            <PlatformPill className="max-tab:hidden" />
-            {comingSoon && (
-              <p className="text-[13px] tracking-[0.04em] text-[#4B82A5] max-tab:text-[11px] max-tab:leading-[16px]">
-                {comingSoon}
-              </p>
+            {action ?? (
+              <>
+                <PlatformPill size="sm" className="tab:hidden" />
+                <PlatformPill className="max-tab:hidden" />
+                {comingSoon && (
+                  <p className="text-[13px] tracking-[0.04em] text-[#4B82A5] max-tab:text-[11px] max-tab:leading-[16px]">
+                    {comingSoon}
+                  </p>
+                )}
+              </>
             )}
           </div>
         </Reveal>
 
+        {/* NAP line — Name / Address / Phone, the local-SEO identity Google
+            keys the entity to (site audit 2026-08-31, Phase 1). Every value
+            comes from lib/site.ts so it can never disagree with the schema
+            or the business listings. Sits above the links row as a quiet
+            white/85 line; the street and phone appear only once they're
+            real (POSTAL_ADDRESS / PHONE_E164 are null until then). */}
+        <address className="mx-auto mt-[40px] flex w-full max-w-[1440px] flex-col items-center text-center text-[12px] not-italic leading-[20px] text-white/85 tab:mt-16 tab:text-[14px] tab:leading-[24px] lg:px-[26px]">
+          <p>
+            <span style={serif}>{SITE_NAME}</span>
+            <span aria-hidden> · </span>
+            <span>{LEGAL_NAME}</span>
+          </p>
+          <p>
+            {POSTAL_ADDRESS
+              ? `${POSTAL_ADDRESS.streetAddress}, ${POSTAL_ADDRESS.addressLocality}, ${POSTAL_ADDRESS.addressRegion} ${POSTAL_ADDRESS.postalCode}`
+              : `${LOCALITY.city}, ${LOCALITY.region}`}
+            {PHONE_E164 && (
+              <>
+                <span aria-hidden> · </span>
+                <a href={`tel:${PHONE_E164}`} className="transition-opacity hover:opacity-70">
+                  {formatPhone(PHONE_E164)}
+                </a>
+              </>
+            )}
+            <span aria-hidden> · </span>
+            <a href={`mailto:${SUPPORT_EMAIL}`} className="transition-opacity hover:opacity-70">
+              {SUPPORT_EMAIL}
+            </a>
+          </p>
+        </address>
+
         {/* Footer row — white text directly on the gradient's blue foot. Below
             sm it stacks links → hairline → copyright; from sm up it is the
             single copyright | links row. */}
-        <div className="mx-auto flex w-full max-w-[1440px] flex-col items-center pb-[24px] text-[14px] text-white max-tab:mt-[40px] tab:mt-20 tab:flex-row tab:justify-between tab:gap-5 tab:pb-9 tab:text-[15px] lg:mt-auto lg:px-[26px] lg:pb-[38px] lg:text-[16px]">
+        <div className="mx-auto flex w-full max-w-[1440px] flex-col items-center pb-[24px] text-[14px] text-white max-tab:mt-[16px] tab:mt-6 tab:flex-row tab:justify-between tab:gap-5 tab:pb-9 tab:text-[15px] lg:mt-6 lg:px-[26px] lg:pb-[38px] lg:text-[16px]">
           <p className="leading-[28px] max-tab:order-3 max-tab:mt-[8px] max-tab:text-[11px]">
-            © 2026 Otopair. All rights reserved
+            © 2026 {LEGAL_NAME} All rights reserved
           </p>
           <span aria-hidden className="order-2 mt-3 h-px w-full bg-white/50 tab:hidden" />
           <nav className="flex items-center gap-8 max-tab:order-1 max-tab:grid max-tab:w-full max-tab:grid-cols-3 max-tab:gap-0 tab:gap-10 lg:gap-[46px]">

@@ -48,7 +48,7 @@ const INFO_SAMPLES: Record<string, unknown> = {
     rows: [
       { label: "Parts", value: "Exact part, exact price" },
       { label: "Labor", value: "Shop's posted rate" },
-      { label: "Otopair fee", value: "7%, always visible" },
+      { label: "Locked total", value: "shown before you confirm" },
       { label: "Taxes", value: "Itemized at checkout" },
     ],
   },
@@ -59,7 +59,7 @@ const INFO_SAMPLES: Record<string, unknown> = {
       { value: "4", label: "NYC boroughs" },
       { value: "120+", label: "Vetted shops" },
       { value: "90s", label: "To book" },
-      { value: "7%", label: "Flat fee" },
+      { value: "$20", label: "Hold at booking" },
     ],
     footnote: "Staten Island and more cities are next.",
   },

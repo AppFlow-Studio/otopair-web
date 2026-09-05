@@ -73,6 +73,9 @@ export async function sendInviteEmail({
 interface WaitlistSignupData {
     email: string;
     name?: string;
+    /** Borough the signup came from (the /brooklyn, /queens… waitlist pages),
+     *  so the team can size demand per market before launch. */
+    borough?: string;
 }
 
 /**
@@ -114,7 +117,7 @@ export async function sendWaitlistConfirmationEmail(data: WaitlistSignupData) {
                       </p>
                       
                       <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
-                        Thank you for joining the Otopair waitlist! We're thrilled to have you on board as we revolutionize the way car repairs are coordinated.
+                        Thanks for joining the Otopair waitlist. Otopair connects drivers with verified independent repair shops at a price you see in full before you confirm, and it opens one New York City borough at a time.
                       </p>
                       
                       <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
@@ -122,7 +125,7 @@ export async function sendWaitlistConfirmationEmail(data: WaitlistSignupData) {
                       </p>
                       
                       <ul style="margin: 0 0 20px; padding-left: 20px; color: #1f2937; font-size: 16px; line-height: 1.8;">
-                        <li>You'll be among the first to access our beta when it launches</li>
+                        <li>The team will be in touch when the first shops open in your area</li>
                         <li>Receive exclusive updates on new features and improvements</li>
                         <li>Get early access to special offers and promotions</li>
                         <li>Help shape the future of car repair coordination</li>
@@ -817,13 +820,13 @@ export async function sendShopOwnerInviteEmail({
  */
 export async function sendWaitlistNotificationEmail(data: WaitlistSignupData) {
     try {
-        const { email, name } = data;
+        const { email, name, borough } = data;
         const companyEmail = process.env.COMPANY_EMAIL || 'team@otopair.com'; // Update with your company email
 
         const result = await resend.emails.send({
             from: 'Otopair <onboarding@resend.dev>', // Update with your verified domain
             to: companyEmail,
-            subject: `🎉 New Waitlist Signup: ${email}`,
+            subject: `🎉 New Waitlist Signup${borough ? ` (${borough})` : ''}: ${email}`,
             html: `
         <!DOCTYPE html>
         <html lang="en">
@@ -875,6 +878,18 @@ export async function sendWaitlistNotificationEmail(data: WaitlistSignupData) {
                               <tr>
                                 <td style="padding: 0; color: #1f2937; font-size: 18px; font-weight: 600;">
                                   ${name}
+                                </td>
+                              </tr>
+                              ` : ''}
+                              ${borough ? `
+                              <tr>
+                                <td style="padding: 20px 0 12px; color: #6b7280; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
+                                  Borough waitlist
+                                </td>
+                              </tr>
+                              <tr>
+                                <td style="padding: 0; color: #1f2937; font-size: 18px; font-weight: 600;">
+                                  ${borough}
                                 </td>
                               </tr>
                               ` : ''}
@@ -1349,3 +1364,53 @@ export async function sendSupportRequestAckEmail(data: SupportRequestAckEmailDat
   }
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Contact form (website /contact → support inbox)                     */
+/* ------------------------------------------------------------------ */
+
+export type ContactLane = 'driver' | 'shop' | 'data' | 'press';
+
+const CONTACT_LANE_LABEL: Record<ContactLane, string> = {
+    driver: 'Driver',
+    shop: 'Repair shop',
+    data: 'Car data / API',
+    press: 'Press or partnerships',
+};
+
+/**
+ * Forward a website contact-form message to the support inbox, with the
+ * visitor's address as reply-to so the team answers from their own client.
+ * Plain-text body on purpose: it is an internal handoff, not marketing.
+ */
+export async function sendContactEmail({
+    name,
+    email,
+    lane,
+    message,
+}: {
+    name: string;
+    email: string;
+    lane: ContactLane;
+    message: string;
+}) {
+    try {
+        const to = process.env.COMPANY_EMAIL || 'support@otopair.com';
+        const result = await resend.emails.send({
+            from: 'Otopair <onboarding@resend.dev>', // Update with your verified domain
+            to,
+            replyTo: email,
+            subject: `[${CONTACT_LANE_LABEL[lane]}] ${name} via otopair.com/contact`,
+            text: `Lane: ${CONTACT_LANE_LABEL[lane]}\nFrom: ${name} <${email}>\n\n${message}\n`,
+        });
+        if (result.error) {
+            return { success: false as const, error: result.error.message };
+        }
+        return { success: true as const, id: result.data?.id };
+    } catch (error) {
+        return {
+            success: false as const,
+            error: error instanceof Error ? error.message : 'Unknown error',
+        };
+    }
+}

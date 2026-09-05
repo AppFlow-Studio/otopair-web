@@ -51,7 +51,7 @@ export default function TabletScale({
     return () => window.removeEventListener("resize", apply);
   }, []);
   return (
-    <main ref={ref} className={`landing-tablet-scale ${className}`}>
+    <main id="main" ref={ref} className={`landing-tablet-scale ${className}`}>
       {children}
     </main>
   );

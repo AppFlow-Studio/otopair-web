@@ -8,6 +8,25 @@ import CoverageSection from "@/components/flagship/landing/coverage-section";
 import ListensSection from "@/components/flagship/landing/listens-section";
 import PathSection from "@/components/flagship/landing/path-section";
 import FooterCta from "@/components/flagship/landing/footer-cta";
+import type { Metadata } from "next";
+
+// Homepage metadata (site audit 2026-08-31, Phase 1). `absolute` bypasses the
+// root "%s — Otopair" template so the brand isn't doubled. Title carries the
+// service + market keywords the audit found missing; the H1 stays the brand
+// line by design.
+const HOME_TITLE = "Otopair — Car repair at a locked price, Staten Island NY";
+const HOME_DESCRIPTION =
+  "Tell Oto what your car is doing and book a verified Staten Island mechanic at a price locked before you pay — no phone tag, no surprises at pickup.";
+
+// No `openGraph` block here on purpose: a page-level openGraph object
+// replaces the root's wholesale, which drops the file-based og:image from
+// app/opengraph-image.tsx (verified 2026-09-04). og:title / og:description
+// fall back to title / description anyway.
+export const metadata: Metadata = {
+  title: { absolute: HOME_TITLE },
+  description: HOME_DESCRIPTION,
+  alternates: { canonical: "/" },
+};
 
 export default function Home() {
   return (

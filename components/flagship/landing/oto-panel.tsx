@@ -1076,8 +1076,10 @@ export default function OtoPanel({ active, reduce }: { active: boolean; reduce: 
                   )}
                 </div>
 
-                {/* Input area — above the tab bar */}
-                <div className="pb-10">
+                {/* Input area — clears the floating tab bar (its top sits ~44px
+                    from the screen bottom: 10px inset + ~34px pill), so 50px of
+                    padding leaves a visible gap instead of touching it. */}
+                <div className="pb-[50px]">
                   {phase === "listen" ? <VoiceStrip animate={!reduce} /> : <InputBar />}
                 </div>
               </div>

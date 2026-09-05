@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { motion } from "motion/react";
 import { AlertTriangle, BatteryFull, Check, ChevronDown, CircleDot, Clock, Disc, Droplet, Info, Plus, ShieldCheck, X } from "lucide-react";
 import { APP, PhoneShell } from "../device";
@@ -63,7 +64,11 @@ export function HealthRing({ score, size = 180, children }: { score: number; siz
   const r = size / 2 - stroke / 2 - size / 22.5;
   const c = 2 * Math.PI * r;
   const col = score >= 75 ? "#30D158" : score >= 60 ? "#FFEA00" : "#FF3B5C";
-  const id = "hr-" + Math.round(size) + "-" + score;
+  // Unique per instance: PhoneAt renders its subtree twice (a phone-only copy
+  // and a tablet-and-up copy, one of them display:none), so a content-derived
+  // id collides and url(#id) resolves into the hidden copy — the arc then
+  // paints as nothing and the ring reads pale mint instead of green.
+  const id = "hr" + useId().replace(/[^a-zA-Z0-9]/g, "");
   return (
     <span className="relative inline-block" style={{ width: size, height: size }}>
       <span className="absolute inset-[-10%] rounded-full" style={{ backgroundColor: col, opacity: 0.12 }} />

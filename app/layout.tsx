@@ -179,6 +179,13 @@ export default function RootLayout({
         <body
           className={`${Inters.variable} ${Loras.variable} ${Robotoslab.variable} ${Balthazars.variable} ${OktaRegular.variable} ${Jersey20s.variable} ${Fraunceses.variable} ${Literatas.variable} ${Petronas.variable} ${Urbanists.variable} antialiased overscroll-none`}
         >
+          {/* Entrance animations write their `initial` state (opacity: 0)
+              into the server markup, so a visitor whose JS never runs would
+              see an empty page below the fold. This un-hides every one of
+              them; `!important` beats motion's inline style. */}
+          <noscript>
+            <style>{"[data-reveal]{opacity:1!important;transform:none!important}"}</style>
+          </noscript>
           {/* Organization + WebSite + LocalBusiness graph, sitewide. */}
           <SiteJsonLd />
           <ConvexClientProvider>{children}</ConvexClientProvider>

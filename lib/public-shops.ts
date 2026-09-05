@@ -2,6 +2,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { publicQuery } from "./convex-server";
 import { neighborhoodSlug, STATEN_ISLAND_NEIGHBORHOODS } from "./coverage";
+import { FIXTURE_SHOPS, devFixturesEnabled, fixtureShop } from "./shop-fixtures";
 
 /**
  * Server-side projection of shop data for the public directory (/shops,
@@ -260,7 +261,11 @@ export async function listPublicShops(): Promise<PublicShopSummary[]> {
       return summarize(s, slugs, hoursToday(hoursRows, s._id));
     }),
   );
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  const sorted = out.sort((a, b) => a.name.localeCompare(b.name));
+  // Development only: the pages are designed for release, so an empty dev
+  // deployment shows the fixture shops instead of the empty states.
+  if (sorted.length === 0 && devFixturesEnabled()) return FIXTURE_SHOPS;
+  return sorted;
 }
 
 /** Slugs for the sitemap. */
@@ -273,7 +278,7 @@ export async function listPublicShopSlugs(): Promise<string[]> {
 export async function getPublicShop(slug: string): Promise<PublicShopProfile | null> {
   const raw = ((await publicQuery(api.shops.list, {})) ?? []) as RawShop[];
   const s = raw.filter(eligible).find((x) => x.slug === slug);
-  if (!s) return null;
+  if (!s) return devFixturesEnabled() && raw.filter(eligible).length === 0 ? fixtureShop(slug) : null;
   const shopId = s._id;
 
   const [catalog, ids, hoursAll, mechanics, portfolio, reviewsRaw] = await Promise.all([

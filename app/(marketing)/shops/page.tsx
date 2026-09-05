@@ -3,7 +3,7 @@ import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
 import { HeroPhone, ShopsVerified } from "@/components/flagship/local-sections";
-import { DirectoryGrid } from "@/components/flagship/product/local";
+import { DirectoryWithMap } from "@/components/flagship/product/local";
 import { SelectServicesScreen } from "@/components/flagship/product/screens/browse";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -37,7 +37,6 @@ export const revalidate = 300;
  * shops without a neighborhood label fall into a city bucket at the end.
  */
 
-const serif = { fontFamily: "var(--font-Petrona)", fontWeight: 400 } as const;
 const GROUP_THRESHOLD = 6;
 
 const FAQ: FaqItem[] = [
@@ -182,46 +181,26 @@ export default async function ShopsDirectoryPage() {
           </p>
         )}
 
-        {count > 0 && !grouped && (
+        {count > 0 && (
           <div className="mt-10">
-            <DirectoryGrid shops={shops} />
-          </div>
-        )}
-
-        {grouped && (
-          <div className="mt-10">
-            <nav aria-label="Neighborhoods" className="mb-8">
-              <ul className="flex flex-wrap gap-2">
-                {grouped.map((g) => (
-                  <li key={g.id}>
-                    <a
-                      href={`#${g.id}`}
-                      className="inline-flex h-9 items-center gap-2 rounded-full border border-[#1a1a1a]/10 bg-white px-4 text-[14px] text-[#1a1a1a] transition-colors hover:border-[#4B82A5]/50"
-                    >
-                      {g.label}
-                      <span className="text-[12px] text-[#777169]">{g.shops.length}</span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </nav>
-            {grouped.map((g) => (
-              <section
-                key={g.id}
-                id={g.id}
-                className="scroll-mt-28 border-t border-[#1a1a1a]/10 py-9 first:border-t-0 first:pt-0"
-              >
-                <h3 className="text-[24px] leading-[1.15] text-[#1a1a1a] tab:text-[28px]" style={serif}>
-                  {g.label}
-                </h3>
-                <p className="mt-2 text-[15px] text-[#6b655d]">
-                  {g.shops.length === 1 ? "1 verified shop" : `${g.shops.length} verified shops`}
-                </p>
-                <div className="mt-6">
-                  <DirectoryGrid shops={g.shops} offset={g.offset} />
-                </div>
-              </section>
-            ))}
+            {grouped && (
+              <nav aria-label="Neighborhoods" className="mb-8">
+                <ul className="flex flex-wrap gap-2">
+                  {grouped.map((g) => (
+                    <li key={g.id}>
+                      <a
+                        href={`#${g.id}`}
+                        className="inline-flex h-9 items-center gap-2 rounded-full border border-[#1a1a1a]/10 bg-white px-4 text-[14px] text-[#1a1a1a] transition-colors hover:border-[#4B82A5]/50"
+                      >
+                        {g.label}
+                        <span className="text-[12px] text-[#777169]">{g.shops.length}</span>
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </nav>
+            )}
+            <DirectoryWithMap shops={shops} groups={grouped ?? undefined} />
           </div>
         )}
       </section>

@@ -1,11 +1,13 @@
 "use client";
 
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { motion, useInView } from "motion/react";
 import { Check, ChevronRight, ClipboardCheck, Clock, CreditCard, Star, Users } from "lucide-react";
 import { BOROUGHS } from "@/lib/coverage";
 import type { PublicShopSummary } from "@/lib/public-shops";
+import { SERVICES } from "@/lib/service-catalog";
+import { project, staticMapSrc, type MapCenter } from "@/lib/static-map";
 import { useReducedMotionSafe } from "../shared";
 import { APP, appFont } from "./device";
 import { PullCard } from "./pullouts";
@@ -116,28 +118,55 @@ export function BoroughRail({ current, liveCount = null }: { current?: string; l
 /* Directory                                                           */
 /* ------------------------------------------------------------------ */
 
-export function DirectoryCard({ shop, index = 0 }: { shop: PublicShopSummary; index?: number }) {
+const NAME_BY_SLUG = new Map(SERVICES.map((s) => [s.slug, s.name]));
+
+export function DirectoryCard({
+  shop,
+  index = 0,
+  n,
+  active = false,
+  onHover,
+}: {
+  shop: PublicShopSummary;
+  index?: number;
+  /** Number shown on the card and on its map pin. */
+  n?: number;
+  active?: boolean;
+  onHover?: (slug: string | null) => void;
+}) {
   const href = `/shops/${shop.slug}`;
   const place = shop.neighborhood ?? shop.city;
   const open = shop.openToday;
+  const names = shop.serviceSlugs.map((x) => NAME_BY_SLUG.get(x)).filter((x): x is string => !!x);
   return (
-    <Rise delay={Math.min(index, 8) * 0.05}>
+    // min-w-0: a grid or flex item defaults to min-width:auto, so the card's
+    // longest name would otherwise widen the whole column past the viewport.
+    <Rise delay={Math.min(index, 8) * 0.05} className="min-w-0">
       <Link
         href={href}
-        className="group flex h-full items-stretch gap-4 rounded-[20px] bg-white p-3 ring-1 ring-[#1a1a1a]/[0.06] transition-[transform,box-shadow] duration-500 ease-expo hover:-translate-y-0.5 hover:shadow-lift focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4B82A5]"
+        onMouseEnter={() => onHover?.(shop.slug)}
+        onMouseLeave={() => onHover?.(null)}
+        onFocus={() => onHover?.(shop.slug)}
+        onBlur={() => onHover?.(null)}
+        className={`group relative flex h-full items-stretch gap-4 rounded-[20px] bg-white p-3 ring-1 transition-[transform,box-shadow] duration-500 ease-expo hover:-translate-y-0.5 hover:shadow-lift focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4B82A5] ${active ? "ring-[#4B82A5]/60" : "ring-[#1a1a1a]/[0.06]"}`}
         style={{ ...appFont, boxShadow: "0 1px 2px rgba(26,26,26,0.04), 0 10px 28px rgba(26,26,26,0.05)" }}
       >
-        <span className="flex h-[96px] w-[96px] shrink-0 items-center justify-center overflow-hidden rounded-[16px]" style={{ backgroundColor: "#E5E7EB" }}>
+        {n != null && (
+          <span className="absolute -left-2 -top-2 flex h-[26px] w-[26px] items-center justify-center rounded-full text-[12px] font-bold text-white ring-2 ring-white" style={{ backgroundColor: active ? "#4B82A5" : INK }}>
+            {n}
+          </span>
+        )}
+        <span className="flex h-[72px] w-[72px] shrink-0 items-center justify-center overflow-hidden rounded-[16px] sm:h-[96px] sm:w-[96px]" style={{ backgroundColor: "#E5E7EB" }}>
           {shop.logoUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={shop.logoUrl} alt="" width={96} height={96} loading="lazy" className="h-full w-full object-cover" />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src="/images/landing/pin-logo.png" alt="" width={64} height={64} loading="lazy" className="h-[64px] w-[64px] object-contain" />
+            <img src="/images/landing/pin-logo.png" alt="" width={64} height={64} loading="lazy" className="h-[48px] w-[48px] object-contain sm:h-[64px] sm:w-[64px]" />
           )}
         </span>
         <span className="flex min-w-0 flex-1 flex-col justify-center gap-[5px] py-1">
-          <span className="truncate text-[19px] font-bold leading-[1.15]" style={{ color: INK }}>
+          <span className="line-clamp-2 text-[19px] font-bold leading-[1.15]" style={{ color: INK }}>
             {shop.name}
           </span>
           <span className="truncate text-[14px] font-medium" style={{ color: "#4B5563" }}>
@@ -156,10 +185,107 @@ export function DirectoryCard({ shop, index = 0 }: { shop: PublicShopSummary; in
               {shop.serviceCount} {shop.serviceCount === 1 ? "service" : "services"}
             </span>
           </span>
+          {names.length > 0 && (
+            <span className="mt-1 flex flex-wrap gap-1">
+              {names.slice(0, 3).map((x) => (
+                <span key={x} className="rounded-full px-2 py-[2px] text-[11.5px] font-medium" style={{ backgroundColor: "#F1F5F9", color: "#475569" }}>
+                  {x}
+                </span>
+              ))}
+              {names.length > 3 && (
+                <span className="rounded-full px-2 py-[2px] text-[11.5px] font-medium" style={{ color: "#6B7280" }}>
+                  +{names.length - 3} more
+                </span>
+              )}
+            </span>
+          )}
         </span>
         <ChevronRight className="my-auto h-[20px] w-[20px] shrink-0 transition-transform duration-500 ease-expo group-hover:translate-x-0.5" style={{ color: "#9CA3AF" }} />
       </Link>
     </Rise>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* The directory: the list beside a map with numbered pins             */
+/* ------------------------------------------------------------------ */
+
+const DIR_MAP: MapCenter = { lat: 40.5795, lng: -74.1502, zoom: 10.9 };
+const DIR_W = 520;
+const DIR_H = 640;
+
+export type DirectoryGroup = { label: string; id: string; shops: PublicShopSummary[] };
+
+/**
+ * The populated directory: every shop as the app's browse card with a
+ * number, and a static map of the island beside it (sticky from lg) with
+ * the same numbers as pins. Hovering or focusing a card lights its pin.
+ * `groups` renders neighborhood headings in the list (past six shops);
+ * the numbering runs across the whole list.
+ */
+export function DirectoryWithMap({ shops, groups }: { shops: PublicShopSummary[]; groups?: DirectoryGroup[] }) {
+  const [active, setActive] = useState<string | null>(null);
+  const order = groups ? groups.flatMap((g) => g.shops) : shops;
+  const numbers = new Map(order.map((s, i) => [s.slug, i + 1]));
+  const pins = order
+    .filter((s) => s.lat != null && s.lng != null)
+    .map((s) => ({ slug: s.slug, name: s.name, n: numbers.get(s.slug)!, ...project(s.lat!, s.lng!, DIR_MAP, DIR_W, DIR_H) }))
+    .filter((p) => p.x > 14 && p.x < DIR_W - 14 && p.y > 14 && p.y < DIR_H - 14);
+  const src = staticMapSrc(DIR_MAP, DIR_W, DIR_H);
+  const card = (s: PublicShopSummary, i: number) => <DirectoryCard key={s.slug} shop={s} index={i} n={numbers.get(s.slug)} active={active === s.slug} onHover={setActive} />;
+  return (
+    <div className="grid gap-8 lg:grid-cols-12 lg:gap-10">
+      <div className="order-2 flex min-w-0 flex-col gap-4 lg:order-1 lg:col-span-7">
+        {groups
+          ? groups.map((g, gi) => (
+              <section key={g.id} id={g.id} className={`scroll-mt-28 ${gi > 0 ? "mt-6" : ""}`}>
+                <h3 className="mb-4 flex items-baseline gap-3 text-[22px] leading-none text-[#1a1a1a]" style={serif}>
+                  {g.label}
+                  <span className="text-[13px] text-[#777169]" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
+                    {g.shops.length} {g.shops.length === 1 ? "shop" : "shops"}
+                  </span>
+                </h3>
+                <div className="flex flex-col gap-4">{g.shops.map((s, i) => card(s, i))}</div>
+              </section>
+            ))
+          : shops.map((s, i) => card(s, i))}
+      </div>
+      <div className="order-1 lg:order-2 lg:col-span-5">
+        <div className="lg:sticky lg:top-[110px]">
+          <div className="relative overflow-hidden rounded-[24px] bg-[#DCE7EF] ring-1 ring-[#1a1a1a]/[0.08] shadow-[0_1px_2px_rgba(26,26,26,0.04),0_10px_28px_rgba(26,26,26,0.05)]" style={{ aspectRatio: `${DIR_W} / ${DIR_H}` }}>
+            {src ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={src} alt="" className="absolute inset-0 h-full w-full object-cover" draggable={false} />
+            ) : (
+              <div className="absolute inset-0 opacity-60" style={{ backgroundImage: "linear-gradient(rgba(255,255,255,0.7) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.7) 1px, transparent 1px)", backgroundSize: "54px 54px" }} />
+            )}
+            {/* pins share the image's coordinate space via percentages */}
+            {pins.map((p) => {
+              const on = active === p.slug;
+              return (
+                <span key={p.slug} className="absolute" style={{ left: `${(p.x / DIR_W) * 100}%`, top: `${(p.y / DIR_H) * 100}%`, zIndex: on ? 2 : 1 }}>
+                  <span
+                    className="flex h-[26px] w-[26px] items-center justify-center rounded-full text-[12px] font-bold text-white ring-2 ring-white transition-transform duration-300 ease-expo"
+                    style={{ backgroundColor: on ? "#4B82A5" : INK, transform: `translate(-50%, -50%) scale(${on ? 1.2 : 1})`, boxShadow: "0 4px 10px rgba(15,23,42,0.25)", ...appFont }}
+                  >
+                    {p.n}
+                  </span>
+                  {on && (
+                    <span className="absolute left-1/2 top-[16px] -translate-x-1/2 whitespace-nowrap rounded-full bg-white px-[10px] py-[4px] text-[12px] font-semibold shadow-[0_4px_12px_rgba(15,23,42,0.18)]" style={{ color: INK, ...appFont }}>
+                      {p.name}
+                    </span>
+                  )}
+                </span>
+              );
+            })}
+            <span className="absolute bottom-2 right-3 text-[10px] tracking-wide text-[#3a556e]/70">© Mapbox © OpenStreetMap</span>
+            <span className="absolute left-3 top-3 rounded-full border-[0.5px] border-white/60 bg-white/75 px-3 py-[6px] text-[12.5px] tracking-[0.02em] text-[#1a1a1a] backdrop-blur-[20px]">
+              {order.length} verified {order.length === 1 ? "shop" : "shops"} · Staten Island
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 

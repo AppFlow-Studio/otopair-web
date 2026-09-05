@@ -48,7 +48,7 @@ logo; `project` places real shops as pins on the phone map).
 | /brooklyn etc. | 2 | Where it sits on the ladder | none: borough rail, this borough marked | | draw | pale |
 | /brooklyn etc. | 3 | FAQ | | | | |
 | /shops | hero | Shops you can book | phone: Select Services (low snap) over the island, real pins, the first shop's browse card | | reveal | shell |
-| /shops | 1 | N verified shops | none: directory cards (live), grouped past six | | stagger | |
+| /shops | 1 | N verified shops | none: numbered browse cards beside a sticky static map with numbered pins; grouped past six | the map's pins follow the hovered card | stagger, pin highlight | |
 | /shops | 2 | What verified means | browser (rates page) | the four checks | reveal | paper |
 | /shops | 3 | booking + FAQ | | | | |
 | /shops/[slug] | hero | The shop | phone: the shop's own app page, real data, the tab that has content | | reveal | shell |
@@ -88,11 +88,18 @@ map / full sheet / category list / form / low sheet with browse card /
 shop page; every page has one row with motion beyond reveal (the rail
 draw, the tab loop, the live map).
 
-## Empty states are designed states
+## Designed for release, populated in development
 
-The shared dev deployment has no verified shop, so every "live data"
-object also renders its honest empty state: the CLOSEST SHOP card's own
-"Finding nearby shops..." copy, no pins, no browse card, the empty-state
-prose in place of the directory. The populated states were verified on a
-fixture lab route (deleted before commit) and are captured in the proof
-board.
+The pages are designed for the populated state, and `next dev` shows
+them that way: when the live list is empty, `lib/public-shops.ts` falls
+back to the fixture shops in `lib/shop-fixtures.ts` (development only;
+a production build never reads them; `SHOP_FIXTURES=0` in `.env.local`
+shows the honest empty states). Every live object still has that empty
+state: the CLOSEST SHOP card's own "Finding nearby shops..." copy, no
+pins, no browse card, prose in place of the directory.
+
+The directory itself (`DirectoryWithMap`): the list of browse cards, each
+numbered, with the shop's services and today's hours, beside a sticky
+static map of the island whose numbered pins light up as a card is
+hovered or focused; past six shops the list groups by neighborhood with a
+jump list, and the numbering runs across the groups.

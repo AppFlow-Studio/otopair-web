@@ -10,6 +10,9 @@ export const metadata: Metadata = {
   alternates: { canonical: "/manhattan" },
 };
 
+// The live shop count on the borough rail refreshes every 5 minutes.
+export const revalidate = 300;
+
 export default function Page() {
   return <BoroughPage borough={borough} />;
 }

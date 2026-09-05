@@ -3,41 +3,41 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { cache } from "react";
 import PageShell, { Section, type TocItem } from "@/components/flagship/page-shell";
+import { HeroPhone } from "@/components/flagship/local-sections";
 import { PillLink } from "@/components/flagship/pill-button";
+import { RatingLine } from "@/components/flagship/product/local";
+import { ShopDetailScreen, Stars, type DetailTab } from "@/components/flagship/product/screens/shop";
 import { FaqSection } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
 import { formatTime, getPublicShop, type PublicShopProfile, type PublicShopService } from "@/lib/public-shops";
 import { SITE_URL, absoluteUrl } from "@/lib/site";
+import { staticMapSrc, staticPinMapSrc } from "@/lib/static-map";
 
 export const revalidate = 300;
 export const dynamicParams = true;
 
 /**
- * /shops/<slug> — one verified shop (site audit 2026-08-31, Tier 2). Every
- * field on this page comes from lib/public-shops.ts's projection, which is
- * the only thing that may touch the raw Convex documents: no contacts, no
- * payout state, no internals. The shop is on this URL only while it passes
- * the same gate as the directory (verified + active + bookable + on the
- * island), so a shop that drops off the network 404s here within the
- * revalidate window instead of advertising a booking it cannot take.
+ * /shops/<slug>: one verified shop (site audit 2026-08-31, Tier 2; design
+ * pass 2026-09-05, the app up close). Every field on this page comes from
+ * lib/public-shops.ts's projection, which is the only thing that may touch
+ * the raw Convex documents: no contacts, no payout state, no internals. The
+ * shop is on this URL only while it passes the same gate as the directory
+ * (verified + active + bookable + on the island), so a shop that drops off
+ * the network 404s here within the revalidate window instead of
+ * advertising a booking it cannot take.
+ *
+ * The hero is the shop's own page in the app, drawn from the same
+ * projection: its logo, name, rating (only when computed from at least
+ * three visible reviews), address, and whichever tab has something to
+ * show. Below it the page stays a document: services, hours, the people,
+ * photos, reviews, directions, questions.
  *
  * What is deliberately NOT here: prices (set by the shop, built per vehicle
- * in the app — never published as numbers or ranges), the platform fee
- * rate, and any rating unless it is computed from at least three visible
- * reviews by drivers who completed a booking (public-shops.ts).
+ * in the app, never published as numbers or ranges), the platform fee
+ * rate, and any rating below the three-review floor.
  */
 
-// Same face/weight as reveal.tsx's `serif`, inlined for a server component.
-const serif = { fontFamily: "var(--font-Petrona)", fontWeight: 400 } as const;
-
-// Static map, same pattern as the landing's path-section: one Static Images
-// request with the API logo/attribution off, so the © credit must be drawn
-// by us. Skipped entirely when the token is absent.
-const MAPBOX_TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
-function staticMapUrl(lat: number, lng: number): string {
-  const at = `${lng.toFixed(5)},${lat.toFixed(5)}`;
-  return `https://api.mapbox.com/styles/v1/mapbox/light-v11/static/pin-s+4b82a5(${at})/${at},14.2,0/720x360@2x?logo=false&attribution=false&access_token=${MAPBOX_TOKEN}`;
-}
+const appFont = { fontFamily: "var(--font-Urbanist), Inter, system-ui, sans-serif" } as const;
 
 const load = cache((slug: string) => getPublicShop(slug));
 
@@ -74,16 +74,6 @@ function listNames(items: string[]): string {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
-function Stars({ rating }: { rating: number }) {
-  const full = Math.max(0, Math.min(5, Math.round(rating)));
-  return (
-    <span aria-label={`${rating} out of 5`} className="tracking-[0.1em] text-[#4B82A5]">
-      {"★".repeat(full)}
-      <span className="text-[#1a1a1a]/20">{"★".repeat(5 - full)}</span>
-    </span>
-  );
-}
-
 /** Seven-day strip: open days on white plates, closed days on paper. */
 function HoursStrip({ hours }: { hours: PublicShopProfile["hours"] }) {
   return (
@@ -112,6 +102,30 @@ function HoursStrip({ hours }: { hours: PublicShopProfile["hours"] }) {
   );
 }
 
+/** The app's mechanic card at reading size: avatar, name, title. */
+function MechanicRows({ mechanics }: { mechanics: PublicShopProfile["mechanics"] }) {
+  return (
+    <ul className="grid gap-3 sm:grid-cols-2" style={appFont}>
+      {mechanics.map((m) => (
+        <li key={m.name} className="flex items-center gap-4 rounded-[16px] border border-[#F3F4F6] bg-white p-4 shadow-[0_1px_2px_rgba(26,26,26,0.04)]">
+          {m.photoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={m.photoUrl} alt="" width={56} height={56} loading="lazy" className="h-14 w-14 shrink-0 rounded-full object-cover" />
+          ) : (
+            <span aria-hidden className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F3F4F6] text-[20px] font-semibold text-[#9CA3AF]">
+              {m.name.charAt(0)}
+            </span>
+          )}
+          <span className="min-w-0">
+            <span className="block text-[17px] font-semibold text-[#0F172A]">{m.name}</span>
+            {m.title && <span className="block text-[13px] text-[#6B7280]">{m.title}</span>}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 /** Gallery rhythm: two wide, then three, then two, on a six-column grid. */
 function Gallery({ shop, photos }: { shop: PublicShopProfile; photos: PublicShopProfile["portfolio"] }) {
   return (
@@ -124,7 +138,7 @@ function Gallery({ shop, photos }: { shop: PublicShopProfile; photos: PublicShop
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={p.url}
-            alt={p.caption ?? `${shop.name}, photo ${i + 2}`}
+            alt={p.caption ?? `${shop.name}, photo ${i + 1}`}
             loading="lazy"
             className="aspect-[4/3] w-full object-cover"
           />
@@ -162,35 +176,20 @@ export default async function ShopPage({ params }: { params: Params }) {
     openDays.length > 0 && openDays.every((h) => h.open === openDays[0].open && h.close === openDays[0].close);
   const hasMechanics = shop.mechanics.length > 0;
   const hasPhotos = shop.portfolio.length > 0;
-  const showMap = !!MAPBOX_TOKEN && shop.lat != null && shop.lng != null;
-  // The hero object: the shop's first gallery photo when it has one, else
-  // its own static map. The rest of the gallery goes below.
-  const gallery = shop.portfolio.slice(1);
-  const hasGallery = gallery.length > 0;
-  const heroVisual = hasPhotos ? (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={shop.portfolio[0].url}
-      alt={shop.portfolio[0].caption ?? `${shop.name}, from the shop's own gallery`}
-      className="aspect-[5/4] w-full object-cover"
-    />
-  ) : showMap ? (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      src={staticMapUrl(shop.lat!, shop.lng!)}
-      alt={`Map showing ${shop.name} at ${addressLine(shop)}`}
-      width={720}
-      height={360}
-      className="aspect-[2/1] w-full object-cover"
-    />
-  ) : undefined;
+  const hasCoords = shop.lat != null && shop.lng != null;
+  // The phone draws the app's own dot marker, so its map carries no pin.
+  const heroMap = hasCoords ? staticMapSrc({ lat: shop.lat!, lng: shop.lng!, zoom: 15.4 }, 390, 300) : null;
+  const wideMap = hasCoords ? staticPinMapSrc(shop.lat!, shop.lng!) : null;
   const shopUrl = absoluteUrl(`/shops/${shop.slug}`);
+  // The app opens on Reviews; on a shop with no visible rating yet the
+  // phone shows the tab that has something real on it.
+  const heroTab: DetailTab = shop.rating ? "reviews" : hasMechanics ? "mechanics" : hasPhotos ? "portfolio" : "reviews";
 
   const toc: TocItem[] = [
     { id: "services", title: "Services" },
     { id: "hours", title: "Hours" },
     ...(hasMechanics ? [{ id: "mechanics", title: "Mechanics" }] : []),
-    ...(hasGallery ? [{ id: "photos", title: "Photos" }] : []),
+    ...(hasPhotos ? [{ id: "photos", title: "Photos" }] : []),
     { id: "reviews", title: "What drivers say" },
     { id: "getting-there", title: "Getting there" },
     { id: "faq", title: "Questions" },
@@ -214,9 +213,7 @@ export default async function ShopPage({ params }: { params: Params }) {
       ...(shop.zip ? { postalCode: shop.zip } : {}),
       addressCountry: "US",
     },
-    ...(shop.lat != null && shop.lng != null
-      ? { geo: { "@type": "GeoCoordinates", latitude: shop.lat, longitude: shop.lng } }
-      : {}),
+    ...(hasCoords ? { geo: { "@type": "GeoCoordinates", latitude: shop.lat, longitude: shop.lng } } : {}),
     ...(shop.logoUrl ? { image: shop.logoUrl, logo: shop.logoUrl } : {}),
     ...(shop.website ? { url: shop.website } : {}),
     mainEntityOfPage: shopUrl,
@@ -271,7 +268,6 @@ export default async function ShopPage({ params }: { params: Params }) {
 
   return (
     <PageShell
-      eyebrow={`VERIFIED SHOP · ${place.toUpperCase()}`}
       title={shop.name}
       lede={
         <>
@@ -288,7 +284,12 @@ export default async function ShopPage({ params }: { params: Params }) {
         { name: "Shops", href: "/shops" },
         { name: shop.name, href: `/shops/${shop.slug}` },
       ]}
-      visual={heroVisual}
+      visual={
+        <HeroPhone w={320}>
+          <ShopDetailScreen shop={shop} tab={heroTab} mapSrc={heroMap} />
+        </HeroPhone>
+      }
+      visualFrame={false}
       hero={
         <>
           <PillLink href="/download">Book in the Otopair app</PillLink>
@@ -298,17 +299,6 @@ export default async function ShopPage({ params }: { params: Params }) {
       toc={toc}
     >
       <JsonLd data={jsonLd} />
-
-      {shop.logoUrl && (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={shop.logoUrl}
-          alt={`${shop.name} logo`}
-          width={96}
-          height={96}
-          className="mb-8 h-24 w-24 rounded-[16px] border border-[#1a1a1a]/10 object-cover"
-        />
-      )}
 
       <Section id="services" title={`What services does ${shop.name} offer on Otopair?`}>
         {shop.services.length === 0 ? (
@@ -354,22 +344,20 @@ export default async function ShopPage({ params }: { params: Params }) {
         {shop.hours.length === 0 ? (
           <p>Opening hours are shown in the app when you pick a time.</p>
         ) : (
-          <>
-            <p>
-              {openDays.length === 0
-                ? "Closed every day at the moment, so no slots are open in the app."
-                : `Open ${openDays.length === 7 ? "every day" : `${openDays.length} days a week`}${
-                    sameHours
-                      ? `, ${formatTime(openDays[0].open!)} to ${formatTime(openDays[0].close!)}`
-                      : "; hours vary by day"
-                  }. The app books against these hours, so a slot you see is a slot the shop can take.`}
-            </p>
-          </>
+          <p>
+            {openDays.length === 0
+              ? "Closed every day at the moment, so no slots are open in the app."
+              : `Open ${openDays.length === 7 ? "every day" : `${openDays.length} days a week`}${
+                  sameHours
+                    ? `, ${formatTime(openDays[0].open!)} to ${formatTime(openDays[0].close!)}`
+                    : "; hours vary by day"
+                }. The app books against these hours, so a slot you see is a slot the shop can take.`}
+          </p>
         )}
       </Section>
 
       {hasMechanics && (
-        <Section id="mechanics" title={`Who works on your car at ${shop.name}?`}>
+        <Section id="mechanics" title={`Who works on your car at ${shop.name}?`} after={<MechanicRows mechanics={shop.mechanics} />}>
           <p>
             {shop.mechanics.length === 1
               ? `One mechanic is on the schedule at ${shop.name}`
@@ -377,43 +365,14 @@ export default async function ShopPage({ params }: { params: Params }) {
             . The app schedules your booking against their calendars, so a slot you see is one that
             one of them actually has open.
           </p>
-          <ul className="!pl-0 [&>li]:before:hidden">
-            {shop.mechanics.map((m) => (
-              <li key={m.name} className="flex items-center gap-4 py-1">
-                {m.photoUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={m.photoUrl}
-                    alt=""
-                    width={48}
-                    height={48}
-                    loading="lazy"
-                    className="h-12 w-12 shrink-0 rounded-full border border-[#1a1a1a]/10 object-cover"
-                  />
-                ) : (
-                  <span
-                    aria-hidden
-                    className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#98C9E8]/35 text-[18px] text-[#4B82A5]"
-                    style={serif}
-                  >
-                    {m.name.charAt(0)}
-                  </span>
-                )}
-                <span>
-                  <span className="block text-[#1a1a1a]">{m.name}</span>
-                  {m.title && <span className="block text-[14px] text-[#777169]">{m.title}</span>}
-                </span>
-              </li>
-            ))}
-          </ul>
         </Section>
       )}
 
-      {hasGallery && (
-        <Section id="photos" title={`Photos of ${shop.name}`} after={<Gallery shop={shop} photos={gallery} />}>
+      {hasPhotos && (
+        <Section id="photos" title={`Photos of ${shop.name}`} after={<Gallery shop={shop} photos={shop.portfolio} />}>
           <p>
-            {gallery.length === 1 ? "One more photo" : `${gallery.length} more photos`} from the
-            shop&rsquo;s own gallery; the first is at the top of the page.
+            {shop.portfolio.length === 1 ? "One photo" : `${shop.portfolio.length} photos`} from the shop&rsquo;s own
+            gallery, the same ones a driver sees on the Portfolio tab in the app.
           </p>
         </Section>
       )}
@@ -421,17 +380,19 @@ export default async function ShopPage({ params }: { params: Params }) {
       <Section id="reviews" title={`What do drivers say about ${shop.name}?`}>
         {shop.rating ? (
           <>
-            <p>
-              <strong>{shop.rating.average.toFixed(1)} out of 5</strong> from{" "}
-              {shop.rating.count === 1 ? "1 review" : `${shop.rating.count} reviews`} by drivers who
-              completed a booking at {shop.name} through Otopair. Reviews can only be left after a
-              completed booking, and a review is the driver&rsquo;s own words.
+            <p className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <RatingLine rating={shop.rating.average} count={shop.rating.count} />
+              <span>
+                from {shop.rating.count === 1 ? "1 review" : `${shop.rating.count} reviews`} by drivers who
+                completed a booking at {shop.name} through Otopair.
+              </span>
             </p>
+            <p>Reviews can only be left after a completed booking, and a review is the driver&rsquo;s own words.</p>
             <ul className="!pl-0 [&>li]:before:hidden">
               {shop.reviews.map((r, i) => (
                 <li key={`${r.reviewer}-${r.createdAt ?? i}`} className="border-t border-[#1a1a1a]/10 py-4 first:border-t-0">
                   <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[14px]">
-                    <Stars rating={r.rating} />
+                    <Stars rating={r.rating} size={13} />
                     <span className="text-[#1a1a1a]">{r.reviewer}</span>
                     {r.createdAt && (
                       <time dateTime={new Date(r.createdAt).toISOString()} className="text-[#777169]">
@@ -464,11 +425,11 @@ export default async function ShopPage({ params }: { params: Params }) {
           {shop.neighborhood ? `, near ${shop.neighborhood}` : ""}. You bring the car to the shop at the
           time you booked; Otopair does not send a mechanic to you.
         </p>
-        {showMap && (
+        {wideMap && (
           <figure className="relative mt-5 overflow-hidden rounded-[16px] border border-[#1a1a1a]/10 bg-[#f7f6f3]">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={staticMapUrl(shop.lat!, shop.lng!)}
+              src={wideMap}
               alt={`Map showing ${shop.name} at ${addressLine(shop)}`}
               width={720}
               height={360}

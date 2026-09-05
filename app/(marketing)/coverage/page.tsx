@@ -2,11 +2,11 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
 import NetworkMap from "@/components/flagship/landing/network-map";
-import { Ladder } from "@/components/flagship/ladder";
+import { CoverageSections } from "@/components/flagship/local-sections";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
-import { BOROUGHS, LIVE_BOROUGHS } from "@/lib/coverage";
+import { listPublicShops, onStatenIsland } from "@/lib/public-shops";
 
 export const metadata: Metadata = {
   title: { absolute: "Where Otopair is available: Staten Island now, NYC boroughs next" },
@@ -15,12 +15,17 @@ export const metadata: Metadata = {
   alternates: { canonical: "/coverage" },
 };
 
+// The live shop count on the rail refreshes every 5 minutes.
+export const revalidate = 300;
+
 /**
- * /coverage (design pass 2026-09-05): the landing's #coverage anchor as its
- * own URL. The live network map is the hero object, framed once; the
- * borough ladder is the one sequence on the page; the two explainers and
- * the FAQ share one editorial list. No city render: the map is the
- * subject, and it is real.
+ * /coverage (design pass 2026-09-05, the app up close): the landing's
+ * #coverage anchor as its own URL. The live network map is the hero
+ * object; the five boroughs run as one rail with the live one carrying
+ * the real verified-shop count and the first segment drawing itself in;
+ * "shops first, drivers second" shows the shop dashboard's rates page,
+ * the thing a shop sets up before its borough opens. The questions stay
+ * in one editorial list.
  */
 const FAQ: FaqItem[] = [
   {
@@ -42,14 +47,14 @@ const FAQ: FaqItem[] = [
 ];
 
 const H2 = "serif-display max-w-[16ch] text-[32px] leading-[1.04] tracking-[-0.01em] text-[#1a1a1a] [text-wrap:balance] tab:text-[38px]";
-const PROSE =
-  "max-w-[62ch] text-[17px] leading-[1.65] text-[#4c5661] [text-wrap:pretty] [&_p+p]:mt-4 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5]";
-const ROW = "grid gap-2 py-6 tab:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] tab:gap-x-10 tab:py-7";
-const TERM = "serif-text text-[21px] leading-[1.3] text-[#1a1a1a] [text-wrap:balance]";
-const ANSWER =
-  "max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661] [&_p+p]:mt-3 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5]";
 
-export default function CoveragePage() {
+export default async function CoveragePage() {
+  let liveCount: number | null = null;
+  try {
+    liveCount = (await listPublicShops()).filter(onStatenIsland).length;
+  } catch {
+    liveCount = null;
+  }
   return (
     <PageShell
       title={
@@ -85,61 +90,23 @@ export default function CoveragePage() {
         }}
       />
 
-      {/* ---------- The ladder: the one sequence on the page ---------- */}
-      <section id="ladder" className="scroll-mt-28">
-        <h2 className={H2}>Which borough is next.</h2>
-        <p className={`mt-6 ${PROSE}`}>
-          Brooklyn, then Queens, The Bronx and Manhattan. Each borough page takes waitlist signups now, so you get one
-          email the day its first shops go live.
-        </p>
-        <Ladder
-          direction="row"
-          className="mt-10"
-          steps={BOROUGHS.map((b) => ({
-            title: b.name,
-            body: (
-              <>
-                <span className="block text-[13px] tracking-[0.08em] text-[#4B82A5]">{b.live ? "LIVE NOW" : b.date.toUpperCase()}</span>
-                <span className="mt-2 block">{b.blurb}</span>
-                <Link
-                  href={`/${b.slug}`}
-                  className="mt-3 inline-block text-[14px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
-                >
-                  {b.live ? `Shops in ${b.name}` : `Join the ${b.name} waitlist`}
-                </Link>
-              </>
-            ),
-          }))}
-        />
-      </section>
+      <CoverageSections liveCount={liveCount} />
 
-      {/* ---------- The details and the questions: one editorial list ---------- */}
-      <section id="details" className="mt-16 scroll-mt-28 border-t border-[#1a1a1a]/10 pt-16 lg:mt-24 lg:pt-24">
-        <h2 className={H2}>The details, in plain terms.</h2>
-        <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
-          <div className={ROW} id="how">
-            <dt className={TERM}>How does a borough go live?</dt>
-            <dd className={ANSWER}>
-              <p>
-                Shops first, drivers second. Otopair verifies shops in a borough before it opens booking there, so the
-                first thing a driver sees is a real network, not an empty map. Shops anywhere in New York City can{" "}
-                <Link href="/apply">apply now</Link>; the ones verified ahead of their borough&rsquo;s quarter are live
-                on opening day. The map above is the same network map as the home page, and the{" "}
-                <Link href="/shops">shop directory</Link> lists the verified shops with hours and services.
-              </p>
-              <p>
-                Live today:{" "}
-                {LIVE_BOROUGHS.map((b) => (
-                  <Link key={b.slug} href={`/${b.slug}`}>
-                    {b.name}
-                  </Link>
-                ))}
-                .
-              </p>
-            </dd>
-          </div>
-        </dl>
-        <FaqList items={FAQ} className="[&>div:first-child]:pt-6 tab:[&>div:first-child]:pt-7 [&_dd]:max-w-[60ch]" />
+      {/* ---------- The questions ---------- */}
+      <section id="details" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
+        <h2 className={H2}>Questions drivers ask.</h2>
+        <FaqList items={FAQ} className="mt-8 border-b border-[#1a1a1a]/10 [&_dd]:max-w-[60ch]" />
+        <p className="mt-8 text-[15px] text-[#4c5661]">
+          The map above is the same live network map as the home page. The{" "}
+          <Link href="/shops" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+            shop directory
+          </Link>{" "}
+          lists every verified shop with hours and services, and{" "}
+          <Link href="/apply" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+            applications
+          </Link>{" "}
+          are open to shops anywhere in New York City.
+        </p>
       </section>
     </PageShell>
   );

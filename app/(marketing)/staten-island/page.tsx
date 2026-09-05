@@ -3,13 +3,16 @@ import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
 import NetworkMap from "@/components/flagship/landing/network-map";
 import { Bezel } from "@/components/flagship/bezel";
+import { HeroPhone, HubServices } from "@/components/flagship/local-sections";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
+import { DirectoryGrid } from "@/components/flagship/product/local";
+import { SelectServicesScreen } from "@/components/flagship/product/screens/browse";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
-import { ShopCards } from "@/components/flagship/service-page-bits";
 import { STATEN_ISLAND_NEIGHBORHOODS, UPCOMING_BOROUGHS } from "@/lib/coverage";
-import { listPublicShops } from "@/lib/public-shops";
+import { listPublicShops, onStatenIsland } from "@/lib/public-shops";
 import { BOOKABLE_SERVICE_COUNT, topLocalServices } from "@/lib/service-catalog";
+import { STATEN_ISLAND_PHONE, phonePins, staticMapSrc } from "@/lib/static-map";
 
 export const metadata: Metadata = {
   title: { absolute: "Car repair on Staten Island: verified shops at a locked price, booked through Otopair" },
@@ -19,13 +22,15 @@ export const metadata: Metadata = {
 };
 
 /**
- * /staten-island (design pass 2026-09-05): the live borough's hub. Verified
- * shops from lib/public-shops.ts (bookable + active + verified, projected
- * fields only), the neighborhood vocabulary from lib/coverage.ts as a plain
- * list (neighborhood pages exist only where a verified shop serves them;
- * none are built yet, so nothing links), the ten local service pages as a
- * list, one live map framed once, and the questions in one editorial list.
- * Stand-in shop names from the landing never appear here.
+ * /staten-island (design pass 2026-09-05, the app up close): the live
+ * borough's hub. The hero is the app's Select Services screen over the
+ * island, with the CLOSEST SHOP card carrying a real verified shop when
+ * one exists (its own loading state otherwise); the verified shops are
+ * the directory's cards, fed only by lib/public-shops.ts; the live map is
+ * framed once; the ten local service pages sit beside one phone that
+ * cycles through the four category lists; the neighborhoods and the
+ * questions stay editorial. Stand-in shop names from the landing never
+ * appear here.
  */
 
 // Shop list refreshes every 5 minutes.
@@ -59,12 +64,10 @@ const ANSWER =
   "max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661] [&_p+p]:mt-3 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5]";
 
 export default async function StatenIslandPage() {
-  const all = await listPublicShops();
-  const shops = all.filter(
-    (s) => s.neighborhood !== null || (s.city ?? "").trim().toLowerCase() === "staten island",
-  );
+  const shops = (await listPublicShops()).filter(onStatenIsland);
   const served = new Set(shops.map((s) => s.neighborhood).filter((n): n is string => !!n));
   const local = topLocalServices();
+  const mapSrc = staticMapSrc(STATEN_ISLAND_PHONE, 390, 844);
 
   return (
     <PageShell
@@ -81,7 +84,12 @@ export default async function StatenIslandPage() {
           <TextLink href="/how-it-works">How a booking runs</TextLink>
         </div>
       }
-      heroAlign="start"
+      visual={
+        <HeroPhone>
+          <SelectServicesScreen closest={shops[0] ? { name: shops[0].name } : null} pins={phonePins(shops)} mapSrc={mapSrc} />
+        </HeroPhone>
+      }
+      visualFrame={false}
       width="wide"
     >
       <JsonLd
@@ -96,15 +104,15 @@ export default async function StatenIslandPage() {
         }}
       />
 
-      {/* ---------- The shops, and where they are ---------- */}
+      {/* ---------- The shops ---------- */}
       <section id="shops" className="scroll-mt-28">
         <h2 className={H2}>Which Staten Island shops can I book?</h2>
         <div className={`mt-6 ${PROSE}`}>
           {shops.length > 0 ? (
             <p>
-              {shops.length} verified {shops.length === 1 ? "shop is" : "shops are"} bookable on Staten Island today:{" "}
-              {shops.map((s) => s.name).join(", ")}. Each one has been reviewed and approved by Otopair, sets its own
-              prices, and lists the services it offers on its profile. The list is live.
+              {shops.length} verified {shops.length === 1 ? "shop is" : "shops are"} bookable on Staten Island today. Each one
+              has been reviewed and approved by Otopair, sets its own prices, and lists the services it offers on its
+              profile. The list is live.
             </p>
           ) : (
             <p>
@@ -116,11 +124,14 @@ export default async function StatenIslandPage() {
         </div>
         {shops.length > 0 && (
           <div className="mt-8">
-            <ShopCards shops={shops} />
+            <DirectoryGrid shops={shops} />
           </div>
         )}
-        {/* The same live Mapbox map as the home page, framed once on this page. */}
-        <figure className="mt-10">
+      </section>
+
+      {/* ---------- The live map, framed once ---------- */}
+      <section id="map" className="scroll-mt-28 pt-16 tab:pt-20">
+        <figure>
           <Bezel>
             <NetworkMap frame={false} className="aspect-[16/10] w-full lg:aspect-[21/9]" />
           </Bezel>
@@ -130,8 +141,11 @@ export default async function StatenIslandPage() {
         </figure>
       </section>
 
+      {/* ---------- The ten local service pages, beside the app's four lists ---------- */}
+      <HubServices local={local.map((s) => ({ slug: s.slug, name: s.name, description: s.description }))} />
+
       {/* ---------- Neighborhoods: a plain list, the served ones in ink ---------- */}
-      <section id="neighborhoods" className="scroll-mt-28 pt-16 lg:pt-24">
+      <section id="neighborhoods" className="scroll-mt-28">
         <h2 className={H2}>Which neighborhoods does Otopair cover?</h2>
         <p className={`mt-6 ${PROSE}`}>
           The whole island, from St. George to Tottenville. A shop&rsquo;s profile names the neighborhood it sits in;
@@ -153,34 +167,20 @@ export default async function StatenIslandPage() {
         </ul>
       </section>
 
-      {/* ---------- The ten local service pages ---------- */}
-      <section id="services" className="scroll-mt-28 pt-16 lg:pt-24">
-        <h2 className={H2}>Which services can I book on Staten Island?</h2>
-        <p className={`mt-6 ${PROSE}`}>
-          All {BOOKABLE_SERVICE_COUNT}, in four categories: Routine, Tires &amp; Brakes, Scheduled Service and
-          Inspections. The ten below have their own Staten Island page with the live list of shops that offer them and
-          the booking steps; the <Link href="/services">full catalog</Link> covers the rest. Oto shows you only the
-          services that apply to your car.
-        </p>
-        <ul className="mt-8 grid gap-x-10 border-t border-[#1a1a1a]/10 sm:grid-cols-2">
-          {local.map((s) => (
-            <li key={s.slug} className="border-b border-[#1a1a1a]/10 py-4">
-              <Link
-                href={`/staten-island/${s.slug}`}
-                className="serif-text text-[19px] leading-[1.3] text-[#1a1a1a] transition-colors duration-300 hover:text-[#4B82A5]"
-              >
-                {s.name} in Staten Island
-              </Link>
-              <p className="mt-1 text-[14.5px] leading-[1.55] text-[#6b655d]">{s.description}.</p>
-            </li>
-          ))}
-        </ul>
-      </section>
-
       {/* ---------- The details and the questions: one editorial list ---------- */}
       <section id="details" className="mt-16 scroll-mt-28 border-t border-[#1a1a1a]/10 pt-16 lg:mt-24 lg:pt-24">
         <h2 className={H2}>The details, in plain terms.</h2>
         <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
+          <div className={ROW} id="all-services">
+            <dt className={TERM}>How many services can I book here?</dt>
+            <dd className={ANSWER}>
+              <p>
+                All {BOOKABLE_SERVICE_COUNT}, in four categories: Routine, Tires &amp; Brakes, Scheduled Service and
+                Inspections. Each shop chooses which of them it offers, and Oto shows you only the services that apply
+                to your car. The <Link href="/services">full catalog</Link> has every one in detail.
+              </p>
+            </dd>
+          </div>
           <div className={ROW} id="next">
             <dt className={TERM}>Where is Otopair going next?</dt>
             <dd className={ANSWER}>

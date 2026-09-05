@@ -447,12 +447,12 @@ export function Rates() {
 /* Framed pages                                                        */
 /* ------------------------------------------------------------------ */
 
-export function PortalWindow({ page, width = 1100, height = 680, ...props }: { page: "board" | "job" | "payouts" | "rates"; width?: number; height?: number } & Partial<Parameters<typeof DayBoard>[0]> & Partial<Parameters<typeof JobSheet>[0]>) {
+export function PortalWindow({ page, width = 1100, height = 680, shop, ...props }: { page: "board" | "job" | "payouts" | "rates"; width?: number; height?: number; /** Sidebar shop name; the local pages pass a placeholder so no stand-in shop appears. */ shop?: string } & Partial<Parameters<typeof DayBoard>[0]> & Partial<Parameters<typeof JobSheet>[0]>) {
   const url = page === "board" ? "shop.otopair.com/schedule" : page === "job" ? "shop.otopair.com/bookings/4f2a9c" : page === "rates" ? "shop.otopair.com/settings/rates" : "shop.otopair.com/payouts";
   const active = page === "board" ? "Schedule" : page === "job" ? "Bookings" : page === "rates" ? "Settings" : "Payouts";
   return (
     <BrowserFrame url={url} width={width} height={height}>
-      <Shell active={active}>
+      <Shell active={active} shop={shop}>
         {page === "board" && <DayBoard blocks={props.blocks} landing={props.landing} nowAt={props.nowAt} date={props.date} />}
         {page === "job" && <JobSheet step={props.step} estimate={props.estimate} />}
         {page === "payouts" && <Payouts />}

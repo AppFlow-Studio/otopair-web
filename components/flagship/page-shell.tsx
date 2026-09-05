@@ -148,7 +148,10 @@ export default function PageShell({
             reads identically here. The split hero runs it deeper so the
             visual's plate sits on blue, not on the white below it. */}
         <header
-          className={`w-full ${
+          // overflow-x-clip: the split hero's radial glow (-inset-10) and a
+          // device's shadow may extend past the viewport on phones; clipping
+          // the x-axis only stops the 16px horizontal scroll that produced.
+          className={`w-full overflow-x-clip ${
             split
               ? "bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_640px)] tab:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_760px)]"
               : stack

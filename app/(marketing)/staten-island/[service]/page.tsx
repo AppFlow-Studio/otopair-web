@@ -6,25 +6,24 @@ import PageShell from "@/components/flagship/page-shell";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
 import { serviceIcon } from "@/components/flagship/hero-visual";
+import { HeroPhone, ServiceBooking } from "@/components/flagship/local-sections";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
-import {
-  BookingSteps,
-  CarApplicability,
-  NoShopsYet,
-  ServiceJsonLd,
-  ShopCards,
-} from "@/components/flagship/service-page-bits";
-import { TOP_LOCAL_SERVICES, categoryByName, isTopLocalService, serviceBySlug } from "@/lib/service-catalog";
+import { DirectoryGrid } from "@/components/flagship/product/local";
+import { CategoryScreen } from "@/components/flagship/product/screens/browse";
+import { BookingSteps, CarApplicability, NoShopsYet, ServiceJsonLd } from "@/components/flagship/service-page-bits";
+import { TOP_LOCAL_SERVICES, isTopLocalService, serviceBySlug } from "@/lib/service-catalog";
 import { shopsOfferingService } from "@/lib/public-shops";
+import { STATEN_ISLAND_PHONE, staticMapSrc } from "@/lib/static-map";
 
 /**
- * /staten-island/<service> (design pass 2026-09-05): local-intent pages for
- * the ten TOP_LOCAL_SERVICES only (an editorial pick; see
- * lib/service-catalog.ts). The target query is "what it costs and how to
- * book", answered without a single cost number, because prices are per
- * shop, per car, and never published. The shop list is live
- * (lib/public-shops.ts). Same composition as the service pages: the
- * service's icon as the hero mark, every answer in one editorial list.
+ * /staten-island/<service> (design pass 2026-09-05, the app up close):
+ * local-intent pages for the ten TOP_LOCAL_SERVICES. The hero is the
+ * app's category list with this service selected, in the app's own
+ * words for it; the shops that list it are the directory's cards (live,
+ * lib/public-shops.ts); "how do I book it" is Oto's in-chat wizard open
+ * on the service beside the steps as the app runs them. The cost answer
+ * carries no number, because prices are per shop, per car, and never
+ * published.
  */
 
 export const revalidate = 300;
@@ -47,21 +46,23 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
 }
 
 const H2 = "serif-display max-w-[16ch] text-[32px] leading-[1.04] tracking-[-0.01em] text-[#1a1a1a] [text-wrap:balance] tab:text-[38px]";
+const PROSE =
+  "max-w-[62ch] text-[17px] leading-[1.65] text-[#4c5661] [text-wrap:pretty] [&_p+p]:mt-4 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5]";
 const ROW = "grid gap-2 py-6 tab:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] tab:gap-x-10 tab:py-7";
 const TERM = "serif-text text-[21px] leading-[1.3] text-[#1a1a1a] [text-wrap:balance]";
 const ANSWER =
-  "max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661] [&_p+p]:mt-3 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5] [&_ul]:mt-3 [&_ul]:flex [&_ul]:flex-col [&_ul]:gap-1.5 [&_ul]:pl-5 [&_ul>li]:relative [&_ul>li]:before:absolute [&_ul>li]:before:-left-5 [&_ul>li]:before:top-[0.8em] [&_ul>li]:before:h-px [&_ul>li]:before:w-2.5 [&_ul>li]:before:bg-[#4B82A5] [&_ol]:mt-3 [&_ol]:flex [&_ol]:flex-col [&_ol]:gap-2 [&_ol]:pl-7 [&_ol]:[list-style:decimal-leading-zero] [&_ol>li]:pl-1 [&_ol>li::marker]:text-[#4B82A5] [&_strong]:font-medium [&_strong]:text-[#1a1a1a]";
+  "max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661] [&_p+p]:mt-3 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5] [&_ul]:mt-3 [&_ul]:flex [&_ul]:flex-col [&_ul]:gap-1.5 [&_ul]:pl-5 [&_ul>li]:relative [&_ul>li]:before:absolute [&_ul>li]:before:-left-5 [&_ul>li]:before:top-[0.8em] [&_ul>li]:before:h-px [&_ul>li]:before:w-2.5 [&_ul>li]:before:bg-[#4B82A5] [&_strong]:font-medium [&_strong]:text-[#1a1a1a]";
 
 export default async function LocalServicePage({ params }: Params) {
   const { service: slug } = await params;
   const service = serviceBySlug(slug);
   if (!service || !isTopLocalService(slug)) notFound();
 
-  const category = categoryByName(service.category);
   const icon = serviceIcon(slug);
   const shops = await shopsOfferingService(slug);
   const path = `/staten-island/${slug}`;
   const n = shops.length;
+  const mapSrc = staticMapSrc(STATEN_ISLAND_PHONE, 390, 844);
 
   const faq: FaqItem[] = [
     {
@@ -92,7 +93,6 @@ export default async function LocalServicePage({ params }: Params) {
           <Image src={icon.src} alt="" width={icon.w} height={icon.h} sizes="80px" className="h-auto w-full object-contain" priority />
         </span>
       }
-      eyebrow={`STATEN ISLAND · ${category.name.toUpperCase()}`}
       title={`${service.name} in Staten Island.`}
       lede={`${service.description}. Book it at a verified Staten Island shop, with the full total shown before you confirm.`}
       crumbs={[
@@ -107,7 +107,12 @@ export default async function LocalServicePage({ params }: Params) {
           <TextLink href={`/services/${slug}`}>{service.name}, in detail</TextLink>
         </div>
       }
-      heroAlign="start"
+      visual={
+        <HeroPhone>
+          <CategoryScreen forSlug={slug} selected={[slug]} mapSrc={mapSrc} />
+        </HeroPhone>
+      }
+      visualFrame={false}
       width="wide"
     >
       <ServiceJsonLd service={service} path={path} />
@@ -126,13 +131,12 @@ export default async function LocalServicePage({ params }: Params) {
       {/* ---------- The shops that offer it ---------- */}
       <section id="shops" className="scroll-mt-28">
         <h2 className={H2}>Which Staten Island shops offer {service.name}?</h2>
-        <div className={`mt-6 ${ANSWER} max-w-[62ch] text-[17px] leading-[1.65]`}>
+        <div className={`mt-6 ${PROSE}`}>
           {n > 0 ? (
             <p>
               {n} verified {n === 1 ? "shop" : "shops"} on Staten Island {n === 1 ? "lists" : "list"} {service.name}{" "}
-              today: {shops.map((s) => s.name).join(", ")}. Each one has been reviewed and approved by Otopair and set
-              its own price for the job; Oto shows you the number for your car. This list is live and updates as shops
-              add or drop the service.
+              today. Each one has been reviewed and approved by Otopair and set its own price for the job; Oto shows
+              you the number for your car. This list is live and updates as shops add or drop the service.
             </p>
           ) : (
             <NoShopsYet serviceName={service.name} />
@@ -140,13 +144,18 @@ export default async function LocalServicePage({ params }: Params) {
         </div>
         {n > 0 && (
           <div className="mt-8">
-            <ShopCards shops={shops} />
+            <DirectoryGrid shops={shops} />
           </div>
         )}
       </section>
 
-      {/* ---------- Cost, booking, cars, questions: one list ---------- */}
-      <section id="details" className="mt-16 scroll-mt-28 border-t border-[#1a1a1a]/10 pt-16 lg:mt-24 lg:pt-24">
+      {/* ---------- How to book it: Oto's wizard, and the steps ---------- */}
+      <ServiceBooking slug={slug} name={service.name}>
+        <BookingSteps serviceName={service.name} />
+      </ServiceBooking>
+
+      {/* ---------- Cost, cars, questions: one list ---------- */}
+      <section id="details" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
         <h2 className={H2}>The details, in plain terms.</h2>
         <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
           <div className={ROW} id="cost">
@@ -164,16 +173,6 @@ export default async function LocalServicePage({ params }: Params) {
                 final price after inspecting the car, and it cannot go above what you approved without your OK in the
                 app.
               </p>
-            </dd>
-          </div>
-          <div className={ROW} id="book">
-            <dt className={TERM}>How do I book {service.name} on Staten Island?</dt>
-            <dd className={ANSWER}>
-              <p>
-                In the Otopair app: tell Oto what the car needs, pick a shop, confirm the total, and drop the car off.
-                Here is the whole path, as the app runs it.
-              </p>
-              <BookingSteps serviceName={service.name} />
             </dd>
           </div>
           <div className={ROW} id="cars">

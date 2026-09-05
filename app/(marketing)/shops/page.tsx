@@ -2,13 +2,15 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
-import NetworkMap from "@/components/flagship/landing/network-map";
-import { Reveal } from "@/components/flagship/landing/reveal";
+import { HeroPhone, ShopsVerified } from "@/components/flagship/local-sections";
+import { DirectoryGrid } from "@/components/flagship/product/local";
+import { SelectServicesScreen } from "@/components/flagship/product/screens/browse";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
 import { STATEN_ISLAND_NEIGHBORHOODS } from "@/lib/coverage";
 import { listPublicShops, neighborhoodSlug, onStatenIsland, type PublicShopSummary } from "@/lib/public-shops";
 import { absoluteUrl } from "@/lib/site";
+import { STATEN_ISLAND_PHONE, phonePins, staticMapSrc } from "@/lib/static-map";
 
 export const metadata: Metadata = {
   title: { absolute: "Verified auto repair shops on Otopair: Staten Island, NY" },
@@ -21,23 +23,21 @@ export const metadata: Metadata = {
 export const revalidate = 300;
 
 /**
- * /shops (design pass 2026-09-05): the public directory of verified,
- * bookable shops, fed only by lib/public-shops.ts (verified + active +
- * bookable + on the island, projected fields). The live network map is the
- * hero object; the shops are peer cards (a directory is the one place cards
- * earn their keep); the verification standard and the booking path share
- * one editorial list with the FAQ. Stand-in shop names from the landing
- * never appear here.
+ * /shops (design pass 2026-09-05, the app up close): the public directory
+ * of verified, bookable shops, fed only by lib/public-shops.ts (verified +
+ * active + bookable + on the island, projected fields). The hero is the
+ * app browsing shops on the island map, with the real shops as pins and
+ * the first one's browse card floating over the low sheet; the directory
+ * is that card's anatomy at reading size, one per shop; "what verified
+ * means" lifts the four checks out beside the dashboard page they are
+ * read from. Stand-in shop names from the landing never appear here.
  *
- * Grouping: past six shops the grid is bucketed by nearest Staten Island
+ * Grouping: past six shops the list is bucketed by nearest Staten Island
  * neighborhood (north to south, lib/coverage.ts order) with a jump list;
  * shops without a neighborhood label fall into a city bucket at the end.
  */
 
-// Same face/weight as reveal.tsx's `serif`, inlined: this is a server
-// component and reveal.tsx is a client module.
 const serif = { fontFamily: "var(--font-Petrona)", fontWeight: 400 } as const;
-
 const GROUP_THRESHOLD = 6;
 
 const FAQ: FaqItem[] = [
@@ -61,75 +61,13 @@ const PROSE =
 const ROW = "grid gap-2 py-6 tab:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] tab:gap-x-10 tab:py-7";
 const TERM = "serif-text text-[21px] leading-[1.3] text-[#1a1a1a] [text-wrap:balance]";
 const ANSWER =
-  "max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661] [&_p+p]:mt-3 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5] [&_ul]:mt-3 [&_ul]:flex [&_ul]:flex-col [&_ul]:gap-1.5 [&_ul]:pl-5 [&_li]:relative [&_li]:before:absolute [&_li]:before:-left-5 [&_li]:before:top-[0.8em] [&_li]:before:h-px [&_li]:before:w-2.5 [&_li]:before:bg-[#4B82A5] [&_strong]:font-medium [&_strong]:text-[#1a1a1a]";
+  "max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661] [&_p+p]:mt-3 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5]";
 
-function placeLine(s: PublicShopSummary): string {
-  return s.neighborhood ? `${s.neighborhood} · ${s.city}, ${s.state}` : `${s.city}, ${s.state}`;
-}
-
-function ShopCard({ shop, index }: { shop: PublicShopSummary; index: number }) {
-  const href = `/shops/${shop.slug}`;
-  return (
-    <Reveal delay={Math.min(index, 8) * 0.04}>
-      <article className="flex h-full flex-col rounded-[22px] bg-white p-6 ring-1 ring-[#1a1a1a]/[0.08] shadow-[0_1px_2px_rgba(26,26,26,0.04)] transition-[transform,box-shadow] duration-500 ease-expo hover:-translate-y-0.5 hover:shadow-lift">
-        <div className="flex items-start gap-4">
-          {shop.logoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={shop.logoUrl}
-              alt=""
-              width={48}
-              height={48}
-              loading="lazy"
-              className="h-12 w-12 shrink-0 rounded-[12px] border border-[#1a1a1a]/10 object-cover"
-            />
-          ) : (
-            <span
-              aria-hidden
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-[12px] bg-[#98C9E8]/35 text-[20px] text-[#4B82A5]"
-              style={serif}
-            >
-              {shop.name.trim().charAt(0).toUpperCase()}
-            </span>
-          )}
-          <div className="min-w-0">
-            <p className="text-[12px] tracking-[0.12em] text-[#777169]">{placeLine(shop).toUpperCase()}</p>
-            <h3 className="mt-1 text-[22px] leading-tight text-[#1a1a1a]" style={serif}>
-              <Link
-                href={href}
-                className="rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4B82A5]"
-              >
-                {shop.name}
-              </Link>
-            </h3>
-          </div>
-        </div>
-        <p className="mt-4 flex-1 text-[15px] leading-[1.6] text-[#6b655d]">
-          {shop.serviceCount === 1 ? "1 service" : `${shop.serviceCount} services`} bookable on Otopair
-          {shop.address ? ` · ${shop.address}` : ""}
-        </p>
-        <div className="mt-4 flex items-center justify-between gap-3">
-          <span className="text-[12px] tracking-[0.05em] text-[#4B82A5]">Verified by Otopair</span>
-          <Link
-            href={href}
-            className="text-[14px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
-          >
-            Hours and services
-          </Link>
-        </div>
-      </article>
-    </Reveal>
-  );
-}
-
-function ShopGrid({ shops, offset = 0 }: { shops: PublicShopSummary[]; offset?: number }) {
-  return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {shops.map((s, i) => (
-        <ShopCard key={s.slug} shop={s} index={offset + i} />
-      ))}
-    </div>
-  );
+/** Is the shop open at this minute, New York time, per its published hours? */
+function openNow(s: PublicShopSummary): boolean {
+  if (!s.openToday) return false;
+  const now = new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "America/New_York" }).format(new Date());
+  return now >= s.openToday.open && now < s.openToday.close;
 }
 
 /** Bucket by nearest neighborhood in the island's north→south order; shops
@@ -157,6 +95,8 @@ export default async function ShopsDirectoryPage() {
   const shops = (await listPublicShops()).filter(onStatenIsland);
   const count = shops.length;
   const grouped = count > GROUP_THRESHOLD ? groupByNeighborhood(shops) : null;
+  const first = shops[0];
+  const mapSrc = staticMapSrc(STATEN_ISLAND_PHONE, 390, 844);
 
   const itemList =
     count > 0
@@ -188,7 +128,17 @@ export default async function ShopsDirectoryPage() {
           <TextLink href="/how-shops-are-verified">How shops are verified</TextLink>
         </div>
       }
-      visual={<NetworkMap frame={false} className="aspect-[5/4]" />}
+      visual={
+        <HeroPhone>
+          <SelectServicesScreen
+            mode="peek"
+            pins={phonePins(shops)}
+            browse={first ? { name: first.name, rating: null, open: openNow(first), logoUrl: first.logoUrl } : null}
+            mapSrc={mapSrc}
+          />
+        </HeroPhone>
+      }
+      visualFrame={false}
       width="wide"
     >
       {itemList && <JsonLd data={itemList} />}
@@ -227,14 +177,14 @@ export default async function ShopsDirectoryPage() {
           </div>
         ) : (
           <p className={`mt-6 ${PROSE}`}>
-            Each card leads to the shop&rsquo;s own page: the services it has switched on, its hours for all seven
-            days, and where it is. The list is live.
+            Each card is the shop as the app shows it, and leads to the shop&rsquo;s own page: the services it has
+            switched on, its hours for all seven days, and where it is. The list is live.
           </p>
         )}
 
         {count > 0 && !grouped && (
           <div className="mt-10">
-            <ShopGrid shops={shops} />
+            <DirectoryGrid shops={shops} />
           </div>
         )}
 
@@ -268,7 +218,7 @@ export default async function ShopsDirectoryPage() {
                   {g.shops.length === 1 ? "1 verified shop" : `${g.shops.length} verified shops`}
                 </p>
                 <div className="mt-6">
-                  <ShopGrid shops={g.shops} offset={g.offset} />
+                  <DirectoryGrid shops={g.shops} offset={g.offset} />
                 </div>
               </section>
             ))}
@@ -276,42 +226,13 @@ export default async function ShopsDirectoryPage() {
         )}
       </section>
 
-      {/* ---------- The details and the questions: one editorial list ---------- */}
-      <section id="details" className="mt-16 scroll-mt-28 border-t border-[#1a1a1a]/10 pt-16 lg:mt-24 lg:pt-24">
+      {/* ---------- What verified means: the four checks, and where they are read from ---------- */}
+      <ShopsVerified />
+
+      {/* ---------- Booking, and the questions ---------- */}
+      <section id="details" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
         <h2 className={H2}>The details, in plain terms.</h2>
         <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
-          <div className={ROW} id="verified">
-            <dt className={TERM}>What does verified mean?</dt>
-            <dd className={ANSWER}>
-              <p>
-                A verified shop is one Otopair has reviewed and approved by hand. Before a shop appears on this page it
-                has to clear four things: the first is a decision by the Otopair team, and the other three are read
-                from the shop&rsquo;s live account, not from a form.
-              </p>
-              <ul>
-                <li>
-                  <strong>Otopair&rsquo;s review and approval.</strong> The Otopair team approves the shop for the
-                  network. It is a manual decision, not an automated check.
-                </li>
-                <li>
-                  <strong>Payment through Stripe.</strong> The shop has a connected Stripe account with charges and
-                  payouts enabled, so the $20 hold at booking and the final charge on completion run through Otopair.
-                </li>
-                <li>
-                  <strong>Real opening hours.</strong> Hours for all seven days are published, and the app books
-                  against them.
-                </li>
-                <li>
-                  <strong>Someone to do the work.</strong> At least one working mechanic and at least one service
-                  switched on.
-                </li>
-              </ul>
-              <p>
-                Verification is Otopair&rsquo;s own approval. It does not certify licences or insurance, so if you need
-                those, ask the shop directly. <Link href="/how-shops-are-verified">The full standard</Link>.
-              </p>
-            </dd>
-          </div>
           <div className={ROW} id="book">
             <dt className={TERM}>How do I book one of these shops?</dt>
             <dd className={ANSWER}>
@@ -323,7 +244,8 @@ export default async function ShopsDirectoryPage() {
               </p>
               <p>
                 <Link href="/download">Get notified at launch</Link> · <Link href="/services">Every service you can book</Link>{" "}
-                · <Link href="/staten-island">Car repair in Staten Island</Link>
+                · <Link href="/staten-island">Car repair in Staten Island</Link> ·{" "}
+                <Link href="/how-shops-are-verified">The full verification standard</Link>
               </p>
             </dd>
           </div>

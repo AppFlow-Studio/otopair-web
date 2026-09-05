@@ -76,6 +76,8 @@ export type PublicShopSummary = {
   neighborhood: string | null;
   serviceSlugs: string[];
   serviceCount: number;
+  /** Today's published hours (New York), null when closed or not set. */
+  openToday: { open: string; close: string } | null;
 };
 
 export type PublicShopProfile = PublicShopSummary & {
@@ -209,8 +211,24 @@ async function offeredServiceIds(shopId: Id<"shops">): Promise<Set<string>> {
   return new Set(rows.filter((r) => r.is_offered !== false).map((r) => String(r.service_id)));
 }
 
-function summarize(s: RawShop & { slug: string }, serviceSlugs: string[]): PublicShopSummary {
+type RawHours = { shop_id: Id<"shops">; day_of_week: number; open_time?: string; close_time?: string; is_closed?: boolean };
+
+/** 0 = Sunday … 6 = Saturday, in New York, whatever the server's zone. */
+function todayInNewYork(): number {
+  const short = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "America/New_York" }).format(new Date());
+  return Math.max(0, ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(short));
+}
+
+function hoursToday(rows: RawHours[], shopId: Id<"shops">): PublicShopSummary["openToday"] {
+  const day = todayInNewYork();
+  const h = rows.find((r) => String(r.shop_id) === String(shopId) && r.day_of_week === day);
+  if (!h || h.is_closed || !h.open_time || !h.close_time) return null;
+  return { open: h.open_time, close: h.close_time };
+}
+
+function summarize(s: RawShop & { slug: string }, serviceSlugs: string[], openToday: PublicShopSummary["openToday"]): PublicShopSummary {
   return {
+    openToday,
     slug: s.slug,
     name: s.name,
     address: s.address ?? null,
@@ -232,13 +250,14 @@ function summarize(s: RawShop & { slug: string }, serviceSlugs: string[]): Publi
 export async function listPublicShops(): Promise<PublicShopSummary[]> {
   const raw = ((await publicQuery(api.shops.list, {})) ?? []) as RawShop[];
   const shops = raw.filter(eligible);
-  const catalog = await serviceCatalog();
+  const [catalog, hoursAll] = await Promise.all([serviceCatalog(), publicQuery(api.shops_hours.list, {})]);
+  const hoursRows = (hoursAll ?? []) as RawHours[];
   const byId = new Map(catalog.map((c) => [String(c._id), c]));
   const out = await Promise.all(
     shops.map(async (s) => {
       const ids = await offeredServiceIds(s._id);
       const slugs = [...ids].map((id) => byId.get(id)?.slug).filter((x): x is string => !!x).sort();
-      return summarize(s, slugs);
+      return summarize(s, slugs, hoursToday(hoursRows, s._id));
     }),
   );
   return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -271,7 +290,8 @@ export async function getPublicShop(slug: string): Promise<PublicShopProfile | n
     .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0))
     .map((c) => ({ name: c.name, slug: c.slug, description: c.description ?? null, category: c.serviceCategory?.name ?? null }));
 
-  const hours: PublicShopHours[] = ((hoursAll ?? []) as { shop_id: Id<"shops">; day_of_week: number; open_time?: string; close_time?: string; is_closed?: boolean }[])
+  const hoursRows = (hoursAll ?? []) as RawHours[];
+  const hours: PublicShopHours[] = hoursRows
     .filter((h) => String(h.shop_id) === String(shopId))
     .sort((a, b) => a.day_of_week - b.day_of_week)
     .map((h) => ({
@@ -313,7 +333,7 @@ export async function getPublicShop(slug: string): Promise<PublicShopProfile | n
       : null;
 
   return {
-    ...summarize(s, services.map((x) => x.slug)),
+    ...summarize(s, services.map((x) => x.slug), hoursToday(hoursRows, shopId)),
     description: s.description?.trim() || null,
     website: s.website?.trim() || null,
     hours,

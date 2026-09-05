@@ -62,8 +62,12 @@ logo; `project` places real shops as pins on the phone map).
 | /download | 1 | What you get | three phones: shop totals, Review and Pay, My Cars | one line each | stagger | sky |
 | /download | 2 | Where it works | none: borough rail | | draw | pale |
 | /about | hero | The price you see is the price you pay | none | | | shell |
-| /about | 1 | One booking, two sides | phone (Bookings, estimate confirmed) + browser (job sheet, confirmed) | | reveal | sky |
-| /about | 2 | what / why / where / company + FAQ | none | | | |
+| /about | 1 | What it is, why it exists (driver and shop) | none (two-column editorial) | | | |
+| /about | 2 | One booking, two sides | phone (Bookings, estimate confirmed) + browser (job sheet, confirmed) | | reveal | sky |
+| /about | 3 | The rules we hold ourselves to | none: six rules, each with what enforces it | | | paper |
+| /about | 4 | What we build | none: four products beside the data-provenance card | the provenance card | reveal | |
+| /about | 5 | What Otopair is not | none: six boundaries, each linked to the page that owns it | | | |
+| /about | 6 | coverage / verification / company + FAQ | none | | | |
 | /press | 1 | boilerplate, facts | none | | | |
 | /press | 2 | The product, at a glance | browser (day board) with the chat phone in front | | reveal | paper |
 | /press | 3 | brand files, contact | none | | | |

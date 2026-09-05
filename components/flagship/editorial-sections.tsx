@@ -2,9 +2,10 @@
 
 import type { ReactNode } from "react";
 import { ArrowRight } from "lucide-react";
-import { FitZoom, Plate } from "@/components/flagship/product/device";
+import { APP, FitZoom, Plate } from "@/components/flagship/product/device";
 import { BoroughRail, Step } from "@/components/flagship/product/local";
 import { PortalWindow } from "@/components/flagship/product/screens/portal";
+import { PullCard } from "@/components/flagship/product/pullouts";
 import { BookingsScreen } from "@/components/flagship/product/screens/bookings";
 import { BRAKES, ChatScreen, OtoTurn, QuickReplies, UserBubble } from "@/components/flagship/product/screens/chat";
 import { PhoneAt, Rise, SectionHead } from "@/app/(marketing)/pricing/sections";
@@ -120,6 +121,52 @@ export function ProductStack() {
         </div>
       </Plate>
     </Rise>
+  );
+}
+
+/**
+ * About: the provenance card. Every value in the vehicle-data catalogue
+ * carries the layer it came from (convex/lib/dataLayers.ts); these are the
+ * four the product serves. No vendor names, and the two internal-only
+ * layers are not listed because they never leave the building.
+ */
+const LAYERS: [string, string, string][] = [
+  ["A", "Official", "Owner's manuals and manufacturer data."],
+  ["C", "Researched", "Our own enrichment work, checked against the car's specification."],
+  ["D", "Measured", "Timings and parts read from completed Otopair jobs."],
+  ["E", "Confirmed", "A mechanic or the Otopair team verified it by hand."],
+];
+
+export function DataProvenance({ className = "" }: { className?: string }) {
+  return (
+    <PullCard className={`w-full p-6 tab:p-7 ${className}`}>
+      <p className="text-[12px] font-semibold uppercase tracking-[0.08em]" style={{ color: APP.blue }}>
+        Every value carries its source
+      </p>
+      <p className="mt-2 text-[19px] font-bold leading-[1.2]" style={{ color: APP.ink }}>
+        Four layers, one car.
+      </p>
+      <ul className="mt-5 flex flex-col divide-y" style={{ borderColor: "rgba(0,0,0,0.06)" }}>
+        {LAYERS.map(([letter, name, body]) => (
+          <li key={letter} className="flex items-start gap-3.5 py-3.5 first:pt-0 last:pb-0" style={{ borderColor: "rgba(0,0,0,0.06)" }}>
+            <span className="mt-[1px] flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full text-[12px] font-bold" style={{ backgroundColor: "#5299FE1A", color: APP.blue }}>
+              {letter}
+            </span>
+            <span>
+              <span className="block text-[15.5px] font-semibold" style={{ color: APP.ink }}>
+                {name}
+              </span>
+              <span className="mt-[2px] block text-[13.5px] leading-[1.5]" style={{ color: APP.meta }}>
+                {body}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-5 text-[13px] leading-[1.5]" style={{ color: APP.meta }}>
+        A value the system cannot stand behind is held back rather than shown.
+      </p>
+    </PullCard>
   );
 }
 

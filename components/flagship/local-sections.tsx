@@ -128,7 +128,7 @@ export function HubServices({ local }: { local: { slug: string; name: string; de
     <section className="py-16 tab:py-24">
       <SectionHead id="services" title="Which services can I book on Staten Island?" line="All 22, in the four lists the app shows. The ten below have their own Staten Island page with the live shop list and the booking steps." />
       <Plate className="relative mt-10 tab:mt-14" clip>
-        <div className="grid items-end gap-8 px-6 pt-10 tab:grid-cols-12 tab:px-14 tab:pt-16">
+        <div className="grid gap-8 px-6 pt-10 tab:grid-cols-12 tab:items-center tab:px-14 tab:pt-16">
           <div className="relative z-10 pb-4 tab:col-span-7 tab:pb-16">
             <ul className="grid gap-x-8 sm:grid-cols-2">
               {local.map((s) => (
@@ -147,10 +147,10 @@ export function HubServices({ local }: { local: { slug: string; name: string; de
               covers the other twelve. Oto shows you only the services that apply to your car.
             </p>
           </div>
-          <Rise className="flex justify-center pb-10 tab:col-span-5 tab:justify-end tab:pb-0">
-            <div className="tab:-mb-[8%]">
-              <TabLoopPhone />
-            </div>
+          {/* The phone stays whole (no hang off the plate): its caption chip
+              sits under it and a hanging phone clipped both. */}
+          <Rise className="flex justify-center pb-10 tab:col-span-5 tab:justify-end tab:pb-16">
+            <TabLoopPhone />
           </Rise>
         </div>
       </Plate>

@@ -72,7 +72,6 @@ const FAQ = [
 export default function SecurityPage() {
   return (
     <PageShell
-      eyebrow="SECURITY"
       title="What protects your account, your card and your data"
       lede={`This page lists what ${SITE_NAME} has built to keep accounts, payments and data safe, in specific terms, and ends with what it does not claim yet. Nothing here is a promise the code does not keep.`}
       updated={UPDATED}

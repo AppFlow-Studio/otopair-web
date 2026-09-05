@@ -3,6 +3,9 @@ import Link from "next/link";
 import PageShell, { Section, Summary, type TocItem } from "@/components/flagship/page-shell";
 import { FaqSection } from "@/components/seo/faq";
 import { SUPPORT_EMAIL } from "@/lib/site";
+import { Plate } from "@/components/flagship/product/device";
+import { ReceiptScreen } from "@/components/flagship/product/screens/bookings";
+import { PhoneAt } from "../pricing/sections";
 
 export const metadata: Metadata = {
   title: "Warranty",
@@ -57,7 +60,6 @@ const FAQ = [
 export default function WarrantyPage() {
   return (
     <PageShell
-      eyebrow="WARRANTY"
       title="Who stands behind the repair?"
       lede="The shop that did the work. Otopair does not warrant repairs; any parts or labor warranty is the shop's own, on the shop's terms. What Otopair keeps is the record of the job, and a 14-day dispute channel after the final charge if something is wrong."
       updated={UPDATED}
@@ -101,7 +103,7 @@ export default function WarrantyPage() {
         </p>
       </Section>
 
-      <Section id="record" title="What does Otopair keep that helps?">
+      <Section id="record" title="What does Otopair keep that helps?" after={<Plate tone="pale" className="flex justify-center px-6 pt-8" clip><div className="-mb-[22%]"><PhoneAt w={300}><ReceiptScreen /></PhoneAt></div></Plate>}>
         <p>
           The whole paper trail of the job. Every booking keeps the price you approved, every
           estimate the shop sent and your answer to it, the messages between you and the shop, and

@@ -22,7 +22,6 @@ const UPDATED = "2026-09-04";
 export default function AccessibilityPage() {
   return (
     <PageShell
-      eyebrow="ACCESSIBILITY"
       title="Usable by everyone who needs a mechanic"
       lede={`${SITE_NAME} is meant to work for people who use a keyboard, a screen reader, magnification, or who turn animation off. This page says what is true today, what is still being fixed, and how to tell us about a barrier.`}
       updated={UPDATED}

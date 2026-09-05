@@ -3,6 +3,9 @@ import Link from "next/link";
 import PageShell, { Section, Summary, type TocItem } from "@/components/flagship/page-shell";
 import { FaqSection } from "@/components/seo/faq";
 import { SITE_NAME, SUPPORT_EMAIL } from "@/lib/site";
+import { Plate } from "@/components/flagship/product/device";
+import { ApproveEstimateScreen } from "@/components/flagship/product/screens/bookings";
+import { PhoneAt } from "../pricing/sections";
 
 export const metadata: Metadata = {
   title: "Trust and safety",
@@ -69,7 +72,6 @@ const FAQ = [
 export default function TrustAndSafetyPage() {
   return (
     <PageShell
-      eyebrow={"TRUST & SAFETY"}
       title="What keeps a booking honest"
       lede={`A price the shop cannot raise on its own, money that does not move until the job is done, reviews that only a real customer can leave, and a person at ${SITE_NAME} when something goes wrong. This page says exactly how each of those works.`}
       updated={UPDATED}
@@ -105,7 +107,7 @@ export default function TrustAndSafetyPage() {
         </p>
       </Section>
 
-      <Section id="price" title="How is the price protected?">
+      <Section id="price" title="How is the price protected?" after={<Plate tone="pale" className="flex justify-center px-6 pt-8" clip><div className="-mb-[22%]"><PhoneAt w={300}><ApproveEstimateScreen /></PhoneAt></div></Plate>}>
         <p>
           The total you approve when you book is the contract. You see the full total for your exact
           car, with parts, labor, tax and {SITE_NAME}&rsquo;s service fee inside it, before you

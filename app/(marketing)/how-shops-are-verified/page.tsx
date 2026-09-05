@@ -3,6 +3,8 @@ import Link from "next/link";
 import PageShell, { Section, Summary, type TocItem } from "@/components/flagship/page-shell";
 import { FaqSection } from "@/components/seo/faq";
 import { SITE_NAME, SUPPORT_EMAIL } from "@/lib/site";
+import { FitZoom, Plate } from "@/components/flagship/product/device";
+import { PortalWindow } from "@/components/flagship/product/screens/portal";
 
 export const metadata: Metadata = {
   title: "How shops are verified",
@@ -69,7 +71,6 @@ const FAQ = [
 export default function HowShopsAreVerifiedPage() {
   return (
     <PageShell
-      eyebrow="VERIFICATION STANDARD"
       title="What it takes to be a verified shop"
       lede={`Every shop on ${SITE_NAME} goes through the same steps, and the badge on a shop page means those steps happened. This page lists them in order, in plain language, and is equally clear about what ${SITE_NAME} does not check yet.`}
       updated={UPDATED}
@@ -146,7 +147,7 @@ export default function HowShopsAreVerifiedPage() {
         </p>
       </Section>
 
-      <Section id="setup" title="What must a shop set up before drivers see it?">
+      <Section id="setup" title="What must a shop set up before drivers see it?" after={<Plate tone="paper" className="p-3 tab:p-5" clip><FitZoom base={1100}><PortalWindow page="rates" shop="Your shop" /></FitZoom></Plate>}>
         <p>
           Four things, all of them checked on the server before the shop appears in the app: opening
           hours for all seven days of the week (including days it is closed), an hourly labor rate,

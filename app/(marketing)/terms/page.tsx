@@ -40,7 +40,6 @@ const TOC: TocItem[] = [
 export default function TermsPage() {
   return (
     <PageShell
-      eyebrow="TERMS OF SERVICE"
       title="The deal, in plain words"
       lede={`These terms govern your use of ${SITE_NAME} (the app, the website and the shop dashboard), operated by ${LEGAL_NAME}. By creating an account or booking a job you agree to them.`}
       updated={UPDATED}

@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell, { Section, Summary, type TocItem } from "@/components/flagship/page-shell";
 import { FaqSection } from "@/components/seo/faq";
+import { Plate } from "@/components/flagship/product/device";
+import { LifecyclePull } from "@/components/flagship/product/pullouts";
 
 export const metadata: Metadata = {
   title: "Cancellation policy",
@@ -59,7 +61,6 @@ const FAQ = [
 export default function CancellationPolicyPage() {
   return (
     <PageShell
-      eyebrow="CANCELLATION POLICY"
       title="Cancelling, rescheduling, and the $20 hold"
       lede="Every appointment you book in the app is held by a $20 card hold, not a full prepayment. This page states the default windows exactly as the app enforces them: when cancelling is free, when the hold is kept, and when it is released in full."
       updated={UPDATED}
@@ -135,7 +136,7 @@ export default function CancellationPolicyPage() {
         </p>
       </Section>
 
-      <Section id="estimate" title="What if I don't answer the inspection estimate?">
+      <Section id="estimate" title="What if I don't answer the inspection estimate?" after={<Plate tone="pale" className="p-3 tab:p-5"><LifecyclePull /></Plate>}>
         <p>
           After inspecting the car, the shop confirms the final price in the app. If it lands within
           what you approved when you booked, no further approval of the price is needed. If it is above that,

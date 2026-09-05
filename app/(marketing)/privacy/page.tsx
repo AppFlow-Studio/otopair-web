@@ -35,7 +35,6 @@ const TOC: TocItem[] = [
 export default function PrivacyPage() {
   return (
     <PageShell
-      eyebrow="PRIVACY POLICY"
       title="What we collect, and why"
       lede={`This policy explains what ${SITE_NAME} collects when you use the driver app, the website, or the shop dashboard, how it is used, and the choices you have. It is written to be read, not skimmed past.`}
       updated={UPDATED}
@@ -134,7 +133,7 @@ export default function PrivacyPage() {
         <p>
           Otopair also relies on a small set of service providers who process data on our behalf
           and under contract: an authentication provider (sign-in), a payment processor (cards,
-          deposits and shop payouts), a database and hosting provider, a speech provider for Oto's
+          deposits and shop payouts), a database and hosting provider, a speech provider for Oto&rsquo;s
           voice mode, a maps provider, and an email delivery provider. We share information with the
           authorities when the law requires it, and with a successor if Otopair is ever acquired.
         </p>

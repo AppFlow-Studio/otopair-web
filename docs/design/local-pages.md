@@ -17,6 +17,7 @@ are the $20 hold and 24 hours; no eyebrows; no icon-card grids.
 | Select Services (full and low snap), pins, browse card | `app/(booking-flow)/select-services.tsx`, GlassSheet, HeroCard*, CategoryListRow, QuickBookRow, MapBrowseShopCard, RatingMarkerPill | `components/flagship/product/screens/browse.tsx` |
 | Category list, ServiceMultiSelectRow, StickyContinueBar | `app/(booking-flow)/category/[tab].tsx`, `constants/serviceTaxonomy.ts` | same |
 | Oto's in-chat wizard, stage 1 | `components/ai-chat/BookServiceComponent.tsx` | same |
+| Service info sheet (the ⓘ on a row) | `components/booking-flow/ServiceInfoSheet.tsx`, copy from `constants/serviceCopy.ts` (mirrored to `lib/service-copy.ts`) | same |
 | Shop detail (map hero, ShopHeroCard, tabs, reviews, mechanics, portfolio) | `app/booking/shop/[id]`, ShopHeroCard, RatingSummaryCard, ReviewCard, ShopMechanicsSection | `components/flagship/product/screens/shop.tsx` |
 
 Web-scale objects: `components/flagship/product/local.tsx` (BoroughRail,
@@ -52,6 +53,11 @@ logo; `project` places real shops as pins on the phone map).
 | /shops | 3 | booking + FAQ | | | | |
 | /shops/[slug] | hero | The shop | phone: the shop's own app page, real data, the tab that has content | | reveal | shell |
 | /shops/[slug] | body | services, hours, mechanics, photos, reviews, directions, FAQ | none (document; app anatomies at reading size) | | | |
+| /services | hero | 22 services, four categories | none | | | shell |
+| /services | 1 | the catalog | pinned phone, 5 steps: Select Services, then the four category lists | the crawlable rows under each step | pinned crossfade | sky |
+| /services | 2 | details + FAQ | | | | |
+| /services/[slug] | hero | The service | phone: the app's info sheet for the service over its category list (lib/service-copy.ts, the Service Guide verbatim) | | reveal | shell |
+| /services/[slug] | 1 | includes, when, cars, price, shops (live cards), FAQ | none | | | |
 
 Rule checks: no two consecutive rows share a device; the six openers are
 map / full sheet / category list / form / low sheet with browse card /

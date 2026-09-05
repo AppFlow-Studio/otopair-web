@@ -6,31 +6,35 @@ import PageShell from "@/components/flagship/page-shell";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
 import { serviceIcon } from "@/components/flagship/hero-visual";
+import { HeroPhone } from "@/components/flagship/local-sections";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
+import { DirectoryGrid } from "@/components/flagship/product/local";
+import { ServiceInfoScreen } from "@/components/flagship/product/screens/browse";
 import {
   CarApplicability,
   HowPriceIsSet,
   NoShopsYet,
   ServiceJsonLd,
-  ShopCards,
 } from "@/components/flagship/service-page-bits";
 import {
   SERVICE_SLUGS,
-  categoryByName,
   isTopLocalService,
   serviceBySlug,
   warningLightsFor,
   type CatalogService,
 } from "@/lib/service-catalog";
 import { shopsOfferingService } from "@/lib/public-shops";
+import { STATEN_ISLAND_PHONE, staticMapSrc } from "@/lib/static-map";
 
 /**
- * /services/<slug> (design pass 2026-09-05): one page per bookable service.
- * Static copy from lib/service-catalog.ts (the seed's name, description and
- * applicability flags; nothing invented beyond them), plus the live list of
- * verified Staten Island shops that offer it. Prices are never printed.
- * The service's own app icon is the hero mark; every answer sits in one
- * editorial list.
+ * /services/<slug> (design pass 2026-09-05, the app up close): one page per
+ * bookable service. The hero is the app's own info sheet for the service
+ * (the ⓘ on its row): the Service Guide's quick look, what it is, why it
+ * matters, the signs, the time and "Shows for", in the app's words
+ * (lib/service-copy.ts). Below it, static copy from lib/service-catalog.ts
+ * (the seed's name, description and applicability flags; nothing invented
+ * beyond them) plus the live list of verified Staten Island shops that
+ * offer it, as the directory's cards. Prices are never printed.
  */
 
 // Live shop list refreshes every 5 minutes; the copy is static.
@@ -133,8 +137,8 @@ export default async function ServicePage({ params }: Params) {
   const service = serviceBySlug(slug);
   if (!service) notFound();
 
-  const category = categoryByName(service.category);
   const icon = serviceIcon(slug);
+  const mapSrc = staticMapSrc(STATEN_ISLAND_PHONE, 390, 844);
   const shops = await shopsOfferingService(slug);
   const lights = warningLightsFor(slug).map((l) => l.label);
   const local = isTopLocalService(slug);
@@ -165,7 +169,6 @@ export default async function ServicePage({ params }: Params) {
           <Image src={icon.src} alt="" width={icon.w} height={icon.h} sizes="80px" className="h-auto w-full object-contain" priority />
         </span>
       }
-      eyebrow={category.name.toUpperCase()}
       title={`${service.name}.`}
       lede={`${service.description}. Book it at a verified Staten Island shop, with the full total shown before you confirm.`}
       crumbs={[
@@ -179,7 +182,12 @@ export default async function ServicePage({ params }: Params) {
           <TextLink href="/services">All 22 services</TextLink>
         </div>
       }
-      heroAlign="start"
+      visual={
+        <HeroPhone>
+          <ServiceInfoScreen slug={slug} mapSrc={mapSrc} />
+        </HeroPhone>
+      }
+      visualFrame={false}
       width="wide"
     >
       <ServiceJsonLd service={service} path={path} />
@@ -259,7 +267,7 @@ export default async function ServicePage({ params }: Params) {
         </dl>
         {shops.length > 0 && (
           <div className="mt-8">
-            <ShopCards shops={shops} />
+            <DirectoryGrid shops={shops} />
           </div>
         )}
       </section>

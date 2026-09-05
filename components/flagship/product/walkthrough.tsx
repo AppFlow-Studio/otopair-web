@@ -28,6 +28,8 @@ export type WalkStep = {
   body: string;
   /** A full phone (PhoneShell) for this step. */
   screen: ReactNode;
+  /** Optional block under the body (a list of links, a fact row). */
+  extra?: ReactNode;
 };
 
 const EASE = [0.22, 1, 0.36, 1] as const;
@@ -85,6 +87,7 @@ function StepBlock({ index, step, total, active, onEnter, reduce }: { index: num
           >
             {step.body}
           </motion.p>
+          {step.extra && <div className="mt-6">{step.extra}</div>}
           <span className="sr-only">
             Step {index + 1} of {total}
           </span>

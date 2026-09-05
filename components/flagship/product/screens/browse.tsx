@@ -18,6 +18,7 @@ import {
   Gauge,
   HelpCircle,
   History,
+  Info,
   MapPin,
   Search,
   Settings,
@@ -32,6 +33,7 @@ import {
 import { APP, PHONE_H, PHONE_W, PhoneShell } from "../device";
 import { BRAKES, ChatScreen, OtoTurn, UserBubble } from "./chat";
 import { SERVICES as CATALOG } from "@/lib/service-catalog";
+import { SERVICE_COPY } from "@/lib/service-copy";
 
 /**
  * The booking flow's first two screens (otopair-1 app/(booking-flow)):
@@ -68,33 +70,33 @@ export const TABS: { key: TabKey; label: string; subtitle: string; icon: LucideI
   { key: "inspections", label: "Inspections", subtitle: "State, emissions, diagnostics", icon: ClipboardCheck, category: "Inspections" },
 ];
 
-type Entry = { label: string; tab: TabKey; time: string; icon: LucideIcon; quote?: boolean };
+type Entry = { label: string; tab: TabKey; time: string; icon: LucideIcon; quote?: boolean; /** The app's "Shows for:" label. */ showsFor: string };
 
 /** label, tab, per-car time ("About …", as the app shows once the car is
  *  known), icon. Order within a tab is the app's. */
 export const TAXONOMY: Record<string, Entry> = {
-  oil_change: { label: "Oil & filter change", tab: "routine_upkeep", time: "About 24 min", icon: Droplet },
-  filter_replacement: { label: "Air & cabin filters", tab: "routine_upkeep", time: "About 21 min", icon: Filter },
-  battery_test: { label: "Battery test", tab: "routine_upkeep", time: "About 12 min", icon: Battery },
-  battery_replacement: { label: "Battery replacement", tab: "routine_upkeep", time: "About 30 min", icon: BatteryCharging },
-  tire_rotation: { label: "Tire rotation", tab: "tires_brakes", time: "About 24 min", icon: Disc },
-  tire_balance: { label: "Tire balancing", tab: "tires_brakes", time: "About 45 min", icon: Gauge },
-  wheel_alignment: { label: "Wheel alignment", tab: "tires_brakes", time: "About 1 hr", icon: Settings },
-  tire_replacement: { label: "Tire replacement", tab: "tires_brakes", time: "Quote", icon: Disc, quote: true },
-  brake_pad_replacement: { label: "Brake pad replacement", tab: "tires_brakes", time: "About 1 hr 30 min", icon: Disc },
-  rotor_replacement: { label: "Brake rotor replacement", tab: "tires_brakes", time: "About 3 hr", icon: Disc },
-  brake_fluid_flush: { label: "Brake fluid flush", tab: "tires_brakes", time: "About 51 min", icon: Droplet },
-  spark_plugs: { label: "Spark plug replacement", tab: "major_service", time: "About 1 hr 30 min", icon: Sparkles },
-  timing_belt: { label: "Timing belt replacement", tab: "major_service", time: "About 5 hr", icon: Wrench },
-  coolant_flush: { label: "Coolant flush", tab: "major_service", time: "About 1 hr 15 min", icon: Droplet },
-  transmission_service: { label: "Transmission fluid change", tab: "major_service", time: "About 1 hr 30 min", icon: Droplet },
-  power_steering_flush: { label: "Power steering flush", tab: "major_service", time: "About 45 min", icon: Droplet },
-  differential_service: { label: "Differential fluid change", tab: "major_service", time: "About 1 hr", icon: Droplet },
-  fuel_system_cleaning: { label: "Fuel system cleaning", tab: "major_service", time: "About 1 hr", icon: Sparkles },
-  state_inspection: { label: "State inspection", tab: "inspections", time: "About 30 min", icon: ClipboardCheck },
-  emissions_test: { label: "Emissions test", tab: "inspections", time: "About 18 min", icon: ShieldCheck },
-  check_engine_light: { label: "Check-engine light diagnosis", tab: "inspections", time: "About 1 hr", icon: Zap },
-  diagnostic_scan: { label: "Diagnostic scan", tab: "inspections", time: "About 30 min", icon: Search },
+  oil_change: { label: "Oil & filter change", tab: "routine_upkeep", time: "About 24 min", icon: Droplet, showsFor: "Gas engines" },
+  filter_replacement: { label: "Air & cabin filters", tab: "routine_upkeep", time: "About 21 min", icon: Filter, showsFor: "All vehicles" },
+  battery_test: { label: "Battery test", tab: "routine_upkeep", time: "About 12 min", icon: Battery, showsFor: "All vehicles" },
+  battery_replacement: { label: "Battery replacement", tab: "routine_upkeep", time: "About 30 min", icon: BatteryCharging, showsFor: "All vehicles" },
+  tire_rotation: { label: "Tire rotation", tab: "tires_brakes", time: "About 24 min", icon: Disc, showsFor: "Rotatable tires" },
+  tire_balance: { label: "Tire balancing", tab: "tires_brakes", time: "About 45 min", icon: Gauge, showsFor: "All vehicles" },
+  wheel_alignment: { label: "Wheel alignment", tab: "tires_brakes", time: "About 1 hr", icon: Settings, showsFor: "All vehicles" },
+  tire_replacement: { label: "Tire replacement", tab: "tires_brakes", time: "Quote", icon: Disc, quote: true, showsFor: "All vehicles" },
+  brake_pad_replacement: { label: "Brake pad replacement", tab: "tires_brakes", time: "About 1 hr 30 min", icon: Disc, showsFor: "All vehicles" },
+  rotor_replacement: { label: "Brake rotor replacement", tab: "tires_brakes", time: "About 3 hr", icon: Disc, showsFor: "All vehicles" },
+  brake_fluid_flush: { label: "Brake fluid flush", tab: "tires_brakes", time: "About 51 min", icon: Droplet, showsFor: "All vehicles" },
+  spark_plugs: { label: "Spark plug replacement", tab: "major_service", time: "About 1 hr 30 min", icon: Sparkles, showsFor: "Gas engines" },
+  timing_belt: { label: "Timing belt replacement", tab: "major_service", time: "About 5 hr", icon: Wrench, showsFor: "Belt-driven engines" },
+  coolant_flush: { label: "Coolant flush", tab: "major_service", time: "About 1 hr 15 min", icon: Droplet, showsFor: "All vehicles" },
+  transmission_service: { label: "Transmission fluid change", tab: "major_service", time: "About 1 hr 30 min", icon: Droplet, showsFor: "All vehicles" },
+  power_steering_flush: { label: "Power steering flush", tab: "major_service", time: "About 45 min", icon: Droplet, showsFor: "Hydraulic steering" },
+  differential_service: { label: "Differential fluid change", tab: "major_service", time: "About 1 hr", icon: Droplet, showsFor: "AWD / RWD only" },
+  fuel_system_cleaning: { label: "Fuel system cleaning", tab: "major_service", time: "About 1 hr", icon: Sparkles, showsFor: "Gas engines" },
+  state_inspection: { label: "State inspection", tab: "inspections", time: "About 30 min", icon: ClipboardCheck, showsFor: "Registered vehicles" },
+  emissions_test: { label: "Emissions test", tab: "inspections", time: "About 18 min", icon: ShieldCheck, showsFor: "Gas engines" },
+  check_engine_light: { label: "Check-engine light diagnosis", tab: "inspections", time: "About 1 hr", icon: Zap, showsFor: "1996 & newer" },
+  diagnostic_scan: { label: "Diagnostic scan", tab: "inspections", time: "About 30 min", icon: Search, showsFor: "1996 & newer" },
 };
 
 const TAB_ORDER: Record<TabKey, string[]> = {
@@ -402,15 +404,14 @@ export function ServiceRow({ slug, selected = false, highlight = false }: { slug
   );
 }
 
-/** `forSlug` picks the tab from a service slug (server pages cannot call
- *  tabOf, a client-module function). */
-export function CategoryScreen({ tab: tabProp, forSlug, selected = [], highlight, mapSrc = null }: { tab?: TabKey; forSlug?: string; selected?: string[]; highlight?: string; mapSrc?: string | null }) {
-  const tab: TabKey = tabProp ?? (forSlug ? tabOf(forSlug) : "routine_upkeep");
+/** The category screen's glass (sheet, rows, Continue bar) without the
+ *  device, so the info sheet can sit over it. */
+function CategoryBody({ tab, selected = [], highlight, mapSrc = null }: { tab: TabKey; selected?: string[]; highlight?: string; mapSrc?: string | null }) {
   const t = TABS.find((x) => x.key === tab)!;
   const slugs = TAB_ORDER[tab];
   const count = selected.length;
   return (
-    <PhoneShell>
+    <>
       <MapBackdrop src={mapSrc} />
       <GlassSheet top={SHEET_TOP_FULL}>
         <TopRow back />
@@ -441,6 +442,111 @@ export function CategoryScreen({ tab: tabProp, forSlug, selected = [], highlight
           </span>
           <ArrowRight className="h-[20px] w-[20px] text-white" strokeWidth={2} />
         </span>
+      </div>
+    </>
+  );
+}
+
+/** `forSlug` picks the tab from a service slug (server pages cannot call
+ *  tabOf, a client-module function). */
+export function CategoryScreen({ tab: tabProp, forSlug, selected = [], highlight, mapSrc = null }: { tab?: TabKey; forSlug?: string; selected?: string[]; highlight?: string; mapSrc?: string | null }) {
+  const tab: TabKey = tabProp ?? (forSlug ? tabOf(forSlug) : "routine_upkeep");
+  return (
+    <PhoneShell>
+      <CategoryBody tab={tab} selected={selected} highlight={highlight} mapSrc={mapSrc} />
+    </PhoneShell>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* ServiceInfoSheet — the ⓘ on a service row                           */
+/* ------------------------------------------------------------------ */
+
+const SHEET_H = Math.min(680, Math.round(PHONE_H * 0.78));
+
+/** SimpleSection: a 3×14 blue bar, a 12px caps title, 16/22 body. */
+function InfoSection({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="mb-[22px]">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="h-[14px] w-[3px] rounded-[2px]" style={{ backgroundColor: APP.blue }} />
+        <span className="text-[12px] font-bold uppercase tracking-[1.2px]" style={{ color: APP.blue }}>
+          {title}
+        </span>
+      </div>
+      <p className="text-[16px] leading-[22px]" style={{ color: "#374151" }}>
+        {body}
+      </p>
+    </div>
+  );
+}
+
+/**
+ * The info sheet (components/booking-flow/ServiceInfoSheet.tsx) over the
+ * category list: a floating white sheet (radius 46, handle 36×5), the
+ * service header (icon tile 48, tab eyebrow, 22px title), the QUICK LOOK
+ * card with the guide's three lines, WHAT IT IS / WHY IT MATTERS / SIGNS
+ * YOU MIGHT NEED IT, and the time + "Shows for" chips. The words are the
+ * app's (lib/service-copy.ts mirrors constants/serviceCopy.ts, simple
+ * tier), never paraphrased.
+ */
+export function ServiceInfoScreen({ slug, mapSrc = null }: { slug: string; mapSrc?: string | null }) {
+  const e = TAXONOMY[slug];
+  const c = SERVICE_COPY[slug];
+  if (!e || !c) return <CategoryScreen forSlug={slug} selected={[slug]} mapSrc={mapSrc} />;
+  const t = TABS.find((x) => x.key === e.tab)!;
+  const Icon = e.icon;
+  return (
+    <PhoneShell>
+      <CategoryBody tab={e.tab} selected={[slug]} mapSrc={mapSrc} />
+      <div className="absolute inset-0 z-30" style={{ backgroundColor: "rgba(0,0,0,0.4)" }} />
+      <div className="absolute inset-x-2 bottom-2 z-40 overflow-hidden rounded-[46px] bg-white" style={{ height: SHEET_H }}>
+        <div className="flex justify-center pt-[10px]">
+          <span className="h-[5px] w-[36px] rounded-[2.5px]" style={{ backgroundColor: "#D1D5DB" }} />
+        </div>
+        <div className="px-[22px] pb-7 pt-[10px]">
+          <div className="mb-5 flex items-center gap-[14px]">
+            <span className="flex h-[48px] w-[48px] shrink-0 items-center justify-center rounded-[14px]" style={{ backgroundColor: "rgba(82,153,254,0.12)", border: "1px solid rgba(82,153,254,0.24)" }}>
+              <Icon className="h-[24px] w-[24px]" style={{ color: "#4B5563" }} strokeWidth={2} />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="mb-[2px] block text-[11px] font-bold tracking-[1.2px]" style={{ color: APP.blue }}>
+                {t.label.toUpperCase()}
+              </span>
+              <span className="line-clamp-2 text-[22px] font-bold leading-[28px]" style={{ color: INK }}>
+                {e.label}
+              </span>
+            </span>
+          </div>
+          <div className="mb-6 rounded-[18px] px-4 py-[14px]" style={{ backgroundColor: "rgba(82,153,254,0.08)", border: "1px solid rgba(82,153,254,0.28)", boxShadow: "0px 2px 4px rgba(0,0,0,0.05), 0px 10px 28px rgba(0,0,0,0.07)" }}>
+            <div className="mb-2 flex items-center gap-[6px]">
+              <Sparkles className="h-[14px] w-[14px]" style={{ color: APP.blue }} strokeWidth={2.2} />
+              <span className="text-[11px] font-bold tracking-[1.2px]" style={{ color: APP.blue }}>
+                QUICK LOOK
+              </span>
+            </div>
+            <div className="flex flex-col gap-1">
+              {c.quick.map((l) => (
+                <p key={l} className="text-[16px] font-medium leading-[22px]" style={{ color: INK }}>
+                  {l}
+                </p>
+              ))}
+            </div>
+          </div>
+          <InfoSection title="What it is" body={c.whatItIs} />
+          <InfoSection title="Why it matters" body={c.whyItMatters} />
+          <InfoSection title="Signs you might need it" body={c.signs} />
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-4" style={{ borderColor: "rgba(15,23,42,0.08)" }}>
+            <span className="flex items-center gap-[6px] rounded-full px-[10px] py-[6px] text-[14px] font-semibold" style={{ color: "#1F2937", backgroundColor: "rgba(15,23,42,0.05)", border: "1px solid rgba(15,23,42,0.06)" }}>
+              <Clock className="h-[14px] w-[14px]" style={{ color: "#4B5563" }} strokeWidth={2} />
+              {e.time.replace("About ", "~")}
+            </span>
+            <span className="flex items-center gap-[6px] rounded-full px-[10px] py-[6px] text-[14px] font-semibold" style={{ color: "#1F2937", backgroundColor: "rgba(15,23,42,0.05)", border: "1px solid rgba(15,23,42,0.06)" }}>
+              <Info className="h-[14px] w-[14px]" style={{ color: "#4B5563" }} strokeWidth={2} />
+              Shows for: {e.showsFor}
+            </span>
+          </div>
+        </div>
       </div>
     </PhoneShell>
   );

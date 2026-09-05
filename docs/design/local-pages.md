@@ -85,10 +85,7 @@ logo; `project` places real shops as pins on the phone map).
 | /security, /accessibility, /privacy, /terms | | documents | none (type only) | | | |
 | /apply | hero | Apply to partner | the three-step form on a paper plate | | | shell |
 | /car-data | body | the lookup tool | none (tool on the paper plate) | | | |
-| /developers | hero | The car data as an API | a terminal block with real keyless requests | | | shell |
-| /developers | 1 | What comes back | none (four rows) | | | |
-| /developers | 2 | Try it without an account | the endpoint list beside a second terminal | | | |
-| /developers | 3 | Docs and access | none (four link cards) | | | |
+
 
 Rule checks: no two consecutive rows share a device; the six openers are
 map / full sheet / category list / form / low sheet with browse card /
@@ -99,16 +96,33 @@ draw, the tab loop, the live map).
 
 The car-data API is its own product on its own origin: the `oto-facts`
 repo, `next dev -p 3100`, whose layout declares Otopair as its parent
-organization. `/developers` on otopair.com is the hand-off to it, not a
-second portal: what the API returns, the keyless sandbox anyone can curl,
-where the docs live, and how access is granted. Every URL resolves
-through `lib/otoindex.ts`, which reads `NEXT_PUBLIC_OTOINDEX_URL` and
-falls back to `http://localhost:3100` in development and to the sibling's
-own declared default in production, because the brand and domain are not
-decided yet. Set one variable in each repo when they are.
+organization. otopair.com has no developer page at all: `/developers` was
+retired on 2026-09-05 and 307-redirects to the OtoIndex origin, so the API
+has exactly one front door. Everything that used to point at it (the about
+page's data-asset paragraph, the car-data CTA, the contact lane, the
+security page's key sentence, the director panel's usage card) now links
+to OtoIndex directly.
 
-The Clerk and Convex account island stays below the fold for people who
-minted a key through Otopair before the split.
+Every URL resolves through `lib/otoindex.ts`, which reads
+`NEXT_PUBLIC_OTOINDEX_URL` and falls back to `http://localhost:3100` in
+development and to the sibling's own declared default in production,
+because the brand and domain are not decided yet. Set one variable in each
+repo when they are. `convex/devPortal` is untouched but no longer has a UI
+on this site.
+
+## The hero wash must land on white
+
+`PageShell`'s hero gradient uses `min(Xpx, 100%)` for the white stop: the
+px value sets the fade rate, the `100%` caps it at the header's own bottom
+edge. Without the cap a short hero (terms, privacy, coverage, apply,
+contact) ended mid-blue against the white page and showed a hard
+horizontal seam. Measured across all 36 marketing pages: no seam, max
+channel delta 2.
+
+Store badges are always the official artwork. The text-plate fallback that
+read "App Store / Coming soon" is gone; `DownloadApp` renders the real
+badges (non-links while the store URLs are placeholders) with one shared
+caption, and takes `align="start"` for a left-aligned hero.
 
 ## Designed for release, populated in development
 

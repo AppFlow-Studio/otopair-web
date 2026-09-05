@@ -12,6 +12,7 @@ import { Plate } from "@/components/flagship/product/device";
 import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
+import { OTOINDEX } from "@/lib/otoindex";
 import { DATA_EMAIL, LEGAL_NAME, LOCALITY, POSTAL_ADDRESS, SUPPORT_EMAIL } from "@/lib/site";
 
 /**
@@ -49,8 +50,8 @@ const LANES = [
   },
   {
     title: "Car data & API",
-    body: "The vehicle-data catalogue is published as OtoIndex. Sandbox and docs first, then request a key.",
-    action: { label: "The developer hand-off", href: "/developers" },
+    body: "The vehicle-data catalogue is published as its own product, OtoIndex. Sandbox and docs first, then request a key.",
+    action: { label: "OtoIndex docs and sandbox", href: OTOINDEX.docs },
     secondary: { label: `Email ${DATA_EMAIL}`, href: `mailto:${DATA_EMAIL}?subject=Data%20API%20access` },
   },
   {
@@ -95,7 +96,7 @@ export default function ContactClient() {
       <PillNav links={NAV_LINKS} cta={NAV_CTA} />
       <div className="isolate">
         {/* ---------- 1. Hero: the ask left, the working form right ---------- */}
-        <header className="w-full overflow-x-clip bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_640px)] tab:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_820px)]">
+        <header className="w-full overflow-x-clip bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_min(640px,100%))] tab:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_min(820px,100%))]">
           <div className="mx-auto grid w-full max-w-[1190px] gap-12 px-6 pt-[128px] sm:px-10 lg:grid-cols-12 lg:items-center lg:gap-14 lg:pt-[150px]">
             <div className="lg:col-span-5">
               <Reveal>

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
-import { ComingSoonPlates } from "@/components/flagship/download-app";
+import DownloadApp from "@/components/flagship/download-app";
 import { HeroPhone } from "@/components/flagship/local-sections";
 import { OtoListening, PhoneRow, WhereItWorks } from "@/components/flagship/editorial-sections";
 import { BookShopsScreen } from "@/components/flagship/product/screens/book";
@@ -29,8 +29,10 @@ export const revalidate = 300;
  * listening, with the launch list and the store plates under the lede;
  * "what you get" is three real screens with one line each; "where it
  * works" is the borough rail. The store badges come from download-app.tsx,
- * which renders a "coming soon" plate while the listings are placeholders,
- * so the page is truthful before and after they go live.
+ * which renders the official badge artwork and one shared "coming soon"
+ * caption while the listings are placeholders, so the page is truthful
+ * before and after they go live and never shows a text box in place of a
+ * badge.
  */
 const FAQ: FaqItem[] = [
   {
@@ -73,7 +75,7 @@ export default async function DownloadPage() {
       hero={
         <div className="flex w-full flex-col items-start gap-4">
           <WaitlistForm list="app" />
-          <ComingSoonPlates className="justify-start" />
+          <DownloadApp align="start" />
         </div>
       }
       width="wide"

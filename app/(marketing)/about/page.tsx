@@ -6,6 +6,7 @@ import { DataProvenance, TwoSides } from "@/components/flagship/editorial-sectio
 import { Plate } from "@/components/flagship/product/device";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
+import { OTOINDEX } from "@/lib/otoindex";
 import { BOOKABLE_SERVICE_COUNT } from "@/lib/service-catalog";
 import { LEGAL_NAME, LOCALITY, SITE_NAME, SUPPORT_EMAIL } from "@/lib/site";
 import { BOROUGHS } from "@/lib/coverage";
@@ -327,10 +328,10 @@ export default function AboutPage() {
           <div className="tab:col-span-5">
             <DataProvenance />
             <p className="mt-5 max-w-[42ch] text-[15px] leading-[1.55] text-[#777169]">
-              The catalogue is open to developers through an API.{" "}
-              <Link href="/developers" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              The catalogue is published as its own product, OtoIndex, and is open to developers through an API.{" "}
+              <a href={OTOINDEX.docs} className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
                 See the endpoints
-              </Link>{" "}
+              </a>{" "}
               or{" "}
               <Link href="/car-data" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
                 look up a car

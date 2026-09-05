@@ -146,17 +146,22 @@ export default function PageShell({
       <div className="isolate">
         {/* Hero wash — same blue as the home/partner heroes so the glass nav
             reads identically here. The split hero runs it deeper so the
-            visual's plate sits on blue, not on the white below it. */}
+            visual's plate sits on blue, not on the white below it.
+            `min(Xpx, 100%)` is load-bearing: the px stop sets the fade rate,
+            and the 100% caps it at the header's own bottom edge so a short
+            hero (terms, privacy, coverage) still reaches white exactly where
+            the section below begins. Without the cap the wash was cut off
+            mid-blue against the white page, a visible horizontal seam. */}
         <header
           // overflow-x-clip: the split hero's radial glow (-inset-10) and a
           // device's shadow may extend past the viewport on phones; clipping
           // the x-axis only stops the 16px horizontal scroll that produced.
           className={`w-full overflow-x-clip ${
             split
-              ? "bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_640px)] tab:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_760px)]"
+              ? "bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_min(640px,100%))] tab:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_min(760px,100%))]"
               : stack
-                ? "bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_760px)] tab:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_1040px)]"
-                : "bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_460px)]"
+                ? "bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_min(760px,100%))] tab:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_min(1040px,100%))]"
+                : "bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_min(460px,100%))]"
           }`}
         >
           {stack && (

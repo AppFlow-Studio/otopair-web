@@ -36,7 +36,7 @@ function Navbar() {
     const isHome = pathname === "/"
     // Every marketing page ships its own floating glass pill nav (PageShell,
     // the home page, the partner page). Since 2026-09-05 that includes the
-    // last three older routes (/apply, /car-data, /developers), so this
+    // last older routes (/apply, /car-data), so this
     // legacy chrome stands down everywhere. The list stays so a future
     // route without the shell can opt back in.
     const LEGACY_CHROME_ROUTES: string[] = []

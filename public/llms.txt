@@ -44,7 +44,6 @@
 - https://otopair.com/help: Answer-first help articles (one question per page under /help/)
 - https://otopair.com/download: Get the app
 - https://otopair.com/car-data: Public vehicle-data lookup
-- https://otopair.com/developers: Car Data API for developers
 - https://otopair.com/press: Press kit and brand assets
 - https://otopair.com/careers: Working at Otopair
 - https://otopair.com/accessibility: Accessibility statement

@@ -10,6 +10,7 @@ import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { LayerLetter } from "@/convex/lib/dataLayers";
+import { OTOINDEX } from "@/lib/otoindex";
 
 type TeaserSpec = { label: string; value: string; layer: LayerLetter };
 type Teaser =
@@ -225,8 +226,8 @@ export function CarDataClient() {
           <p className="text-[15px]" style={{ color: muted }}>
             Building something with car data?
           </p>
-          <a href="/developers" className={BTN_OUT}>
-            The developer portal
+          <a href={OTOINDEX.docs} className={BTN_OUT}>
+            The OtoIndex API docs
           </a>
           <a
             href="mailto:data@otopair.com?subject=Data%20API%20access"
@@ -258,8 +259,11 @@ function TeaserCard({ t }: { t: Extract<NonNullable<Teaser>, { object: "teaser" 
             className="h-24 w-40 rounded-[16px] bg-white object-contain"
           />
         ) : (
-          <div className="flex h-24 w-40 items-center justify-center rounded-[16px] border border-dashed border-[#1a1a1a]/15 text-[12px] text-[#8f8a82]">
-            render coming soon
+          // No render on file yet: the pin mark on the same plate, never a
+          // dashed box with text where a picture belongs.
+          <div className="flex h-24 w-40 items-center justify-center rounded-[16px] bg-[#f1efe9]">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/images/landing/pin-logo.png" alt="" width={44} height={44} className="h-[44px] w-[44px] object-contain opacity-70" />
           </div>
         )}
         <div>

@@ -117,7 +117,6 @@ export const PUBLIC_ROUTES: ReadonlyArray<{
   { path: "/guides", changeFrequency: "monthly", priority: 0.4 },
   { path: "/guides/dealership-vs-independent-mechanic", changeFrequency: "yearly", priority: 0.5 },
   { path: "/car-data", changeFrequency: "monthly", priority: 0.5 },
-  { path: "/developers", changeFrequency: "monthly", priority: 0.4 },
   { path: "/contact", changeFrequency: "yearly", priority: 0.5 },
   { path: "/privacy", changeFrequency: "yearly", priority: 0.2 },
   { path: "/terms", changeFrequency: "yearly", priority: 0.2 },

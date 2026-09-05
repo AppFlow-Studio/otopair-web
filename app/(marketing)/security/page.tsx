@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { OTOINDEX } from "@/lib/otoindex";
 import PageShell, { Section, Summary, type TocItem } from "@/components/flagship/page-shell";
 import { FaqSection } from "@/components/seo/faq";
 import { SITE_NAME, SUPPORT_EMAIL } from "@/lib/site";
@@ -152,7 +153,7 @@ export default function SecurityPage() {
         <ul>
           <li>
             <strong>API keys are stored as hashes.</strong> A key for the{" "}
-            <Link href="/developers">vehicle-data API</Link> is shown once, when it is created.{" "}
+            <a href={OTOINDEX.authentication}>vehicle-data API</a> is shown once, when it is created.{" "}
             {SITE_NAME} keeps only its SHA-256 hash and a short display prefix, so a copy of the
             database does not contain a usable key.
           </li>

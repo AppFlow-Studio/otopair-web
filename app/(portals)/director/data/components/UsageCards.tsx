@@ -2,12 +2,13 @@
 
 // Zone 4 — product usage: external Data API, Oto AI (with clearly-labeled
 // cost estimate), and app analytics pulse. No key-management UI here — that
-// lives in /developers.
+// lives on OtoIndex (lib/otoindex.ts).
 
 import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
 import type { api } from "@/convex/_generated/api";
 import { CARD, MICRO_H, PILL, fmtNum, Sparkline, MiniBars, Skeleton } from "./shared";
+import { OTOINDEX } from "@/lib/otoindex";
 
 type ApiSeries = FunctionReturnType<typeof api.dataInsights.apiUsageSeries> | undefined;
 type OtoUsage = FunctionReturnType<typeof api.directorData.otoUsage> | undefined;
@@ -58,7 +59,7 @@ export function UsageCards({
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-      <CardShell title="External API" linkHref="/developers" linkLabel="Key management">
+      <CardShell title="External API" linkHref={OTOINDEX.home} linkLabel="OtoIndex">
         {apiSeries === undefined ? (
           <Skeleton className="h-24 w-full" />
         ) : apiSeries.length === 0 ? (

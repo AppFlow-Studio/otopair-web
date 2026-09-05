@@ -61,9 +61,6 @@ const isPublicRoute = createRouteMatcher([
   // Public car-data teaser (marketing) — anonymous lookup, layer-gated
   // teaser subset served by convex/dataPublic.teaserLookup.
   "/car-data(.*)",
-  // Developer portal — public landing; the dashboard gates in-component via
-  // Clerk (SignedIn/SignedOut) and every convex function checks ctx.auth.
-  "/developers(.*)",
 ]);
 
 const isPortalRoute = createRouteMatcher([

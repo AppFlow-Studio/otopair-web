@@ -3,6 +3,7 @@ import Link from "next/link";
 import PageShell, { Section, Summary, type TocItem } from "@/components/flagship/page-shell";
 import { FaqSection } from "@/components/seo/faq";
 import { SITE_NAME, SUPPORT_EMAIL } from "@/lib/site";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { Plate } from "@/components/flagship/product/device";
 import { ApproveEstimateScreen } from "@/components/flagship/product/screens/bookings";
 import { PhoneAt } from "../pricing/sections";
@@ -107,7 +108,18 @@ export default function TrustAndSafetyPage() {
         </p>
       </Section>
 
-      <Section id="price" title="How is the price protected?" after={<Plate tone="pale" className="flex justify-center px-6 pt-8" clip><div className="-mb-[22%]"><PhoneAt w={300}><ApproveEstimateScreen /></PhoneAt></div></Plate>}>
+      {/* Motion nested under motion: page-shell wraps every Section in a
+          Reveal, so this object rides one already. It is allowed here because
+          the payload is a Plate holding a PhoneAt and device.tsx carries no
+          motion of its own — the object would otherwise never move at all —
+          and it is bounded: the rise is 14, not the house 18, so it cannot
+          compound with the section's own 26 into a lurch. (FaqList used to be
+          cited here; it no longer nests — it takes cascade={false} under a
+          Section and rides the section's single Reveal whole.) Reveal carries
+          its own observer, so the delay separates the object from the clauses
+          only when the whole section fits one screen; further down the page
+          the phone simply settles on its own entry. */}
+      <Section id="price" title="How is the price protected?" after={<Reveal delay={0.12} y={14}><Plate tone="pale" className="flex justify-center px-6 pt-8" clip><div className="-mb-[22%]"><PhoneAt w={300}><ApproveEstimateScreen /></PhoneAt></div></Plate></Reveal>}>
         <p>
           The total you approve when you book is the contract. You see the full total for your exact
           car, with parts, labor, tax and {SITE_NAME}&rsquo;s service fee inside it, before you

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import PageShell from "@/components/flagship/page-shell";
 import { PillLink } from "@/components/flagship/pill-button";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import ApplyForm from "./apply-form";
 
 export const metadata: Metadata = {
@@ -51,14 +52,19 @@ export default function ApplyPage() {
         </PillLink>
       }
     >
-      <p className="max-w-[62ch] text-[17px] leading-[1.65] text-[#4c5661]">
-        Already on the network?{" "}
-        <a href="/dashboard" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-          Sign in to your dashboard
-        </a>
-        . Not sure yet? The <a href="/for-shops" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">for-shops tour</a> shows the dashboard page by page, and{" "}
-        <a href="/how-shops-are-verified" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">how shops are verified</a> lists what the review checks.
-      </p>
+      {/* The page's only content below the shell: one block of prose, so it
+          settles as one block. The hero's facts list and the form itself are
+          already staggered by PageShell (hero + visual). */}
+      <Reveal>
+        <p className="max-w-[62ch] text-[17px] leading-[1.65] text-[#4c5661]">
+          Already on the network?{" "}
+          <a href="/dashboard" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+            Sign in to your dashboard
+          </a>
+          . Not sure yet? The <a href="/for-shops" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">for-shops tour</a> shows the dashboard page by page, and{" "}
+          <a href="/how-shops-are-verified" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">how shops are verified</a> lists what the review checks.
+        </p>
+      </Reveal>
     </PageShell>
   );
 }

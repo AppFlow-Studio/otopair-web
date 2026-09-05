@@ -434,6 +434,22 @@ function CategoryBody({ tab, selected = [], highlight, mapSrc = null }: { tab: T
           ))}
         </div>
       </GlassSheet>
+      {/* In the app this list scrolls, so the rows that do not fit are simply
+          below the fold. A still cannot scroll, so on the seven-service tabs
+          (Tires & Brakes, Scheduled service) the last card ran straight
+          through the Continue pill — and because the pill is 45% blue while
+          nothing is selected, the card's own text showed through it. This is
+          what the bottom of a scrolled list actually looks like: the rows fade
+          into the sheet before they reach the CTA. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-[150px]"
+        // Opaque by 38% of 150px = 57px down, i.e. 93px above the phone's
+        // bottom edge — one pixel clear of the pill's own top (30px inset +
+        // 56px pill + 8px). Anything softer and the row still reads through
+        // the translucent pill.
+        style={{ background: "linear-gradient(180deg, rgba(232,238,243,0) 0%, rgba(232,238,243,0.88) 24%, #E8EEF3 38%)" }}
+      />
       {/* StickyContinueBar */}
       <div className="absolute inset-x-0 bottom-0 z-20 px-4 pb-[30px] pt-2">
         <span className="flex min-h-[56px] items-center justify-between rounded-full px-[22px] py-4" style={{ backgroundColor: count ? APP.blue : "rgba(82,153,254,0.45)" }}>

@@ -3,6 +3,7 @@ import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
 import { TextLink } from "@/components/flagship/pill-button";
 import { HeroPhone, ShopsVerified } from "@/components/flagship/local-sections";
+import { Reveal, Seq, Sequence } from "@/components/flagship/landing/reveal";
 import { ShopDirectory, ShopSearch } from "@/components/flagship/shop-finder";
 import { SelectServicesScreen } from "@/components/flagship/product/screens/browse";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
@@ -158,7 +159,10 @@ export default async function ShopsDirectoryPage() {
       {/* ---------- The directory, filtered by the search ---------- */}
       <section id="directory" className="scroll-mt-28">
         {count === 0 ? (
-          <>
+          // Empty state: a heading and the prose that answers it are one
+          // thought, so they arrive as one block (motion.md — never a
+          // paragraph at a time).
+          <Reveal>
             <h2 className={H2}>Verified shops are being onboarded now.</h2>
             <div className={`mt-6 ${PROSE}`}>
               <p>
@@ -171,8 +175,14 @@ export default async function ShopsDirectoryPage() {
                 or <Link href="/apply">apply in two minutes</Link>.
               </p>
             </div>
-          </>
+          </Reveal>
         ) : (
+          // Static on purpose. ShopDirectory choreographs itself: a Reveal on
+          // the heading block that outlives the query, a Stagger per group of
+          // cards, and a Reveal on the sticky map (shop-finder.tsx,
+          // product/local.tsx). A Reveal here would fade an already-fading
+          // subtree — and put a transformed ancestor over the map column's
+          // `lg:sticky`.
           <ShopDirectory shops={shops} groups={grouped} />
         )}
       </section>
@@ -182,25 +192,39 @@ export default async function ShopsDirectoryPage() {
 
       {/* ---------- Booking, and the questions ---------- */}
       <section id="details" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
-        <h2 className={H2}>The details, in plain terms.</h2>
-        <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
-          <div className={ROW} id="book">
-            <dt className={TERM}>How do I book one of these shops?</dt>
-            <dd className={ANSWER}>
-              <p>
-                In the Otopair app. Tell Oto what your car is doing, pick a verified shop, and see the full total for
-                your exact car before you confirm. A $20 hold reserves the slot; the shop confirms the final price after
-                inspecting the car, and it cannot go above what you approved without your OK. Every shop page here lists
-                the services that shop has switched on, with its hours and location.
-              </p>
-              <p>
-                <Link href="/download">Get notified at launch</Link> · <Link href="/services">Every service you can book</Link>{" "}
-                · <Link href="/staten-island">Car repair in Staten Island</Link> ·{" "}
-                <Link href="/how-shops-are-verified">The full verification standard</Link>
-              </p>
-            </dd>
-          </div>
-        </dl>
+        {/* One clock for the heading and the booking row. The Seq sits AROUND
+            the whole <dl>; a wrapper between a <dl> and its rows would hand
+            `divide-y` the wrong children. FaqList below runs its own clock —
+            see the note there. */}
+        <Sequence>
+          <Seq>
+            <h2 className={H2}>The details, in plain terms.</h2>
+          </Seq>
+          <Seq at={0.08}>
+            <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
+              <div className={ROW} id="book">
+                <dt className={TERM}>How do I book one of these shops?</dt>
+                <dd className={ANSWER}>
+                  <p>
+                    In the Otopair app. Tell Oto what your car is doing, pick a verified shop, and see the full total for
+                    your exact car before you confirm. A $20 hold reserves the slot; the shop confirms the final price after
+                    inspecting the car, and it cannot go above what you approved without your OK. Every shop page here lists
+                    the services that shop has switched on, with its hours and location.
+                  </p>
+                  <p>
+                    <Link href="/download">Get notified at launch</Link> · <Link href="/services">Every service you can book</Link>{" "}
+                    · <Link href="/staten-island">Car repair in Staten Island</Link> ·{" "}
+                    <Link href="/how-shops-are-verified">The full verification standard</Link>
+                  </p>
+                </dd>
+              </div>
+            </dl>
+          </Seq>
+        </Sequence>
+        {/* Not wrapped: FaqList is already a Sequence, one Seq per Q&A row
+            (components/seo/faq.tsx). A wrapper here would fade the sheet in
+            on top of its own cascade. The two <dl>s still read as one ruled
+            sheet — neither wrapper carries a margin, so the rules meet. */}
         <FaqList items={FAQ} className="[&>div:first-child]:pt-6 tab:[&>div:first-child]:pt-7 [&_dd]:max-w-[60ch]" />
       </section>
     </PageShell>

@@ -36,6 +36,9 @@ export function matchShops(shops: PublicShopSummary[], q: string): PublicShopSum
 /* The search bar (hero)                                               */
 /* ------------------------------------------------------------------ */
 
+/* Deliberately un-animated: it is a form field, and it is rendered into
+   PageShell's `hero` slot, which the shell already reveals. */
+
 function SearchInner({ count }: { count: number }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -150,6 +153,17 @@ function DirectoryInner({ shops, groups }: { shops: PublicShopSummary[]; groups:
 
   return (
     <>
+      {/* No entrance here, on purpose. Every layer above this one already
+          animates: /shops wraps <ShopDirectory> in a Reveal, and
+          DirectoryWithMap Reveals its map and Staggers its cards. A Reveal
+          on this heading would be the third fade on the same scroll and
+          would compound another 26px of travel onto the block. It would
+          also fire late: DirectoryInner sits behind a <Suspense> (it reads
+          useSearchParams), so it mounts after hydration and a whileInView
+          here would pop in front of a reader already looking at it. The
+          heading is an aria-live region whose text is rewritten on every
+          keystroke, and leaving it static is what keeps a filtered result
+          from re-animating under the cursor. */}
       <h2 className={H2} aria-live="polite">
         {heading}
       </h2>
@@ -172,6 +186,9 @@ function DirectoryInner({ shops, groups }: { shops: PublicShopSummary[]; groups:
 
       {n > 0 && (
         <div className="mt-10">
+          {/* Static on purpose. It is a jump rail, and it only exists while
+              the query is empty: a Stagger here would replay every time the
+              reader cleared the search box. */}
           {!q && shownGroups && (
             <nav aria-label="Neighborhoods" className="mb-8">
               <ul className="flex flex-wrap gap-2">

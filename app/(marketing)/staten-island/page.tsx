@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
 import NetworkMap from "@/components/flagship/landing/network-map";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { Bezel } from "@/components/flagship/bezel";
 import { HeroPhone, HubServices } from "@/components/flagship/local-sections";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
@@ -106,22 +107,27 @@ export default async function StatenIslandPage() {
 
       {/* ---------- The shops ---------- */}
       <section id="shops" className="scroll-mt-28">
-        <h2 className={H2}>Which Staten Island shops can I book?</h2>
-        <div className={`mt-6 ${PROSE}`}>
-          {shops.length > 0 ? (
-            <p>
-              {shops.length} verified {shops.length === 1 ? "shop is" : "shops are"} bookable on Staten Island today. Each one
-              has been reviewed and approved by Otopair, sets its own prices, and lists the services it offers on its
-              profile. The list is live.
-            </p>
-          ) : (
-            <p>
-              No verified shop is listed on this page yet. A shop appears here the day it has been reviewed and approved
-              by Otopair and is bookable in the app; until then, Oto is the fastest way to see who can take your car.{" "}
-              <Link href="/shops">Browse every verified shop</Link> as they come online.
-            </p>
-          )}
-        </div>
+        {/* Heading and the sentence that answers it are one block. The cards
+            below already stagger themselves — DirectoryWithMap runs them
+            through Stagger (components/flagship/product/local.tsx). */}
+        <Reveal>
+          <h2 className={H2}>Which Staten Island shops can I book?</h2>
+          <div className={`mt-6 ${PROSE}`}>
+            {shops.length > 0 ? (
+              <p>
+                {shops.length} verified {shops.length === 1 ? "shop is" : "shops are"} bookable on Staten Island today. Each one
+                has been reviewed and approved by Otopair, sets its own prices, and lists the services it offers on its
+                profile. The list is live.
+              </p>
+            ) : (
+              <p>
+                No verified shop is listed on this page yet. A shop appears here the day it has been reviewed and approved
+                by Otopair and is bookable in the app; until then, Oto is the fastest way to see who can take your car.{" "}
+                <Link href="/shops">Browse every verified shop</Link> as they come online.
+              </p>
+            )}
+          </div>
+        </Reveal>
         {shops.length > 0 && (
           <div className="mt-8">
             <DirectoryGrid shops={shops} />
@@ -131,14 +137,18 @@ export default async function StatenIslandPage() {
 
       {/* ---------- The live map, framed once ---------- */}
       <section id="map" className="scroll-mt-28 pt-16 tab:pt-20">
-        <figure>
-          <Bezel>
-            <NetworkMap frame={false} className="aspect-[16/10] w-full lg:aspect-[21/9]" />
-          </Bezel>
-          <figcaption className="mt-3 text-center text-[13.5px] tracking-[0.03em] text-[#1a1a1a]">
-            The network map, live. Zoom in on the island for the shops.
-          </figcaption>
-        </figure>
+        {/* The map is one heavy object: the framed plate and its caption
+            settle together, and nothing inside it is animated. */}
+        <Reveal>
+          <figure>
+            <Bezel>
+              <NetworkMap frame={false} className="aspect-[16/10] w-full lg:aspect-[21/9]" />
+            </Bezel>
+            <figcaption className="mt-3 text-center text-[13.5px] tracking-[0.03em] text-[#1a1a1a]">
+              The network map, live. Zoom in on the island for the shops.
+            </figcaption>
+          </figure>
+        </Reveal>
       </section>
 
       {/* ---------- The ten local service pages, beside the app's four lists ---------- */}
@@ -146,58 +156,74 @@ export default async function StatenIslandPage() {
 
       {/* ---------- Neighborhoods: a plain list, the served ones in ink ---------- */}
       <section id="neighborhoods" className="scroll-mt-28">
-        <h2 className={H2}>Which neighborhoods does Otopair cover?</h2>
-        <p className={`mt-6 ${PROSE}`}>
-          The whole island, from St. George to Tottenville. A shop&rsquo;s profile names the neighborhood it sits in;
-          the names in ink below have at least one verified shop today, and the rest are served by the nearest shop on
-          the map. Neighborhood pages will open as verified shops come online in each one.
-        </p>
-        <ul
-          className="mt-6 columns-2 gap-x-10 text-[15px] leading-[2] sm:columns-3 lg:columns-4"
-          aria-label="Staten Island neighborhoods"
-        >
-          {STATEN_ISLAND_NEIGHBORHOODS.map((n) => {
-            const on = served.has(n);
-            return (
-              <li key={n} className={on ? "font-medium text-[#1a1a1a]" : "text-[#777169]"}>
-                {n}
-              </li>
-            );
-          })}
-        </ul>
+        <Reveal>
+          <h2 className={H2}>Which neighborhoods does Otopair cover?</h2>
+          <p className={`mt-6 ${PROSE}`}>
+            The whole island, from St. George to Tottenville. A shop&rsquo;s profile names the neighborhood it sits in;
+            the names in ink below have at least one verified shop today, and the rest are served by the nearest shop on
+            the map. Neighborhood pages will open as verified shops come online in each one.
+          </p>
+        </Reveal>
+        {/* The whole roster settles as one: it is a set of place names in CSS
+            columns, not a rank, and per-name motion would read as a slideshow
+            (a wrapper between the <ul> and its <li>s would break the columns
+            anyway). */}
+        <Reveal delay={0.08}>
+          <ul
+            className="mt-6 columns-2 gap-x-10 text-[15px] leading-[2] sm:columns-3 lg:columns-4"
+            aria-label="Staten Island neighborhoods"
+          >
+            {STATEN_ISLAND_NEIGHBORHOODS.map((n) => {
+              const on = served.has(n);
+              return (
+                <li key={n} className={on ? "font-medium text-[#1a1a1a]" : "text-[#777169]"}>
+                  {n}
+                </li>
+              );
+            })}
+          </ul>
+        </Reveal>
       </section>
 
       {/* ---------- The details and the questions: one editorial list ---------- */}
       <section id="details" className="mt-16 scroll-mt-28 border-t border-[#1a1a1a]/10 pt-16 lg:mt-24 lg:pt-24">
-        <h2 className={H2}>The details, in plain terms.</h2>
-        <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
-          <div className={ROW} id="all-services">
-            <dt className={TERM}>How many services can I book here?</dt>
-            <dd className={ANSWER}>
-              <p>
-                All {BOOKABLE_SERVICE_COUNT}, in four categories: Routine, Tires &amp; Brakes, Scheduled Service and
-                Inspections. Each shop chooses which of them it offers, and Oto shows you only the services that apply
-                to your car. The <Link href="/services">full catalog</Link> has every one in detail.
-              </p>
-            </dd>
-          </div>
-          <div className={ROW} id="next">
-            <dt className={TERM}>Where is Otopair going next?</dt>
-            <dd className={ANSWER}>
-              <p>
-                Borough by borough:{" "}
-                {UPCOMING_BOROUGHS.map((b, i) => (
-                  <span key={b.slug}>
-                    <Link href={`/${b.slug}`}>{b.name}</Link> ({b.date})
-                    {i < UPCOMING_BOROUGHS.length - 1 ? ", " : "."}
-                  </span>
-                ))}{" "}
-                Brooklyn is next on the <Link href="/coverage">coverage ladder</Link>. Run a shop anywhere in New
-                York City? <Link href="/apply">Apply now</Link>; verified shops are what opens a borough.
-              </p>
-            </dd>
-          </div>
-        </dl>
+        <Reveal>
+          <h2 className={H2}>The details, in plain terms.</h2>
+        </Reveal>
+        {/* The definition rows are a <dl> of prose: one block, never term by
+            term. The FaqList below is NOT wrapped with them — it runs its own
+            Sequence and Seq's each row (components/seo/faq.tsx), so a Reveal
+            over it would compound a 26px rise onto the rows' own 14px one. */}
+        <Reveal delay={0.08}>
+          <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
+            <div className={ROW} id="all-services">
+              <dt className={TERM}>How many services can I book here?</dt>
+              <dd className={ANSWER}>
+                <p>
+                  All {BOOKABLE_SERVICE_COUNT}, in four categories: Routine, Tires &amp; Brakes, Scheduled Service and
+                  Inspections. Each shop chooses which of them it offers, and Oto shows you only the services that apply
+                  to your car. The <Link href="/services">full catalog</Link> has every one in detail.
+                </p>
+              </dd>
+            </div>
+            <div className={ROW} id="next">
+              <dt className={TERM}>Where is Otopair going next?</dt>
+              <dd className={ANSWER}>
+                <p>
+                  Borough by borough:{" "}
+                  {UPCOMING_BOROUGHS.map((b, i) => (
+                    <span key={b.slug}>
+                      <Link href={`/${b.slug}`}>{b.name}</Link> ({b.date})
+                      {i < UPCOMING_BOROUGHS.length - 1 ? ", " : "."}
+                    </span>
+                  ))}{" "}
+                  Brooklyn is next on the <Link href="/coverage">coverage ladder</Link>. Run a shop anywhere in New
+                  York City? <Link href="/apply">Apply now</Link>; verified shops are what opens a borough.
+                </p>
+              </dd>
+            </div>
+          </dl>
+        </Reveal>
         <FaqList items={FAQ} className="[&>div:first-child]:pt-6 tab:[&>div:first-child]:pt-7 [&_dd]:max-w-[60ch]" />
       </section>
     </PageShell>

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import PageShell, { Prose, Section } from "@/components/flagship/page-shell";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { JsonLd } from "@/components/seo/json-ld";
 import { HELP_SLUGS, helpBySlug } from "@/lib/help-articles";
 import { SUPPORT_EMAIL } from "@/lib/site";
@@ -66,9 +67,14 @@ export default async function HelpArticlePage({ params }: { params: Promise<Para
         }}
       />
 
-      <article>
-        <Prose>{a.body}</Prose>
-      </article>
+      {/* The answer itself: one block, one fade. Never per paragraph — the
+          reader is here to read, not to watch the page assemble. The
+          "Related questions" Section below carries the shell's own Reveal. */}
+      <Reveal>
+        <article>
+          <Prose>{a.body}</Prose>
+        </article>
+      </Reveal>
 
       <Section id="related" title="Related questions">
         {related.length > 0 && (

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { Walkthrough, type WalkStep } from "@/components/flagship/product/walkthrough";
 import { CategoryScreen, SelectServicesScreen, TABS, type TabKey } from "@/components/flagship/product/screens/browse";
 import { STATEN_ISLAND_PHONE, staticMapSrc } from "@/lib/static-map";
@@ -19,30 +20,38 @@ export type CatalogGroup = { tab: TabKey; title: string; body: string; services:
 
 const MAP = staticMapSrc(STATEN_ISLAND_PHONE, 390, 844);
 
+/* The whole list settles as one block, a beat behind the step's own text.
+   It is not a stagger: the rows are ruled by the <ul>'s divide-y, so a
+   per-item wrapper would sit between the list and its <li>s and take the
+   hairlines with it. The step's title and body are already choreographed
+   by Walkthrough (opacity tracks the active step); this only adds the
+   arrival the rows never had. */
 function Rows({ services }: { services: CatalogRow[] }) {
   return (
-    <ul className="flex flex-col divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10">
-      {services.map((s) => (
-        <li key={s.slug} className="py-4">
-          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <Link href={`/services/${s.slug}`} className="serif-text text-[19px] leading-[1.25] text-[#1a1a1a] transition-colors duration-300 hover:text-[#4B82A5]">
-              {s.name}
-            </Link>
-            <span className="text-[11px] tracking-[0.12em] text-[#777169]">{s.laborOnly ? "LABOR ONLY" : "PARTS INCLUDED"}</span>
-          </div>
-          <p className="mt-1 text-[14.5px] leading-[1.55] text-[#4c5661]">{s.description}.</p>
-          {s.notes.length > 0 && (
-            <p className="mt-1.5 flex flex-wrap gap-1.5">
-              {s.notes.map((n) => (
-                <span key={n} className="inline-flex items-center rounded-full border border-[#1a1a1a]/12 bg-[#f7f6f3] px-2.5 py-[3px] text-[12px] leading-none tracking-[0.02em] text-[#4c5661]">
-                  {n}
-                </span>
-              ))}
-            </p>
-          )}
-        </li>
-      ))}
-    </ul>
+    <Reveal>
+      <ul className="flex flex-col divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10">
+        {services.map((s) => (
+          <li key={s.slug} className="py-4">
+            <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <Link href={`/services/${s.slug}`} className="serif-text text-[19px] leading-[1.25] text-[#1a1a1a] transition-colors duration-300 hover:text-[#4B82A5]">
+                {s.name}
+              </Link>
+              <span className="text-[11px] tracking-[0.12em] text-[#777169]">{s.laborOnly ? "LABOR ONLY" : "PARTS INCLUDED"}</span>
+            </div>
+            <p className="mt-1 text-[14.5px] leading-[1.55] text-[#4c5661]">{s.description}.</p>
+            {s.notes.length > 0 && (
+              <p className="mt-1.5 flex flex-wrap gap-1.5">
+                {s.notes.map((n) => (
+                  <span key={n} className="inline-flex items-center rounded-full border border-[#1a1a1a]/12 bg-[#f7f6f3] px-2.5 py-[3px] text-[12px] leading-none tracking-[0.02em] text-[#4c5661]">
+                    {n}
+                  </span>
+                ))}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Reveal>
   );
 }
 

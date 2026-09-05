@@ -9,6 +9,14 @@ import { ApproveEstimateScreen, BookingsScreen, ReceiptScreen } from "@/componen
 /**
  * The seven steps and the screen each one shows. Client component only so
  * the page can stay a server component with its metadata export.
+ *
+ * Motion (docs/design/motion.md): nothing to add here. The order of these
+ * steps IS the motion, and Walkthrough already choreographs it — one
+ * observer per step drives the pinned phone's 320ms screen crossfade, the
+ * spring rail dot and the active step's body. Do not wrap this in a Reveal
+ * or a Sequence: a second entrance would double-animate a component that
+ * already animates, and a transform on the wrapper would drag the pinned
+ * column with it.
  */
 const STEPS: WalkStep[] = [
   {

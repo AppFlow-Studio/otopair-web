@@ -36,8 +36,11 @@ export function Ladder({
       <Sequence className={className} delay={0.05}>
         <ol className="grid grid-cols-1 gap-8 sm:grid-cols-2 lg:grid-cols-[repeat(var(--n),minmax(0,1fr))] lg:gap-6" style={{ ["--n" as string]: steps.length }}>
           {steps.map((s, i) => (
-            <Seq key={s.title} at={i * 0.08}>
-              <li className="border-t border-[#1a1a1a]/12 pt-5">
+            // <li> outside, <Seq> inside: an <ol> may only contain <li>, and
+            // Seq renders a plain div. The rule is the grid item's own border,
+            // so the rungs are drawn and the copy drops into them.
+            <li key={s.title} className="min-w-0 border-t border-[#1a1a1a]/12 pt-5">
+              <Seq at={i * 0.08}>
                 <span className="text-[15px] text-[#4B82A5]" style={serif}>
                   {String(start + i).padStart(2, "0")}.
                 </span>
@@ -45,8 +48,8 @@ export function Ladder({
                   {s.title}
                 </h3>
                 <div className="mt-3 text-[15px] leading-[1.6] text-[#6b655d]">{s.body}</div>
-              </li>
-            </Seq>
+              </Seq>
+            </li>
           ))}
         </ol>
       </Sequence>

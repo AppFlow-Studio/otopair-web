@@ -147,6 +147,12 @@ export default function HowShopsAreVerifiedPage() {
         </p>
       </Section>
 
+      {/* Every gate on this page is prose, and page-shell already wraps each
+          Section (and the Summary, and the FAQ) in a Reveal, so the clauses
+          arrive as blocks and are never animated line by line. The rates
+          window rides that same Reveal: a second one around the `after` slot
+          would be a Reveal inside a Reveal, compounding 26px and 16px into a
+          lurch whenever the section fits the viewport. */}
       <Section id="setup" title="What must a shop set up before drivers see it?" after={<Plate tone="paper" className="p-3 tab:p-5" clip><FitZoom base={1100}><PortalWindow page="rates" shop="Your shop" /></FitZoom></Plate>}>
         <p>
           Four things, all of them checked on the server before the shop appears in the app: opening

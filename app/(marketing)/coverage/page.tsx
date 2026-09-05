@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
 import NetworkMap from "@/components/flagship/landing/network-map";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { CoverageSections } from "@/components/flagship/local-sections";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
@@ -94,19 +95,26 @@ export default async function CoveragePage() {
 
       {/* ---------- The questions ---------- */}
       <section id="details" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
-        <h2 className={H2}>Questions drivers ask.</h2>
+        <Reveal>
+          <h2 className={H2}>Questions drivers ask.</h2>
+        </Reveal>
+        {/* FaqList carries its own Sequence and its rows are already Seq'd
+            (components/seo/faq.tsx), so it is left unwrapped: a Reveal over it
+            would compound a 26px rise onto the rows' own 14px one. */}
         <FaqList items={FAQ} className="mt-8 border-b border-[#1a1a1a]/10 [&_dd]:max-w-[60ch]" />
-        <p className="mt-8 text-[15px] text-[#4c5661]">
-          The map above is the same live network map as the home page. The{" "}
-          <Link href="/shops" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-            shop directory
-          </Link>{" "}
-          lists every verified shop with hours and services, and{" "}
-          <Link href="/apply" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-            applications
-          </Link>{" "}
-          are open to shops anywhere in New York City.
-        </p>
+        <Reveal>
+          <p className="mt-8 text-[15px] text-[#4c5661]">
+            The map above is the same live network map as the home page. The{" "}
+            <Link href="/shops" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              shop directory
+            </Link>{" "}
+            lists every verified shop with hours and services, and{" "}
+            <Link href="/apply" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              applications
+            </Link>{" "}
+            are open to shops anywhere in New York City.
+          </p>
+        </Reveal>
       </section>
     </PageShell>
   );

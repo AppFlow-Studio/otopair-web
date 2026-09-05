@@ -8,6 +8,7 @@ import { PortalWindow } from "@/components/flagship/product/screens/portal";
 import { PullCard } from "@/components/flagship/product/pullouts";
 import { BookingsScreen } from "@/components/flagship/product/screens/bookings";
 import { BRAKES, ChatScreen, OtoTurn, QuickReplies, UserBubble } from "@/components/flagship/product/screens/chat";
+import { Reveal, Seq, Sequence } from "@/components/flagship/landing/reveal";
 import { PhoneAt, Rise, SectionHead } from "@/app/(marketing)/pricing/sections";
 
 /**
@@ -67,7 +68,9 @@ export function WhereItWorks({ liveCount }: { liveCount: number | null }) {
 export function TwoSides() {
   return (
     <section className="pb-16 tab:pb-24">
-      <SectionHead id="two-sides" title="One booking, two sides." line="The driver watches it from the Bookings tab; the shop runs it from the dashboard. Otopair sits between them: it verified the shop, locked the price, and settles the payment through Stripe." />
+      <Reveal>
+        <SectionHead id="two-sides" title="One booking, two sides." line="The driver watches it from the Bookings tab; the shop runs it from the dashboard. Otopair sits between them: it verified the shop, locked the price, and settles the payment through Stripe." />
+      </Reveal>
       <Plate className="relative mt-10 tab:mt-14" clip>
         <div className="flex flex-col items-center gap-8 px-6 pt-10 tab:flex-row tab:items-end tab:gap-8 tab:px-10 tab:pt-16">
           <Rise className="order-2 -mb-[30%] tab:order-1 tab:-mb-[10%] tab:shrink-0">
@@ -176,20 +179,28 @@ export function ShopDay() {
   return (
     <Plate tone="paper" className="relative" clip>
       <div className="grid items-center gap-10 px-6 py-10 tab:grid-cols-12 tab:px-14 tab:py-16">
-        <div className="tab:col-span-4">
-          <ol className="flex flex-col gap-6">
-            <Step n={1} title="Oto">
-              The assistant that turns &ldquo;it squeals when I brake&rdquo; into a scoped job a shop can price.
-            </Step>
-            <Step n={2} title="Pricing and booking">
-              Holds $20, locks a total built for one exact car, takes approvals inside 24 hours, settles through Stripe.
-            </Step>
-            <Step n={3} title="The shop dashboard">
-              Runs a real garage&rsquo;s day: the board, the job sheet, the estimate, the payout.
-            </Step>
-          </ol>
-          <p className="mt-8 max-w-[38ch] text-[15px] leading-[1.55] text-[#777169]">Underneath all three is a vehicle-data asset built from verified shop work.</p>
-        </div>
+        {/* The order of the three products is the content, but Step renders
+            the <li> itself and nothing may come between an <ol> and its items —
+            so the list arrives as one block and the note follows a beat later,
+            on the same clock. The dashboard beside it keeps its own entrance. */}
+        <Sequence className="tab:col-span-4">
+          <Seq>
+            <ol className="flex flex-col gap-6">
+              <Step n={1} title="Oto">
+                The assistant that turns &ldquo;it squeals when I brake&rdquo; into a scoped job a shop can price.
+              </Step>
+              <Step n={2} title="Pricing and booking">
+                Holds $20, locks a total built for one exact car, takes approvals inside 24 hours, settles through Stripe.
+              </Step>
+              <Step n={3} title="The shop dashboard">
+                Runs a real garage&rsquo;s day: the board, the job sheet, the estimate, the payout.
+              </Step>
+            </ol>
+          </Seq>
+          <Seq at={0.12}>
+            <p className="mt-8 max-w-[38ch] text-[15px] leading-[1.55] text-[#777169]">Underneath all three is a vehicle-data asset built from verified shop work.</p>
+          </Seq>
+        </Sequence>
         <Rise className="tab:col-span-8" delay={0.1}>
           <div className="translate-x-[6%] tab:translate-x-[10%]">
             <FitZoom base={1100}>

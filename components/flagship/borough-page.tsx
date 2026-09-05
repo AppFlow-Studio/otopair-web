@@ -1,6 +1,7 @@
 import PageShell from "@/components/flagship/page-shell";
 import WaitlistForm from "@/components/flagship/waitlist-form";
 import { BoroughSections } from "@/components/flagship/local-sections";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
 import { listPublicShops, onStatenIsland } from "@/lib/public-shops";
@@ -69,8 +70,14 @@ export default async function BoroughPage({ borough }: { borough: Borough }) {
 
       <BoroughSections slug={borough.slug} name={borough.name} date={borough.date} liveCount={liveCount} />
 
+      {/* Only the heading gets an entrance here. FaqList carries its own
+          Sequence and Seq'd rows (components/seo/faq.tsx) — wrapping it would
+          double-animate it and compound the two rises, so it is left alone
+          with its own top margin. Same shape as /pricing and /how-it-works. */}
       <section id="details" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
-        <h2 className={H2}>Questions {borough.name} drivers ask.</h2>
+        <Reveal>
+          <h2 className={H2}>Questions {borough.name} drivers ask.</h2>
+        </Reveal>
         <FaqList items={faq} className="mt-8 border-b border-[#1a1a1a]/10 [&_dd]:max-w-[60ch]" />
       </section>
     </PageShell>

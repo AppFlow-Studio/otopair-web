@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { cache } from "react";
 import PageShell, { Section, type TocItem } from "@/components/flagship/page-shell";
 import { HeroPhone } from "@/components/flagship/local-sections";
+import { Reveal, Seq, Sequence } from "@/components/flagship/landing/reveal";
 import { PillLink } from "@/components/flagship/pill-button";
 import { RatingLine } from "@/components/flagship/product/local";
 import { ShopDetailScreen, Stars, type DetailTab } from "@/components/flagship/product/screens/shop";
@@ -74,78 +75,112 @@ function listNames(items: string[]): string {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
-/** Seven-day strip: open days on white plates, closed days on paper. */
+/** Seven-day strip: open days on white plates, closed days on paper.
+ *
+ *  The week is seven peers, so the plates sweep in Mon→Sun off one clock.
+ *  The motion element lives INSIDE each <li> and carries the plate's own
+ *  classes: a wrapper between <ol> and <li> would break the list. `h-full`
+ *  is load-bearing — the <li> is the grid item and stretches to the row, so
+ *  without it a "Closed" day's plate would be a line shorter than its
+ *  neighbours. */
 function HoursStrip({ hours }: { hours: PublicShopProfile["hours"] }) {
   return (
-    <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7" aria-label="Opening hours by day">
-      {hours.map((h) => {
-        const open = !!(h.open && h.close);
-        return (
-          <li
-            key={h.day}
-            className={`rounded-[18px] px-3 py-3 ring-1 ${open ? "bg-white ring-[#1a1a1a]/[0.08] shadow-[0_1px_2px_rgba(26,26,26,0.04)]" : "bg-[#f7f6f3] ring-transparent"}`}
-          >
-            <span className="block text-[11px] uppercase tracking-[0.12em] text-[#777169]">{h.dayName.slice(0, 3)}</span>
-            {open ? (
-              <time className="mt-1.5 block text-[14px] leading-[1.35] text-[#1a1a1a]">
-                {formatTime(h.open!)}
-                <br />
-                {formatTime(h.close!)}
-              </time>
-            ) : (
-              <span className="mt-1.5 block text-[14px] leading-[1.35] text-[#777169]">Closed</span>
-            )}
-          </li>
-        );
-      })}
-    </ol>
+    <Sequence>
+      <ol className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7" aria-label="Opening hours by day">
+        {hours.map((h, i) => {
+          const open = !!(h.open && h.close);
+          return (
+            <li key={h.day} className="min-w-0">
+              <Seq
+                at={0.04 * i}
+                y={12}
+                className={`h-full rounded-[18px] px-3 py-3 ring-1 ${open ? "bg-white ring-[#1a1a1a]/[0.08] shadow-[0_1px_2px_rgba(26,26,26,0.04)]" : "bg-[#f7f6f3] ring-transparent"}`}
+              >
+                <span className="block text-[11px] uppercase tracking-[0.12em] text-[#777169]">{h.dayName.slice(0, 3)}</span>
+                {open ? (
+                  <time className="mt-1.5 block text-[14px] leading-[1.35] text-[#1a1a1a]">
+                    {formatTime(h.open!)}
+                    <br />
+                    {formatTime(h.close!)}
+                  </time>
+                ) : (
+                  <span className="mt-1.5 block text-[14px] leading-[1.35] text-[#777169]">Closed</span>
+                )}
+              </Seq>
+            </li>
+          );
+        })}
+      </ol>
+    </Sequence>
   );
 }
 
-/** The app's mechanic card at reading size: avatar, name, title. */
+/** The app's mechanic card at reading size: avatar, name, title.
+ *
+ *  Peers, so the cards arrive in order off one clock. Same rule as the hours
+ *  strip: the Seq sits inside the <li> and takes the card's own classes. */
 function MechanicRows({ mechanics }: { mechanics: PublicShopProfile["mechanics"] }) {
   return (
-    <ul className="grid gap-3 sm:grid-cols-2" style={appFont}>
-      {mechanics.map((m) => (
-        <li key={m.name} className="flex items-center gap-4 rounded-[16px] border border-[#F3F4F6] bg-white p-4 shadow-[0_1px_2px_rgba(26,26,26,0.04)]">
-          {m.photoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={m.photoUrl} alt="" width={56} height={56} loading="lazy" className="h-14 w-14 shrink-0 rounded-full object-cover" />
-          ) : (
-            <span aria-hidden className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F3F4F6] text-[20px] font-semibold text-[#9CA3AF]">
-              {m.name.charAt(0)}
-            </span>
-          )}
-          <span className="min-w-0">
-            <span className="block text-[17px] font-semibold text-[#0F172A]">{m.name}</span>
-            {m.title && <span className="block text-[13px] text-[#6B7280]">{m.title}</span>}
-          </span>
-        </li>
-      ))}
-    </ul>
+    <Sequence>
+      <ul className="grid gap-3 sm:grid-cols-2" style={appFont}>
+        {mechanics.map((m, i) => (
+          <li key={m.name} className="min-w-0">
+            <Seq
+              at={0.06 * Math.min(i, 8)}
+              y={12}
+              className="flex h-full items-center gap-4 rounded-[16px] border border-[#F3F4F6] bg-white p-4 shadow-[0_1px_2px_rgba(26,26,26,0.04)]"
+            >
+              {m.photoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={m.photoUrl} alt="" width={56} height={56} loading="lazy" className="h-14 w-14 shrink-0 rounded-full object-cover" />
+              ) : (
+                <span aria-hidden className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-[#F3F4F6] text-[20px] font-semibold text-[#9CA3AF]">
+                  {m.name.charAt(0)}
+                </span>
+              )}
+              <span className="min-w-0">
+                <span className="block text-[17px] font-semibold text-[#0F172A]">{m.name}</span>
+                {m.title && <span className="block text-[13px] text-[#6B7280]">{m.title}</span>}
+              </span>
+            </Seq>
+          </li>
+        ))}
+      </ul>
+    </Sequence>
   );
 }
 
-/** Gallery rhythm: two wide, then three, then two, on a six-column grid. */
+/** Gallery rhythm: two wide, then three, then two, on a six-column grid.
+ *
+ *  The photos are peers and settle in reading order. `sm:col-span-*` stays
+ *  on the <li>, which is still the grid item; the Seq inside carries the
+ *  plate (and `h-full`, so a captioned photo's neighbour still fills its
+ *  row). The cascade is capped so a forty-photo gallery lands in the same
+ *  beat as a three-photo one. */
 function Gallery({ shop, photos }: { shop: PublicShopProfile; photos: PublicShopProfile["portfolio"] }) {
   return (
-    <ul className="grid gap-3 sm:grid-cols-6">
-      {photos.map((p, i) => (
-        <li
-          key={p.url}
-          className={`overflow-hidden rounded-[22px] bg-[#f7f6f3] ring-1 ring-[#1a1a1a]/[0.08] ${i % 5 < 2 ? "sm:col-span-3" : "sm:col-span-2"}`}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={p.url}
-            alt={p.caption ?? `${shop.name}, photo ${i + 1}`}
-            loading="lazy"
-            className="aspect-[4/3] w-full object-cover"
-          />
-          {p.caption && <p className="px-4 py-3 text-[14px] text-[#6b655d]">{p.caption}</p>}
-        </li>
-      ))}
-    </ul>
+    <Sequence>
+      <ul className="grid gap-3 sm:grid-cols-6">
+        {photos.map((p, i) => (
+          <li key={p.url} className={`min-w-0 ${i % 5 < 2 ? "sm:col-span-3" : "sm:col-span-2"}`}>
+            <Seq
+              at={0.06 * Math.min(i, 8)}
+              y={14}
+              className="h-full overflow-hidden rounded-[22px] bg-[#f7f6f3] ring-1 ring-[#1a1a1a]/[0.08]"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={p.url}
+                alt={p.caption ?? `${shop.name}, photo ${i + 1}`}
+                loading="lazy"
+                className="aspect-[4/3] w-full object-cover"
+              />
+              {p.caption && <p className="px-4 py-3 text-[14px] text-[#6b655d]">{p.caption}</p>}
+            </Seq>
+          </li>
+        ))}
+      </ul>
+    </Sequence>
   );
 }
 
@@ -315,21 +350,27 @@ export default async function ShopPage({ params }: { params: Params }) {
               {shop.services.length > 4 ? " and more" : ""}. Each one is bookable in the app for your
               exact car.
             </p>
-            {groups.map((g) => (
-              <div key={g.category}>
-                <h3>{g.category}</h3>
-                <ul className="mt-3">
-                  {g.services.map((s) => (
-                    <li key={s.slug}>
-                      <Link href={serviceHref(s)}>{s.name}</Link>
-                      {s.description ? (
-                        <span className="text-[#6b655d]">: {s.description}</span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
+            {/* The categories are peers: one clock, one beat apart. Each Seq
+                stands in for the plain <div> that grouped a category, so no
+                new element enters Prose's selector chain — only the Sequence
+                root, which carries no margin of its own. */}
+            <Sequence>
+              {groups.map((g, i) => (
+                <Seq key={g.category} at={0.07 * Math.min(i, 6)} y={14}>
+                  <h3>{g.category}</h3>
+                  <ul className="mt-3">
+                    {g.services.map((s) => (
+                      <li key={s.slug}>
+                        <Link href={serviceHref(s)}>{s.name}</Link>
+                        {s.description ? (
+                          <span className="text-[#6b655d]">: {s.description}</span>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
+                </Seq>
+              ))}
+            </Sequence>
             <p>
               {shop.name} sets its own labor rates and can set a flat price for a service; the total is
               built for your exact car in the app. The total you see before you confirm includes parts, labor, tax and
@@ -388,26 +429,36 @@ export default async function ShopPage({ params }: { params: Params }) {
               </span>
             </p>
             <p>Reviews can only be left after a completed booking, and a review is the driver&rsquo;s own words.</p>
-            <ul className="!pl-0 [&>li]:before:hidden">
-              {shop.reviews.map((r, i) => (
-                <li key={`${r.reviewer}-${r.createdAt ?? i}`} className="border-t border-[#1a1a1a]/10 py-4 first:border-t-0">
-                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[14px]">
-                    <Stars rating={r.rating} size={13} />
-                    <span className="text-[#1a1a1a]">{r.reviewer}</span>
-                    {r.createdAt && (
-                      <time dateTime={new Date(r.createdAt).toISOString()} className="text-[#777169]">
-                        {new Date(r.createdAt).toLocaleDateString("en-US", {
-                          month: "short",
-                          year: "numeric",
-                          timeZone: "America/New_York",
-                        })}
-                      </time>
-                    )}
-                  </div>
-                  {r.comment && <p className="mt-2 text-[16px] leading-[1.6]">{r.comment}</p>}
-                </li>
-              ))}
-            </ul>
+            {/* Reviews are peers, so they fill the ruled sheet in order off
+                one clock. `mt-3` moves onto the Sequence root: Prose sets
+                that gap with a `p + ul` sibling rule, which the wrapper
+                would otherwise break. The <li> keeps its own rule and
+                padding — `first:border-t-0` only works while the <li> is the
+                list's direct child. */}
+            <Sequence className="mt-3">
+              <ul className="!pl-0 [&>li]:before:hidden">
+                {shop.reviews.map((r, i) => (
+                  <li key={`${r.reviewer}-${r.createdAt ?? i}`} className="border-t border-[#1a1a1a]/10 py-4 first:border-t-0">
+                    <Seq at={0.06 * Math.min(i, 6)} y={12}>
+                      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[14px]">
+                        <Stars rating={r.rating} size={13} />
+                        <span className="text-[#1a1a1a]">{r.reviewer}</span>
+                        {r.createdAt && (
+                          <time dateTime={new Date(r.createdAt).toISOString()} className="text-[#777169]">
+                            {new Date(r.createdAt).toLocaleDateString("en-US", {
+                              month: "short",
+                              year: "numeric",
+                              timeZone: "America/New_York",
+                            })}
+                          </time>
+                        )}
+                      </div>
+                      {r.comment && <p className="mt-2 text-[16px] leading-[1.6]">{r.comment}</p>}
+                    </Seq>
+                  </li>
+                ))}
+              </ul>
+            </Sequence>
           </>
         ) : (
           <p>
@@ -425,22 +476,29 @@ export default async function ShopPage({ params }: { params: Params }) {
           {shop.neighborhood ? `, near ${shop.neighborhood}` : ""}. You bring the car to the shop at the
           time you booked; Otopair does not send a mechanic to you.
         </p>
+        {/* The map is the object in this section, not a peer of the copy, so
+            it settles a beat after the address reads. The Reveal stays
+            INSIDE the conditional and takes the figure's `mt-5`: hoisting it
+            outside would leave an empty div between the two paragraphs on a
+            shop with no coordinates. */}
         {wideMap && (
-          <figure className="relative mt-5 overflow-hidden rounded-[16px] border border-[#1a1a1a]/10 bg-[#f7f6f3]">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={wideMap}
-              alt={`Map showing ${shop.name} at ${addressLine(shop)}`}
-              width={720}
-              height={360}
-              loading="lazy"
-              className="aspect-[2/1] w-full object-cover"
-            />
-            {/* Required credit when the API logo is off. */}
-            <figcaption className="absolute bottom-1.5 right-2.5 text-[10px] tracking-wide text-[#3a556e]/70">
-              © Mapbox © OpenStreetMap
-            </figcaption>
-          </figure>
+          <Reveal className="mt-5" delay={0.12} y={14}>
+            <figure className="relative overflow-hidden rounded-[16px] border border-[#1a1a1a]/10 bg-[#f7f6f3]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={wideMap}
+                alt={`Map showing ${shop.name} at ${addressLine(shop)}`}
+                width={720}
+                height={360}
+                loading="lazy"
+                className="aspect-[2/1] w-full object-cover"
+              />
+              {/* Required credit when the API logo is off. */}
+              <figcaption className="absolute bottom-1.5 right-2.5 text-[10px] tracking-wide text-[#3a556e]/70">
+                © Mapbox © OpenStreetMap
+              </figcaption>
+            </figure>
+          </Reveal>
         )}
         <p>
           <a

@@ -3,6 +3,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import PageShell from "@/components/flagship/page-shell";
+import { Reveal, Seq, Sequence } from "@/components/flagship/landing/reveal";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
 import { serviceIcon } from "@/components/flagship/hero-visual";
@@ -205,66 +206,75 @@ export default async function ServicePage({ params }: Params) {
 
       {/* ---------- Everything about the service, in one list ---------- */}
       <section id="details" className="scroll-mt-28">
-        <h2 className={H2}>{service.name}, in plain terms.</h2>
-        <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
-          <div className={ROW} id="includes">
-            <dt className={TERM}>What does it include?</dt>
-            <dd className={ANSWER}>
-              <p>
-                {service.description}. {includesCopy(service)}
-              </p>
-              <p>
-                It is one of 22 bookable services on Otopair, and the name you see here is the name the shop sees on
-                its board. Oto uses the catalog&rsquo;s names and nothing else, so what you book is what the shop does.
-              </p>
-            </dd>
-          </div>
-          <div className={ROW} id="when">
-            <dt className={TERM}>When do I need it?</dt>
-            <dd className={ANSWER}>
-              <p>{WHEN_NEEDED[slug] ?? `When your car's service schedule calls for it. Tell Oto and it checks against your car's records.`}</p>
-              {lights.length > 0 && (
-                <p>
-                  Dashboard cue: the {joinLights(lights)}. Oto maps that light to {service.name}, and once the job is
-                  recorded done it clears the light in your car&rsquo;s record.
-                </p>
-              )}
-            </dd>
-          </div>
-          <div className={ROW} id="cars">
-            <dt className={TERM}>Which cars is it available for?</dt>
-            <dd className={ANSWER}>
-              <CarApplicability service={service} />
-            </dd>
-          </div>
-          <div className={ROW} id="price">
-            <dt className={TERM}>How is the price set?</dt>
-            <dd className={ANSWER}>
-              <HowPriceIsSet serviceName={service.name} />
-            </dd>
-          </div>
-          <div className={ROW} id="shops">
-            <dt className={TERM}>Which Staten Island shops offer it?</dt>
-            <dd className={ANSWER}>
-              {shops.length > 0 ? (
-                <p>
-                  {shops.length} verified {shops.length === 1 ? "shop" : "shops"} on Staten Island{" "}
-                  {shops.length === 1 ? "lists" : "list"} {service.name} today: {shops.map((s) => s.name).join(", ")}.
-                  Each one set its own price for it; Oto shows you the number for your car. The list is live and updates
-                  as shops add or drop the service.
-                </p>
-              ) : (
-                <NoShopsYet serviceName={service.name} />
-              )}
-              {local && (
-                <p>
-                  The Staten Island page for this service has the same live shop list, the booking steps and the local
-                  questions in one place: <Link href={`/staten-island/${slug}`}>{service.name} in Staten Island</Link>.
-                </p>
-              )}
-            </dd>
-          </div>
-        </dl>
+        {/* One clock for the pair: the question lands, the answers settle a
+            beat later. The <dl> moves as a single block — the five rows are
+            reading, not a cascade, and divide-y needs its own children. */}
+        <Sequence>
+          <Seq>
+            <h2 className={H2}>{service.name}, in plain terms.</h2>
+          </Seq>
+          <Seq at={0.1} className="mt-8">
+            <dl className="flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
+              <div className={ROW} id="includes">
+                <dt className={TERM}>What does it include?</dt>
+                <dd className={ANSWER}>
+                  <p>
+                    {service.description}. {includesCopy(service)}
+                  </p>
+                  <p>
+                    It is one of 22 bookable services on Otopair, and the name you see here is the name the shop sees on
+                    its board. Oto uses the catalog&rsquo;s names and nothing else, so what you book is what the shop does.
+                  </p>
+                </dd>
+              </div>
+              <div className={ROW} id="when">
+                <dt className={TERM}>When do I need it?</dt>
+                <dd className={ANSWER}>
+                  <p>{WHEN_NEEDED[slug] ?? `When your car's service schedule calls for it. Tell Oto and it checks against your car's records.`}</p>
+                  {lights.length > 0 && (
+                    <p>
+                      Dashboard cue: the {joinLights(lights)}. Oto maps that light to {service.name}, and once the job is
+                      recorded done it clears the light in your car&rsquo;s record.
+                    </p>
+                  )}
+                </dd>
+              </div>
+              <div className={ROW} id="cars">
+                <dt className={TERM}>Which cars is it available for?</dt>
+                <dd className={ANSWER}>
+                  <CarApplicability service={service} />
+                </dd>
+              </div>
+              <div className={ROW} id="price">
+                <dt className={TERM}>How is the price set?</dt>
+                <dd className={ANSWER}>
+                  <HowPriceIsSet serviceName={service.name} />
+                </dd>
+              </div>
+              <div className={ROW} id="shops">
+                <dt className={TERM}>Which Staten Island shops offer it?</dt>
+                <dd className={ANSWER}>
+                  {shops.length > 0 ? (
+                    <p>
+                      {shops.length} verified {shops.length === 1 ? "shop" : "shops"} on Staten Island{" "}
+                      {shops.length === 1 ? "lists" : "list"} {service.name} today: {shops.map((s) => s.name).join(", ")}.
+                      Each one set its own price for it; Oto shows you the number for your car. The list is live and updates
+                      as shops add or drop the service.
+                    </p>
+                  ) : (
+                    <NoShopsYet serviceName={service.name} />
+                  )}
+                  {local && (
+                    <p>
+                      The Staten Island page for this service has the same live shop list, the booking steps and the local
+                      questions in one place: <Link href={`/staten-island/${slug}`}>{service.name} in Staten Island</Link>.
+                    </p>
+                  )}
+                </dd>
+              </div>
+            </dl>
+          </Seq>
+        </Sequence>
         {shops.length > 0 && (
           <div className="mt-8">
             <DirectoryGrid shops={shops} />
@@ -274,20 +284,28 @@ export default async function ServicePage({ params }: Params) {
 
       {/* ---------- Questions ---------- */}
       <section id="faq" className="scroll-mt-28 pt-12 lg:pt-16">
+        {/* FaqList carries its own Sequence and its rows are already Seq'd
+            (components/seo/faq.tsx), so it is left unwrapped: a Reveal over it
+            would compound a 26px rise onto the rows' own 14px one. The links
+            below get their own trigger instead of a shared clock — the answers
+            are a long read, and a clock started above them would have the
+            links settle long before the reader reaches them. */}
         <FaqList items={faq} className="border-b border-[#1a1a1a]/10 [&>div:first-child]:pt-0 [&_dd]:max-w-[60ch]" />
-        <p className="mt-8 text-[15px] text-[#4c5661]">
-          <Link href="/services" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-            All 22 services
-          </Link>{" "}
-          ·{" "}
-          <Link href="/staten-island" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-            Staten Island
-          </Link>{" "}
-          ·{" "}
-          <Link href="/shops" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-            Verified shops
-          </Link>
-        </p>
+        <Reveal className="mt-8">
+          <p className="text-[15px] text-[#4c5661]">
+            <Link href="/services" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              All 22 services
+            </Link>{" "}
+            ·{" "}
+            <Link href="/staten-island" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              Staten Island
+            </Link>{" "}
+            ·{" "}
+            <Link href="/shops" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              Verified shops
+            </Link>
+          </p>
+        </Reveal>
       </section>
     </PageShell>
   );

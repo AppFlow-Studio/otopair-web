@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
+import { Reveal, Seq, Sequence } from "@/components/flagship/landing/reveal";
 import { HeroPhone } from "@/components/flagship/local-sections";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
 import { BookingsScreen } from "@/components/flagship/product/screens/bookings";
@@ -55,27 +56,38 @@ function CategoryBlock({ category }: { category: HelpCategory }) {
   const meta = HELP_CATEGORY_META[category];
   return (
     <section id={meta.id} className="scroll-mt-28 border-t border-[#1a1a1a]/10 py-10 first:border-t-0 first:pt-0 tab:py-14">
-      <div className="grid gap-3 tab:grid-cols-12 tab:items-end tab:gap-8">
+      <Reveal className="grid gap-3 tab:grid-cols-12 tab:items-end tab:gap-8">
         <h2 className={`${H2} tab:col-span-5`}>{category}</h2>
         <p className="max-w-[46ch] text-[17px] leading-[1.55] text-[#4c5661] tab:col-span-6 tab:col-start-7 tab:pb-1">{meta.blurb}</p>
-      </div>
-      <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10">
-        {items.map((a) => (
-          <div key={a.slug} className="grid gap-2 py-5 tab:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] tab:gap-x-10 tab:py-6">
-            <dt className="text-[20px] leading-[1.3] text-[#1a1a1a] [text-wrap:balance]" style={serif}>
-              <Link href={`/help/${a.slug}`} className="transition-colors duration-300 hover:text-[#4B82A5] focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4B82A5]">
-                {a.title}
-              </Link>
-            </dt>
-            <dd className="max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661]">
-              {a.summary}{" "}
-              <Link href={`/help/${a.slug}`} className="whitespace-nowrap text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-                The full answer
-              </Link>
-            </dd>
-          </div>
-        ))}
-      </dl>
+      </Reveal>
+      {/* The rows are peers, so they cascade. A wrapper may not sit between
+          the <dl> and its rows (motion contract, hazard 2), so `Seq` *becomes*
+          the row <div> and carries its classes — the same wiring
+          components/seo/faq.tsx uses, so `divide-y` keeps matching. `mt-8`
+          rides the Sequence root. */}
+      <Sequence delay={0.08} className="mt-8">
+        <dl className="flex flex-col divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10">
+          {items.map((a, i) => (
+            <Seq
+              key={a.slug}
+              at={Math.min(i, 8) * 0.06}
+              className="grid gap-2 py-5 tab:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] tab:gap-x-10 tab:py-6"
+            >
+              <dt className="text-[20px] leading-[1.3] text-[#1a1a1a] [text-wrap:balance]" style={serif}>
+                <Link href={`/help/${a.slug}`} className="transition-colors duration-300 hover:text-[#4B82A5] focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4B82A5]">
+                  {a.title}
+                </Link>
+              </dt>
+              <dd className="max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661]">
+                {a.summary}{" "}
+                <Link href={`/help/${a.slug}`} className="whitespace-nowrap text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+                  The full answer
+                </Link>
+              </dd>
+            </Seq>
+          ))}
+        </dl>
+      </Sequence>
     </section>
   );
 }
@@ -120,7 +132,7 @@ export default function HelpPage() {
       ))}
 
       <section id="still-stuck" className="scroll-mt-28 border-t border-[#1a1a1a]/10 py-10 tab:py-14">
-        <div className="grid gap-3 tab:grid-cols-12 tab:gap-8">
+        <Reveal className="grid gap-3 tab:grid-cols-12 tab:gap-8">
           <h2 className={`${H2} tab:col-span-5`}>Still stuck?</h2>
           <p className="max-w-[56ch] text-[17px] leading-[1.6] text-[#4c5661] tab:col-span-6 tab:col-start-7 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5]">
             Email <a href={`mailto:${SUPPORT_EMAIL}?subject=Driver%20support`}>{SUPPORT_EMAIL}</a> with the booking and
@@ -128,11 +140,16 @@ export default function HelpPage() {
             thread on the booking in the app, where the shop answers with your car in front of them. The{" "}
             <Link href="/contact">contact page</Link> lists the right address for shops, the car-data API and press.
           </p>
-        </div>
+        </Reveal>
       </section>
 
       <section id="faq" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-10 tab:pt-14">
-        <h2 className={H2}>The four most-asked questions.</h2>
+        <Reveal>
+          <h2 className={H2}>The four most-asked questions.</h2>
+        </Reveal>
+        {/* FaqList carries its own Sequence/Seq cascade — no wrapper, or the
+            block double-animates (motion contract, "what does not get
+            animated"). Its own classes keep the spacing. */}
         <FaqList items={FAQ} className="mt-8 border-b border-[#1a1a1a]/10 [&_dd]:max-w-[60ch]" />
       </section>
     </PageShell>

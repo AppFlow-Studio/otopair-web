@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Card } from "@/components/flagship/page-shell";
+import { Stagger } from "@/components/flagship/landing/reveal";
 import { JsonLd } from "@/components/seo/json-ld";
 import { absoluteUrl, LOCALITY, SITE_URL } from "@/lib/site";
 import {
@@ -13,8 +14,22 @@ import type { PublicShopSummary } from "@/lib/public-shops";
 /**
  * Server-renderable pieces shared by the service catalog pages (/services,
  * /services/<slug>) and the Staten Island local pages (/staten-island,
- * /staten-island/<service>). No client code: everything here is plain
- * markup so the copy is crawlable and cannot drift between the four routes.
+ * /staten-island/<service>). Everything here is plain markup, so the copy is
+ * crawlable and cannot drift between the four routes; the one piece of
+ * client code is Stagger, the house entrance primitive, which a server
+ * component may *render* — what it may not do is read a value out of that
+ * module, which is why `serif` below is inlined.
+ *
+ * Motion (docs/design/motion.md): almost nothing in this file animates
+ * itself, and that is the point. These are fragments, not sections. The
+ * answers (CarApplicability, HowPriceIsSet, NoShopsYet) render inside a <dd>
+ * of a divided <dl>, where the whole definition list is the block that
+ * fades and animating a term at a time would turn a reference page into a
+ * slideshow; BookingSteps is prose handed to a column that two layers of
+ * call-site have each declined to animate (see its docblock — that gap is
+ * theirs to close, not this file’s); a single Card is one item in a grid
+ * the caller staggers. The exception is ShopCards, which *is* a grid of
+ * peers, so it owns its own cascade.
  *
  * Copy rules baked in (locked decisions, site audit 2026-08-31 + Aug 2026
  * fee decision): no fee rate, no fee dollar amount, no price ranges or
@@ -69,10 +84,17 @@ function addressLine(s: PublicShopSummary): string | null {
 }
 
 /** Live shop cards → /shops/<slug>. Only ever fed by lib/public-shops.ts,
- *  which gates on bookable + active + verified and projects safe fields. */
+ *  which gates on bookable + active + verified and projects safe fields.
+ *
+ *  A grid of peers, so it staggers. The grid's own classes stay on the
+ *  Stagger container, which keeps each Card the direct grid item, and
+ *  `itemClassName="min-w-0"` is on the generated wrapper because a grid
+ *  item's default `min-width: auto` lets a long shop name push the column
+ *  past the viewport. Card's Bezel is already `h-full`, so the wrapper
+ *  stretching to the row height keeps the cards level. */
 export function ShopCards({ shops }: { shops: PublicShopSummary[] }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <Stagger className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" itemClassName="min-w-0">
       {shops.map((s) => (
         <Card
           key={s.slug}
@@ -95,7 +117,7 @@ export function ShopCards({ shops }: { shops: PublicShopSummary[] }) {
           </Link>
         </Card>
       ))}
-    </div>
+    </Stagger>
   );
 }
 
@@ -167,7 +189,26 @@ export function HowPriceIsSet({ serviceName }: { serviceName?: string }) {
   );
 }
 
-/** The booking steps, as the app runs them. */
+/** The booking steps, as the app runs them.
+ *
+ *  No per-step motion, ever. The order is the content, but a Sequence
+ *  would need a <div> between the <ol> and its <li>s, and the numerals
+ *  here are `::marker`s on a `decimal-leading-zero` list (styled from
+ *  ServiceBooking’s column in local-sections.tsx): a wrapper there deletes
+ *  the numbers outright, and nesting one inside each <li> leaves the
+ *  markers fully opaque while their text fades. The ladder can only ever
+ *  arrive as one block.
+ *
+ *  OPEN (2026-09-05): right now it arrives with no entrance at all,
+ *  because both layers above it defer to the other. /staten-island/
+ *  [service]/page.tsx says “No wrapper here — ServiceBooking’s own text
+ *  column is already a Reveal”, while that column in local-sections.tsx
+ *  says “No entrance on this column — the caller already hands it in
+ *  wrapped in its own Reveal”. Neither is true. One of those two has to
+ *  take it (the column is the better owner: it is the element carrying
+ *  the grid’s `order-*`/`col-span-*`, which this fragment cannot). Do not
+ *  fix it by adding a third Reveal in here without deleting one of
+ *  theirs. */
 export function BookingSteps({ serviceName }: { serviceName: string }) {
   return (
     <ol>

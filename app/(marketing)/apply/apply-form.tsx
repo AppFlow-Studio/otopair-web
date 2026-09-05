@@ -155,6 +155,10 @@ export default function ApplyForm() {
                 <AnimatePresence mode="wait">
                   <motion.div
                     key={step}
+                    // Hand-rolled motion with an `initial` opacity ships the
+                    // step invisible to a visitor whose JS never runs; the
+                    // root layout's <noscript> rule keys off data-reveal.
+                    data-reveal
                     initial={{ opacity: 0, x: 12 }}
                     animate={{ opacity: 1, x: 0 }}
                     exit={{ opacity: 0, x: -12 }}

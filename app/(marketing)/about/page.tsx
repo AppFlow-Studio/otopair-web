@@ -3,6 +3,7 @@ import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
 import { DataProvenance, TwoSides } from "@/components/flagship/editorial-sections";
+import { Reveal, Stagger } from "@/components/flagship/landing/reveal";
 import { Plate } from "@/components/flagship/product/device";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -132,13 +133,17 @@ const TERM = "serif-text text-[21px] leading-[1.3] text-[#1a1a1a] [text-wrap:bal
 const ANSWER =
   "max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661] [&_p+p]:mt-3 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5] [&_ul]:mt-3 [&_ul]:flex [&_ul]:flex-col [&_ul]:gap-1.5 [&_ul]:pl-5 [&_li]:relative [&_li]:before:absolute [&_li]:before:-left-5 [&_li]:before:top-[0.8em] [&_li]:before:h-px [&_li]:before:w-2.5 [&_li]:before:bg-[#4B82A5]";
 
-/** A section head on the twelve-column grid: claim left, one line right. */
+/** A section head on the twelve-column grid: claim left, one line right.
+ *  Reveals as one block — the claim and its line are a single thought, so
+ *  they arrive together rather than one after the other (docs/design/motion.md). */
 function Head({ id, title, line }: { id: string; title: string; line: string }) {
   return (
-    <div id={id} className="grid scroll-mt-28 gap-3 tab:grid-cols-12 tab:items-end tab:gap-8">
-      <h2 className={`${H2} tab:col-span-6`}>{title}</h2>
-      <p className={`${LEAD} tab:col-span-5 tab:col-start-8 tab:pb-1`}>{line}</p>
-    </div>
+    <Reveal>
+      <div id={id} className="grid scroll-mt-28 gap-3 tab:grid-cols-12 tab:items-end tab:gap-8">
+        <h2 className={`${H2} tab:col-span-6`}>{title}</h2>
+        <p className={`${LEAD} tab:col-span-5 tab:col-start-8 tab:pb-1`}>{line}</p>
+      </div>
+    </Reveal>
   );
 }
 
@@ -173,27 +178,31 @@ export default function AboutPage() {
       />
 
       {/* ---------- Jump row: the page runs long, so give it a skip ---------- */}
-      <nav aria-label="On this page" className="mb-14 tab:mb-16">
-        <ul className="flex flex-wrap gap-2">
-          {[
-            ["what", "What it is"],
-            ["why", "Why it exists"],
-            ["rules", "The rules"],
-            ["build", "What we build"],
-            ["not", "What it is not"],
-            ["where", "The details"],
-          ].map(([id, label]) => (
-            <li key={id}>
-              <a
-                href={`#${id}`}
-                className="inline-flex h-9 items-center rounded-full border border-[#1a1a1a]/10 bg-white px-4 text-[14px] text-[#1a1a1a] transition-colors hover:border-[#4B82A5]/50"
-              >
-                {label}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </nav>
+      {/* One Reveal on the whole row, not a cascade per pill: these are <li>
+          children and a wrapper between <ul> and <li> would break the list. */}
+      <Reveal>
+        <nav aria-label="On this page" className="mb-14 tab:mb-16">
+          <ul className="flex flex-wrap gap-2">
+            {[
+              ["what", "What it is"],
+              ["why", "Why it exists"],
+              ["rules", "The rules"],
+              ["build", "What we build"],
+              ["not", "What it is not"],
+              ["where", "The details"],
+            ].map(([id, label]) => (
+              <li key={id}>
+                <a
+                  href={`#${id}`}
+                  className="inline-flex h-9 items-center rounded-full border border-[#1a1a1a]/10 bg-white px-4 text-[14px] text-[#1a1a1a] transition-colors hover:border-[#4B82A5]/50"
+                >
+                  {label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      </Reveal>
 
       {/* ---------- What it is ---------- */}
       <section className="scroll-mt-28">
@@ -202,20 +211,23 @@ export default function AboutPage() {
           title="What Otopair is."
           line="A marketplace between drivers who need a repair and independent shops that have been reviewed and approved to take it."
         />
-        <div className={`mt-8 ${PROSE}`}>
-          <p>
-            A driver tells Oto, the in-app assistant, what the car is doing. Oto turns that into a job a shop can
-            price, shows the verified shops nearby with the total each one set for that exact car, and locks that
-            total when the driver books. A $20 hold reserves the slot. The locked price is what the driver pays, and
-            extra work needs the driver&rsquo;s approval in the app before it happens.
-          </p>
-          <p>
-            Otopair is not a garage. The shop does the repair, sets its own labor rate, chooses which of the{" "}
-            {BOOKABLE_SERVICE_COUNT} bookable services it offers, and owns the relationship with the driver. Otopair
-            verifies the shop, scopes the job, locks the price, settles the payment through Stripe and keeps the
-            record of what was done.
-          </p>
-        </div>
+        {/* Prose: the block settles as a whole, a beat behind its head. */}
+        <Reveal delay={0.08}>
+          <div className={`mt-8 ${PROSE}`}>
+            <p>
+              A driver tells Oto, the in-app assistant, what the car is doing. Oto turns that into a job a shop can
+              price, shows the verified shops nearby with the total each one set for that exact car, and locks that
+              total when the driver books. A $20 hold reserves the slot. The locked price is what the driver pays, and
+              extra work needs the driver&rsquo;s approval in the app before it happens.
+            </p>
+            <p>
+              Otopair is not a garage. The shop does the repair, sets its own labor rate, chooses which of the{" "}
+              {BOOKABLE_SERVICE_COUNT} bookable services it offers, and owns the relationship with the driver. Otopair
+              verifies the shop, scopes the job, locks the price, settles the payment through Stripe and keeps the
+              record of what was done.
+            </p>
+          </div>
+        </Reveal>
       </section>
 
       {/* ---------- Why it exists ---------- */}
@@ -225,7 +237,8 @@ export default function AboutPage() {
           title="Why it exists."
           line="Both sides of a repair are broken in the same place: nobody knows the number until it is too late to argue with it."
         />
-        <div className="mt-10 grid gap-10 tab:grid-cols-2 tab:gap-14">
+        {/* Two peers, side by side: the driver's half then the shop's. */}
+        <Stagger className="mt-10 grid gap-10 tab:grid-cols-2 tab:gap-14" itemClassName="min-w-0">
           <div>
             <h3 className="serif-text text-[22px] leading-[1.2] text-[#1a1a1a]">For the driver</h3>
             <div className={`mt-4 ${PROSE} max-w-[46ch]`}>
@@ -255,7 +268,7 @@ export default function AboutPage() {
               </p>
             </div>
           </div>
-        </div>
+        </Stagger>
       </section>
 
       {/* ---------- One booking, two sides (product object) ---------- */}
@@ -270,23 +283,29 @@ export default function AboutPage() {
           title="The rules we hold ourselves to."
           line="Each one is enforced by the product, not promised in a paragraph. This is the whole list."
         />
-        <Plate tone="paper" className="mt-10 px-6 py-4 tab:mt-14 tab:px-10 tab:py-6">
-          <ol className="flex flex-col divide-y divide-[#1a1a1a]/10">
-            {RULES.map((r, i) => (
-              <li key={r.rule} className="grid gap-2 py-6 tab:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] tab:gap-x-10 tab:py-7">
-                <div className="flex gap-4">
-                  <span className="serif shrink-0 pt-[3px] text-[15px] tabular-nums text-[#4B82A5]">0{i + 1}.</span>
-                  <h3 className="serif-text text-[21px] leading-[1.3] text-[#1a1a1a] [text-wrap:balance]">{r.rule}</h3>
-                </div>
-                <p className="max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661]">{r.how}</p>
-              </li>
-            ))}
-          </ol>
-        </Plate>
-        <p className={`mt-6 ${PROSE}`}>
-          The long form of every one of these, including what happens when a shop or a driver breaks them, is on{" "}
-          <Link href="/trust-and-safety">trust and safety</Link>.
-        </p>
+        {/* The plate settles as one object. The rules inside are an <ol> with
+            divide-y doing the hairlines, so they are never wrapped per item. */}
+        <Reveal>
+          <Plate tone="paper" className="mt-10 px-6 py-4 tab:mt-14 tab:px-10 tab:py-6">
+            <ol className="flex flex-col divide-y divide-[#1a1a1a]/10">
+              {RULES.map((r, i) => (
+                <li key={r.rule} className="grid gap-2 py-6 tab:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] tab:gap-x-10 tab:py-7">
+                  <div className="flex gap-4">
+                    <span className="serif shrink-0 pt-[3px] text-[15px] tabular-nums text-[#4B82A5]">0{i + 1}.</span>
+                    <h3 className="serif-text text-[21px] leading-[1.3] text-[#1a1a1a] [text-wrap:balance]">{r.rule}</h3>
+                  </div>
+                  <p className="max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661]">{r.how}</p>
+                </li>
+              ))}
+            </ol>
+          </Plate>
+        </Reveal>
+        <Reveal>
+          <p className={`mt-6 ${PROSE}`}>
+            The long form of every one of these, including what happens when a shop or a driver breaks them, is on{" "}
+            <Link href="/trust-and-safety">trust and safety</Link>.
+          </p>
+        </Reveal>
       </section>
 
       {/* ---------- What we build ---------- */}
@@ -297,47 +316,55 @@ export default function AboutPage() {
           line="Three products and the data asset underneath them. Each one exists because the price could not be locked without it."
         />
         <div className="mt-10 grid items-start gap-10 tab:mt-14 tab:grid-cols-12 tab:gap-12">
-          <ol className="flex flex-col gap-7 tab:col-span-7">
-            {[
-              [
-                "Oto, the assistant",
-                "Turns “it squeals when I brake” into a scoped job a shop can price, by reading the car’s service history, the manufacturer’s data for that exact car and any stored codes. It asks one narrowing question rather than twenty, and it never quotes a price itself.",
-              ],
-              [
-                "The pricing and booking system",
-                "Builds the total for one exact car from what the shop set, holds $20, locks the ceiling, carries approvals inside 24 hours, and settles through Stripe on Stripe’s payout schedule.",
-              ],
-              [
-                "The shop dashboard",
-                "Runs a real garage’s day on the web: the board, the job sheet, the estimate, the team, the payouts, and the rates and services the shop controls itself.",
-              ],
-              [
-                "The vehicle-data asset",
-                "Maintenance specs, service intervals, exact-fit parts and real-world labor times, built from official sources and from what verified shops actually measure on the job. It is what makes a price for your car possible, and it is a product in its own right.",
-              ],
-            ].map(([t, b], i) => (
-              <li key={t} className="flex gap-4">
-                <span className="serif shrink-0 pt-[5px] text-[15px] tabular-nums text-[#4B82A5]">0{i + 1}.</span>
-                <div>
-                  <h3 className="serif-text text-[21px] leading-[1.25] text-[#1a1a1a]">{t}</h3>
-                  <p className="mt-2 max-w-[52ch] text-[16px] leading-[1.6] text-[#4c5661]">{b}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
+          {/* The Reveal is the grid item now, so it carries the column span
+              (and min-w-0, or the <ol> can push the grid wider than the page). */}
+          <Reveal className="min-w-0 tab:col-span-7">
+            <ol className="flex flex-col gap-7">
+              {[
+                [
+                  "Oto, the assistant",
+                  "Turns “it squeals when I brake” into a scoped job a shop can price, by reading the car’s service history, the manufacturer’s data for that exact car and any stored codes. It asks one narrowing question rather than twenty, and it never quotes a price itself.",
+                ],
+                [
+                  "The pricing and booking system",
+                  "Builds the total for one exact car from what the shop set, holds $20, locks the ceiling, carries approvals inside 24 hours, and settles through Stripe on Stripe’s payout schedule.",
+                ],
+                [
+                  "The shop dashboard",
+                  "Runs a real garage’s day on the web: the board, the job sheet, the estimate, the team, the payouts, and the rates and services the shop controls itself.",
+                ],
+                [
+                  "The vehicle-data asset",
+                  "Maintenance specs, service intervals, exact-fit parts and real-world labor times, built from official sources and from what verified shops actually measure on the job. It is what makes a price for your car possible, and it is a product in its own right.",
+                ],
+              ].map(([t, b], i) => (
+                <li key={t} className="flex gap-4">
+                  <span className="serif shrink-0 pt-[5px] text-[15px] tabular-nums text-[#4B82A5]">0{i + 1}.</span>
+                  <div>
+                    <h3 className="serif-text text-[21px] leading-[1.25] text-[#1a1a1a]">{t}</h3>
+                    <p className="mt-2 max-w-[52ch] text-[16px] leading-[1.6] text-[#4c5661]">{b}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </Reveal>
+          {/* DataProvenance is a PullCard and settles itself; only its caption
+              needs a trigger, a beat behind the card. */}
           <div className="tab:col-span-5">
             <DataProvenance />
-            <p className="mt-5 max-w-[42ch] text-[15px] leading-[1.55] text-[#777169]">
-              The catalogue is published as its own product, OtoIndex, and is open to developers through an API.{" "}
-              <a href={OTOINDEX.docs} className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-                See the endpoints
-              </a>{" "}
-              or{" "}
-              <Link href="/car-data" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-                look up a car
-              </Link>
-              .
-            </p>
+            <Reveal delay={0.1}>
+              <p className="mt-5 max-w-[42ch] text-[15px] leading-[1.55] text-[#777169]">
+                The catalogue is published as its own product, OtoIndex, and is open to developers through an API.{" "}
+                <a href={OTOINDEX.docs} className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+                  See the endpoints
+                </a>{" "}
+                or{" "}
+                <Link href="/car-data" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+                  look up a car
+                </Link>
+                .
+              </p>
+            </Reveal>
           </div>
         </div>
       </section>
@@ -349,84 +376,97 @@ export default function AboutPage() {
           title="What Otopair is not."
           line="The boundaries matter as much as the promises, so they are written down and linked to the page that owns each one."
         />
-        <ul className="mt-10 grid gap-x-12 gap-y-8 tab:grid-cols-2">
-          {NOT.map((n) => (
-            <li key={n.claim} className="border-t border-[#1a1a1a]/10 pt-5">
-              <h3 className="serif-text text-[21px] leading-[1.25] text-[#1a1a1a]">{n.claim}</h3>
-              <p className="mt-2 max-w-[46ch] text-[16px] leading-[1.6] text-[#4c5661]">{n.body}</p>
-              <Link
-                href={n.href}
-                className="mt-3 inline-block text-[14.5px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
-              >
-                {n.label}
-              </Link>
-            </li>
-          ))}
-        </ul>
+        {/* Six boundaries: peers, but they are <li> under a <ul>, so the list
+            arrives as one block rather than being wrapped item by item. */}
+        <Reveal>
+          <ul className="mt-10 grid gap-x-12 gap-y-8 tab:grid-cols-2">
+            {NOT.map((n) => (
+              <li key={n.claim} className="border-t border-[#1a1a1a]/10 pt-5">
+                <h3 className="serif-text text-[21px] leading-[1.25] text-[#1a1a1a]">{n.claim}</h3>
+                <p className="mt-2 max-w-[46ch] text-[16px] leading-[1.6] text-[#4c5661]">{n.body}</p>
+                <Link
+                  href={n.href}
+                  className="mt-3 inline-block text-[14.5px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
+                >
+                  {n.label}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </Reveal>
       </section>
 
       {/* ---------- Where it operates, the company, and the questions ---------- */}
       <section className="mt-16 scroll-mt-28 border-t border-[#1a1a1a]/10 pt-16 tab:mt-24 tab:pt-20">
-        <h2 className={H2}>The details, in plain terms.</h2>
-        <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
-          <div className={ROW} id="where">
-            <dt className={TERM}>Where it operates</dt>
-            <dd className={ANSWER}>
-              <p>
-                {SITE_NAME} went live in {LOCALITY.city} in 2026 and opens New York City one borough at a time, each
-                borough only once it has verified shops to book from. A borough opens on readiness, not on a
-                marketing date, and each borough page takes waitlist signups until then.
-              </p>
-              <ul>
-                {BOROUGHS.map((b) => (
-                  <li key={b.slug}>
-                    <Link href={`/${b.slug}`}>{b.name}</Link>: {b.live ? "live now" : `planned ${b.date}`}
-                  </li>
-                ))}
-              </ul>
-              <p>
-                Nothing beyond the five boroughs of New York City has been announced. Drivers from anywhere can book
-                a shop in a live borough; <Link href="/coverage">the coverage ladder</Link> has the full picture.
-              </p>
-            </dd>
-          </div>
-          <div className={ROW} id="shops">
-            <dt className={TERM}>How a shop gets on the network</dt>
-            <dd className={ANSWER}>
-              <p>
-                By applying, and then by clearing a review the Otopair team does by hand. Approval is a decision, not
-                an automated check, and three more things are read from the shop&rsquo;s own live account before a
-                driver ever sees it: payments connected through Stripe with charges and payouts enabled, opening
-                hours published for all seven days, and at least one working mechanic with at least one service
-                switched on.
-              </p>
-              <p>
-                Verification is Otopair&rsquo;s own approval and nothing more. It does not check licences beyond the
-                New York DMV inspection-station licence, does not verify insurance or mechanic certifications, and
-                does not include an in-person visit. <Link href="/how-shops-are-verified">The full standard</Link>{" "}
-                says exactly what is and is not checked; shops apply at <Link href="/apply">otopair.com/apply</Link>{" "}
-                with no subscription and no setup fee.
-              </p>
-            </dd>
-          </div>
-          <div className={ROW} id="company">
-            <dt className={TERM}>The company</dt>
-            <dd className={ANSWER}>
-              <p>
-                {SITE_NAME} is a product of {LEGAL_NAME}, based in {LOCALITY.city}, {LOCALITY.region}. It is a small
-                team building the driver app for iOS and Android, the shop dashboard, Oto, and the vehicle-data asset
-                behind them. Store listings are on the way; the app is what drivers book in, and shops work from the
-                web dashboard.
-              </p>
-              <p>
-                Press and partnership inquiries go to{" "}
-                <a href={`mailto:${SUPPORT_EMAIL}?subject=Press`}>{SUPPORT_EMAIL}</a>. Brand assets, boilerplate and
-                the key facts are on the <Link href="/press">press page</Link>; open roles, when there are any, are
-                on <Link href="/careers">careers</Link>.
-              </p>
-            </dd>
-          </div>
-        </dl>
+        <Reveal>
+          <h2 className={H2}>The details, in plain terms.</h2>
+        </Reveal>
+        {/* A <dl> of definitions fades up whole — never term by term. */}
+        <Reveal delay={0.08}>
+          <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
+            <div className={ROW} id="where">
+              <dt className={TERM}>Where it operates</dt>
+              <dd className={ANSWER}>
+                <p>
+                  {SITE_NAME} went live in {LOCALITY.city} in 2026 and opens New York City one borough at a time, each
+                  borough only once it has verified shops to book from. A borough opens on readiness, not on a
+                  marketing date, and each borough page takes waitlist signups until then.
+                </p>
+                <ul>
+                  {BOROUGHS.map((b) => (
+                    <li key={b.slug}>
+                      <Link href={`/${b.slug}`}>{b.name}</Link>: {b.live ? "live now" : `planned ${b.date}`}
+                    </li>
+                  ))}
+                </ul>
+                <p>
+                  Nothing beyond the five boroughs of New York City has been announced. Drivers from anywhere can book
+                  a shop in a live borough; <Link href="/coverage">the coverage ladder</Link> has the full picture.
+                </p>
+              </dd>
+            </div>
+            <div className={ROW} id="shops">
+              <dt className={TERM}>How a shop gets on the network</dt>
+              <dd className={ANSWER}>
+                <p>
+                  By applying, and then by clearing a review the Otopair team does by hand. Approval is a decision, not
+                  an automated check, and three more things are read from the shop&rsquo;s own live account before a
+                  driver ever sees it: payments connected through Stripe with charges and payouts enabled, opening
+                  hours published for all seven days, and at least one working mechanic with at least one service
+                  switched on.
+                </p>
+                <p>
+                  Verification is Otopair&rsquo;s own approval and nothing more. It does not check licences beyond the
+                  New York DMV inspection-station licence, does not verify insurance or mechanic certifications, and
+                  does not include an in-person visit. <Link href="/how-shops-are-verified">The full standard</Link>{" "}
+                  says exactly what is and is not checked; shops apply at <Link href="/apply">otopair.com/apply</Link>{" "}
+                  with no subscription and no setup fee.
+                </p>
+              </dd>
+            </div>
+            <div className={ROW} id="company">
+              <dt className={TERM}>The company</dt>
+              <dd className={ANSWER}>
+                <p>
+                  {SITE_NAME} is a product of {LEGAL_NAME}, based in {LOCALITY.city}, {LOCALITY.region}. It is a small
+                  team building the driver app for iOS and Android, the shop dashboard, Oto, and the vehicle-data asset
+                  behind them. Store listings are on the way; the app is what drivers book in, and shops work from the
+                  web dashboard.
+                </p>
+                <p>
+                  Press and partnership inquiries go to{" "}
+                  <a href={`mailto:${SUPPORT_EMAIL}?subject=Press`}>{SUPPORT_EMAIL}</a>. Brand assets, boilerplate and
+                  the key facts are on the <Link href="/press">press page</Link>; open roles, when there are any, are
+                  on <Link href="/careers">careers</Link>.
+                </p>
+              </dd>
+            </div>
+          </dl>
+        </Reveal>
+        {/* FaqList carries its own Sequence and Seq's the rows 60ms apart at
+            y=14, deliberately short because it expects nothing lifting it from
+            outside. No wrapper here — a second trigger would compound into the
+            lurch that component's docblock exists to prevent. */}
         <FaqList items={FAQ} className="[&>div:first-child]:pt-6 tab:[&>div:first-child]:pt-7 [&_dd]:max-w-[60ch]" />
       </section>
     </PageShell>

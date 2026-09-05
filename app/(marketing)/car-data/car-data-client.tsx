@@ -5,11 +5,18 @@
 // /api/vin NHTSA decode) or Year/Make/Model[/Trim]. Output: the teaser —
 // identity + render + headline specs with layer badges, two sample
 // intervals, and the locked-counts card that IS the call to action.
+//
+// Motion (docs/design/motion.md): the two static blocks — the lookup card
+// and the closing CTA strip — settle on entry as whole blocks. The fields
+// inside them never animate on their own, and the result region below is
+// deliberately left static: it re-renders on every query, and a reveal
+// there would re-play or flash each time the lookup changes.
 
 import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { LayerLetter } from "@/convex/lib/dataLayers";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { OTOINDEX } from "@/lib/otoindex";
 
 type TeaserSpec = { label: string; value: string; layer: LayerLetter };
@@ -94,99 +101,101 @@ export function CarDataClient() {
     <div className="w-full">
       <div className="mx-auto max-w-3xl">
         {/* Lookup card */}
-        <div className="rounded-[28px] bg-[#f7f6f3] p-6 tab:rounded-[40px] tab:p-8" style={{ boxShadow: "inset 0 0 0 1px rgba(26,26,26,0.06)" }}>
-          <div className="flex gap-1 rounded-full bg-[#1a1a1a]/[0.06] p-1">
-            {(["ymmt", "vin"] as const).map((m) => (
-              <button
-                key={m}
-                onClick={() => {
-                  setMode(m);
-                  setArmed(false);
-                  setPickedKey(null);
-                }}
-                className={`flex-1 rounded-full px-4 py-2 text-[14px] font-medium transition ${
-                  mode === m ? "bg-white text-[#1a1a1a] shadow-[0_1px_3px_rgba(26,26,26,0.08)]" : "text-[#6b655d]"
-                }`}
-              >
-                {m === "ymmt" ? "Year / Make / Model" : "VIN"}
-              </button>
-            ))}
-          </div>
+        <Reveal>
+          <div className="rounded-[28px] bg-[#f7f6f3] p-6 tab:rounded-[40px] tab:p-8" style={{ boxShadow: "inset 0 0 0 1px rgba(26,26,26,0.06)" }}>
+            <div className="flex gap-1 rounded-full bg-[#1a1a1a]/[0.06] p-1">
+              {(["ymmt", "vin"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => {
+                    setMode(m);
+                    setArmed(false);
+                    setPickedKey(null);
+                  }}
+                  className={`flex-1 rounded-full px-4 py-2 text-[14px] font-medium transition ${
+                    mode === m ? "bg-white text-[#1a1a1a] shadow-[0_1px_3px_rgba(26,26,26,0.08)]" : "text-[#6b655d]"
+                  }`}
+                >
+                  {m === "ymmt" ? "Year / Make / Model" : "VIN"}
+                </button>
+              ))}
+            </div>
 
-          {mode === "vin" ? (
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-              <input
-                value={vin}
-                onChange={(e) => {
-                  setVin(e.target.value.toUpperCase());
-                  setArmed(false);
-                }}
-                onKeyDown={(e) => e.key === "Enter" && search()}
-                placeholder="17-character VIN"
-                className={`${inputCls} w-full font-mono tracking-wide`}
-              />
-              <button
-                onClick={search}
-                className={`shrink-0 ${BTN}`}
-              >
-                Look up
-              </button>
-            </div>
-          ) : (
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
-              <input
-                value={year}
-                onChange={(e) => {
-                  setYear(e.target.value);
-                  setArmed(false);
-                }}
-                placeholder="Year"
-                inputMode="numeric"
-                className={inputCls}
-              />
-              <input
-                value={make}
-                onChange={(e) => {
-                  setMake(e.target.value);
-                  setArmed(false);
-                }}
-                placeholder="Make"
-                list="cardata-makes"
-                className={inputCls}
-              />
-              <datalist id="cardata-makes">
-                {(makes ?? []).map((m: { _id: string; name: string }) => (
-                  <option key={m._id} value={m.name} />
-                ))}
-              </datalist>
-              <input
-                value={model}
-                onChange={(e) => {
-                  setModel(e.target.value);
-                  setArmed(false);
-                }}
-                placeholder="Model"
-                className={inputCls}
-              />
-              <input
-                value={trim}
-                onChange={(e) => {
-                  setTrim(e.target.value);
-                  setArmed(false);
-                }}
-                onKeyDown={(e) => e.key === "Enter" && search()}
-                placeholder="Trim (optional)"
-                className={inputCls}
-              />
-              <button
-                onClick={search}
-                className={`col-span-2 sm:col-span-1 ${BTN}`}
-              >
-                Look up
-              </button>
-            </div>
-          )}
-        </div>
+            {mode === "vin" ? (
+              <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                <input
+                  value={vin}
+                  onChange={(e) => {
+                    setVin(e.target.value.toUpperCase());
+                    setArmed(false);
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && search()}
+                  placeholder="17-character VIN"
+                  className={`${inputCls} w-full font-mono tracking-wide`}
+                />
+                <button
+                  onClick={search}
+                  className={`shrink-0 ${BTN}`}
+                >
+                  Look up
+                </button>
+              </div>
+            ) : (
+              <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-5">
+                <input
+                  value={year}
+                  onChange={(e) => {
+                    setYear(e.target.value);
+                    setArmed(false);
+                  }}
+                  placeholder="Year"
+                  inputMode="numeric"
+                  className={inputCls}
+                />
+                <input
+                  value={make}
+                  onChange={(e) => {
+                    setMake(e.target.value);
+                    setArmed(false);
+                  }}
+                  placeholder="Make"
+                  list="cardata-makes"
+                  className={inputCls}
+                />
+                <datalist id="cardata-makes">
+                  {(makes ?? []).map((m: { _id: string; name: string }) => (
+                    <option key={m._id} value={m.name} />
+                  ))}
+                </datalist>
+                <input
+                  value={model}
+                  onChange={(e) => {
+                    setModel(e.target.value);
+                    setArmed(false);
+                  }}
+                  placeholder="Model"
+                  className={inputCls}
+                />
+                <input
+                  value={trim}
+                  onChange={(e) => {
+                    setTrim(e.target.value);
+                    setArmed(false);
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && search()}
+                  placeholder="Trim (optional)"
+                  className={inputCls}
+                />
+                <button
+                  onClick={search}
+                  className={`col-span-2 sm:col-span-1 ${BTN}`}
+                >
+                  Look up
+                </button>
+              </div>
+            )}
+          </div>
+        </Reveal>
 
         {/* Result */}
         {lookupArgs && (
@@ -222,20 +231,22 @@ export function CarDataClient() {
         )}
 
         {/* Bottom CTA strip */}
-        <div className="mt-16 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-[#1a1a1a]/10 pt-8">
-          <p className="text-[15px]" style={{ color: muted }}>
-            Building something with car data?
-          </p>
-          <a href={OTOINDEX.docs} className={BTN_OUT}>
-            The OtoIndex API docs
-          </a>
-          <a
-            href="mailto:data@otopair.com?subject=Data%20API%20access"
-            className="text-[14px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
-          >
-            Or email data@otopair.com
-          </a>
-        </div>
+        <Reveal>
+          <div className="mt-16 flex flex-wrap items-center gap-x-6 gap-y-3 border-t border-[#1a1a1a]/10 pt-8">
+            <p className="text-[15px]" style={{ color: muted }}>
+              Building something with car data?
+            </p>
+            <a href={OTOINDEX.docs} className={BTN_OUT}>
+              The OtoIndex API docs
+            </a>
+            <a
+              href="mailto:data@otopair.com?subject=Data%20API%20access"
+              className="text-[14px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
+            >
+              Or email data@otopair.com
+            </a>
+          </div>
+        </Reveal>
       </div>
     </div>
   );

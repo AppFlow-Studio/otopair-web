@@ -6,6 +6,7 @@ import PageShell from "@/components/flagship/page-shell";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
 import { serviceIcon } from "@/components/flagship/hero-visual";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { HeroPhone, ServiceBooking } from "@/components/flagship/local-sections";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
 import { DirectoryGrid } from "@/components/flagship/product/local";
@@ -130,18 +131,23 @@ export default async function LocalServicePage({ params }: Params) {
 
       {/* ---------- The shops that offer it ---------- */}
       <section id="shops" className="scroll-mt-28">
-        <h2 className={H2}>Which Staten Island shops offer {service.name}?</h2>
-        <div className={`mt-6 ${PROSE}`}>
-          {n > 0 ? (
-            <p>
-              {n} verified {n === 1 ? "shop" : "shops"} on Staten Island {n === 1 ? "lists" : "list"} {service.name}{" "}
-              today. Each one has been reviewed and approved by Otopair and set its own price for the job; Oto shows
-              you the number for your car. This list is live and updates as shops add or drop the service.
-            </p>
-          ) : (
-            <NoShopsYet serviceName={service.name} />
-          )}
-        </div>
+        {/* Heading and the sentence that answers it are one block. The cards
+            below already stagger themselves — DirectoryWithMap runs them
+            through Stagger (components/flagship/product/local.tsx). */}
+        <Reveal>
+          <h2 className={H2}>Which Staten Island shops offer {service.name}?</h2>
+          <div className={`mt-6 ${PROSE}`}>
+            {n > 0 ? (
+              <p>
+                {n} verified {n === 1 ? "shop" : "shops"} on Staten Island {n === 1 ? "lists" : "list"} {service.name}{" "}
+                today. Each one has been reviewed and approved by Otopair and set its own price for the job; Oto shows
+                you the number for your car. This list is live and updates as shops add or drop the service.
+              </p>
+            ) : (
+              <NoShopsYet serviceName={service.name} />
+            )}
+          </div>
+        </Reveal>
         {n > 0 && (
           <div className="mt-8">
             <DirectoryGrid shops={shops} />
@@ -150,58 +156,72 @@ export default async function LocalServicePage({ params }: Params) {
       </section>
 
       {/* ---------- How to book it: Oto's wizard, and the steps ---------- */}
+      {/* No wrapper here: ServiceBooking's own text column is already a
+          Reveal (components/flagship/local-sections.tsx), and it is the
+          element that carries the grid's order-* and col-span-*. The <ol>
+          keeps its numerals — nothing goes between it and its <li>s. */}
       <ServiceBooking slug={slug} name={service.name}>
         <BookingSteps serviceName={service.name} />
       </ServiceBooking>
 
       {/* ---------- Cost, cars, questions: one list ---------- */}
       <section id="details" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
-        <h2 className={H2}>The details, in plain terms.</h2>
-        <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
-          <div className={ROW} id="cost">
-            <dt className={TERM}>How much does {service.name} cost on Staten Island?</dt>
-            <dd className={ANSWER}>
-              <p>
-                Whatever the shop you pick set for your exact car, and you see that number in full before you confirm.
-                Each Staten Island shop on Otopair sets its own labor rate and can set a flat price for {service.name};
-                the app builds the total for your car from that, with parts, labor, tax and Otopair&rsquo;s service fee
-                included, and locks it before the car goes in.
-              </p>
-              <p>
-                Otopair does not publish an average, a range or a starting price for {service.name} on Staten Island,
-                because none of those would be the price you pay. A $20 hold reserves the slot; the shop confirms the
-                final price after inspecting the car, and it cannot go above what you approved without your OK in the
-                app.
-              </p>
-            </dd>
-          </div>
-          <div className={ROW} id="cars">
-            <dt className={TERM}>Which cars is {service.name} available for?</dt>
-            <dd className={ANSWER}>
-              <CarApplicability service={service} />
-            </dd>
-          </div>
-        </dl>
+        <Reveal>
+          <h2 className={H2}>The details, in plain terms.</h2>
+        </Reveal>
+        {/* The definition rows are a <dl> of prose: one block, never term by
+            term. The FaqList below is NOT wrapped with them — it runs its own
+            Sequence and Seq's each row (components/seo/faq.tsx), so a Reveal
+            over it would compound a 26px rise onto the rows' own 14px one. */}
+        <Reveal delay={0.08}>
+          <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
+            <div className={ROW} id="cost">
+              <dt className={TERM}>How much does {service.name} cost on Staten Island?</dt>
+              <dd className={ANSWER}>
+                <p>
+                  Whatever the shop you pick set for your exact car, and you see that number in full before you confirm.
+                  Each Staten Island shop on Otopair sets its own labor rate and can set a flat price for {service.name};
+                  the app builds the total for your car from that, with parts, labor, tax and Otopair&rsquo;s service fee
+                  included, and locks it before the car goes in.
+                </p>
+                <p>
+                  Otopair does not publish an average, a range or a starting price for {service.name} on Staten Island,
+                  because none of those would be the price you pay. A $20 hold reserves the slot; the shop confirms the
+                  final price after inspecting the car, and it cannot go above what you approved without your OK in the
+                  app.
+                </p>
+              </dd>
+            </div>
+            <div className={ROW} id="cars">
+              <dt className={TERM}>Which cars is {service.name} available for?</dt>
+              <dd className={ANSWER}>
+                <CarApplicability service={service} />
+              </dd>
+            </div>
+          </dl>
+        </Reveal>
         <FaqList items={faq} className="[&>div:first-child]:pt-6 tab:[&>div:first-child]:pt-7 [&_dd]:max-w-[60ch]" />
-        <p className="mt-8 text-[15px] text-[#4c5661]">
-          What the service includes, when you need it and the dashboard cues:{" "}
-          <Link href={`/services/${slug}`} className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-            {service.name} on Otopair
-          </Link>
-          . Everything else bookable on the island:{" "}
-          <Link href="/staten-island" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-            Staten Island
-          </Link>{" "}
-          ·{" "}
-          <Link href="/services" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-            All 22 services
-          </Link>{" "}
-          ·{" "}
-          <Link href="/shops" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-            Verified shops
-          </Link>
-          .
-        </p>
+        <Reveal>
+          <p className="mt-8 text-[15px] text-[#4c5661]">
+            What the service includes, when you need it and the dashboard cues:{" "}
+            <Link href={`/services/${slug}`} className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              {service.name} on Otopair
+            </Link>
+            . Everything else bookable on the island:{" "}
+            <Link href="/staten-island" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              Staten Island
+            </Link>{" "}
+            ·{" "}
+            <Link href="/services" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              All 22 services
+            </Link>{" "}
+            ·{" "}
+            <Link href="/shops" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              Verified shops
+            </Link>
+            .
+          </p>
+        </Reveal>
       </section>
     </PageShell>
   );

@@ -10,6 +10,7 @@ import { BookServiceScreen, CategoryScreen, TABS, servicesInTab, type TabKey } f
 import { BRAKES, ChatScreen, OtoTurn, QuickReplies, UserBubble } from "@/components/flagship/product/screens/chat";
 import { STATEN_ISLAND_PHONE, staticMapSrc } from "@/lib/static-map";
 import { useReducedMotionSafe } from "@/components/flagship/shared";
+import { Reveal, Stagger } from "@/components/flagship/landing/reveal";
 import { PhoneAt, Rise, SectionHead } from "@/app/(marketing)/pricing/sections";
 
 /**
@@ -52,7 +53,10 @@ export function CoverageSections({ liveCount }: { liveCount: number | null }) {
         <SectionHead id="how" title="Shops first, drivers second." line="A borough opens to drivers once it has verified shops to book from, not on a marketing date. Any New York City shop can start now." />
         <Plate tone="paper" className="relative mt-10 tab:mt-14" clip>
           <div className="grid items-center gap-10 px-6 py-10 tab:grid-cols-12 tab:px-14 tab:py-16">
-            <div className="tab:col-span-4">
+            {/* The ladder arrives as one block: the wrapper carries the
+                column so the grid item is unchanged, and the <ol> keeps its
+                own <li> children (a per-step wrapper would break the list). */}
+            <Reveal className="min-w-0 tab:col-span-4">
               <ol className="flex flex-col gap-6">
                 <Step n={1} title="Apply">
                   Two minutes on the <Link href="/apply" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">application</Link>. No subscription, no setup fee.
@@ -64,7 +68,7 @@ export function CoverageSections({ liveCount }: { liveCount: number | null }) {
                   Shops verified ahead of their borough&rsquo;s quarter are bookable the day it opens, at the rates they set.
                 </Step>
               </ol>
-            </div>
+            </Reveal>
             <Rise className="tab:col-span-8" delay={0.1}>
               <div className="translate-x-[6%] tab:translate-x-[10%]">
                 <FitZoom base={1100}>
@@ -129,7 +133,10 @@ export function HubServices({ local }: { local: { slug: string; name: string; de
       <SectionHead id="services" title="Which services can I book on Staten Island?" line="All 22, in the four lists the app shows. The ten below have their own Staten Island page with the live shop list and the booking steps." />
       <Plate className="relative mt-10 tab:mt-14" clip>
         <div className="grid gap-8 px-6 pt-10 tab:grid-cols-12 tab:items-center tab:px-14 tab:pt-16">
-          <div className="relative z-10 pb-4 tab:col-span-7 tab:pb-16">
+          {/* One block for the list and its footnote: the <li> rows carry
+              the hairline rule and the count, so they stagger as a set or
+              not at all. The wrapper takes the column. */}
+          <Reveal className="relative z-10 min-w-0 pb-4 tab:col-span-7 tab:pb-16">
             <ul className="grid gap-x-8 sm:grid-cols-2">
               {local.map((s) => (
                 <li key={s.slug} className="border-b border-[#1a1a1a]/10 py-3.5">
@@ -146,7 +153,7 @@ export function HubServices({ local }: { local: { slug: string; name: string; de
               </Link>{" "}
               covers the other twelve. Oto shows you only the services that apply to your car.
             </p>
-          </div>
+          </Reveal>
           {/* The phone stays whole (no hang off the plate): its caption chip
               sits under it and a hanging phone clipped both. */}
           <Rise className="flex justify-center pb-10 tab:col-span-5 tab:justify-end tab:pb-16">
@@ -175,7 +182,11 @@ export function ServiceBooking({ slug, name, children }: { slug: string; name: s
               </PhoneAt>
             </div>
           </Rise>
-          <div className="relative z-10 order-1 pb-2 tab:order-2 tab:col-span-7 tab:pb-16">
+          {/* No entrance on this column: `children` is the caller's block and
+              the one caller (/staten-island/[service]) already hands it in
+              wrapped in its own Reveal. A Reveal here would nest inside that
+              one and rise the steps twice. */}
+          <div className="relative z-10 order-1 min-w-0 pb-2 tab:order-2 tab:col-span-7 tab:pb-16">
             <div className="max-w-[56ch] text-[16px] leading-[1.6] text-[#4c5661] [&_ol]:flex [&_ol]:flex-col [&_ol]:gap-3 [&_ol]:pl-7 [&_ol]:[list-style:decimal-leading-zero] [&_ol>li]:pl-1 [&_ol>li::marker]:text-[#4B82A5] [&_strong]:font-medium [&_strong]:text-[#1a1a1a]">{children}</div>
           </div>
         </div>
@@ -207,7 +218,10 @@ export function BoroughSections({ slug, name, date, liveCount }: { slug: string;
                 </PhoneAt>
               </div>
             </Rise>
-            <div className="relative z-10 order-1 grid gap-8 pb-2 tab:order-2 tab:col-span-7 tab:pb-16">
+            {/* Two peer columns of copy — drivers, then shops. Stagger keeps
+                its own children the grid items, so the gap-8 grid is intact
+                and the wrapper still carries the order and the span. */}
+            <Stagger className="relative z-10 order-1 grid min-w-0 gap-8 pb-2 tab:order-2 tab:col-span-7 tab:pb-16">
               <div>
                 <h3 className="serif-text text-[22px] leading-[1.2] text-[#1a1a1a]">For drivers</h3>
                 <p className="mt-3 max-w-[46ch] text-[16px] leading-[1.6] text-[#4c5661]">
@@ -231,7 +245,7 @@ export function BoroughSections({ slug, name, date, liveCount }: { slug: string;
                   </Link>
                 </p>
               </div>
-            </div>
+            </Stagger>
           </div>
         </Plate>
       </section>

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import PageShell from "@/components/flagship/page-shell";
 import { Ladder } from "@/components/flagship/ladder";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { PartnerSections } from "./sections";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -123,19 +124,24 @@ export default function PartnerWithUsPage() {
 
       {/* ---------- What it takes to go live ---------- */}
       <section id="verification" className="scroll-mt-28 border-t border-[#1a1a1a]/10 py-14 tab:py-20">
-        <div className="grid gap-3 tab:grid-cols-12 tab:items-end tab:gap-8">
-          <h2 className={`${H2} tab:col-span-5`}>Five steps to your first booking.</h2>
-          <p className="max-w-[46ch] text-[17px] leading-[1.55] text-[#4c5661] [text-wrap:pretty] tab:col-span-6 tab:col-start-7 tab:pb-1">
-            A person reviews every application. Stripe verifies identity and payouts. You set hours, a rate, services
-            and a team, and you are live.
-          </p>
-        </div>
+        {/* Head and lede are one block; the Ladder brings its own Sequence. */}
+        <Reveal>
+          <div className="grid gap-3 tab:grid-cols-12 tab:items-end tab:gap-8">
+            <h2 className={`${H2} tab:col-span-5`}>Five steps to your first booking.</h2>
+            <p className="max-w-[46ch] text-[17px] leading-[1.55] text-[#4c5661] [text-wrap:pretty] tab:col-span-6 tab:col-start-7 tab:pb-1">
+              A person reviews every application. Stripe verifies identity and payouts. You set hours, a rate, services
+              and a team, and you are live.
+            </p>
+          </div>
+        </Reveal>
         <Ladder direction="row" steps={GO_LIVE} className="mt-10" />
       </section>
 
       {/* ---------- The questions shops ask ---------- */}
       <section id="faq" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
-        <h2 className={H2}>The questions shops ask.</h2>
+        <Reveal>
+          <h2 className={H2}>The questions shops ask.</h2>
+        </Reveal>
         <FaqList items={FAQ} className="mt-8 border-b border-[#1a1a1a]/10 [&_dd]:max-w-[60ch]" />
       </section>
     </PageShell>

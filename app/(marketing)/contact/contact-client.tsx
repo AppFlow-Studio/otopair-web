@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ArrowUpRight } from "lucide-react";
-import { Reveal, serif, serifDisplay } from "@/components/flagship/landing/reveal";
+import { Reveal, Seq, Sequence, serif, serifDisplay } from "@/components/flagship/landing/reveal";
 import FooterCta from "@/components/flagship/landing/footer-cta";
 import NetworkMap from "@/components/flagship/landing/network-map";
 import PillNav from "@/components/flagship/pill-nav";
@@ -151,44 +151,55 @@ export default function ContactClient() {
                 Direct routes.
               </h2>
             </Reveal>
-            <ul className="mt-8 divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10">
-              {LANES.map((l, i) => (
-                <Reveal key={l.title} delay={0.04 * i}>
-                  <li className="grid gap-3 py-6 sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:items-center sm:gap-8 tab:grid-cols-[220px_minmax(0,1fr)_auto]">
-                    <h3 className="text-[22px] leading-none text-[#1a1a1a]" style={serif}>
-                      {l.title}
-                    </h3>
-                    <p className="text-[15px] leading-[1.6] text-[#4c5661]">{l.body}</p>
-                    <div className="flex flex-wrap items-center gap-x-5 gap-y-2 sm:justify-end">
-                      <Link
-                        href={l.action.href}
-                        className="group inline-flex items-center gap-1.5 whitespace-nowrap text-[14px] text-[#1a1a1a] underline decoration-[#1a1a1a]/25 underline-offset-[4px] transition-colors duration-300 hover:decoration-[#1a1a1a]"
-                      >
-                        {l.action.label}
-                        <ArrowUpRight
-                          className="size-3.5 text-[#4B82A5] transition-transform duration-500 ease-expo group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
-                          aria-hidden
-                        />
-                      </Link>
-                      {"secondary" in l && l.secondary && (
+            {/* One clock for the four lanes: the rows are peers, so they
+              cascade off a single trigger. The motion element lives INSIDE
+              each <li> — a wrapper between <ul> and <li> would break the
+              list's semantics and hand `divide-y` the wrong children. */}
+            <Sequence className="mt-8">
+              <ul className="divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10">
+                {LANES.map((l, i) => (
+                  <li key={l.title}>
+                    <Seq
+                      at={0.06 * i}
+                      className="grid gap-3 py-6 sm:grid-cols-[180px_minmax(0,1fr)_auto] sm:items-center sm:gap-8 tab:grid-cols-[220px_minmax(0,1fr)_auto]"
+                    >
+                      <h3 className="text-[22px] leading-none text-[#1a1a1a]" style={serif}>
+                        {l.title}
+                      </h3>
+                      <p className="text-[15px] leading-[1.6] text-[#4c5661]">{l.body}</p>
+                      <div className="flex flex-wrap items-center gap-x-5 gap-y-2 sm:justify-end">
                         <Link
-                          href={l.secondary.href}
-                          className="whitespace-nowrap text-[14px] text-[#777169] transition-colors duration-300 hover:text-[#1a1a1a]"
+                          href={l.action.href}
+                          className="group inline-flex items-center gap-1.5 whitespace-nowrap text-[14px] text-[#1a1a1a] underline decoration-[#1a1a1a]/25 underline-offset-[4px] transition-colors duration-300 hover:decoration-[#1a1a1a]"
                         >
-                          {l.secondary.label}
+                          {l.action.label}
+                          <ArrowUpRight
+                            className="size-3.5 text-[#4B82A5] transition-transform duration-500 ease-expo group-hover:translate-x-0.5 group-hover:-translate-y-0.5"
+                            aria-hidden
+                          />
                         </Link>
-                      )}
-                    </div>
+                        {"secondary" in l && l.secondary && (
+                          <Link
+                            href={l.secondary.href}
+                            className="whitespace-nowrap text-[14px] text-[#777169] transition-colors duration-300 hover:text-[#1a1a1a]"
+                          >
+                            {l.secondary.label}
+                          </Link>
+                        )}
+                      </div>
+                    </Seq>
                   </li>
-                </Reveal>
-              ))}
-            </ul>
+                ))}
+              </ul>
+            </Sequence>
           </section>
 
           {/* ---------- 3. Where: the company's place, with the live map ---------- */}
           <section className={`${CONTAINER} pt-24 tab:pt-32`}>
-            <div className="grid gap-10 lg:grid-cols-12 lg:items-center lg:gap-16">
-              <Reveal className="lg:col-span-5">
+            {/* Text first, the map a beat later, off one shared clock — the
+              map is the object in this composition, not a peer of the copy. */}
+            <Sequence className="grid gap-10 lg:grid-cols-12 lg:items-center lg:gap-16">
+              <Seq className="min-w-0 lg:col-span-5">
                 <h2 className={H2} style={serifDisplay}>
                   Built on Staten Island
                 </h2>
@@ -219,14 +230,14 @@ export default function ContactClient() {
                     See the verified shops on the island
                   </Link>
                 </p>
-              </Reveal>
-              <Reveal delay={0.08} className="lg:col-span-7">
+              </Seq>
+              <Seq at={0.14} className="min-w-0 lg:col-span-7">
                 <Bezel>
                   {/* The same live Mapbox map as the home page: real shop pins. */}
                   <NetworkMap frame={false} className="h-[380px] sm:h-[460px] lg:h-[520px]" />
                 </Bezel>
-              </Reveal>
-            </div>
+              </Seq>
+            </Sequence>
           </section>
 
           {/* ---------- 4. FAQ: two-column editorial list ---------- */}
@@ -236,9 +247,11 @@ export default function ContactClient() {
                 Before you write
               </h2>
             </Reveal>
-            <Reveal delay={0.06}>
-              <FaqList items={FAQ} className="mt-10 max-w-[900px]" />
-            </Reveal>
+            {/* No wrapper: FaqList runs its own Sequence and Seq's the
+              pairs itself (components/seo/faq.tsx). A Reveal around it would
+              double-animate — two opacity ramps multiplied together and its
+              26px lift compounding with the rows' own 14px. */}
+            <FaqList items={FAQ} className="mt-10 max-w-[900px]" />
           </section>
         </main>
 

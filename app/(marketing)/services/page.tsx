@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
+import { Seq, Sequence } from "@/components/flagship/landing/reveal";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -127,41 +128,55 @@ export default async function ServicesIndexPage() {
 
       {/* ---------- The details and the questions: one editorial list ---------- */}
       <section id="details" className="mt-16 scroll-mt-28 border-t border-[#1a1a1a]/10 pt-16 lg:mt-24 lg:pt-24">
-        <h2 className={H2}>The details, in plain terms.</h2>
-        <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
-          <div className={ROW} id="price">
-            <dt className={TERM}>How is the price set?</dt>
-            <dd className={ANSWER}>
-              <p>
-                By the shop, for your exact car. Every shop on Otopair sets its own labor rate and can set a flat price
-                for a service. Oto builds the total for your car from what the shop set, parts, labor, tax and
-                Otopair&rsquo;s service fee, and shows you that full total before you confirm. It is locked before the
-                car goes in.
-              </p>
-              <p>
-                A $20 hold reserves the slot when you book. The shop confirms the final price after inspecting the
-                car, and it cannot go above what you approved without your approval in the app; any added work is a
-                request you answer before it is done. Otopair does not publish averages, ranges or starting prices;
-                the number that matters is the one built for your car.
-              </p>
-            </dd>
-          </div>
-          <div className={ROW} id="where">
-            <dt className={TERM}>Where can I book these?</dt>
-            <dd className={ANSWER}>
-              <p>
-                <Link href="/staten-island">Staten Island, NY</Link>, today. Every shop you can book is a verified
-                independent shop on the island, and each service page lists the Staten Island shops that currently
-                offer it. Brooklyn is next on the <Link href="/coverage">coverage ladder</Link> for Q4 2026, then
-                Queens, The Bronx and Manhattan.
-              </p>
-              <p>
-                Want to start from the shop instead of the service? <Link href="/shops">Browse every verified shop</Link>{" "}
-                and see what each one lists.
-              </p>
-            </dd>
-          </div>
-        </dl>
+        {/* Head and the definition list share one clock: the question lands,
+            the answers settle a beat later. The <dl> moves as one block —
+            never term by term, and never with a wrapper between it and its
+            rows, where divide-y is doing the ruling. */}
+        <Sequence>
+          <Seq>
+            <h2 className={H2}>The details, in plain terms.</h2>
+          </Seq>
+          <Seq at={0.1} className="mt-8">
+            <dl className="flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
+              <div className={ROW} id="price">
+                <dt className={TERM}>How is the price set?</dt>
+                <dd className={ANSWER}>
+                  <p>
+                    By the shop, for your exact car. Every shop on Otopair sets its own labor rate and can set a flat price
+                    for a service. Oto builds the total for your car from what the shop set, parts, labor, tax and
+                    Otopair&rsquo;s service fee, and shows you that full total before you confirm. It is locked before the
+                    car goes in.
+                  </p>
+                  <p>
+                    A $20 hold reserves the slot when you book. The shop confirms the final price after inspecting the
+                    car, and it cannot go above what you approved without your approval in the app; any added work is a
+                    request you answer before it is done. Otopair does not publish averages, ranges or starting prices;
+                    the number that matters is the one built for your car.
+                  </p>
+                </dd>
+              </div>
+              <div className={ROW} id="where">
+                <dt className={TERM}>Where can I book these?</dt>
+                <dd className={ANSWER}>
+                  <p>
+                    <Link href="/staten-island">Staten Island, NY</Link>, today. Every shop you can book is a verified
+                    independent shop on the island, and each service page lists the Staten Island shops that currently
+                    offer it. Brooklyn is next on the <Link href="/coverage">coverage ladder</Link> for Q4 2026, then
+                    Queens, The Bronx and Manhattan.
+                  </p>
+                  <p>
+                    Want to start from the shop instead of the service? <Link href="/shops">Browse every verified shop</Link>{" "}
+                    and see what each one lists.
+                  </p>
+                </dd>
+              </div>
+            </dl>
+          </Seq>
+        </Sequence>
+        {/* FaqList carries its own Sequence and its rows are already Seq'd
+            (components/seo/faq.tsx), so it is left unwrapped: a Reveal over it
+            would compound a 26px rise onto the rows' own 14px one. Same call
+            as /how-it-works. */}
         <FaqList items={FAQ} className="[&>div:first-child]:pt-6 tab:[&>div:first-child]:pt-7 [&_dd]:max-w-[60ch]" />
       </section>
     </PageShell>

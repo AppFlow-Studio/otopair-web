@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
 import { ShopDay } from "@/components/flagship/editorial-sections";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { PillAnchor, TextLink } from "@/components/flagship/pill-button";
 import { LOCALITY, SUPPORT_EMAIL } from "@/lib/site";
 
@@ -46,45 +47,52 @@ export default function CareersPage() {
       width="wide"
     >
       <section id="details" className="scroll-mt-28">
-        <dl className="flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
-          <div className={`${ROW} pt-0! tab:pt-0!`} id="what">
-            <dt className={TERM}>What we are building</dt>
-            <dd className={ANSWER}>
-              <p>
-                A marketplace where a driver describes a problem to an assistant, sees the price a verified shop set,
-                and books it locked. That means three products at once: Oto, the assistant that turns &ldquo;it
-                squeals when I brake&rdquo; into a scoped job; the pricing and booking system that holds a deposit,
-                locks a price and settles it through Stripe; and the shop dashboard that runs a real garage&rsquo;s
-                day. Underneath all three is a vehicle-data asset built from verified shop work.
-              </p>
-            </dd>
-          </div>
-        </dl>
+        {/* Answers, not roles: each <dl> is a definition list, so it settles as
+            one block rather than term by term (docs/design/motion.md). The
+            dashboard object between them animates inside ShopDay already. */}
+        <Reveal>
+          <dl className="flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
+            <div className={`${ROW} pt-0! tab:pt-0!`} id="what">
+              <dt className={TERM}>What we are building</dt>
+              <dd className={ANSWER}>
+                <p>
+                  A marketplace where a driver describes a problem to an assistant, sees the price a verified shop set,
+                  and books it locked. That means three products at once: Oto, the assistant that turns &ldquo;it
+                  squeals when I brake&rdquo; into a scoped job; the pricing and booking system that holds a deposit,
+                  locks a price and settles it through Stripe; and the shop dashboard that runs a real garage&rsquo;s
+                  day. Underneath all three is a vehicle-data asset built from verified shop work.
+                </p>
+              </dd>
+            </div>
+          </dl>
+        </Reveal>
         <div className="mt-2 tab:mt-4">
           <ShopDay />
         </div>
-        <dl className="mt-14 flex flex-col divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10 tab:mt-20">
-          <div className={ROW} id="who">
-            <dt className={TERM}>Who does well here</dt>
-            <dd className={ANSWER}>
-              <ul>
-                <li>People who have stood in a shop, or would, to watch how a job actually flows.</li>
-                <li>Engineers comfortable across a TypeScript stack: Next.js, React Native, Convex, Stripe.</li>
-                <li>Anyone who would rather write the true sentence than the impressive one.</li>
-              </ul>
-            </dd>
-          </div>
-          <div className={ROW} id="how">
-            <dt className={TERM}>How to reach us</dt>
-            <dd className={ANSWER}>
-              <p>
-                Email <a href={`mailto:${SUPPORT_EMAIL}?subject=Careers`}>{SUPPORT_EMAIL}</a> with &ldquo;Careers&rdquo;
-                in the subject, a few lines about you, and links to something you built. If you run a repair shop
-                rather than want a job, the <Link href="/partner-with-us">partner page</Link> is where to start.
-              </p>
-            </dd>
-          </div>
-        </dl>
+        <Reveal>
+          <dl className="mt-14 flex flex-col divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10 tab:mt-20">
+            <div className={ROW} id="who">
+              <dt className={TERM}>Who does well here</dt>
+              <dd className={ANSWER}>
+                <ul>
+                  <li>People who have stood in a shop, or would, to watch how a job actually flows.</li>
+                  <li>Engineers comfortable across a TypeScript stack: Next.js, React Native, Convex, Stripe.</li>
+                  <li>Anyone who would rather write the true sentence than the impressive one.</li>
+                </ul>
+              </dd>
+            </div>
+            <div className={ROW} id="how">
+              <dt className={TERM}>How to reach us</dt>
+              <dd className={ANSWER}>
+                <p>
+                  Email <a href={`mailto:${SUPPORT_EMAIL}?subject=Careers`}>{SUPPORT_EMAIL}</a> with &ldquo;Careers&rdquo;
+                  in the subject, a few lines about you, and links to something you built. If you run a repair shop
+                  rather than want a job, the <Link href="/partner-with-us">partner page</Link> is where to start.
+                </p>
+              </dd>
+            </div>
+          </dl>
+        </Reveal>
       </section>
     </PageShell>
   );

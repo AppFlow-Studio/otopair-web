@@ -24,10 +24,15 @@ export const LEAD = "max-w-[46ch] text-[17px] leading-[1.55] text-[#4c5661] [tex
 
 export function SectionHead({ id, title, line, className = "" }: { id?: string; title: string; line: string; className?: string }) {
   return (
-    <div id={id} className={`grid gap-3 scroll-mt-28 tab:grid-cols-12 tab:items-end tab:gap-8 ${className}`}>
-      <h2 className={`${H2} tab:col-span-6`}>{title}</h2>
-      <p className={`${LEAD} tab:col-span-5 tab:col-start-8 tab:pb-1`}>{line}</p>
-    </div>
+    // The heading and its answer are one block, so they arrive together and
+    // the section's own Rise follows them. The id and the scroll margin stay
+    // on the grid, not the wrapper, so anchor links still land on the heading.
+    <Rise>
+      <div id={id} className={`grid gap-3 scroll-mt-28 tab:grid-cols-12 tab:items-end tab:gap-8 ${className}`}>
+        <h2 className={`${H2} tab:col-span-6`}>{title}</h2>
+        <p className={`${LEAD} tab:col-span-5 tab:col-start-8 tab:pb-1`}>{line}</p>
+      </div>
+    </Rise>
   );
 }
 
@@ -35,6 +40,10 @@ export function Rise({ children, delay = 0, className = "" }: { children: ReactN
   const reduce = useReducedMotionSafe();
   return (
     <motion.div
+      // Un-hidden by the <noscript> rule in app/layout.tsx: motion writes this
+      // initial opacity into the server markup, so without the attribute every
+      // section on all six product pages ships invisible when JS never runs.
+      data-reveal
       className={className}
       initial={reduce ? { opacity: 0 } : { opacity: 0, transform: "translateY(22px)" }}
       whileInView={{ opacity: 1, transform: "translateY(0px)" }}

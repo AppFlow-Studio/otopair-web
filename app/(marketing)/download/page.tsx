@@ -11,6 +11,7 @@ import WaitlistForm from "@/components/flagship/waitlist-form";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
 import { listPublicShops, onStatenIsland } from "@/lib/public-shops";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { SectionHead } from "../pricing/sections";
 
 export const metadata: Metadata = {
@@ -94,7 +95,11 @@ export default async function DownloadPage() {
 
       {/* ---------- What you get: three screens, one line each ---------- */}
       <section className="pb-16 tab:pb-24">
-        <SectionHead id="what" title="What you get in the app." line="Prices from real shops, a total that is locked before the car goes in, and a record that stays with the car. Oto is the way in; the booking is the point." />
+        <Reveal>
+          <SectionHead id="what" title="What you get in the app." line="Prices from real shops, a total that is locked before the car goes in, and a record that stays with the car. Oto is the way in; the booking is the point." />
+        </Reveal>
+        {/* The three screens arrive left to right on PhoneRow's own clock
+            (Rise, delay i * 0.1) — nothing to add here. */}
         <div className="mt-10 tab:mt-14">
           <PhoneRow
             items={[
@@ -108,21 +113,32 @@ export default async function DownloadPage() {
 
       {/* ---------- Where it works ---------- */}
       <section className="py-16 tab:py-24">
-        <SectionHead id="where" title="Where does it work?" line="Staten Island today; the rest of New York City borough by borough, each one once it has verified shops to book from." />
+        <Reveal>
+          <SectionHead id="where" title="Where does it work?" line="Staten Island today; the rest of New York City borough by borough, each one once it has verified shops to book from." />
+        </Reveal>
+        {/* WhereItWorks carries its own Rise. */}
         <div className="mt-10 tab:mt-14">
           <WhereItWorks liveCount={liveCount} />
         </div>
-        <p className="mt-6 text-[15px] text-[#4c5661]">
-          The{" "}
-          <Link href="/coverage" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
-            coverage page
-          </Link>{" "}
-          has the ladder and the waitlists.
-        </p>
+        <Reveal>
+          <p className="mt-6 text-[15px] text-[#4c5661]">
+            The{" "}
+            <Link href="/coverage" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+              coverage page
+            </Link>{" "}
+            has the ladder and the waitlists.
+          </p>
+        </Reveal>
       </section>
 
       <section id="faq" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
-        <h2 className={H2}>Questions people ask.</h2>
+        {/* Only the heading gets an entrance here. FaqList carries its own
+            Sequence and Seq'd rows (components/seo/faq.tsx) — wrapping it
+            would double-animate it and compound the two rises, so it is left
+            alone with its own top margin. Same shape as /how-it-works. */}
+        <Reveal>
+          <h2 className={H2}>Questions people ask.</h2>
+        </Reveal>
         <FaqList items={FAQ} className="mt-8 border-b border-[#1a1a1a]/10 [&_dd]:max-w-[60ch]" />
       </section>
     </PageShell>

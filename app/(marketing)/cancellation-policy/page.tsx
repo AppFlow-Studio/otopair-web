@@ -136,6 +136,13 @@ export default function CancellationPolicyPage() {
         </p>
       </Section>
 
+      {/* Section already reveals its copy (page-shell wraps every Section in a
+          Reveal), and LifecyclePull's own PullCard carries a whileInView
+          fade-up on a later trigger than the section's — so the receipt
+          already settles a beat behind the text. Deliberately NOT wrapped in a
+          Reveal the way the sibling legal pages wrap their `after` plates
+          (a phone screen, which does not animate itself): here that would put
+          a third fade-up on a card that already rides two. */}
       <Section id="estimate" title="What if I don't answer the inspection estimate?" after={<Plate tone="pale" className="p-3 tab:p-5"><LifecyclePull /></Plate>}>
         <p>
           After inspecting the car, the shop confirms the final price in the app. If it lands within

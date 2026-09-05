@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import PageShell from "@/components/flagship/page-shell";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { PricingSections } from "./sections";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -83,8 +84,9 @@ export default function PricingPage() {
 
       {/* ---------- The details and the questions: one editorial list ---------- */}
       <section id="details" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
-        <h2 className={H2}>Questions drivers ask.</h2>
-        
+        <Reveal>
+          <h2 className={H2}>Questions drivers ask.</h2>
+        </Reveal>
         <FaqList items={FAQ} className="mt-8 border-b border-[#1a1a1a]/10 [&_dd]:max-w-[60ch]" />
       </section>
     </PageShell>

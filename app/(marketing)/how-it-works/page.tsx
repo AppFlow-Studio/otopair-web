@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import PageShell from "@/components/flagship/page-shell";
+import { Reveal } from "@/components/flagship/landing/reveal";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -81,8 +82,16 @@ export default function HowItWorksPage() {
 
       <HowItWorksStory />
 
+      {/* The walkthrough above is already choreographed by its own component
+          (the screen crossfade, the rail dot, the active step's body), so the
+          only entrance this page adds is the heading here. FaqList carries
+          its own Sequence and Seq'd rows (components/seo/faq.tsx) — wrapping
+          it would double-animate it and compound the two rises, so it is
+          left alone with its own top margin. */}
       <section id="questions" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:mt-10 tab:pt-20">
-        <h2 className={H2}>Questions drivers ask.</h2>
+        <Reveal>
+          <h2 className={H2}>Questions drivers ask.</h2>
+        </Reveal>
         <FaqList items={FAQ} className="mt-8 border-b border-[#1a1a1a]/10 [&_dd]:max-w-[60ch]" />
       </section>
     </PageShell>

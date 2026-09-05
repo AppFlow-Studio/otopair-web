@@ -8,6 +8,7 @@ import NetworkMap from "@/components/flagship/landing/network-map";
 import PillNav from "@/components/flagship/pill-nav";
 import ContactForm from "@/components/flagship/contact-form";
 import { Bezel } from "@/components/flagship/bezel";
+import { Plate } from "@/components/flagship/product/device";
 import { Breadcrumbs } from "@/components/seo/breadcrumbs";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
@@ -93,7 +94,7 @@ export default function ContactClient() {
       <PillNav links={NAV_LINKS} cta={NAV_CTA} />
       <div className="isolate">
         {/* ---------- 1. Hero: the ask left, the working form right ---------- */}
-        <header className="w-full bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_640px)] tab:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_820px)]">
+        <header className="w-full overflow-x-clip bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_640px)] tab:bg-[linear-gradient(to_bottom,#98C9E8_0px,#FFFFFF_820px)]">
           <div className="mx-auto grid w-full max-w-[1190px] gap-12 px-6 pt-[128px] sm:px-10 lg:grid-cols-12 lg:items-center lg:gap-14 lg:pt-[150px]">
             <div className="lg:col-span-5">
               <Reveal>
@@ -127,12 +128,12 @@ export default function ContactClient() {
                 className="pointer-events-none absolute -inset-10 -z-10 rounded-full bg-[radial-gradient(closest-side,rgba(255,255,255,0.85),rgba(255,255,255,0))]"
               />
               <Reveal delay={0.12} y={18}>
-                <Bezel tone="glass" clip={false} innerClassName="p-6 sm:p-8">
+                <Plate tone="paper" className="p-6 sm:p-8">
                   <p className="text-[22px] leading-none text-[#1a1a1a]" style={serif}>
                     Send a message
                   </p>
                   <ContactForm className="mt-6" />
-                </Bezel>
+                </Plate>
               </Reveal>
             </div>
           </div>

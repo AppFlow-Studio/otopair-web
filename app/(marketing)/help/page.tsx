@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import PageShell, { Card, Section } from "@/components/flagship/page-shell";
-import { FaqSection, type FaqItem } from "@/components/seo/faq";
+import PageShell from "@/components/flagship/page-shell";
+import { HeroPhone } from "@/components/flagship/local-sections";
+import { PillLink, TextLink } from "@/components/flagship/pill-button";
+import { BookingsScreen } from "@/components/flagship/product/screens/bookings";
+import { FaqList, type FaqItem } from "@/components/seo/faq";
+import { JsonLd } from "@/components/seo/json-ld";
 import {
   HELP_CATEGORIES,
   HELP_CATEGORY_META,
@@ -19,11 +23,12 @@ export const metadata: Metadata = {
 };
 
 /**
- * /help — audit Tier 4, "long-tail question capture". A search-less hub:
- * one block per category, each article as a card whose summary already
- * answers the question, so a reader who never clicks through still leaves
- * with the answer. The four most-asked questions are repeated at the bottom
- * as FAQPage schema so search engines get the same answers.
+ * /help (audit Tier 4, "long-tail question capture"; design pass
+ * 2026-09-05): a search-less hub. The hero is the moment most questions
+ * come from, the Bookings tab with an approval waiting. One block per
+ * category, each question as a row whose summary already answers it, so
+ * a reader who never clicks through still leaves with the answer. The four
+ * most-asked questions repeat at the bottom as FAQPage schema.
  *
  * Articles live in lib/help-articles.tsx; this page renders whatever is
  * there and skips empty categories.
@@ -42,36 +47,35 @@ const FAQ: FaqItem[] = TOP_QUESTIONS.flatMap((slug) => {
   return a ? [{ q: a.title, a: a.summary }] : [];
 });
 
+const H2 = "serif-display max-w-[16ch] text-[32px] leading-[1.04] tracking-[-0.01em] text-[#1a1a1a] [text-wrap:balance] tab:text-[38px]";
+
 function CategoryBlock({ category }: { category: HelpCategory }) {
   const items = helpByCategory(category);
   if (!items.length) return null;
   const meta = HELP_CATEGORY_META[category];
   return (
-    <section
-      id={meta.id}
-      className="scroll-mt-28 border-t border-[#1a1a1a]/10 py-9 first:border-t-0 first:pt-0 tab:py-11"
-    >
-      <h2 className="text-[24px] leading-[1.15] text-[#1a1a1a] tab:text-[28px]" style={serif}>
-        {category}
-      </h2>
-      <p className="mt-3 max-w-[64ch] text-[17px] leading-[1.65] text-[#4c5661]">{meta.blurb}</p>
-      <ul className="mt-6 grid list-none gap-4 p-0 sm:grid-cols-2 lg:grid-cols-3">
+    <section id={meta.id} className="scroll-mt-28 border-t border-[#1a1a1a]/10 py-10 first:border-t-0 first:pt-0 tab:py-14">
+      <div className="grid gap-3 tab:grid-cols-12 tab:items-end tab:gap-8">
+        <h2 className={`${H2} tab:col-span-5`}>{category}</h2>
+        <p className="max-w-[46ch] text-[17px] leading-[1.55] text-[#4c5661] tab:col-span-6 tab:col-start-7 tab:pb-1">{meta.blurb}</p>
+      </div>
+      <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10">
         {items.map((a) => (
-          <li key={a.slug} className="min-w-0">
-            <Link
-              href={`/help/${a.slug}`}
-              className="block h-full rounded-[20px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4B82A5]"
-            >
-              <Card title={a.title}>
-                <p className="mt-3 flex-1 text-[15px] leading-[1.6] text-[#6b655d]">{a.summary}</p>
-                <span className="mt-4 text-[14px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px]">
-                  Read the full answer
-                </span>
-              </Card>
-            </Link>
-          </li>
+          <div key={a.slug} className="grid gap-2 py-5 tab:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] tab:gap-x-10 tab:py-6">
+            <dt className="text-[20px] leading-[1.3] text-[#1a1a1a] [text-wrap:balance]" style={serif}>
+              <Link href={`/help/${a.slug}`} className="transition-colors duration-300 hover:text-[#4B82A5] focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4B82A5]">
+                {a.title}
+              </Link>
+            </dt>
+            <dd className="max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661]">
+              {a.summary}{" "}
+              <Link href={`/help/${a.slug}`} className="whitespace-nowrap text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+                The full answer
+              </Link>
+            </dd>
+          </div>
         ))}
-      </ul>
+      </dl>
     </section>
   );
 }
@@ -79,31 +83,58 @@ function CategoryBlock({ category }: { category: HelpCategory }) {
 export default function HelpPage() {
   return (
     <PageShell
-      eyebrow="HELP"
-      title="Answers, before you have to ask"
+      title="Answers, before you have to ask."
       lede="Every question here is answered in its first few lines, written against what the app actually enforces: the $20 hold, the price you lock, what needs your approval, when cancelling is free, and how to reach a person when something goes wrong."
       crumbs={[
         { name: "Home", href: "/" },
         { name: "Help", href: "/help" },
       ]}
+      hero={
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <PillLink href="/help/approving-extra-work">Approving extra work</PillLink>
+          <TextLink href="/contact">Reach a person</TextLink>
+        </div>
+      }
+      visual={
+        <HeroPhone>
+          <BookingsScreen stage={2} approval title="Marcus started at 10:05 AM" subtitle="Front pads off, rotors checked" />
+        </HeroPhone>
+      }
+      visualFrame={false}
       width="wide"
     >
+      <JsonLd
+        data={{
+          "@context": "https://schema.org",
+          "@type": "FAQPage",
+          mainEntity: FAQ.map((it) => ({
+            "@type": "Question",
+            name: it.q,
+            acceptedAnswer: { "@type": "Answer", text: it.a },
+          })),
+        }}
+      />
+
       {HELP_CATEGORIES.map((c) => (
         <CategoryBlock key={c} category={c} />
       ))}
 
-      <div className="mx-auto mt-6 max-w-[720px]">
-        <Section id="still-stuck" title="Still stuck?">
-          <p>
-            Email <a href={`mailto:${SUPPORT_EMAIL}?subject=Driver%20support`}>{SUPPORT_EMAIL}</a>{" "}
-            with the booking and what happened, and a person will reply. For anything about a
-            specific job, the fastest route is the message thread on the booking in the app, where
-            the shop answers with your car in front of them. The <Link href="/contact">contact page</Link>{" "}
-            lists the right address for shops, the car-data API and press.
+      <section id="still-stuck" className="scroll-mt-28 border-t border-[#1a1a1a]/10 py-10 tab:py-14">
+        <div className="grid gap-3 tab:grid-cols-12 tab:gap-8">
+          <h2 className={`${H2} tab:col-span-5`}>Still stuck?</h2>
+          <p className="max-w-[56ch] text-[17px] leading-[1.6] text-[#4c5661] tab:col-span-6 tab:col-start-7 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5]">
+            Email <a href={`mailto:${SUPPORT_EMAIL}?subject=Driver%20support`}>{SUPPORT_EMAIL}</a> with the booking and
+            what happened, and a person will reply. For anything about a specific job, the fastest route is the message
+            thread on the booking in the app, where the shop answers with your car in front of them. The{" "}
+            <Link href="/contact">contact page</Link> lists the right address for shops, the car-data API and press.
           </p>
-        </Section>
-        <FaqSection items={FAQ} />
-      </div>
+        </div>
+      </section>
+
+      <section id="faq" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-10 tab:pt-14">
+        <h2 className={H2}>The four most-asked questions.</h2>
+        <FaqList items={FAQ} className="mt-8 border-b border-[#1a1a1a]/10 [&_dd]:max-w-[60ch]" />
+      </section>
     </PageShell>
   );
 }

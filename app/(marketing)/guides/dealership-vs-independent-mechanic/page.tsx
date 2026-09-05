@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell, { Section, Summary, type TocItem } from "@/components/flagship/page-shell";
 import { FaqSection } from "@/components/seo/faq";
+import { BreakdownPull } from "@/components/flagship/product/pullouts";
+import { Plate } from "@/components/flagship/product/device";
 
 export const metadata: Metadata = {
   title: "Dealership or independent mechanic: which should I choose?",
@@ -57,7 +59,6 @@ const FAQ = [
 export default function DealershipVsIndependentGuide() {
   return (
     <PageShell
-      eyebrow="GUIDE"
       title="Dealership or independent mechanic: which should I choose?"
       lede="It depends on the job. Warranty repairs, recalls and anything that needs the manufacturer's own tools and software belong at a dealership. Out-of-warranty maintenance and most repairs are well served by a good independent shop, where you can build a relationship and see exactly what you are paying for. Here is how to decide, job by job."
       updated={UPDATED}
@@ -193,7 +194,7 @@ export default function DealershipVsIndependentGuide() {
         </p>
       </Section>
 
-      <Section id="otopair" title="How does Otopair fit in?">
+      <Section id="otopair" title="How does Otopair fit in?" after={<Plate tone="pale" className="flex justify-center px-6 py-10"><BreakdownPull /></Plate>}>
         <p>
           Otopair is a marketplace for booking independent shops, and it is built around the five
           checks above so you do not have to run them yourself. Each shop on the network is reviewed

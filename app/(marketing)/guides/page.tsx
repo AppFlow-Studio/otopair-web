@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import PageShell, { Card } from "@/components/flagship/page-shell";
+import PageShell from "@/components/flagship/page-shell";
 
 export const metadata: Metadata = {
   title: "Guides",
@@ -25,31 +25,32 @@ const GUIDES = [
 export default function GuidesPage() {
   return (
     <PageShell
-      eyebrow="GUIDES"
-      title="Guides for deciding, not just booking"
+      title="Guides for deciding, not just booking."
       lede="Longer reads on the questions that come before a booking, written to be balanced rather than to sell. Each one says when the answer is not Otopair."
       crumbs={[
         { name: "Home", href: "/" },
         { name: "Guides", href: "/guides" },
       ]}
+      heroAlign="start"
+      width="wide"
     >
-      <ul className="grid list-none gap-4 p-0">
+      <dl className="flex flex-col divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10">
         {GUIDES.map((g) => (
-          <li key={g.slug}>
-            <Link
-              href={`/guides/${g.slug}`}
-              className="block h-full rounded-[20px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#4B82A5]"
-            >
-              <Card title={g.title} eyebrow="GUIDE">
-                <p className="mt-3 flex-1 text-[15px] leading-[1.6] text-[#6b655d]">{g.summary}</p>
-                <span className="mt-4 text-[14px] text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px]">
-                  Read the guide
-                </span>
-              </Card>
-            </Link>
-          </li>
+          <div key={g.slug} className="grid gap-2 py-6 tab:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] tab:gap-x-10 tab:py-7">
+            <dt className="serif-text text-[21px] leading-[1.3] text-[#1a1a1a] [text-wrap:balance]">
+              <Link href={`/guides/${g.slug}`} className="transition-colors duration-300 hover:text-[#4B82A5]">
+                {g.title}
+              </Link>
+            </dt>
+            <dd className="max-w-[60ch] text-[16px] leading-[1.6] text-[#4c5661]">
+              {g.summary}{" "}
+              <Link href={`/guides/${g.slug}`} className="whitespace-nowrap text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">
+                Read the guide
+              </Link>
+            </dd>
+          </div>
         ))}
-      </ul>
+      </dl>
     </PageShell>
   );
 }

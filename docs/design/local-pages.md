@@ -58,6 +58,22 @@ logo; `project` places real shops as pins on the phone map).
 | /services | 2 | details + FAQ | | | | |
 | /services/[slug] | hero | The service | phone: the app's info sheet for the service over its category list (lib/service-copy.ts, the Service Guide verbatim) | | reveal | shell |
 | /services/[slug] | 1 | includes, when, cars, price, shops (live cards), FAQ | none | | | |
+| /download | hero | Price locked, in your pocket | phone: Oto listening (voice) | launch list + store plates | reveal | shell |
+| /download | 1 | What you get | three phones: shop totals, Review and Pay, My Cars | one line each | stagger | sky |
+| /download | 2 | Where it works | none: borough rail | | draw | pale |
+| /about | hero | The price you see is the price you pay | none | | | shell |
+| /about | 1 | One booking, two sides | phone (Bookings, estimate confirmed) + browser (job sheet, confirmed) | | reveal | sky |
+| /about | 2 | what / why / where / company + FAQ | none | | | |
+| /press | 1 | boilerplate, facts | none | | | |
+| /press | 2 | The product, at a glance | browser (day board) with the chat phone in front | | reveal | paper |
+| /press | 3 | brand files, contact | none | | | |
+| /careers | 1 | What we are building | browser (day board, booking landing) | the three products as steps | reveal | paper |
+| /careers | 2 | who / how | none | | | |
+| /guides | 1 | the guides | none: rows | | | |
+| /guides/[article] | body | the long read | none; the Service Breakdown lifted out under "How does Otopair fit in" | | reveal | pale |
+| /help | hero | Answers, before you have to ask | phone: Bookings with an approval waiting | | reveal | shell |
+| /help | 1..5 | one list per category | none: question rows | | | |
+| /contact | hero | Talk to a person | the working form on a paper plate | | | shell |
 
 Rule checks: no two consecutive rows share a device; the six openers are
 map / full sheet / category list / form / low sheet with browse card /

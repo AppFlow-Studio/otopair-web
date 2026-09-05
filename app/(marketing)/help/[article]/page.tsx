@@ -43,7 +43,6 @@ export default async function HelpArticlePage({ params }: { params: Promise<Para
 
   return (
     <PageShell
-      eyebrow={a.category.toUpperCase()}
       title={a.title}
       lede={a.summary}
       updated={a.updated}

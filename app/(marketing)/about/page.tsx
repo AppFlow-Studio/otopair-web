@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
 import { PillLink, TextLink } from "@/components/flagship/pill-button";
+import { TwoSides } from "@/components/flagship/editorial-sections";
 import { FaqList, type FaqItem } from "@/components/seo/faq";
 import { JsonLd } from "@/components/seo/json-ld";
 import { LEGAL_NAME, LOCALITY, SITE_NAME, SUPPORT_EMAIL } from "@/lib/site";
@@ -19,7 +20,9 @@ export const metadata: Metadata = {
  * so a model or a crawler can lift any paragraph as a self-contained
  * statement of what Otopair is. Company facts come from lib/site.ts. No
  * decorative object in the hero: the company has no photograph of itself
- * yet, and a logo in a frame said nothing. One editorial list.
+ * yet, and a logo in a frame said nothing. One product object, where the
+ * copy makes its one product claim: the same booking as the driver and the
+ * shop see it (the app up close, 2026-09-05). Then one editorial list.
  */
 /** Two questions the rows above do not already answer. The entity facts
  *  (what, who, where) live in the rows themselves, once. */
@@ -70,7 +73,9 @@ export default function AboutPage() {
         }}
       />
 
-      <section id="details" className="scroll-mt-28">
+      <TwoSides />
+
+      <section id="details" className="scroll-mt-28 border-t border-[#1a1a1a]/10 pt-14 tab:pt-20">
         <h2 className={H2}>Otopair, in plain terms.</h2>
         <dl className="mt-8 flex flex-col divide-y divide-[#1a1a1a]/10 border-b border-[#1a1a1a]/10">
           <div className={ROW} id="what">

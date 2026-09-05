@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
+import { ShopDay } from "@/components/flagship/editorial-sections";
 import { PillAnchor, TextLink } from "@/components/flagship/pill-button";
 import { LOCALITY, SUPPORT_EMAIL } from "@/lib/site";
 
@@ -15,7 +16,9 @@ export const metadata: Metadata = {
  * /careers (design pass 2026-09-05): there are no posted roles, and the
  * page says so rather than inventing any; it exists so the URL resolves,
  * the entity is grounded, and someone who wants in has a real address to
- * write to. Three answers in one editorial list.
+ * write to. Three answers in one editorial list, and one product object
+ * under the first: the shop's day as the dashboard shows it, beside the
+ * three products the team builds (the app up close, 2026-09-05).
  */
 const ROW = "grid gap-2 py-6 tab:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] tab:gap-x-10 tab:py-7";
 const TERM = "serif-text text-[21px] leading-[1.3] text-[#1a1a1a] [text-wrap:balance]";
@@ -56,6 +59,11 @@ export default function CareersPage() {
               </p>
             </dd>
           </div>
+        </dl>
+        <div className="mt-2 tab:mt-4">
+          <ShopDay />
+        </div>
+        <dl className="mt-14 flex flex-col divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10 tab:mt-20">
           <div className={ROW} id="who">
             <dt className={TERM}>Who does well here</dt>
             <dd className={ANSWER}>

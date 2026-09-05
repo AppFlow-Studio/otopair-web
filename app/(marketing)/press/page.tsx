@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Image from "next/image";
 import Link from "next/link";
 import PageShell from "@/components/flagship/page-shell";
+import { ProductStack } from "@/components/flagship/editorial-sections";
 import { PillAnchor, TextLink } from "@/components/flagship/pill-button";
 import { LEGAL_NAME, LOCALITY, SITE_NAME, SITE_URL, SUPPORT_EMAIL } from "@/lib/site";
 
@@ -18,6 +19,10 @@ export const metadata: Metadata = {
  * not invented. The brand assets are the one place on the site where a
  * mark on a plate is the content rather than decoration, so they sit as
  * three plain plates inside the same editorial list as everything else.
+ * Between the facts and the files: the two products in one frame, the
+ * driver app in front of the shop dashboard, drawn from the app's own
+ * components (the app up close, 2026-09-05). Renders, not screenshots;
+ * the row says so.
  */
 const ASSETS = [
   { file: "/logo.png", name: "Pin mark", spec: "PNG, 200 × 200", w: 200, h: 200 },
@@ -93,6 +98,21 @@ export default function PressPage() {
               </dl>
             </dd>
           </div>
+        </dl>
+      </section>
+
+      <section id="product" className="scroll-mt-28 pt-14 tab:pt-20">
+        <div className="grid gap-3 tab:grid-cols-12 tab:items-end tab:gap-8">
+          <h2 className="serif-display max-w-[16ch] text-[32px] leading-[1.04] tracking-[-0.01em] text-[#1a1a1a] [text-wrap:balance] tab:col-span-6 tab:text-[38px]">The product, at a glance.</h2>
+          <p className="max-w-[46ch] text-[17px] leading-[1.55] text-[#4c5661] tab:col-span-5 tab:col-start-8 tab:pb-1">Two products: the driver app, where Oto listens and the price is locked, and the shop dashboard, where the day runs. The frames below are drawn from the app&rsquo;s own components; press-ready captures are available by email.</p>
+        </div>
+        <div className="mt-10 tab:mt-14">
+          <ProductStack />
+        </div>
+      </section>
+
+      <section id="files" className="scroll-mt-28 pt-14 tab:pt-20">
+        <dl className="flex flex-col divide-y divide-[#1a1a1a]/10 border-y border-[#1a1a1a]/10">
           <div className={ROW} id="assets">
             <dt className={TERM}>Brand assets</dt>
             <dd className={ANSWER}>

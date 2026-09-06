@@ -241,6 +241,22 @@ crons.daily(
   {},
 );
 
+// Cohort dispatcher (Sep 2026): route the fleet's STORED missing_roles to the
+// proven repair lanes — curated fluid rung for atf_fluid/coolant, per-config
+// role repair for everything else — stalest-first over a fresh stamp column
+// (cohort_dispatched_at). Exists because those lanes only ever fired inside
+// per-config heals, so configs enriched before a lane shipped never met it
+// (ATF cohort 89→81 in the week after the fluid catalog landed). Dark unless
+// PARTS_COHORT_DISPATCH_BUDGET (configs/night) is set > 0. 08:00 UTC —
+// BEFORE role repair (08:15) and the price refresh (09:00), so fluid parts
+// written here get priced the same night.
+crons.daily(
+  "cohort-dispatch-known-gaps",
+  { hourUTC: 8, minuteUTC: 0 },
+  (internal as any).vehicleEnrichment.cohortDispatch.nightly,
+  {},
+);
+
 // Fleet role repair (Wave 2): nightly census of configs whose latest run
 // shows missing binding core roles, scheduling the batch repair over the
 // worst under PARTS_ROLE_REPAIR_FLEET_BUDGET (0 = census-only, no spend).
@@ -276,6 +292,23 @@ crons.daily(
   { hourUTC: 9, minuteUTC: 30 },
   internal.vehicleEnrichment.fitmentQuarantine.runQuarantineScan,
   { dryRun: false },
+);
+
+// Zero-price sweep (Sep 2026): the price cron above only re-verifies parts
+// that already HAVE a price row, and NEVER-priced parts are otherwise touched
+// only by post-run epilogues — so a finished config's unpriced parts were
+// reachable by nothing (price-only cohort: 76 configs frozen a week with lit
+// budgets). Walks configs stalest-first (price_sweep_at stamp), finds
+// fitment-present/price-missing services in the latest quotability snapshot,
+// and dispatches the existing targeted backfill (whose epilogue re-asks the
+// completion gate). Dark unless PARTS_PRICE_SWEEP_BUDGET (parts/night) is set
+// > 0. 10:00 UTC — AFTER the 09:00 refresh and 09:30 quarantine, so the two
+// Firecrawl budget windows never stack.
+crons.daily(
+  "sweep-never-priced-parts",
+  { hourUTC: 10, minuteUTC: 0 },
+  (internal as any).vehicleEnrichment.priceBackfillSweep.nightly,
+  {},
 );
 
 // Labor times: fold freshly-recorded shop data into the labor median every 6h.

@@ -13,7 +13,9 @@ import { useReducedMotionSafe } from "../shared";
  * the `motion` package the project already ships — no new dependency.
  */
 
-/** Counts from `from` up to `value` when scrolled into view (once). */
+/** Counts from `from` up to `value` when scrolled into view (once). The final
+ *  value is the initial render — server markup must never ship the `from` 0
+ *  as content (site audit 2026-08-31); the count-up replaces it on start. */
 export function NumberTicker({
   value,
   from = 0,
@@ -34,7 +36,7 @@ export function NumberTicker({
   const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true, margin: "0px 0px -15% 0px" });
   const reduce = useReducedMotionSafe();
-  const [display, setDisplay] = useState(reduce ? value : from);
+  const [display, setDisplay] = useState(value);
 
   useEffect(() => {
     if (!inView) return;

@@ -21,10 +21,6 @@ const navItems = [
         href: '/services'
     },
     {
-        label: 'Car Data',
-        href: '/data'
-    },
-    {
         label: 'Partner with us',
         href: '/partner-with-us'
     }
@@ -38,11 +34,14 @@ function Navbar() {
     const [name, setName] = useState('')
     const [submitted, setSubmitted] = useState(false)
     const isHome = pathname === "/"
-    // The flagship home hero and the partner page each ship their own floating
-    // glass pill nav, so the global chrome stands down on both routes.
-    // /developers is an app-like docs/portal surface — it ships its own slim
-    // header, so the marketing chrome stands down there too.
-    const hideChrome = isHome || pathname === "/partner-with-us" || (pathname?.startsWith("/developers") ?? false)
+    // Every marketing page ships its own floating glass pill nav (PageShell,
+    // the home page, the partner page). Since 2026-09-05 that includes the
+    // last older routes (/apply, /car-data), so this
+    // legacy chrome stands down everywhere. The list stays so a future
+    // route without the shell can opt back in.
+    const LEGACY_CHROME_ROUTES: string[] = []
+    const hideChrome =
+        isHome || !LEGACY_CHROME_ROUTES.some((p) => pathname === p || pathname.startsWith(p + "/"))
 
     useEffect(() => {
         if (!isHome) {

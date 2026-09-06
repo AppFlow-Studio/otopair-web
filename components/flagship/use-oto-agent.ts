@@ -67,13 +67,13 @@ const MYCAR_RE =
 // Short, natural demo-mode acknowledgements (live agent speaks its own words).
 const DEMO_LINES: Record<DemoFeature, string> = {
   service_catalog: "Here's everything you can book at launch.",
-  pricing: "Here's how pricing works — every charge is its own line, including our 7% fee.",
+  pricing: "Here's how pricing works — every line is shown before you confirm, and the total is locked.",
   health_score: "Here's how the Vehicle Health Score keeps your car protected.",
   tires: "Tires work a little differently — you pick a tier and nearby shops send live quotes.",
-  ratings: "Every mechanic is rated by real customers and vetted in person before they go live.",
+  ratings: "Every shop is reviewed and approved before it goes live, and rated only by drivers who completed a job there.",
   rewards: "You earn real dollar credit — Ownership Credit — on every booking. No points, no hoops.",
   overview: "Here's Otopair in a nutshell.",
-  coverage: "Here's where Otopair is launching.",
+  coverage: "Here's where Otopair is live, and where it goes next.",
   payments: "Here's how payments work — pay your way, securely.",
   service_history: "You can upload past records — here's why it makes everything more accurate.",
   checkin: "Every 90 days there's a soft check-in to keep things accurate — never a push.",
@@ -140,6 +140,15 @@ export function useOtoAgent() {
   }, [demoFeature]);
   useEffect(() => {
     setDynamicCard(null);
+  }, [step]);
+  // Same guarantee for the demo-card channel. flagship-hero renders demoFeature
+  // BEFORE any step branch, so an explainer left standing masks the entire
+  // booking funnel. Every LOCAL path clears it by hand; this covers the agent's
+  // tools and any future setStep site the same way the effect above does.
+  // (Not sufficient alone: setStep to the CURRENT step is a no-op and won't
+  // re-run this — hence the explicit clears in the funnel tools below.)
+  useEffect(() => {
+    setDemoFeature(null);
   }, [step]);
 
   const pushMessage = useCallback((role: ChatMessage["role"], text: string) => {
@@ -357,6 +366,7 @@ export function useOtoAgent() {
 
   // ---- Client tools the live agent calls to drive the UI -------------------
   useConversationClientTool("show_scheduling", () => {
+    setDemoFeature(null);
     setStep("scheduling");
     return "Scheduling preview shown.";
   });
@@ -366,6 +376,7 @@ export function useOtoAgent() {
     if (Array.isArray(incoming) && incoming.length) {
       setShops(incoming as unknown as Shop[]);
     }
+    setDemoFeature(null);
     setStep("shops");
     return "Shop list shown to the user.";
   });
@@ -378,6 +389,7 @@ export function useOtoAgent() {
     if (typeof params?.shop === "string") {
       setSelectedShop((prev) => prev ?? { ...DEFAULT_SHOPS[0], name: params.shop as string });
     }
+    setDemoFeature(null);
     setStep("datetime");
     return "Available times shown to the user.";
   });
@@ -396,6 +408,7 @@ export function useOtoAgent() {
             ? (params.total as number)
             : prev.total,
       }));
+      setDemoFeature(null);
       setStep("confirmed");
       return "Booking confirmed in the UI.";
     }

@@ -1,10 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { sendWaitlistConfirmationEmail, sendWaitlistNotificationEmail } from '@/email/send';
 
+// Boroughs the coverage ladder announces but does not serve yet. The
+// borough waitlist pages (/brooklyn, /queens, /bronx, /manhattan) post one
+// of these; anything else is dropped rather than echoed into the email.
+const BOROUGHS = new Set(['Brooklyn', 'Queens', 'The Bronx', 'Manhattan', 'Staten Island']);
+
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
         const { email, name } = body;
+        const borough =
+            typeof body.borough === 'string' && BOROUGHS.has(body.borough) ? body.borough : undefined;
+        // The app-launch list from /download (design pass 2026-09-05): tagged
+        // so the team notification says which list the signup came from.
+        const list = body.list === 'app' ? 'App launch' : undefined;
 
         // Validate email
         if (!email || typeof email !== 'string' || !email.includes('@')) {
@@ -29,6 +39,7 @@ export async function POST(request: NextRequest) {
         const notificationResult = await sendWaitlistNotificationEmail({
             email,
             name: name || undefined,
+            borough: borough ?? list,
         });
 
         if (!notificationResult.success) {
@@ -53,4 +64,3 @@ export async function POST(request: NextRequest) {
         );
     }
 }
-

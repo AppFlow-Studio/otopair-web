@@ -1775,7 +1775,7 @@ export default function ShopSetupPage() {
                 </label>
                 <div className="flex items-center overflow-hidden rounded-lg border border-input focus-within:border-transparent focus-within:ring-2 focus-within:ring-ring">
                   <span className="border-r border-input bg-muted px-3.5 py-2.5 font-mono text-sm text-muted-foreground">
-                    otopair.com/shop/
+                    otopair.com/shops/
                   </span>
                   <input
                     type="text"

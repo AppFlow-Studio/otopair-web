@@ -8,12 +8,24 @@ import {
   useMotionValueEvent,
   useScroll,
 } from "motion/react";
+import { useLenis } from "lenis/react";
 import { useReducedMotionSafe } from "../shared";
+import DownloadApp from "../download-app";
 import { Reveal, serif, serifDisplay } from "./reveal";
 import DriversPanel from "./drivers-panel";
 import OtoPanel from "./oto-panel";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
+
+/* Mobile accordion row pitches (Figma 390:3296, a 332px block): "01." sits at
+   +65, "02." at +161, "03." at +254.5 → 96 / 93.5 / 77.5 per row header. Fixed
+   minimums, not content-driven gaps, so the rhythm matches the frame even
+   though the live descriptions run a line longer than the placeholder copy. */
+const MOBILE_ROW_MIN_H = [
+  "max-tab:min-h-[96px]",
+  "max-tab:min-h-[93.5px]",
+  "max-tab:min-h-[77.5px]",
+] as const;
 
 /* ------------------------------------------------------------------ */
 /* The three roles — hovering one swaps the graphic on the right.      */
@@ -27,12 +39,14 @@ const ROLES = [
   {
     num: "02.",
     title: "The Shops.",
-    body: "Real-time scheduling, recalculated as bays fill. Two-way ratings. 24-hour Stripe payouts.",
+    body: "Real-time scheduling, recalculated as bays fill. Verified-booking ratings. Daily Stripe payouts.",
   },
   {
     num: "03.",
     title: "Oto",
-    body: "The intelligent layer that locks your quote. Triages symptoms. Identifies the right service.",
+    // Not a repeat of 01's triage lines (site audit 2026-08-31) — this row
+    // sells the layer itself, matching the panel's records-pull → booking arc.
+    body: "The intelligent layer that locks your quote. Reads your car's records. Books the right shop.",
   },
 ] as const;
 
@@ -80,11 +94,11 @@ const SHOP_CAPTIONS: Record<ShopBeat, string> = {
   // Step 4 lights up and the COMPLETE button appears.
   step4: "Last step — one tap closes the job.",
   alldone: "Last step — one tap closes the job.",
-  complete: "Job complete — paid out within 24 hours.",
+  complete: "Job complete — paid out on Stripe's daily schedule.",
 };
 
 /* Restart time for the full story loop — mirrored in STORY_MS. */
-const SHOPS_LOOP_MS = 33800;
+const SHOPS_LOOP_MS = 31300;
 
 /* The cast on the board, exactly as the Figma frames name them. */
 const MECHS = ["Twunna S.", "Temur S.", "Abubeckr E."] as const;
@@ -96,7 +110,7 @@ function StepNode({ n, state }: { n: number; state: "done" | "active" | "todo" }
   const dark = state !== "todo";
   return (
     <motion.span
-      className="z-[2] flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-medium sm:h-9 sm:w-9 sm:text-[14px]"
+      className="z-[2] flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[11px] font-medium tab:h-9 tab:w-9 tab:text-[14px]"
       initial={false}
       animate={{
         backgroundColor: dark ? "#1a1a1a" : "rgba(255,255,255,0.65)",
@@ -135,22 +149,22 @@ function JobSheet({
   return (
     <div>
       {/* Title (serif, like every headline on the shelf) */}
-      <p className="text-[20px] leading-[26px] text-[#1a1a1a] sm:text-[25px] sm:leading-[32px]" style={serif}>
+      <p className="text-[20px] leading-[26px] text-[#1a1a1a] tab:text-[25px] tab:leading-[32px]" style={serif}>
         Oil Change - John Wilson
       </p>
 
       {/* JOB PROGRESS + CONFIRMED pill */}
-      <div className="mt-5 flex items-center justify-between sm:mt-7">
-        <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-[#33383b] sm:text-[12px]">
+      <div className="mt-5 flex items-center justify-between tab:mt-7">
+        <span className="text-[10px] font-medium uppercase tracking-[0.1em] text-[#33383b] tab:text-[12px]">
           Job Progress
         </span>
-        <span className="rounded-full bg-[#dbe3e8]/90 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.06em] text-[#33383b] sm:text-[9.5px]">
+        <span className="rounded-full bg-[#dbe3e8]/90 px-2.5 py-1 text-[8px] font-medium uppercase tracking-[0.06em] text-[#33383b] tab:text-[9.5px]">
           Confirmed
         </span>
       </div>
 
       {/* Stepper — 4 nodes, connectors fill as steps complete */}
-      <div className="relative mt-3 flex items-center sm:mt-4">
+      <div className="relative mt-3 flex items-center tab:mt-4">
         {[1, 2, 3, 4].map((n) => (
           <Fragment key={n}>
             {n > 1 && (
@@ -167,26 +181,26 @@ function JobSheet({
           </Fragment>
         ))}
       </div>
-      <p className="mt-2 text-[10px] text-[#8a9094] sm:text-[12.5px]">Mileage unknown</p>
+      <p className="mt-2 text-[10px] text-[#8a9094] tab:text-[12.5px]">Mileage unknown</p>
 
       {/* Services scope row */}
-      <div className="mt-4 flex items-center justify-between rounded-[4px] bg-white/35 px-4 py-3 sm:mt-5 sm:px-6 sm:py-4">
+      <div className="mt-4 flex items-center justify-between rounded-[4px] bg-white/35 px-4 py-3 tab:mt-5 tab:px-6 tab:py-4">
         <div>
-          <p className="text-[9px] font-medium uppercase tracking-[0.1em] text-[#8a9094] sm:text-[10.5px]">
+          <p className="text-[9px] font-medium uppercase tracking-[0.1em] text-[#8a9094] tab:text-[10.5px]">
             Services
           </p>
-          <p className="mt-1 text-[14px] font-semibold tracking-[-0.01em] text-[#1a1a1a] sm:text-[16.5px]">
+          <p className="mt-1 text-[14px] font-semibold tracking-[-0.01em] text-[#1a1a1a] tab:text-[16.5px]">
             This job&apos;s scope
           </p>
         </div>
-        <span className="text-[10px] text-[#6b7280] sm:text-[12px]">1 Service · 0 parts ⌄</span>
+        <span className="text-[10px] text-[#6b7280] tab:text-[12px]">1 Service · 0 parts ⌄</span>
       </div>
 
       {/* Vehicle condition */}
-      <p className="mt-4 text-[10px] font-medium uppercase tracking-[0.1em] text-[#33383b] sm:mt-5 sm:text-[12px]">
+      <p className="mt-4 text-[10px] font-medium uppercase tracking-[0.1em] text-[#33383b] tab:mt-5 tab:text-[12px]">
         Vehicle Condition
       </p>
-      <div className="relative mt-2 rounded-[4px] bg-white/35 px-4 py-3 sm:px-6 sm:py-4">
+      <div className="relative mt-2 rounded-[4px] bg-white/35 px-4 py-3 tab:px-6 tab:py-4">
         <AnimatePresence mode="wait" initial={false}>
           <motion.div
             key={ready ? "ready" : "building"}
@@ -195,29 +209,29 @@ function JobSheet({
             exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
             transition={{ duration: 0.35, ease: EASE }}
           >
-            <p className="text-[13px] font-semibold tracking-[-0.01em] text-[#1a1a1a] sm:text-[15px]">
+            <p className="text-[13px] font-semibold tracking-[-0.01em] text-[#1a1a1a] tab:text-[15px]">
               {ready ? "Vehicle profile ready" : "Building vehicle profile - 5 mins"}
             </p>
-            <p className="mt-1 max-w-[340px] text-[10.5px] leading-[1.4] text-[#6b7280] sm:text-[12.5px]">
+            <p className="mt-1 max-w-[340px] text-[10.5px] leading-[1.4] text-[#6b7280] tab:text-[12.5px]">
               {ready
                 ? "Engine, fluids, and chassis data loaded."
                 : "First time we're seeing this VIN — fetching engine, fluids, and chassis data."}
             </p>
           </motion.div>
         </AnimatePresence>
-        <span className="absolute right-3 top-3 rounded-full bg-[#dbe3e8]/90 px-2 py-0.5 text-[7.5px] font-medium uppercase tracking-[0.05em] text-[#33383b] sm:text-[9px]">
+        <span className="absolute right-3 top-3 rounded-full bg-[#dbe3e8]/90 px-2 py-0.5 text-[7.5px] font-medium uppercase tracking-[0.05em] text-[#33383b] tab:text-[9px]">
           {showComplete ? "Complete" : "2 left"}
         </span>
       </div>
 
       {/* Action button — appears with step 2, turns white when pressed,
           becomes COMPLETE for the final step (per screens 2/5/7/8). */}
-      <div className="mt-4 h-[44px] sm:mt-5 sm:h-[52px]">
+      <div className="mt-4 h-[44px] tab:mt-5 tab:h-[52px]">
         <AnimatePresence mode="wait" initial={false}>
           {(showStart || showComplete) && (
             <motion.div
               key={showComplete ? "complete" : startPressed ? "start-white" : "start-black"}
-              className="relative flex h-full w-full items-center justify-center rounded-[4px] text-[11px] font-medium uppercase tracking-[0.12em] sm:text-[13px]"
+              className="relative flex h-full w-full items-center justify-center rounded-[4px] text-[11px] font-medium uppercase tracking-[0.12em] tab:text-[13px]"
               initial={reduce ? { opacity: 0 } : { opacity: 0, y: 10 }}
               animate={{
                 opacity: 1,
@@ -280,16 +294,20 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
       ["time", 650],
       ["cols", 1000],
       ["rows", 1900],
-      ["land", 5700],
-      ["press", 9200],    // block click…
-      ["job1", 10000],    // …opens the sheet 0.8s later
-      ["job2", 13000],
-      ["ready", 16800],
-      ["start", 19800],   // START SERVICE press…
-      ["step3", 20600],   // …advances the stepper 0.8s later
-      ["step4", 24400],
-      ["alldone", 27800], // COMPLETE press + all checks…
-      ["complete", 29000],// …collapse into the ✓ card
+      // The assembled grid used to hold 3.8s before the booking landed —
+      // "holds its position for too long" (design feedback 2026-08-31).
+      // `land` now follows ~1.3s after the cascade settles; everything after
+      // keeps its original spacing, shifted up by the 2.5s saved.
+      ["land", 3200],
+      ["press", 6700],    // block click…
+      ["job1", 7500],     // …opens the sheet 0.8s later
+      ["job2", 10500],
+      ["ready", 14300],
+      ["start", 17300],   // START SERVICE press…
+      ["step3", 18100],   // …advances the stepper 0.8s later
+      ["step4", 21900],
+      ["alldone", 25300], // COMPLETE press + all checks…
+      ["complete", 26500],// …collapse into the ✓ card
     ];
     const run = () => {
       for (const [b, t] of SEQ) later(b, t);
@@ -331,11 +349,11 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                 {/* Date pager row (V1 385:258/259) */}
                 <motion.div className="flex items-center" {...rise(at("date"))}>
                   <span className="px-1 text-[16px] text-[#1a1a1a]">‹</span>
-                  <span className="relative mx-2 h-[30px] overflow-hidden sm:h-[34px]">
+                  <span className="relative mx-2 h-[30px] overflow-hidden tab:h-[34px]">
                     <AnimatePresence mode="popLayout" initial={false}>
                       <motion.span
                         key={june22 ? "22" : "21"}
-                        className="block whitespace-nowrap text-[21px] leading-[30px] text-[#1a1a1a] sm:text-[26px] sm:leading-[34px]"
+                        className="block whitespace-nowrap text-[21px] leading-[30px] text-[#1a1a1a] tab:text-[26px] tab:leading-[34px]"
                         style={serif}
                         initial={reduce ? { opacity: 0 } : { opacity: 0, y: 22 }}
                         animate={{ opacity: 1, y: 0 }}
@@ -358,16 +376,16 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                       />
                     )}
                   </span>
-                  <span className="ml-auto flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.1em] text-[#1a1a1a] sm:text-[13px]">
+                  <span className="ml-auto flex items-center gap-1 text-[11px] font-medium uppercase tracking-[0.1em] text-[#1a1a1a] tab:text-[13px]">
                     All Mechanics <span className="text-[9px]">⌄</span>
                   </span>
                 </motion.div>
 
                 {/* Column headers — TIME (EST) enters FIRST (the notes layer's
                     "time appears first"), then the mechanics in order. */}
-                <div className="mt-7 grid grid-cols-[64px_repeat(3,1fr)] gap-2 sm:mt-10 sm:grid-cols-[96px_repeat(3,1fr)] sm:gap-[14px]">
+                <div className="mt-7 grid grid-cols-[64px_repeat(3,1fr)] gap-2 tab:mt-10 tab:grid-cols-[96px_repeat(3,1fr)] tab:gap-[14px]">
                   <motion.div
-                    className="flex h-[56px] items-center justify-center bg-[#1a1a1a] text-[9px] font-medium uppercase tracking-[0.08em] text-[#cfcfcf] sm:h-[74px] sm:text-[12px]"
+                    className="flex h-[56px] items-center justify-center bg-[#1a1a1a] text-[9px] font-medium uppercase tracking-[0.08em] text-[#cfcfcf] tab:h-[74px] tab:text-[12px]"
                     {...rise(at("time"))}
                   >
                     Time (EST)
@@ -375,13 +393,13 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                   {MECHS.map((name, i) => (
                     <motion.div
                       key={name}
-                      className="flex h-[56px] flex-col items-center justify-center bg-white/55 sm:h-[74px]"
+                      className="flex h-[56px] flex-col items-center justify-center bg-white/55 tab:h-[74px]"
                       {...rise(at("cols"), i * 0.13)}
                     >
-                      <span className="text-[11px] font-semibold tracking-[-0.01em] text-[#1a1a1a] sm:text-[14px]">
+                      <span className="text-[11px] font-semibold tracking-[-0.01em] text-[#1a1a1a] tab:text-[14px]">
                         {name}
                       </span>
-                      <span className="relative mt-0.5 h-[16px] text-[10px] sm:text-[12.5px]">
+                      <span className="relative mt-0.5 h-[16px] text-[10px] tab:text-[12.5px]">
                         <AnimatePresence mode="popLayout" initial={false}>
                           <motion.span
                             key={i === 0 && june22 ? "job" : "avail"}
@@ -401,15 +419,15 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                 </div>
 
                 {/* Hour rows — cascade in after the columns. */}
-                <div className="relative mt-3 sm:mt-4">
+                <div className="relative mt-3 tab:mt-4">
                   {HOURS.map((h, i) => (
                     <motion.div
                       key={h}
-                      className="relative flex h-[38px] items-center sm:h-[49px]"
+                      className="relative flex h-[38px] items-center tab:h-[49px]"
                       {...rise(at("rows"), i * 0.05)}
                     >
                       {i > 0 && <span className="absolute inset-x-0 top-0 h-px bg-white/60" />}
-                      <span className="pl-2 text-[10.5px] tracking-[0.02em] text-[#33383b] sm:pl-[22px] sm:text-[14px]">
+                      <span className="pl-2 text-[10.5px] tracking-[0.02em] text-[#33383b] tab:pl-[22px] tab:text-[14px]">
                         {h}
                       </span>
                     </motion.div>
@@ -419,13 +437,13 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                       fades in and blue line reveals/slides from left to
                       right, time 12:56 fades in") */}
                   <motion.div
-                    className="pointer-events-none absolute inset-x-0 top-[35px] z-10 sm:top-[46px]"
+                    className="pointer-events-none absolute inset-x-0 top-[35px] z-10 tab:top-[46px]"
                     initial={false}
                     animate={{ opacity: at("land") ? 1 : 0 }}
                     transition={{ duration: reduce ? 0.2 : 0.35, ease: EASE, delay: reduce ? 0 : 0.3 }}
                   >
                     <motion.span
-                      className="absolute -top-[13px] left-[18px] text-[8.5px] font-medium text-[#5299fe] sm:left-[24px] sm:text-[10px]"
+                      className="absolute -top-[13px] left-[18px] text-[8.5px] font-medium text-[#5299fe] tab:left-[24px] tab:text-[10px]"
                       initial={false}
                       animate={{ opacity: at("land") ? 1 : 0 }}
                       transition={{ duration: 0.4, ease: EASE, delay: reduce ? 0 : 1.0 }}
@@ -445,7 +463,7 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                       beat it turns almost white with a drop shadow (frame-4,
                       note: "kinda like a click effect"). */}
                   <motion.div
-                    className="absolute left-[72px] top-[48px] z-20 w-[calc((100%-64px-3*8px)/3)] sm:left-[110px] sm:top-[62px] sm:w-[calc((100%-96px-3*14px)/3)]"
+                    className="absolute left-[72px] top-[48px] z-20 w-[calc((100%-64px-3*8px)/3)] tab:left-[110px] tab:top-[62px] tab:w-[calc((100%-96px-3*14px)/3)]"
                     initial={false}
                     animate={
                       reduce
@@ -455,7 +473,7 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                     transition={{ duration: 0.65, ease: EASE, delay: reduce ? 0 : 0.2 }}
                   >
                     <motion.div
-                      className="relative h-[128px] border border-white/70 p-2.5 sm:h-[164px] sm:p-3.5"
+                      className="relative h-[128px] border border-white/70 p-2.5 tab:h-[164px] tab:p-3.5"
                       initial={false}
                       animate={{
                         backgroundColor: at("press") ? "rgba(255,255,255,0.94)" : "rgba(255,255,255,0.55)",
@@ -466,16 +484,19 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                       }}
                       transition={{ duration: 0.55, ease: EASE }}
                     >
-                      <p className="text-[12.5px] font-semibold tracking-[-0.01em] text-[#1a1a1a] sm:text-[15px]">
+                      <p className="text-[12.5px] font-semibold tracking-[-0.01em] text-[#1a1a1a] tab:text-[15px]">
                         John Wilson
                       </p>
-                      <p className="mt-0.5 text-[11px] text-[#33383b] sm:text-[13px]">Oil Change</p>
-                      <p className="mt-1.5 text-[9px] leading-[1.35] text-[#8a9094] sm:text-[10.5px]">
-                        2021 Bugatti
+                      <p className="mt-0.5 text-[11px] text-[#33383b] tab:text-[13px]">Oil Change</p>
+                      {/* An everyday car, deliberately — the Figma frame's
+                          Bugatti Chiron read as a joke against the premium-calm
+                          register (site audit 2026-08-31). */}
+                      <p className="mt-1.5 text-[9px] leading-[1.35] text-[#8a9094] tab:text-[10.5px]">
+                        2021 Toyota
                         <br />
-                        Chiron · 5303
+                        Camry · 5303
                       </p>
-                      <span className="absolute bottom-2 right-2 rounded-full bg-[#dbe3e8]/90 px-2 py-0.5 text-[8.5px] font-medium text-[#33383b] sm:bottom-2.5 sm:right-2.5 sm:text-[10px]">
+                      <span className="absolute bottom-2 right-2 rounded-full bg-[#dbe3e8]/90 px-2 py-0.5 text-[8.5px] font-medium text-[#33383b] tab:bottom-2.5 tab:right-2.5 tab:text-[10px]">
                         12:50p
                       </span>
                     </motion.div>
@@ -513,8 +534,8 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
               >
                 {/* Final state (shop portal screen 9): the sheet collapses to
                     a small centered Complete card. */}
-                <div className="flex w-[300px] flex-col items-center bg-white/35 px-8 py-9 sm:w-[330px]">
-                  <p className="text-[15px] text-[#1a1a1a] sm:text-[16px]" style={serif}>
+                <div className="flex w-[300px] flex-col items-center bg-white/35 px-8 py-9 tab:w-[330px]">
+                  <p className="text-[15px] text-[#1a1a1a] tab:text-[16px]" style={serif}>
                     Oil Change - John Wilson
                   </p>
                   <motion.span
@@ -525,7 +546,7 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
                   >
                     ✓
                   </motion.span>
-                  <p className="mt-3 text-[15px] text-[#1a1a1a] sm:text-[16px]" style={serif}>
+                  <p className="mt-3 text-[15px] text-[#1a1a1a] tab:text-[16px]" style={serif}>
                     Complete
                   </p>
                 </div>
@@ -540,11 +561,11 @@ function ShopsPanel({ active, reduce }: { active: boolean; reduce: boolean }) {
           cycle, so the subtitle blinks out between beats. The crossfade
           keeps a line on screen at all times, and `relative` gives the
           exiting chip something to pin to while it fades. */}
-      <div className="relative flex h-8 shrink-0 items-center justify-center sm:h-9">
+      <div className="relative flex h-8 shrink-0 items-center justify-center tab:h-9">
         <AnimatePresence mode="popLayout" initial={false}>
           <motion.span
             key={SHOP_CAPTIONS[beat]}
-            className="whitespace-nowrap rounded-full border-[0.5px] border-white/50 bg-white/20 px-5 py-1.5 text-[12px] tracking-[0.03em] text-[#1a1a1a] backdrop-blur-[35px] sm:text-[13px] lg:px-6 lg:py-2 lg:text-[13.5px]"
+            className="whitespace-nowrap rounded-full border-[0.5px] border-white/50 bg-white/20 px-5 py-1.5 text-[12px] tracking-[0.03em] text-[#1a1a1a] backdrop-blur-[35px] tab:text-[13px] lg:px-6 lg:py-2 lg:text-[13.5px]"
             initial={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
             animate={{ opacity: active ? 1 : 0, y: 0 }}
             exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}
@@ -577,7 +598,14 @@ function PriceLockCard({
       whileInView={{ opacity: 1, y: 0 }}
       viewport={{ once: true, margin: "0px 0px -12% 0px" }}
       transition={{ duration: 0.9, ease: EASE }}
-      className="relative h-[440px] w-full sm:h-[560px] lg:h-[640px]"
+      // lg floor = what the tallest panel paints: the phone at its lg scale
+      // (486 × 1.16 = 564px) + the 36px caption row + 8px panel padding =
+      // 608, plus 12px of air. Below that the stage used to keep shrinking
+      // (down to 400px) while the phone kept its size, so on ~970px-tall
+      // screens the tab bar clipped at the card edge and the caption sat on
+      // the phone (2026-09-05). The stage now holds; the fit-scale below
+      // shrinks the whole pinned composition on short laptops instead.
+      className="relative h-[440px] w-full tab:h-[560px] lg:h-[clamp(620px,calc(100vh_-_400px),640px)]"
     >
       {[0, 1, 2].map((i) => (
         <div
@@ -599,23 +627,26 @@ function PriceLockCard({
 /* ------------------------------------------------------------------ */
 export default function PriceLockSection() {
   const reduce = useReducedMotionSafe();
-  // Default focus is "Drivers" (index 0); hovering a role swaps the graphic.
+  // Default focus is "Drivers" (index 0).
   const [active, setActive] = useState(0);
-  const touched = useRef(false);
-  // Any engagement (hover, tap, focus) permanently ends the auto-playing reel.
-  const engaged = useRef(false);
-  // Bumped once when the section first scrolls into view — remounts the
-  // panels so the story clock and the auto-advance clock start together.
+  // Bumped when the section scrolls into view — remounts the panels so the
+  // story clock and the advance clock start together.
   const [resetToken, setResetToken] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
   const listInView = useInView(listRef, { amount: 0.35 });
 
-  // ── Pinned scroll-through (design feedback 2026-08-24, item 2) ──
-  // On desktop the card pins inside a 320vh runway and the visitor's scroll
-  // steps 01 → 02 → 03 (a third of the runway each), so nobody misses two of
-  // the three roles behind a hover they never perform. Hover/tap still swaps
-  // instantly between threshold crossings. Mobile and tablet keep the
-  // stacked layout with the auto-advancing reel.
+  // ── Scroll-driven stories (design feedback 2026-08-31) ──
+  // On lg the WHOLE COMPOSITION — headline + card — pins inside a 280vh
+  // runway (the composition pin keeps the headline gap intact). Stories are
+  // driven by exactly two things — scroll and the story clock — hover/click/
+  // focus switching is gone. SCROLL IS TRUTH in both directions: scrolling
+  // down steps 01→02→03, scrolling back up rewinds. The clock only ever
+  // moves FORWARD (a watched story hands off to the next when it completes)
+  // and stops at 03 — no loop back to 01, which would yank the reel out from
+  // under a visitor whose scroll still sits in zone 3.
+  const advanceTo = (i: number) =>
+    setActive((a) => Math.max(a, Math.min(i, ROLES.length - 1)));
+
   const [pinnedMode, setPinnedMode] = useState(false);
   useEffect(() => {
     const mq = window.matchMedia("(min-width: 1024px)");
@@ -625,6 +656,71 @@ export default function PriceLockSection() {
     return () => mq.removeEventListener("change", sync);
   }, []);
 
+  // ── Mobile (< sm): the frame has no story stage ──
+  // Below 640px the Figma mobile frame (390:3296) is a compact accordion:
+  // three role rows, all collapsed, and no phone stage at all. The stage is
+  // CSS-hidden there from the first paint and unmounted once we know the
+  // viewport (so its story clocks don't run under a display:none); tapping a
+  // row's "+" mounts that role's panel beneath it instead — one at a time.
+  // SSR renders the desktop shape (`mobile` false), matching the client's
+  // first render; nothing mobile-only is in the HTML, so no hydration drift.
+  const [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 1023.98px)");
+    const sync = () => setMobile(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  const [open, setOpen] = useState<number | null>(null);
+
+  // Short-desktop compact mode: the pinned composition must fit one
+  // viewport, and the card's height is driven by the role rows' type +
+  // padding — so on sub-1000px-tall screens the headline, row padding and
+  // card tail all step down a size. Class swaps via state rather than
+  // stacked media variants: `lg:` and `[@media(max-height:…)]:` utilities
+  // tie on specificity and resolve by stylesheet order.
+  const [shortPin, setShortPin] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px) and (max-height: 1099px)");
+    const sync = () => setShortPin(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  // Fit-scale: when the nav-clearing hold plus the composition can't fit
+  // the viewport (short laptops), the pinned composition scales down
+  // visually — layout (and the sticky release point) stay untouched.
+  const stickyRef = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState(1);
+  // The composition's layout height, pre-transform: the sticky box is
+  // sized to `stickyH * fit` so the pin releases where the painted block
+  // ends, not where the unscaled one would.
+  const [stickyH, setStickyH] = useState(0);
+  useEffect(() => {
+    if (!pinnedMode) {
+      setFit(1);
+      return;
+    }
+    const measure = () => {
+      const h = stickyRef.current?.offsetHeight ?? 0; // layout height, pre-transform
+      const top = shortPin ? 88 : 104;
+      setStickyH(h);
+      setFit(Math.min(1, (window.innerHeight - top - 12) / Math.max(1, h)));
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    // Fonts, images and the stage clamp can all change the layout height
+    // after mount; re-measure on any size change of the block itself.
+    const ro = typeof ResizeObserver !== "undefined" && stickyRef.current ? new ResizeObserver(measure) : null;
+    if (ro && stickyRef.current) ro.observe(stickyRef.current);
+    return () => {
+      window.removeEventListener("resize", measure);
+      ro?.disconnect();
+    };
+  }, [pinnedMode, shortPin]);
+
   const runwayRef = useRef<HTMLDivElement>(null);
   const { scrollYProgress } = useScroll({
     target: runwayRef,
@@ -632,13 +728,8 @@ export default function PriceLockSection() {
   });
   useMotionValueEvent(scrollYProgress, "change", (p) => {
     if (!pinnedMode) return;
-    const zone = p < 1 / 3 ? 0 : p < 2 / 3 ? 1 : 2;
-    setActive((a) => {
-      if (a === zone) return a;
-      // Scroll is the desktop driver — it also retires the auto reel.
-      engaged.current = true;
-      return zone;
-    });
+    // Direct set, not advanceTo: scroll rewinds as well as advances.
+    setActive(p < 1 / 3 ? 0 : p < 2 / 3 ? 1 : 2);
   });
 
   // Full loop length of each role's story, minus a beat so we hand off just
@@ -648,145 +739,264 @@ export default function PriceLockSection() {
   const STORY_MS = [24100, SHOPS_LOOP_MS - 300, 37400];
 
   useEffect(() => {
-    if (listInView && !engaged.current) setResetToken((t) => t + 1);
+    if (listInView) setResetToken((t) => t + 1);
   }, [listInView]);
 
-  // The reel: an untouched visitor sees Drivers → Shops → Oto, each story
-  // playing to completion before the next takes the stage. Only off-desktop —
-  // when the section pins, scroll position is the driver instead.
+  // The watch path: a visitor who stays on a story sees it hand off to the
+  // next when it completes. Stops at the last story — no loop back.
+  //
+  // A timed hand-off ALSO moves the scroll position to the new story's zone.
+  // While pinned this is invisible (the composition is fixed to the
+  // viewport; runway progress has no visual) — but it keeps scroll ⇄ story
+  // in sync, so the visitor's next scroll gesture continues from the story
+  // they're actually watching instead of rewinding them through the zones
+  // they timed past (design feedback 2026-08-31). Forward jumps only.
+  const lenis = useLenis();
   useEffect(() => {
-    if (pinnedMode || reduce || !listInView || resetToken === 0) return;
-    if (engaged.current) return;
+    // No reel on mobile — the rows are an accordion the visitor drives.
+    if (mobile) return;
+    if (reduce || !listInView || resetToken === 0) return;
+    if (active >= ROLES.length - 1) return;
     const t = window.setTimeout(() => {
-      if (!engaged.current) setActive((a) => (a + 1) % ROLES.length);
+      const next = active + 1;
+      advanceTo(next);
+      if (pinnedMode && runwayRef.current) {
+        const r = runwayRef.current.getBoundingClientRect();
+        const rTop = r.top + window.scrollY;
+        const span = r.height - window.innerHeight;
+        const target = Math.round(rTop + span * (next / 3 + 0.02));
+        if (target > window.scrollY) {
+          if (lenis) lenis.scrollTo(target, { immediate: true });
+          else window.scrollTo(0, target);
+        }
+      }
     }, STORY_MS[active]);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [active, listInView, pinnedMode, reduce, resetToken]);
-
-  const select = (i: number) => {
-    touched.current = true;
-    engaged.current = true;
-    setActive(i);
-  };
-
-  // Touch browsers synthesize mouseenter (and re-fire it when content moves
-  // under the stale pointer position) — hover may only drive state on devices
-  // that actually hover; touch goes through click/focus.
-  const hoverTo = (i: number) => {
-    if (window.matchMedia("(hover: hover)").matches) {
-      engaged.current = true;
-      setActive(i);
-    }
-  };
+  }, [active, listInView, reduce, resetToken, pinnedMode, mobile]);
 
   return (
     <section
       id="how-it-works"
-      className="mx-auto w-full max-w-[1440px] px-4 pt-28 sm:px-10 sm:pt-36 lg:px-[78px]"
+      // Mobile frame: 27px side insets, headline 43px under the why-drivers
+      // tiles (390:3244 at y1177). sm+ keeps its own padding untouched.
+      className="mx-auto w-full max-w-[1440px] px-[27px] pt-[43px] tab:px-10 tab:pt-16 lg:px-[78px]"
     >
-      {/* Centered three-line headline (V1 302:1149: 912x204 box, 68px line
-          pitch, page-centered) */}
-      <Reveal>
-        <h2
-          className="mx-auto max-w-[912px] text-center text-[38px] leading-[1.19] text-[#1a1a1a] sm:text-[50px] lg:text-[57px] lg:leading-[68px]"
-          style={serifDisplay}
-        >
-          The shop sets the price.
-          <br />
-          Oto locks it.
-          <br />
-          You never negotiate.
-        </h2>
-      </Reveal>
-
       {/* V1's gradient card (node 302:1074 — section 2's 1269x642 card
           rotated 180°: white fading to #95C7E7, radius 40). The rail sits 76px
           in from the card's left edge, the demo stage fills the right — V1's
           arrangement (rail x160, UI x726 on the page). On mobile the stage
           still stacks first, so the DOM order is stage → list and the swap
-          happens with order utilities at lg.
+          happens with order utilities at lg; mobile stays ordinary flow with
+          the timed hand-offs only.
 
-          On lg the card lives inside a 320vh runway and pins (sticky, centered
-          in the viewport when it fits) while scroll steps the three roles;
-          past the runway it releases and the page continues. */}
-      <div ref={runwayRef} className="lg:h-[320vh]">
-        <div className="lg:sticky lg:top-[max(16px,calc(50vh-430px))]">
-      <div className="mx-auto mt-16 w-full max-w-[1269px] overflow-clip rounded-[28px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] sm:mt-24 sm:rounded-[40px]">
-        {/* pb keeps the phone mock + caption chips off the card's bottom edge
-            on every step (design feedback 2026-08-24, item 4). */}
-        <div className="grid grid-cols-1 gap-12 px-5 pt-10 pb-16 sm:px-10 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:pt-5 lg:pb-20 lg:pl-[76px] lg:pr-[27px]">
-        {/* The story stage */}
-        <div className="lg:order-2">
-          <PriceLockCard active={active} reduce={reduce} resetToken={resetToken} />
-        </div>
-
-        {/* Numbered roles — hover/tap/focus swaps the card graphic */}
+          The sticky box is exactly one viewport tall — pin window and
+          `scrollYProgress` are identical by construction (both run from
+          "runway top hits viewport top" to "runway bottom hits viewport
+          bottom"). No hand-computed card-height constants: the stage height
+          flexes with a clamp so headline + card fit one viewport down to
+          short laptops. Margins must NOT sit on the sticky box's children in
+          normal flow — they collapse out and drag the pin. */}
+      {/* `relative` anchors motion's useScroll offset math (it warns on
+          static targets). */}
+      <div ref={runwayRef} className="relative mt-0 tab:mt-3 lg:h-[280vh]">
+        {/* Natural height + fixed top offset, NOT h-screen centering — the
+            centered box padded (viewport − composition)/2 of slack under the
+            card at release, inflating the gap to the payout section on tall
+            monitors (design feedback 2026-08-31, "I hate that you're forcing
+            spacing"). Released flush with the runway's end, the next section
+            follows at its own padding — constant everywhere. */}
+        {/* Two boxes, not one: the OUTER is what sticks and it takes the
+            scaled height, so the pin's arithmetic matches what is painted;
+            the INNER carries the transform. With the transform on the sticky
+            box itself its layout height stayed full-size, and on short
+            viewports the runway's end pushed the (still "tall") box up
+            behind the nav in zone 3 (2026-09-05). */}
         <div
-          ref={listRef}
-          className="relative lg:order-1"
-          onMouseLeave={() => {
-            // Only snap back on true hover devices — touch browsers fire
-            // synthetic mouse events that would undo the visitor's tap.
-            if (window.matchMedia("(hover: hover)").matches && !touched.current) setActive(0);
-          }}
+          className={`lg:sticky ${shortPin ? "lg:top-[88px]" : "lg:top-[104px]"}`}
+          style={pinnedMode && fit < 1 && stickyH > 0 ? { height: Math.round(stickyH * fit) } : undefined}
         >
-          {/* Inactive rows sit blurred on the card (no highlight box) —
-              hovering a row already swaps `active`, which sharpens it;
-              clicking pins it. */}
-          {ROLES.map((role, i) => {
-            const on = active === i;
-            return (
-              <div
-                key={role.num}
-                role="button"
-                tabIndex={0}
-                aria-pressed={on}
-                onMouseEnter={() => hoverTo(i)}
-                onFocus={() => {
-                  engaged.current = true;
-                  setActive(i);
-                }}
-                onClick={() => select(i)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    select(i);
-                  }
-                }}
-                className="relative flex cursor-pointer flex-col justify-center rounded-[16px] px-0 py-8 outline-none [transition:filter_400ms_ease] focus-visible:ring-1 focus-visible:ring-[#1a1a1a]/30 lg:h-[33.333%] lg:min-h-[168px] lg:px-8"
-                style={{ filter: on ? "blur(0px)" : "blur(5px)" }}
-              >
-                <p
-                  className="text-[17px] tracking-[0.05em] [transition:color_350ms_ease]"
-                  style={{ color: on ? "rgb(119,113,105)" : "rgba(119,113,105,0.35)" }}
-                >
-                  {role.num}
-                </p>
-                <div
-                  className="mt-3 h-px w-full [transition:background-color_350ms_ease]"
-                  style={{ backgroundColor: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.18)" }}
-                />
-                <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:gap-8">
-                  <h3
-                    className="w-[130px] shrink-0 text-[25px] [transition:color_350ms_ease]"
-                    style={{ ...serif, color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
-                  >
-                    {role.title}
-                  </h3>
-                  <p
-                    className="max-w-[320px] text-[17px] leading-[23px] tracking-[0.05em] [transition:color_350ms_ease]"
-                    style={{ color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
-                  >
-                    {role.body}
-                  </p>
-                </div>
+        <div
+          ref={stickyRef}
+          className={`lg:flex lg:flex-col lg:items-center ${shortPin ? "lg:gap-7" : "lg:gap-12"}`}
+          style={
+            pinnedMode && fit < 1
+              ? { transform: `scale(${fit})`, transformOrigin: "top center" }
+              : undefined
+          }
+        >
+          {/* Centered three-line headline (V1 302:1149: 912x204 box, 68px
+              line pitch, page-centered; steps down a size when the pin is
+              height-bound) */}
+          {/* Mobile (390:3244): 28/28 Romie Regular → Petrona 400, no display
+              cut and no cap normalisation — the `!` overrides beat the inline
+              serifDisplay style below sm only; sm+ is untouched. */}
+          <Reveal>
+            <h2
+              className={`mx-auto max-w-[912px] text-center text-[38px] leading-[1.19] text-[#1a1a1a] max-tab:text-[28px] max-tab:leading-[28px] max-tab:font-normal! max-tab:[font-size-adjust:none]! tab:text-[50px] ${
+                shortPin ? "lg:text-[44px] lg:leading-[52px]" : "lg:text-[57px] lg:leading-[68px]"
+              }`}
+              style={serifDisplay}
+            >
+              The shop sets the price.
+              <br />
+              Oto locks it.
+              <br />
+              You never negotiate.
+            </h2>
+          </Reveal>
+
+          {/* Mobile only (390:3247): the two black store plates 38px under the
+              headline. The box is exactly the plates' 38px — DownloadApp's
+              "coming soon" caption hangs below into the accordion block's
+              empty top (the frame's block starts 21px under the plates with
+              its first row 65px further down), so the rows' positions don't
+              depend on whether the caption renders. */}
+          {/* Content-sized (badge + its coming-soon caption), 28px under the
+              headline; the accordion then starts 36px under the caption —
+              the old fixed 38px box left a 58px hole (design feedback
+              2026-09-03, "fix google play spacing"). */}
+          <Reveal delay={0.1} className="mt-[28px] tab:hidden">
+            <DownloadApp size="sm" />
+          </Reveal>
+
+          {/* No gradient card on mobile — the frame's blue is a full-bleed foot
+              band behind the lower rows (390:3178), painted inside the list. */}
+          <div className="mx-auto mt-[21px] w-full max-w-[1269px] tab:mt-12 tab:overflow-clip tab:rounded-[40px] tab:bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] lg:mt-0">
+            {/* pb keeps the phone mock + caption chips off the card's bottom
+                edge on every step (design feedback 2026-08-24, item 4). */}
+            <div
+              className={`grid grid-cols-1 tab:gap-12 tab:px-10 tab:pt-10 tab:pb-16 lg:grid-cols-[minmax(0,0.83fr)_minmax(0,1fr)] lg:items-center lg:gap-10 lg:pt-5 lg:pl-[76px] lg:pr-[27px] ${
+                shortPin ? "lg:pb-10" : "lg:pb-20"
+              }`}
+            >
+              {/* The story stage — sm+ only; mobile mounts a panel per open row. */}
+              <div className="hidden tab:block lg:order-2">
+                {!mobile && (
+                  <PriceLockCard active={active} reduce={reduce} resetToken={resetToken} />
+                )}
               </div>
-            );
-          })}
+
+              {/* Numbered roles — display only on sm+: they light up as the
+                  story advances (scroll or hand-off), never on hover/click.
+                  On mobile they're the accordion (390:3296): block starts
+                  1358, "01." at +65, block ends 1690 + 22px of band foot. */}
+              <div ref={listRef} className="relative max-tab:pt-[15px] max-tab:pb-[22px] lg:order-1">
+                {/* Full-bleed foot band (390:3178): white → #95C7E7, 226px
+                    from block +128 to the block's end, 40px bottom corners.
+                    `bottom-0` rather than a fixed height so an expanded row's
+                    panel stays on the blue. */}
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute -inset-x-[27px] top-[78px] bottom-0 rounded-b-[40px] bg-[linear-gradient(to_bottom,#FFFFFF,#95C7E7)] tab:hidden"
+                />
+                {ROLES.map((role, i) => {
+                  const on = active === i;
+                  const isOpen = mobile && open === i;
+                  const panelId = `how-it-works-panel-${i}`;
+                  // Mobile frame drops the trailing period ("Drivers", "The
+                  // Shops"); the word itself is the live site's.
+                  const dot = role.title.endsWith(".");
+                  const word = dot ? role.title.slice(0, -1) : role.title;
+                  return (
+                    <div
+                      key={role.num}
+                      aria-current={(!mobile && on) || undefined}
+                      className={`relative flex flex-col justify-center rounded-[16px] px-0 [transition:filter_400ms_ease] max-tab:justify-start max-tab:py-0 max-tab:[filter:none]! lg:h-[33.333%] lg:px-8 ${
+                        shortPin ? "py-4" : "py-8"
+                      }`}
+                      style={{ filter: on ? "blur(0px)" : "blur(5px)" }}
+                    >
+                      {/* Row header. `tab:contents` dissolves the wrapper on
+                          sm+ so the desktop flex column is byte-identical;
+                          on mobile it's the fixed-pitch header and the tap
+                          target's positioning box. */}
+                      <div className={`relative tab:contents ${MOBILE_ROW_MIN_H[i]}`}>
+                        <div className="flex items-start justify-between tab:contents">
+                          <p
+                            className="text-[17px] tracking-[0.05em] [transition:color_350ms_ease] max-tab:text-[11px] max-tab:leading-[11px] max-tab:tracking-[0.55px] max-tab:text-[#1a1a1a]!"
+                            style={{ color: on ? "rgb(119,113,105)" : "rgba(119,113,105,0.35)" }}
+                          >
+                            {role.num}
+                          </p>
+                          {/* The frame's "+" (390:3306): 10/13, x367. Becomes
+                              "−" while the row is open. Decorative — the
+                              overlay button below is the control. */}
+                          <span
+                            aria-hidden
+                            className="text-[10px] leading-[13px] tracking-[0.5px] text-black tab:hidden"
+                          >
+                            {isOpen ? "−" : "+"}
+                          </span>
+                        </div>
+                        <div
+                          className="mt-3 h-px w-full [transition:background-color_350ms_ease] max-tab:mt-[5px] max-tab:h-[0.5px] max-tab:bg-[#1a1a1a]!"
+                          style={{ backgroundColor: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.18)" }}
+                        />
+                        <div className="mt-5 flex flex-col gap-2 max-tab:mt-[4.5px] max-tab:flex-row max-tab:items-start max-tab:gap-0 tab:flex-row tab:items-start tab:gap-8">
+                          <h3
+                            className="w-[130px] shrink-0 text-[25px] [transition:color_350ms_ease] max-tab:w-[131px] max-tab:text-[20px] max-tab:leading-[28px] max-tab:tracking-[0.374px] max-tab:text-[#1a1a1a]!"
+                            style={{ ...serif, color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
+                          >
+                            {word}
+                            {dot && <span className="max-tab:hidden">.</span>}
+                          </h3>
+                          <p
+                            className="max-w-[320px] text-[17px] leading-[23px] tracking-[0.05em] [transition:color_350ms_ease] max-tab:mt-2 max-tab:min-w-0 max-tab:max-w-none max-tab:flex-1 max-tab:text-[10px] max-tab:leading-[12px] max-tab:tracking-[0.5px] max-tab:text-[#1a1a1a]!"
+                            style={{ color: on ? "rgb(26,26,26)" : "rgba(26,26,26,0.28)" }}
+                          >
+                            {role.body}
+                          </p>
+                        </div>
+                        {/* Mobile disclosure control: the whole row header is
+                            the hit area (the 10px "+" alone is no touch
+                            target). Progressive disclosure — the frame shows
+                            every row collapsed; opening one closes the rest. */}
+                        <button
+                          type="button"
+                          className="absolute inset-0 rounded-[6px] tab:hidden"
+                          aria-expanded={isOpen}
+                          aria-controls={panelId}
+                          aria-label={`${isOpen ? "Hide" : "Show"} the ${word} story`}
+                          onClick={() => setOpen((o) => (o === i ? null : i))}
+                        />
+                      </div>
+
+                      {/* The role's story, mounted only while open (fresh
+                          story clock each time), at today's mobile scale. */}
+                      {mobile && (
+                        <AnimatePresence initial={false}>
+                          {isOpen && (
+                            <motion.div
+                              key="panel"
+                              id={panelId}
+                              role="region"
+                              aria-label={`${word} story`}
+                              className="overflow-hidden"
+                              initial={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
+                              animate={reduce ? { opacity: 1 } : { height: "auto", opacity: 1 }}
+                              exit={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
+                              transition={{ duration: reduce ? 0.2 : 0.55, ease: EASE }}
+                            >
+                              {/* 440px = today's mobile stage height; the
+                                  bottom margin keeps the caption chip off
+                                  the next row's number line. */}
+                              <div className="relative mb-6 h-[440px] w-full">
+                                {i === 0 && <DriversPanel active reduce={reduce} />}
+                                {i === 1 && <ShopsPanel active reduce={reduce} />}
+                                {i === 2 && <OtoPanel active reduce={reduce} />}
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         </div>
-        </div>
-      </div>
         </div>
       </div>
     </section>

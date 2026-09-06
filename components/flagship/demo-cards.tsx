@@ -59,7 +59,7 @@ function CardHead({
     <Step delay={delay}>
       <div className="flex items-center gap-2">
         <Icon className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
           {title}
         </h3>
       </div>
@@ -113,11 +113,11 @@ export function ServiceCatalogCard() {
   return (
     <div className={CARD}>
       <Step delay={0.05}>
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
           Service Catalog
         </h3>
         <p className="mt-1 text-[12px] text-[#1a1a1a]/45">
-          Everything bookable at launch · 7 categories
+          Everything bookable at launch · 4 categories
         </p>
       </Step>
 
@@ -145,7 +145,7 @@ export function ServiceCatalogCard() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Pricing — line items + 7% fee                                       */
+/* Pricing — line items, total locked before you confirm                */
 /* ------------------------------------------------------------------ */
 export function PricingCard() {
   const lineBase = 0.16;
@@ -153,7 +153,7 @@ export function PricingCard() {
   return (
     <div className={CARD}>
       <Step delay={0.05}>
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
           Transparent pricing
         </h3>
         <p className="mt-1 text-[12px] text-[#1a1a1a]/45">
@@ -200,8 +200,8 @@ export function PricingCard() {
 
       <Step delay={totalDelay + 0.1}>
         <p className="mt-3 text-[11px] leading-relaxed text-[#1a1a1a]/45">
-          The 7% fee sits on top — your mechanic keeps their full quote. Example only; real
-          prices are built for your exact car.
+          Every line is shown before you confirm, and the total you see is the total you pay.
+          Example only; real prices are built for your exact car.
         </p>
       </Step>
     </div>
@@ -222,7 +222,7 @@ export function HealthScoreCard() {
       <Step delay={0.05}>
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
             Vehicle Health
           </h3>
         </div>
@@ -294,7 +294,7 @@ export function TiresCard() {
   return (
     <div className={CARD}>
       <Step delay={0.05}>
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
           New tires
         </h3>
         <p className="mt-1 text-[12px] text-[#1a1a1a]/45">
@@ -418,8 +418,8 @@ export function RatingsCard() {
 
       <Step delay={0.7}>
         <p className="mt-4 text-[11px] text-[#1a1a1a]/45">
-          Two-way ratings — mechanics rate drivers too. Every shop is vetted in person before going
-          live.
+          Ratings come only from drivers who completed a job. Every shop is reviewed and approved
+          before going live.
         </p>
       </Step>
     </div>
@@ -436,7 +436,7 @@ export function RewardsCard() {
       <Step delay={0.05}>
         <div className="flex items-center gap-2">
           <Gift className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
             Ownership Credit
           </h3>
         </div>
@@ -473,8 +473,8 @@ export function RewardsCard() {
 
       <Step delay={0.6}>
         <p className="mt-3 text-[11px] text-[#1a1a1a]/45">
-          Real dollars toward your next service — not points. Credits expire after 6 months of
-          inactivity; we’ll remind you first.
+          Real dollars toward your next service — not points. Exact amounts and terms are shown in
+          the app.
         </p>
       </Step>
     </div>

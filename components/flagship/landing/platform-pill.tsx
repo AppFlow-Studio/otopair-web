@@ -2,26 +2,37 @@
 
 import { motion } from "motion/react";
 import { APP_STORE_URL, PLAY_STORE_URL, storeIsLive, usePlatform } from "../download-app";
+import { useWaitlist } from "../waitlist-modal";
 
-/** One half of the platform pill. While its store URL is the "#" placeholder
- *  it renders as a plain span — an href="#" here scroll-jumped visitors back
- *  to the top of the page (site audit 2026-08-31). */
+/** One half of the platform pill. While its store URL is the "#" placeholder it
+ *  is a button that opens the waitlist — never an href="#", which scroll-jumped
+ *  visitors back to the top of the page (site audit 2026-08-31). On launch the
+ *  URLs go live and it becomes the real store link. */
 function PillHalf({
   href,
   label,
+  platform,
   className,
   children,
 }: {
   href: string;
   label: string;
+  platform: "ios" | "android";
   className: string;
   children: React.ReactNode;
 }) {
+  const { open } = useWaitlist();
   if (!storeIsLive(href)) {
     return (
-      <span title="Coming soon" aria-label={`${label} — coming soon`} className={className}>
+      <motion.button
+        type="button"
+        whileTap={{ scale: 0.97 }}
+        onClick={() => open({ platform })}
+        aria-label={`${label} — join the launch list`}
+        className={className}
+      >
         {children}
-      </span>
+      </motion.button>
     );
   }
   return (
@@ -90,6 +101,7 @@ export default function PlatformPill({
       {showApple && (
         <PillHalf
           href={APP_STORE_URL}
+          platform="ios"
           label="Download Otopair for iPhone on the App Store"
           className={`${half} ${applePad}`}
         >
@@ -103,6 +115,7 @@ export default function PlatformPill({
       {showAndroid && (
         <PillHalf
           href={PLAY_STORE_URL}
+          platform="android"
           label="Get Otopair for Android on Google Play"
           className={`${half} ${androidPad}`}
         >

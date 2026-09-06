@@ -2,17 +2,22 @@
 
 import { useSyncExternalStore } from "react";
 import { motion } from "motion/react";
+import { useWaitlist } from "./waitlist-modal";
 
 /**
- * Store destinations. Both are placeholders until the real listings exist —
- * swapping them is the only change needed to make every badge surface fully
- * live (this component and the footer's PlatformPill both read these).
+ * Store destinations — the launch flag. Both stay the "#" placeholder until the
+ * real listings exist; setting NEXT_PUBLIC_APP_STORE_URL / NEXT_PUBLIC_PLAY_STORE_URL
+ * (in Vercel, at launch) is the only change needed to make every badge surface go
+ * live. Until then every store control opens the waitlist modal instead. This
+ * component and the footer's PlatformPill both read these, so one env flip flips
+ * the whole site — link vs. waitlist — with no code change.
  */
-export const APP_STORE_URL = "#";
-export const PLAY_STORE_URL = "#";
+export const APP_STORE_URL = process.env.NEXT_PUBLIC_APP_STORE_URL || "#";
+export const PLAY_STORE_URL = process.env.NEXT_PUBLIC_PLAY_STORE_URL || "#";
 
 /** A "#" placeholder must never render as a link — a dead badge that jumps to
- *  the top of the page reads as broken software (site audit 2026-08-31). */
+ *  the top of the page reads as broken software (site audit 2026-08-31). While
+ *  not-live the badge is a button that opens the waitlist instead. */
 export const storeIsLive = (url: string) => url !== "#";
 
 export type Platform = "ios" | "android" | "other";
@@ -46,6 +51,7 @@ export function usePlatform(): Platform {
  * DownloadApp carries the "coming soon" message.
  */
 function StoreBadge({ store, size = "md" }: { store: "apple" | "google"; size?: "sm" | "md" | "lg" }) {
+  const { open } = useWaitlist();
   // sm = the mobile frame's 145×38 / 152×38 plates (node 390:3247), i.e. 0.8×.
   const scale = size === "lg" ? 1.18 : size === "sm" ? 0.8 : 1;
   const w = Math.round((store === "apple" ? 180 : 189) * scale);
@@ -63,15 +69,20 @@ function StoreBadge({ store, size = "md" }: { store: "apple" | "google"; size?: 
   );
 
   if (!storeIsLive(href)) {
+    // Pre-launch: the badge is a button that opens the waitlist, never a dead
+    // link to "#" (site audit 2026-08-31).
     return (
-      <span
-        title="Coming soon"
-        aria-label={`${label} — coming soon`}
-        className="flex items-center justify-center rounded-[8px] bg-[#1a1a1a]"
+      <motion.button
+        type="button"
+        whileTap={{ scale: 0.97 }}
+        onClick={() => open({ platform: store === "apple" ? "ios" : "android" })}
+        title="Join the launch list"
+        aria-label={`${label} — join the launch list`}
+        className="flex items-center justify-center rounded-[8px] bg-[#1a1a1a] transition-transform duration-300 hover:scale-[1.03]"
         style={{ width: w, height: h }}
       >
         {art}
-      </span>
+      </motion.button>
     );
   }
   return (

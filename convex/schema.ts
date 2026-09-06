@@ -386,6 +386,14 @@ export default defineSchema({
      *  never/oldest-audited first, so the whole fleet rotates through the
      *  auditor without any cursor state to lose. */
     fitment_audited_at: v.optional(v.number()),
+    /** When the nightly zero-price sweep (priceBackfillSweep) last EXAMINED
+     *  this config — examined, not necessarily dispatched: no-op configs are
+     *  stamped too, so they rotate to the back instead of eating the budget
+     *  every night. Same never/oldest-first contract as fitment_audited_at. */
+    price_sweep_at: v.optional(v.number()),
+    /** When the nightly cohort dispatcher (cohortDispatch) last examined this
+     *  config's stored missing_roles. Same rotation contract as above. */
+    cohort_dispatched_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
     .index("by_config_key", ["config_key"])

@@ -16,6 +16,8 @@ import {
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
 import type { PostJobSurveyPayload } from "@/lib/vehicle-passport";
+import { formatPartIdentity } from "@/lib/vehicle-passport";
+import { formatHoursValue } from "@/lib/labor-units";
 import {
   buildPartRows,
   getDefaultLaborMinutes,
@@ -181,7 +183,7 @@ function ReportView({ report }: { report: PostJobSurveyPayload }) {
                 <div className="min-w-0">
                   <p className="truncate font-medium">{part.part_name}</p>
                   <p className="text-xs text-muted-foreground">
-                    {[part.brand, part.oem_number].filter(Boolean).join(" · ")}
+                    {formatPartIdentity(part)}
                   </p>
                 </div>
                 <span className="shrink-0 text-sm">
@@ -271,7 +273,7 @@ function ReportEditor({
   onSaveDraft?: (payload: JobActualsPayload) => Promise<void>;
   onFinalize: (payload: JobActualsPayload) => Promise<void>;
 }) {
-  const [laborMinutes, setLaborMinutes] = useState("");
+  const [laborHoursText, setLaborHoursText] = useState("");
   const [partsCost, setPartsCost] = useState("");
   const [difficultyRating, setDifficultyRating] = useState("");
   const [technicianNotes, setTechnicianNotes] = useState("");
@@ -281,8 +283,12 @@ function ReportEditor({
   );
 
   useEffect(() => {
-    setLaborMinutes(
-      toNumberString(getDefaultLaborMinutes(jobActuals, estimatedLaborMinutes)),
+    const defaultLaborMinutes = getDefaultLaborMinutes(
+      jobActuals,
+      estimatedLaborMinutes,
+    );
+    setLaborHoursText(
+      defaultLaborMinutes != null ? formatHoursValue(defaultLaborMinutes) : "",
     );
     setPartsCost(toNumberString(jobActuals?.actualPartsCost ?? null));
     setDifficultyRating(toNumberString(jobActuals?.difficultyRating ?? null));
@@ -305,7 +311,7 @@ function ReportEditor({
     try {
       await fn(
         toPayload(parts, {
-          laborMinutes,
+          laborHours: laborHoursText,
           partsCost,
           difficultyRating,
           technicianNotes,
@@ -325,17 +331,20 @@ function ReportEditor({
       <div className="grid gap-3 md:grid-cols-2">
         <label className="space-y-1.5">
           <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Labor minutes
+            Labor time (hours)
           </span>
           <input
-            type="number"
-            min="0"
-            step="1"
-            value={laborMinutes}
-            onChange={(e) => setLaborMinutes(e.target.value)}
+            type="text"
+            inputMode="decimal"
+            value={laborHoursText}
+            onChange={(e) =>
+              setLaborHoursText(e.target.value.replace(/[^0-9.]/g, ""))
+            }
             className={inputClass}
             placeholder={
-              estimatedLaborMinutes != null ? String(estimatedLaborMinutes) : "Auto"
+              estimatedLaborMinutes != null
+                ? formatHoursValue(estimatedLaborMinutes)
+                : "Auto"
             }
           />
         </label>

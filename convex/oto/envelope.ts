@@ -51,6 +51,10 @@ export interface ConversationStateBlock {
   established_facts: string[];
   last_user_intent: string | null;
   updated_at: number | null;
+  // W3.2 — unresolved symptoms from EARLIER turns of this conversation,
+  // appended deterministically by the safety classifier (never by the model).
+  // Rendered so a subject change cannot silently drop a safety thread (D-43).
+  open_symptoms?: { text: string; category: string; safety_relevant: boolean }[];
 }
 
 // Wave 3 integration step 4 (§3.4) — one fact pulled from a PRIOR
@@ -113,6 +117,12 @@ interface BuildEnvelopeArgs {
   // conversations, top_K most-recent first. Optional; skipped from the
   // envelope when empty or omitted. See PriorConversationFact above.
   priorConversationFacts?: PriorConversationFact[];
+  // Wave 2.2 — pre-rendered <safety_override> block from
+  // convex/oto/safety.ts `renderSafetyOverrideBlock`, or null/undefined when
+  // the turn carries no urgent-or-worse hazard. Passed in rather than computed
+  // here so the classifier stays out of the envelope's dependency surface
+  // (envelope.ts is pure formatting; safety.ts owns the hazard model).
+  safetyOverride?: string | null;
   // Reference "now" for relative-time formatting under <recent_context>.
   // Defaults to Date.now() at call time when omitted (production path);
   // tests pin it explicitly so format output is deterministic.
@@ -120,9 +130,15 @@ interface BuildEnvelopeArgs {
 }
 
 // Lowered 6 → 4 (beta feedback: a stranded user hit "just get me a mechanic"
-// frustration well before six rounds of narrowing). Four unconverged
-// question-turns is enough signal to offer the booking exit.
-const POLITE_EXIT_THRESHOLD = 4;
+// frustration well before six rounds of narrowing), then 4 → 2 (2026-08-14):
+// the prompt's three-state termination rule caps narrowing at ~two clarifying
+// turns, and N=10 eval runs showed the model sailing past turn 3 explaining
+// instead of concluding — the server now enforces the same deadline the
+// prompt asks for. Two unconverged question-turns → the third turn carries
+// the block and must conclude.
+// Exported (2026-08-14) so chat.ts's forced-exit backstop keys on the same
+// number this block does — one threshold, two enforcement layers.
+export const POLITE_EXIT_THRESHOLD = 2;
 
 // -----------------------------------------------------------------------------
 // Pick the active vehicle for this conversation. Precedence:
@@ -254,6 +270,7 @@ export function buildEnvelope({
   diagnosticTurnCount = 0,
   priorConversationFacts,
   knowledgeLevel,
+  safetyOverride,
   now,
 }: BuildEnvelopeArgs): string {
   const blocks: string[] = [];
@@ -297,6 +314,21 @@ export function buildEnvelope({
         lines.push(`    - ${fact}`);
       }
     }
+    // W3.2 — the open-symptom ledger. Only rows still open reach the envelope
+    // (chat.ts filters), and the rule line travels WITH the data so the model
+    // never sees an open symptom without also seeing what it owes it.
+    const openSymptoms = conversationState.open_symptoms ?? [];
+    if (openSymptoms.length > 0) {
+      lines.push(`  unresolved_symptoms:`);
+      for (const s of openSymptoms) {
+        lines.push(
+          `    - "${s.text}"${s.safety_relevant ? " [safety-relevant]" : ""}`,
+        );
+      }
+      lines.push(
+        `  unresolved_symptoms_rule: These were reported earlier in THIS conversation and never resolved. Do not let a subject change drop them. Before this conversation ends or a booking is finalized, either fold them into the booking (they are auto-added to the customer notes when you fire render_book_service) or explicitly ask the user about them once.`,
+      );
+    }
     lines.push(`</conversation_state>`);
     blocks.push(lines.join("\n"));
   }
@@ -321,12 +353,20 @@ export function buildEnvelope({
     blocks.push(lines.join("\n"));
   }
 
+  // Wave 2.2 — safety override. Deliberately placed BEFORE conversation
+  // history and before <untrusted_user_input>: the block is system-authored
+  // context about the current turn, and putting it ahead of the user's own
+  // words keeps it from reading as something the user asked for. Highest
+  // priority block in the envelope; see convex/oto/safety.ts for why it
+  // exists and why it is tone-blind.
+  if (safetyOverride) blocks.push(safetyOverride);
+
   if (diagnosticTurnCount >= POLITE_EXIT_THRESHOLD) {
     blocks.push(
       [
         `<polite_exit_required>`,
         `  diagnostic_turn_count: ${diagnosticTurnCount}`,
-        `  rule: This conversation has narrowed for ${diagnosticTurnCount} turns without converging. Stop narrowing now. Call render_book_service with service_slugs=["diagnostic_scan"], diagnostic_system="not_sure", and customer_notes summarizing everything the user has mentioned across the conversation. The mechanic can see what you couldn't.`,
+        `  rule: This conversation has narrowed for ${diagnosticTurnCount} turns without converging. Stop narrowing — THIS turn must reach a terminal state, and no further clarifying question is allowed. If you have not yet consulted get_vehicle_health for the implicated system this conversation, call it NOW in this same turn before concluding. Then: if the trust gate holds (the narrowed symptom contradicts an on_time self_reported record — the recorded service, if real, would have eliminated this symptom), fire render_record_confirmation for that maintenance type. Otherwise call render_book_service with service_slugs=["diagnostic_scan"], diagnostic_system set to the closest subsystem (or "not_sure"), and customer_notes summarizing everything the user has mentioned across the conversation. The mechanic can see what you couldn't.`,
         `</polite_exit_required>`,
       ].join("\n"),
     );
@@ -365,7 +405,10 @@ function hasUsefulState(s: ConversationStateBlock): boolean {
     s.mood ||
       s.arc_summary ||
       (s.established_facts && s.established_facts.length > 0) ||
-      s.last_user_intent,
+      s.last_user_intent ||
+      // W3.2 — an open symptom alone is reason enough to render the block;
+      // it is exactly the state that must survive a first-turn subject change.
+      (s.open_symptoms && s.open_symptoms.length > 0),
   );
 }
 

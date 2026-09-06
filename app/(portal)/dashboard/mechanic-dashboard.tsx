@@ -12,11 +12,13 @@ import MultiPointInspectionDialog, {
   type InspectionInputPayload,
 } from "@/components/multi-point-inspection-dialog";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import { useLockedQuote } from "@/lib/use-locked-quote";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
 import type {
   PostJobSurveyPayload,
+  CustomJobOutcome,
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
 import {
@@ -149,6 +151,12 @@ export default function MechanicDashboard() {
     api.job_actuals.getPrefillData,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"
   );
+  // Customer-approved quote for the post-job "Confirm parts to use" step. Same
+  // hook the owner's booking-detail-panel uses, so the mechanic's completion
+  // dialog shows the AGREED parts + total (e.g. battery $350, oil filter $35,
+  // not-used rows dropped, $726.69 total) instead of falling back to the
+  // pre-approval snapshot (stale $0 parts, $103 total).
+  const workflowLockedQuote = useLockedQuote(selectedWorkflowBooking);
   const selectedBooking = useQuery(
     api.bookings.getJobDetail,
     actualsBookingId ? { bookingId: actualsBookingId } : "skip"
@@ -309,7 +317,11 @@ export default function MechanicDashboard() {
     }
   }
 
-  async function handleCompleteAction(payload: PostJobSurveyPayload) {
+  async function handleCompleteAction(
+    payload: PostJobSurveyPayload,
+    customJobOutcomes?: CustomJobOutcome[],
+    resolvedPriorRecommendationIds?: string[],
+  ) {
     if (!workflowBookingId) return;
 
     setBusyAction(`complete:${String(workflowBookingId)}`);
@@ -317,6 +329,15 @@ export default function MechanicDashboard() {
       await completeWithPostjob({
         bookingId: workflowBookingId,
         postjob: payload,
+        customJobOutcomes:
+          customJobOutcomes && customJobOutcomes.length > 0
+            ? customJobOutcomes
+            : undefined,
+        resolvedPriorRecommendationIds:
+          resolvedPriorRecommendationIds &&
+          resolvedPriorRecommendationIds.length > 0
+            ? (resolvedPriorRecommendationIds as Id<"job_recommendations">[])
+            : undefined,
       });
       setToast("Booking completed");
       closeWorkflowDialog();
@@ -692,6 +713,7 @@ export default function MechanicDashboard() {
             : ""
         }
         bookingServices={selectedWorkflowBooking?.serviceNames ?? []}
+        jobInProgress={selectedWorkflowBooking?.status === "in_progress"}
         tireReplacementPositions={
           selectedWorkflowBooking?.tireSpecs?.positions ?? []
         }
@@ -769,6 +791,9 @@ export default function MechanicDashboard() {
         }
         passportData={selectedWorkflowPassport ?? null}
         estimatedLaborMinutes={selectedWorkflowBooking?.estimatedLaborMinutes ?? null}
+        customLaborOverridesMinutes={
+          (selectedWorkflowBooking as any)?.customLaborOverridesMinutes ?? null
+        }
         prefillData={workflowPrefill ?? null}
         isSubmitting={
           workflowBookingId !== null &&
@@ -776,21 +801,37 @@ export default function MechanicDashboard() {
         }
         onClose={closeWorkflowDialog}
         onSubmit={handleCompleteAction}
-        initialTechnicianNotes={
-          (selectedWorkflowBooking?.jobActuals as any)?.inProgressNotes ?? ""
+        layoverNotes={[
+          (selectedWorkflowBooking?.jobActuals as any)?.inProgressNotes ?? "",
+          // "Why the added scope / why this adjustment" reasons for agreed
+          // changes — folded in so they seed the findings and appear in the
+          // "From the active job" context instead of being retyped.
+          ...(((selectedWorkflowBooking as any)?.scopeReasons ?? []) as string[]),
+        ]
+          .filter((line: string) => String(line).trim())
+          .join("\n")}
+        layoverPhotos={
+          [
+            ...((selectedWorkflowBooking?.jobActuals as any)?.inProgressPhotos ??
+              []),
+            // Evidence attached to agreed mid/pre-job changes rides in on the
+            // same read-only stream so it's carried into (and sent with) the
+            // final report.
+            ...((selectedWorkflowBooking as any)?.scopePhotos ?? []),
+          ].map((p: any) => ({
+            id: p.storageId,
+            storageId: p.storageId,
+            previewUrl: p.url ?? "",
+            caption: p.caption ?? "",
+            status: "ready" as const,
+            takenAt: p.takenAt ?? undefined,
+          }))
         }
-        initialPhotos={
-          ((selectedWorkflowBooking?.jobActuals as any)?.inProgressPhotos ?? []).map(
-            (p: any) => ({
-              id: p.storageId,
-              storageId: p.storageId,
-              previewUrl: p.url ?? "",
-              caption: p.caption ?? "",
-              status: "ready" as const,
-            }),
-          )
-        }
-        lockBilling
+        lockBilling={!workflowLockedQuote.isWalkIn}
+        quotedParts={workflowLockedQuote.lockedQuoteParts}
+        lockedQuote={workflowLockedQuote.lockedQuote}
+        isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
+        fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
       />
 
       {/* Pre-Job Approval — auto-chained from the inspection dialog. Same
@@ -825,6 +866,8 @@ export default function MechanicDashboard() {
         laborCostDollars={(selectedWorkflowBooking as any)?.laborCost ?? null}
         shopState={(selectedWorkflowBooking as any)?.shopState ?? null}
         shopZip={(selectedWorkflowBooking as any)?.shopZip ?? null}
+        isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
+        fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
       />
 
       <JobActualsDialog

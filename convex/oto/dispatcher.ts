@@ -308,6 +308,10 @@ function toFiniteNumber(v: unknown): number | undefined {
 }
 
 const VEHICLE_TRUTH_CLAIM_KINDS = new Set(["due", "light_on", "completed"]);
+// W4.3 (QA K3) — hedged self-reports. Only the two literal values pass; any
+// other emission ("unsure", "", 0.5) is dropped here so downstream treats the
+// claim as the default "certain" (matches pre-field behavior for old payloads).
+const VEHICLE_TRUTH_STATED_CONFIDENCE = new Set(["certain", "hedged"]);
 
 function sanitizeServiceClaims(
   raw: unknown,
@@ -329,6 +333,12 @@ function sanitizeServiceClaims(
     if (serviceAgeDays !== undefined) clean.service_age_days = serviceAgeDays;
     const serviceDate = toFiniteNumber(claim.service_date);
     if (serviceDate !== undefined) clean.service_date = serviceDate;
+    if (
+      typeof claim.stated_confidence === "string" &&
+      VEHICLE_TRUTH_STATED_CONFIDENCE.has(claim.stated_confidence)
+    ) {
+      clean.stated_confidence = claim.stated_confidence;
+    }
     out.push(clean);
   }
   return out.length ? out : undefined;

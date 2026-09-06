@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, forwardRef } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
+import { jobListTotal } from "@/lib/booking-total";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useEntityLabel } from "@/lib/use-entity-label";
-import { Bell, Calendar, Car, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Search, X } from "lucide-react";
-import { useSearchParams } from "next/navigation";
+import { Bell, Calendar, Car, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Search, User, X } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { usePortalSidebar } from "../portal-context";
 import BookingDetailPanel from "@/components/booking-detail-panel";
 import DatePicker from "@/components/ui/date-picker";
@@ -47,6 +48,36 @@ function shiftIsoDate(isoDate: string, offsetDays: number): string {
 export default function BookingsPage() {
   const entityLabel = useEntityLabel();
   const searchParams = useSearchParams();
+  const router = useRouter();
+
+  // Walk-in success banner — shown once after a redirect from
+  // /schedule/walkin/new. Params are read once and stripped from the URL so a
+  // refresh doesn't resurface the banner.
+  const [walkinBanner, setWalkinBanner] = useState<{
+    phone: string;
+    assigned: string;
+    time: string;
+    token: string;
+  } | null>(null);
+  const [copiedTrackerLink, setCopiedTrackerLink] = useState(false);
+  useEffect(() => {
+    if (searchParams.get("walkinSuccess") !== "1") return;
+    setWalkinBanner({
+      phone: searchParams.get("phone") ?? "",
+      // `assigned` is the new key; fall back to legacy `bay` so a banner
+      // triggered from an older cached tab still renders sensibly.
+      assigned: searchParams.get("assigned") ?? searchParams.get("bay") ?? "",
+      time: searchParams.get("time") ?? "",
+      token: searchParams.get("token") ?? "",
+    });
+    const params = new URLSearchParams(searchParams.toString());
+    ["walkinSuccess", "phone", "assigned", "bay", "time", "token"].forEach((k) =>
+      params.delete(k),
+    );
+    const qs = params.toString();
+    router.replace(qs ? `/bookings?${qs}` : "/bookings", { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [statusFilter, setStatusFilter] = useState<JobStatusFilter>("all");
   const [customerFilter, setCustomerFilter] = useState("");
   const [vehicleFilter, setVehicleFilter] = useState("");
@@ -113,10 +144,11 @@ export default function BookingsPage() {
 
   const statusCounts = useMemo(() => {
     if (!allJobs) return {};
-    const counts: Record<string, number> = { all: allJobs.length };
+    const counts: Record<string, number> = { all: allJobs.length, walkin: 0 };
     for (const job of allJobs) {
       const key = job.status === "pending" ? "pending_shop_acceptance" : job.status;
       counts[key] = (counts[key] ?? 0) + 1;
+      if (job.source === "mechanic_walk_in") counts.walkin += 1;
     }
     return counts;
   }, [allJobs]);
@@ -142,7 +174,9 @@ export default function BookingsPage() {
   const filteredJobs = useMemo(() => {
     if (!allJobs) return undefined;
     return allJobs.filter((j) => {
-      if (statusFilter !== "all") {
+      if (statusFilter === "walkin") {
+        if (j.source !== "mechanic_walk_in") return false;
+      } else if (statusFilter !== "all") {
         const isPending = statusFilter === "pending_shop_acceptance";
         const jobIsPending = j.status === "pending" || j.status === "pending_shop_acceptance";
         if (isPending ? !jobIsPending : j.status !== statusFilter) return false;
@@ -262,6 +296,10 @@ export default function BookingsPage() {
   // Keyboard navigation
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      // Never hijack browser/OS chords (⌘R reload, ⌘L, ⌃…): with a modifier
+      // held, let the key pass through instead of firing a single-key shortcut
+      // (e.g. ⌘R was triggering "r" = mark-completed, popping a new form).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
         // If focus is inside the assign dropdown, let react-aria close it first
         if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
@@ -349,7 +387,102 @@ export default function BookingsPage() {
   return (
     <div className="space-y-6">
       {/* Page header — full width, above the flex row */}
-      <h1 className="text-2xl font-bold text-foreground">All Bookings</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold text-foreground">All Bookings</h1>
+        <button
+          type="button"
+          onClick={() => router.push("/schedule/walkin/new")}
+          className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-sm font-semibold text-emerald-700 transition-colors hover:bg-emerald-100"
+        >
+          <User className="w-4 h-4" />
+          New walk-in
+        </button>
+      </div>
+
+      {walkinBanner && (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4">
+          <div className="flex items-start gap-4">
+            <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500 text-white">
+              <Check className="h-4 w-4" strokeWidth={3} />
+            </span>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-emerald-900">
+                Walk-in created
+              </div>
+              {(walkinBanner.assigned || walkinBanner.time) && (
+                <div className="mt-0.5 text-[13px] leading-relaxed text-emerald-700">
+                  {walkinBanner.assigned ? walkinBanner.assigned : "This slot"}{" "}
+                  is now blocked
+                  {walkinBanner.time ? ` ${walkinBanner.time}` : ""}. The app
+                  won&apos;t offer this slot to anyone else.
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setWalkinBanner(null)}
+              className="rounded-lg border border-emerald-200 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
+
+          {/* Tracker link — hand-to-customer stand-in until Telnyx is wired. */}
+          <div className="mt-3 ml-11">
+            {walkinBanner.token ? (
+              (() => {
+                const base =
+                  typeof window !== "undefined"
+                    ? window.location.origin
+                    : "https://otopair.com";
+                const url = `${base}/t/${walkinBanner.token}`;
+                return (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-emerald-700">
+                      Tracker link for {walkinBanner.phone || "the customer"}
+                    </div>
+                    <div className="flex w-full items-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 py-2 sm:w-auto sm:flex-1">
+                      <code className="flex-1 truncate text-xs text-gray-700">
+                        {url}
+                      </code>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            await navigator.clipboard.writeText(url);
+                            setCopiedTrackerLink(true);
+                            setTimeout(() => setCopiedTrackerLink(false), 2000);
+                          } catch {
+                            /* noop — fallback: user can select the code */
+                          }
+                        }}
+                        className="shrink-0 rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-emerald-700 transition-colors"
+                      >
+                        {copiedTrackerLink ? "Copied" : "Copy"}
+                      </button>
+                      <a
+                        href={url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="shrink-0 rounded-md border border-emerald-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 transition-colors"
+                      >
+                        Open
+                      </a>
+                    </div>
+                  </div>
+                );
+              })()
+            ) : (
+              <div className="rounded-lg border border-dashed border-emerald-200 bg-white/60 px-3 py-2 text-[12px] leading-relaxed text-emerald-800">
+                Tracker link isn&apos;t available yet — deploy Convex to
+                activate it. Once live, this banner will show a copyable
+                <code className="ml-1 text-emerald-900">/t/&lt;token&gt;</code>{" "}
+                URL to hand to the customer.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {context === undefined ? (
         <div className="bg-card rounded-xl border border-border p-8 text-center text-muted-foreground">
@@ -685,7 +818,23 @@ export default function BookingsPage() {
                               </td>
                               <td className="px-3 py-4">
                                 <div className="flex items-center gap-1.5 flex-wrap">
-                                  <StatusPill status={job.status} />
+                                  {/* Walk-ins that got tagged as no_show by the auto-drop cron
+                                      don't get a status pill — the concept doesn't apply
+                                      (the customer was physically at the shop when the booking
+                                      was created). The Walk-in pill is enough. */}
+                                  {!(
+                                    job.source === "mechanic_walk_in" &&
+                                    job.status === "no_show"
+                                  ) && <StatusPill status={job.status} />}
+                                  {job.source === "mechanic_walk_in" && (
+                                    <span
+                                      title="Created as a walk-in at the counter"
+                                      className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700"
+                                    >
+                                      <User className="h-2.5 w-2.5" />
+                                      Walk-in
+                                    </span>
+                                  )}
                                   {countdown && !drawerCompact && (
                                     <span className="text-amber-600 text-[11px] whitespace-nowrap">
                                       {countdown}
@@ -723,7 +872,22 @@ export default function BookingsPage() {
                                 {formatJobDate(job.scheduledDate, job.scheduledTime)}
                               </td>
                               <td className="px-3 py-4 text-right pr-5 font-medium text-foreground whitespace-nowrap">
-                                ${job.totalCost.toFixed(2)}
+                                {(() => {
+                                  const shown = jobListTotal(job);
+                                  const reQuoted =
+                                    Math.abs(shown - job.totalCost) > 0.005;
+                                  return (
+                                    <span
+                                      title={
+                                        reQuoted
+                                          ? `Re-quoted · original estimate $${job.totalCost.toFixed(2)}`
+                                          : undefined
+                                      }
+                                    >
+                                      ${shown.toFixed(2)}
+                                    </span>
+                                  );
+                                })()}
                               </td>
                             </tr>
                           );

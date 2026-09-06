@@ -82,13 +82,14 @@ export type RotorResolutionVerdict = {
  * minimum under a label that classified as discard_min.
  */
 export function validateRotorResolution(input: {
-  front?: { minMm?: number | null; nominalMm?: number | null };
-  rear?: { minMm?: number | null; nominalMm?: number | null };
+  front?: { minMm?: number | null; nominalMm?: number | null; derived?: boolean };
+  rear?: { minMm?: number | null; nominalMm?: number | null; derived?: boolean };
 }): RotorResolutionVerdict {
   const verdict: RotorResolutionVerdict = { rejects: {}, flags: {} };
   for (const axle of ["front", "rear"] as const) {
     const minMm = input[axle]?.minMm;
     const nominalMm = input[axle]?.nominalMm;
+    const derived = input[axle]?.derived === true;
     if (minMm == null) continue;
     if (!Number.isFinite(minMm)) {
       verdict.rejects[axle] = "rotor_min_not_numeric";
@@ -107,8 +108,13 @@ export function validateRotorResolution(input: {
           verdict.rejects[axle] = `rotor_min_gte_nominal:${minMm}>=${nominalMm}`;
           continue;
         }
+        // Delta plausibility exists to catch a SOURCED value read under the
+        // wrong label (a machining spec, an inch figure). A 15%-wear DERIVED
+        // minimum's delta is fixed by arithmetic — 4.5mm on a 30mm truck
+        // rotor is the policy working, not a misread — so the rule only
+        // applies to non-derived values.
         const delta = Math.round((nominalMm - minMm) * 100) / 100;
-        if (delta < 0.5 || delta > 4.0) {
+        if (!derived && (delta < 0.5 || delta > 4.0)) {
           verdict.flags[axle] =
             `rotor_min_delta_implausible:${delta}mm below nominal ${nominalMm}mm`;
         }

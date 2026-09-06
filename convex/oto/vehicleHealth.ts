@@ -42,7 +42,8 @@ import {
   type DriverRecommendationLike,
 } from "../../utils/mergedMaintenance";
 import { resolveSlugMap } from "../service_intervals_queries";
-import { bufferFor } from "../healthPoints";
+import { loadHealthScoreWeights } from "../healthScoreWeights";
+import { resolveMileageForOwner } from "../lib/mileage";
 import type { MaintenanceItem, MaintenanceStatus } from "../../components/cars/MaintenanceTracker";
 
 // -----------------------------------------------------------------------------
@@ -66,6 +67,29 @@ const WARNING_LIGHT_LABELS: Record<string, string> = {
   check_engine: "Check engine light",
   not_sure_which: "Unspecified warning light (driver wasn't sure which)",
 };
+
+/**
+ * Coerce a `lastServiceDate`-shaped value into a numeric epoch. The schema
+ * allows `v.optional(v.union(v.string(), v.number()))`, and downstream
+ * arithmetic (`now - record.lastServiceDate` in utils/maintenanceStatus.ts)
+ * turns a stray string into NaN, which silently scores the row as "no
+ * anchor" — a serviced car reading as unknown, no throw and no log. Applied
+ * at THIS boundary so every reader downstream can assume `number | undefined`.
+ *
+ * Non-numeric-but-parseable strings ("2026-08-31", ISO 8601, etc.) become
+ * their epoch equivalent; unparseable strings + non-finite numbers return
+ * undefined (same shape "no anchor" as omitting the field entirely).
+ *
+ * Mirrors the fix mobile applied at their hook boundary (2026-08-31). No
+ * writer on web actually stores a string today, so this is cheap insurance
+ * against a future writer + against Convex accepting either shape by design.
+ */
+function toEpoch(value: string | number | undefined): number | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
 
 function describeKnownIssues(knownIssues?: string[]): string[] | undefined {
   // Format- and vocabulary-agnostic: canonicalWarningLights scans the whole
@@ -134,7 +158,84 @@ export interface VehicleHealthItem {
   record_provenance: RecordProvenance;
 }
 
+// -----------------------------------------------------------------------------
+// K5 fix (2026-08-12) — coverage scope declaration.
+//
+// The QA report's most consequential fabrication: a user asked about the
+// hybrid traction battery, get_vehicle_health came back with no problems on
+// the list, and Oto answered "the hybrid battery is in good shape — the system
+// has that covered" about a $4,000+ component we have never measured.
+//
+// Root cause is structural, not a prompt slip. MaintenanceType is a CLOSED
+// FIVE-VALUE SET (oil | brakes | tires | battery | inspection — see
+// utils/maintenanceStatus.ts and the mirror in convex/vehicleDocuments.ts).
+// This query returns those five and nothing else, and the payload never said
+// that five was the whole universe. So "absent because we have never looked"
+// and "absent because there is nothing wrong" serialized to the SAME JSON.
+// The response literally could not express the difference, and Haiku resolved
+// the ambiguity the flattering way.
+//
+// Note the second trap folded into the same defect: `battery` here is the
+// ordinary 12V starter battery. It is NOT a hybrid/EV high-voltage traction
+// pack. A model scanning for "battery: on_time" finds a match and answers the
+// wrong question. MONITORED_SYSTEM_SCOPE says so in the payload itself.
+//
+// Same philosophy as the F1 strip pass in toAiShape below: don't rely on the
+// prompt to stop a misread — make the misread unavailable in the data. The
+// two fields are emitted FIRST in the response object so the boundary is read
+// before the item list, not after.
+// -----------------------------------------------------------------------------
+
+/** One entry in the monitored set — what this type does and does NOT cover. */
+export interface MonitoredSystem {
+  type: MaintenanceType;
+  label: string;
+  /** Plain-language boundary of this type. Deliberately names the exclusions. */
+  covers: string;
+}
+
+const MONITORED_SYSTEM_SCOPE: Record<MaintenanceType, string> = {
+  oil: "Engine oil and filter change interval only. Says nothing about oil leaks, oil pressure, or internal engine condition.",
+  brakes:
+    "Brake pad / rotor service history and wear interval only. Says nothing about brake lines, master cylinder, or the ABS module.",
+  tires:
+    "Tire tread, tire age, and rotation/replacement history only. Says nothing about wheel alignment, TPMS sensors, or wheel condition.",
+  battery:
+    "The ordinary 12V starter battery ONLY. This is NOT a hybrid or electric-vehicle high-voltage traction battery — traction packs are never tracked by OtoPair and never appear in this response.",
+  inspection:
+    "State safety / emissions inspection due date only. Present in `items` only when the user has an inspection record on file.",
+};
+
+/**
+ * The complete monitored set. Built from ALL_MAINTENANCE_TYPES plus
+ * "inspection" (which ALL_MAINTENANCE_TYPES omits because it's record-gated
+ * for display — but it IS a monitored type, so it belongs in the declaration
+ * whether or not an item for it shows up in `items` this call).
+ */
+const MONITORED_SYSTEMS: MonitoredSystem[] = [...ALL_MAINTENANCE_TYPES, "inspection" as const].map(
+  (type) => ({
+    type,
+    label: MAINTENANCE_LABELS[type] ?? type,
+    covers: MONITORED_SYSTEM_SCOPE[type],
+  }),
+);
+
+/**
+ * The boundary statement. Deliberately NOT an exhaustive list of untracked car
+ * parts — that would be unmaintainable and would still read as a checklist.
+ * It states the rule (only the five above exist here) and names the handful of
+ * systems users actually ask Oto about, hybrid/EV traction battery first.
+ */
+const NOT_MONITORED_STATEMENT =
+  "OtoPair tracks ONLY the systems listed in `monitored_systems`. This response carries no data whatsoever — not good, not bad — about anything else. That includes, among many others, the hybrid/EV high-voltage traction battery, the transmission, the suspension, and the air conditioning. If a system is not in `monitored_systems`, it is absent because it has never been measured, NOT because it was checked and found healthy. Never infer that an unlisted system is fine, healthy, or 'covered' from this payload, from an absence of problems in `items`, or from the health score — the score is computed from the monitored set alone. For anything unlisted, say plainly that you have no data on it and offer an inspection.";
+
 export interface VehicleHealthResponse {
+  /**
+   * K5 — what IS tracked. Emitted before `items` so the scope is read first.
+   */
+  monitored_systems: MonitoredSystem[];
+  /** K5 — the boundary. See NOT_MONITORED_STATEMENT above. */
+  not_monitored: string;
   score: number;
   score_is_estimated: boolean;
   items: VehicleHealthItem[];
@@ -166,8 +267,6 @@ interface LoadedContext {
   knownIssues: string[] | undefined;
   /** Open-mechanic-rec penalty (0–15) the ring subtracts — vehicle_owners.health_score_rec_penalty. */
   recPenalty: number | undefined;
-  /** Health-Points buffer (0–3) the ring adds — Rewards Framework v3 §11. */
-  hpBuffer: number;
   /**
    * Provenance keyed by MaintenanceType for items that DO have a record.
    * Items without a record (unknown-* fallbacks) get "inferred" downstream
@@ -251,7 +350,10 @@ async function loadVehicleContextForUser(
     }
   }
 
-  const odometerMiles = owner.mileage ?? 0;
+  // Resolve across the two stores (shop passport vs this owner row) by recency —
+  // the app card, maintenance tracker and VHS must show the same odometer the
+  // shop does, not just whatever the owner row last held.
+  const odometerMiles = (await resolveMileageForOwner(ctx, owner)).mileage ?? 0;
   const knownIssues = Array.isArray(owner.knownIssues) ? (owner.knownIssues as string[]) : undefined;
   const drivingConditions = owner.drivingConditions ?? undefined;
   const avgMonthlyDriving = owner.avgMonthlyDriving ?? undefined;
@@ -302,23 +404,25 @@ async function loadVehicleContextForUser(
       )
     : {};
 
-  // Health-Points buffer (+0–3) and open-mechanic-rec penalty (−0–15) — both feed
-  // the ring's score.
-  const hpRow = await ctx.db
-    .query("vehicle_health_points")
-    .withIndex("by_vin_user", (q: any) =>
-      q.eq("vin", (vehicle.vin ?? "").toUpperCase().trim()).eq("user_id", userId),
-    )
-    .unique();
-  const hpBuffer = bufferFor(hpRow?.points ?? 0);
+  // Open-mechanic-rec penalty (−0–15) feeds the ring's score. Rewards (the
+  // Health-Points buffer) are paused for now — see Rewards removal — so Oto
+  // no longer reads vehicle_health_points here, keeping it in lockstep with
+  // the ring not applying the buffer either.
   const recPenalty = (owner as any).health_score_rec_penalty as number | undefined;
 
   // Normalize raw records into the builder's input shape. lastServiceDate is
-  // stored as union(string|number); we only feed numeric values forward.
+  // stored as union(string|number) — schema says so and Convex will accept
+  // either — so the boundary must coerce every incoming value into a number
+  // before it reaches `now - record.lastServiceDate` arithmetic downstream.
+  //
+  // Mobile terminal, 2026-08-31: silent NaN scoring is the specific hazard —
+  // a string date propagates NaN into the ratio and the item scores as
+  // "no anchor" (unknown) with no throw and no log. The previous coarse
+  // `typeof === "number"` guard silently dropped parseable date strings
+  // too, treating them as no-record. `toEpoch` promotes them properly.
   const recordInputs: MaintenanceRecordInput[] = records.map((rec) => ({
     type: rec.type,
-    lastServiceDate:
-      typeof rec.lastServiceDate === "number" ? rec.lastServiceDate : undefined,
+    lastServiceDate: toEpoch(rec.lastServiceDate ?? undefined),
     lastServiceMileage: rec.lastServiceMileage ?? undefined,
     customInputs: (rec.customInputs ?? undefined) as Record<string, unknown> | undefined,
     confirmedHealthyAt: rec.confirmedHealthyAt ?? undefined,
@@ -402,11 +506,24 @@ async function loadVehicleContextForUser(
     if (type === "battery") {
       const age = vehicleYear ? new Date().getFullYear() - vehicleYear : 0;
       if (age < 3) {
+        // W4.1b (2026-08-10): this branch used to read "— healthy", which is an
+        // affirmative health CLAIM derived from nothing but the model year. No
+        // battery was measured; no record exists. That is the same "absence
+        // re-interpreted as evidence" lie the F1 fix below was written to kill,
+        // and it survived here as an exception. It is also the most likely
+        // origin of the QA report's K5 line ("the hybrid battery is in good
+        // shape") — provenance is correctly `inferred` and toAiShape strips the
+        // enrichment fields, but `description` was never stripped, so the word
+        // "healthy" rode straight through the anti-fabrication pass.
+        //
+        // Now states the age and the absence of history, and nothing else.
+        // `status: "on_time"` is deliberately unchanged — it feeds the health
+        // score, and re-scoring young vehicles is a separate product decision.
         merged.push({
           id: `unknown-${type}`,
           serviceName: MAINTENANCE_LABELS[type] || type,
-          description: `Battery is ~${age || "<1"} year${age !== 1 ? "s" : ""} old — healthy`,
-          detail: "On time",
+          description: `Battery is ~${age || "<1"} year${age !== 1 ? "s" : ""} old — no service history on file`,
+          detail: "No record",
           status: "on_time",
         });
         continue;
@@ -462,6 +579,7 @@ async function loadVehicleContextForUser(
     records: records.map((r) => ({
       type: r.type,
       confirmedHealthyAt: r.confirmedHealthyAt ?? undefined,
+      customInputs: (r.customInputs ?? undefined) as Record<string, unknown> | undefined,
     })),
     knownIssues,
     vehicleYear,
@@ -477,7 +595,6 @@ async function loadVehicleContextForUser(
     odometerMiles,
     knownIssues,
     recPenalty,
-    hpBuffer,
     provenanceByType,
   };
 }
@@ -546,22 +663,28 @@ async function _getVehicleHealthCore(
     odometerMiles,
     knownIssues,
     recPenalty,
-    hpBuffer,
     provenanceByType,
   } = await loadVehicleContextForUser(ctx, userId, args.vehicle_id);
 
-  // Score from the ring-equivalent items + the same penalty/buffer so the number
+  // Score from the ring-equivalent items + the same penalty so the number
   // Oto states matches the Cars page. Items REPORTED to Oto stay the conservative
   // enrichedItems (unchanged).
-  const score = computeVehicleHealthScore({
-    maintenanceItems: scoringItems,
-    odometerMiles,
-    knownIssues,
-    recPenalty,
-    hpBuffer,
-  });
+  const score = computeVehicleHealthScore(
+    {
+      maintenanceItems: scoringItems,
+      odometerMiles,
+      knownIssues,
+      recPenalty,
+    },
+    await loadHealthScoreWeights(ctx),
+  );
 
+  // K5: scope declaration first, item list second. Static per response — it
+  // describes what this query is capable of knowing, not what this vehicle's
+  // data happens to say.
   return {
+    monitored_systems: MONITORED_SYSTEMS,
+    not_monitored: NOT_MONITORED_STATEMENT,
     score,
     score_is_estimated: owner.health_score_is_estimated ?? false,
     items: enrichedItems.map((item) => toAiShape(item, provenanceByType)),
@@ -601,21 +724,21 @@ async function _getProjectedHealthScoreCore(
   userId: Id<"users">,
   args: { vehicle_id: string; item_id: string },
 ): Promise<ProjectedHealthResponse> {
-  const { scoringItems, odometerMiles, knownIssues, recPenalty, hpBuffer } =
+  const { scoringItems, odometerMiles, knownIssues, recPenalty } =
     await loadVehicleContextForUser(ctx, userId, args.vehicle_id);
 
-  // Project from the SAME base as the quoted score (scoringItems + penalty/buffer)
+  // Project from the SAME base as the quoted score (scoringItems + penalty)
   // so the "fixing this adds N pts" delta reconciles with the number Oto states.
   const input = {
     maintenanceItems: scoringItems,
     odometerMiles,
     knownIssues,
     recPenalty,
-    hpBuffer,
   };
+  const weights = await loadHealthScoreWeights(ctx);
 
-  const current = computeVehicleHealthScore(input);
-  const projected = computeProjectedHealthScore(input, args.item_id);
+  const current = computeVehicleHealthScore(input, weights);
+  const projected = computeProjectedHealthScore(input, args.item_id, weights);
   const lift = Math.max(0, projected - current);
 
   return {

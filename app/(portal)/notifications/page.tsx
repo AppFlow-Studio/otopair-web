@@ -376,10 +376,17 @@ function HistoryView() {
     <div className="overflow-hidden rounded-xl border border-border bg-card">
       <ul className="divide-y divide-border">
         {history.map((row: any) => {
-          const open = row.status === "pending";
-          const descriptor = [row.customerName, row.vehicleLabel]
-            .filter(Boolean)
-            .join(" · ");
+          const open = row.resolved_at == null;
+          const isBlocker =
+            typeof row.category === "string" &&
+            row.category.startsWith("job_blocked_");
+          // Blocker rows state car · mechanic · reason (the note carries the
+          // "why"); everything else keeps the customer · vehicle descriptor.
+          const descriptor = isBlocker
+            ? [row.vehicleLabel, row.mechanicName, row.reasonLabel]
+                .filter(Boolean)
+                .join(" · ")
+            : [row.customerName, row.vehicleLabel].filter(Boolean).join(" · ");
           return (
             <li
               key={String(row._id)}
@@ -411,6 +418,11 @@ function HistoryView() {
                     ) : null}
                   </p>
                 )}
+                {isBlocker && row.reasonNote ? (
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground/80">
+                    “{row.reasonNote}”
+                  </p>
+                ) : null}
               </div>
               <span className="shrink-0 text-xs text-muted-foreground/70">
                 {relativeTime(row.created_at)}

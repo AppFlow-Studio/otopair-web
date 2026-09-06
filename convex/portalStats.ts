@@ -13,6 +13,10 @@
 // (dedupe_key `slo:<key>:<YYYY-MM-DD>`) for the Slack dispatcher.
 // =============================================================================
 import { v } from "convex/values";
+import {
+  likelyCanonicalClusters,
+  exposureFromClusters,
+} from "./directorCustomJobs";
 import { internalMutation, query } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -34,6 +38,17 @@ export const SLO_THRESHOLDS: Record<
   "slo.review_queue_depth": { target: 50, alert: 100, direction: "below" },
   "slo.spec_variance_rate_7d": { target: 0.05, alert: 0.1, direction: "below" },
   "slo.job_confirmation_rate_7d": { target: 0.9, alert: 0.8, direction: "above" },
+  // Off-Catalog Work spec, §8. NOT a queue depth — this counts vehicles
+  // currently carrying work that probably should have been a canonical service,
+  // i.e. drivers whose health score is decaying for a service they paid for.
+  // Queue length says how much work is waiting; this says how much harm is
+  // accruing, and only the second one deserves to wake anyone up.
+  //
+  // Target 0 because the band should normally be empty: a non-empty band is a
+  // bug report about the match gate, not a backlog. Start the alert threshold
+  // low and noisy while the gate is new, then relax it once the band reliably
+  // clears.
+  "slo.custom_job_exposure": { target: 0, alert: 3, direction: "below" },
 };
 
 async function upsertStat(
@@ -204,6 +219,30 @@ export const recomputeCheapStats = internalMutation({
       openIncidents.length + monitoringIncidents.length,
       { open: openIncidents.length, monitoring: monitoringIncidents.length },
     );
+
+    // ── Off-catalog exposure (Off-Catalog Work spec, §8) ─────────────────────
+    // Vehicles carrying work that probably should have been a canonical service.
+    // Each one is a driver losing maintenance credit right now, which is why the
+    // alert watches this rather than the review queue's length.
+    //
+    // Because the alias band is the ONLY feedback path into the match gate, and
+    // clearing it depends on a human opening a screen, this number is what makes
+    // that dependency visible instead of silent.
+    const exposedClusters = await likelyCanonicalClusters(ctx, now);
+    const exposedVehicles = exposureFromClusters(exposedClusters);
+    await upsertStat(ctx, "slo.custom_job_exposure", exposedVehicles, {
+      clusters: exposedClusters.length,
+      top: exposedClusters.slice(0, 5).map((c) => ({
+        name: c.name,
+        looks_like: c.service_name,
+        vehicles: c.distinct_vehicles,
+        shops: c.distinct_shops,
+      })),
+    });
+    // samples = 1 so evaluateSlo runs even when exposure is 0 (it bails on
+    // samples === 0, which would make a healthy zero indistinguishable from
+    // "never measured").
+    await evaluateSlo(ctx, "slo.custom_job_exposure", exposedVehicles, 1);
 
     return { ok: true };
   },

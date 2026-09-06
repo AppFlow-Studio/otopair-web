@@ -20,6 +20,7 @@ import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { isEvalTestMake } from "./evalTestFilter";
 import { resolveVehicleByIdOrVin } from "./resolveVehicle";
+import { resolveMileageForOwner } from "../lib/mileage";
 
 export interface VehicleFactsResponse {
   display: string;
@@ -177,13 +178,17 @@ async function _getVehicleFactsCore(
     const t = (transmission as any) ?? {};
     const ts = (trimSpec as any) ?? {};
 
+    // Current odometer resolved by recency across the two mileage stores, so the
+    // fact Oto quotes matches what the app card and shop surfaces show.
+    const resolvedMileage = (await resolveMileageForOwner(ctx, owner)).mileage;
+
     return {
       display,
       year: typeof year === "number" ? year : null,
       make: make ?? null,
       model: model ?? null,
       trim: trimName ?? null,
-      mileage: owner.mileage ?? null,
+      mileage: resolvedMileage ?? null,
       engine: {
         displacement_l: e.displacement_l ?? null,
         cylinders: e.cylinders ?? null,

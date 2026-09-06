@@ -20,6 +20,8 @@ import {
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
+import { customServiceNames } from "./lib/customServiceNames";
+import { axlePositionByServiceId } from "./lib/brakeScope";
 
 const PLATFORM_FEE_BPS = 700;
 const DEFAULT_LABOR_RATE = 120;
@@ -170,13 +172,21 @@ async function assembleInvoiceData(
       (s: any) => !s.superseded_by_id && !s.not_used,
     );
 
+    // Tire lines key on a `TIRE-{size}` sentinel oem_number so downstream
+    // consumers don't treat a size as an OEM part number. On a customer-facing
+    // receipt that sentinel must never show — surface the bare size instead.
+    const displayOem = (oem: string | null | undefined): string | null =>
+      typeof oem === "string" && oem.toUpperCase().startsWith("TIRE-")
+        ? oem.replace(/^TIRE-/i, "")
+        : (oem ?? null);
+
     let parts: AssembledInvoicePart[] = liveSnaps.map((s: any) => {
       const qty = Number(s.quantity ?? 0);
       const unit = Number(s.unit_cost ?? 0);
       const line = Number(s.total_cost ?? qty * unit);
       return {
         name: s.part_name,
-        oemNumber: s.oem_part_number ?? null,
+        oemNumber: displayOem(s.oem_part_number),
         brand: s.brand ?? null,
         qty,
         unitCents: Math.round(unit * 100),
@@ -194,7 +204,7 @@ async function assembleInvoiceData(
           const unit = Number(p.cost ?? 0);
           return {
             name: p.part_name,
-            oemNumber: p.oem_number ?? null,
+            oemNumber: displayOem(p.oem_number),
             brand: p.brand ?? null,
             qty,
             unitCents: Math.round(unit * 100),
@@ -280,6 +290,10 @@ async function assembleInvoiceData(
         vehicle_config_id: cfgForBand._id,
         service_ids: booking.service_ids,
         shop_id: booking.shop_id,
+        // Booked axle per service (brakes) so the band reflects per-axle labor.
+        service_positions: Object.fromEntries(
+          axlePositionByServiceId(booking as any),
+        ),
       });
       if (!series.quotes.some((q) => !q.ok)) {
         for (const q of series.quotes) {
@@ -383,9 +397,16 @@ async function assembleInvoiceData(
         logoUrl: shopLogoUrl,
       },
       mechanicName,
-      services: services
-        .map((s): string | null => (s ? (s as Doc<"services">).name : null))
-        .filter((x): x is string => Boolean(x)),
+      // Catalog services first, then the off-catalog lines. Without the second
+      // half a booking whose only work was custom produced a PDF and a
+      // /receipts/<id> page listing NOTHING against a real charge — the
+      // customer's own proof of what they paid for, blank.
+      services: [
+        ...services
+          .map((s): string | null => (s ? (s as Doc<"services">).name : null))
+          .filter((x): x is string => Boolean(x)),
+        ...customServiceNames((booking as any).custom_services),
+      ],
       parts,
 
       laborMinutes,

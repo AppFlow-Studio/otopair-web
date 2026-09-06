@@ -31,17 +31,31 @@ import {
 } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { postjobPartValidator } from "./lib/vehicle_passports";
+import {
+  laborAllocationValidator,
+  postjobPartValidator,
+} from "./lib/vehicle_passports";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
+import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
   buildCustomerInspectionSnapshot,
   type CustomerInspectionSnapshot,
 } from "../lib/inspection-measurements";
+import {
+  stampMidJobCustomJobs,
+  revertDeclinedMidJobWork,
+  confirmStagedCustomServices,
+} from "./customJobs";
 
 const SLA_MS = 24 * 60 * 60 * 1000;
-const MIN_MANUAL_JUSTIFICATION_LEN = 12;
+
+// Last-resort labor rate ($125/hr) when a submission arrives without one — the
+// same industry default the estimate dialog falls back to, so a fixed-price
+// added-scope price computed here matches what the mechanic saw. In practice
+// the client always sends the shop's rate.
+const DEFAULT_LABOR_RATE_CENTS = 12500;
 
 // ─────────────────────────────────────────────────────────────────────────
 // Auth helpers (local copies — mirror convex/bookings.ts pattern)
@@ -102,6 +116,10 @@ type SubmittedPart = {
   supplied_by?: string;
   part_tier?: string;
   service_id?: Id<"services">;
+  /** Off-catalog attribution: set on parts belonging to an ADDED service line
+   *  (which has no catalog `service_id`). Distinguishes added-scope parts from
+   *  the locked base on a fixed-price booking. */
+  custom_service_name?: string | null;
   source?: "catalog" | "manual";
   swap_from_oem_number?: string;
   not_used?: boolean;
@@ -119,25 +137,6 @@ function partsSubtotalCents(parts: SubmittedPart[]): number {
     total += Math.round((p.cost ?? 0) * qty * 100);
   }
   return total;
-}
-
-/** Validates parts gate: manual parts need a justification of ≥12 chars.
- *  UI is expected to enforce the catalog-median cap; this is a server-side
- *  defense (justification only — the median cap requires loading the part
- *  catalog and is the dialog's responsibility). */
-function validatePartsForApproval(parts: SubmittedPart[]): void {
-  for (const p of parts) {
-    if (p.not_used) continue;
-    if (p.supplied_by === "customer") continue;
-    if (p.source === "manual") {
-      const j = (p.justification_text ?? "").trim();
-      if (j.length < MIN_MANUAL_JUSTIFICATION_LEN) {
-        throw new Error(
-          `Manual part "${p.part_name}" requires a justification of at least ${MIN_MANUAL_JUSTIFICATION_LEN} characters.`,
-        );
-      }
-    }
-  }
 }
 
 type SetPriceComputed = {
@@ -205,6 +204,82 @@ async function computeMechanicSetPrice(
   };
 }
 
+/** Normalize a line name for matching a part's `custom_service_name` to a
+ *  `custom_jobs` row (both hold the same added-line name). */
+function normLineName(s: string | null | undefined): string {
+  return (s ?? "").trim().toLowerCase();
+}
+
+/** Read the booking's ACTIVE added lines that carry a shop FLAT price. Returns
+ *  the set of their (normalized) names — so their parts/labor can be excluded
+ *  from the parts+labor recompute — and the sum of their flat prices (cents),
+ *  which is billed as a pre-tax PARTS-basis component (mirrors booking-create's
+ *  computeDisclosedRange, where a shop_service_fixed_prices line lands in the
+ *  parts basis with tax + fee on top). Re-read server-side rather than trusting
+ *  a client sum, so the flat price can't be tampered with. */
+async function readFlatAddedLines(
+  ctx: any,
+  bookingId: Id<"bookings">,
+): Promise<{ flatNames: Set<string>; flatAddedCents: number }> {
+  const rows = await ctx.db
+    .query("custom_jobs")
+    .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
+    .collect();
+  const flatNames = new Set<string>();
+  let flatAddedCents = 0;
+  for (const r of rows) {
+    if (r.status === "cancelled" || r.status === "declined") continue;
+    const cents = r.quoted_price_cents;
+    if (typeof cents === "number" && cents > 0) {
+      flatNames.add(normLineName(r.name));
+      flatAddedCents += cents;
+    }
+  }
+  return { flatNames, flatAddedCents };
+}
+
+/** Price an all-in amount from raw component cents, treating a flat-price
+ *  service amount as a PARTS-basis pre-tax component (matches booking-create).
+ *  Tax + platform fee are server-authoritative. With flatCents == 0 this is
+ *  identical to computeMechanicSetPrice over the same parts + labor. */
+async function priceWithFlat(
+  ctx: any,
+  booking: any,
+  amounts: { partsCents: number; laborCents: number; flatCents: number },
+): Promise<SetPriceComputed> {
+  const { partsCents, laborCents, flatCents } = amounts;
+  const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+  const shopState =
+    (shop?.address_state as string | undefined) ??
+    (shop?.state as string | undefined) ??
+    null;
+  const shopZip =
+    (shop?.address_zip as string | undefined) ??
+    (shop?.zip as string | undefined) ??
+    null;
+  // A fixed-price service bundles parts + labor into one taxable line, so its
+  // flat amount joins the PARTS basis for tax.
+  const taxResult = computeBookingTax({
+    laborDollars: laborCents / 100,
+    partsDollars: (partsCents + flatCents) / 100,
+    state: shopState,
+    zip: shopZip,
+  });
+  const taxCents = Math.round((taxResult.taxDollars ?? 0) * 100);
+  const subtotalCents = partsCents + laborCents + flatCents;
+  const feeCents = Math.max(
+    0,
+    Math.round(computePlatformFeeDollars(subtotalCents / 100) * 100),
+  );
+  return {
+    parts_subtotal_cents: partsCents + flatCents,
+    labor_cents: laborCents,
+    tax_cents: taxCents,
+    service_fee_cents: feeCents,
+    total_cents: subtotalCents + taxCents + feeCents,
+  };
+}
+
 function ceilingForCycle(booking: any, cycle: string): number {
   if (cycle === "pre_job") {
     return booking.disclosed_range_high_cents ?? 0;
@@ -228,7 +303,22 @@ type SubmitArgs = {
   parts: SubmittedPart[];
   laborHours?: number;
   laborRateCents?: number;
+  /** Labor hours attributable to ADDED services only (custom-job lines),
+   *  excluding the locked base. Used exclusively by the fixed-price + added-
+   *  scope path to price the added labor; ignored otherwise. */
+  addedLaborHours?: number;
+  /** Per-line breakdown behind `laborHours` (the scalar total). Keyed "base" +
+   *  custom-job ids. Persisted so the post-job Labor step can seed the base
+   *  line with base-only labor instead of the whole-approval total. */
+  laborAllocations?: Array<{
+    line_key: string;
+    label?: string | null;
+    hours: number;
+  }>;
   notes?: string;
+  /** Optional evidence photos justifying the change, shown to the customer on
+   *  the approval screen alongside `notes`. */
+  scopePhotoIds?: Id<"_storage">[];
   submittedByUserId?: Id<"users">;
 };
 
@@ -259,43 +349,99 @@ async function performSubmission(
   const booking: any = await ctx.db.get(args.bookingId);
   if (!booking) throw new Error("Booking not found.");
 
-  validatePartsForApproval(args.parts);
-
-  const priced = await computeMechanicSetPrice(ctx, {
-    booking,
-    parts: args.parts,
-    laborHours: args.laborHours,
-    laborRateCents: args.laborRateCents,
+  // ADDED lines the shop flat-prices (a catalog service with a
+  // shop_service_fixed_prices row at the vehicle's tier) are billed at their
+  // frozen flat price, NOT parts+labor — the same rule a booked fixed-price
+  // service follows. Exclude their parts/labor from the recompute and add the
+  // flat sum as a pre-tax parts-basis component. For a booking with no such
+  // lines, flatNames is empty and this is identical to the old computeMechanic-
+  // SetPrice call. (The client sends laborHours/addedLaborHours already
+  // excluding flat lines' hours, so their labor is never double-counted.)
+  const { flatNames, flatAddedCents } = await readFlatAddedLines(
+    ctx,
+    args.bookingId,
+  );
+  const baseLaborCents =
+    args.laborHours != null && args.laborRateCents != null
+      ? Math.round(args.laborHours * args.laborRateCents)
+      : Math.round((booking.labor_cost ?? 0) * 100);
+  let priced = await priceWithFlat(ctx, booking, {
+    partsCents: partsSubtotalCents(
+      args.parts.filter((p) => !flatNames.has(normLineName(p.custom_service_name))),
+    ),
+    laborCents: baseLaborCents,
+    flatCents: flatAddedCents,
   });
   const inspectionSnapshot = await getInspectionSnapshotForBooking(
     ctx,
     args.bookingId,
   );
 
-  // Fixed-price bookings: parts/labor updates are audit-only. Customer
-  // agreed to a flat price (shop_service_fixed_prices); mechanic edits get
-  // logged on booking_approvals but never alter the booking total, never
-  // trip a Stripe authorization adjust, and never push the customer an
-  // approval prompt. Path returns early after the audit insert.
   const isFixedPrice = booking.is_fixed_price === true;
+  // Fixed-price bookings run the SAME confirm-hold-and-continue flow as any
+  // estimate — the base price just can't be EDITED. The customer authorized a
+  // deposit at booking; the pre-job submit is what raises the hold to the real
+  // amount (silently when it's within the disclosed contract, or via an explicit
+  // customer confirmation when added scope pushes it over). So we do NOT skip
+  // the approval machinery — we only PIN the base:
+  //   - base = the contracted flat price (a fixed booking discloses low==high),
+  //     NOT the parts+labor recompute (which can diverge from what the customer
+  //     agreed to). Frozen in `fixed_contract_base_cents` once added scope grows
+  //     the running total so a resubmit never reads the grown total as the base.
+  //   - added services (parts tagged `custom_service_name` + their labor) are
+  //     priced on top. Editing the BASE service's own parts/labor never moves
+  //     the price — it stays the flat contract.
+  let fixedBaseCents: number | null = null;
   if (isFixedPrice) {
-    return performFixedPriceInformationalSubmission(ctx, {
-      bookingId: args.bookingId,
-      cycle: args.cycle,
-      parts: args.parts,
-      laborHours: args.laborHours,
-      laborRateCents: args.laborRateCents,
-      notes: args.notes,
-      submittedByUserId: args.submittedByUserId,
-      priced,
-      inspectionSnapshot,
+    fixedBaseCents =
+      (booking.fixed_contract_base_cents as number | undefined) ??
+      (booking.disclosed_range_high_cents as number | undefined) ??
+      Math.round((booking.total_cost ?? 0) * 100);
+    // Added PARTS+LABOR lines (tagged custom_service_name), EXCLUDING any the
+    // shop flat-prices — those are billed at their frozen flat price via the
+    // flatAddedCents component below, not parts+labor.
+    const addedParts = args.parts.filter(
+      (p) =>
+        (p.custom_service_name ?? "").trim() !== "" &&
+        !flatNames.has(normLineName(p.custom_service_name)),
+    );
+    const addedRateCents =
+      typeof args.laborRateCents === "number" && args.laborRateCents > 0
+        ? args.laborRateCents
+        : DEFAULT_LABOR_RATE_CENTS;
+    // Added-service labor only (base labor is locked, never re-billed). The
+    // client sends this per-line split — already excluding flat-priced lines'
+    // hours; absent → 0, NEVER the base fallback.
+    const addedLaborCents = Math.round(
+      (args.addedLaborHours ?? 0) * addedRateCents,
+    );
+    const addedPriced = await priceWithFlat(ctx, booking, {
+      partsCents: partsSubtotalCents(addedParts),
+      laborCents: addedLaborCents,
+      flatCents: flatAddedCents,
     });
+    priced = {
+      parts_subtotal_cents: addedPriced.parts_subtotal_cents,
+      labor_cents: addedPriced.labor_cents,
+      tax_cents: addedPriced.tax_cents,
+      service_fee_cents: addedPriced.service_fee_cents,
+      total_cents: fixedBaseCents + addedPriced.total_cents,
+    };
   }
 
-  const ceiling = ceilingForCycle(booking, args.cycle);
+  // Gate against the disclosed/approved ceiling, exactly as a normal estimate:
+  // a plain fixed price lands in-range (raise the hold, continue), while added
+  // scope pushes it over and asks the customer. `max(base, …)` also keeps the
+  // pre_job ceiling positive for a fixed booking so it never hits the guard.
+  const ceiling =
+    fixedBaseCents != null
+      ? Math.max(fixedBaseCents, ceilingForCycle(booking, args.cycle))
+      : ceilingForCycle(booking, args.cycle);
   // Pre-feature bookings (no disclosed range): there's no approval contract
   // — fall back to legacy behavior at capture time. Reject submission here.
-  if (args.cycle === "pre_job" && ceiling <= 0) {
+  // (Fixed-price bookings always have a positive base ceiling, so they skip
+  // this — a fixed-price job predates nothing.)
+  if (!isFixedPrice && args.cycle === "pre_job" && ceiling <= 0) {
     throw new Error(
       "This booking pre-dates the pre-job approval flow and cannot be re-estimated.",
     );
@@ -325,6 +471,36 @@ async function performSubmission(
     }
   }
 
+  // One pending ask at a time. `post_job` has its own idempotent reuse above;
+  // `pre_job` and `mid_job` had no duplicate protection at all, and the "you
+  // can't act while an approval is pending" rule was enforced only in the UI
+  // (the detail panel greys its buttons out). Anything reaching the mutation
+  // without that UI — the overlay's own scope dialog, a stale tab, a retry —
+  // inserted a SECOND open row, overwrote payment_approval_state, and left two
+  // live SLA timers. The expiry sweeper then reverts a ceiling per row, so the
+  // first could roll back a ceiling the customer had already approved past on
+  // the second.
+  //
+  // Withdraw is the way out and already ships: withdrawPendingApproval closes
+  // the open row and reverts state so the booking "can accept a fresh
+  // submission". Withdraw-then-resubmit was always the intended protocol; it
+  // just wasn't enforced.
+  if (args.cycle === "pre_job" || args.cycle === "mid_job") {
+    const openRow = (
+      await ctx.db
+        .query("booking_approvals")
+        .withIndex("by_booking_and_cycle", (q: any) =>
+          q.eq("booking_id", args.bookingId),
+        )
+        .collect()
+    ).find((r: any) => r.decision == null);
+    if (openRow) {
+      throw new Error(
+        "There's already a change waiting on the customer. Withdraw it first, then send the updated one.",
+      );
+    }
+  }
+
   const inRange = priced.total_cents <= ceiling;
   const now = Date.now();
 
@@ -345,8 +521,16 @@ async function performSubmission(
     service_fee_cents: priced.service_fee_cents,
     parts_snapshot: args.parts as any,
     labor_hours: args.laborHours,
+    labor_allocations:
+      args.laborAllocations && args.laborAllocations.length > 0
+        ? args.laborAllocations
+        : undefined,
     labor_rate_cents: args.laborRateCents,
     notes: args.notes,
+    scope_photo_ids:
+      args.scopePhotoIds && args.scopePhotoIds.length > 0
+        ? args.scopePhotoIds
+        : undefined,
     inspection_snapshot: inspectionSnapshot ?? undefined,
     prior_ceiling_cents: ceiling,
     ceiling_after_decision_cents: inRange ? priced.total_cents : undefined,
@@ -359,6 +543,17 @@ async function performSubmission(
     stripe_payment_intent_id: piId,
     stripe_action: inRange ? "auto_approved_within_range" : undefined,
   });
+
+  // Bind the off-catalog lines this mid-job cycle introduced to this approval
+  // row, so a later decline/expiry reverts exactly these and nothing from a
+  // prior approved cycle. No-op for pre/post-job cycles.
+  if (args.cycle === "mid_job") {
+    await stampMidJobCustomJobs(ctx, {
+      bookingId: args.bookingId,
+      approvalId,
+      now,
+    });
+  }
 
   const newState = inRange
     ? "in_range"
@@ -373,10 +568,30 @@ async function performSubmission(
     mechanic_set_price_cents: priced.total_cents,
     updated_at: now,
   };
+  // Freeze the fixed contract base the first time added scope is billed, so
+  // every later added-scope estimate keeps pricing off the original flat price
+  // rather than the running total it just grew.
+  if (fixedBaseCents != null && booking.fixed_contract_base_cents == null) {
+    bookingPatch.fixed_contract_base_cents = fixedBaseCents;
+  }
   if (inRange) {
     bookingPatch.running_approved_ceiling_cents = priced.total_cents;
     bookingPatch.estimate_approved_at_ms = now;
     bookingPatch.sla_expires_at_ms = undefined;
+    // Auto-approved within range → the re-quote is agreed. Sync the booking's
+    // stored totals so every surface (lists, detail panel, invoices) shows the
+    // agreed amount instead of the original estimate. (Out-of-range stays
+    // pending; totals are synced on customer approval in applyApprovalDecision.)
+    bookingPatch.total_cost = priced.total_cents / 100;
+    if (fixedBaseCents == null) {
+      // Non-fixed: sync the full breakdown. For fixed+added, `priced` holds the
+      // ADDED delta only (parts/labor), while the base parts/labor stay locked
+      // on the booking — the added breakdown lives on custom_services/custom_
+      // jobs and the receipt attributes it there. Overwriting with the delta
+      // would erase the base line, so move only the all-in total above.
+      bookingPatch.parts_cost = priced.parts_subtotal_cents / 100;
+      bookingPatch.labor_cost = priced.labor_cents / 100;
+    }
   } else {
     bookingPatch.sla_expires_at_ms = now + SLA_MS;
   }
@@ -428,66 +643,6 @@ async function performSubmission(
   };
 }
 
-/** Fixed-price submission path — log the mechanic's edited parts/labor on
- *  booking_approvals for audit, but do NOT touch the booking total,
- *  payment_approval_state, Stripe authorization, or the customer. The
- *  customer's contracted price came from shop_service_fixed_prices and
- *  stays locked. */
-async function performFixedPriceInformationalSubmission(
-  ctx: any,
-  args: {
-    bookingId: Id<"bookings">;
-    cycle: "pre_job" | "mid_job" | "post_job";
-    parts: SubmittedPart[];
-    laborHours: number | undefined;
-    laborRateCents: number | undefined;
-    notes: string | undefined;
-    submittedByUserId: Id<"users"> | undefined;
-    priced: SetPriceComputed;
-    inspectionSnapshot: CustomerInspectionSnapshot | null;
-  },
-): Promise<{
-  approvalId: Id<"booking_approvals">;
-  state: string;
-  totalCents: number;
-  ceilingCents: number;
-}> {
-  const now = Date.now();
-  // Snapshot the customer-locked price as the "ceiling" on the audit row so
-  // the activity log can compare mechanic-computed vs locked side-by-side.
-  const bookingRow: any = await ctx.db.get(args.bookingId);
-  const lockedCents =
-    bookingRow?.mechanic_set_price_cents ??
-    Math.round((bookingRow?.total_cost ?? 0) * 100);
-  const approvalId = await ctx.db.insert("booking_approvals", {
-    booking_id: args.bookingId,
-    cycle: args.cycle,
-    mechanic_set_price_cents: args.priced.total_cents,
-    parts_subtotal_cents: args.priced.parts_subtotal_cents,
-    labor_cents: args.priced.labor_cents,
-    tax_cents: args.priced.tax_cents,
-    service_fee_cents: args.priced.service_fee_cents,
-    parts_snapshot: args.parts as any,
-    labor_hours: args.laborHours,
-    labor_rate_cents: args.laborRateCents,
-    notes: args.notes,
-    inspection_snapshot: args.inspectionSnapshot ?? undefined,
-    prior_ceiling_cents: lockedCents,
-    ceiling_after_decision_cents: lockedCents,
-    submitted_at_ms: now,
-    submitted_by_user_id: args.submittedByUserId,
-    decision: "fixed_price_informational",
-    decided_at_ms: now,
-    decision_actor: "system",
-  });
-  return {
-    approvalId,
-    state: "fixed_price_locked",
-    totalCents: lockedCents,
-    ceilingCents: lockedCents,
-  };
-}
-
 async function enqueueCustomerApprovalPush(
   ctx: any,
   args: {
@@ -521,6 +676,47 @@ async function enqueueCustomerApprovalPush(
   });
 }
 
+/** Notify the shop's own in-app feed that the customer answered a mid-job
+ *  extra-work request. Mirrors the owner-facing blocker notifications: an
+ *  `in_app` row keyed by shop_id that `getShopStaffNotifications` reads
+ *  directly — no dispatcher drains it. Category must be a STAFF_CATEGORY. */
+async function enqueueShopDecisionNotice(
+  ctx: any,
+  args: {
+    booking: any;
+    bookingId: Id<"bookings">;
+    category: string;
+    title: string;
+    body: string;
+    dedupeSuffix: string;
+  },
+) {
+  const shopId = args.booking?.shop_id;
+  if (!shopId) return;
+  const dedupeKey = `${args.category}:${String(args.bookingId)}:${args.dedupeSuffix}`;
+  const dup = await ctx.db
+    .query("notification_outbox")
+    .withIndex("by_dedupe_key", (q: any) => q.eq("dedupe_key", dedupeKey))
+    .first();
+  if (dup) return;
+  const now = Date.now();
+  await ctx.db.insert("notification_outbox", {
+    shop_id: shopId,
+    booking_id: args.bookingId,
+    channel: "in_app",
+    category: args.category,
+    status: "pending",
+    dedupe_key: dedupeKey,
+    payload: {
+      title: args.title,
+      body: args.body,
+      data: { bookingId: String(args.bookingId) },
+    },
+    created_at: now,
+    updated_at: now,
+  });
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // Public mutations
 // ─────────────────────────────────────────────────────────────────────────
@@ -531,7 +727,10 @@ export const submitPreJobEstimate = mutation({
     parts: v.array(postjobPartValidator),
     laborHours: v.optional(v.number()),
     laborRateCents: v.optional(v.number()),
+    addedLaborHours: v.optional(v.number()),
+    laborAllocations: v.optional(v.array(laborAllocationValidator)),
     notes: v.optional(v.string()),
+    scopePhotoIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
     const { user } = await requireShopStaffForBooking(ctx, args.bookingId);
@@ -541,7 +740,10 @@ export const submitPreJobEstimate = mutation({
       parts: args.parts as SubmittedPart[],
       laborHours: args.laborHours,
       laborRateCents: args.laborRateCents,
+      addedLaborHours: args.addedLaborHours,
+      laborAllocations: args.laborAllocations,
       notes: args.notes,
+      scopePhotoIds: args.scopePhotoIds,
       submittedByUserId: user._id,
     });
   },
@@ -553,7 +755,10 @@ export const submitMidJobChange = mutation({
     parts: v.array(postjobPartValidator),
     laborHours: v.optional(v.number()),
     laborRateCents: v.optional(v.number()),
+    addedLaborHours: v.optional(v.number()),
+    laborAllocations: v.optional(v.array(laborAllocationValidator)),
     notes: v.optional(v.string()),
+    scopePhotoIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
     const { user, booking } = await requireShopStaffForBooking(
@@ -571,7 +776,10 @@ export const submitMidJobChange = mutation({
       parts: args.parts as SubmittedPart[],
       laborHours: args.laborHours,
       laborRateCents: args.laborRateCents,
+      addedLaborHours: args.addedLaborHours,
+      laborAllocations: args.laborAllocations,
       notes: args.notes,
+      scopePhotoIds: args.scopePhotoIds,
       submittedByUserId: user._id,
     });
   },
@@ -645,7 +853,7 @@ export const applyApprovalDecision = mutation({
         decided_by_user_id: user._id,
         ceiling_after_decision_cents: newCeiling,
       });
-      await ctx.db.patch(args.bookingId, {
+      const approvedPatch: any = {
         payment_approval_state:
           cycle === "pre_job"
             ? "pre_job_approved"
@@ -656,8 +864,32 @@ export const applyApprovalDecision = mutation({
         estimate_approved_at_ms: now,
         estimate_decided_by_user_id: user._id,
         sla_expires_at_ms: undefined,
+        // Customer approved the re-quote → it's the agreed price. Sync the
+        // booking's stored totals from the approved breakdown so every surface
+        // shows the agreed amount, not the original estimate.
+        total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
         updated_at: now,
-      });
+      };
+      // For fixed-price bookings the approval row's parts/labor are the ADDED
+      // delta only (the base stays locked), so syncing them onto the booking
+      // would erase the base line. Move only the all-in total; the added
+      // breakdown lives on custom_services/custom_jobs for the receipt.
+      if (booking.is_fixed_price !== true) {
+        approvedPatch.parts_cost = (open.parts_subtotal_cents ?? 0) / 100;
+        approvedPatch.labor_cost = (open.labor_cents ?? 0) / 100;
+      }
+      await ctx.db.patch(args.bookingId, approvedPatch);
+      // The customer just said yes to the (pre/mid-job) estimate → surface any
+      // off-catalog lines it carried on their booking card. They were staged
+      // `pending_confirmation` at add-time so an unapproved line never showed on
+      // the driver's card until this approval. (Declines strip the line instead,
+      // via revertDeclinedMidJobWork.)
+      if (cycle === "pre_job" || cycle === "mid_job") {
+        await confirmStagedCustomServices(ctx, {
+          bookingId: args.bookingId,
+          now,
+        });
+      }
       if (ctx.scheduler?.runAfter) {
         await ctx.scheduler.runAfter(
           0,
@@ -674,6 +906,26 @@ export const applyApprovalDecision = mutation({
           );
         }
       }
+      // Let the shop's in-app feed know the customer confirmed the added work —
+      // otherwise the only signal is the booking total quietly changing.
+      if (cycle === "mid_job") {
+        await enqueueShopDecisionNotice(ctx, {
+          booking,
+          bookingId: args.bookingId,
+          category: "booking_mid_job_accepted",
+          title: "Extra work approved",
+          body: `The customer approved the added work at $${(newCeiling / 100).toFixed(2)}.`,
+          dedupeSuffix: `accepted:${open._id}`,
+        });
+      }
+      // Message Shop: mark any open "request_approval" ticket action accepted
+      // and resolve the ticket.
+      await syncTicketActionStatus(ctx, {
+        bookingId: args.bookingId,
+        kind: "request_approval",
+        status: "accepted",
+        autoResolve: true,
+      });
       return { ok: true, state: "approved", ceilingCents: newCeiling };
     }
 
@@ -710,7 +962,101 @@ export const applyApprovalDecision = mutation({
         { bookingId: args.bookingId, forceCaptureAtCeiling: true },
       );
     }
+
+    // Mid-job decline: the added scope was never agreed. Revert the lines this
+    // cycle introduced — kept as `declined` custom_jobs for audit (with their
+    // denied parts) but stripped from the booking so they never reach the
+    // completed job, the receipt, or the price. Then tell the shop.
+    if (cycle === "mid_job") {
+      await revertDeclinedMidJobWork(ctx, {
+        bookingId: args.bookingId,
+        approvalId: open._id,
+        now,
+      });
+      await enqueueShopDecisionNotice(ctx, {
+        booking,
+        bookingId: args.bookingId,
+        category: "booking_mid_job_declined",
+        title: "Extra work declined",
+        body: "The customer declined the added work. It won't be charged.",
+        dedupeSuffix: `declined:${open._id}`,
+      });
+    }
+    // Message Shop: mark any open "request_approval" ticket action declined.
+    await syncTicketActionStatus(ctx, {
+      bookingId: args.bookingId,
+      kind: "request_approval",
+      status: "declined",
+    });
     return { ok: true, state: declinedState };
+  },
+});
+
+/**
+ * Records an approved pre/mid-job over-range estimate and parks the booking in
+ * `reauth_required` so the customer confirms the new hold on their CHOSEN
+ * payment method next. Unlike `applyApprovalDecision`, it does NOT schedule the
+ * silent `adjustAuthorization` — the caller (`approveAndAuthorizeHold`) places
+ * the hold on-session with the picked method, so that choice is always
+ * authoritative (an async increment could otherwise land on the original card
+ * first). Internal: the action authenticates and passes the resolved user id.
+ * Post-job is a final capture, not a hold, so it stays on `applyApprovalDecision`.
+ */
+export const _recordApprovalApproved = internalMutation({
+  args: { bookingId: v.id("bookings"), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const booking: any = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("Booking not found.");
+    if (String(booking.user_id) !== String(args.userId)) {
+      throw new Error("Not your booking.");
+    }
+
+    const candidates = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_booking_and_cycle", (q: any) =>
+        q.eq("booking_id", args.bookingId),
+      )
+      .order("desc")
+      .collect();
+    const open = candidates.find((r: any) => r.decision == null);
+    if (!open) throw new Error("No estimate is waiting for your decision.");
+
+    const cycle = open.cycle as "pre_job" | "mid_job" | "post_job";
+    if (cycle !== "pre_job" && cycle !== "mid_job") {
+      throw new Error("This estimate can't be authorized as a hold.");
+    }
+
+    const now = Date.now();
+    const newCeiling = open.mechanic_set_price_cents;
+    await ctx.db.patch(open._id, {
+      decision: "approved",
+      decided_at_ms: now,
+      decided_by_user_id: args.userId,
+      ceiling_after_decision_cents: newCeiling,
+    });
+    const reauthPatch: any = {
+      // Customer confirms the new hold on their chosen method next (the caller
+      // drives an on-session PI), so we skip the silent auto-adjust.
+      payment_approval_state: "reauth_required",
+      running_approved_ceiling_cents: newCeiling,
+      estimate_approved_at_ms: now,
+      estimate_decided_by_user_id: args.userId,
+      sla_expires_at_ms: undefined,
+      total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
+      updated_at: now,
+    };
+    // Fixed-price: the approval row's parts/labor are the added delta only —
+    // don't erase the locked base breakdown. (Mirrors applyApprovalDecision.)
+    if (booking.is_fixed_price !== true) {
+      reauthPatch.parts_cost = (open.parts_subtotal_cents ?? 0) / 100;
+      reauthPatch.labor_cost = (open.labor_cents ?? 0) / 100;
+    }
+    await ctx.db.patch(args.bookingId, reauthPatch);
+    // Customer approved the estimate (the payment re-auth hold is a separate,
+    // following step) → clear the staged flag so the confirmed off-catalog lines
+    // show on their card. `cycle` is already asserted pre_job/mid_job above.
+    await confirmStagedCustomServices(ctx, { bookingId: args.bookingId, now });
+    return { ceilingCents: newCeiling, cycle };
   },
 });
 
@@ -737,6 +1083,19 @@ export const getOpenApprovalForBooking = query({
     const open = candidates.find((r: any) => r.decision == null);
     if (!open) return null;
 
+    // Resolve any scope-justification photos to signed URLs so the approval
+    // screen can render them inline. Dropped silently if a storage id no longer
+    // resolves. Empty array when the mechanic attached none.
+    const scopePhotoIds: Id<"_storage">[] = (open as any).scope_photo_ids ?? [];
+    const scope_photos = (
+      await Promise.all(
+        scopePhotoIds.map(async (storage_id) => {
+          const url = await ctx.storage.getUrl(storage_id);
+          return url ? { storage_id, url } : null;
+        }),
+      )
+    ).filter((p): p is { storage_id: Id<"_storage">; url: string } => p !== null);
+
     return {
       _id: open._id,
       cycle: open.cycle,
@@ -746,6 +1105,7 @@ export const getOpenApprovalForBooking = query({
       labor_hours: open.labor_hours,
       labor_rate_cents: open.labor_rate_cents,
       notes: open.notes,
+      scope_photos,
       inspection_snapshot: open.inspection_snapshot,
       submitted_at_ms: open.submitted_at_ms,
       sla_expires_at_ms: open.sla_expires_at_ms,
@@ -763,6 +1123,35 @@ export const getOpenApprovalForBooking = query({
  * the numbers reconcile. Returns null when no adjustment was approved (the
  * caller then falls back to the booking's original quote).
  */
+/**
+ * Approval rows, genuinely newest-first.
+ *
+ * ─── WHY THIS EXISTS ────────────────────────────────────────────────────────
+ * `.order("desc")` on `by_booking_and_cycle` does NOT give you this. That index
+ * is ["booking_id", "cycle"], so descending sorts by the CYCLE STRING:
+ *
+ *     "pre_job"  >  "post_job"  >  "mid_job"
+ *
+ * So "the first row" was always the pre-job one, whatever had happened since.
+ * Three separate reads took that first row as "latest" — including the
+ * customer-facing receipt — which meant a mid-job change the customer had
+ * approved and paid for was invisible downstream: the post-job confirmation
+ * showed the original parts list and the original total, short by exactly the
+ * work that had just been added.
+ *
+ * Sort by when the customer actually answered. `_creationTime` covers rows
+ * written before `decided_at_ms` existed.
+ */
+function approvalsNewestFirst<T extends { decided_at_ms?: number; _creationTime?: number }>(
+  rows: T[],
+): T[] {
+  return [...rows].sort(
+    (a, b) =>
+      (b.decided_at_ms ?? b._creationTime ?? 0) -
+      (a.decided_at_ms ?? a._creationTime ?? 0),
+  );
+}
+
 export const getEffectiveQuoteForBooking = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -770,14 +1159,26 @@ export const getEffectiveQuoteForBooking = query({
     if (!user) return null;
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) return null;
-    // Soft shop-staff check — mirror getActiveJobConflict's read-only style.
+    // Soft shop-staff check. Must authorize the same viewers as requireShopStaff
+    // (which gates the panel): shop_users members AND the shop OWNER. The owner
+    // often has no shop_users row, so a shop_users-only check would return null
+    // for them and the read-only post-job dialog would silently fall back to the
+    // pre-approval snapshot (stale $0 parts) instead of the agreed quote.
+    // (The assigned mechanic is covered by the shop_users branch: their
+    // membership row is what links user → mechanics roster in the first place.)
     const membership = await ctx.db
       .query("shop_users")
       .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
       .collect();
-    const inShop = membership.some(
+    let inShop = membership.some(
       (m: any) => String(m.shop_id) === String((booking as any).shop_id),
     );
+    if (!inShop) {
+      const shop = await ctx.db.get((booking as any).shop_id);
+      if (shop && String((shop as any).owner_user_id) === String(user._id)) {
+        inShop = true;
+      }
+    }
     if (!inShop) return null;
 
     const rows = await ctx.db
@@ -792,8 +1193,20 @@ export const getEffectiveQuoteForBooking = query({
       "approved",
       "auto_approved_within_range",
     ]);
-    // Latest approved row wins (rows are newest-first).
-    const eff = rows.find(
+    // ─── ORDER BY TIME, NOT BY INDEX ──────────────────────────────────────
+    // `by_booking_and_cycle` is ["booking_id", "cycle"], so `.order("desc")`
+    // sorts by the CYCLE STRING — not by recency, whatever the previous
+    // comment here claimed. Descending that reads
+    // "pre_job" > "post_job" > "mid_job", so the first approved row found was
+    // always the PRE-JOB one.
+    //
+    // The effect: every mid-job change the customer approved was invisible to
+    // the post-job confirmation. The mechanic confirmed against the original
+    // quote — the extra work missing from the parts list and the total short
+    // by whatever had been added — while the booking itself carried the
+    // correct, higher figure. Two numbers for one job, and the wrong one in
+    // front of the person signing it off.
+    const eff = approvalsNewestFirst(rows as any[]).find(
       (r: any) =>
         APPROVED.has(r.decision ?? "") &&
         r.parts_subtotal_cents != null &&
@@ -876,7 +1289,10 @@ export const getReauthBreakdownForBooking = query({
       .order("desc")
       .collect();
     const APPROVED = new Set(["approved", "auto_approved_within_range"]);
-    const eff = rows.find(
+    // Newest by decision time — see approvalsNewestFirst. This one is the
+    // customer's own view, so picking the pre-job row showed them a receipt
+    // for work they'd already agreed to change.
+    const eff = approvalsNewestFirst(rows as any[]).find(
       (r: any) =>
         APPROVED.has(r.decision ?? "") &&
         r.parts_subtotal_cents != null &&
@@ -975,6 +1391,7 @@ export const _listExpiredOpenApprovals = internalQuery({
       .map((r: any) => ({
         bookingId: r.booking_id as Id<"bookings">,
         cycle: r.cycle as string,
+        approvalId: r._id as Id<"booking_approvals">,
       }));
   },
 });
@@ -983,11 +1400,14 @@ export const expireApprovals = internalAction({
   args: {},
   handler: async (ctx): Promise<{ processed: number }> => {
     const now = Date.now();
-    const expired: Array<{ bookingId: Id<"bookings">; cycle: string }> =
-      await ctx.runQuery(
-        internal.booking_approvals._listExpiredOpenApprovals,
-        { nowMs: now },
-      );
+    const expired: Array<{
+      bookingId: Id<"bookings">;
+      cycle: string;
+      approvalId: Id<"booking_approvals">;
+    }> = await ctx.runQuery(
+      internal.booking_approvals._listExpiredOpenApprovals,
+      { nowMs: now },
+    );
     let processed = 0;
     for (const row of expired) {
       await ctx.runMutation(internal.booking_approvals._markApprovalExpired, {
@@ -1006,10 +1426,12 @@ export const expireApprovals = internalAction({
         // A mid-job scope increase the customer let lapse. performSubmission
         // optimistically bumped mechanic_set_price_cents at request time, so
         // roll it back to the last approved ceiling — otherwise completion
-        // would capture an increase the customer never approved.
+        // would capture an increase the customer never approved. Passing the
+        // expired approval id also reverts the added lines (treated exactly
+        // like an explicit decline: kept for audit, off the price).
         await ctx.runMutation(
           internal.booking_approvals._revertToPriorCeilingAfterExpiry,
-          { bookingId: row.bookingId },
+          { bookingId: row.bookingId, approvalId: row.approvalId },
         );
       } else if (row.cycle === "post_job") {
         // Legacy rows only — Wave 4 stopped creating post_job cycles. The
@@ -1044,12 +1466,16 @@ export const _reconcileAmountCapturableUpdated = internalMutation({
   handler: async (ctx, args) => {
     // Find the most recent approval row tied to this PI. Both the original
     // PI (from booking confirm) and a reauth-replacement PI should match.
-    const rows = await ctx.db.query("booking_approvals").collect();
-    const candidate = rows
-      .filter(
-        (r: any) => r.stripe_payment_intent_id === args.stripePaymentIntentId,
+    // Index-scoped (not a full-table `.collect()`): the second index field is
+    // submitted_at_ms, so `.order("desc").first()` returns the newest cycle for
+    // this PI directly.
+    const candidate = await ctx.db
+      .query("booking_approvals")
+      .withIndex("by_stripe_payment_intent_id", (q: any) =>
+        q.eq("stripe_payment_intent_id", args.stripePaymentIntentId),
       )
-      .sort((a: any, b: any) => b.submitted_at_ms - a.submitted_at_ms)[0];
+      .order("desc")
+      .first();
 
     // Drift reconciliation: patch the payment row to match Stripe's view.
     if (args.amountCapturable != null) {
@@ -1122,8 +1548,9 @@ export const getBookingApprovalState = query({
       )
       .order("desc")
       .collect();
-    const latest = rows[0] ?? null;
-    const open = rows.find((r: any) => r.decision == null) ?? null;
+    const byTime = approvalsNewestFirst(rows as any[]);
+    const latest = byTime[0] ?? null;
+    const open = byTime.find((r: any) => r.decision == null) ?? null;
 
     return {
       booking_status: (booking as any).status as string,
@@ -1140,6 +1567,205 @@ export const getBookingApprovalState = query({
       submitted_at_ms: (latest?.submitted_at_ms as number | undefined) ?? null,
       has_open_approval: !!open,
     };
+  },
+});
+
+/**
+ * Per-cycle history of mid-job extra-work requests, so the active-job overlay
+ * and the booking drawer can show the shop what state each added-scope request
+ * is in — waiting on the customer, accepted, auto-confirmed (in-range), or
+ * declined — instead of the total silently moving. Staff-gated (soft check,
+ * same as getBookingApprovalState). Newest first.
+ *
+ * `addedServiceNames`/`deniedParts` join through custom_jobs on
+ * `introduced_by_approval_id`, so they survive a rename and are exactly the
+ * lines a decline reverted. `withdrawn` rows (mechanic pulled the request back
+ * before the customer answered) are omitted — they aren't a customer decision.
+ */
+export const getMidJobScopeChanges = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return [];
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking || !(booking as any).shop_id) return [];
+
+    const membership = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .filter((q: any) => q.eq(q.field("is_active"), true))
+      .first();
+    const ownedShop = await ctx.db
+      .query("shops")
+      .withIndex("by_owner_user_id", (q: any) =>
+        q.eq("owner_user_id", user._id),
+      )
+      .first();
+    const isStaff =
+      (membership &&
+        String(membership.shop_id) === String((booking as any).shop_id)) ||
+      (ownedShop && String(ownedShop._id) === String((booking as any).shop_id));
+    if (!isStaff) return [];
+
+    // Both pre-job and mid-job adjustments carry a "Why this adjustment?"
+    // reason and the evidence photos the mechanic attached on that screen.
+    // Surface both cycles so the active-job overlay tells the whole story, not
+    // just work added mid-job. (A pre_job row only exists when a mechanic
+    // actually submitted a pre-job estimate — never the customer's original
+    // booking — so including it can't leak the baseline quote here.)
+    const [preJobRows, midJobRows] = await Promise.all([
+      ctx.db
+        .query("booking_approvals")
+        .withIndex("by_booking_and_cycle", (q: any) =>
+          q.eq("booking_id", args.bookingId).eq("cycle", "pre_job"),
+        )
+        .collect(),
+      ctx.db
+        .query("booking_approvals")
+        .withIndex("by_booking_and_cycle", (q: any) =>
+          q.eq("booking_id", args.bookingId).eq("cycle", "mid_job"),
+        )
+        .collect(),
+    ]);
+    const rows = [...preJobRows, ...midJobRows];
+
+    const customJobs = await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
+      .collect();
+
+    const stateFor = (decision: string | undefined) => {
+      if (decision == null) return "pending" as const;
+      if (decision === "approved") return "accepted" as const;
+      if (decision === "auto_approved_within_range")
+        return "auto_confirmed" as const;
+      // A lapsed SLA is a decline the customer never got around to.
+      if (decision === "declined" || decision === "sla_expired")
+        return "declined" as const;
+      return "other" as const; // withdrawn / fixed_price_informational
+    };
+
+    const enriched = await Promise.all(
+      rows
+        .filter((r: any) => stateFor(r.decision) !== "other")
+        .sort(
+          (a: any, b: any) =>
+            (b.submitted_at_ms ?? b._creationTime ?? 0) -
+            (a.submitted_at_ms ?? a._creationTime ?? 0),
+        )
+        .map(async (r: any) => {
+        const introduced = customJobs.filter(
+          (c: any) =>
+            String(c.introduced_by_approval_id ?? "") === String(r._id),
+        );
+        const state = stateFor(r.decision);
+        const cycle = (r.cycle === "pre_job" ? "pre_job" : "mid_job") as
+          | "pre_job"
+          | "mid_job";
+
+        // The parts these added lines carry — surfaced for EVERY state now, not
+        // just declines. A *pending* request previously showed only a service
+        // name and a lump-sum delta, so the shop couldn't see which part it was
+        // asking the customer to confirm (it stayed invisible until the scope
+        // was either approved into the total or declined). Same shape as the
+        // legacy `deniedParts`, plus unit price.
+        const parts = introduced.flatMap((c: any) =>
+          (c.parts ?? []).map((p: any) => ({
+            part_name: p.part_name as string,
+            oem_number: (p.oem_number ?? null) as string | null,
+            quantity: (p.quantity ?? 1) as number,
+            unit_price_cents: (p.unit_price_cents ?? null) as number | null,
+            line_total_cents: (p.line_total_cents ?? null) as number | null,
+          })),
+        );
+        const partsSubtotalCents = introduced.reduce(
+          (sum: number, c: any) =>
+            sum +
+            ((c.quoted_parts_cents as number | undefined) ??
+              (c.parts ?? []).reduce(
+                (s: number, p: any) =>
+                  s + ((p.line_total_cents as number) ?? 0),
+                0,
+              )),
+          0,
+        );
+        // Labor = each added line's quoted price minus its parts. Left null
+        // when no line carried a quoted price (nothing dependable to show).
+        let laborCents: number | null = null;
+        for (const c of introduced) {
+          const price = c.quoted_price_cents as number | undefined;
+          if (typeof price !== "number") continue;
+          const cParts =
+            (c.quoted_parts_cents as number | undefined) ??
+            (c.parts ?? []).reduce(
+              (s: number, p: any) => s + ((p.line_total_cents as number) ?? 0),
+              0,
+            );
+          laborCents = (laborCents ?? 0) + Math.max(0, price - cParts);
+        }
+        const laborMinutes = introduced.reduce(
+          (sum: number, c: any) =>
+            sum + ((c.estimated_minutes as number | undefined) ?? 0),
+          0,
+        );
+
+        // Evidence photos the mechanic attached on the "Why this adjustment?"
+        // screen. Resolved for EVERY state — including declined — so a change
+        // the customer turned down still shows what the mechanic found (the UI
+        // marks those declined/ignored rather than dropping them).
+        const photos = (
+          await Promise.all(
+            (((r.scope_photo_ids ?? []) as Id<"_storage">[]) || []).map(
+              async (sid: Id<"_storage">) => ({
+                storageId: String(sid),
+                url: await ctx.storage.getUrl(sid),
+              }),
+            ),
+          )
+        ).filter((p) => p.url !== null) as {
+          storageId: string;
+          url: string;
+        }[];
+
+        const prior = (r.prior_ceiling_cents ?? 0) as number;
+        return {
+          approvalId: r._id as Id<"booking_approvals">,
+          state,
+          // Which cycle produced this adjustment — the overlay badges a
+          // pre-job change as "Before the job" so it reads differently from
+          // work added mid-job.
+          cycle,
+          addedServiceNames: introduced.map((c: any) => c.name as string),
+          totalCents: r.mechanic_set_price_cents as number,
+          deltaPriceCents: (r.mechanic_set_price_cents as number) - prior,
+          notes: (r.notes ?? null) as string | null,
+          photos,
+          sla_expires_at_ms: (r.sla_expires_at_ms ?? null) as number | null,
+          submitted_at_ms: (r.submitted_at_ms ?? null) as number | null,
+          decided_at_ms: (r.decided_at_ms ?? null) as number | null,
+          parts,
+          partsSubtotalCents,
+          laborCents,
+          laborMinutes: laborMinutes > 0 ? laborMinutes : null,
+          // Back-compat: the old declined-only view still reads this. Equal to
+          // `parts` when declined, empty otherwise.
+          deniedParts: state === "declined" ? parts : [],
+        };
+      }),
+    );
+
+    // A pre-job cycle with no reason, no photo, no added scope, and no price
+    // delta is a bare in-range confirmation — there's no "why" to surface, so
+    // drop it to keep the panel about genuine adjustments. Mid-job rows are
+    // always kept (unchanged behavior).
+    return enriched.filter(
+      (e) =>
+        e.cycle === "mid_job" ||
+        (e.notes != null && e.notes.trim().length > 0) ||
+        e.photos.length > 0 ||
+        e.deltaPriceCents > 0 ||
+        e.parts.length > 0,
+    );
   },
 });
 
@@ -1236,7 +1862,10 @@ export const _markApprovalExpired = internalMutation({
  *  captures only the agreed price. Called by expireApprovals for the mid_job
  *  branch, immediately after _markApprovalExpired. */
 export const _revertToPriorCeilingAfterExpiry = internalMutation({
-  args: { bookingId: v.id("bookings") },
+  args: {
+    bookingId: v.id("bookings"),
+    approvalId: v.optional(v.id("booking_approvals")),
+  },
   handler: async (ctx, args) => {
     const booking: any = await ctx.db.get(args.bookingId);
     if (!booking) return;
@@ -1252,5 +1881,24 @@ export const _revertToPriorCeilingAfterExpiry = internalMutation({
     };
     if (ceiling != null) patch.mechanic_set_price_cents = ceiling;
     await ctx.db.patch(args.bookingId, patch);
+
+    // Expiry is a decline the customer never got around to. Revert the lines
+    // this cycle introduced (kept as `declined` for audit, off the price) and
+    // notify the shop, exactly like applyApprovalDecision's declined branch.
+    if (args.approvalId) {
+      await revertDeclinedMidJobWork(ctx, {
+        bookingId: args.bookingId,
+        approvalId: args.approvalId,
+        now,
+      });
+      await enqueueShopDecisionNotice(ctx, {
+        booking,
+        bookingId: args.bookingId,
+        category: "booking_mid_job_expired",
+        title: "Extra work expired",
+        body: "The customer didn't respond to the added work in time. It won't be charged.",
+        dedupeSuffix: `expired:${String(args.approvalId)}`,
+      });
+    }
   },
 });

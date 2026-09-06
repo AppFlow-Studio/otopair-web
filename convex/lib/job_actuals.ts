@@ -12,6 +12,7 @@ import {
   vehicleUpdateValuesValidator,
 } from "./vehicle_passports";
 import { recomputeLaborForConfigService } from "./labor_aggregation";
+import { blockedMinutesForBooking } from "../jobBlockers";
 
 export const jobActualPartValidator = postjobPartValidator;
 
@@ -20,6 +21,11 @@ export const jobActualInputValidator = v.object({
   actual_parts_cost: v.optional(v.union(v.float64(), v.null())),
   difficulty_rating: v.optional(v.union(v.float64(), v.null())),
   technician_notes: v.optional(v.union(v.string(), v.null())),
+  // Customer-facing summary of what was found / done. Distinct from
+  // technician_notes ("for the next mechanic") and additional_observations
+  // (private shop note) — this is the one free-text field the driver reads on
+  // the receipt and Past Service report.
+  mechanic_findings: v.optional(v.union(v.string(), v.null())),
   parts_used: v.optional(v.union(v.array(jobActualPartValidator), v.null())),
   prejob_report: v.optional(v.union(prejobReportValidator, v.null())),
   completion_mileage: v.optional(v.union(v.float64(), v.null())),
@@ -39,10 +45,18 @@ export type JobActualPartInput = {
   quantity?: number;
   supplied_by?: string;
   part_tier?: string;
-  service_id?: Id<"services">;
+  service_id?: Id<"services"> | null;
   source?: "catalog" | "manual";
   swap_from_oem_number?: string;
   not_used?: boolean;
+  // Mechanic-entered tire-replacement line (mid-job / walk-in). See
+  // postjobPartValidator for the full rationale; oem_number carries the
+  // `TIRE-{size}` sentinel while identity lives in these fields.
+  is_tire?: boolean;
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+  tire_position?: string | null;
 };
 
 export type JobActualInput = {
@@ -50,6 +64,7 @@ export type JobActualInput = {
   actual_parts_cost?: number | null;
   difficulty_rating?: number | null;
   technician_notes?: string | null;
+  mechanic_findings?: string | null;
   parts_used?: JobActualPartInput[] | null;
   prejob_report?: Record<string, unknown> | null;
   completion_mileage?: number | null;
@@ -114,17 +129,30 @@ function getJobActualMechanicId(booking: any, mechanicId?: any) {
   return resolvedMechanicId;
 }
 
+/**
+ * Auto-derived labour when the mechanic didn't type a number themselves.
+ *
+ * `blockedMinutes` is subtracted from the wall-clock span, because
+ * `started_at` runs straight through a clock-stopping blocker like a parts wait
+ * or a flag-issue admin pause. Left in, a three-hour back-order would be billed
+ * as three hours of labour and would also pollute the variance stats we derive
+ * shop shortcuts from. This matches what the mechanic sees: the on-screen timer
+ * excludes the same spans.
+ */
 export function getAutoActualLaborMinutes({
   jobActual,
   fallbackMinutes,
   now,
+  blockedMinutes = 0,
 }: {
   jobActual?: any;
   fallbackMinutes?: number | null;
   now: number;
+  blockedMinutes?: number;
 }) {
   if (jobActual?.started_at != null) {
-    return Math.max(0, Math.round((now - jobActual.started_at) / 60000));
+    const elapsed = Math.round((now - jobActual.started_at) / 60000);
+    return Math.max(0, elapsed - Math.max(0, blockedMinutes));
   }
   if (jobActual?.actual_labor_minutes != null) {
     return jobActual.actual_labor_minutes;
@@ -205,6 +233,9 @@ function applyActualsInputToPatch(patch: Record<string, any>, actuals?: JobActua
   }
   if (hasOwn(actuals, "technician_notes")) {
     patch.technician_notes = actuals.technician_notes ?? "";
+  }
+  if (hasOwn(actuals, "mechanic_findings")) {
+    patch.mechanic_findings = actuals.mechanic_findings ?? "";
   }
   if (hasOwn(actuals, "parts_used")) {
     patch.parts_used = actuals.parts_used ?? [];
@@ -452,13 +483,15 @@ export async function saveJobActualDraft(
     !hasOwn(actuals, "actual_labor_minutes") &&
     patch.actual_labor_minutes === undefined
   ) {
+    const autoAt = completedAtMs ?? now;
     patch.actual_labor_minutes = getAutoActualLaborMinutes({
       jobActual: {
         ...existing,
         ...patch,
       },
       fallbackMinutes: booking.estimated_labor_minutes ?? null,
-      now: completedAtMs ?? now,
+      now: autoAt,
+      blockedMinutes: await blockedMinutesForBooking(ctx, booking._id, autoAt),
     });
   }
 

@@ -20,6 +20,7 @@
 import { v } from "convex/values";
 import { api, internal } from "../_generated/api";
 import { internalAction } from "../_generated/server";
+import { isRealVin } from "./vinIdentity";
 
 const VDB_BASE = "https://api.vehicledatabases.com/vehicle-images";
 const FETCH_TIMEOUT_MS = 6000;
@@ -68,7 +69,7 @@ export const resolveVehicleImage = internalAction({
       // vehicle_config. Return it and back-fill this VIN's row so the
       // next read hits step 1 directly (no join needed).
       if (cached?.config_image_url) {
-        if (vin.length === 17) {
+        if (isRealVin(vin)) {
           try {
             await ctx.runMutation(api.vehicles.saveVehicleImageUrl, {
               vin,
@@ -100,7 +101,7 @@ export const resolveVehicleImage = internalAction({
 
     // 2) Build URL list — VIN first (most reliable), then YMMT.
     const urls: string[] = [];
-    if (vin.length === 17) urls.push(`${VDB_BASE}/${vin}`);
+    if (isRealVin(vin)) urls.push(`${VDB_BASE}/${vin}`);
     if (year && make && model && trim) {
       for (const m of normalizeMakes(make)) {
         urls.push(
@@ -139,7 +140,7 @@ export const resolveVehicleImage = internalAction({
 
       // 3) Persist for next time. Best-effort — a write failure should
       //    not prevent us from returning the URL we just resolved.
-      if (vin.length === 17) {
+      if (isRealVin(vin)) {
         try {
           await ctx.runMutation(api.vehicles.saveVehicleImageUrl, {
             vin,

@@ -71,6 +71,14 @@ export const tireTreadMeasurementsValidator = v.object({
 export const tireIdentityValidator = v.object({
   brand: v.optional(nullableStringValidator),
   model: v.optional(nullableStringValidator),
+  // Vestigial: the MPI stopped collecting DOT codes in PR #60 (Abdul — not
+  // relevant to standard repair). Kept optional so historical rows still read.
+  dot_code: v.optional(nullableStringValidator),
+  run_flat: v.optional(nullableBooleanValidator),
+  // Season / construction category, vocabulary shared with the tire catalog
+  // (convex/lib/tireBrands.ts mapTireType) so a reading here can join to a
+  // scraped listing for automated re-booking.
+  tire_type: v.optional(nullableStringValidator),
 });
 
 export const tireIdentityByPositionValidator = v.object({
@@ -125,6 +133,7 @@ export const vehiclePassportTiresValidator = v.object({
   size_front: v.optional(nullableStringValidator),
   size_rear: v.optional(nullableStringValidator),
   run_flat: v.optional(nullableBooleanValidator),
+  identities: v.optional(v.union(tireIdentityByPositionValidator, v.null())),
   overall_condition: v.optional(v.union(tireConditionValidator, v.null())),
   front_condition: v.optional(v.union(tireConditionValidator, v.null())),
   rear_condition: v.optional(v.union(tireConditionValidator, v.null())),
@@ -141,6 +150,7 @@ export const vehiclePassportFluidsValidator = v.object({
   coolant_type: v.optional(nullableStringValidator),
   brake_fluid_type: v.optional(nullableStringValidator),
   transmission_fluid_type: v.optional(nullableStringValidator),
+  power_steering_fluid_type: v.optional(nullableStringValidator),
   confirmation_status: v.optional(nullableStringValidator),
 });
 
@@ -158,11 +168,24 @@ export const vehiclePassportBrakesValidator = v.object({
   // the mechanic reads the number cast on the rotor hat.
   rotor_min_front_mm: v.optional(nullableNumberValidator),
   rotor_min_rear_mm: v.optional(nullableNumberValidator),
-  // "oem_spec" | "mechanic_read" | "director_verified" | "derived_from_nominal"
+  // "derived_15pct_wear" (standard: 85% of OEM nominal) | "oem_spec" |
+  // "mechanic_read" | "director_verified" | "derived_from_nominal" (legacy)
   // | "default_fallback" — anything derived must never read as an OEM figure.
   rotor_min_quality_front: v.optional(nullableStringValidator),
   rotor_min_quality_rear: v.optional(nullableStringValidator),
   rotor_min_source_url: v.optional(nullableStringValidator),
+});
+
+const rotorPhotoEvidenceItemValidator = v.object({
+  first_accepted_at: v.float64(),
+  source_inspection_id: v.id("vehicle_inspections"),
+});
+
+export const rotorPhotoEvidenceValidator = v.object({
+  FL: v.optional(rotorPhotoEvidenceItemValidator),
+  FR: v.optional(rotorPhotoEvidenceItemValidator),
+  RL: v.optional(rotorPhotoEvidenceItemValidator),
+  RR: v.optional(rotorPhotoEvidenceItemValidator),
 });
 
 export const vehiclePassportInspectionValidator = v.object({
@@ -227,17 +250,62 @@ export const prejobReportValidator = v.object({
 export const inspectionZoneStateValidator = v.object({
   zone_id: v.string(),
   done: v.boolean(),
-  measures: v.optional(v.any()),
-  tri: v.optional(v.any()),
-  descriptors: v.optional(v.any()),
-  text: v.optional(v.any()),
-  select: v.optional(v.any()),
+  measures: v.optional(v.record(v.string(), v.string())),
+  tri: v.optional(
+    v.record(v.string(), v.union(v.literal("g"), v.literal("y"), v.literal("r"))),
+  ),
+  descriptors: v.optional(v.record(v.string(), v.array(v.string()))),
+  text: v.optional(v.record(v.string(), v.string())),
+  select: v.optional(v.record(v.string(), v.union(v.string(), v.float64()))),
+  statuses: v.optional(
+    v.record(
+      v.string(),
+      v.union(
+        v.literal("not_inspected"),
+        v.literal("not_visible"),
+        v.literal("not_applicable"),
+      ),
+    ),
+  ),
+  methods: v.optional(v.record(v.string(), v.string())),
   photo_ids: v.optional(v.array(v.id("_storage"))),
+  photo_tags: v.optional(
+    v.record(
+      v.string(),
+      v.union(v.literal("general"), v.literal("rotor_stamp")),
+    ),
+  ),
+  // Repeatable warning-light picker entries. Only answered entries are ever
+  // sent (the client omits blanks) — see "Dashboard warning lights."
+  lights: v.optional(
+    v.record(
+      v.string(),
+      v.array(
+        v.object({
+          light: v.union(
+            v.literal("oil_pressure"),
+            v.literal("battery_charging"),
+            v.literal("temperature"),
+            v.literal("abs"),
+            v.literal("tpms"),
+            v.literal("airbag_srs"),
+            v.literal("transmission"),
+            v.literal("check_engine"),
+            v.literal("other"),
+            v.literal("none"),
+          ),
+          other_text: v.optional(v.string()),
+        }),
+      ),
+    ),
+  ),
 });
 
 export const inspectionInputValidator = v.object({
   template_version: v.string(),
   zones: v.array(inspectionZoneStateValidator),
+  odometer: v.optional(v.float64()),
+  lift_status: v.optional(v.union(v.literal("yes"), v.literal("no"))),
   findings_attention: v.optional(
     v.array(v.object({ label: v.string(), zone: v.string() })),
   ),
@@ -281,7 +349,23 @@ export const postjobPartValidator = v.object({
   // back to booking.service_ids[0]. New rows from the post-job and backfill
   // flows stamp it so multi-service bookings get accurate per-service
   // analytics (shop_part_preferences, cost-by-service).
-  service_id: v.optional(v.id("services")),
+  // Nullable, not just optional: the client sends an explicit null for a part
+  // with no resolvable catalog service (a manually-added row, or a booking
+  // whose partsRequiredServices[0] is absent). `v.optional(v.id("services"))`
+  // accepts undefined but REJECTS null — exactly the failure that hit
+  // custom_service_name below — so every such post-job submit was rejected at
+  // the arg validator before normalizePartsUsed could strip the null away.
+  service_id: v.optional(v.union(v.id("services"), v.null())),
+  // The CUSTOM line this part belongs to, when there's no catalog service to
+  // point at. Off-catalog work has no services row, so without this the
+  // association is lost the moment a quoted part becomes a used part — which
+  // is why a switch fitted through Flag Issue billed correctly but left its
+  // custom_jobs row reading "no parts".
+  // Nullable, not just optional: the client sends an explicit null for a part
+  // that belongs to a catalog service, exactly as `brand` above does.
+  // `v.optional(v.string())` accepts undefined but REJECTS null, which failed
+  // every post-job submit carrying a catalog part.
+  custom_service_name: v.optional(nullableStringValidator),
   // "catalog" rows came from the Otopair prefill (part_fitments); identity
   // fields (part_name/brand/oem_number) are read-only and only price/qty/
   // supplied_by/swap can change. "manual" rows are mechanic-added and stay
@@ -305,6 +389,35 @@ export const postjobPartValidator = v.object({
   justification_text: v.optional(v.string()),
   evidence_photo_ids: v.optional(v.array(v.id("_storage"))),
   verified_against_catalog_median_cents: v.optional(v.number()),
+  // Tire-replacement lines entered directly by a mechanic (mid-job / walk-in)
+  // instead of the customer quote flow. Tires have no OEM number — they're
+  // identified by size (fitment) / brand / model with a mechanic-set price — so
+  // these structured fields carry that identity while oem_number still holds the
+  // `TIRE-{size}` sentinel (see tireOem in job_actuals.ts) so every OEM-keyed
+  // consumer keeps working unchanged. tire_position is a free string
+  // ("front" / "rear") so staggered / aftermarket fitments never reject.
+  is_tire: v.optional(v.boolean()),
+  tire_size: v.optional(nullableStringValidator),
+  tire_brand: v.optional(nullableStringValidator),
+  tire_model: v.optional(nullableStringValidator),
+  tire_position: v.optional(nullableStringValidator),
+});
+
+/**
+ * Per-line labor breakdown behind the single `labor_hours` scalar an approval
+ * carries. Mirrors `parts_snapshot` — a per-line record, not a lump. Keyed the
+ * same way the Labor step is: `"base"` for the original booked service(s) plus
+ * one entry per custom-job id. Recording it lets the post-job Labor step seed
+ * each line with the labor that was AGREED for it, instead of treating the
+ * whole-approval total as the BASE service's time — which folded every custom
+ * job's hours into the base line and then double-counted them when the step
+ * re-listed each custom job. `hours` is decimal labor hours; `label` is a
+ * human tag for provenance only.
+ */
+export const laborAllocationValidator = v.object({
+  line_key: v.string(),
+  label: v.optional(nullableStringValidator),
+  hours: v.float64(),
 });
 
 export const postjobPhotoValidator = v.object({
@@ -384,6 +497,9 @@ export const postjobReportValidator = v.object({
   parts_used: v.array(postjobPartValidator),
   vehicle_updates: v.optional(v.union(vehicleUpdateValuesValidator, v.null())),
   technician_notes: v.optional(nullableStringValidator),
+  // Customer-facing "what did you find / do" summary. Read by getReceipt →
+  // Past Service report. See job_actuals.mechanic_findings.
+  mechanic_findings: v.optional(nullableStringValidator),
   flagged_vehicle_specs: v.optional(v.boolean()),
   flagged_vehicle_specs_reason: v.optional(nullableStringValidator),
   actual_labor_minutes: v.optional(nullableNumberValidator),
@@ -398,6 +514,13 @@ export const postjobReportValidator = v.object({
   time_variance_reason: v.optional(v.union(timeVarianceReasonValidator, v.null())),
   time_variance_note: v.optional(nullableStringValidator),
   recommendations: v.optional(v.array(jobRecommendationInputValidator)),
+  // Canonical warning-light codes the mechanic confirmed are no longer lit,
+  // re-checked against the vehicle's current knownIssues at post-job close
+  // (any source — driver check-in, Oto, an earlier visit's inspection, or
+  // this same visit's pre-job picker). Applied as a targeted removal by the
+  // same deferred job that applies everything else from this visit — see
+  // "Dashboard warning lights."
+  cleared_warning_lights: v.optional(v.array(v.string())),
 });
 
 export function hasText(value: unknown): value is string {

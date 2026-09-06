@@ -12,6 +12,7 @@ import { paginationOptsValidator } from "convex/server";
 import { query, mutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireDirector } from "./directorGate";
+import { bookingOrigin } from "./director";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { resolveVehicleDisplay, userDisplayName } from "./lib/bookingEnrichment";
@@ -50,6 +51,17 @@ async function bookingRow(ctx: QueryCtx, b: Doc<"bookings">) {
       return s?.name ?? "—";
     }),
   );
+  // Off-catalog custom jobs — a walk-in often has no catalog service_ids, so
+  // without these the card reads "Service TBD" for real work. Declined mid-job
+  // lines are audit-only and excluded (matches the receipt).
+  const customJobs = await ctx.db
+    .query("custom_jobs")
+    .withIndex("by_booking", (q) => q.eq("booking_id", b._id))
+    .collect();
+  const customServices = customJobs
+    .filter((j) => j.status !== "declined")
+    .sort((a, c) => a.created_at - c.created_at)
+    .map((j) => j.name);
   return {
     id: b._id,
     userId: b.user_id,
@@ -61,6 +73,10 @@ async function bookingRow(ctx: QueryCtx, b: Doc<"bookings">) {
     vin: b.vin,
     vehicleYmm: vehicle.ymm,
     services: serviceNames,
+    customServices,
+    // Walk-in (shop-created) vs app (customer self-serve). See bookingOrigin.
+    origin: bookingOrigin(b.source),
+    source: b.source ?? null,
     scheduledDate: b.scheduled_date ?? null,
     scheduledTime: b.scheduled_time ?? null,
     createdAt: b.created_at ?? b._creationTime,
@@ -649,6 +665,27 @@ export const completion = query({
       inProgressPhotos: { url: string; caption: string | null; takenAt: number }[];
       hasPrejobReport: boolean;
       hasPostjobReport: boolean;
+      /* The parts the mechanic confirmed, itemised and attributed. The card
+         used to show only actual_parts_cost — a single number, with no way to
+         answer "which parts", which is the question anyone opening a completion
+         report is actually asking. The receipt has shown the itemisation to the
+         CUSTOMER all along; the operator had less detail than the person who
+         paid the bill. */
+      partsUsed: Array<{
+        partName: string;
+        oemNumber: string | null;
+        brand: string | null;
+        quantity: number;
+        unitCost: number;
+        lineCost: number;
+        /** Catalog service name, or the off-catalog line's own name. */
+        forWork: string | null;
+        /** True when it belongs to a custom line — worth marking, because
+         *  off-catalog parts are the ones with no catalog price to check. */
+        isCustom: boolean;
+        suppliedByCustomer: boolean;
+        notUsed: boolean;
+      }>;
     } | null = null;
 
     if (ja) {
@@ -664,6 +701,51 @@ export const completion = query({
           takenAt: p.taken_at,
         })),
       );
+      // Attribute each part to the work it went into. service_id resolves to a
+      // catalog name; custom_service_name IS the name for off-catalog lines.
+      const rawParts = Array.isArray(ja.parts_used) ? (ja.parts_used as any[]) : [];
+      const serviceNameCache = new Map<string, string | null>();
+      const partsUsed = await Promise.all(
+        rawParts.map(async (part: any) => {
+          const quantity =
+            typeof part?.quantity === "number" && part.quantity > 0
+              ? part.quantity
+              : 1;
+          const unitCost = Number(part?.cost ?? 0);
+          let forWork: string | null = null;
+          let isCustom = false;
+          const customName =
+            typeof part?.custom_service_name === "string"
+              ? part.custom_service_name.trim()
+              : "";
+          if (customName) {
+            forWork = customName;
+            isCustom = true;
+          } else if (part?.service_id) {
+            const key = String(part.service_id);
+            if (!serviceNameCache.has(key)) {
+              serviceNameCache.set(
+                key,
+                ((await ctx.db.get(part.service_id)) as any)?.name ?? null,
+              );
+            }
+            forWork = serviceNameCache.get(key) ?? null;
+          }
+          return {
+            partName: String(part?.part_name ?? "").trim() || "Part",
+            oemNumber: part?.oem_number ? String(part.oem_number) : null,
+            brand: part?.brand ? String(part.brand) : null,
+            quantity,
+            unitCost,
+            lineCost: unitCost * quantity,
+            forWork,
+            isCustom,
+            suppliedByCustomer: part?.supplied_by === "customer",
+            notUsed: part?.not_used === true,
+          };
+        }),
+      );
+
       jobActual = {
         startedAt: ja.started_at ?? null,
         completedAtMs: ja.completed_at_ms ?? null,
@@ -683,6 +765,7 @@ export const completion = query({
         inProgressPhotos: photos.filter((p): p is { url: string; caption: string | null; takenAt: number } => p.url != null),
         hasPrejobReport: ja.prejob_report != null,
         hasPostjobReport: ja.postjob_report != null,
+        partsUsed,
       };
     }
 
@@ -756,30 +839,54 @@ export const moneyDetail = query({
       .withIndex("by_booking_and_cycle", (q) => q.eq("booking_id", id))
       .collect();
     approvalRows.sort((a, b) => a.submitted_at_ms - b.submitted_at_ms);
+    // Off-catalog lines, so each mid-job approval cycle can name the extra work
+    // it carried — and, for a declined/expired cycle, the parts that were
+    // denied (kept on the row for audit, never charged).
+    const customJobRows = await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q) => q.eq("booking_id", id))
+      .collect();
     const approvals = await Promise.all(
-      approvalRows.map(async (a) => ({
-        cycle: a.cycle,
-        submittedAtMs: a.submitted_at_ms,
-        submittedBy: a.submitted_by_user_id
-          ? userDisplayName(await ctx.db.get(a.submitted_by_user_id))
-          : null,
-        mechanicSetPrice: centsToDollars(a.mechanic_set_price_cents),
-        priorCeiling: centsToDollars(a.prior_ceiling_cents),
-        over: a.mechanic_set_price_cents > a.prior_ceiling_cents,
-        parts: centsToDollars(a.parts_subtotal_cents),
-        labor: centsToDollars(a.labor_cents),
-        tax: centsToDollars(a.tax_cents),
-        serviceFee: centsToDollars(a.service_fee_cents),
-        decision: a.decision ?? null,
-        decidedAtMs: a.decided_at_ms ?? null,
-        decidedBy: a.decided_by_user_id
-          ? userDisplayName(await ctx.db.get(a.decided_by_user_id))
-          : a.decision_actor ?? null,
-        ceilingAfter: centsToDollars(a.ceiling_after_decision_cents),
-        slaExpiresAtMs: a.sla_expires_at_ms ?? null,
-        stripeAction: a.stripe_action ?? null,
-        notes: a.notes ?? null,
-      })),
+      approvalRows.map(async (a) => {
+        const introduced = customJobRows.filter(
+          (c) => String(c.introduced_by_approval_id ?? "") === String(a._id),
+        );
+        const isDenied =
+          a.decision === "declined" || a.decision === "sla_expired";
+        return {
+          cycle: a.cycle,
+          submittedAtMs: a.submitted_at_ms,
+          submittedBy: a.submitted_by_user_id
+            ? userDisplayName(await ctx.db.get(a.submitted_by_user_id))
+            : null,
+          mechanicSetPrice: centsToDollars(a.mechanic_set_price_cents),
+          priorCeiling: centsToDollars(a.prior_ceiling_cents),
+          over: a.mechanic_set_price_cents > a.prior_ceiling_cents,
+          parts: centsToDollars(a.parts_subtotal_cents),
+          labor: centsToDollars(a.labor_cents),
+          tax: centsToDollars(a.tax_cents),
+          serviceFee: centsToDollars(a.service_fee_cents),
+          decision: a.decision ?? null,
+          decidedAtMs: a.decided_at_ms ?? null,
+          decidedBy: a.decided_by_user_id
+            ? userDisplayName(await ctx.db.get(a.decided_by_user_id))
+            : a.decision_actor ?? null,
+          ceilingAfter: centsToDollars(a.ceiling_after_decision_cents),
+          slaExpiresAtMs: a.sla_expires_at_ms ?? null,
+          stripeAction: a.stripe_action ?? null,
+          notes: a.notes ?? null,
+          addedServices: introduced.map((c) => c.name),
+          deniedParts: isDenied
+            ? introduced.flatMap((c) =>
+                (c.parts ?? []).map((p) => ({
+                  name: p.part_name,
+                  quantity: p.quantity ?? 1,
+                  lineCents: p.line_total_cents ?? null,
+                })),
+              )
+            : [],
+        };
+      }),
     );
 
     const [bDisputes, pDisputes, tireRows, rotorRows, dismissalRows] = await Promise.all([

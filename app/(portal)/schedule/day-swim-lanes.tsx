@@ -707,8 +707,7 @@ export default function DaySwimLanes({
   return (
     <div
       ref={containerRef}
-      className="overflow-auto"
-      style={{ height: "calc(100vh - 180px)", minHeight: 500 }}
+      className="overflow-auto flex-1 min-h-0"
     >
       <div
         className="flex"
@@ -1096,6 +1095,17 @@ export default function DaySwimLanes({
                   const isPendingCustomer =
                     ev.status === "pending_customer_acceptance";
                   const isTentativeQuote = ev.status === "tentative_quote";
+                  // Booking is waiting on the customer for the hold — either an
+                  // out-of-range estimate pending approval, or reauth_required
+                  // (approved / hold increment needs the customer to confirm
+                  // the new hold on their card). The block status stays
+                  // vehicle_at_shop / in_progress, so this rides on
+                  // payment_approval_state.
+                  const isAwaitingHold =
+                    ev.paymentApprovalState === "pre_job_pending" ||
+                    ev.paymentApprovalState === "mid_job_pending" ||
+                    ev.paymentApprovalState === "post_job_pending" ||
+                    ev.paymentApprovalState === "reauth_required";
                   const isAwaitingRecResponse =
                     ev.recommendationState === "pending_customer";
                   const isAwaitingInfo =
@@ -1161,8 +1171,9 @@ export default function DaySwimLanes({
                         height: Math.max(ROW_HEIGHT * 0.5, slotHeight - 2),
                         backgroundColor: colors.bg,
                         color: colors.text,
-                        borderLeft:
-                          isPendingCustomer || isTentativeQuote
+                        borderLeft: isAwaitingHold
+                          ? "3px dashed rgb(245 158 11)"
+                          : isPendingCustomer || isTentativeQuote
                             ? `3px dashed ${colors.border}`
                             : `3px solid ${colors.border}`,
                         borderTop: isTentativeQuote
@@ -1280,6 +1291,12 @@ export default function DaySwimLanes({
                       {isPendingCustomer && (
                         <p className="truncate opacity-70 text-[10px]">
                           {pendingLabel}
+                        </p>
+                      )}
+                      {isAwaitingHold && (
+                        <p className="mt-0.5 inline-flex items-center gap-1 truncate rounded-sm bg-amber-100 px-1 text-[10px] font-semibold text-amber-900">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                          Confirming new hold
                         </p>
                       )}
                       {diagnosticBadge && (

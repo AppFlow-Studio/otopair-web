@@ -9,6 +9,7 @@ import { useEffect, useMemo, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import type { ShopPin } from "@/convex/portalSeries";
+import { stashGoto } from "@/app/(director-panel)/director/components/directorNav";
 
 function pinColor(p: ShopPin): string {
   if (!p.is_active) return "#94a3b8"; // slate-400
@@ -89,9 +90,15 @@ export default function ShopsMap({
            }
            <span style="color:${p.is_active ? "#059669" : "#94a3b8"}">${p.is_active ? "active" : "inactive"}</span>
            ${p.stripe_ready ? ` · <span style="color:#059669">stripe ready</span>` : ` · <span style="color:#b45309">no stripe</span>`}<br/>
-           <a href="/shops/all/${p.id}" style="color:#2563eb;font-weight:600">Open shop →</a>
+           <a href="/director#shops" data-open-shop="${esc(String(p.id))}" style="color:#2563eb;font-weight:600">Open shop →</a>
          </div>`,
       );
+      // /shops/all/<id> merged into /director#shops — stash the id when the
+      // popup link is clicked so the Shops tab opens this shop on arrival.
+      marker.on("popupopen", (e) => {
+        const a = e.popup.getElement()?.querySelector<HTMLAnchorElement>("a[data-open-shop]");
+        a?.addEventListener("click", () => stashGoto("shops", String(p.id)));
+      });
       marker.addTo(layer);
     }
     if (bounds) map.fitBounds(bounds.pad(0.25), { maxZoom: 11 });

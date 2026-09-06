@@ -8,6 +8,7 @@
 // =============================================================================
 import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
+import { effectiveBookingTotalDollars } from "../lib/booking-total";
 import { requireDirector, logAudit } from "./directorGate";
 import type { Doc, Id } from "./_generated/dataModel";
 import { listAvailableWindowsForShopDate } from "./lib/timeSlotAvailability";
@@ -650,7 +651,9 @@ export const shopBookings = query({
           status: b.status,
           date: b.scheduled_date ?? null,
           time: b.scheduled_time ?? null,
-          total: b.total_cost ?? null,
+          // Effective total: surfaces an approved-but-not-captured re-quote,
+          // else the original/reconciled total_cost. See lib/booking-total.
+          total: effectiveBookingTotalDollars(b),
           laborCost: b.labor_cost ?? null,
           partsCost: b.parts_cost ?? null,
           estLaborMinutes: b.estimated_labor_minutes ?? null,

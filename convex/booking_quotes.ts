@@ -60,6 +60,9 @@ export type ComputeDisclosedRangeArgs = {
    *  zeroes its labor contribution. */
   shop_id?: Id<"shops"> | null;
   vehicle_config_id?: Id<"vehicle_configs"> | null;
+  /** Booked axle per service (brakes) for the engine-band sanity sidecar, so
+   *  the disclosed range's per_axle labor scaling matches the customer's. */
+  service_positions?: Record<string, "front" | "rear" | "both">;
 };
 
 export type DisclosedRangeBreakdown = {
@@ -263,6 +266,7 @@ export async function computeDisclosedRange(
       vehicle_config_id: args.vehicle_config_id,
       service_ids: args.services.map((s) => s.service_id),
       shop_id: args.shop_id,
+      service_positions: args.service_positions,
     });
     const anyRefused = series.quotes.some((q) => !q.ok);
     if (anyRefused) {
@@ -384,11 +388,16 @@ async function resolvePartsBandForService(
 // ─────────────────────────────────────────────────────────────────────────
 
 export type PricedPartSnapshotRow = {
-  service_id: Id<"services">;
+  /** Absent on parts attached to a custom (off-catalog) line. */
+  service_id?: Id<"services">;
+  /** Set instead of service_id when this part belongs to a custom line. */
+  custom_service_name?: string;
   part_id?: Id<"oem_parts">;
   oem_number: string;
   part_name: string;
   brand?: string;
+  /** Optional provenance link the mechanic pasted for this part/price. */
+  source_url?: string;
   part_tier?: string;
   quantity: number;
   unit_price_cents: number;
@@ -414,6 +423,15 @@ export type PricedPartSnapshotRow = {
    *  "foreign_signature"). Row is kept (frozen price = customer contract);
    *  display/itemization surfaces filter on it. */
   integrity_flag?: string;
+  /** Mechanic-entered tire-replacement line (mid-job / walk-in). Tires have no
+   *  OEM number — identity lives here while oem_number carries the
+   *  `TIRE-{size}` sentinel. tire_position is a free string ("front" / "rear")
+   *  so staggered / aftermarket fitments never reject. */
+  is_tire?: boolean;
+  tire_size?: string;
+  tire_brand?: string;
+  tire_model?: string;
+  tire_position?: string;
 };
 
 // ─────────────────────────────────────────────────────────────────────────

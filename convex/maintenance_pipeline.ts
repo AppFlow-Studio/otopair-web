@@ -44,6 +44,7 @@ import {
 } from "./lib/intervals";
 import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
 import { canonicalWarningLights } from "../lib/warningLightVocab";
+import { resolveVehicleMileage } from "./lib/mileage";
 
 // ============================================================================
 // INTERNAL QUERIES
@@ -457,6 +458,14 @@ export const runPipeline = internalAction({
     );
     const observedUrgency = observedUrgencyByCategory(passport);
 
+    // The vehicle's CURRENT odometer, resolved by recency across the two stores
+    // this vehicle's mileage lives in (shop passport vs driver owner row). Read
+    // raw `owner.mileage` here and a driver's between-visit app update is
+    // invisible to intervals/urgency/velocity — the exact drift this pipeline
+    // is supposed to react to. `mileageAtPurchase` / prev-owner rate stay on the
+    // owner row: those are historical, not "current".
+    const resolvedCurrentMileage = resolveVehicleMileage(passport, owner).mileage;
+
     const weights = await ctx.runQuery(
       internal.maintenance_pipeline.getModifierWeights,
       {}
@@ -502,7 +511,7 @@ export const runPipeline = internalAction({
       raw = calculateRawModifiers(
         usagePattern,
         vehicle?.year ?? undefined,
-        owner.mileage ?? undefined,
+        resolvedCurrentMileage ?? undefined,
         prevOwnerRate ?? owner.prev_owner_annual_rate ?? undefined,
         owner.history_confidence ?? historyConfidence
       );
@@ -512,7 +521,7 @@ export const runPipeline = internalAction({
         ownedSinceNew: owner.ownedSinceNew ?? undefined,
         garageRole: owner.garageRole ?? undefined,
         modelYear: vehicle?.year ?? undefined,
-        currentMileage: owner.mileage ?? undefined,
+        currentMileage: resolvedCurrentMileage ?? undefined,
         ownershipDurationMonths: durationMonths,
         historyConfidence,
       });
@@ -540,7 +549,7 @@ export const runPipeline = internalAction({
       raw = calculateRawModifiers(
         usagePattern,
         vehicle?.year ?? undefined,
-        owner.mileage ?? undefined,
+        resolvedCurrentMileage ?? undefined,
         owner.prev_owner_annual_rate ?? undefined,
         historyConfidence
       );
@@ -577,7 +586,7 @@ export const runPipeline = internalAction({
 
     // Step 4: Estimate annual mileage (refined with check-in velocity when available)
     let velocity = estimateAnnualMileage(
-      owner.mileage ?? undefined,
+      resolvedCurrentMileage ?? undefined,
       vehicle?.year ?? undefined,
       owner.annualMileageBand ?? undefined,
       durationMonths,
@@ -701,7 +710,7 @@ export const runPipeline = internalAction({
       symptom_noise: issues.includes("diagnostic_noise"),
     };
 
-    const currentMileage = owner.mileage ?? 0;
+    const currentMileage = resolvedCurrentMileage ?? 0;
 
     // Map service category to composite value
     const categoryCompositeMap: Record<string, number> = {

@@ -2,8 +2,9 @@
  * convex/lib/brakeScope.ts — Booking → brake axle scope.
  *
  * A brake booking carries its axle choice in `selected_service_options`
- * (option_type "axle_position", labels "Front only" / "Rear only" / "Both…")
- * and, for rotor-quote bookings, in `rotor_specs.axle`. The priced parts
+ * (option_type "position" in the live services catalog, "axle_position" in the
+ * older seed; labels "Front" / "Rear" / "Front and rear") and, for rotor-quote
+ * bookings, in `rotor_specs.axle`. The priced parts
  * snapshot is NOT a reliable scope source — when the booking flow omits
  * `service_variants`, the resolver silently defaults a multi-axle service to
  * front. So scope-aware UI (the pre-job OEM parts card, the pre-job brakes
@@ -36,6 +37,21 @@ export function isRotorSlug(slug: string | null | undefined): boolean {
   return slug.toLowerCase().includes("rotor");
 }
 
+// The live services catalog tags brake/rotor axle choices as option_type
+// "position" (convex/seed_services_catalog.ts); the older seed used
+// "axle_position". Accept both — plus untyped legacy rows — so a customer's
+// Front/Rear pick is never silently dropped. This is safe because
+// parseAxlePosition returns null for non-axial labels (so a non-brake
+// "position" option such as wipers can't be read as an axle), and every axle
+// read is gated to brake services (isBrakeSlug) upstream regardless.
+const AXLE_OPTION_TYPES = new Set(["axle_position", "position"]);
+
+/** True when this option's type can carry an axle choice (or is an untyped
+ *  legacy row). */
+export function isAxleOptionType(type: string | null | undefined): boolean {
+  return !type || AXLE_OPTION_TYPES.has(type);
+}
+
 /** Parse an axle_position option label into a normalized axle. Returns null
  *  when the label carries no front/rear signal. */
 export function parseAxlePosition(
@@ -59,8 +75,9 @@ export function axlePositionByServiceId(
 ): Map<string, AxlePosition> {
   const out = new Map<string, AxlePosition>();
   for (const opt of booking.selected_service_options ?? []) {
-    // Tolerate legacy rows with no option_type as long as the label is axial.
-    if (opt.option_type && opt.option_type !== "axle_position") continue;
+    // Accept "position" (live catalog) and "axle_position" (older seed), plus
+    // untyped legacy rows, as long as the label is axial.
+    if (!isAxleOptionType(opt.option_type)) continue;
     const pos = parseAxlePosition(opt.option_label);
     if (pos) out.set(String(opt.service_id), pos);
   }
@@ -102,7 +119,7 @@ export function deriveServiceVariantsFromOptions(
 ): Array<{ serviceId: Id<"services">; position: AxlePosition }> {
   const out: Array<{ serviceId: Id<"services">; position: AxlePosition }> = [];
   for (const opt of selectedOptions ?? []) {
-    if (opt.option_type && opt.option_type !== "axle_position") continue;
+    if (!isAxleOptionType(opt.option_type)) continue;
     const pos = parseAxlePosition(opt.option_label);
     if (pos) out.push({ serviceId: opt.service_id, position: pos });
   }
@@ -167,7 +184,27 @@ export async function resolveBrakeScopeForBooking(
     if (axle === "rear" || axle === "both") rear = true;
   }
 
+  // Off-catalog brake/rotor work added via the pre-job / mid-job "Add to this
+  // job" path lives in custom_services, NOT service_ids, so the loop above never
+  // sees it. It carries its axle inline (customJobs.addCustomServiceForBooking
+  // defaults a brake line to "both"), because it has no selected_service_options
+  // entry to read. Fold it in so a booking whose ONLY brake work was added
+  // off-catalog still resolves a real axle scope instead of dead-ending the
+  // inspection on "missing axle selection". isBrakeSlug matches the display name
+  // ("Brake Pad Replacement" → brake) the same way it matches a service slug.
+  for (const line of booking.custom_services ?? []) {
+    if (!isBrakeSlug(line?.name)) continue;
+    hasBrakeWork = true;
+    const axle = line?.axle as AxlePosition | undefined;
+    if (!axle) continue;
+    sawAxleSignal = true;
+    if (axle === "front" || axle === "both") front = true;
+    if (axle === "rear" || axle === "both") rear = true;
+  }
+
   if (!hasBrakeWork) return { hasBrakeWork: false, front: false, rear: false };
-  if (!sawAxleSignal) return { hasBrakeWork: true, front: true, rear: true };
+  // Missing axle scope is invalid for a brake booking. Callers surface a
+  // blocking booking-scope error instead of silently inspecting all corners.
+  if (!sawAxleSignal) return { hasBrakeWork: true, front: false, rear: false };
   return { hasBrakeWork: true, front, rear };
 }

@@ -14,13 +14,21 @@ import { useFuzzySearchList, Highlight } from '@nozbe/microfuzz/react'
 import { api } from '@/convex/_generated/api'
 import { DirectorSessionCtx } from './DirectorSessionCtx'
 import { gotoEntity } from './directorNav'
-import { NAV_ITEMS, type NavItem } from './navConfig'
+import { NAV_GROUPS, NAV_ITEMS, type NavItem } from './navConfig'
 
 const RECORDS_DEBOUNCE_MS = 180
 
 type NavRow = NavItem & { section: string }
 
 const HIGHLIGHT_STYLE = { background: 'transparent', color: '#2563eb', fontWeight: 600 }
+
+// Shared cmdk group-heading treatment so every section header (nav + records)
+// renders identically.
+const GROUP_HEADING_CLASS =
+  '[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-bold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-slate-400'
+
+// `settings` lives at the tail of NAV_ITEMS (sidebar footer gear, not a group).
+const SETTINGS_ITEM = NAV_ITEMS.find((i) => i.id === 'settings')
 
 export function DirectorCommandK({
   open,
@@ -116,31 +124,32 @@ export function DirectorCommandK({
                 </Command.Empty>
               )}
 
-              {/* Pages / navigation */}
-              {navResults.length > 0 && (
-                <Command.Group
-                  heading={searching ? 'Pages' : 'Jump to'}
-                  className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-1.5 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-bold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-slate-400"
-                >
-                  {navResults.map(({ item, ranges }) => {
-                    const Icon = item.Icon
-                    return (
-                      <Command.Item
-                        key={item.id}
-                        value={`nav-${item.id}`}
-                        onSelect={() => goTab(item.id)}
-                        className="group flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-[13px] text-slate-800 data-[selected=true]:bg-blue-50"
-                      >
-                        <span className="shrink-0 text-slate-400 group-data-[selected=true]:text-blue-500">
-                          <Icon size={16} />
-                        </span>
-                        <span className="min-w-0 flex-1 truncate font-medium">
-                          {ranges ? <Highlight text={item.label} ranges={ranges} style={HIGHLIGHT_STYLE} /> : item.label}
-                        </span>
-                        <span className="shrink-0 text-[11px] text-slate-400">{item.section}</span>
-                      </Command.Item>
-                    )
-                  })}
+              {/* Idle state: the full nav, grouped by section like the sidebar —
+                  scannable instead of a flat wall of 28 rows. */}
+              {!searching &&
+                NAV_GROUPS.map((group, i) => (
+                  <Command.Group
+                    key={group.section ?? `group-${i}`}
+                    heading={group.section}
+                    className={GROUP_HEADING_CLASS}
+                  >
+                    {group.items.map((item) => (
+                      <NavItemRow key={item.id} item={item} onSelect={() => goTab(item.id)} />
+                    ))}
+                  </Command.Group>
+                ))}
+              {!searching && SETTINGS_ITEM && (
+                <Command.Group heading="System" className={GROUP_HEADING_CLASS}>
+                  <NavItemRow item={SETTINGS_ITEM} onSelect={() => goTab(SETTINGS_ITEM.id)} />
+                </Command.Group>
+              )}
+
+              {/* While searching: one relevance-ranked list, section shown per row. */}
+              {searching && navResults.length > 0 && (
+                <Command.Group heading="Pages" className={GROUP_HEADING_CLASS}>
+                  {navResults.map(({ item, ranges }) => (
+                    <NavItemRow key={item.id} item={item} ranges={ranges} showSection onSelect={() => goTab(item.id)} />
+                  ))}
                 </Command.Group>
               )}
 
@@ -182,12 +191,41 @@ export function DirectorCommandK({
   )
 }
 
+// One nav row. `ranges` highlights the fuzzy match while searching; `showSection`
+// appends the section tag (only useful in the flat, ranked search view — the
+// idle view already carries a section heading above each group).
+function NavItemRow({
+  item,
+  ranges,
+  showSection,
+  onSelect,
+}: {
+  item: NavItem & { section?: string }
+  ranges?: Array<[number, number]> | null
+  showSection?: boolean
+  onSelect: () => void
+}) {
+  const Icon = item.Icon
+  return (
+    <Command.Item
+      value={`nav-${item.id}`}
+      onSelect={onSelect}
+      className="group flex cursor-pointer items-center gap-3 rounded-md px-3 py-2 text-[13px] text-slate-800 data-[selected=true]:bg-blue-50"
+    >
+      <span className="shrink-0 text-slate-400 group-data-[selected=true]:text-blue-500">
+        <Icon size={16} />
+      </span>
+      <span className="min-w-0 flex-1 truncate font-medium">
+        {ranges ? <Highlight text={item.label} ranges={ranges} style={HIGHLIGHT_STYLE} /> : item.label}
+      </span>
+      {showSection && item.section && <span className="shrink-0 text-[11px] text-slate-400">{item.section}</span>}
+    </Command.Item>
+  )
+}
+
 function RecordGroup({ heading, children }: { heading: string; children: React.ReactNode }) {
   return (
-    <Command.Group
-      heading={heading}
-      className="[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:pt-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:font-bold [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-slate-400"
-    >
+    <Command.Group heading={heading} className={GROUP_HEADING_CLASS}>
       {children}
     </Command.Group>
   )

@@ -92,7 +92,11 @@ async function hydrate(
 
   let serviceSummary: string | null = null;
   if (booking?.service_ids?.length) {
-    const names = await resolveServiceNames(ctx, booking.service_ids.slice(0, 4));
+    const names = await resolveServiceNames(
+      ctx,
+      booking.service_ids.slice(0, 4),
+      booking.custom_services,
+    );
     if (names.length === 1) serviceSummary = names[0];
     else if (names.length > 1) {
       serviceSummary = `${names[0]} +${booking.service_ids.length - 1} more`;

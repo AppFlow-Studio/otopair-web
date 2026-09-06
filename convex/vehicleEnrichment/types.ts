@@ -296,6 +296,35 @@ export function buildNhtsaVinKey(input: {
   return parts.join("_");
 }
 
+/**
+ * Identity fingerprint for a vehicle known only by year/make/model[/trim] —
+ * no VIN, no engine resolved yet.
+ *
+ * Deliberately built from the SAME canonicalize/canonicalizeMake pair as
+ * buildEngineKey and buildNhtsaVinKey so a manually-entered "mercedes benz"
+ * fingerprints identically to a VIN-decoded "Mercedes-Benz". Used to recognise
+ * a returning walk-in's car (bookings.resolveWalkInVin) so we reuse their
+ * existing placeholder VIN instead of forking a second vehicles row — service
+ * history is keyed by VIN string, so a fork splits the car's history in two.
+ *
+ * Format: `{year}_{makeSlug}_{modelSlug}[_{trimSlug}]`
+ * Example: "2020_honda_cr_v_ex_l"
+ */
+export function buildYmmtFingerprint(input: {
+  year: number;
+  make: string;
+  model: string;
+  trim?: string;
+}): string {
+  const parts = [
+    String(input.year),
+    canonicalizeMake(input.make),
+    canonicalize(input.model),
+    canonicalize(input.trim ?? ""),
+  ].filter((p) => p.length > 0);
+  return parts.join("_");
+}
+
 // ─── Field Lists (for fill rate calculation) ─────────────────────
 
 // ─── P2.4 · Field-level sibling inheritance ──────────────────────
@@ -559,10 +588,11 @@ export const V4_FIELD_KEYS = [
 
   // ── v7 New OEM Parts (4) ──
   "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem",
-  // ── Rotor thickness (4) ── the DISCARD minimum is the replace-at number the
-  //    inspection grades against; nominal is the new thickness and is tracked
-  //    separately purely so a nominal can never be mistaken for a minimum.
-  "rotor_front_min_thickness_mm", "rotor_rear_min_thickness_mm",
+  // ── Rotor thickness (2) ── NOMINAL (new/original OEM) thickness only. The
+  //    replace-at minimum is no longer an extraction target: it is DERIVED as
+  //    a 15% wear threshold off the nominal (rotorSpecResource.deriveRotorMinMm,
+  //    operator policy Aug 2026) — the web publishes nominals, not discard
+  //    limits, so hunting minimums bought nothing.
   "rotor_front_nominal_thickness_mm", "rotor_rear_nominal_thickness_mm",
   // ── v9.9 New OEM Parts (1) ── bottle-SKU engine oil for oil_change fitment.
   "engine_oil_oem",

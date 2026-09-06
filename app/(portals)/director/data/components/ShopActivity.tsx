@@ -8,6 +8,7 @@ import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
 import type { api } from "@/convex/_generated/api";
 import { CARD, MICRO_H, PILL, money, fmtNum, SegmentedControl, Skeleton } from "./shared";
+import { stashGoto } from "@/app/(director-panel)/director/components/directorNav";
 
 type TopShops = FunctionReturnType<typeof api.directorOverview.overviewTopShops> | undefined;
 type TopMechanics = FunctionReturnType<typeof api.directorOverview.overviewTopMechanics> | undefined;
@@ -84,7 +85,8 @@ export function ShopActivity({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <Link
-                        href={`/shops/all/${String(s.id)}`}
+                        href="/director#shops"
+                        onClick={() => stashGoto("shops", String(s.id))}
                         className="truncate text-[13px] font-medium text-slate-800 hover:text-blue-700"
                       >
                         {s.name}
@@ -119,7 +121,8 @@ export function ShopActivity({
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <Link
-                        href={`/shops/mechanics/${String(m.id)}`}
+                        href="/director#shops"
+                        onClick={() => stashGoto("shops-mechanic", String(m.id))}
                         className="truncate text-[13px] font-medium text-slate-800 hover:text-blue-700"
                       >
                         {m.name}
@@ -149,7 +152,7 @@ export function ShopActivity({
           </ul>
         )}
         <div className="mt-2 border-t border-slate-100 pt-2 text-right">
-          <Link href="/shops/all" className="text-[12px] font-semibold text-blue-600 hover:underline">
+          <Link href="/director#shops" className="text-[12px] font-semibold text-blue-600 hover:underline">
             All shops →
           </Link>
         </div>

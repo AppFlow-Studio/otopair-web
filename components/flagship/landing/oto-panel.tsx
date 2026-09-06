@@ -130,8 +130,8 @@ const OTO_CAPTIONS: Record<OtoPhase, string> = {
   s4pick: "Live slots — tap to reserve.",
   s5: "Every detail confirmed before you pay.",
   pay: "Every detail confirmed before you pay.",
-  payscreen: "A real estimate. A $20 hold — that's it.",
-  gpay: "A real estimate. A $20 hold — that's it.",
+  payscreen: "A locked price. A $20 hold — that's it.",
+  gpay: "A locked price. A $20 hold — that's it.",
   success: "Booked in about 90 seconds.",
   receipt: "Booked in about 90 seconds.",
 };
@@ -581,6 +581,11 @@ function WizardSheet({ step, paying }: { step: 1 | 2 | 3 | 4 | 5; paying: boolea
                     Tomorrow at 8:15 AM
                   </span>
                 </div>
+                {/* Services only — the old "Labor rate $150/hr (shop posted)"
+                    row is gone with the rest of the rate math (design
+                    feedback 2026-08-31): no per-hour numbers anywhere on the
+                    marketing page. The footnote below carries the lock
+                    message. */}
                 <div className="rounded-[8px] bg-white p-1.5">
                   <div className="flex items-center justify-between">
                     <span className="text-[5.3px] uppercase tracking-wide" style={{ color: C.dim }}>
@@ -591,18 +596,9 @@ function WizardSheet({ step, paying }: { step: 1 | 2 | 3 | 4 | 5; paying: boolea
                       <Pencil className="h-[5px] w-[5px]" style={{ color: C.dim }} />
                     </span>
                   </div>
-                  <div className="my-1 border-t" style={{ borderColor: C.border }} />
-                  <div className="flex items-center justify-between">
-                    <span className="text-[5.3px] uppercase tracking-wide" style={{ color: C.dim }}>
-                      Labor rate
-                    </span>
-                    <span className="text-[5.8px] font-medium" style={{ color: C.ink }}>
-                      $150/hr (shop posted)
-                    </span>
-                  </div>
                 </div>
                 <p className="px-0.5 text-[5px] leading-snug" style={{ color: C.dim }}>
-                  Final total comes from the shop&apos;s posted rate and parts estimate on the payment screen.
+                  Your price locks on the next screen — before you pay.
                 </p>
               </div>
               <SheetCta label="Book & Pay" pressed={paying} />
@@ -778,28 +774,21 @@ function PayScreen({ pressing, success, reduce }: { pressing: boolean; success: 
             <FileText className="h-[7px] w-[7px]" style={{ color: C.meta }} />
           </div>
           <div className="my-1 border-t" style={{ borderColor: "rgba(0,0,0,0.06)" }} />
+          {/* One flat line per service, one locked total. NO labor math, NO
+              fee line, NO ranges: the internal pricing formula and the 7%
+              service fee are locked-decision secrets (Aug 2026), and a range
+              under a "Fixed" headline reads as a broken promise (site audit
+              2026-08-31). Fees live folded inside the service price. */}
           <div className="space-y-[3px]">
-            <BreakdownRow k="Brake Inspection" v="$77.50 – $81.50" />
-            <BreakdownRow k="Labor (30 mins @ $150/hr)" v="$75.00" sub />
-            <BreakdownRow k="Shop supplies (Part)" v="$2.50 – $6.50" sub />
-            <BreakdownRow k="Brake pads (if needed)" v="Price TBD" sub />
-            <BreakdownRow k="Taxes" v="$0.22 – $0.58" sub />
-            <div className="flex items-baseline justify-between">
-              <span className="flex items-center gap-0.5 text-[5.8px]" style={{ color: C.meta }}>
-                Service Fee — 7%
-                <Info className="h-[5px] w-[5px]" style={{ color: C.dim }} />
-              </span>
-              <span className="text-[5.8px]" style={{ color: C.meta }}>
-                $5.43 – $5.71
-              </span>
-            </div>
+            <BreakdownRow k="Brake Inspection" v="$85.00" />
+            <BreakdownRow k="Taxes" v="$7.54" sub />
           </div>
           <div className="my-1 border-t" style={{ borderColor: "rgba(0,0,0,0.06)" }} />
           <span className="block text-[6.3px] font-bold" style={{ color: C.ink }}>
-            Estimated price range
+            Your locked price
           </span>
           <span className="block text-[9.5px] font-extrabold" style={{ color: C.blue }}>
-            $83.15 – $87.79
+            $92.54
           </span>
           <div
             className="mt-1 flex items-start gap-1 rounded-[6px] border p-1"
@@ -1087,8 +1076,10 @@ export default function OtoPanel({ active, reduce }: { active: boolean; reduce: 
                   )}
                 </div>
 
-                {/* Input area — above the tab bar */}
-                <div className="pb-10">
+                {/* Input area — clears the floating tab bar (its top sits ~44px
+                    from the screen bottom: 10px inset + ~34px pill), so 50px of
+                    padding leaves a visible gap instead of touching it. */}
+                <div className="pb-[50px]">
                   {phase === "listen" ? <VoiceStrip animate={!reduce} /> : <InputBar />}
                 </div>
               </div>
@@ -1110,11 +1101,15 @@ export default function OtoPanel({ active, reduce }: { active: boolean; reduce: 
       </div>
 
       {/* Caption — pinned to the card bottom, same treatment as Shops */}
-      <div className="flex h-8 shrink-0 items-center justify-center sm:h-9">
-        <AnimatePresence mode="wait" initial={false}>
+      {/* popLayout, not wait: "wait" empties the row for a full exit+enter
+          cycle, so the subtitle blinks out between beats. The crossfade
+          keeps a line on screen at all times, and `relative` gives the
+          exiting chip something to pin to while it fades. */}
+      <div className="relative flex h-8 shrink-0 items-center justify-center sm:h-9">
+        <AnimatePresence mode="popLayout" initial={false}>
           <motion.span
             key={caption}
-            className="whitespace-nowrap rounded-full bg-white/70 px-5 py-1.5 text-[12px] tracking-[0.03em] text-[#1a1a1a] ring-1 ring-black/5 backdrop-blur-md sm:text-[13px] lg:px-6 lg:py-2 lg:text-[13.5px]"
+            className="whitespace-nowrap rounded-full border-[0.5px] border-white/50 bg-white/20 px-5 py-1.5 text-[12px] tracking-[0.03em] text-[#1a1a1a] backdrop-blur-[35px] sm:text-[13px] lg:px-6 lg:py-2 lg:text-[13.5px]"
             initial={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
             animate={{ opacity: active ? 1 : 0, y: 0 }}
             exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8 }}

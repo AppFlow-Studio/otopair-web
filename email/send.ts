@@ -73,6 +73,46 @@ export async function sendInviteEmail({
 interface WaitlistSignupData {
     email: string;
     name?: string;
+    /** Borough the signup came from (the /brooklyn, /queens… waitlist pages),
+     *  or the "App launch" list tag, so the team can size demand before launch. */
+    borough?: string;
+}
+
+/** Sender for the pre-launch waitlist emails. `info@otopair.com` is already a
+ *  verified Resend sender (used by the invite emails); the old
+ *  `onboarding@resend.dev` sandbox address does NOT deliver to real inboxes.
+ *  Override with WAITLIST_FROM if a dedicated address is verified later. */
+const WAITLIST_FROM = process.env.WAITLIST_FROM || 'Otopair <info@otopair.com>';
+
+/** Where new signups are announced. Defaults to developer@otopair.com. */
+const WAITLIST_NOTIFY_TO = process.env.WAITLIST_NOTIFY_EMAIL || 'developer@otopair.com';
+
+/**
+ * Light, home-page-styled shell for the waitlist emails — the hero's sky wash
+ * (#98C9E8 → white) fading under the Otopair logo, a steel-blue (#4B82A5) serif
+ * headline, and the site's NAP footer. Table-based for email-client support.
+ * `bodyHtml` is trusted, pre-built markup and `headline` a trusted literal;
+ * any user-supplied value inside `bodyHtml` must be escaped by the caller.
+ */
+function waitlistShell(headline: string, bodyHtml: string): string {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background:#F2F8FC;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Inter,Arial,sans-serif;">
+  <table role="presentation" width="100%" style="border-collapse:collapse;background:#F2F8FC;"><tr><td align="center" style="padding:40px 20px;">
+    <table role="presentation" width="600" style="max-width:600px;width:100%;border-collapse:collapse;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 8px 24px rgba(17,24,39,0.06),0 1px 2px rgba(17,24,39,0.04);">
+      <tr><td style="padding:44px 40px 28px;text-align:center;background:linear-gradient(180deg,#98C9E8 0%,#FFFFFF 100%);">
+        <img src="${OTOPAIR_LOGO_URL}" alt="Otopair" width="56" height="56" style="display:block;margin:0 auto 18px;border:0;">
+        <h1 style="margin:0;font-family:Georgia,'Times New Roman',serif;font-weight:400;font-size:30px;line-height:1.15;color:#4B82A5;letter-spacing:-0.3px;">${headline}</h1>
+      </td></tr>
+      <tr><td style="padding:8px 40px 8px;color:#4c5661;font-size:16px;line-height:1.65;">${bodyHtml}</td></tr>
+      <tr><td style="padding:26px 40px 34px;border-top:1px solid #eceff2;background:#fbfcfd;text-align:center;">
+        <p style="margin:0 0 4px;color:#1a1a1a;font-size:14px;font-weight:600;">Otopair · AppFlow Creations Inc.</p>
+        <p style="margin:0 0 10px;color:#777169;font-size:13px;">Staten Island, NY · <a href="mailto:support@otopair.com" style="color:#4B82A5;text-decoration:none;">support@otopair.com</a></p>
+        <p style="margin:0;color:#9aa3ab;font-size:12px;">© ${new Date().getFullYear()} AppFlow Creations Inc. All rights reserved</p>
+      </td></tr>
+    </table>
+  </td></tr></table>
+</body></html>`;
 }
 
 /**
@@ -82,137 +122,22 @@ export async function sendWaitlistConfirmationEmail(data: WaitlistSignupData) {
     try {
         const { email, name } = data;
 
+        const greetName = name ? escapeHtml(name) : 'there';
         const result = await resend.emails.send({
-            from: 'Otopair <onboarding@resend.dev>', // Update with your verified domain
+            from: WAITLIST_FROM,
             to: email,
-            subject: 'Welcome to Otopair - You\'re on the Waitlist! 🚗',
-            html: `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>Welcome to Otopair</title>
-        </head>
-        <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f9fafb;">
-          <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f9fafb;">
-            <tr>
-              <td align="center" style="padding: 40px 20px;">
-                <table role="presentation" style="max-width: 600px; width: 100%; border-collapse: collapse; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-                  <!-- Header -->
-                  <tr>
-                    <td style="padding: 40px 40px 30px; text-align: center; background: linear-gradient(135deg, #0d72ff 0%, #3b82f6 100%); border-radius: 12px 12px 0 0;">
-                      <h1 style="margin: 0; color: #ffffff; font-size: 32px; font-weight: 700; letter-spacing: -0.5px;">Welcome to Otopair!</h1>
-                    </td>
-                  </tr>
-                  
-                  <!-- Content -->
-                  <tr>
-                    <td style="padding: 40px;">
-                      <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
-                        ${name ? `Hi ${name},` : 'Hi there,'}
-                      </p>
-                      
-                      <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
-                        Thank you for joining the Otopair waitlist! We're thrilled to have you on board as we revolutionize the way car repairs are coordinated.
-                      </p>
-                      
-                      <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
-                        <strong>What's next?</strong>
-                      </p>
-                      
-                      <ul style="margin: 0 0 20px; padding-left: 20px; color: #1f2937; font-size: 16px; line-height: 1.8;">
-                        <li>You'll be among the first to access our beta when it launches</li>
-                        <li>Receive exclusive updates on new features and improvements</li>
-                        <li>Get early access to special offers and promotions</li>
-                        <li>Help shape the future of car repair coordination</li>
-                      </ul>
-                      
-                      <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
-                        We're building something special, and your support means everything to us. Stay tuned for exciting updates!
-                      </p>
-                      
-                      <!-- CTA Button -->
-                      <table role="presentation" style="width: 100%; border-collapse: collapse; margin: 30px 0;">
-                        <tr>
-                          <td align="center" style="padding: 0;">
-                            <a href="https://otopair.com" style="display: inline-block; padding: 14px 32px; background: linear-gradient(135deg, #0d72ff 0%, #3b82f6 100%); color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; box-shadow: 0 4px 14px rgba(13, 114, 255, 0.3);">
-                              Visit Otopair
-                            </a>
-                          </td>
-                        </tr>
-                      </table>
-                      
-                      <p style="margin: 30px 0 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
-                        If you have any questions, feel free to reach out to us. We're here to help!
-                      </p>
-                    </td>
-                  </tr>
-                  
-                  <!-- Footer -->
-                  <tr>
-                    <td style="padding: 50px 40px 40px; background-color: #ffffff; border-radius: 0 0 12px 12px; border-top: 1px solid #e5e7eb;">
-                      <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                        <!-- Logo -->
-                        <tr>
-                          <td align="center" style="padding: 0 0 24px;">
-                            <img src="https://otopair.com/logo.png" alt="Otopair Logo" style="width: 64px; height: 64px; display: block; margin: 0 auto;" />
-                          </td>
-                        </tr>
-                        
-                        <!-- Company Name -->
-                        <tr>
-                          <td align="center" style="padding: 0 0 8px;">
-                            <p style="margin: 0; color: #1f2937; font-size: 18px; font-weight: 600; letter-spacing: -0.3px;">
-                              Otopair
-                            </p>
-                          </td>
-                        </tr>
-                        
-                        <!-- Tagline -->
-                        <tr>
-                          <td align="center" style="padding: 0 0 24px;">
-                            <p style="margin: 0; color: #6b7280; font-size: 14px; line-height: 1.5;">
-                              The future of car repair coordination
-                            </p>
-                          </td>
-                        </tr>
-                        
-                        <!-- Social Links -->
-                        <tr>
-                          <td align="center" style="padding: 0 0 32px;">
-                            <table role="presentation" style="border-collapse: collapse; margin: 0 auto;">
-                              <tr>
-                                <td style="padding: 0 6px;">
-                                  <a href="https://www.linkedin.com/company/repair-connect/" target="_blank" rel="noopener noreferrer" style="display: inline-block; width: 40px; height: 40px; border: 1px solid #e5e7eb; border-radius: 8px; background-color: #ffffff; text-align: center; line-height: 40px; text-decoration: none; transition: background-color 0.2s;">
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="black" style="vertical-align: middle;">
-                                      <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
-                                    </svg>
-                                  </a>
-                                </td>
-                              </tr>
-                            </table>
-                          </td>
-                        </tr>
-                        
-                        <!-- Copyright -->
-                        <tr>
-                          <td align="center" style="padding: 0;">
-                            <p style="margin: 0; color: #9ca3af; font-size: 12px; line-height: 1.6;">
-                              © Otopair ${new Date().getFullYear()}
-                            </p>
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-          </table>
-        </body>
-        </html>
+            subject: "You're on the Otopair launch list",
+            html: waitlistShell(
+                "You're on the list.",
+                `
+        <p style="margin:0 0 18px;">Hi ${greetName},</p>
+        <p style="margin:0 0 18px;">Thanks for joining the Otopair launch list. Otopair connects you with verified independent shops near you, at a fixed price you see in full before you book — no phone tag, no surprises.</p>
+        <p style="margin:0 0 18px;">We're opening one New York City borough at a time, starting with Staten Island. You'll get <strong style="color:#1a1a1a;">one email the day the app goes live</strong> — nothing else.</p>
+        <table role="presentation" width="100%" style="border-collapse:collapse;margin:24px 0 6px;"><tr><td align="center">
+          <a href="https://otopair.com" style="display:inline-block;padding:14px 30px;background:#1a1a1a;color:#ffffff;text-decoration:none;border-radius:999px;font-size:15px;font-weight:600;">Explore Otopair</a>
+        </td></tr></table>
       `,
+            ),
         });
 
         return { success: true, data: result };
@@ -590,6 +515,136 @@ export async function sendWalkinClaimEmail({
   }
 }
 
+// ============================================================================
+// Data API — enrichment run updates (OtoIndex /developers)
+// ============================================================================
+//
+// Sent to the API-key owner when a POST /v0/enrich run they triggered is
+// queued, completes, or fails. Enqueued onto notification_outbox by
+// dataApiEnrich.ts and dispatched via lib/email_provider.ts. The dashboard
+// link honors OTOINDEX_APP_URL / OTOFACTS_APP_URL (falls back to
+// https://otoindex.com).
+
+type EnrichEmailCategory = "enrich_queued" | "enrich_complete" | "enrich_failed";
+
+type EnrichEmailPayload = {
+  vin?: string | null;
+  vehicle?: string | null;
+  year?: number | null;
+  make?: string | null;
+  model?: string | null;
+  trim?: string | null;
+  config_key?: string | null;
+  fill_rate?: number | null;
+  error?: string | null;
+};
+
+function otoindexDashboardUrl(): string {
+  const base = (
+    process.env.OTOINDEX_APP_URL ||
+    process.env.OTOFACTS_APP_URL ||
+    "https://otoindex.com"
+  ).replace(/\/$/, "");
+  return `${base}/developers`;
+}
+
+function renderEnrichIdentity(p: EnrichEmailPayload): string {
+  const vehicle =
+    (p.vehicle && p.vehicle.trim()) ||
+    [p.year, p.make, p.model, p.trim].filter((x) => x != null && x !== "").join(" ");
+  const rows = [
+    vehicle
+      ? `<tr><td style="padding:6px 0;color:#5b6b80;font-size:14px;width:110px;">Vehicle</td><td style="padding:6px 0;color:#12233f;font-size:14px;font-weight:600;">${escapeHtml(vehicle)}</td></tr>`
+      : "",
+    p.vin
+      ? `<tr><td style="padding:6px 0;color:#5b6b80;font-size:14px;">VIN</td><td style="padding:6px 0;color:#12233f;font-size:13px;font-family:'SF Mono',Menlo,monospace;">${escapeHtml(p.vin)}</td></tr>`
+      : "",
+    p.config_key
+      ? `<tr><td style="padding:6px 0;color:#5b6b80;font-size:14px;">config_key</td><td style="padding:6px 0;color:#12233f;font-size:13px;font-family:'SF Mono',Menlo,monospace;">${escapeHtml(p.config_key)}</td></tr>`
+      : "",
+    p.fill_rate != null
+      ? `<tr><td style="padding:6px 0;color:#5b6b80;font-size:14px;">Fill rate</td><td style="padding:6px 0;color:#12233f;font-size:14px;font-weight:600;">${escapeHtml(String(p.fill_rate))}%</td></tr>`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("");
+  if (!rows) return "";
+  return `<table role="presentation" style="width:100%;border-collapse:collapse;margin:4px 0 24px;background:#f6f1e6;border-radius:10px;border:1px solid #e4dccb;">
+    <tr><td style="padding:12px 18px;"><table role="presentation" style="width:100%;border-collapse:collapse;">${rows}</table></td></tr>
+  </table>`;
+}
+
+function enrichCta(label: string, url: string): string {
+  return `<table role="presentation" style="width:100%;border-collapse:collapse;margin:8px 0 4px;">
+    <tr><td align="center">
+      <a href="${escapeHtml(url)}" style="display:inline-block;padding:13px 30px;background:#1b3358;color:#f6f1e6;text-decoration:none;border-radius:8px;font-weight:600;font-size:15px;">${escapeHtml(label)}</a>
+    </td></tr>
+  </table>`;
+}
+
+/** Enrichment-run lifecycle email (queued / complete / failed). */
+export async function sendEnrichUpdateEmail({
+  to,
+  category,
+  payload,
+}: {
+  to: string;
+  category: EnrichEmailCategory;
+  payload: EnrichEmailPayload;
+}) {
+  try {
+    const label =
+      (payload.vehicle && payload.vehicle.trim()) ||
+      [payload.year, payload.make, payload.model].filter((x) => x != null && x !== "").join(" ") ||
+      (payload.vin ? `VIN ${payload.vin}` : "your vehicle");
+    const dash = otoindexDashboardUrl();
+    const identity = renderEnrichIdentity(payload);
+
+    let subject: string;
+    let headline: string;
+    let body: string;
+
+    if (category === "enrich_complete") {
+      subject = `Your ${label} data is ready`;
+      headline = "Enrichment complete";
+      body = `
+        <p style="margin:0 0 8px;">Good news — the data for <strong>${escapeHtml(label)}</strong> is enriched and ready to query.</p>
+        ${identity}
+        <p style="margin:0 0 16px;color:#5b6b80;font-size:14px;">Fetch the full payload any time:</p>
+        <p style="margin:0 0 20px;padding:12px 16px;background:#12233f;border-radius:8px;color:#e9edf5;font-size:13px;font-family:'SF Mono',Menlo,monospace;overflow-wrap:anywhere;">GET /v0/vehicle?vin=${escapeHtml(payload.vin ?? "")}</p>
+        ${enrichCta("View on your dashboard", dash)}`;
+    } else if (category === "enrich_failed") {
+      subject = `Enrichment couldn't complete for ${label}`;
+      headline = "Enrichment didn't complete";
+      body = `
+        <p style="margin:0 0 8px;">We weren't able to finish enriching <strong>${escapeHtml(label)}</strong>.</p>
+        ${identity}
+        ${payload.error ? `<p style="margin:0 0 16px;color:#8a5a1a;font-size:14px;">${escapeHtml(payload.error)}</p>` : ""}
+        <p style="margin:0 0 20px;color:#5b6b80;font-size:14px;">Any enrich credit for a failed run is refunded automatically — you can retry from the console, and it often succeeds on a second pass.</p>
+        ${enrichCta("Open the dashboard", dash)}`;
+    } else {
+      subject = `Enriching ${label} — we'll email you when it's ready`;
+      headline = "Enrichment started";
+      body = `
+        <p style="margin:0 0 8px;">We've started enriching <strong>${escapeHtml(label)}</strong>. This usually takes 7–40 minutes; we'll email you the moment it's ready.</p>
+        ${identity}
+        <p style="margin:0 0 20px;color:#5b6b80;font-size:14px;">You can watch live progress on your dashboard, or poll <span style="font-family:'SF Mono',Menlo,monospace;">GET /v0/enrich?vin=${escapeHtml(payload.vin ?? "")}</span>.</p>
+        ${enrichCta("Track it live", dash)}`;
+    }
+
+    const result = await resend.emails.send({
+      from: "OtoIndex <info@otopair.com>",
+      to,
+      subject,
+      html: brandedShellWithLogo(headline, body),
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    console.error("Error sending enrich update email:", error);
+    return { success: false, error };
+  }
+}
+
 /**
  * Receipt / invoice email — sent after Stripe capture succeeds with the
  * branded PDF attached. Both the inline HTML and the attachment carry the
@@ -817,157 +872,33 @@ export async function sendShopOwnerInviteEmail({
  */
 export async function sendWaitlistNotificationEmail(data: WaitlistSignupData) {
     try {
-        const { email, name } = data;
-        const companyEmail = process.env.COMPANY_EMAIL || 'team@otopair.com'; // Update with your company email
+        const { email, name, borough } = data;
+
+        // Info card rows — every user value escaped.
+        const rows: Array<[string, string]> = [['Email', escapeHtml(email)]];
+        if (name) rows.push(['Name', escapeHtml(name)]);
+        if (borough) rows.push(['List', escapeHtml(borough)]);
+        rows.push(['Received', new Date().toLocaleString('en-US', {
+            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+            hour: '2-digit', minute: '2-digit', timeZoneName: 'short',
+        })]);
+        const card = rows.map(([k, v], i) => `
+          <tr><td style="padding:${i === 0 ? '0' : '14px'} 0 4px;color:#777169;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">${k}</td></tr>
+          <tr><td style="padding:0;color:#1a1a1a;font-size:17px;font-weight:600;">${v}</td></tr>`).join('');
 
         const result = await resend.emails.send({
-            from: 'Otopair <onboarding@resend.dev>', // Update with your verified domain
-            to: companyEmail,
-            subject: `🎉 New Waitlist Signup: ${email}`,
-            html: `
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-          <meta charset="UTF-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1.0">
-          <title>New Waitlist Signup</title>
-        </head>
-        <body style="margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f9fafb;">
-          <table role="presentation" style="width: 100%; border-collapse: collapse; background-color: #f9fafb;">
-            <tr>
-              <td align="center" style="padding: 40px 20px;">
-                <table role="presentation" style="max-width: 600px; width: 100%; border-collapse: collapse; background-color: #ffffff; border-radius: 12px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-                  <!-- Header -->
-                  <tr>
-                    <td style="padding: 30px 40px; text-align: center; background: linear-gradient(135deg, #10b981 0%, #059669 100%); border-radius: 12px 12px 0 0;">
-                      <h1 style="margin: 0; color: #ffffff; font-size: 24px; font-weight: 700; letter-spacing: -0.5px;">New Waitlist Signup! 🎉</h1>
-                    </td>
-                  </tr>
-                  
-                  <!-- Content -->
-                  <tr>
-                    <td style="padding: 40px;">
-                      <p style="margin: 0 0 20px; color: #1f2937; font-size: 16px; line-height: 1.6;">
-                        Great news! Someone new has joined the Otopair waitlist.
-                      </p>
-                      
-                      <!-- User Info Card -->
-                      <table role="presentation" style="width: 100%; border-collapse: collapse; margin: 20px 0; background-color: #f9fafb; border-radius: 8px; border: 1px solid #e5e7eb;">
-                        <tr>
-                          <td style="padding: 20px;">
-                            <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                              <tr>
-                                <td style="padding: 0 0 12px; color: #6b7280; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
-                                  Email Address
-                                </td>
-                              </tr>
-                              <tr>
-                                <td style="padding: 0 0 20px; color: #1f2937; font-size: 18px; font-weight: 600;">
-                                  ${email}
-                                </td>
-                              </tr>
-                              ${name ? `
-                              <tr>
-                                <td style="padding: 0 0 12px; color: #6b7280; font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">
-                                  Name
-                                </td>
-                              </tr>
-                              <tr>
-                                <td style="padding: 0; color: #1f2937; font-size: 18px; font-weight: 600;">
-                                  ${name}
-                                </td>
-                              </tr>
-                              ` : ''}
-                            </table>
-                          </td>
-                        </tr>
-                      </table>
-                      
-                      <p style="margin: 20px 0 0; color: #6b7280; font-size: 14px; line-height: 1.6;">
-                        <strong>Timestamp:</strong> ${new Date().toLocaleString('en-US', {
-                weekday: 'long',
-                year: 'numeric',
-                month: 'long',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                timeZoneName: 'short'
-            })}
-                      </p>
-                    </td>
-                  </tr>
-                  
-                  <!-- Footer -->
-                  <tr>
-                    <td style="padding: 50px 40px 40px; background-color: #ffffff; border-radius: 0 0 12px 12px; border-top: 1px solid #e5e7eb;">
-                      <table role="presentation" style="width: 100%; border-collapse: collapse;">
-                        <!-- Logo -->
-                        <tr>
-                          <td align="center" style="padding: 0 0 24px;">
-                            <img src="https://otopair.com/logo.png" alt="Otopair Logo" style="width: 64px; height: 64px; display: block; margin: 0 auto;" />
-                          </td>
-                        </tr>
-                        
-                        <!-- Company Name -->
-                        <tr>
-                          <td align="center" style="padding: 0 0 8px;">
-                            <p style="margin: 0; color: #1f2937; font-size: 18px; font-weight: 600; letter-spacing: -0.3px;">
-                              Otopair
-                            </p>
-                          </td>
-                        </tr>
-                        
-                        <!-- Tagline -->
-                        <tr>
-                          <td align="center" style="padding: 0 0 24px;">
-                            <p style="margin: 0; color: #6b7280; font-size: 14px; line-height: 1.5;">
-                              The future of car repair coordination
-                            </p>
-                          </td>
-                        </tr>
-                        
-                        <!-- Social Links -->
-                        <tr>
-                          <td align="center" style="padding: 0 0 32px;">
-                            <table role="presentation" style="border-collapse: collapse; margin: 0 auto;">
-                              <tr>
-                                <td style="padding: 0 6px;">
-                                  <a href="https://www.linkedin.com/company/repair-connect/" target="_blank" rel="noopener noreferrer" style="display: inline-block; width: 40px; height: 40px; border: 1px solid #e5e7eb; border-radius: 8px; background-color: #ffffff; text-align: center; line-height: 40px; text-decoration: none; transition: background-color 0.2s;">
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; color: #1f2937;">
-                                      <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
-                                    </svg>
-                                  </a>
-                                </td>
-                                <td style="padding: 0 6px;">
-                                  <a href="https://twitter.com" target="_blank" rel="noopener noreferrer" style="display: inline-block; width: 40px; height: 40px; border: 1px solid #e5e7eb; border-radius: 8px; background-color: #ffffff; text-align: center; line-height: 40px; text-decoration: none; transition: background-color 0.2s;">
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; color: #1f2937;">
-                                      <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
-                                    </svg>
-                                  </a>
-                                </td>
-                              </tr>
-                            </table>
-                          </td>
-                        </tr>
-                        
-                        <!-- Copyright -->
-                        <tr>
-                          <td align="center" style="padding: 0;">
-                            <p style="margin: 0; color: #9ca3af; font-size: 12px; line-height: 1.6;">
-                              © Otopair ${new Date().getFullYear()}
-                            </p>
-                          </td>
-                        </tr>
-                      </table>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-          </table>
-        </body>
-        </html>
+            from: WAITLIST_FROM,
+            to: WAITLIST_NOTIFY_TO,
+            subject: `New launch-list signup${borough ? ` (${borough})` : ''}: ${email}`,
+            html: waitlistShell(
+                'New launch-list signup',
+                `
+        <p style="margin:0 0 18px;">Someone new joined the Otopair launch list.</p>
+        <table role="presentation" width="100%" style="border-collapse:collapse;background:#F7FAFD;border:1px solid #e6eef4;border-radius:12px;"><tr><td style="padding:20px 22px;">
+          <table role="presentation" width="100%" style="border-collapse:collapse;">${card}</table>
+        </td></tr></table>
       `,
+            ),
         });
 
         return { success: true, data: result };
@@ -1349,3 +1280,53 @@ export async function sendSupportRequestAckEmail(data: SupportRequestAckEmailDat
   }
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Contact form (website /contact → support inbox)                     */
+/* ------------------------------------------------------------------ */
+
+export type ContactLane = 'driver' | 'shop' | 'data' | 'press';
+
+const CONTACT_LANE_LABEL: Record<ContactLane, string> = {
+    driver: 'Driver',
+    shop: 'Repair shop',
+    data: 'Car data / API',
+    press: 'Press or partnerships',
+};
+
+/**
+ * Forward a website contact-form message to the support inbox, with the
+ * visitor's address as reply-to so the team answers from their own client.
+ * Plain-text body on purpose: it is an internal handoff, not marketing.
+ */
+export async function sendContactEmail({
+    name,
+    email,
+    lane,
+    message,
+}: {
+    name: string;
+    email: string;
+    lane: ContactLane;
+    message: string;
+}) {
+    try {
+        const to = process.env.COMPANY_EMAIL || 'support@otopair.com';
+        const result = await resend.emails.send({
+            from: 'Otopair <onboarding@resend.dev>', // Update with your verified domain
+            to,
+            replyTo: email,
+            subject: `[${CONTACT_LANE_LABEL[lane]}] ${name} via otopair.com/contact`,
+            text: `Lane: ${CONTACT_LANE_LABEL[lane]}\nFrom: ${name} <${email}>\n\n${message}\n`,
+        });
+        if (result.error) {
+            return { success: false as const, error: result.error.message };
+        }
+        return { success: true as const, id: result.data?.id };
+    } catch (error) {
+        return {
+            success: false as const,
+            error: error instanceof Error ? error.message : 'Unknown error',
+        };
+    }
+}

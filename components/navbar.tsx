@@ -7,6 +7,8 @@ import { AnimatedThemeToggler } from './ui/animated-theme-toggler'
 import LiquidGlass from '@nkzw/liquid-glass'
 import { ChevronRight, Menu, X, CheckCircle2 } from 'lucide-react'
 import { usePathname } from 'next/navigation'
+import { isValidEmail } from '@/lib/email'
+import { Honeypot, useBotGuard } from '@/components/flagship/waitlist-guard'
 const navItems = [
     {
         label: 'About',
@@ -21,7 +23,7 @@ const navItems = [
         href: '/services'
     },
     {
-        label: 'For shops',
+        label: 'Partner with us',
         href: '/partner-with-us'
     }
 ]
@@ -33,7 +35,16 @@ function Navbar() {
     const [email, setEmail] = useState('')
     const [name, setName] = useState('')
     const [submitted, setSubmitted] = useState(false)
+    const { honeypotRef, markOpened, guardFields } = useBotGuard()
     const isHome = pathname === "/"
+    // Every marketing page ships its own floating glass pill nav (PageShell,
+    // the home page, the partner page). Since 2026-09-05 that includes the
+    // last older routes (/apply, /car-data), so this
+    // legacy chrome stands down everywhere. The list stays so a future
+    // route without the shell can opt back in.
+    const LEGACY_CHROME_ROUTES: string[] = []
+    const hideChrome =
+        isHome || !LEGACY_CHROME_ROUTES.some((p) => pathname === p || pathname.startsWith(p + "/"))
 
     useEffect(() => {
         if (!isHome) {
@@ -49,8 +60,14 @@ function Navbar() {
         return () => window.removeEventListener('scroll', onScroll)
     }, [isHome])
 
+    // Start the bot-guard timer when the modal opens (the navbar stays mounted).
+    useEffect(() => {
+        if (waitlistModalOpen) markOpened()
+    }, [waitlistModalOpen, markOpened])
+
     const handleWaitlistSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
+        if (!isValidEmail(email)) return
 
         try {
             const response = await fetch('/api/waitlist', {
@@ -58,7 +75,7 @@ function Navbar() {
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ email, name: name || undefined }),
+                body: JSON.stringify({ email, name: name || undefined, ...guardFields() }),
             })
 
             const data = await response.json()
@@ -81,8 +98,8 @@ function Navbar() {
         }
     }
 
-    // The flagship home hero ships its own floating pill nav.
-    if (isHome) return null
+    // The flagship home hero and partner page ship their own floating pill nav.
+    if (hideChrome) return null
 
     return (
         <>
@@ -493,10 +510,13 @@ function Navbar() {
                                                     />
                                                 </div>
 
+                                                {/* Invisible bot trap — never seen or tabbed to by a human. */}
+                                                <Honeypot ref={honeypotRef} />
+
                                                 {/* Submit Button */}
                                                 <motion.button
                                                     type="submit"
-                                                    disabled={!email || submitted}
+                                                    disabled={!isValidEmail(email) || submitted}
                                                     className="w-full relative px-6 py-3 rounded-xl font-semibold text-white overflow-hidden group disabled:opacity-50 disabled:cursor-not-allowed"
                                                     style={{
                                                         background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.9) 0%, rgba(37, 99, 235, 1) 100%)',

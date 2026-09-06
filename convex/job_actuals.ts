@@ -21,7 +21,14 @@ import {
   type AxlePosition,
 } from "./lib/brakeScope";
 import { ensureWalkInCashPayment } from "./bookings";
-import { partFitsConfigMake } from "./partSelector";
+import { passesI1ReadGuardNamed, makeNameCached } from "./lib/makeIdentity";
+import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
+import { rotorMinForVin } from "./lib/rotorMin";
+import { serviceMatchKey } from "./lib/serviceMatch";
+import { resolveSparkPlugQuantity } from "./lib/sparkPlugs";
+import { deriveSuggestedRecommendations } from "../lib/inspection-template";
+import { canonicalWarningLights } from "../lib/warningLightVocab";
+import { applyInspectionLightPicker } from "./lib/warningLightsMerge";
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
@@ -43,6 +50,19 @@ type SuggestedPart = {
   // "Used last time on this car" (vin) vs "Shop default" (shop) vs catalog
   // fallback. Absent for legacy paths that pre-date the layered cascade.
   learned_from?: "vin" | "shop" | "config" | "catalog";
+  // Tire-replacement suggestion — identity lives in these structured fields
+  // (tires have no OEM number). oem_number carries the `TIRE-{size}` sentinel.
+  is_tire?: boolean;
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+  tire_position?: string | null;
+  // Seeded from the shop's accepted tire/rotor QUOTE response rather than the
+  // catalog cascade. A quote-originated booking carries its parts on the
+  // *_quote_responses row, not priced_parts_snapshot, so these lines are the
+  // only prefill for it — the post-job parts step unions them in explicitly
+  // (they must survive even when other snapshot parts, e.g. brakes, exist).
+  from_quote?: boolean;
 };
 
 // Mirror of SHOP_DEMOTE_DELTA in shop_part_preferences.ts so the cascade
@@ -345,6 +365,142 @@ export const getPostjobReportForBooking = query({
   },
 });
 
+// The quote flow attaches its service with either slug spelling depending on
+// which catalog row exists (bookings.acceptTireQuote / acceptRotorQuote try
+// "…-replacement" then "…_replacement"). The prefill MUST accept both — a real
+// booking on dev carries "tire_replacement" (underscore), and gating on the
+// hyphen alone is exactly why its parts step opened empty.
+const TIRE_REPLACEMENT_SLUGS = new Set(["tire-replacement", "tire_replacement"]);
+const ROTOR_REPLACEMENT_SLUGS = new Set([
+  "rotor-replacement",
+  "rotor_replacement",
+]);
+
+/** Per-axle tire counts. Honors the customer's booked corners
+ *  (tire_specs.positions: FL/FR → front, RL/RR → rear) so a rear-only job seeds
+ *  two rear tires, not one per axle. Falls back to an even split (front-weighted
+ *  on odd counts) when no positions were recorded. */
+function tireAxleQuantities(
+  positions: string[] | null | undefined,
+  totalQty: number,
+): { front: number; rear: number } {
+  if (Array.isArray(positions) && positions.length > 0) {
+    let front = 0;
+    let rear = 0;
+    for (const p of positions) {
+      if (p === "FL" || p === "FR") front += 1;
+      else if (p === "RL" || p === "RR") rear += 1;
+    }
+    if (front + rear > 0) return { front, rear };
+  }
+  const front = Math.ceil(totalQty / 2);
+  return { front, rear: totalQty - front };
+}
+
+/**
+ * The parts-step prefill for a quote-originated tire/rotor service.
+ *
+ * A quote booking carries its parts on the accepted (non-superseded)
+ * tire/rotor_quote_responses row — NOT priced_parts_snapshot — so this is the
+ * only prefill it has. Returns the lines marked `from_quote` (empty when the
+ * service isn't a tire/rotor replacement or no accepted quote exists). Shared by
+ * getPrefillData and the devOnly probe so the app and the confirmation read the
+ * exact same output.
+ */
+export async function quotePrefillLinesForService(
+  ctx: any,
+  booking: any,
+  slug: string | null | undefined,
+  serviceId: any,
+): Promise<SuggestedPart[]> {
+  if (!slug) return [];
+
+  if (TIRE_REPLACEMENT_SLUGS.has(slug)) {
+    const q = await ctx.db
+      .query("tire_quote_responses")
+      .withIndex("by_booking_id", (x: any) => x.eq("booking_id", booking._id))
+      .filter((x: any) => x.eq(x.field("superseded_at"), undefined))
+      .first();
+    if (!q) return [];
+    const totalQty = q.quantity ?? booking.tire_specs?.quantity ?? 4;
+    const size = booking.tire_specs?.size ?? null;
+    const brand = q.tire_brand ?? null;
+    const model = q.tire_model ?? null;
+    const brandModel = [brand, model].filter(Boolean).join(" ");
+    const oem = size ? `TIRE-${size}` : "";
+    const { front, rear } = tireAxleQuantities(
+      booking.tire_specs?.positions,
+      totalQty,
+    );
+    const lines: SuggestedPart[] = [];
+    for (const [position, axleQty] of [
+      ["front", front],
+      ["rear", rear],
+    ] as const) {
+      if (axleQty <= 0) continue;
+      lines.push({
+        part_name: brandModel
+          ? `Tires — ${brandModel} (x${axleQty})`
+          : `Tires (x${axleQty})`,
+        oem_number: oem,
+        cost: q.per_tire_price ?? 0,
+        quantity: axleQty,
+        service_id: serviceId,
+        is_tire: true,
+        from_quote: true,
+        tire_size: size,
+        tire_brand: brand,
+        tire_model: model,
+        tire_position: position,
+      });
+    }
+    return lines;
+  }
+
+  if (ROTOR_REPLACEMENT_SLUGS.has(slug)) {
+    const q = await ctx.db
+      .query("rotor_quote_responses")
+      .withIndex("by_booking_id", (x: any) => x.eq("booking_id", booking._id))
+      .filter((x: any) => x.eq(x.field("superseded_at"), undefined))
+      .first();
+    if (!q) return [];
+    const lines: SuggestedPart[] = [];
+    const rotorQty = q.quantity ?? 2;
+    const rotorBrandModel = [q.rotor_brand, q.rotor_model]
+      .filter(Boolean)
+      .join(" ");
+    // Axle-neutral name so the dialog's off-axle pruning (partNameAxle) never
+    // drops it — the quote gives a total count, not a per-axle split.
+    lines.push({
+      part_name: rotorBrandModel
+        ? `Rotors — ${rotorBrandModel} (x${rotorQty})`
+        : `Rotors (x${rotorQty})`,
+      oem_number: "",
+      cost: q.per_rotor_price ?? 0,
+      quantity: rotorQty,
+      service_id: serviceId,
+      from_quote: true,
+    });
+    if (q.pad_price != null || q.pad_brand) {
+      const padQty = q.pad_quantity ?? 1;
+      const padName = [q.pad_brand, q.pad_type].filter(Boolean).join(" ");
+      lines.push({
+        part_name: padName
+          ? `Brake Pads — ${padName} (x${padQty})`
+          : `Brake Pads (x${padQty})`,
+        oem_number: "",
+        cost: q.pad_price ?? 0,
+        quantity: padQty,
+        service_id: serviceId,
+        from_quote: true,
+      });
+    }
+    return lines;
+  }
+
+  return [];
+}
+
 export const getPrefillData = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -561,7 +717,30 @@ export const getPrefillData = query({
           // Per-unit cost (the dialog multiplies by quantity for the total).
           // Pre-fix bug: previously pushed `cost: 12 * qty` (line total)
           // with no `quantity`, which the dialog then multiplied again.
-          const qty = s.spark_plug_quantity ?? 4;
+          //
+          // The `?? 4` this replaces was a second, quieter bug: a missing
+          // quantity billed FOUR plugs on every engine, so a V6 was under-
+          // quoted by two and a HEMI V8 by twelve — confidently, with nothing
+          // marking it as a guess. `engine` is in scope here, so derive from
+          // its real cylinder count instead (lib/sparkPlugs owns the twin-plug
+          // exceptions). A genuinely unknown count now falls back to 1 rather
+          // than 4: still not the truth, but off by the smallest possible
+          // margin and visible as an obviously-wrong line rather than a
+          // plausible one. The pre-job form is where a mechanic corrects it.
+          const resolved = resolveSparkPlugQuantity({
+            spark_plug_quantity: s.spark_plug_quantity ?? engine.spark_plug_quantity,
+            cylinders: engine.cylinders,
+            make: make?.name,
+            engineCode: engine.engine_code,
+            displacementL: engine.displacement_l,
+          });
+          if (resolved.quantity == null) {
+            console.warn(
+              `[job-actuals] spark plug quantity unknown for engine ${engine._id} ` +
+                `(cylinders=${engine.cylinders ?? "null"}) — quoting 1, needs mechanic input`,
+            );
+          }
+          const qty = resolved.quantity ?? 1;
           suggestedParts.push({
             part_name: "Spark Plug",
             oem_number: s.spark_plug_oem,
@@ -597,38 +776,34 @@ export const getPrefillData = query({
         }
       }
 
-      // Tire-replacement — independent of service_vehicle_specs. For in-app
-      // bookings the accepted tire_quote_responses row has brand / model /
-      // per-tire price / qty; for walk-in / backfilled jobs fall back to
-      // booking.tire_specs and leave cost 0 for the mechanic to fill.
-      if (suggestedParts.length === before && svc.slug === "tire-replacement") {
-        const acceptedQuote = await ctx.db
-          .query("tire_quote_responses")
-          .withIndex("by_booking_id", (q: any) =>
-            q.eq("booking_id", booking._id),
-          )
-          .filter((q: any) => q.eq(q.field("superseded_at"), undefined))
-          .first();
-        if (acceptedQuote) {
-          const qty = acceptedQuote.quantity ?? 4;
-          const brandModel = [acceptedQuote.tire_brand, acceptedQuote.tire_model]
-            .filter(Boolean)
-            .join(" ");
-          suggestedParts.push({
-            part_name: brandModel
-              ? `Tires — ${brandModel} (x${qty})`
-              : `Tires (x${qty})`,
-            oem_number: tireOem(booking.tire_specs?.size),
-            cost: (acceptedQuote.per_tire_price ?? 0) * qty,
-            service_id: sid,
-          });
-        } else if (booking.tire_specs) {
+      // Tire / rotor replacement — a quote-originated booking carries its parts
+      // on the accepted *_quote_responses row (NOT priced_parts_snapshot), so
+      // seed them from there. Shared helper (accepts both slug spellings, honors
+      // tire positions) so the app and the devOnly probe agree exactly.
+      if (suggestedParts.length === before) {
+        const quoteLines = await quotePrefillLinesForService(
+          ctx,
+          booking,
+          svc.slug,
+          sid,
+        );
+        if (quoteLines.length > 0) {
+          suggestedParts.push(...quoteLines);
+        } else if (
+          TIRE_REPLACEMENT_SLUGS.has(svc.slug) &&
+          booking.tire_specs
+        ) {
+          // Walk-in / backfilled tire job with no quote to read: single line at
+          // cost 0 for the mechanic to fill (unchanged legacy behavior).
           const qty = booking.tire_specs.quantity ?? 4;
           suggestedParts.push({
             part_name: `Tires — ${booking.tire_specs.tier} ${booking.tire_specs.type} (x${qty})`,
             oem_number: tireOem(booking.tire_specs.size),
             cost: 0,
+            quantity: qty,
             service_id: sid,
+            is_tire: true,
+            tire_size: booking.tire_specs.size ?? null,
           });
         }
       }
@@ -660,6 +835,7 @@ export const getPrefillData = query({
 
     if (vehicle.vehicle_config_id) {
       const recConfig = await ctx.db.get(vehicle.vehicle_config_id);
+      const recConfigMakeName = await makeNameCached(ctx, recConfig?.make_id);
       for (const sid of booking.service_ids ?? []) {
         const svc = await ctx.db.get(sid);
         if (!svc?.slug) continue;
@@ -679,8 +855,26 @@ export const getPrefillData = query({
           if (f.package_code != null) continue;
           const part = await ctx.db.get(f.part_id);
           if (!part) continue;
-          // I1 make guard: drop cross-make contaminant parts
-          if (!partFitsConfigMake(part.make_id, recConfig?.make_id)) continue;
+          // I1 read guard — NAME-aware, matching the canonical resolver
+          // (serviceParts.resolveWinningPartForService). The strict id-only
+          // partFitsConfigMake dropped parts stamped under a corporate-family
+          // sibling make (or a duplicate make row): a CR-V's coolant-flush
+          // part OL999-9011 is stamped "Acura" — Honda's parts-sharing family —
+          // so Review & Pay priced it but this post-job survey read "no parts
+          // on file for Coolant Flush". The foreign-brand signature backstop
+          // still fires on the escape path, and PARTS_I1_FAMILY_READ=off
+          // restores strict behavior.
+          if (
+            !passesI1ReadGuardNamed({
+              partMakeId: part.make_id,
+              configMakeId: recConfig?.make_id,
+              oemPartNumber: part.oem_part_number,
+              configMakeName: recConfigMakeName,
+              partMakeName: await makeNameCached(ctx, part.make_id),
+              mechanicVerified: f.mechanic_verified === true,
+            })
+          )
+            continue;
           // Scope to the booked axle — position-neutral parts (hardware,
           // grease) survive a single-axle filter.
           if (!fitmentMatchesPosition(f.position, part.subcategory, recPosition)) {
@@ -766,6 +960,34 @@ export const getPrefillData = query({
       }
     }
 
+    // Work added to THIS job beyond the original booking scope — the pre-job
+    // "add to job" flow (issues caught during the inspection) and any mid-job
+    // additions. Non-declined custom_jobs whose source isn't the original
+    // create-booking drawer. Used two ways below: the "Fixed this visit" strip
+    // in the post-job step, and auto-connecting a prior recommendation this work
+    // resolves (matched on the clustering key, the same one custom_jobs cluster
+    // on). Read once here and reused for onJobMatchKeys further down.
+    const customJobsOnBooking = await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    const activeCustomJobs = customJobsOnBooking.filter(
+      (job: any) => job.status !== "declined" && job.status !== "cancelled",
+    );
+    const addedWorkJobs = activeCustomJobs
+      .filter((job: any) => job.source !== "booking")
+      .sort((a: any, b: any) => a.created_at - b.created_at);
+    const addedWorkMatchKeys = new Set<string>(
+      addedWorkJobs
+        .map((job: any) => job.match_key || serviceMatchKey(String(job.name ?? "")))
+        .filter((key: string) => key.length > 0),
+    );
+    const resolvedThisVisit = addedWorkJobs.map((job: any) => ({
+      _id: job._id,
+      service_name: job.name,
+      reason: job.complaint ?? null,
+    }));
+
     // Prior open recommendations for the same VIN (shop-scoped). Surfaced as
     // a muted "last visit said…" strip at the top of the post-job step so
     // the mechanic has memory aids — actual confirmation happens in pre-job.
@@ -787,6 +1009,9 @@ export const getPrefillData = query({
         const svc = rec.recommended_service_id
           ? await ctx.db.get(rec.recommended_service_id)
           : null;
+        const recMatchKey = serviceMatchKey(
+          String(svc?.name ?? rec.freeform_text ?? ""),
+        );
         return {
           _id: rec._id,
           service_name: svc?.name ?? rec.freeform_text ?? "Unspecified",
@@ -794,6 +1019,13 @@ export const getPrefillData = query({
           urgency: rec.urgency,
           reason: rec.reason ?? null,
           created_at: rec.created_at,
+          // True when work added to THIS job resolves this open rec (matched on
+          // the clustering key). The post-job step pre-checks these as Done and
+          // closes them on completion; the mechanic can still un-check one that
+          // wasn't actually fixed. This is the link that was missing — an added
+          // service never touched the prior rec it obviously resolved.
+          matchedByThisVisit:
+            recMatchKey.length > 0 && addedWorkMatchKeys.has(recMatchKey),
         };
       }),
     );
@@ -811,6 +1043,166 @@ export const getPrefillData = query({
       return nameAxle == null || nameAxle === axle;
     });
 
+    // This visit's inspection recommendations — split into what the mechanic
+    // already confirmed at pre-job (read-only here) and what they saw but
+    // didn't check (a second chance at post-job). See "Post-job survey —
+    // surfacing this visit's inspection recommendations."
+    const thisVisitRecRows = await ctx.db
+      .query("job_recommendations")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    // status === "open" excludes a rec the mechanic already undid this same
+    // screen (see the "Undo" action in the post-job survey UI, which dismisses
+    // via jobRecommendations.confirmFromPreJob) — once retracted, it should
+    // drop out of this read-only list AND stop being excluded from
+    // suggestedFromInspection below, so it's offered again as a candidate.
+    const confirmedThisVisitRows = thisVisitRecRows.filter(
+      (r) => r.source === "inspection" && r.status === "open",
+    );
+    const confirmedThisVisit = await Promise.all(
+      confirmedThisVisitRows.map(async (rec) => {
+        const svc = rec.recommended_service_id
+          ? await ctx.db.get(rec.recommended_service_id)
+          : null;
+        return {
+          _id: rec._id,
+          service_name: svc?.name ?? rec.freeform_text ?? "Unspecified",
+          is_freeform: !rec.recommended_service_id,
+          urgency: rec.urgency,
+          reason: rec.reason ?? null,
+          created_at: rec.created_at,
+        };
+      }),
+    );
+    const confirmedServiceIds = new Set(
+      confirmedThisVisitRows
+        .map((r) => (r.recommended_service_id ? String(r.recommended_service_id) : null))
+        .filter((id): id is string => !!id),
+    );
+    const confirmedFreeformLabels = new Set(
+      confirmedThisVisitRows
+        .filter((r) => !r.recommended_service_id)
+        .map((r) => (r.freeform_text ?? "").trim().toLowerCase())
+        .filter((label) => label.length > 0),
+    );
+
+    const inspection = await ctx.db
+      .query("vehicle_inspections")
+      .withIndex("by_booking", (q) => q.eq("booking_id", args.bookingId))
+      .first();
+    const allServices = booking.shop_id ? await ctx.db.query("services").collect() : [];
+    const inspectionState = inspection ? hydrateTieredInspectionState(inspection) : null;
+    // Rotor recommendation grades against THIS vehicle's enrichment minimum.
+    const rotorMin = inspectionState ? await rotorMinForVin(ctx, booking.vin) : null;
+
+    // Work that's already ON this job — don't offer it as a "for next time"
+    // suggestion. Abdul hit this from the other side: he added a tire
+    // replacement as extra work, did it, and the post-job still offered "tire
+    // replacement — soon". The deferred reveal now catches anything that slips
+    // through (see inspectionHealthDeferred), but not offering it in the first
+    // place is what stops the mechanic having to notice and un-tick it.
+    //
+    // "On the job" rather than "performed" here: the booking is still open at
+    // this point, so completion status isn't decided yet. A DECLINED custom
+    // line is excluded — the customer turned it down, so it still belongs in
+    // the recommendations.
+    const onJobServiceIds = new Set(
+      ((booking.service_ids ?? []) as any[]).map((id: any) => String(id)),
+    );
+    const onJobMatchKeys = new Set<string>(
+      activeCustomJobs
+        .map((job: any) => serviceMatchKey(String(job.name ?? "")))
+        .filter((key: string) => key.length > 0),
+    );
+
+    const suggestedFromInspection = inspectionState
+      ? deriveSuggestedRecommendations(inspectionState, {
+          onlyCompletedZones: true,
+          rotorMin,
+        })
+          .map((s) => {
+            const found = allServices.find((svc: any) =>
+              svc.slug ? s.match.includes(svc.slug) : false,
+            );
+            return {
+              key: s.key,
+              label: s.label,
+              urgency: s.urgency,
+              reasons: s.reasons,
+              serviceId: found?._id ?? null,
+              serviceName: found?.name ?? null,
+            };
+          })
+          .filter((s) =>
+            s.serviceId
+              ? !confirmedServiceIds.has(String(s.serviceId))
+              : !confirmedFreeformLabels.has(s.label.trim().toLowerCase()),
+          )
+          .filter((s) => {
+            // Already ON this job — don't re-offer it. Check BOTH id-spaces
+            // regardless of whether the finding resolved to a catalog service:
+            // a mid-job "Add to this job" lands as a custom_jobs row recorded
+            // by NAME only (onJobMatchKeys) and never enters booking.service_ids
+            // (onJobServiceIds). Without the name check a catalog finding added
+            // mid-job (e.g. Coolant Flush) shows in both "Fixed this visit" and
+            // "Also flagged during today's inspection."
+            if (s.serviceId && onJobServiceIds.has(String(s.serviceId)))
+              return false;
+            if (onJobMatchKeys.has(serviceMatchKey(s.serviceName ?? s.label)))
+              return false;
+            return true;
+          })
+      : [];
+
+    // Dashboard lights to offer in the post-job "still on?" list. This is
+    // the PROJECTED set, not just what's on file right now: this visit's own
+    // pre-job picker selections don't reach knownIssues until the deferred
+    // job runs 2 hours after close, so offering only the stored array would
+    // omit a light this very inspection just flagged — leaving the mechanic
+    // unable to clear the exact thing they may have just fixed (e.g. TPMS
+    // seen on the walk-around, tires topped up mid-visit). Uses the same
+    // shared merge the deferred write itself uses so the two can't drift.
+    // See "Dashboard warning lights."
+    const owner = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_vin_user", (q) => q.eq("vin", booking.vin).eq("user_id", booking.user_id))
+      .first();
+    const projectedKnownIssues = applyInspectionLightPicker(
+      Array.isArray(owner?.knownIssues) ? (owner.knownIssues as string[]) : [],
+      inspectionState?.zones.ENG?.statuses.warning_lights
+        ? []
+        : inspectionState?.zones.ENG?.lights.warning_lights,
+    );
+    const currentWarningLights = canonicalWarningLights(projectedKnownIssues);
+
+    // Prejob inspection tire findings — surfaced so the mid-job / walk-in tire
+    // editor can prefill the sizes (and brand/model) recorded per corner during
+    // the multi-point inspection. Front axle takes front_left else front_right;
+    // rear axle takes rear_left else rear_right (sizes are synced per axle).
+    const latestActual = await getLatestJobActualForBooking(ctx, args.bookingId);
+    const prejob = (latestActual?.prejob_report ?? null) as any;
+    const td = prejob?.tire_details ?? null;
+    const pickCorner = (a: any, b: any) =>
+      (a ?? null) || (b ?? null) || null;
+    const prejobTires = prejob
+      ? {
+          tire_size_front: prejob.tire_size_front ?? null,
+          tire_size_rear: prejob.tire_size_rear ?? null,
+          front: td
+            ? {
+                brand: pickCorner(td.front_left?.brand, td.front_right?.brand),
+                model: pickCorner(td.front_left?.model, td.front_right?.model),
+              }
+            : null,
+          rear: td
+            ? {
+                brand: pickCorner(td.rear_left?.brand, td.rear_right?.brand),
+                model: pickCorner(td.rear_left?.model, td.rear_right?.model),
+              }
+            : null,
+        }
+      : null;
+
     return {
       vehicleLabel,
       serviceName: service?.name ?? "",
@@ -823,6 +1215,11 @@ export const getPrefillData = query({
       oemRecommendations,
       vehicleConfigId: vehicle.vehicle_config_id ?? null,
       priorOpenRecommendations,
+      confirmedThisVisit,
+      suggestedFromInspection,
+      resolvedThisVisit,
+      currentWarningLights,
+      prejobTires,
     };
   },
 });

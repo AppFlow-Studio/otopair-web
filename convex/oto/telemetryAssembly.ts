@@ -26,7 +26,16 @@ export type TurnSample = {
   latency_ms: number;
   /** Tool names in dispatch order: data, state, terminal. */
   tool_names: string[];
-  branch: "terminal" | "text_only" | "data_continue" | "forced_final";
+  branch:
+    | "terminal"
+    | "text_only"
+    | "data_continue"
+    | "forced_final"
+    // Follow-up repair calls (chat.ts §6.9 state-contract retry and the
+    // 2026-08-15 announcement-terminal retry) — real API calls whose usage
+    // must count toward the turn.
+    | "state_repair"
+    | "answer_repair";
 };
 
 /** The conversation-state writeback tool (Locked Principle: every

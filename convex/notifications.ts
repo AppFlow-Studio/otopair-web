@@ -29,13 +29,15 @@ export const getMyNotifications = query({
     const user = await getCurrentUserOrNull(ctx);
     if (!user) return [];
 
+    // The feed reads the RESOLVE axis, not delivery status — a delivered push
+    // stays until it's resolved by an action or a booking state change.
     const rows = await ctx.db
       .query("notification_outbox")
-      .withIndex("by_status", (q: any) => q.eq("status", "pending"))
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
       .collect();
 
     const mine = rows
-      .filter((row: any) => row.user_id === user._id)
+      .filter((row: any) => row.resolved_at == null)
       .sort((a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0))
       .slice(0, 50);
 
@@ -54,12 +56,26 @@ export const getMyNotifications = query({
         let shortHandle: string | null = null;
         let rescheduleExpiresAt: number | null = null;
         let assignedMechanicId: string | null = null;
+        // Muted context line ("what is this notification about"): the car,
+        // plus the shop and mechanic when the row references them.
+        let vin: string | null = null;
+        let vehicleYMMT: string | null = null;
+        let mileage: number | null = null;
+        let mechanicName: string | null = null;
+        let bookingShopId: any = null;
+        // Raw YMMT parts — filled from the booking vehicle first, then the
+        // payload (car-bound rows like vehicle_enrichment_complete have no
+        // booking_id but carry the vehicle in their payload).
+        let vYear: number | string | null = null;
+        let vMake: string | null = null;
+        let vModel: string | null = null;
         if (row.booking_id) {
           const booking: any = await ctx.db.get(row.booking_id);
           if (booking) {
             scheduledDate = booking.scheduled_date ?? null;
             scheduledTime = booking.scheduled_time ?? null;
             assignedMechanicId = booking.mechanic_id ?? null;
+            bookingShopId = booking.shop_id ?? null;
             if (
               (row.category === "booking_reschedule_proposed" ||
                 row.category === "booking_forced_delay_proposed") &&
@@ -86,19 +102,47 @@ export const getMyNotifications = query({
                 cust?.email ||
                 null;
             }
-            if (booking.vehicle_id) {
-              const veh: any = await ctx.db.get(booking.vehicle_id);
-              if (veh) {
-                const meta = veh.metadata ?? {};
-                const parts = [veh.year ?? meta.year, meta.make, meta.model].filter(
-                  Boolean,
-                );
-                vehicleLabel =
-                  parts.length > 0
-                    ? parts.join(" ")
-                    : veh.vin
-                      ? `VIN …${String(veh.vin).slice(-6)}`
-                      : null;
+            // Resolve the car from vehicle_id first; bookings always carry
+            // the VIN directly, so fall back to a by_vin lookup when
+            // vehicle_id is missing or dangling. This keeps the car showing
+            // (year/make/model) on every booking-bound row, not just ones
+            // whose vehicle_id happens to be set.
+            let veh: any = booking.vehicle_id
+              ? await ctx.db.get(booking.vehicle_id)
+              : null;
+            if (!veh && typeof booking.vin === "string" && booking.vin) {
+              veh = await ctx.db
+                .query("vehicles")
+                .withIndex("by_vin", (q: any) => q.eq("vin", booking.vin))
+                .first();
+            }
+            if (typeof booking.vin === "string" && booking.vin) {
+              vin = booking.vin;
+            }
+            if (veh) {
+              const meta = veh.metadata ?? {};
+              const parts = [veh.year ?? meta.year, meta.make, meta.model].filter(
+                Boolean,
+              );
+              vehicleLabel =
+                parts.length > 0
+                  ? parts.join(" ")
+                  : veh.vin
+                    ? `VIN …${String(veh.vin).slice(-6)}`
+                    : null;
+              vin = veh.vin ?? vin;
+              vYear = veh.year ?? meta.year ?? null;
+              vMake = meta.make ?? null;
+              vModel = meta.model ?? null;
+            }
+            if (booking.mechanic_id) {
+              const mech: any = await ctx.db.get(booking.mechanic_id);
+              if (mech) {
+                const mn = [mech.first_name, mech.last_name]
+                  .filter(Boolean)
+                  .join(" ")
+                  .trim();
+                mechanicName = mn.length > 0 ? mn : null;
               }
             }
           }
@@ -106,6 +150,33 @@ export const getMyNotifications = query({
         if (row.shop_id) {
           const shop: any = await ctx.db.get(row.shop_id);
           shopName = shop?.name ?? null;
+        }
+        // Fall back to the booking's shop when the row itself isn't shop-scoped
+        // (customer rows are user-scoped but still concern a shop).
+        if (!shopName && bookingShopId) {
+          const shop: any = await ctx.db.get(bookingShopId);
+          shopName = shop?.name ?? null;
+        }
+        // Payload fallback for car-bound rows without a booking.
+        const pl = row.payload ?? {};
+        if (!vin && typeof pl.vin === "string") vin = pl.vin;
+        if (vYear == null && pl.year != null) vYear = pl.year;
+        if (!vMake && typeof pl.make === "string") vMake = pl.make;
+        if (!vModel && typeof pl.model === "string") vModel = pl.model;
+        // Year / make / model only — no trim or body-style tail in the feed.
+        const ymmtParts = [vYear, vMake, vModel].filter(Boolean);
+        vehicleYMMT = ymmtParts.length > 0 ? ymmtParts.join(" ") : null;
+        // Mileage = the recipient's own odometer for this VIN.
+        if (vin && user?._id) {
+          const vinStr: string = vin;
+          const ownerRow: any = await ctx.db
+            .query("vehicle_owners")
+            .withIndex("by_vin_user", (q: any) =>
+              q.eq("vin", vinStr).eq("user_id", user._id),
+            )
+            .first();
+          mileage =
+            typeof ownerRow?.mileage === "number" ? ownerRow.mileage : null;
         }
         return {
           _id: row._id,
@@ -115,6 +186,7 @@ export const getMyNotifications = query({
           shop_id: row.shop_id ?? null,
           created_at: row.created_at,
           status: row.status,
+          read_at: row.read_at ?? null,
           customerName,
           vehicleLabel,
           shopName,
@@ -123,6 +195,10 @@ export const getMyNotifications = query({
           scheduledTime,
           rescheduleExpiresAt,
           assignedMechanicId,
+          vin,
+          vehicleYMMT,
+          mileage,
+          mechanicName,
         };
       }),
     );
@@ -138,10 +214,13 @@ export const getMyUnreadCount = query({
 
     const rows = await ctx.db
       .query("notification_outbox")
-      .withIndex("by_status", (q: any) => q.eq("status", "pending"))
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
       .collect();
 
-    return rows.filter((row: any) => row.user_id === user._id).length;
+    // Unread = still open (resolved_at == null) AND not yet seen (read_at == null).
+    return rows.filter(
+      (row: any) => row.resolved_at == null && row.read_at == null,
+    ).length;
   },
 });
 
@@ -149,7 +228,32 @@ export const getMyUnreadCount = query({
 // Shop-staff notification feed (new bookings, quote requests)
 // ============================================================================
 
-const STAFF_CATEGORIES = ["new_booking", "new_quote_request", "booking_never_started", "settlement_shortfall", "hold_expiring"] as const;
+const STAFF_CATEGORIES = ["new_booking", "new_quote_request", "booking_never_started", "settlement_shortfall", "hold_expiring", "booking_mid_job_accepted", "booking_mid_job_declined", "booking_mid_job_expired"] as const;
+
+/**
+ * Alerts that used to be written with `channel: "slack"` and then sat pending
+ * forever, because no Slack dispatcher exists in this codebase — blockers,
+ * damage reports, and a shortcut created for work we already sell.
+ *
+ * They don't need one. This feed already reads notification_outbox by shop, so
+ * the fix is to let these categories through rather than to build an
+ * integration: the people who need to see a stopped job are the people already
+ * looking at this list.
+ *
+ * A prefix test rather than an enum because blocker categories are minted per
+ * kind (`job_blocked_parts_delay`, …) and a fixed list would silently drop the
+ * next kind someone adds to KIND_POLICY.
+ */
+function isStaffCategory(category: unknown): boolean {
+  if (typeof category !== "string") return false;
+  if ((STAFF_CATEGORIES as readonly string[]).includes(category)) return true;
+  // Owner-audience blockers only. The driver-audience twin is suffixed
+  // `_driver` and is not the shop's notification.
+  if (category.startsWith("job_blocked_") && !category.endsWith("_driver")) {
+    return true;
+  }
+  return category === "custom_shortcut_override";
+}
 const MECHANIC_CATEGORIES = ["new_job_assigned"] as const;
 const OWNER_MANAGER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const FRONT_DESK_ROLES = new Set(["front_desk"]);
@@ -182,12 +286,12 @@ export const getShopStaffUnreadCount = query({
     if (!info) return 0;
     const { user, membership } = info;
 
-    const rows = await ctx.db
-      .query("notification_outbox")
-      .withIndex("by_shop_and_status", (q: any) =>
-        q.eq("shop_id", membership.shop_id).eq("status", "pending"),
-      )
-      .collect();
+    const rows = (
+      await ctx.db
+        .query("notification_outbox")
+        .withIndex("by_shop_id", (q: any) => q.eq("shop_id", membership.shop_id))
+        .collect()
+    ).filter((r: any) => r.resolved_at == null);
 
     if (MECHANIC_ROLES.has(membership.role)) {
       return rows.filter(
@@ -201,9 +305,7 @@ export const getShopStaffUnreadCount = query({
       OWNER_MANAGER_ROLES.has(membership.role) ||
       FRONT_DESK_ROLES.has(membership.role)
     ) {
-      return rows.filter((r: any) =>
-        (STAFF_CATEGORIES as readonly string[]).includes(r.category),
-      ).length;
+      return rows.filter((r: any) => isStaffCategory(r.category)).length;
     }
 
     return 0;
@@ -217,12 +319,12 @@ export const getShopStaffNotifications = query({
     if (!info) return [];
     const { user, membership } = info;
 
-    const rows = await ctx.db
-      .query("notification_outbox")
-      .withIndex("by_shop_and_status", (q: any) =>
-        q.eq("shop_id", membership.shop_id).eq("status", "pending"),
-      )
-      .collect();
+    const rows = (
+      await ctx.db
+        .query("notification_outbox")
+        .withIndex("by_shop_id", (q: any) => q.eq("shop_id", membership.shop_id))
+        .collect()
+    ).filter((r: any) => r.resolved_at == null);
 
     let filtered: any[];
     if (MECHANIC_ROLES.has(membership.role)) {
@@ -235,9 +337,7 @@ export const getShopStaffNotifications = query({
       OWNER_MANAGER_ROLES.has(membership.role) ||
       FRONT_DESK_ROLES.has(membership.role)
     ) {
-      filtered = rows.filter((r: any) =>
-        (STAFF_CATEGORIES as readonly string[]).includes(r.category),
-      );
+      filtered = rows.filter((r: any) => isStaffCategory(r.category));
     } else {
       return [];
     }
@@ -250,6 +350,7 @@ export const getShopStaffNotifications = query({
       sorted.map(async (row: any) => {
         let customerName: string | null = null;
         let vehicleLabel: string | null = null;
+        let mechanicName: string | null = null;
         let shortHandle: string | null = null;
         let scheduledDate: string | null = null;
         let scheduledTime: string | null = null;
@@ -259,6 +360,14 @@ export const getShopStaffNotifications = query({
           if (booking) {
             scheduledDate = booking.scheduled_date ?? null;
             scheduledTime = booking.scheduled_time ?? null;
+            if (booking.mechanic_id) {
+              const mech: any = await ctx.db.get(booking.mechanic_id);
+              const mn = [mech?.first_name, mech?.last_name]
+                .filter(Boolean)
+                .join(" ")
+                .trim();
+              mechanicName = mn.length > 0 ? mn : null;
+            }
             const inv = (booking.invoice_number ?? "").trim();
             shortHandle = inv
               ? inv.startsWith("#")
@@ -296,9 +405,21 @@ export const getShopStaffNotifications = query({
           }
         }
 
+        // Blocker rows carry the pause reason in their payload; surface it so
+        // the staff feed can read car · shop · mechanic · reason at a glance.
+        const isBlockerRow =
+          typeof row.category === "string" &&
+          row.category.startsWith("job_blocked_") &&
+          !row.category.endsWith("_driver");
+        const reasonLabel = isBlockerRow ? (row.payload?.label ?? null) : null;
+        const reasonNote = isBlockerRow ? (row.payload?.note ?? null) : null;
+
         return {
           _id: row._id,
           category: row.category as string,
+          mechanicName,
+          reasonLabel,
+          reasonNote,
           booking_id: row.booking_id ?? null,
           shop_id: row.shop_id ?? null,
           created_at: row.created_at,
@@ -363,6 +484,7 @@ export const getShopStaffNotificationHistory = query({
       sorted.map(async (row: any) => {
         let customerName: string | null = null;
         let vehicleLabel: string | null = null;
+        let mechanicName: string | null = null;
         let shortHandle: string | null = null;
         let scheduledDate: string | null = null;
         let scheduledTime: string | null = null;
@@ -372,6 +494,14 @@ export const getShopStaffNotificationHistory = query({
           if (booking) {
             scheduledDate = booking.scheduled_date ?? null;
             scheduledTime = booking.scheduled_time ?? null;
+            if (booking.mechanic_id) {
+              const mech: any = await ctx.db.get(booking.mechanic_id);
+              const mn = [mech?.first_name, mech?.last_name]
+                .filter(Boolean)
+                .join(" ")
+                .trim();
+              mechanicName = mn.length > 0 ? mn : null;
+            }
             const inv = (booking.invoice_number ?? "").trim();
             shortHandle = inv
               ? inv.startsWith("#")
@@ -409,15 +539,29 @@ export const getShopStaffNotificationHistory = query({
           }
         }
 
+        // Blocker rows carry the pause reason in their payload; surface it so
+        // the staff feed can read car · shop · mechanic · reason at a glance.
+        const isBlockerRow =
+          typeof row.category === "string" &&
+          row.category.startsWith("job_blocked_") &&
+          !row.category.endsWith("_driver");
+        const reasonLabel = isBlockerRow ? (row.payload?.label ?? null) : null;
+        const reasonNote = isBlockerRow ? (row.payload?.note ?? null) : null;
+
         return {
           _id: row._id,
           category: row.category as string,
+          mechanicName,
+          reasonLabel,
+          reasonNote,
           channel: row.channel as string,
           booking_id: row.booking_id ?? null,
           shop_id: row.shop_id ?? null,
           created_at: row.created_at,
           processed_at: row.processed_at ?? null,
-          // "pending" = still open/unresolved; anything else = actioned.
+          // Open vs resolved is the RESOLVE axis now, independent of delivery
+          // status: resolved_at == null → still open.
+          resolved_at: row.resolved_at ?? null,
           status: row.status as string,
           customerName,
           vehicleLabel,
@@ -444,9 +588,13 @@ export const markShopStaffNotificationRead = mutation({
       throw new Error("Not your notification");
     }
 
+    // Staff "mark read" dismisses the alert from the live feed — resolve it.
     const now = Date.now();
     await ctx.db.patch(args.notificationId, {
       status: "resolved",
+      read_at: now,
+      resolved_at: now,
+      resolved_reason: "user_action",
       processed_at: now,
       updated_at: now,
     } as any);
@@ -471,13 +619,16 @@ export const markShopNotificationsReadForBooking = mutation({
       rows
         .filter(
           (r: any) =>
-            r.status === "pending" &&
+            r.resolved_at == null &&
             String(r.shop_id) === String(info.membership.shop_id) &&
             (STAFF_CATEGORIES as readonly string[]).includes(r.category),
         )
         .map((r: any) =>
           ctx.db.patch(r._id, {
             status: "resolved",
+            read_at: now,
+            resolved_at: now,
+            resolved_reason: "user_action",
             processed_at: now,
             updated_at: now,
           } as any),
@@ -498,9 +649,42 @@ export const markNotificationRead = mutation({
       throw new Error("Not your notification");
     }
 
+    // Mark SEEN — not resolved. The row stays in the feed (styled read) until
+    // it's resolved by an action (resolveNotification) or a booking state
+    // change. Idempotent.
+    if ((row as any).read_at != null) return;
+    const now = Date.now();
+    await ctx.db.patch(args.notificationId, {
+      read_at: now,
+      updated_at: now,
+    } as any);
+  },
+});
+
+/**
+ * Customer resolves (archives) a notification — either after completing its
+ * action or dismissing an informational one. Sets the RESOLVE axis so the row
+ * drops out of the feed; also stamps read_at if it wasn't already seen.
+ */
+export const resolveNotification = mutation({
+  args: { notificationId: v.id("notification_outbox") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) throw new Error("Your session has expired. Please sign in again.");
+
+    const row = await ctx.db.get(args.notificationId);
+    if (!row) return;
+    if ((row as any).user_id !== user._id) {
+      throw new Error("Not your notification");
+    }
+    if ((row as any).resolved_at != null) return;
+
     const now = Date.now();
     await ctx.db.patch(args.notificationId, {
       status: "resolved",
+      read_at: (row as any).read_at ?? now,
+      resolved_at: now,
+      resolved_reason: "user_action",
       processed_at: now,
       updated_at: now,
     } as any);

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -13,12 +13,14 @@ import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actua
 import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
 } from "@/components/reschedule-confirmation-dialog";
-import { ArrowUpRight, Loader2 } from "lucide-react";
+import { ArrowUpRight, ChevronRight, Loader2 } from "lucide-react";
 import MechanicDashboard from "./mechanic-dashboard";
 import LateStartReviewDialog, {
   type LateStartReviewView,
 } from "@/components/late-start-review-dialog";
-import NowWorkingOverlay from "@/components/mechanic/now-working-overlay";
+import NowWorkingOverlay, {
+  type ActiveJobRow,
+} from "@/components/mechanic/now-working-overlay";
 import {
   GreetingHeader,
   MetricRow,
@@ -32,6 +34,7 @@ import {
   type Tone,
 } from "@/components/dashboard/command-deck";
 import RevenueSection from "@/components/dashboard/revenue-section";
+import PickupRequestAlerts from "@/components/dashboard/pickup-request-alerts";
 
 const MECHANIC_ROLES = ["shop_mechanic", "mechanic"];
 
@@ -157,27 +160,16 @@ function OwnerDashboardPage({
 }) {
   const { user } = useUser();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const dashboard = useQuery(api.bookings.getMyOwnerDashboard, {
     localDate: new Date().toLocaleDateString("en-CA"),
   });
   const [selectedJobId, setSelectedJobId] = useState<Id<"bookings"> | null>(null);
   const [actualsBookingId, setActualsBookingId] = useState<Id<"bookings"> | null>(null);
   const [successMessage, setSuccessMessage] = useState("");
-  const [activeOverlayBookingIds, setActiveOverlayBookingIds] = useState<
-    Array<Id<"bookings">>
-  >([]);
-  const openOrAddOverlay = useCallback((id: Id<"bookings">) => {
-    setActiveOverlayBookingIds((prev) => {
-      if (prev.some((existing) => String(existing) === String(id))) return prev;
-      if (prev.length >= 2) return [prev[1], id];
-      return [...prev, id];
-    });
-  }, []);
-  const closeOverlayPane = useCallback((id: Id<"bookings">) => {
-    setActiveOverlayBookingIds((prev) =>
-      prev.filter((x) => String(x) !== String(id)),
-    );
-  }, []);
+  // The active-jobs overlay is a single pick-first surface now (open the list,
+  // focus one car at a time) — no more side-by-side panes to track.
+  const [activeJobsOpen, setActiveJobsOpen] = useState(false);
   const [pendingMarkCompleteFor, setPendingMarkCompleteFor] = useState<string | null>(null);
   const [rescheduleProposal, setRescheduleProposal] =
     useState<RescheduleConfirmationProposal | null>(null);
@@ -262,20 +254,47 @@ function OwnerDashboardPage({
 
   // Pop the post-job dialog inside BookingDetailPanel once it's mounted
   // for the booking the owner just hit Mark complete on from the overlay.
+  // The panel only exists once `dashboard` has loaded (the page renders a
+  // skeleton until then), yet `selectedJob` — a lighter single-booking query —
+  // often resolves first. So gate on `dashboard` too, and don't burn the
+  // pending flag unless we actually drove the panel; otherwise the one-shot
+  // fires into a null ref and the flow silently never opens (the exact symptom
+  // when Mark complete is pressed from the header active-job overlay, which
+  // routes here via ?postjob and re-mounts the dashboard).
   useEffect(() => {
     if (!pendingMarkCompleteFor) return;
+    if (dashboard === undefined) return;
     if (!selectedJob || String(selectedJob._id) !== pendingMarkCompleteFor) return;
     const frame = requestAnimationFrame(() => {
-      jobDetailRef.current?.showMarkCompleted();
+      const handle = jobDetailRef.current;
+      if (!handle) return; // panel not mounted yet — a later re-run retries
+      handle.showMarkCompleted();
       setPendingMarkCompleteFor(null);
     });
     return () => cancelAnimationFrame(frame);
-  }, [pendingMarkCompleteFor, selectedJob]);
+  }, [pendingMarkCompleteFor, selectedJob, dashboard]);
+
+  // The header active-jobs overlay's "Mark complete" routes owners here with
+  // ?postjob=<id> (the same way it routes mechanics to their post-job dialog).
+  // Open that booking's detail drawer and pop the completion flow — reusing the
+  // in-page overlay's own path — then strip the param so it can't re-fire.
+  useEffect(() => {
+    const postjobId = searchParams.get("postjob");
+    if (!postjobId) return;
+    setSelectedJobId(postjobId as Id<"bookings">);
+    setPendingMarkCompleteFor(postjobId);
+    router.replace("/dashboard");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (!selectedJobId) return;
 
+      // Never hijack browser/OS chords (⌘R reload, ⌘L, ⌃…): with a modifier
+      // held, let the key pass through instead of firing a single-key shortcut
+      // (e.g. ⌘R was triggering "r" = mark-completed, popping a new form).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       if (e.key === "Escape") {
         if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
         if (jobDetailRef.current?.handleEscape()) return;
@@ -585,7 +604,7 @@ function OwnerDashboardPage({
     !actualsBookingId &&
     !rescheduleProposal &&
     !selectedLateStartReviewId &&
-    activeOverlayBookingIds.length === 0;
+    !activeJobsOpen;
   const { focused, setFocused } = useListKeyboard({
     count: needItems.length,
     enabled: listNavEnabled,
@@ -678,6 +697,31 @@ function OwnerDashboardPage({
     (row: any) => row.booking?.scheduledDate && row.booking.scheduledDate !== todayDateString,
   ).length;
 
+  // Rows the pick-first overlay renders. The overlay owns which one is focused;
+  // the dashboard just hands it the full list.
+  const activeJobsForOverlay: ActiveJobRow[] = activeJobs.map((row: any) => ({
+    bookingId: row.booking._id as Id<"bookings">,
+    mechanicName: row.mechanicName ?? "",
+    vehicle: row.booking.vehicle ?? row.booking.vehicleShort ?? "Vehicle",
+    serviceSummary: (row.booking.serviceNames ?? []).join(" · "),
+    startedAt: row.booking.startedAt ?? null,
+    scheduledDate: row.booking.scheduledDate ?? null,
+    blockedMinutes: row.blockedMinutes ?? 0,
+    clockPaused: row.clockPaused ?? false,
+  }));
+  // Compact "who's on what" preview for the entry card's second line.
+  const activeJobsPreview =
+    activeJobsForOverlay
+      .slice(0, 3)
+      .map(
+        (job) =>
+          `${(job.mechanicName || "").split(" ")[0] || "Mechanic"} · ${job.vehicle}`,
+      )
+      .join(", ") +
+    (activeJobsForOverlay.length > 3
+      ? ` +${activeJobsForOverlay.length - 3} more`
+      : "");
+
   return (
     <>
       <div className="flex items-start">
@@ -687,6 +731,10 @@ function OwnerDashboardPage({
             name={user?.firstName}
             dateLabel={todayLabel}
             subtitle={dashboard.shop.name}
+          />
+
+          <PickupRequestAlerts
+            onOpenBooking={(bookingId) => setSelectedJobId(bookingId)}
           />
 
           <MetricRow>
@@ -740,46 +788,31 @@ function OwnerDashboardPage({
 
           {activeJobs.length > 0 ? (
             <section id="active-jobs" aria-label="Active jobs" className="scroll-mt-6">
-              <SectionLabel count={activeJobs.length} hint="Jump in to monitor side-by-side">
-                In the bay
-              </SectionLabel>
-              <CommandList>
-                {activeJobs.map((row: any) => {
-                  const booking = row.booking;
-                  if (!booking) return null;
-                  const bookingId = booking._id as Id<"bookings">;
-                  const bookingIdStr = String(bookingId);
-                  const isAlreadyOpen = activeOverlayBookingIds.some(
-                    (id) => String(id) === bookingIdStr,
-                  );
-                  const hasOtherOpen =
-                    activeOverlayBookingIds.length > 0 && !isAlreadyOpen;
-                  const overrun =
-                    booking.scheduledDate && booking.scheduledDate !== todayDateString;
-                  return (
-                    <CommandRow
-                      key={bookingIdStr}
-                      dot="success"
-                      primary={`${row.mechanicName} · ${
-                        booking.vehicle ?? booking.vehicleShort ?? "Vehicle"
-                      }`}
-                      secondary={(booking.serviceNames ?? []).join(" · ") || undefined}
-                      meta={overrun ? `from ${booking.scheduledDate}` : "in progress"}
-                      action={{
-                        label: isAlreadyOpen
-                          ? "Open"
-                          : hasOtherOpen
-                            ? "Alongside"
-                            : "Jump in",
-                        tone: "success",
-                        disabled: isAlreadyOpen,
-                        run: () => openOrAddOverlay(bookingId),
-                      }}
-                      onOpen={() => openOrAddOverlay(bookingId)}
-                    />
-                  );
-                })}
-              </CommandList>
+              <SectionLabel count={activeJobs.length}>In the bay</SectionLabel>
+              <button
+                type="button"
+                onClick={() => setActiveJobsOpen(true)}
+                className="mt-3 flex w-full items-center gap-4 rounded-xl border border-border bg-card px-4 py-4 text-left transition-colors hover:bg-muted/60"
+              >
+                <span className="relative inline-flex h-2.5 w-2.5 shrink-0">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-foreground">
+                    Active jobs
+                  </p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {activeJobsPreview || "Tap to focus a job"}
+                  </p>
+                </div>
+                {overrunningCount > 0 ? (
+                  <span className="hidden shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold text-amber-800 sm:inline-block">
+                    {overrunningCount} overrunning
+                  </span>
+                ) : null}
+                <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
+              </button>
             </section>
           ) : null}
 
@@ -930,11 +963,11 @@ function OwnerDashboardPage({
       />
 
       <NowWorkingOverlay
-        bookingIds={activeOverlayBookingIds}
-        onClose={() => setActiveOverlayBookingIds([])}
-        onClosePane={closeOverlayPane}
+        open={activeJobsOpen}
+        jobs={activeJobsForOverlay}
+        onClose={() => setActiveJobsOpen(false)}
         onMarkComplete={(id) => {
-          closeOverlayPane(id);
+          setActiveJobsOpen(false);
           setSelectedJobId(id);
           setPendingMarkCompleteFor(String(id));
         }}

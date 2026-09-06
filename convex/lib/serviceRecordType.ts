@@ -47,3 +47,36 @@ export const SERVICE_SLUG_TO_RECORD_TYPE: Record<string, string> = {
 export function recordTypeForServiceSlug(slug: string): string | null {
   return SERVICE_SLUG_TO_RECORD_TYPE[slug] ?? null;
 }
+
+/**
+ * Second, finer-grained map for the Consolidated Upkeep model's minor items.
+ *
+ * The map above deliberately collapses every fluid service into one shared
+ * `"fluids"` record (and both filters into `"filters"`) — that aggregate is
+ * load-bearing for the pipeline and predates this feature, so it stays.
+ * But the minor-item grades written by
+ * `convex/lib/inspectionHealth.ts`'s `deriveMinorGrades` live on their own
+ * per-field `minor_*` rows (see `MINOR_ITEM_RECORD_TYPES` in
+ * utils/mergedMaintenance.ts), which the aggregate never touches. Without
+ * this second map, a completed Brake Fluid Flush bumps `"fluids"` while
+ * `minor_bf_condition` keeps its red grade forever — the "until next
+ * service" expiry the plan promises never fires, because
+ * `isMechanicGradeStale` (utils/maintenanceStatus.ts) has no
+ * `lastServiceDate` to compare its `mechanicGradedAt` against.
+ *
+ * Completion writes BOTH: the aggregate (unchanged behavior) and, when the
+ * slug appears here, the specific `minor_*` row.
+ */
+export const SERVICE_SLUG_TO_MINOR_RECORD_TYPE: Record<string, string> = {
+  brake_fluid_flush: "minor_bf_condition",
+  coolant_flush: "minor_cool_condition",
+  transmission_service: "minor_trans",
+  power_steering_flush: "minor_ps",
+  filter_replacement: "minor_filter",
+};
+
+/** Resolve a service slug to the Consolidated-model minor record type it
+ *  services, or null when the service doesn't correspond to one. */
+export function minorRecordTypeForServiceSlug(slug: string): string | null {
+  return SERVICE_SLUG_TO_MINOR_RECORD_TYPE[slug] ?? null;
+}

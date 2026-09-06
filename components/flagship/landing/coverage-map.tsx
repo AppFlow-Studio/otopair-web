@@ -6,17 +6,29 @@ import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { AnimatePresence, motion } from "motion/react";
 import { useReducedMotionSafe } from "../shared";
+import MapLoading from "./map-loading";
 import { mergeNetworkPins, milesBetween, type Pin } from "./network-pins";
 
 const TOKEN = process.env.NEXT_PUBLIC_MAPBOX_TOKEN ?? "";
 
+/* Below sm the camera cluster only appears once the camera has actually left
+   the resting frame (a dive, a pinch, a two-finger drag) — the phone frame
+   shows the map bare, and the "back out" button is the one control that still
+   earns its place there. These are the "has it moved" thresholds. */
+const AWAY_ZOOM = 0.25;
+const AWAY_MILES = 0.6;
+
 const SI_CENTER: [number, number] = [-74.1385, 40.5885];
 
-/* Camera framing. INTRO starts low among the lower-Manhattan towers (real 3D
-   extrusions at dusk), then sweeps across the harbor into the borough-wide
-   RESTING coverage frame. */
-const INTRO_CAMERA = { center: [-74.0125, 40.7075] as [number, number], zoom: 16.2, pitch: 74, bearing: -32 };
+/* Camera framing. The map opens directly on the borough-wide coverage frame.
+   There used to be a cinematic sweep in front of it — open at zoom 16.2 /
+   pitch 74 among the lower-Manhattan towers, then fly 7s out to here — and it
+   was measured as the dominant cost of the map's first boot: crossing ~10
+   miles and 5 zoom levels at a pitch that sees to the horizon meant loading
+   and parsing tiles continuously the whole way. Dropping it cut the boot's
+   main-thread work 1,742ms -> 666ms and time-to-idle 2,351ms -> 960ms. */
 const RESTING_CAMERA = { center: [-74.117, 40.5845] as [number, number], zoom: 11.1, pitch: 57, bearing: -14 };
 
 /* ------------------------------------------------------------------ */
@@ -94,11 +106,8 @@ function createPinElement(p: Pin, uid: string): HTMLDivElement {
  * map fails to boot, so the section never breaks.
  */
 export default function CoverageMap({
-  play = true,
   fallback,
 }: {
-  /** Flips true when the map cell is actually on screen — launches the sweep. */
-  play?: boolean;
   fallback: React.ReactNode;
 }) {
   const reduce = useReducedMotionSafe();
@@ -106,12 +115,14 @@ export default function CoverageMap({
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const youRef = useRef<mapboxgl.Marker | null>(null);
-  // True once the visitor manually grabs the map — the auto-sweep must never
-  // yank the camera away from them.
-  const userMovedRef = useRef(false);
-  const playedRef = useRef(false);
   const [ready, setReady] = useState(false);
   const [failed, setFailed] = useState(false);
+  // `load` only means the style is parsed — tiles are still streaming in, which
+  // is what made the map look like it was assembling itself in public. `idle`
+  // is the real "nothing left to draw" signal, so that is what uncovers it.
+  const [settled, setSettled] = useState(false);
+  // Camera off the resting frame — gates the mobile-only control cluster.
+  const [away, setAway] = useState(false);
 
   const [q, setQ] = useState("");
   const [searching, setSearching] = useState(false);
@@ -141,11 +152,15 @@ export default function CoverageMap({
       map = new mapboxgl.Map({
         container: containerRef.current,
         style: "mapbox://styles/mapbox/standard",
-        ...(reduce ? RESTING_CAMERA : INTRO_CAMERA),
+        ...RESTING_CAMERA,
         maxBounds: [
           [-74.62, 40.32],
           [-73.28, 41.08],
         ],
+        // One-finger drag scrolls the page (two fingers pan/pinch the map), so
+        // the map can never trap a phone mid-scroll. Wheel zoom is disabled
+        // below regardless, so the desktop wheel path is unchanged.
+        cooperativeGestures: true,
       });
     } catch {
       setFailed(true);
@@ -160,17 +175,15 @@ export default function CoverageMap({
 
     map.on("style.load", () => {
       try {
-        map.setConfigProperty("basemap", "lightPreset", "dusk");
+        map.setConfigProperty("basemap", "lightPreset", "day");
         map.setConfigProperty("basemap", "show3dObjects", true);
       } catch {
         /* older style versions — dusk is cosmetic */
       }
     });
 
-    // First touch/scroll/drag marks the map as user-controlled so the
-    // cinematic sweep never yanks the camera from a hand that's on it.
+    // Grabbing the map closes any open suggestion list.
     const onUserGrab = () => {
-      userMovedRef.current = true;
       setSuggestions([]);
     };
     map.on("mousedown", onUserGrab);
@@ -185,9 +198,24 @@ export default function CoverageMap({
     map.on("zoom", syncZoomClass);
     syncZoomClass();
 
-    // The map boots early (holding on the skyline) — the cinematic sweep is
-    // triggered by the `play` effect below, once the cell is actually seen.
+    // Has the camera left the resting frame? Settles on every moveend, so a
+    // pinch, a drag, a dive or the way back all keep the mobile cluster honest.
+    const syncAway = () => {
+      const c = map.getCenter();
+      const drifted =
+        Math.abs(map.getZoom() - RESTING_CAMERA.zoom) > AWAY_ZOOM ||
+        milesBetween(c.lat, c.lng, RESTING_CAMERA.center[1], RESTING_CAMERA.center[0]) > AWAY_MILES;
+      setAway(drifted);
+    };
+    map.on("moveend", syncAway);
+
     map.on("load", () => setReady(true));
+    map.once("idle", () => setSettled(true));
+    // Safety net: `idle` is the right signal but not a guaranteed one — a stalled
+    // tile request or a style that never quiesces would otherwise leave the
+    // loader up forever, which is worse than the ragged load it replaced. Show
+    // the map regardless after this long.
+    const revealAnyway = window.setTimeout(() => setSettled(true), 8000);
     map.on("error", (e) => {
       // Token/style-level failures arrive here — fall back to the static art.
       const status = (e.error as { status?: number } | undefined)?.status;
@@ -197,25 +225,13 @@ export default function CoverageMap({
     return () => {
       markersRef.current.forEach((m) => m.remove());
       markersRef.current = [];
+      window.clearTimeout(revealAnyway);
       youRef.current?.remove();
       youRef.current = null;
       map.remove();
       mapRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  // ---- cinematic sweep — skyline hold until the cell is seen --------------
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!play || !ready || playedRef.current || !map) return;
-    playedRef.current = true;
-    if (reduce || userMovedRef.current) return;
-    const t1 = window.setTimeout(() => {
-      map.flyTo({ ...RESTING_CAMERA, duration: 7000, curve: 1.45, essential: false });
-    }, 350);
-    return () => window.clearTimeout(t1);
-  }, [play, ready, reduce]);
 
   // ---- (re)place shop markers when data or map readiness changes ----------
   useEffect(() => {
@@ -237,8 +253,6 @@ export default function CoverageMap({
   const flyToShop = (p: Pin) => {
     const map = mapRef.current;
     if (!map) return;
-    userMovedRef.current = true;
-    playedRef.current = true;
     setSuggestions([]);
     map.flyTo({ center: [p.lng, p.lat], zoom: 17.4, pitch: 67, duration: reduce ? 0 : 2800 });
     setNotice({
@@ -254,8 +268,6 @@ export default function CoverageMap({
   const goToPlace = (lng: number, lat: number) => {
     const map = mapRef.current;
     if (!map) return;
-    userMovedRef.current = true;
-    playedRef.current = true;
     setSuggestions([]);
 
     youRef.current?.remove();
@@ -371,15 +383,12 @@ export default function CoverageMap({
   const zoomStep = (dir: 1 | -1) => {
     const map = mapRef.current;
     if (!map) return;
-    userMovedRef.current = true;
     if (dir === 1) map.zoomIn({ duration: 300 });
     else map.zoomOut({ duration: 300 });
   };
   const flyOverview = () => {
     const map = mapRef.current;
     if (!map) return;
-    userMovedRef.current = true;
-    playedRef.current = true;
     setNotice(null);
     map.flyTo({ ...RESTING_CAMERA, duration: reduce ? 0 : 2400, essential: true });
   };
@@ -388,17 +397,49 @@ export default function CoverageMap({
 
   return (
     <div className="absolute inset-0">
-      <div ref={containerRef} className="h-full w-full" aria-label="Live map of the Otopair shop network" />
+      {/* Map and its controls fade in together as one piece. The container has
+          to stay laid out and painting for mapbox to render at all, so this
+          gates opacity rather than unmounting or hiding. */}
+      <motion.div
+        className="absolute inset-0"
+        initial={false}
+        // Never hidden — only covered. Holding the map at opacity 0 let the
+        // compositor skip rasterizing the canvas, so flipping it back to 1 left
+        // a blank frame while it repainted (visible as a white flash between
+        // loader and map). Painting throughout and simply dissolving the opaque
+        // loader off the top removes both that flash and the washed midpoint a
+        // two-layer cross-fade produced. Pointer events stay off until settled
+        // so nothing is clickable behind the loader.
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0 }}
+        style={{ pointerEvents: settled ? "auto" : "none" }}
+      >
+        <div ref={containerRef} className="h-full w-full" aria-label="Live map of the Otopair shop network" />
 
-      {/* Glass search bar — now a real address search */}
+      {/* Glass search bar — now a real address search. Below sm it is the
+          phone frame's pill (390:3612): 30 tall, 13 from the top, 8px in,
+          frosted white over the map, an 11px glass at left 10, the 8px
+          placeholder starting at 28, the arrow (13px, #777169) at the right.
+          Figma declares the fill at 20% white, but that is over its white
+          artboard where it renders solid; over the real basemap 20% leaves the
+          8px placeholder unreadable, so it runs at 70% to match the render.
+          The typed value stays 16px there: anything smaller makes iOS zoom
+          the page on focus. */}
       <form
         role="search"
         onSubmit={search}
-        className="absolute left-4 right-4 top-4 flex h-[54px] items-center gap-3 rounded-[8px] border border-white/15 bg-black/25 px-4 shadow-[0_4px_16px_rgba(0,0,0,0.25)] backdrop-blur-md sm:left-8 sm:right-8 sm:top-6"
+        className="absolute left-4 right-4 top-4 flex h-[54px] items-center gap-3 rounded-[8px] border border-white/60 bg-white/80 px-4 shadow-[0_4px_16px_rgba(20,40,80,0.10)] backdrop-blur-md max-tab:left-2 max-tab:right-2 max-tab:top-[13px] max-tab:h-[30px] max-tab:gap-[7px] max-tab:border-0 max-tab:bg-white/70 max-tab:pl-[10px] max-tab:pr-0 tab:left-8 tab:right-8 tab:top-6"
       >
-        <svg width={18} height={18} viewBox="0 0 18 18" fill="none" className="shrink-0" aria-hidden>
-          <circle cx="7.5" cy="7.5" r="5.5" stroke="white" strokeWidth="1.4" />
-          <path d="M11.6 11.6 L16 16" stroke="white" strokeWidth="1.4" strokeLinecap="round" />
+        <svg
+          width={18}
+          height={18}
+          viewBox="0 0 18 18"
+          fill="none"
+          className="shrink-0 text-[#1a1a1a] max-tab:h-[11px] max-tab:w-[11px] max-tab:text-[#777169]"
+          aria-hidden
+        >
+          <circle cx="7.5" cy="7.5" r="5.5" stroke="currentColor" strokeWidth="1.4" />
+          <path d="M11.6 11.6 L16 16" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
         </svg>
         <input
           value={q}
@@ -408,13 +449,13 @@ export default function CoverageMap({
           }}
           placeholder="Find your nearest shop — type any NYC address"
           aria-label="Find your nearest shop — type any NYC address"
-          className="h-full flex-1 truncate bg-transparent text-[13px] tracking-[0.05em] text-white placeholder:text-white/80 focus:outline-none"
+          className="h-full flex-1 truncate bg-transparent text-[13px] tracking-[0.05em] text-[#1a1a1a] placeholder:text-[#777169] focus:outline-none max-tab:text-[16px] max-tab:tracking-normal max-tab:placeholder:text-[8px] max-tab:placeholder:tracking-[0.4px]"
         />
         <button
           type="submit"
           aria-label="Search"
           disabled={searching}
-          className="text-[20px] font-light leading-none text-white transition-transform duration-200 hover:translate-x-0.5 hover:-translate-y-0.5 disabled:opacity-50"
+          className="text-[20px] font-light leading-none text-[#1a1a1a] transition-transform duration-200 hover:translate-x-0.5 hover:-translate-y-0.5 disabled:opacity-50 max-tab:flex max-tab:h-full max-tab:items-center max-tab:px-[6px] max-tab:text-[13px] max-tab:text-[#777169]"
         >
           {searching ? "…" : "↗"}
         </button>
@@ -422,7 +463,7 @@ export default function CoverageMap({
 
       {/* Live suggestions — shops in the network + street/address matches */}
       {suggestions.length > 0 && (
-        <div className="absolute left-4 right-4 top-[74px] z-20 overflow-hidden rounded-[8px] border border-white/15 bg-black/45 shadow-[0_10px_30px_rgba(0,0,0,0.35)] backdrop-blur-md sm:left-8 sm:right-8 sm:top-[88px]">
+        <div className="absolute left-4 right-4 top-[74px] z-20 overflow-hidden rounded-[8px] border border-white/60 bg-white/90 shadow-[0_10px_30px_rgba(20,40,80,0.14)] backdrop-blur-md max-tab:left-2 max-tab:right-2 max-tab:top-[47px] tab:left-8 tab:right-8 tab:top-[88px]">
           {suggestions.map((s) =>
             s.kind === "shop" ? (
               <button
@@ -433,16 +474,16 @@ export default function CoverageMap({
                   setQ(s.pin.name);
                   flyToShop(s.pin);
                 }}
-                className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-white/10"
+                className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[#1a1a1a]/[0.06]"
               >
-                <span className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-white bg-[#5299fe]" />
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-white bg-[#5299fe] ring-1 ring-[#1a1a1a]/15" />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] text-white">{s.pin.name}</span>
-                  <span className="block truncate text-[11px] text-white/60">
+                  <span className="block truncate text-[13px] text-[#1a1a1a]">{s.pin.name}</span>
+                  <span className="block truncate text-[11px] text-[#777169]">
                     {s.pin.city} · {s.pin.verified ? "Verified partner" : "Onboarding"}
                   </span>
                 </span>
-                <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-white/50">
+                <span className="shrink-0 text-[10px] uppercase tracking-[0.08em] text-[#777169]">
                   Shop
                 </span>
               </button>
@@ -455,12 +496,12 @@ export default function CoverageMap({
                   setQ(s.sub ? `${s.name}, ${s.sub}` : s.name);
                   goToPlace(s.lng, s.lat);
                 }}
-                className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-white/10"
+                className="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[#1a1a1a]/[0.06]"
               >
-                <MapPin className="h-3.5 w-3.5 shrink-0 text-white/70" strokeWidth={2} />
+                <MapPin className="h-3.5 w-3.5 shrink-0 text-[#777169]" strokeWidth={2} />
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[13px] text-white">{s.name}</span>
-                  {s.sub && <span className="block truncate text-[11px] text-white/60">{s.sub}</span>}
+                  <span className="block truncate text-[13px] text-[#1a1a1a]">{s.name}</span>
+                  {s.sub && <span className="block truncate text-[11px] text-[#777169]">{s.sub}</span>}
                 </span>
               </button>
             ),
@@ -469,24 +510,24 @@ export default function CoverageMap({
       )}
 
       {/* Result / error chip — clickable when it points at a shop */}
-      <div aria-live="polite" className="pointer-events-none absolute bottom-4 left-4 right-4 sm:bottom-6 sm:left-8 sm:right-auto">
+      <div aria-live="polite" className="pointer-events-none absolute bottom-4 left-4 right-4 tab:bottom-6 tab:left-8 tab:right-auto">
         {notice &&
           (notice.shop ? (
             <button
               type="button"
               onClick={() => flyToShop(notice.shop!)}
               title={`Fly to ${notice.shop.name}`}
-              className="pointer-events-auto inline-flex max-w-full items-center gap-1.5 rounded-[8px] border border-white/20 bg-black/35 px-3.5 py-2 text-[13px] tracking-[0.05em] text-white backdrop-blur-md transition-colors hover:bg-black/55"
+              className="pointer-events-auto inline-flex max-w-full items-center gap-1.5 rounded-[8px] border border-white/60 bg-white/85 px-3.5 py-2 text-[13px] tracking-[0.05em] text-[#1a1a1a] backdrop-blur-md transition-colors hover:bg-white"
             >
               <span className="truncate">{notice.text}</span>
-              <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-white/70" strokeWidth={2} />
+              <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-[#777169]" strokeWidth={2} />
             </button>
           ) : (
             <span
               className={`inline-block max-w-full truncate rounded-[8px] border px-3.5 py-2 text-[13px] tracking-[0.05em] backdrop-blur-md ${
                 notice.kind === "ok"
-                  ? "border-white/20 bg-black/35 text-white"
-                  : "border-[#ffb4a2]/40 bg-black/35 text-[#ffcdc2]"
+                  ? "border-white/60 bg-white/85 text-[#1a1a1a]"
+                  : "border-[#b4432e]/30 bg-white/85 text-[#b4432e]"
               }`}
             >
               {notice.text}
@@ -494,36 +535,61 @@ export default function CoverageMap({
           ))}
       </div>
 
-      {/* Camera controls — zoom, and the way back out of a dive */}
-      <div className="absolute bottom-8 right-3 z-10 flex flex-col overflow-hidden rounded-[8px] border border-white/15 bg-black/30 shadow-[0_4px_16px_rgba(0,0,0,0.25)] backdrop-blur-md sm:right-4">
+      {/* Camera controls — zoom, and the way back out of a dive. Below sm the
+          result chip owns the bottom edge (site audit P2: the two collided),
+          so the cluster sits under the search pill instead, loses +/− (pinch
+          zooms there) and only shows once the camera has left the resting
+          frame — the phone frame's map is bare. */}
+      <div
+        className={`absolute bottom-8 right-3 z-10 flex flex-col overflow-hidden rounded-[8px] border border-white/60 bg-white/80 shadow-[0_4px_16px_rgba(20,40,80,0.10)] backdrop-blur-md max-tab:top-[51px] max-tab:right-2 max-tab:bottom-auto tab:right-4 ${
+          away ? "" : "max-tab:hidden"
+        }`}
+      >
         <button
           type="button"
           onClick={() => zoomStep(1)}
           aria-label="Zoom in"
-          className="flex h-7 w-7 items-center justify-center text-white transition-colors hover:bg-white/15"
+          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07] max-tab:hidden"
         >
           <Plus className="h-3.5 w-3.5" strokeWidth={2.2} />
         </button>
-        <span className="h-px bg-white/15" />
+        <span className="h-px bg-[#1a1a1a]/12 max-tab:hidden" />
         <button
           type="button"
           onClick={() => zoomStep(-1)}
           aria-label="Zoom out"
-          className="flex h-7 w-7 items-center justify-center text-white transition-colors hover:bg-white/15"
+          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07] max-tab:hidden"
         >
           <Minus className="h-3.5 w-3.5" strokeWidth={2.2} />
         </button>
-        <span className="h-px bg-white/15" />
+        <span className="h-px bg-[#1a1a1a]/12 max-tab:hidden" />
         <button
           type="button"
           onClick={flyOverview}
           aria-label="Back to full coverage view"
           title="Back to the full coverage view"
-          className="flex h-7 w-7 items-center justify-center text-white transition-colors hover:bg-white/15"
+          className="flex h-7 w-7 items-center justify-center text-[#1a1a1a] transition-colors hover:bg-[#1a1a1a]/[0.07]"
         >
           <MapIcon className="h-3.5 w-3.5" strokeWidth={2} />
         </button>
       </div>
+      </motion.div>
+
+      {/* One continuous loading state, uncovered only once the map reports
+          idle — i.e. every tile loaded and drawn, not merely the style parsed. */}
+      <AnimatePresence initial={false}>
+        {!settled && (
+          <motion.div
+            key="loading"
+            className="absolute inset-0 z-30"
+            initial={false}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduce ? 0 : 0.55, ease: [0.22, 1, 0.36, 1] }}
+          >
+            <MapLoading />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

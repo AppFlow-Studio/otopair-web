@@ -55,6 +55,11 @@ export default async function ClaimPage({
       firstName={result.firstName ?? ""}
       shopName={result.shopName ?? ""}
       vehicleSummary={result.vehicleSummary ?? ""}
+      // The shop entered this car without a valid VIN, so it's on a placeholder
+      // identity (Off-Catalog Work spec, §5). Setting the expectation here is
+      // all we can do pre-signup — the repair itself needs an authenticated
+      // owner to authorise it. Deliberately not a blocker on claiming.
+      vehicleNeedsVin={result.vehicleNeedsVin === true}
     />
   );
 }

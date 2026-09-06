@@ -738,6 +738,9 @@ export const getMyOnboardingData = query({
     );
 
     for (const service of allServices) {
+      // Pre-Purchase Inspection has been retired as an offerable service; keep it
+      // out of the onboarding and settings service pickers.
+      if (service.slug === "pre_purchase_inspection") continue;
       const categoryId = String(service.service_category_id);
       if (!categoryMap.has(categoryId)) continue;
       categoryMap.get(categoryId)!.services.push({

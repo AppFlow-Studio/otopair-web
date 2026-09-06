@@ -4,7 +4,7 @@
 import {
   IconHome, IconShop, IconUsers, IconCalendar, IconBug, IconMessage, IconStripe,
   IconAudit, IconSettings, IconCar, IconBolt, IconTag, IconClock, IconStar,
-  IconCard, IconRefresh,
+  IconCard, IconRefresh, IconPlug,
 } from './Primitives'
 
 export type NavIcon = (p: { size?: number; stroke?: number; style?: React.CSSProperties }) => React.ReactElement
@@ -55,6 +55,7 @@ export const NAV_GROUPS: NavGroup[] = [
   ] },
   { section:'Insight', items: [
     { id:'analytics',    label:'Analytics',    Icon:IconBolt,     keywords:['metrics','charts','reports','insights'] },
+    { id:'customJobs',   label:'Custom jobs',  Icon:IconCar,      keywords:['custom jobs','off catalog','off-catalog','clusters','what to build','aliases','gaps'] },
     { id:'systemHealth', label:'System health', Icon:IconRefresh, badge:'systemHealth', keywords:['health','status','monitoring','uptime'] },
   ] },
   { section:'Signals', items: [
@@ -64,6 +65,9 @@ export const NAV_GROUPS: NavGroup[] = [
   { section:'Governance', items: [
     { id:'audit',         label:'Audit log',      Icon:IconAudit, keywords:['audit','activity','history','logs'] },
     { id:'mechanicEdits', label:'Mechanic Edits', Icon:IconCar,  badge:'mechanicEdits', keywords:['mechanic edits','changes','approvals'] },
+  ] },
+  { section:'Internal', items: [
+    { id:'integrations', label:'Tools & integrations', Icon:IconPlug, keywords:['integrations','services','tools','vendors','subscriptions','saas','convex','slack','stripe','firecrawl','reducto','fly','spend','costs','stack'] },
   ] },
 ]
 

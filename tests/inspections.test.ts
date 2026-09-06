@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { api } from "../convex/_generated/api";
 import { identityFor, makeT, seedConfirmedBooking } from "./helpers";
+import { INSPECTION_TEMPLATE_VERSION } from "../lib/inspection-template";
 
 const deleteInspectionPhoto = makeFunctionReference<"mutation">(
   "inspections:deleteInspectionPhoto",
@@ -127,5 +128,265 @@ describe("inspection photos", () => {
       storageId,
     });
     expect(await t.run((ctx) => ctx.storage.getUrl(storageId))).toBeNull();
+  });
+});
+
+describe("zone checkpoints", () => {
+  // Abdul, Aug 20: "I wish you did checkpoints — how quick I'm spending on each
+  // section." Successive completed_at values are what make that measurable.
+  const prejob = {
+    mileage: 42_000,
+    front_tire_condition: null,
+    rear_tire_condition: null,
+  } as any;
+
+  function inspectionWith(done: boolean) {
+    return {
+      template_version: INSPECTION_TEMPLATE_VERSION,
+      odometer: 42_000,
+      zones: [
+        {
+          zone_id: "FL",
+          done,
+          measures: { tread: "8", psi: "35" },
+          tri: { wear: "g", brake_visual: "g" },
+          text: { tire_brand: "Michelin", tire_model: "Defender", tire_size: "225/45R17" },
+          select: { run_flat: "no", tire_type: "All-Season" },
+        },
+      ],
+      findings_attention: [],
+      findings_monitor: [],
+    } as any;
+  }
+
+  async function readCompletedAt(t: ReturnType<typeof makeT>, bookingId: any) {
+    return t.run(async (ctx) => {
+      const row = await ctx.db
+        .query("vehicle_inspections")
+        .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
+        .first();
+      return (row?.zones ?? []).find((z: any) => z.zone_id === "FL")
+        ?.completed_at as number | undefined;
+    });
+  }
+
+  it("stamps a zone the first time it is marked done and never moves it after", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, { status: "vehicle_at_shop" });
+    const owner = t.withIdentity(identityFor(seed.ownerClerkId));
+
+    // Draft with the zone still open — nothing to stamp yet.
+    await owner.mutation(api.bookings.savePrejob, {
+      bookingId: seed.bookingId,
+      prejob,
+      inspection: inspectionWith(false),
+    });
+    // Convex serialises undefined to null across the t.run boundary.
+    expect(await readCompletedAt(t, seed.bookingId)).toBeFalsy();
+
+    // Marked complete — stamped.
+    await owner.mutation(api.bookings.savePrejob, {
+      bookingId: seed.bookingId,
+      prejob,
+      inspection: inspectionWith(true),
+    });
+    const first = await readCompletedAt(t, seed.bookingId);
+    expect(typeof first).toBe("number");
+
+    // Re-saved (mechanic reopened the zone to fix a reading). The clock must
+    // not restart, or a correction reads as time spent inspecting.
+    await owner.mutation(api.bookings.savePrejob, {
+      bookingId: seed.bookingId,
+      prejob,
+      inspection: inspectionWith(true),
+    });
+    expect(await readCompletedAt(t, seed.bookingId)).toBe(first);
+  });
+});
+
+describe("unaddressed findings", () => {
+  // The list the mechanic overlay offers "Add to this job" from. A finding can
+  // already be handled four ways by the time the job is running; re-offering one
+  // that was is how the system starts reading as if it isn't following along.
+  async function seedFlaggedWipers(t: ReturnType<typeof makeT>, seed: any) {
+    await t.run(async (ctx) => {
+      await ctx.db.insert("vehicle_inspections", {
+        booking_id: seed.bookingId,
+        vin: "1HGCM82633A004352",
+        shop_id: seed.shopId,
+        mechanic_id: seed.mechanicId,
+        template_version: INSPECTION_TEMPLATE_VERSION,
+        zones: [
+          { zone_id: "FRT", done: true, tri: { wipe: "r" } },
+        ],
+        findings_attention: [],
+        findings_monitor: [],
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any);
+    });
+  }
+
+  function findingsFor(t: ReturnType<typeof makeT>, seed: any) {
+    return t
+      .withIdentity(identityFor(seed.ownerClerkId))
+      .query(api.inspections.getUnaddressedFindingsForBooking, {
+        bookingId: seed.bookingId,
+      });
+  }
+
+  it("offers a flagged finding nothing has acted on", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    await seedFlaggedWipers(t, seed);
+
+    const out = await findingsFor(t, seed);
+    expect(out.map((f: any) => f.label)).toContain("Wiper Blade Replacement");
+  });
+
+  it("drops it once an off-catalog line covers it", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    await seedFlaggedWipers(t, seed);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("custom_jobs", {
+        booking_id: seed.bookingId,
+        shop_id: seed.shopId,
+        vehicle_vin: "1HGCM82633A004352",
+        name: "Replace wiper blades",
+        normalized_name: "replace wiper blades",
+        match_key: "blades replace wiper",
+        source: "mid_job",
+        status: "planned",
+        created_at: Date.now(),
+      } as any);
+    });
+
+    const out = await findingsFor(t, seed);
+    expect(out.map((f: any) => f.label)).not.toContain("Wiper Blade Replacement");
+  });
+
+  it("keeps it when the customer DECLINED that line", async () => {
+    // The tire the customer turned down is still worn. Arguably they need
+    // telling more than anyone.
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    await seedFlaggedWipers(t, seed);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("custom_jobs", {
+        booking_id: seed.bookingId,
+        shop_id: seed.shopId,
+        vehicle_vin: "1HGCM82633A004352",
+        name: "Replace wiper blades",
+        normalized_name: "replace wiper blades",
+        match_key: "blades replace wiper",
+        source: "mid_job",
+        status: "declined",
+        created_at: Date.now(),
+      } as any);
+    });
+
+    const out = await findingsFor(t, seed);
+    expect(out.map((f: any) => f.label)).toContain("Wiper Blade Replacement");
+  });
+
+  it("drops it once it was filed as a recommendation instead", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    await seedFlaggedWipers(t, seed);
+    const jobActualId = await t.run(async (ctx) =>
+      ctx.db.insert("job_actuals", {
+        booking_id: seed.bookingId,
+        mechanic_id: seed.mechanicId,
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any),
+    );
+    await t.run(async (ctx) => {
+      await ctx.db.insert("job_recommendations", {
+        booking_id: seed.bookingId,
+        job_actual_id: jobActualId,
+        shop_id: seed.shopId,
+        mechanic_id: seed.mechanicId,
+        vehicle_vin: "1HGCM82633A004352",
+        freeform_text: "Wiper Blade Replacement",
+        urgency: "soon",
+        visible_to_driver: false,
+        status: "open",
+        source: "inspection",
+        created_at: Date.now(),
+      } as any);
+    });
+
+    const out = await findingsFor(t, seed);
+    expect(out.map((f: any) => f.label)).not.toContain("Wiper Blade Replacement");
+  });
+
+  it("carries a catalog-derived taxonomy for a service we offer", async () => {
+    // An oil-condition flag resolves to the Oil Change catalog slug, so the
+    // overlay can add it in one tap — the mechanic never re-classifies a service
+    // we already offer. Without this the add throws "Pick at least one system".
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    await t.run(async (ctx) => {
+      await ctx.db.insert("vehicle_inspections", {
+        booking_id: seed.bookingId,
+        vin: "1HGCM82633A004352",
+        shop_id: seed.shopId,
+        mechanic_id: seed.mechanicId,
+        template_version: INSPECTION_TEMPLATE_VERSION,
+        zones: [{ zone_id: "ENG", done: true, tri: { oil_condition: "r" } }],
+        findings_attention: [],
+        findings_monitor: [],
+        created_at: Date.now(),
+        updated_at: Date.now(),
+      } as any);
+    });
+
+    const out = await findingsFor(t, seed);
+    const oil = out.find((f: any) => f.label === "Oil Change");
+    expect(oil).toBeTruthy();
+    expect(oil.systemTags).toEqual(["engine"]);
+    expect(oil.workType).toBe("service");
+  });
+
+  it("leaves taxonomy null for a freeform finding (picker path)", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    await seedFlaggedWipers(t, seed);
+
+    const out = await findingsFor(t, seed);
+    const wipers = out.find((f: any) => f.label === "Wiper Blade Replacement");
+    expect(wipers).toBeTruthy();
+    expect(wipers.systemTags).toBeNull();
+    expect(wipers.workType).toBeNull();
+  });
+});
+
+describe("promoting a finding into mid-job work", () => {
+  // The mutation round-trip the "Add to this job" button depends on. It went
+  // untested when the button shipped, so the missing-taxonomy crash reached a
+  // partner's screen — the button always called this without a taxonomy.
+  it("needs a taxonomy: throws without one, succeeds with the derived one", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, { status: "in_progress" });
+    const owner = t.withIdentity(identityFor(seed.ownerClerkId));
+
+    // The exact crash the overlay hit before findings carried a taxonomy.
+    await expect(
+      owner.mutation(api.customJobs.addMidJobCustomService, {
+        bookingId: seed.bookingId,
+        name: "Oil Change",
+      }),
+    ).rejects.toThrow(/pick at least one system/i);
+
+    // The one-tap catalog path: the taxonomy inspectionSlugTaxonomy derived.
+    const res = await owner.mutation(api.customJobs.addMidJobCustomService, {
+      bookingId: seed.bookingId,
+      name: "Oil Change",
+      systemTags: ["engine"],
+      workType: "service",
+    });
+    expect(res.ok).toBe(true);
   });
 });

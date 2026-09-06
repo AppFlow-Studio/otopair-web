@@ -49,6 +49,9 @@ type BoardCard = {
   vin: string
   vehicleYmm: string | null
   services: string[]
+  customServices?: string[]
+  origin?: 'walk_in' | 'app'
+  source?: string | null
   scheduledDate: string | null
   scheduledTime: string | null
   createdAt: number
@@ -72,6 +75,38 @@ function cardPrice(r: BoardCard): { text: string; estimate: boolean } | null {
     return { text: `${money(r.quote.low, { cents: true })}–${money(r.quote.high, { cents: true })}`, estimate: true }
   if (r.quote.high != null) return { text: money(r.quote.high, { cents: true }), estimate: true }
   return null
+}
+
+// Walk-in (shop-created) vs app (customer self-serve) pill. Origin comes from
+// booking.source — see bookingOrigin in convex/director.ts.
+const OriginBadge = ({ origin }: { origin?: 'walk_in' | 'app' }) =>
+  origin === 'walk_in'
+    ? <Badge tone="orange">Walk-in</Badge>
+    : <Badge tone="blue">App</Badge>
+
+// Service(s) cell: catalog service names, then any off-catalog custom jobs each
+// tagged "Custom". A pure walk-in has no catalog services, so without the custom
+// names the cell would read "—" for real work that happened.
+const ServiceCell = ({ services, custom }: { services: string[]; custom?: string[] }) => {
+  const catalog = (services ?? []).filter(s => s && s !== '—')
+  const customJobs = custom ?? []
+  if (catalog.length === 0 && customJobs.length === 0) return <>—</>
+  return (
+    <span style={{ display:'inline-flex', flexWrap:'wrap', alignItems:'center' }}>
+      {catalog.length > 0 && <span>{catalog.join(', ')}</span>}
+      {customJobs.map((name, i) => {
+        // Comma-separate from whatever came before (catalog list or a prior
+        // custom line) so the whole cell reads as one list.
+        const needsComma = catalog.length > 0 || i > 0
+        return (
+          <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:4 }}>
+            <span>{needsComma ? `, ${name}` : name}</span>
+            <Badge tone="teal">Custom</Badge>
+          </span>
+        )
+      })}
+    </span>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -161,12 +196,17 @@ const BoardView = ({ token, onOpen }: { token: string; onOpen: (id: Id<'bookings
                         {c.scheduledDate ? fmtDate(c.scheduledDate) : shortDate(c.createdAt)}{c.scheduledTime ? ` ${c.scheduledTime}` : ''}
                       </span>
                     </div>
-                    <div style={{ fontSize: 12, color: 'var(--slate-500)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.shop}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1 }}>
+                      <span style={{ flex: 1, fontSize: 12, color: 'var(--slate-500)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.shop}</span>
+                      <OriginBadge origin={c.origin} />
+                    </div>
                     {c.vehicleYmm && (
                       <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--slate-700)', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.vehicleYmm}</div>
                     )}
-                    <div style={{ fontSize: 12, color: 'var(--slate-600)', marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {c.services.filter(s => s && s !== '—').join(', ') || 'Service TBD'}
+                    <div style={{ fontSize: 12, color: 'var(--slate-600)', marginTop: 3 }}>
+                      {c.services.filter(s => s && s !== '—').length === 0 && (c.customServices ?? []).length === 0
+                        ? 'Service TBD'
+                        : <ServiceCell services={c.services} custom={c.customServices} />}
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 5 }}>
                       <span className="mono" style={{ fontSize: 10, color: 'var(--slate-400)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -194,19 +234,24 @@ const BoardView = ({ token, onOpen }: { token: string; onOpen: (id: Id<'bookings
 
 // ---------------------------------------------------------------------------
 // List view — the existing recent-50 director list (api.director.recentBookingsList)
-// with its status/shop/refund/fallback filters. Preserved verbatim.
+// with its status/shop/refund/fallback filters, plus origin (walk-in/app) +
+// custom-work filters and an Origin column.
 // ---------------------------------------------------------------------------
 const ListView = ({ token, onOpen }: { token: string; onOpen: (id: Id<'bookings'>) => void }) => {
   const [statusFilter, setStatusFilter] = useState('all')
   const [shopFilter, setShopFilter]     = useState('')
+  const [originFilter, setOriginFilter] = useState('all')
   const [untaggedOnly, setUntaggedOnly] = useState(false)
   const [fallbackOnly, setFallbackOnly] = useState(false)
+  const [customOnly, setCustomOnly]     = useState(false)
 
   const bookings = useQuery(api.director.recentBookingsList, { token })
 
   const filtered = (bookings ?? []).filter(b => {
     if (statusFilter !== 'all' && b.status !== statusFilter) return false
     if (shopFilter && !b.shop.toLowerCase().includes(shopFilter.toLowerCase())) return false
+    if (originFilter !== 'all' && (b.origin ?? 'app') !== originFilter) return false
+    if (customOnly && (b.customServices ?? []).length === 0) return false
     if (untaggedOnly && b.status !== 'refunded') return false
     if (
       fallbackOnly &&
@@ -225,8 +270,11 @@ const ListView = ({ token, onOpen }: { token: string; onOpen: (id: Id<'bookings'
       <div style={{ display:'flex', alignItems:'center', gap:10, padding:12, background:'#fff', border:'1px solid var(--slate-200)', borderRadius:10, marginBottom:12, flexWrap:'wrap' }}>
         <Select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
           options={[{ value:'all', label:'All statuses' },{ value:'pending', label:'Pending' },{ value:'confirmed', label:'Confirmed' },{ value:'in_progress', label:'In progress' },{ value:'completed', label:'Completed' },{ value:'cancelled', label:'Cancelled' },{ value:'refunded', label:'Refunded' }]} />
+        <Select value={originFilter} onChange={e => setOriginFilter(e.target.value)}
+          options={[{ value:'all', label:'All origins' },{ value:'app', label:'App' },{ value:'walk_in', label:'Walk-in' }]} />
         <Input icon={<IconShop size={14} />} value={shopFilter} onChange={e => setShopFilter(e.target.value)} placeholder="Filter by shop…" style={{ width:220 }} />
         <span style={{ width:1, height:22, background:'var(--slate-200)' }} />
+        <Toggle checked={customOnly} onChange={e => setCustomOnly(e.target.checked)} label="Custom work only" />
         <Toggle checked={untaggedOnly} onChange={e => setUntaggedOnly(e.target.checked)} label="Show refunds only" />
         <Toggle checked={fallbackOnly} onChange={e => setFallbackOnly(e.target.checked)} label="Fallback only" />
         <span style={{ flex:1 }} />
@@ -240,6 +288,7 @@ const ListView = ({ token, onOpen }: { token: string; onOpen: (id: Id<'bookings'
             <th style={tableStyles.th}>Booking</th>
             <th style={tableStyles.th}>User</th>
             <th style={tableStyles.th}>Shop</th>
+            <th style={tableStyles.th}>Origin</th>
             <th style={tableStyles.th}>Service(s)</th>
             <th style={tableStyles.th}>Fallback</th>
             <th style={tableStyles.th}>Scheduled</th>
@@ -249,15 +298,16 @@ const ListView = ({ token, onOpen }: { token: string; onOpen: (id: Id<'bookings'
           </tr></thead>
           <tbody>
             {bookings === undefined
-              ? <tr><td colSpan={9} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>Loading…</td></tr>
+              ? <tr><td colSpan={10} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>Loading…</td></tr>
               : filtered.length === 0
-                ? <tr><td colSpan={9} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>No bookings found.</td></tr>
+                ? <tr><td colSpan={10} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>No bookings found.</td></tr>
                 : filtered.map(b => (
                   <tr key={b.id} onClick={() => onOpen(b.id)} style={{ cursor:'pointer' }}>
                     <td style={tableStyles.td}><span className="mono" style={{ color:'var(--blue-700)', fontWeight:500 }}>{String(b.id).slice(-8)}</span></td>
                     <td style={tableStyles.td}>{b.user}</td>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{b.shop}</td>
-                    <td style={{ ...tableStyles.td, color:'var(--slate-600)', fontSize:12 }}>{b.services.join(', ') || '—'}</td>
+                    <td style={tableStyles.td}><OriginBadge origin={b.origin} /></td>
+                    <td style={{ ...tableStyles.td, color:'var(--slate-600)', fontSize:12 }}><ServiceCell services={b.services} custom={b.customServices} /></td>
                     <td style={tableStyles.td}>
                       {(b.fallback.catches +
                         b.fallback.corrected +

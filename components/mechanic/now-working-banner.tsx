@@ -20,6 +20,14 @@ export default function NowWorkingBanner({
   const job = useQuery(api.bookings.getJobDetail, { bookingId });
   const startedAt = job?.jobActuals?.startedAt ?? null;
 
+  // A stopped clock (a blocker like "waiting on a part", or a mid-job re-quote
+  // sitting with the customer) pauses the job. Reflect it here so this banner
+  // doesn't keep ticking about a car nobody is touching. Both the flag and the
+  // excluded span are server-derived — see jobBlockers.listForBooking.
+  const blockers = useQuery(api.jobBlockers.listForBooking, { bookingId });
+  const paused = Boolean(blockers?.clockPaused);
+  const blockedMs = (blockers?.blockedMinutes ?? 0) * 60_000;
+
   return (
     <section
       className="overflow-hidden rounded-2xl border border-emerald-400/30 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_60%),linear-gradient(180deg,_#0f172a,_#0b1220)] p-5 text-slate-50 shadow-[0_10px_30px_rgba(15,23,42,0.18)]"
@@ -32,9 +40,17 @@ export default function NowWorkingBanner({
           </span>
           <div>
             <div className="flex items-center gap-2">
-              <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
-              <p className="text-xs font-medium uppercase tracking-[0.18em] text-emerald-300/80">
-                Now working
+              <span
+                className={`inline-flex h-2 w-2 rounded-full ${
+                  paused ? "bg-amber-400" : "animate-pulse bg-emerald-400"
+                }`}
+              />
+              <p
+                className={`text-xs font-medium uppercase tracking-[0.18em] ${
+                  paused ? "text-amber-300/90" : "text-emerald-300/80"
+                }`}
+              >
+                {paused ? "Paused" : "Now working"}
               </p>
               <span className="text-xs text-slate-400">
                 {shortBookingCode(String(bookingId))}
@@ -54,11 +70,15 @@ export default function NowWorkingBanner({
         <div className="flex items-center gap-4">
           <div className="text-right">
             <p className="text-[10px] uppercase tracking-wider text-slate-400">
-              Elapsed
+              {paused ? "Paused" : "Elapsed"}
             </p>
             <ElapsedTimer
               startedAtMs={startedAt}
-              className="font-mono text-2xl font-semibold tabular-nums text-white"
+              paused={paused}
+              blockedMs={blockedMs}
+              className={`font-mono text-2xl font-semibold tabular-nums ${
+                paused ? "text-amber-200" : "text-white"
+              }`}
             />
           </div>
           <button

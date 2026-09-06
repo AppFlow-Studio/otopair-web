@@ -170,6 +170,9 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
         <span className="mono" style={{ fontSize:13, fontWeight:600, color:'var(--blue-700)' }}>
           {detail.invoiceNumber ?? String(detail.id).slice(-8)}
         </span>
+        <Badge tone={detail.origin === 'walk_in' ? 'orange' : 'blue'}>
+          {detail.origin === 'walk_in' ? 'Walk-in' : 'App'}
+        </Badge>
         {detail.liveStage && <Badge tone="blue">{detail.liveStage}</Badge>}
         {detail.refundReason && <Badge tone="purple">Refund tagged</Badge>}
       </>}
@@ -292,10 +295,14 @@ const OverviewTab = ({ detail, bookingId }: { detail: any; bookingId: Id<'bookin
                     )
                   : null
               return (
-                <div key={String(s.id)} style={{ background:'#fff', border:`1px solid ${isCatch ? '#FED7AA' : isCorrected ? '#A7F3D0' : 'var(--slate-200)'}`, borderRadius:8, padding:'8px 12px' }}>
+                <div key={String(s.id)} style={{ background:'#fff', border:`1px solid ${isCatch ? '#FED7AA' : isCorrected ? '#A7F3D0' : s.isCustom ? '#99F6E4' : 'var(--slate-200)'}`, borderRadius:8, padding:'8px 12px' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexWrap:'wrap' }}>
                     <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
                       <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{s.name}</span>
+                      {s.isCustom && <Badge tone="teal">Custom</Badge>}
+                      {s.isCustom && s.customSource && s.customSource !== 'booking' && (
+                        <Badge tone="slate">{String(s.customSource).replace(/_/g, ' ')}</Badge>
+                      )}
                       {isCatch && <Badge tone="orange">⚠ Fallback catch</Badge>}
                       {isCorrected && <Badge tone="green">✓ Engine corrected</Badge>}
                       {isRefused && <Badge tone="red">Engine refused</Badge>}
@@ -617,6 +624,56 @@ const CompletionTab = ({ token, id }: { token: string; id: Id<'bookings'> }) => 
               </span>
             } />
           </div>
+          {/* Which parts, not just how much. The receipt has itemised this for
+              the customer all along — the operator had less detail than the
+              person who paid the bill. Each row names the work it went into,
+              so an off-catalog part is traceable to its line. */}
+          {ja.partsUsed && ja.partsUsed.length > 0 && (
+            <div style={{ marginTop:14, borderTop:'1px solid var(--slate-100)', paddingTop:12 }}>
+              <div style={{ marginBottom:8, fontSize:10, fontWeight:600, color:'var(--slate-400)', textTransform:'uppercase', letterSpacing:'0.04em' }}>
+                Parts used ({ja.partsUsed.filter((p: any) => !p.notUsed).length})
+              </div>
+              <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
+                {ja.partsUsed.map((p: any, i: number) => (
+                  <div
+                    key={i}
+                    style={{
+                      display:'flex', alignItems:'baseline', justifyContent:'space-between',
+                      gap:12, fontSize:13,
+                      opacity: p.notUsed ? 0.45 : 1,
+                    }}
+                  >
+                    <span style={{ minWidth:0 }}>
+                      <span style={{ fontWeight:600, textDecoration: p.notUsed ? 'line-through' : 'none' }}>
+                        {p.partName}
+                      </span>
+                      {p.quantity > 1 && <span style={{ color:'var(--slate-500)' }}> ×{p.quantity}</span>}
+                      {p.oemNumber && (
+                        <span className="mono" style={{ marginLeft:6, fontSize:11, color:'var(--slate-500)' }}>
+                          {p.oemNumber}
+                        </span>
+                      )}
+                      <span style={{ display:'block', fontSize:11, color:'var(--slate-500)', marginTop:1 }}>
+                        {p.forWork ?? 'Unattributed'}
+                        {p.isCustom && (
+                          <span style={{ marginLeft:6, borderRadius:3, border:'1px solid var(--amber-500, #B45309)', color:'var(--amber-700, #B45309)', padding:'0 4px', fontSize:9, fontWeight:700, letterSpacing:'0.04em', textTransform:'uppercase' }}>
+                            custom
+                          </span>
+                        )}
+                        {p.suppliedByCustomer && (
+                          <span style={{ marginLeft:6, color:'var(--slate-400)' }}>customer-supplied</span>
+                        )}
+                        {p.notUsed && <span style={{ marginLeft:6 }}>not used</span>}
+                      </span>
+                    </span>
+                    <span className="mono" style={{ whiteSpace:'nowrap' }}>
+                      {money(p.lineCost, { cents: true })}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           {(ja.mechanicFindings || ja.technicianNotes || ja.additionalObservations || ja.inProgressNotes) && (
             <div style={{ marginTop:14, display:'flex', flexDirection:'column', gap:10, borderTop:'1px solid var(--slate-100)', paddingTop:12 }}>
               {ja.mechanicFindings && <Field label="Mechanic findings (customer-facing)" value={ja.mechanicFindings} />}
@@ -801,6 +858,24 @@ const MoneyApprovalsTab = ({ token, id }: { token: string; id: Id<'bookings'> })
                   {a.ceilingAfter != null && ` · new ceiling ${money(a.ceilingAfter, { cents: true })}`}
                   {a.stripeAction && ` · ${a.stripeAction.replace(/_/g, ' ')}`}
                 </div>
+                {a.addedServices && a.addedServices.length > 0 && (
+                  <div style={{ marginTop:4, fontSize:11, color:'var(--slate-500)' }}>
+                    Added: {a.addedServices.join(', ')}
+                  </div>
+                )}
+                {a.deniedParts && a.deniedParts.length > 0 && (
+                  <div style={{ marginTop:4, borderRadius:6, background:'var(--red-50)', border:'1px solid #FECACA', padding:'6px 10px' }}>
+                    <div style={{ fontSize:10, fontWeight:600, color:'var(--red-700)', textTransform:'uppercase', letterSpacing:'0.04em', marginBottom:2 }}>
+                      Denied parts — not charged
+                    </div>
+                    {a.deniedParts.map((p, pi: number) => (
+                      <div key={pi} style={{ display:'flex', justifyContent:'space-between', gap:10, fontSize:12, color:'var(--slate-600)' }}>
+                        <span>{p.quantity > 1 ? `${p.quantity} × ` : ''}{p.name}</span>
+                        {p.lineCents != null && <span className="mono" style={{ textDecoration:'line-through' }}>{money(p.lineCents, { cents: true })}</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {a.notes && <div style={{ marginTop:4, fontSize:12, color:'var(--slate-600)' }}>{a.notes}</div>}
               </div>
             ))}

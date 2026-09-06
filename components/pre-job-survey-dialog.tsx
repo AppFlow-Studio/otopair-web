@@ -58,6 +58,7 @@ import {
   TIRE_POSITIONS,
   convertRotorValue,
   formatRotorValue,
+  formatRotorReferenceMinimum,
   getTireTreadMinimum,
   rotorValueToMicrometers,
   validateInspectionMeasurementDraft,
@@ -66,6 +67,7 @@ import {
   type TirePosition,
   type TireTreadReading,
 } from "@/lib/inspection-measurements";
+import { classify } from "@/lib/inspection-template";
 import { TIRE_BRAND_OPTIONS } from "@/lib/inspection-options";
 import { cn } from "@/lib/utils";
 import { TireSizeInput } from "@/components/ui/tire-size-input";
@@ -253,6 +255,16 @@ function keepNumericInput(value: string) {
   return rest.length > 0 ? `${whole}.${rest.join("")}` : whole;
 }
 
+// Pull the first numeric token out of a free-text measurement value so an "Other"
+// entry degrades gracefully: "3.5" -> 3.5, "3.5mm" -> 3.5, "10-12" -> 10,
+// "worn to metal" -> null. Guarantees callers never emit NaN.
+function firstFiniteNumber(value: string): number | null {
+  const match = value.match(/-?\d+(\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 type TreadInputState = Record<
   TirePosition,
   {
@@ -401,6 +413,52 @@ function rotorConditionLabel(value: string) {
   if (value === "needs_attention") return "Needs attention";
   return "Select...";
 }
+
+// Rotor minimum thickness = 15%-wear threshold off the OEM original (85% of
+// nominal). Enrichment fetches the nominal and stores the derived minimum on
+// the config; the passport carries it per axle as the replace-at figure. Here
+// the prejob surfaces that per-position and grades the mechanic's reading
+// against it. See convex/vehicleEnrichment/utils/rotorSpecResource.deriveRotorMinMm.
+function rotorMinForPosition(
+  brakes: VehiclePassportData["passport"]["brakes"] | undefined,
+  position: TirePosition,
+): { minMm: number | null; quality: string | null } {
+  const isFront = position === "front_left" || position === "front_right";
+  return {
+    minMm: (isFront ? brakes?.rotor_min_front_mm : brakes?.rotor_min_rear_mm) ?? null,
+    quality:
+      (isFront ? brakes?.rotor_min_quality_front : brakes?.rotor_min_quality_rear) ??
+      null,
+  };
+}
+
+/** Derived minimums grade at full strength but are shown as an estimate so the
+ *  figure never reads as the manufacturer's printed discard spec. */
+function isEstimatedRotorMin(quality: string | null): boolean {
+  return quality === "derived_15pct_wear" || quality === "derived_from_nominal";
+}
+
+/** Grade an entered rotor reading against the axle minimum, or null when the
+ *  reading is blank/invalid or there's no minimum to grade against. */
+function gradeRotorReading(
+  rawInput: string,
+  unit: RotorUnit,
+  minMm: number | null,
+): { lvl: "ok" | "warn" | "bad"; txt: string } | null {
+  if (minMm == null) return null;
+  const entered = parseFloat(rawInput.trim());
+  if (!Number.isFinite(entered)) return null;
+  const measuredMm = rotorValueToMicrometers(entered, unit) / 1000;
+  const res = classify("rotor", measuredMm, minMm);
+  if (res.lvl === "none") return null;
+  return { lvl: res.lvl as "ok" | "warn" | "bad", txt: res.txt };
+}
+
+const ROTOR_GRADE_CHIP: Record<"ok" | "warn" | "bad", string> = {
+  ok: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  warn: "bg-amber-50 text-amber-700 ring-amber-200",
+  bad: "bg-red-50 text-red-700 ring-red-200",
+};
 
 function initialFilterStatus(value?: string | null): FilterStatus {
   return isFilterStatus(value) ? value : "not_checked";
@@ -904,8 +962,7 @@ function PreJobSurveyDialogBody({
     const normalizedRearTireSize = rearMatchesFront
       ? normalizedFrontTireSize
       : normalizeTireSizeValue(rearTireSize);
-    const parsedOilCapacity =
-      oilCapacity.trim() === "" ? null : Number(oilCapacity);
+    const parsedOilCapacity = firstFiniteNumber(oilCapacity);
     const tireTread = Object.fromEntries(
       TIRE_POSITIONS.flatMap((position) => {
         const reading = buildTreadReading(treadInputs[position]);
@@ -946,8 +1003,8 @@ function PreJobSurveyDialogBody({
       rear_tire_condition: rearCondition,
       tire_tread: tireTread,
       brakes: {
-        front_pad_mm: frontPadMm.trim() === "" ? null : Number(frontPadMm),
-        rear_pad_mm: rearPadMm.trim() === "" ? null : Number(rearPadMm),
+        front_pad_mm: firstFiniteNumber(frontPadMm),
+        rear_pad_mm: firstFiniteNumber(rearPadMm),
         rotor_condition:
           rotorCondition === ""
             ? null
@@ -1873,8 +1930,6 @@ function PreJobSurveyDialogBody({
                     options={PAD_THICKNESS_OPTIONS}
                     placeholder="Select mm…"
                     otherPlaceholder="mm"
-                    otherInputMode="decimal"
-                    otherSanitize={keepNumericInput}
                     helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
                   />
                 ) : null}
@@ -1892,8 +1947,6 @@ function PreJobSurveyDialogBody({
                     options={PAD_THICKNESS_OPTIONS}
                     placeholder="Select mm…"
                     otherPlaceholder="mm"
-                    otherInputMode="decimal"
-                    otherSanitize={keepNumericInput}
                     helperText="New ≈ 10–12mm · Replace soon ≤ 4mm · Replace immediately ≤ 3mm"
                   />
                 ) : null}
@@ -1940,14 +1993,36 @@ function PreJobSurveyDialogBody({
                   </div>
                 </div>
                 <div className="grid gap-2 sm:grid-cols-2">
-                  {rotorPositions.map((position) => (
+                  {rotorPositions.map((position) => {
+                    const { minMm, quality } = rotorMinForPosition(
+                      passportData?.passport.brakes,
+                      position,
+                    );
+                    const grade = gradeRotorReading(
+                      rotorInputs[position],
+                      rotorUnit,
+                      minMm,
+                    );
+                    return (
                     <label
                       key={position}
                       className="rounded-lg border border-primary/10 bg-muted/40 p-3"
                     >
-                      <span className="text-[11px] font-medium text-muted-foreground">
-                        {POSITION_LABELS[position]}
-                      </span>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[11px] font-medium text-muted-foreground">
+                          {POSITION_LABELS[position]}
+                        </span>
+                        {grade ? (
+                          <span
+                            className={cn(
+                              "rounded-full px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset",
+                              ROTOR_GRADE_CHIP[grade.lvl],
+                            )}
+                          >
+                            {grade.txt}
+                          </span>
+                        ) : null}
+                      </div>
                       <div className="mt-2 flex items-center gap-2">
                         <input
                           aria-label={`${POSITION_LABELS[position]} rotor thickness`}
@@ -1966,8 +2041,27 @@ function PreJobSurveyDialogBody({
                           {rotorUnit}
                         </span>
                       </div>
+                      {minMm != null ? (
+                        <p className="mt-1.5 text-[10px] text-muted-foreground">
+                          Replace at{" "}
+                          <span className="font-medium text-foreground">
+                            {formatRotorReferenceMinimum(minMm, rotorUnit)}
+                          </span>{" "}
+                          <span className="text-muted-foreground/80">· min (15% wear)</span>
+                          {isEstimatedRotorMin(quality) ? (
+                            <span className="ml-1 rounded bg-primary/5 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground">
+                              est.
+                            </span>
+                          ) : null}
+                        </p>
+                      ) : (
+                        <p className="mt-1.5 text-[10px] text-muted-foreground/80">
+                          No spec on file — read the min cast on the rotor hat.
+                        </p>
+                      )}
                     </label>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
               <FieldRow
@@ -2052,8 +2146,6 @@ function PreJobSurveyDialogBody({
                   options={OIL_CAPACITY_OPTIONS}
                   placeholder="Select capacity…"
                   otherPlaceholder="qts"
-                  otherInputMode="decimal"
-                  otherSanitize={keepNumericInput}
                 />
                 <SelectableFieldCard
                   label={
@@ -2862,8 +2954,6 @@ function SelectableFieldCard({
   options,
   placeholder = "Select...",
   otherPlaceholder = "Enter value",
-  otherInputMode,
-  otherSanitize,
   helperText,
 }: {
   label: ReactNode;
@@ -2872,8 +2962,6 @@ function SelectableFieldCard({
   options: SelectOption[];
   placeholder?: string;
   otherPlaceholder?: string;
-  otherInputMode?: InputHTMLAttributes<HTMLInputElement>["inputMode"];
-  otherSanitize?: (raw: string) => string;
   helperText?: ReactNode;
 }) {
   const matched = resolveOption(value, options);
@@ -2963,12 +3051,8 @@ function SelectableFieldCard({
       {isOther ? (
         <input
           value={value}
-          onChange={(event) => {
-            const next = otherSanitize ? otherSanitize(event.target.value) : event.target.value;
-            onChange(next);
-          }}
+          onChange={(event) => onChange(event.target.value)}
           placeholder={otherPlaceholder}
-          inputMode={otherInputMode}
           className={cn(baseField(), "mt-2 w-full text-left")}
         />
       ) : null}

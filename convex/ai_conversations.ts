@@ -293,6 +293,166 @@ export const updateState = internalMutation({
 });
 
 /**
+ * appendOpenSymptomInternal — W3.2 (D-43, D-15) deterministic symptom ledger.
+ *
+ * Called by chat.ts when the Wave 2 safety classifier fires — NEVER by the
+ * model, so a safety-relevant symptom cannot be forgotten by a distracted
+ * turn. Dedupes by `category` among rows still open: the same soft brake
+ * pedal reported three times is one open symptom, but a symptom the user
+ * re-reports AFTER it was addressed re-opens as a new row (the concern
+ * evidently came back).
+ */
+export const appendOpenSymptomInternal = internalMutation({
+  args: {
+    id: v.id("ai_conversations"),
+    text: v.string(),
+    category: v.string(),
+    safety_relevant: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const convo = await ctx.db.get(args.id);
+    if (!convo) return { ok: false as const, reason: "no_conversation" as const };
+    const existing =
+      ((convo as Record<string, unknown>).open_symptoms as
+        | {
+            text: string;
+            category: string;
+            safety_relevant: boolean;
+            status: "open" | "addressed" | "dismissed";
+            opened_at: number;
+            addressed_at?: number;
+          }[]
+        | undefined) ?? [];
+    if (existing.some((s) => s.status === "open" && s.category === args.category)) {
+      return { ok: true as const, deduped: true as const };
+    }
+    await ctx.db.patch(args.id, {
+      open_symptoms: [
+        ...existing,
+        {
+          text: args.text.slice(0, 140),
+          category: args.category,
+          safety_relevant: args.safety_relevant,
+          status: "open" as const,
+          opened_at: Date.now(),
+        },
+      ],
+    });
+    return { ok: true as const, deduped: false as const };
+  },
+});
+
+/**
+ * markSymptomsAddressedInternal — W3.3 resolution path. Called by chat.ts
+ * after a `render_book_service` fires with the open symptoms bundled into
+ * its customer notes; flips the named categories open → addressed. A
+ * booking OFFER is the addressing event by design — the user still confirms
+ * inside the booking component, but from the conversation's point of view
+ * the symptom has been routed to a mechanic rather than dropped.
+ */
+export const markSymptomsAddressedInternal = internalMutation({
+  args: {
+    id: v.id("ai_conversations"),
+    categories: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const convo = await ctx.db.get(args.id);
+    if (!convo) return { ok: false as const, reason: "no_conversation" as const };
+    const existing =
+      ((convo as Record<string, unknown>).open_symptoms as
+        | {
+            text: string;
+            category: string;
+            safety_relevant: boolean;
+            status: "open" | "addressed" | "dismissed";
+            opened_at: number;
+            addressed_at?: number;
+          }[]
+        | undefined) ?? [];
+    if (existing.length === 0) return { ok: true as const, changed: 0 };
+    const wanted = new Set(args.categories);
+    let changed = 0;
+    const next = existing.map((s) => {
+      if (s.status === "open" && wanted.has(s.category)) {
+        changed++;
+        return { ...s, status: "addressed" as const, addressed_at: Date.now() };
+      }
+      return s;
+    });
+    if (changed > 0) await ctx.db.patch(args.id, { open_symptoms: next });
+    return { ok: true as const, changed };
+  },
+});
+
+/**
+ * markRecordConfirmationOfferedInternal — §7b' trust-gate hard floor
+ * (2026-08-15). Records that a record-confirmation card for this maintenance
+ * type has been shown in this conversation (model-fired or server-forced),
+ * so the gate never re-fires for the same type. Called by chat.ts only.
+ */
+export const markRecordConfirmationOfferedInternal = internalMutation({
+  args: {
+    id: v.id("ai_conversations"),
+    maintenance_type: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const convo = await ctx.db.get(args.id);
+    if (!convo) return { ok: false as const };
+    const existing =
+      ((convo as Record<string, unknown>).record_confirmations_offered as
+        | string[]
+        | undefined) ?? [];
+    if (existing.includes(args.maintenance_type)) return { ok: true as const };
+    await ctx.db.patch(args.id, {
+      record_confirmations_offered: [...existing, args.maintenance_type],
+    });
+    return { ok: true as const };
+  },
+});
+
+/**
+ * getOpenSymptoms — Issue 2 (2026-08-15) read path for the pinned
+ * "Tracking: …" list in the chat thread. PUBLIC, owner-gated; reactive, so
+ * the pin appears the moment chat.ts appends a row and clears the moment a
+ * booking marks the rows addressed. Follows the getBySessionId posture:
+ * foreign-owned / missing conversations return [] rather than throwing.
+ */
+export const getOpenSymptoms = query({
+  args: { id: v.id("ai_conversations") },
+  returns: v.array(
+    v.object({
+      text: v.string(),
+      category: v.string(),
+      safety_relevant: v.boolean(),
+      opened_at: v.number(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    const user = await requireUser(ctx);
+    const convo = await ctx.db.get(args.id);
+    if (!convo || convo.user_id !== user._id) return [];
+    const rows =
+      ((convo as Record<string, unknown>).open_symptoms as
+        | {
+            text: string;
+            category: string;
+            safety_relevant: boolean;
+            status: "open" | "addressed" | "dismissed";
+            opened_at: number;
+          }[]
+        | undefined) ?? [];
+    return rows
+      .filter((s) => s.status === "open")
+      .map((s) => ({
+        text: s.text,
+        category: s.category,
+        safety_relevant: s.safety_relevant,
+        opened_at: s.opened_at,
+      }));
+  },
+});
+
+/**
  * setCurrentModel — server-managed routing field for the Sonnet cascade
  * (Locked Principle #2). chat.ts reads this at the start of each turn to
  * pick the Anthropic model. Set via Haiku's request_sonnet_handoff tool;

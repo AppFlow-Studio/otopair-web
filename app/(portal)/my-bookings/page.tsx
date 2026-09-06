@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { jobListTotal } from "@/lib/booking-total";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -327,7 +328,22 @@ export default function MyBookingsPage() {
                           {formatJobDate(job.scheduledDate, job.scheduledTime)}
                         </td>
                         <td className="px-3 py-4 text-right pr-5 font-medium text-foreground">
-                          ${(job.totalCost ?? 0).toFixed(2)}
+                          {(() => {
+                            const shown = jobListTotal({ ...job, totalCost: job.totalCost ?? 0 });
+                            const original = job.totalCost ?? 0;
+                            const reQuoted = Math.abs(shown - original) > 0.005;
+                            return (
+                              <span
+                                title={
+                                  reQuoted
+                                    ? `Re-quoted · original estimate $${original.toFixed(2)}`
+                                    : undefined
+                                }
+                              >
+                                ${shown.toFixed(2)}
+                              </span>
+                            );
+                          })()}
                         </td>
                       </tr>
                     );

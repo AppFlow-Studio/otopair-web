@@ -14,6 +14,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { partFitsConfigMake } from "./partSelector";
 import { normalizeMakeKey } from "./vehicleEnrichment/manualLibrary";
+import { resolveTierWithRules, type TierRule } from "./lib/tierResolver";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,6 +72,14 @@ export const carsList = query({
       .order("desc")
       .take(take);
 
+    // Director tier rules fetched once (not per-car) — the effective tier a car
+    // WOULD get even if its config's pricing_tier was never persisted (configs
+    // only persist lazily at first quote / at creation). Lets the Cars page
+    // show a tier for every car and flag the untiered as "Needs review".
+    const tierRules = (await ctx.db
+      .query("pricing_tier_rules")
+      .collect()) as TierRule[];
+
     return Promise.all(
       vehicles.map(async (vehicle) => {
         const ymm = await resolveMakeModelTrim(ctx, vehicle);
@@ -118,6 +127,25 @@ export const carsList = query({
           ? await ctx.db.get(vehicle.vehicle_config_id)
           : null;
 
+        // Effective tier: the persisted tier if present, otherwise what the
+        // resolver (director rules → hardcoded engine) would assign. Null =
+        // "Needs review" (surfaced, never auto-priced).
+        const persistedTier = (cfg?.pricing_tier as string | undefined) ?? null;
+        let tierEffective = persistedTier;
+        let tierSource: string | null = persistedTier
+          ? cfg?.pricing_tier_source ?? "stored"
+          : null;
+        if (!persistedTier && ymm.make !== "—") {
+          const res = resolveTierWithRules(tierRules, {
+            make: ymm.make,
+            model: ymm.model === "—" ? "" : ymm.model,
+            trim: ymm.trim === "—" ? "" : ymm.trim,
+            year: vehicle.year ?? 0,
+          });
+          tierEffective = res.tier;
+          tierSource = res.tier ? `${res.source}_detected` : null;
+        }
+
         // Passport mileage if present.
         const passport = await ctx.db
           .query("vehicle_passports")
@@ -140,6 +168,9 @@ export const carsList = query({
           mileage:      passport?.mileage ?? primaryOwnerRow?.mileage,
           bookingCount,
           enrichment:   enrichmentLabel(cfg),
+          pricing_tier:   persistedTier,
+          tier_effective: tierEffective,
+          tier_source:    tierSource,
           createdAt:    vehicle.created_at,
           updatedAt:    vehicle.updated_at,
         };
@@ -381,6 +412,8 @@ export const carDetail = query({
             enrichment_version:  vehicleConfig.enrichment_version,
             verification_count:  vehicleConfig.verification_count,
             packages_available:  vehicleConfig.packages_available,
+            pricing_tier:        (vehicleConfig.pricing_tier as string | undefined) ?? null,
+            pricing_tier_source: vehicleConfig.pricing_tier_source ?? null,
           }
         : null,
 
@@ -576,6 +609,8 @@ export const vehicleConfigsList = query({
           rotorFrontMinMm:     cfg.rotor_front_min_thickness_mm ?? null,
           rotorRearMinMm:      cfg.rotor_rear_min_thickness_mm ?? null,
           rotorMinEstimated:
+            cfg.rotor_front_min_quality === "derived_15pct_wear" ||
+            cfg.rotor_rear_min_quality === "derived_15pct_wear" ||
             cfg.rotor_front_min_quality === "derived_from_nominal" ||
             cfg.rotor_rear_min_quality === "derived_from_nominal",
           vehicleCount:        vehiclesForConfig.length,
@@ -727,6 +762,56 @@ export const partFitmentDetail = query({
         })
         .slice(0, 50),
     };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// configRefutedFitments — the durable record behind a run's `fitment_refuted:*`
+// error strings. The run row only carries `fitment_refuted:<role>:<oem>` codes;
+// the human-readable verdict sentence ("fits 2019-2024 X, not this 2013") that
+// the adversarial fitment verifier produced lives on refuted_fitments.reason.
+// This powers the "what exactly got refuted, and why" drawer in the config
+// modal. Config-scoped (cumulative across runs) — refuted_fitments has no
+// run_id, and "which parts were rejected for this vehicle" is the useful view.
+// ---------------------------------------------------------------------------
+export const configRefutedFitments = query({
+  args: { vehicle_config_id: v.id("vehicle_configs") },
+  handler: async (ctx, { vehicle_config_id }) => {
+    const rows = await ctx.db
+      .query("refuted_fitments")
+      .withIndex("by_config", (q) => q.eq("vehicle_config_id", vehicle_config_id))
+      .collect();
+
+    const out = await Promise.all(
+      rows
+        .slice()
+        .sort((a, b) => b.refuted_at - a.refuted_at)
+        .map(async (r) => {
+          // Best-effort identity join. A hard-delete ("block") removed the
+          // part_fitments row but KEEPS the oem_parts row, so the name/role
+          // still resolve by normalized number. Nullable — old rows may lack
+          // the normalized column, and a phantom number has no oem_parts row.
+          const part = r.oem_part_number_normalized
+            ? ((await ctx.db
+                .query("oem_parts")
+                .withIndex("by_part_number_normalized", (q) =>
+                  q.eq("oem_part_number_normalized", r.oem_part_number_normalized),
+                )
+                .first()) as any | null)
+            : null;
+          return {
+            oem:         r.oem_part_number_normalized,
+            serviceType: r.service_type ?? null,
+            mode:        r.mode, // "block" (deleted) | "flag" (kept, demoted)
+            reason:      r.reason,
+            refutedAt:   r.refuted_at,
+            partName:    part?.name ?? null,
+            roleKey:     part?.subcategory ?? null,
+            brand:       part?.brand ?? null,
+          };
+        }),
+    );
+    return out;
   },
 });
 

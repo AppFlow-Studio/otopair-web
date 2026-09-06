@@ -19,13 +19,19 @@ import type { Id } from "./_generated/dataModel";
 import Anthropic from "@anthropic-ai/sdk";
 import { searchAndFetch } from "./vehicleEnrichment/firecrawl";
 import { advancedVinDecode, extractVDBFields } from "./lib/vehicleDatabases";
+import { decodeProvider } from "./lib/decodeProvider";
+import { carApiVinDecode, extractCarApiFields } from "./lib/carApi";
 import { findHaloVariant } from "./lib/haloVariantRules";
 import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
-import { isSyntheticEngineCode } from "./vehicleEnrichment/utils/engineLookup";
+import {
+  contradictsDecodedEngine,
+  isSyntheticEngineCode,
+  lookupKnownEngineCode,
+} from "./vehicleEnrichment/utils/engineLookup";
 import { reconcileDrivetrain } from "./vehicleEnrichment/drivetrainReconcile";
 import { sanitizeCylinders } from "./vehicleEnrichment/cylindersRepair";
-import { acceptNormalizedTrim } from "./vehicleEnrichment/identityResolution";
+import { acceptNormalizedModel, acceptNormalizedTrim } from "./vehicleEnrichment/identityResolution";
 import { parseGvwrUpperLbs } from "./vehicleEnrichment/validation/sanityChecks";
 import { assembleVariantFingerprint, type TransmissionFamily } from "./vehicleEnrichment/variantFingerprint";
 import { resolveFuelClass } from "./vehicleEnrichment/fuelTypeResolver";
@@ -109,19 +115,30 @@ export const processVin = internalAction({
   handler: async (ctx, args): Promise<ProcessVinResult | null> => {
     try {
       // ════════════════════════════════════════════════════════════
-      // SOURCE 1: Vehicle Databases API (primary — paid, structured)
+      // SOURCE 1: structured decode — VDB (default) or CarAPI, flag-gated by
+      // PARTS_DECODE_PROVIDER. Both map to the same extractVDBFields shape and
+      // feed the identical merge below; NHTSA + the engine-code chain are
+      // provider-agnostic. Vehicle IMAGES stay on VDB regardless
+      // (lib/vehicle_image.ts) — this flag is decode-only.
       // ════════════════════════════════════════════════════════════
-      const vdbRaw = await advancedVinDecode(args.vin);
-      const vdb = vdbRaw ? extractVDBFields(vdbRaw) : null;
+      const decodeProviderName = decodeProvider();
+      let vdb: ReturnType<typeof extractVDBFields> | null = null;
+      if (decodeProviderName === "carapi") {
+        const carApiRaw = await carApiVinDecode(args.vin);
+        vdb = carApiRaw ? extractCarApiFields(carApiRaw) : null;
+      } else {
+        const vdbRaw = await advancedVinDecode(args.vin);
+        vdb = vdbRaw ? extractVDBFields(vdbRaw) : null;
+      }
 
       if (vdb) {
-        console.log(`[decode] VDB: ${vdb.year} ${vdb.make} ${vdb.model} ${vdb.trim}`);
-        console.log(`[decode] VDB engine: ${vdb.engineDescription ?? "?"} | code=${vdb.engineCode ?? "none"}`);
-        console.log(`[decode] VDB trans: ${vdb.transType ?? "?"} ${vdb.transSpeeds ?? "?"}spd`);
-        console.log(`[decode] VDB tires: ${vdb.frontTireSize ?? "?"} / ${vdb.rearTireSize ?? "?"} @ ${vdb.frontTirePressure ?? "?"}/${vdb.rearTirePressure ?? "?"} PSI`);
-        console.log(`[decode] VDB battery: ${vdb.cca ?? "?"} CCA | torque: ${vdb.wheelTorque ?? "?"} lb-ft | drive: ${vdb.drivetrain ?? "?"}`);
+        console.log(`[decode] ${decodeProviderName}: ${vdb.year} ${vdb.make} ${vdb.model} ${vdb.trim}`);
+        console.log(`[decode] ${decodeProviderName} engine: ${vdb.engineDescription ?? "?"} | code=${vdb.engineCode ?? "none"}`);
+        console.log(`[decode] ${decodeProviderName} trans: ${vdb.transType ?? "?"} ${vdb.transSpeeds ?? "?"}spd`);
+        console.log(`[decode] ${decodeProviderName} tires: ${vdb.frontTireSize ?? "?"} / ${vdb.rearTireSize ?? "?"} @ ${vdb.frontTirePressure ?? "?"}/${vdb.rearTirePressure ?? "?"} PSI`);
+        console.log(`[decode] ${decodeProviderName} battery: ${vdb.cca ?? "?"} CCA | torque: ${vdb.wheelTorque ?? "?"} lb-ft | drive: ${vdb.drivetrain ?? "?"}`);
       } else {
-        console.log("[decode] VDB unavailable — NHTSA only");
+        console.log(`[decode] ${decodeProviderName} unavailable — NHTSA only`);
       }
 
       // ════════════════════════════════════════════════════════════
@@ -491,8 +508,37 @@ export const processVin = internalAction({
         console.log(`[decode] VDB engine code "${vdb.engineCode}" is a placeholder/marketing term — ignored`);
       }
 
-      let finalEngineCode = vdbCode || nhtsaEngineClean || "";
-      const engineCodeSource = vdbCode ? "vdb" : nhtsaEngineClean ? "nhtsa" : "none";
+      // ── Engine-spec gate (round 3, Aug 2026) ──
+      // A decoder can hand back a REAL code for the WRONG engine in the same
+      // lineup: the 2022 Macan (vPIC: 2.0L, 4-cyl, 261 hp — an EA888) was
+      // stored as EA839, the 2.9L V6 of the Macan S/GTS/Turbo, because VDB
+      // decoded the trim as "S". Format checks cannot see this (EA839 is a
+      // real Porsche code in real code shape) and adversarial web search
+      // cannot refute it (EA839 genuinely exists on a 2022 Macan). Physical
+      // facts can. Fail-open: unknown codes and undecoded engines pass.
+      const decodedEngine = {
+        displacementL: merged.displacement,
+        cylinders: merged.cylinders,
+      };
+      const gateEngineCode = (code: string, source: string): string => {
+        if (!code) return "";
+        const verdict = contradictsDecodedEngine(code, decodedEngine);
+        if (verdict.known && verdict.contradicts) {
+          console.warn(`[decode] ENGINE SPEC GATE (${source}) — ${verdict.reason}; rejected`);
+          return "";
+        }
+        return code;
+      };
+
+      // Gated once, up front: downstream conditions test whether VDB supplied a
+      // code, and a code the facts contradict must not count as "supplied" —
+      // otherwise rejecting it would also silently block the normalizer's
+      // replacement below (`!vdbCode`), leaving the vehicle with no code at all.
+      const vdbCodeOk = gateEngineCode(vdbCode, "vdb");
+      const nhtsaCodeOk = gateEngineCode(nhtsaEngineClean, "nhtsa");
+
+      let finalEngineCode = vdbCodeOk || nhtsaCodeOk || "";
+      const engineCodeSource = vdbCodeOk ? "vdb" : nhtsaCodeOk ? "nhtsa" : "none";
       console.log(`[decode] Engine code after merge: "${finalEngineCode}" (from ${engineCodeSource})`);
 
       // AI normalization (fix NHTSA model/trim/drivetrain mislabeling)
@@ -515,7 +561,32 @@ export const processVin = internalAction({
           engineModel: finalEngineCode || nhtsaEngineRaw,
         });
         if (normalized) {
-          if (normalized.model) finalModel = normalized.model;
+          // Round 3 (Aug 2026): the model was applied unconditionally here and
+          // a 2022 Outlander was stored as an "Outlander Sport" — a different
+          // vehicle — though neither decoder ever said "Sport". Same
+          // evidence-overlap philosophy as the trim gate below.
+          if (normalized.model) {
+            if (
+              // NAMEPLATE evidence only. bodyClass is deliberately excluded:
+              // vPIC returns "Sport Utility Vehicle [SUV]/..." for this VIN,
+              // which would corroborate "Sport" on any SUV.
+              acceptNormalizedModel(normalized.model, merged.model, [
+                merged.model,
+                merged.trim,
+                merged.trim2,
+                merged.series,
+                merged.series2,
+                vdb?.model,
+                vdb?.trim,
+              ])
+            ) {
+              finalModel = normalized.model;
+            } else {
+              console.warn(
+                `[decode] Normalizer model "${normalized.model}" rejected — extends decoded nameplate "${merged.model}" with a token no decoder produced (kept "${finalModel}")`,
+              );
+            }
+          }
           // Round 8 (batch-10): accept the LLM's trim only when it overlaps the
           // decode evidence — the unconditional override stored a Lariat F-150
           // as "FX4 SuperCrew" and a 745Li as "745i" (trims no decoder produced).
@@ -535,8 +606,9 @@ export const processVin = internalAction({
               );
             }
           }
-          if (normalized.engine_code && !vdbCode && !isSyntheticEngineCode(normalized.engine_code)) {
-            finalEngineCode = normalized.engine_code;
+          if (normalized.engine_code && !vdbCodeOk && !isSyntheticEngineCode(normalized.engine_code)) {
+            const accepted = gateEngineCode(normalized.engine_code, "normalizer");
+            if (accepted) finalEngineCode = accepted;
           }
           if (normalized.drivetrain_type) drivetrainType = normalized.drivetrain_type;
         }
@@ -559,6 +631,23 @@ export const processVin = internalAction({
           `[decode] Halo variant promoted: model "${finalModel}" → "${halo.promotedModel}" (rule=${halo.ruleId}, trim="${finalTrim}")`
         );
         finalModel = halo.promotedModel;
+      }
+
+      // ── Deterministic year-pinned engine code (round 3, Aug 2026) ──
+      // The generation-aware rule ("the 2019+ Altima 2.5 is PR25DD, not the
+      // older QR25DE") existed only as advice inside the search prompt below.
+      // The 2022 Outlander resolved NO code at all and shipped the descriptor
+      // "2.5l_4cyl", though its engine IS that same Nissan-shared PR25DD.
+      // Where make+model+year+displacement pin the engine as a public fact,
+      // answer from the table and skip the search entirely.
+      if (!finalEngineCode || isSyntheticEngineCode(finalEngineCode)) {
+        const known = lookupKnownEngineCode(merged.make, finalModel, merged.year, decodedEngine);
+        if (known) {
+          console.log(
+            `[decode] Engine code from year-pinned table: "${known.code}" (${known.note}) — was "${finalEngineCode}"`,
+          );
+          finalEngineCode = known.code;
+        }
       }
 
       // Web search + Haiku fallback when still no real engine code
@@ -609,8 +698,13 @@ export const processVin = internalAction({
               code.length >= 2 &&
               code.length <= 20
             ) {
-              console.log(`[decode] Search + Haiku resolved engine code: ${code} (was "${finalEngineCode}")`);
-              finalEngineCode = code;
+              // Search can surface the right-format code for the wrong sibling
+              // engine (the S/GTS V6 on a base four). Physical facts decide.
+              const accepted = gateEngineCode(code, "search+haiku");
+              if (accepted) {
+                console.log(`[decode] Search + Haiku resolved engine code: ${code} (was "${finalEngineCode}")`);
+                finalEngineCode = accepted;
+              }
             } else if (code && DESCRIPTOR_ANSWERS.has(code.toLowerCase())) {
               console.log(`[decode] Search + Haiku returned descriptor "${code}", not an engine code — ignored`);
             }
@@ -1712,6 +1806,151 @@ export const confirmVehicleForUser = action({
     }
 
     // Schedule tire price scraping in parallel with enrichment
+    await ctx.scheduler.runAfter(0, api.tires.scrapeVehicleTires, {
+      year: args.year,
+      make: args.make,
+      model: args.model,
+      trim: args.trim,
+      displacementL: args.displacement ? parseFloat(args.displacement) : undefined,
+    });
+
+    return {
+      success: true as const,
+      vehicleOwnerId,
+      cache_hit: cacheHit,
+      cache_hit_source: dedupSource,
+      enrichment_scheduled: scheduledEnrichment,
+    };
+  },
+});
+
+/**
+ * Shop-scoped sibling of confirmVehicleForUser: attaches the decoded vehicle
+ * to a walk-in booking's stub customer, NOT to the caller. Auth is via
+ * shopAuth against the booking's shop, plus a walk-in-source guard. Same
+ * downstream: upsertVehicle → addOwner → dedup/enrichment schedule.
+ *
+ * Called from the shop portal's walkin/new page immediately after
+ * createByShop lands. The customer's Cars page shows the car the moment
+ * they claim the booking, without needing a separate app-side add flow.
+ */
+export const confirmVehicleForShopCustomer = action({
+  args: {
+    bookingId: v.id("bookings"),
+    vin: v.string(),
+    trimId: v.id("trims"),
+    engineId: v.id("engines"),
+    transmissionId: v.optional(v.id("transmissions")),
+    year: v.float64(),
+    make: v.string(),
+    model: v.string(),
+    trim: v.string(),
+    engineCode: v.string(),
+    displacement: v.string(),
+    cylinders: v.float64(),
+    fuelType: v.string(),
+    color: v.optional(v.string()),
+    drivetrain: v.optional(v.string()),
+    nhtsaVinKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<
+    | { success: false; error: string }
+    | {
+        success: true;
+        vehicleOwnerId: Id<"vehicle_owners">;
+        cache_hit: boolean;
+        cache_hit_source: "nhtsa_vin_key" | "config_key" | "none";
+        enrichment_scheduled: boolean;
+      }
+  > => {
+    const { userId }: { userId: Id<"users"> } = await ctx.runQuery(
+      internal.walkin_claims._walkinBookingCustomerForShopStaff,
+      { bookingId: args.bookingId },
+    );
+
+    const vin = args.vin.toUpperCase().trim();
+
+    const vehicle: { _id: Id<"vehicles"> } | null = await ctx.runMutation(api.vehicles.upsertVehicle, {
+      vin,
+      trim_id: args.trimId,
+      engine_id: args.engineId,
+      transmission_id: args.transmissionId,
+      year: args.year,
+      metadata: {
+        make: args.make,
+        model: args.model,
+        color: args.color || "",
+      },
+    });
+
+    const vehicleOwnerId: Id<"vehicle_owners"> = await ctx.runMutation(api.vehicles.addOwner, {
+      vin,
+      userId,
+      nickname: `${args.year} ${args.make} ${args.model}`,
+    });
+
+    let cacheHit = false;
+    let scheduledEnrichment = false;
+    let dedupSource: "nhtsa_vin_key" | "config_key" | "none" = "none";
+
+    if (vehicle?._id) {
+      let existingConfig = null as any;
+
+      if (args.nhtsaVinKey) {
+        existingConfig = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getVehicleConfigByNhtsaVinKey,
+          { nhtsaVinKey: args.nhtsaVinKey },
+        );
+        if (existingConfig) dedupSource = "nhtsa_vin_key";
+      }
+
+      let configKey = "";
+      if (!existingConfig && args.engineCode) {
+        configKey = buildEngineKey({
+          vehicleId: vehicle._id as any,
+          year: args.year,
+          make: args.make,
+          model: args.model,
+          trim: args.trim,
+          engineCode: args.engineCode,
+          displacement: args.displacement,
+        });
+        existingConfig = await ctx.runQuery(
+          internal.vehicleEnrichment.v3queries.getVehicleConfigByKey,
+          { configKey },
+        );
+        if (existingConfig) dedupSource = "config_key";
+      }
+
+      const STALE_MS = 180 * 24 * 60 * 60 * 1000;
+      const status = existingConfig?.enrichment_status;
+      const fresh =
+        existingConfig &&
+        (status === "complete" || status === "verified") &&
+        (existingConfig.last_enriched_at ?? 0) >= Date.now() - STALE_MS;
+
+      if (fresh && existingConfig?._id) {
+        await ctx.runMutation(
+          internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
+          { vehicle_id: vehicle._id, vehicle_config_id: existingConfig._id },
+        );
+        cacheHit = true;
+      } else {
+        await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.v3pipeline.enrichVehicleBatchV3, {
+          vehicleId: vehicle._id,
+          year: args.year,
+          make: args.make,
+          model: args.model,
+          trim: args.trim,
+          engineCode: args.engineCode,
+          displacement: args.displacement,
+          drivetrain: args.drivetrain,
+          nhtsaVinKey: args.nhtsaVinKey,
+        });
+        scheduledEnrichment = true;
+      }
+    }
+
     await ctx.scheduler.runAfter(0, api.tires.scrapeVehicleTires, {
       year: args.year,
       make: args.make,

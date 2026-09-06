@@ -45,7 +45,7 @@ import {
  *  when one or more unpaired lights are active. `check_engine` is included
  *  so a combined multi-light card keeps its label (its solo card uses the
  *  richer copy in buildItemForCheckEngine). */
-const LIGHT_LABELS: Record<CanonicalWarningLight, string> = {
+export const LIGHT_LABELS: Record<CanonicalWarningLight, string> = {
   tpms: "Tire pressure",
   battery_charging: "Battery / charging",
   temperature: "Temperature",

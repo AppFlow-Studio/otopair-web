@@ -7,7 +7,9 @@ import { ChevronDown, Maximize2, Wrench } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ElapsedTimer from "./mechanic/elapsed-timer";
-import NowWorkingOverlay from "./mechanic/now-working-overlay";
+import NowWorkingOverlay, {
+  type ActiveJobRow,
+} from "./mechanic/now-working-overlay";
 import OverrunExtendCard from "./mechanic/overrun-extend-card";
 
 function shortBookingCode(id: string) {
@@ -27,8 +29,6 @@ export default function ActiveJobStrip() {
   const [overlayOpen, setOverlayOpen] = useState(false);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  // Owner full-screen overlay: panes the viewer has dismissed this session.
-  const [dismissedPanes, setDismissedPanes] = useState<string[]>([]);
 
   // Mechanic view only: surface an overrun check-in awaiting a response so the
   // pill can flag it even before the popover is opened.
@@ -45,6 +45,16 @@ export default function ActiveJobStrip() {
     (overrunCheckin.status === "mechanic_prompted" ||
       overrunCheckin.status === "awaiting_extension" ||
       overrunCheckin.status === "front_desk_escalated");
+
+  // A clock-stopping blocker pauses the job. The pill lives in the header on
+  // every page (the schedule included), so freezing its timer here is what
+  // keeps "paused on the job" from reading as "still running" everywhere else.
+  const pauseBlockers = useQuery(
+    api.jobBlockers.listForBooking,
+    mechanicBookingId ? { bookingId: mechanicBookingId } : "skip",
+  );
+  const jobPaused = Boolean(pauseBlockers?.clockPaused);
+  const jobBlockedMs = (pauseBlockers?.blockedMinutes ?? 0) * 60_000;
 
   useEffect(() => {
     if (!toast) return;
@@ -74,16 +84,28 @@ export default function ActiveJobStrip() {
           }`}
         >
           <span
-            className={`inline-flex h-2 w-2 shrink-0 animate-pulse rounded-full ${
-              needsOverrunAttention ? "bg-amber-400" : "bg-emerald-400"
+            className={`inline-flex h-2 w-2 shrink-0 rounded-full ${
+              jobPaused
+                ? "bg-amber-400"
+                : needsOverrunAttention
+                  ? "animate-pulse bg-amber-400"
+                  : "animate-pulse bg-emerald-400"
             }`}
           />
-          <span className="hidden text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-200/80 sm:inline">
-            Now working
+          <span
+            className={`hidden text-[10px] font-semibold uppercase tracking-[0.16em] sm:inline ${
+              jobPaused ? "text-amber-200/90" : "text-emerald-200/80"
+            }`}
+          >
+            {jobPaused ? "Paused" : "Now working"}
           </span>
           <ElapsedTimer
             startedAtMs={job.startedAtMs}
-            className="font-mono text-sm font-semibold tabular-nums text-white"
+            paused={jobPaused}
+            blockedMs={jobBlockedMs}
+            className={`font-mono text-sm font-semibold tabular-nums ${
+              jobPaused ? "text-amber-200" : "text-white"
+            }`}
           />
           {needsOverrunAttention ? (
             <span className="rounded-full bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-300">
@@ -114,8 +136,12 @@ export default function ActiveJobStrip() {
                     <Wrench className="h-4 w-4" />
                   </span>
                   <div className="min-w-0">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300/80">
-                      Now working
+                    <p
+                      className={`text-[10px] font-semibold uppercase tracking-[0.18em] ${
+                        jobPaused ? "text-amber-300/90" : "text-emerald-300/80"
+                      }`}
+                    >
+                      {jobPaused ? "Paused" : "Now working"}
                     </p>
                     <p className="truncate text-sm font-medium text-slate-100">
                       {job.vehicleLabel}
@@ -136,7 +162,11 @@ export default function ActiveJobStrip() {
               <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-white/5 px-3 py-2">
                 <ElapsedTimer
                   startedAtMs={job.startedAtMs}
-                  className="font-mono text-lg font-semibold tabular-nums text-white"
+                  paused={jobPaused}
+                  blockedMs={jobBlockedMs}
+                  className={`font-mono text-lg font-semibold tabular-nums ${
+                    jobPaused ? "text-amber-200" : "text-white"
+                  }`}
                 />
                 <button
                   type="button"
@@ -171,9 +201,18 @@ export default function ActiveJobStrip() {
         ) : null}
 
         <NowWorkingOverlay
-          bookingIds={overlayOpen ? [bookingId] : []}
+          open={overlayOpen}
+          jobs={[
+            {
+              bookingId,
+              mechanicName: "",
+              vehicle: job.vehicleLabel,
+              serviceSummary: job.serviceSummary,
+              startedAt: job.startedAtMs,
+              scheduledDate: null,
+            },
+          ]}
           onClose={() => setOverlayOpen(false)}
-          onClosePane={() => setOverlayOpen(false)}
           onMarkComplete={(id) => {
             setOverlayOpen(false);
             router.push(`/dashboard?postjob=${String(id)}`);
@@ -188,19 +227,22 @@ export default function ActiveJobStrip() {
   /* ---------------------------------------------------------------- */
   if (header.count === 0) return null;
 
-  const activeBookingIds = (header.activeBookingIds ?? []) as Id<"bookings">[];
-  const visibleOverlayIds = activeBookingIds.filter(
-    (id) => !dismissedPanes.includes(String(id)),
-  );
+  const ownerJobs: ActiveJobRow[] = (header.activeJobs ?? []).map((j: any) => ({
+    bookingId: j.bookingId as Id<"bookings">,
+    mechanicName: j.mechanicName ?? "",
+    vehicle: j.vehicleLabel ?? "Vehicle",
+    serviceSummary: j.serviceSummary ?? "",
+    startedAt: j.startedAt ?? null,
+    scheduledDate: j.scheduledDate ?? null,
+    blockedMinutes: j.blockedMinutes ?? 0,
+    clockPaused: j.clockPaused ?? false,
+  }));
 
   return (
     <>
       <button
         type="button"
-        onClick={() => {
-          setDismissedPanes([]);
-          setOverlayOpen(true);
-        }}
+        onClick={() => setOverlayOpen(true)}
         title="One or more mechanics are mid-job — open full screen"
         className="group inline-flex h-9 items-center gap-2.5 rounded-full border border-emerald-400/30 bg-[linear-gradient(135deg,_#0f172a,_#0b1220)] pl-2 pr-2.5 text-slate-50 shadow-sm transition-all hover:border-emerald-400/60 hover:shadow"
       >
@@ -222,18 +264,9 @@ export default function ActiveJobStrip() {
       </button>
 
       <NowWorkingOverlay
-        bookingIds={overlayOpen ? visibleOverlayIds : []}
+        open={overlayOpen}
+        jobs={ownerJobs}
         onClose={() => setOverlayOpen(false)}
-        onClosePane={(id) => {
-          const remaining = visibleOverlayIds.filter(
-            (v) => String(v) !== String(id),
-          );
-          if (remaining.length === 0) {
-            setOverlayOpen(false);
-          } else {
-            setDismissedPanes((prev) => [...prev, String(id)]);
-          }
-        }}
         onMarkComplete={(id) => {
           setOverlayOpen(false);
           router.push(`/dashboard?postjob=${String(id)}`);

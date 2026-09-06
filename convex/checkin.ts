@@ -16,6 +16,8 @@ import {
   getQuestionVisibility,
 } from "./lib/checkin_questions";
 import type { VehicleMode } from "./lib/checkin_questions";
+import { logKnownIssueEvents } from "./lib/knownIssueEvents";
+import { resolveMileageForOwner } from "./lib/mileage";
 
 // ============================================================================
 // QUERIES
@@ -92,7 +94,7 @@ export const getCheckinQuestionSet = query({
 
     // Calculate projected mileage for Q1 prefill
     const annualRate = owner.annual_mileage_rate ?? 12_000;
-    const lastMileage = owner.mileage ?? 0;
+    const lastMileage = (await resolveMileageForOwner(ctx, owner)).mileage ?? 0;
     const lastCheckin = owner.last_checkin_at ?? owner.added_at ?? Date.now();
     const monthsSinceLast = (Date.now() - lastCheckin) / (30.44 * 24 * 60 * 60 * 1000);
     const projectedMileage = Math.round(
@@ -132,7 +134,7 @@ export const startCheckin = mutation({
 
     const mode = (owner.vehicle_mode ?? "owned_active") as VehicleMode;
     const annualRate = owner.annual_mileage_rate ?? 12_000;
-    const lastMileage = owner.mileage ?? 0;
+    const lastMileage = (await resolveMileageForOwner(ctx, owner)).mileage ?? 0;
     const lastCheckin = owner.last_checkin_at ?? owner.added_at ?? Date.now();
     const monthsSinceLast = (Date.now() - lastCheckin) / (30.44 * 24 * 60 * 60 * 1000);
     const projectedMileage = Math.round(
@@ -271,6 +273,14 @@ export const completeCheckin = mutation({
         updated.some((v, i) => v !== existingIssues[i])
       ) {
         await ctx.db.patch(args.vehicleOwnerId, { knownIssues: updated });
+        await logKnownIssueEvents(ctx, {
+          vehicleOwnerId: args.vehicleOwnerId,
+          before: existingIssues,
+          after: updated,
+          source: "check_in",
+          sourceDetail: String(args.checkinId),
+          now,
+        });
       }
     }
 
@@ -378,8 +388,15 @@ export const completeCheckin = mutation({
       const existingIssues = (owner?.knownIssues as string[] | undefined) ?? [];
       const batteryFlag = q6Answer === "no_start" ? "battery_no_start" : "battery_hesitate";
       if (!existingIssues.includes(batteryFlag)) {
-        await ctx.db.patch(args.vehicleOwnerId, {
-          knownIssues: [...existingIssues, batteryFlag],
+        const updated = [...existingIssues, batteryFlag];
+        await ctx.db.patch(args.vehicleOwnerId, { knownIssues: updated });
+        await logKnownIssueEvents(ctx, {
+          vehicleOwnerId: args.vehicleOwnerId,
+          before: existingIssues,
+          after: updated,
+          source: "check_in",
+          sourceDetail: String(args.checkinId),
+          now,
         });
       }
     }
@@ -450,6 +467,14 @@ export const completeCheckin = mutation({
         );
         if (cleaned.length !== currentIssues.length) {
           await ctx.db.patch(args.vehicleOwnerId, { knownIssues: cleaned });
+          await logKnownIssueEvents(ctx, {
+            vehicleOwnerId: args.vehicleOwnerId,
+            before: currentIssues,
+            after: cleaned,
+            source: "check_in",
+            sourceDetail: String(args.checkinId),
+            now,
+          });
         }
       }
     }

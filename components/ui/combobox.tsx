@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown, Loader2 } from "lucide-react";
+import { Check, ChevronDown, Loader2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const MENU_MAX_HEIGHT = 256; // matches max-h-64
@@ -37,6 +37,21 @@ interface ComboboxProps {
   inputClassName?: string;
   emptyText?: string;
   allowCustomValue?: boolean;
+  /**
+   * When set (and `allowCustomValue` is on), a persistent, non-selectable footer
+   * row is shown at the bottom of the open menu — an explicit "Other" cue so
+   * users realize they can type a value not in the list (e.g. a part brand they
+   * source externally). Purely discoverability; typing already works regardless.
+   */
+  customHint?: string;
+  /**
+   * Opt into explicit-add mode (mirrors the "Add custom service" flow). When set,
+   * a typed value is NOT auto-committed on keystroke, Enter, or click-away — the
+   * mechanic must click an explicit "Add … as custom" row, which calls this with
+   * the trimmed text. Use this (instead of relying on `allowCustomValue`) when the
+   * custom value should be a deliberate, persisted choice.
+   */
+  onAddCustom?: (value: string) => void;
 }
 
 export function Combobox({
@@ -53,7 +68,11 @@ export function Combobox({
   inputClassName,
   emptyText = "No matches",
   allowCustomValue = true,
+  customHint,
+  onAddCustom,
 }: ComboboxProps) {
+  // Explicit-add mode: no silent commits — the mechanic taps an "Add …" row.
+  const explicitAdd = !!onAddCustom;
   const selectedLabel =
     options.find((option) => option.value === value)?.label ?? value;
   const [open, setOpen] = useState(false);
@@ -117,16 +136,17 @@ export function Combobox({
         !listRef.current?.contains(target)
       ) {
         setOpen(false);
-        if (allowCustomValue && query !== value) {
+        if (!explicitAdd && allowCustomValue && query !== value) {
           onChange(query);
-        } else if (!allowCustomValue) {
+        } else if (explicitAdd || !allowCustomValue) {
+          // Discard un-added text — a custom value only sticks via the Add row.
           setQuery(selectedLabel);
         }
       }
     }
     document.addEventListener("mousedown", onClickAway);
     return () => document.removeEventListener("mousedown", onClickAway);
-  }, [open, query, value, selectedLabel, onChange, allowCustomValue]);
+  }, [open, query, value, selectedLabel, onChange, allowCustomValue, explicitAdd]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -158,15 +178,29 @@ export function Combobox({
       const opt = filtered[activeIndex];
       if (opt) {
         commit(opt);
-      } else if (allowCustomValue) {
+      } else if (allowCustomValue && !explicitAdd) {
         onChange(query);
         setOpen(false);
       }
+      // explicitAdd: a bare Enter never saves a custom value — the mechanic must
+      // click the "Add … as custom" row (mirrors the custom-service Add button).
     } else if (e.key === "Escape") {
       setOpen(false);
       setQuery(selectedLabel);
     }
   }
+
+  const trimmedQuery = query.trim();
+  const queryMatchesOption =
+    trimmedQuery !== "" &&
+    options.some(
+      (o) =>
+        o.label.toLowerCase() === trimmedQuery.toLowerCase() ||
+        o.value.toLowerCase() === trimmedQuery.toLowerCase(),
+    );
+  // In explicit-add mode, offer an "Add …" row once the typed text is non-empty
+  // and isn't already an existing option (real or previously-saved custom).
+  const showAddRow = explicitAdd && trimmedQuery !== "" && !queryMatchesOption;
 
   return (
     <div ref={containerRef} className={cn("relative", className)}>
@@ -188,7 +222,7 @@ export function Combobox({
           onChange={(e) => {
             setQuery(e.target.value);
             setOpen(true);
-            if (allowCustomValue) onChange(e.target.value);
+            if (allowCustomValue && !explicitAdd) onChange(e.target.value);
           }}
           onKeyDown={handleKeyDown}
           className={cn(
@@ -230,7 +264,7 @@ export function Combobox({
           }}
           className="z-[100] overflow-auto rounded-md border border-border bg-popover shadow-lg p-1 text-sm"
         >
-          {filtered.length === 0 ? (
+          {filtered.length === 0 && !showAddRow ? (
             <li className="px-3 py-2 text-muted-foreground">
               {loading ? "Loading…" : emptyText}
             </li>
@@ -259,6 +293,31 @@ export function Combobox({
               );
             })
           )}
+          {showAddRow ? (
+            <li
+              role="option"
+              aria-selected={false}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onAddCustom?.(trimmedQuery);
+                setQuery(trimmedQuery);
+                setOpen(false);
+                inputRef.current?.blur();
+              }}
+              className="mt-0.5 flex items-center gap-1.5 rounded border-t border-border px-3 py-2 font-medium text-primary cursor-pointer hover:bg-accent hover:text-accent-foreground"
+            >
+              <Plus className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Add &ldquo;{trimmedQuery}&rdquo; as custom</span>
+            </li>
+          ) : null}
+          {customHint && allowCustomValue ? (
+            <li
+              role="presentation"
+              className="mt-1 border-t border-border px-3 pb-0.5 pt-2 text-[11px] italic text-muted-foreground"
+            >
+              {customHint}
+            </li>
+          ) : null}
         </ul>,
         document.body
       )}

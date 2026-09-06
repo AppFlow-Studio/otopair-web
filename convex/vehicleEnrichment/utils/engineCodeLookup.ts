@@ -14,6 +14,7 @@
 
 import Anthropic from "@anthropic-ai/sdk";
 import { MODEL_HAIKU } from "./batchClient";
+import { contradictsDecodedEngine } from "./engineLookup";
 
 let _client: Anthropic | null = null;
 function getClient(): Anthropic {
@@ -206,6 +207,20 @@ export async function resolveEngineCode(
 
     if (!code || code.toLowerCase() === "unknown" || isNhtsaDescriptor(code)) {
       console.warn(`[engine-lookup] Could not resolve engine code for ${year} ${make} ${model}`);
+      return { engineCode: rawEngineCode, source: "unknown" };
+    }
+
+    // Round 3 (Aug 2026): the adversarial verifier below cannot refute a code
+    // that genuinely exists on this nameplate and year but belongs to a
+    // different engine in the lineup (EA839, the Macan S/GTS 2.9 V6, on a base
+    // 2.0 four). Its displacement and cylinder count are static facts —
+    // check them before spending a verification call. Fail-open on an unknown
+    // code or an undecoded engine.
+    const specVerdict = contradictsDecodedEngine(code, { displacementL: displacement, cylinders });
+    if (specVerdict.known && specVerdict.contradicts) {
+      console.warn(
+        `[engine-lookup] ENGINE SPEC GATE — ${specVerdict.reason}; keeping placeholder "${rawEngineCode}"`,
+      );
       return { engineCode: rawEngineCode, source: "unknown" };
     }
 

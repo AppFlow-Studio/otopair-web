@@ -70,3 +70,48 @@ describe("discoverPriceUrls", () => {
     expect(await discoverPriceUrls({ oem: "1" }, search)).toEqual([]);
   });
 });
+
+describe("query ladder — unquoted fallback before a no_listing verdict", () => {
+  // Aug 20 2026, live: `"04466-04030" Toyota Rear Brake Pads OEM part price`
+  // returned ZERO Firecrawl results for a part with abundant dealer listings,
+  // while unquoted `04466-04030 OEM price` returned three dealer pages. An
+  // empty primary is frequently the query's fault, so one simplified retry
+  // runs before the caller can stamp a durable no_listing.
+  it("falls back to the unquoted query when the primary is empty", async () => {
+    const calls: string[] = [];
+    const search: UrlSearcher = async (q) => {
+      calls.push(q);
+      return q.startsWith('"')
+        ? []
+        : [{ url: "https://parts.capovalleytoyota.com/oem-parts/toyota-brake-pads-446604030" }];
+    };
+    const urls = await discoverPriceUrls({ oem: "04466-04030", make: "Toyota" }, search);
+    expect(urls).toEqual([
+      "https://parts.capovalleytoyota.com/oem-parts/toyota-brake-pads-446604030",
+    ]);
+    expect(calls).toContain("04466-04030 OEM price");
+  });
+
+  it("does not run the fallback when the primary found urls", async () => {
+    const calls: string[] = [];
+    const search: UrlSearcher = async (q) => {
+      calls.push(q);
+      return [{ url: "https://toyota.oempartsonline.com/oem-parts/x-446604030" }];
+    };
+    await discoverPriceUrls({ oem: "04466-04030" }, search);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a fallback failure never converts a real empty into null", async () => {
+    let first = true;
+    const search: UrlSearcher = async () => {
+      if (first) {
+        first = false;
+        return [];
+      }
+      throw new Error("rate limited");
+    };
+    const urls = await discoverPriceUrls({ oem: "1234567" }, search);
+    expect(urls).toEqual([]); // searched, nothing found — a real answer
+  });
+});

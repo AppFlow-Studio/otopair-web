@@ -706,6 +706,9 @@ export const internalDeriveMaintenance = internalMutation({
       (owner.mileage === undefined || odometer > owner.mileage)
     ) {
       ownerPatch.mileage = odometer;
+      // Stamp write time + source so the resolver ranks this reading by recency.
+      ownerPatch.mileage_updated_at = Date.now();
+      ownerPatch.mileage_source = "receipt_ocr";
     }
 
     // 3. Increment health_score_rec_penalty (capped)

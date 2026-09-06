@@ -17,12 +17,21 @@ import { ArrowRight, Bell, Car, Clock, Ellipsis, Loader2, MessageSquare, User, X
 import { useEntityLabel } from "@/lib/use-entity-label";
 import OverrunExtendCard from "@/components/mechanic/overrun-extend-card";
 import InvoiceNumberField from "@/components/invoice-number-field";
+import ExtraWorkStatus from "@/components/booking/extra-work-status";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import PostjobReportSection from "@/components/booking/postjob-report-section";
 import SendReceiptCard from "@/components/booking/send-receipt-card";
+import VinRepairPrompt from "@/components/booking/vin-repair-prompt";
+import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
+import { BookingMessagesDrawer } from "@/components/messages/booking-messages-drawer";
+import { useLockedQuote } from "@/lib/use-locked-quote";
+import {
+  useApprovalWorkflow,
+  type ApprovalCycle,
+} from "@/lib/use-approval-workflow";
 import type { JobActualsPayload } from "@/lib/job-actuals";
 import VehiclePassportCard from "@/components/vehicle-passport-card";
-import JobStepIndicator from "@/components/job-step-indicator";
+import JobStepRing from "@/components/job-step-ring";
 import MultiPointInspectionDialog, {
   type InspectionInputPayload,
 } from "@/components/multi-point-inspection-dialog";
@@ -60,7 +69,6 @@ import {
   drawerSelectTriggerClassName,
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
-import { StatusPill } from "@/components/status-pill";
 import BookingTimelineModal from "@/components/booking/booking-timeline-modal";
 import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
 import {
@@ -68,8 +76,8 @@ import {
   formatActivityTimestamp,
 } from "@/lib/booking-activity-format";
 import type {
-  JobActualPartPayload,
   PostJobSurveyPayload,
+  CustomJobOutcome,
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
 
@@ -267,7 +275,7 @@ function PaymentApprovalBadge({
   if (state === "pre_job_pending" || state === "mid_job_pending") {
     return (
       <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-800">
-        Pending customer approval
+        Awaiting hold confirmation
       </span>
     );
   }
@@ -279,6 +287,126 @@ function PaymentApprovalBadge({
     );
   }
   return null;
+}
+
+/**
+ * Prominent "we're waiting on the customer to confirm the new hold" card shown
+ * at the top of the panel body while a booking is waiting on the customer for
+ * money. Covers two situations:
+ *   - `*_pending` (reauth=false): an out-of-range estimate is sitting with the
+ *     customer to APPROVE. Surfaces the new hold vs. prior, sent + SLA
+ *     countdown, and a Withdraw action so the mechanic can pull it back.
+ *   - `reauth_required` (reauth=true): the customer already approved (or a hold
+ *     increment needs their re-authentication) and must now CONFIRM the new
+ *     hold on their card. There's no open request to withdraw, so that action
+ *     is hidden and the copy shifts to the card-confirmation ask.
+ */
+function AwaitingHoldConfirmation({
+  cycle,
+  reauth,
+  newHoldCents,
+  priorHoldCents,
+  sentLabel,
+  slaLabel,
+  addedServiceNames,
+  onWithdraw,
+}: {
+  cycle: ApprovalCycle;
+  reauth: boolean;
+  newHoldCents: number | null;
+  priorHoldCents: number | null;
+  sentLabel: string | null;
+  slaLabel: string | null;
+  /** Mid-job only: the services this pending request is asking the customer to
+   *  approve, so the banner names *what* is waiting rather than a bare "added
+   *  scope". Empty/undefined for the pre-job and re-auth cycles. */
+  addedServiceNames?: string[];
+  onWithdraw: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const title = reauth
+    ? "Waiting for the customer to confirm the new hold on their card"
+    : cycle === "mid_job"
+      ? "Waiting for the customer to confirm the added scope"
+      : cycle === "post_job_reapproval"
+        ? "Waiting for the customer to confirm the final total"
+        : "Waiting for the customer to confirm the new hold";
+  const changed =
+    newHoldCents != null &&
+    priorHoldCents != null &&
+    newHoldCents !== priorHoldCents;
+  const meta = [
+    sentLabel,
+    slaLabel && !reauth ? `Customer has ${slaLabel} to confirm` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-amber-900">
+      <div className="flex items-start gap-2.5">
+        <span
+          className="mt-1 h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-500"
+          aria-hidden="true"
+        />
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-semibold leading-snug">{title}</p>
+          {cycle === "mid_job" &&
+            addedServiceNames &&
+            addedServiceNames.length > 0 && (
+              <p className="mt-0.5 text-[12px] leading-snug text-amber-800">
+                Added: {addedServiceNames.join(", ")}
+              </p>
+            )}
+          {newHoldCents != null && (
+            <p className="mt-1.5 flex flex-wrap items-baseline gap-x-2 text-[13px]">
+              <span className="font-semibold tabular-nums">
+                New hold ${(newHoldCents / 100).toFixed(2)}
+              </span>
+              {changed && (
+                <span className="text-[12px] tabular-nums text-amber-700/80 line-through">
+                  was ${((priorHoldCents as number) / 100).toFixed(2)}
+                </span>
+              )}
+            </p>
+          )}
+          {reauth && (
+            <p className="mt-1 text-[11px] leading-relaxed text-amber-700">
+              They were asked to re-authenticate the hold with their bank —
+              work can start once it clears.
+            </p>
+          )}
+          {meta && (
+            <p className="mt-1 text-[11px] font-medium text-amber-700">{meta}</p>
+          )}
+          {err && (
+            <p className="mt-1 text-[11px] font-medium text-rose-700">{err}</p>
+          )}
+          {!reauth && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setErr(null);
+                setBusy(true);
+                try {
+                  await onWithdraw();
+                } catch (e: any) {
+                  setErr(e?.message ?? "Couldn't withdraw. Try again.");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-white px-2.5 py-1.5 text-[12px] font-semibold text-amber-900 transition-colors hover:bg-amber-100 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              {busy ? "Withdrawing…" : "Withdraw request"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const OUT_OF_SCOPE_LABELS: Record<string, string> = {
@@ -566,6 +694,8 @@ export interface JobDetailData {
   previousMechanicName?: string | null;
   rescheduleProposedAt?: number | null;
   estimatedLaborMinutes?: number | null;
+  combinedLaborSavedMinutes?: number | null;
+  combinedLaborNotes?: string[] | null;
   scheduleChangeMode?: string | null;
   scheduleChangeSourceBookingId?: Id<"bookings"> | null;
   customerCanRestoreOriginal?: boolean | null;
@@ -587,7 +717,28 @@ export interface JobDetailData {
       oem_number: string;
       cost: number;
     }>;
+    // Mid-job "Active Job Layover" notes/photos, surfaced read-only in the
+    // post-job review (getJobDetail resolves photo URLs).
+    inProgressNotes?: string;
+    inProgressPhotos?: Array<{
+      storageId: string;
+      caption?: string | null;
+      takenAt?: number;
+      url?: string | null;
+    }>;
   } | null;
+  // Evidence photos from agreed mid/pre-job changes ("Why the added scope?"),
+  // resolved to URLs by getJobDetail. Carried into the post-job report the same
+  // way layover photos are. Top-level so it resolves without a job_actuals row.
+  scopePhotos?: Array<{
+    storageId: string;
+    caption?: string | null;
+    takenAt?: number;
+    url?: string | null;
+  }>;
+  // The mechanic's "why the added scope / why this adjustment" reasons for those
+  // same agreed changes — folded into the post-job findings seed.
+  scopeReasons?: string[];
   customerLateMonitor?: {
     pushEnqueuedAtMs: number | null;
     smsEnqueuedAtMs: number | null;
@@ -700,6 +851,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showCancelRescheduleConfirm, setShowCancelRescheduleConfirm] = useState(false);
     const [showEarlyArrivalDialog, setShowEarlyArrivalDialog] = useState(false);
     const [showEndCurrentJobDialog, setShowEndCurrentJobDialog] = useState(false);
+    const [showMessages, setShowMessages] = useState(false);
     // Holds the conflicting booking id parsed from a server-side race error
     // (`MECHANIC_HAS_ACTIVE_JOB:<id>`). Used to render the dialog with the
     // right active-job summary during the small window before reactive
@@ -788,204 +940,70 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       api.serviceParts.getOemPartsForBooking,
       job ? { bookingId: job._id } : "skip"
     );
-    // Brake axle scope for this booking — used to keep the snapshot-seeded
-    // parts list from listing an axle the customer didn't book (older
-    // snapshots could freeze front pads regardless of the chosen axle).
-    const brakeScope = useQuery(
-      api.serviceParts.getBrakeScopeForBooking,
-      job ? { bookingId: job._id } : "skip"
-    );
-    // The effective AGREED quote — the latest customer-approved mechanic
-    // adjustment with its frozen breakdown. When present it's the single source
-    // of truth for the locked post-job confirmation (parts + breakdown all
-    // reconcile to its total). Null when the quote was never adjusted.
-    const effectiveQuote = useQuery(
-      (api as any).booking_approvals.getEffectiveQuoteForBooking,
-      job ? { bookingId: job._id } : "skip"
-    ) as
-      | {
-          cycle: string;
-          totalCents: number;
-          partsCents: number;
-          laborCents: number;
-          taxCents: number;
-          feeCents: number;
-          partsSnapshot: Array<{
-            part_name: string;
-            brand?: string | null;
-            oem_number: string;
-            cost: number;
-            quantity?: number;
-            supplied_by?: string;
-            part_tier?: string;
-            service_id?: string | null;
-            source?: "catalog" | "manual";
-          }>;
-        }
-      | null
-      | undefined;
-    // The parts ACTUALLY quoted on this booking, scoped to the booked axle.
-    // This is the source of truth the pre/post-job dialogs seed from — what we
-    // quoted, not the catalog's broader suggestions. Null when the booking has
-    // no snapshot (walk-ins) or nothing survives the axle filter, so the
-    // dialog falls back to its catalog prefill.
-    const scopedQuotedParts = useMemo<JobActualPartPayload[] | null>(() => {
-      const snapshot = job?.pricedPartsSnapshot;
-      if (!snapshot || snapshot.length === 0) return null;
-      const rows: JobActualPartPayload[] = snapshot
-        .filter((p) => {
-          if (!brakeScope?.hasBrakeWork) return true;
-          if (brakeScope.front && brakeScope.rear) return true;
-          const n = p.part_name.toLowerCase();
-          const hasFront = /\bfront\b/.test(n);
-          const hasRear = /\brear\b/.test(n);
-          if (hasFront && !hasRear) return brakeScope.front;
-          if (hasRear && !hasFront) return brakeScope.rear;
-          return true;
-        })
-        .map((p) => ({
-          part_name: p.part_name,
-          brand: p.brand ?? null,
-          oem_number: p.oem_number,
-          cost: p.unit_price_cents / 100,
-          quantity: p.quantity,
-          supplied_by: "shop" as const,
-          part_tier: p.part_tier ?? "oem",
-          service_id: p.service_id ?? null,
-          source: "catalog" as const,
-        }));
-      return rows.length > 0 ? rows : null;
-    }, [job?.pricedPartsSnapshot, brakeScope]);
-    // The locked, customer-approved quote breakdown (cents) that drives the
-    // read-only post-job confirmation. An approved mechanic adjustment wins
-    // (its frozen breakdown reconciles exactly); otherwise the booking's
-    // original quote. originalTotalCents is set only when an adjustment moved
-    // the price, so the confirmation can show original → new.
-    const lockedQuote = useMemo(() => {
-      const APPROVED = new Set([
-        "pre_job_approved",
-        "mid_job_approved",
-        "post_job_approved",
-        "captured",
-      ]);
-      const originalCents =
-        job?.quotedSetPriceDollars != null
-          ? Math.round(job.quotedSetPriceDollars * 100)
-          : job?.quotedBreakdown
-            ? job.quotedBreakdown.parts_cents +
-              job.quotedBreakdown.labor_cents +
-              job.quotedBreakdown.tax_cents +
-              job.quotedBreakdown.service_fee_cents
-            : null;
-      // 1. Approved adjustment WITH its frozen breakdown — reconciles exactly.
-      if (effectiveQuote) {
-        return {
-          partsCents: effectiveQuote.partsCents,
-          laborCents: effectiveQuote.laborCents,
-          taxCents: effectiveQuote.taxCents,
-          feeCents: effectiveQuote.feeCents,
-          totalCents: effectiveQuote.totalCents,
-          originalTotalCents:
-            originalCents != null && originalCents !== effectiveQuote.totalCents
-              ? originalCents
-              : null,
-          hasBreakdown: true,
-        };
-      }
-      // 2. Robust fallback — the booking row itself records an approved
-      //    adjustment (mechanic_set_price_cents). Surface the NEW total +
-      //    original even when the detailed breakdown query isn't available;
-      //    per-line breakdown is suppressed (hasBreakdown:false) since we can't
-      //    reconcile it without the frozen approval row.
-      const agreedCents = job?.mechanicSetPriceCents ?? null;
-      if (
-        !job?.isFixedPrice &&
-        agreedCents != null &&
-        APPROVED.has(job?.paymentApprovalState ?? "") &&
-        originalCents != null &&
-        agreedCents !== originalCents
-      ) {
-        return {
-          partsCents: 0,
-          laborCents: 0,
-          taxCents: 0,
-          feeCents: 0,
-          totalCents: agreedCents,
-          originalTotalCents: originalCents,
-          hasBreakdown: false,
-        };
-      }
-      // 3. No adjustment — original quote breakdown.
-      const bd = job?.quotedBreakdown;
-      if (!bd) return null;
-      const sumCents =
-        bd.parts_cents + bd.labor_cents + bd.tax_cents + bd.service_fee_cents;
-      return {
-        partsCents: bd.parts_cents,
-        laborCents: bd.labor_cents,
-        taxCents: bd.tax_cents,
-        feeCents: bd.service_fee_cents,
-        totalCents: originalCents ?? sumCents,
-        originalTotalCents: null,
-        hasBreakdown: true,
-      };
-    }, [
-      job?.quotedBreakdown,
-      job?.quotedSetPriceDollars,
-      job?.mechanicSetPriceCents,
-      job?.paymentApprovalState,
-      job?.isFixedPrice,
-      effectiveQuote,
-    ]);
-    // Parts shown in the locked confirmation. When an adjustment was approved,
-    // these are its frozen parts_snapshot (matches the breakdown). Otherwise
-    // the booking's original priced snapshot, UNSCOPED — so the rows reconcile
-    // with the quote breakdown rather than mixing a scoped subset with the
-    // full total.
-    const lockedQuoteParts = useMemo<JobActualPartPayload[] | null>(() => {
-      if (effectiveQuote && effectiveQuote.partsSnapshot.length > 0) {
-        return effectiveQuote.partsSnapshot.map((p) => ({
-          part_name: p.part_name,
-          brand: p.brand ?? null,
-          oem_number: p.oem_number,
-          cost: p.cost,
-          quantity: p.quantity,
-          supplied_by: p.supplied_by === "customer" ? "customer" : "shop",
-          part_tier: p.part_tier ?? "oem",
-          service_id: p.service_id ?? null,
-          source: p.source ?? "catalog",
-        }));
-      }
-      const snapshot = job?.pricedPartsSnapshot;
-      if (!snapshot || snapshot.length === 0) return null;
-      return snapshot.map((p) => ({
-        part_name: p.part_name,
-        brand: p.brand ?? null,
-        oem_number: p.oem_number,
-        cost: p.unit_price_cents / 100,
-        quantity: p.quantity,
-        supplied_by: "shop" as const,
-        part_tier: p.part_tier ?? "oem",
-        service_id: p.service_id ?? null,
-        source: "catalog" as const,
-      }));
-    }, [effectiveQuote, job?.pricedPartsSnapshot]);
-    // Walk-in bookings have no customer-approved quote — the mechanic gives a
-    // verbal quote and manages parts directly. Billing is never "locked" for
-    // them; the post-job parts step stays editable and shows no catalog
-    // pre-fill (handled server-side in getPrefillData). Customer/self-serve
-    // bookings keep the locked confirmation flow.
-    const isWalkIn =
-      (job as any)?.source === "mechanic_walk_in" ||
-      (job as any)?.source === "mechanic_backfill";
+    // Customer-approved quote + parts for the locked post-job confirmation.
+    // SHARED with the mechanic dashboard via useLockedQuote so the two surfaces
+    // that render PostJobSurveyDialog can never drift — the dashboard once
+    // omitted this wiring entirely, dropping its locked confirmation back to the
+    // stale pre-approval snapshot. See lib/use-locked-quote.ts.
+    const { scopedQuotedParts, lockedQuote, lockedQuoteParts, isWalkIn } =
+      useLockedQuote(job);
     const postjobReport = useQuery(
       api.job_actuals.getPostjobReportForBooking,
       job ? { bookingId: job._id } : "skip"
     );
+    // A clock-stopping blocker pauses the job. The step indicator otherwise
+    // keeps saying "Active job · underway" while the mechanic has it stopped.
+    const jobBlockers = useQuery(
+      api.jobBlockers.listForBooking,
+      job ? { bookingId: job._id } : "skip"
+    );
+    const jobPaused = Boolean(jobBlockers?.clockPaused);
+    // Out-of-range estimate sitting with the customer. Subscribe to the live
+    // approval state so the panel can render the "awaiting hold confirmation"
+    // treatment (new hold amount, SLA countdown, withdraw). getBookingApprovalState
+    // returns null for non-staff callers, so `awaitingHold` stays false there.
+    const approvalPendingCycle: ApprovalCycle =
+      (job as any)?.paymentApprovalState === "mid_job_pending"
+        ? "mid_job"
+        : (job as any)?.paymentApprovalState === "post_job_pending"
+          ? "post_job_reapproval"
+          : "pre_job";
+    const holdApproval = useApprovalWorkflow({
+      bookingId: job?._id ?? null,
+      cycle: approvalPendingCycle,
+    });
+    // "Waiting on the customer for the hold" spans BOTH the pending-approval
+    // states (customer must approve the out-of-range price) AND reauth_required
+    // (customer approved / a hold increment needs their re-authentication, so
+    // they must confirm the new hold on their card next). Both block work.
+    const holdAwaitingReauth = holdApproval.isReauthRequired;
+    const awaitingHold = holdApproval.isPending || holdAwaitingReauth;
+    // For a mid-job hold, name the pending services in the banner. Same source
+    // the Extra work card reads below — Convex dedupes the identical
+    // subscription, so this isn't a second network round-trip.
+    const midJobScopeChanges = useQuery(
+      api.booking_approvals.getMidJobScopeChanges,
+      job && awaitingHold && approvalPendingCycle === "mid_job"
+        ? { bookingId: job._id }
+        : "skip",
+    ) as Array<{ state: string; addedServiceNames: string[] }> | undefined;
+    const pendingAddedServiceNames = (midJobScopeChanges ?? [])
+      .filter((c) => c.state === "pending")
+      .flatMap((c) => c.addedServiceNames ?? []);
     const activityLog = useQuery(
       (api as any).booking_activity.getBookingActivityLog,
       job ? { bookingId: job._id } : "skip"
     ) as ActivityEvent[] | undefined;
+    // Message Shop tickets for this booking — drives the header entry point +
+    // its unread badge, and feeds the in-booking drawer when opened.
+    const bookingTickets = useQuery(
+      api.shop_tickets_web.listShopTicketsForBooking,
+      job ? { bookingId: job._id } : "skip",
+    );
+    const ticketCount = (bookingTickets ?? []).length;
+    const ticketUnread = (bookingTickets ?? []).filter(
+      (t) => (t.shop_unread_count ?? 0) > 0,
+    ).length;
     // Pre-flight check for the start-job flow: if the mechanic already has
     // another booking in_progress, we route through EndCurrentJobConfirmDialog
     // instead of opening the prejob survey directly.
@@ -1324,6 +1342,19 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         setShowEndCurrentJobDialog(true);
         return;
       }
+      // New-cycle bookings that have already submitted a pre-job estimate are
+      // parked at inspection_complete (status stays vehicle_at_shop) while the
+      // customer's hold is confirmed. Re-opening the inspection here would make
+      // the mechanic redo it just to reach the hold popup — skip straight to
+      // the estimate/hold status dialog instead. Mirrors the mechanic
+      // dashboard's tryStartBooking routing.
+      const pas = (job as any).paymentApprovalState as string | undefined;
+      const alreadyEstimated =
+        (job as any).hasDisclosedRange && pas != null && pas !== "none";
+      if (alreadyEstimated) {
+        setShowPrejobEstimateDialog(true);
+        return;
+      }
       setShowPrejobDialog(true);
     }
 
@@ -1471,7 +1502,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
     }
 
-    async function handleCompleteWithPostjob(payload: PostJobSurveyPayload) {
+    async function handleCompleteWithPostjob(
+      payload: PostJobSurveyPayload,
+      customJobOutcomes?: CustomJobOutcome[],
+      resolvedPriorRecommendationIds?: string[],
+    ) {
       if (!job?._id) return;
       setActionError("");
       setIsSubmittingPostjob(true);
@@ -1479,6 +1514,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         await completeWithPostjob({
           bookingId: job._id,
           postjob: payload,
+          customJobOutcomes:
+            customJobOutcomes && customJobOutcomes.length > 0
+              ? customJobOutcomes
+              : undefined,
+          resolvedPriorRecommendationIds:
+            resolvedPriorRecommendationIds &&
+            resolvedPriorRecommendationIds.length > 0
+              ? (resolvedPriorRecommendationIds as Id<"job_recommendations">[])
+              : undefined,
         });
         setShowPostjobDialog(false);
         onSuccess?.("Booking completed");
@@ -1746,20 +1790,20 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const actionBar = job
       ? (() => {
                   const s = job.status;
-                  // A pre-job quote is sitting with the customer. The booking
-                  // status is still pending_shop_acceptance, but the shop's
-                  // turn is over until the customer approves or declines —
-                  // block the response actions in the meantime.
-                  const quoteAwaitingCustomer =
-                    (job as any).paymentApprovalState === "pre_job_pending";
+                  // An out-of-range estimate is sitting with the customer
+                  // (pre/mid/post-job pending). The shop's turn is over until
+                  // the customer confirms the new hold — block every mutating
+                  // action in the meantime. The AwaitingHoldConfirmation card
+                  // (rendered above) carries the status + a Withdraw action.
+                  const quoteAwaitingCustomer = awaitingHold;
                   const isPendingIncoming =
                     s === "pending" || s === "pending_shop_acceptance";
                   const canAccept = isPendingIncoming && !quoteAwaitingCustomer;
-                  const canAdjustQuote = isPendingIncoming;
-                  const canComplete = s === "in_progress";
-                  const canMarkVehicleHere = s === "confirmed";
-                  const canStartJob = s === "vehicle_at_shop";
-                  const canMarkNoShow = s === "confirmed";
+                  const canAdjustQuote = isPendingIncoming && !quoteAwaitingCustomer;
+                  const canComplete = s === "in_progress" && !quoteAwaitingCustomer;
+                  const canMarkVehicleHere = s === "confirmed" && !quoteAwaitingCustomer;
+                  const canStartJob = s === "vehicle_at_shop" && !quoteAwaitingCustomer;
+                  const canMarkNoShow = s === "confirmed" && !quoteAwaitingCustomer;
                   const canDecline = isPendingIncoming && !quoteAwaitingCustomer;
                   const canCancel =
                     s === "confirmed" ||
@@ -1801,16 +1845,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           Updating parts or time won&apos;t change the price — edits are logged but
                           will not affect this job. To change what the customer pays, update the
                           fixed price in the shop&apos;s service catalog.
-                        </div>
-                      ) : null}
-                      {quoteAwaitingCustomer ? (
-                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
-                          <span className="font-semibold">
-                            Waiting on the customer.
-                          </span>{" "}
-                          Your quote was sent for approval. You can&apos;t
-                          accept, decline, or reschedule this booking until the
-                          customer approves or declines it.
                         </div>
                       ) : null}
                       <div className="flex flex-wrap items-center gap-2">
@@ -2068,16 +2102,43 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     <h2 className="truncate text-base font-semibold text-foreground">
                       {job.vehicle || "Booking Detail"}
                     </h2>
-                    <StatusPill status={job.status} />
+                    <JobStepRing
+                      currentStep={getJobStep(job.status)}
+                      status={job.status}
+                      paused={jobPaused}
+                      awaitingHold={awaitingHold}
+                    />
                     <PaymentApprovalBadge
                       state={(job as any).paymentApprovalState}
                       settlementState={(job as any).settlementState}
                     />
                   </div>
-                  <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                    {job.serviceNames.join(", ")}
-                    {job.customerName ? ` · ${job.customerName}` : ""}
-                  </p>
+                  {/* Service · customer and the VIN prompt collapse away once the
+                      body scrolls, so the pinned header keeps only the title,
+                      status, N/4 progress, live countdown, and actions. */}
+                  <div
+                    className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out ${
+                      isStepIndicatorCompact
+                        ? "grid-rows-[0fr] opacity-0"
+                        : "grid-rows-[1fr] opacity-100"
+                    }`}
+                  >
+                    <div className={`min-h-0 overflow-hidden ${isStepIndicatorCompact ? "pointer-events-none" : ""}`}>
+                      <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                        {job.serviceNames.join(", ")}
+                        {job.customerName ? ` · ${job.customerName}` : ""}
+                      </p>
+                      {/* Renders only when this booking's car is on a placeholder
+                          VIN (Off-Catalog Work spec, §5). The mechanic has the car;
+                          nobody else can fix it this cheaply. */}
+                      <div className="mt-2">
+                        <VinRepairPrompt
+                          bookingId={String(job._id)}
+                          onDone={(msg) => onSuccess?.(msg)}
+                        />
+                      </div>
+                    </div>
+                  </div>
                   {(() => {
                     const subtext = getStatusSubtext(job.status);
                     const clock =
@@ -2093,7 +2154,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     if (!subtext && !clock && !rescheduleCd) return null;
                     return (
                       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-                        {subtext && (
+                        {subtext && !isStepIndicatorCompact && (
                           <span className="text-xs text-muted-foreground">
                             {subtext}
                           </span>
@@ -2119,21 +2180,53 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 </h2>
               )}
             </div>
-            <button
-              onClick={onClose}
-              className="-mt-0.5 p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
-            >
-              <X className="w-5 h-5" />
-            </button>
+            <div className="flex shrink-0 items-center gap-1">
+              {job ? (
+                <button
+                  type="button"
+                  onClick={() => setShowMessages(true)}
+                  className="relative -mt-0.5 inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                  title="Customer messages for this booking"
+                >
+                  <MessageSquare className="h-4 w-4" aria-hidden="true" />
+                  Messages
+                  {ticketUnread > 0 ? (
+                    <span className="ml-0.5 inline-flex min-w-[1rem] justify-center rounded-full bg-amber-500 px-1 text-[10px] font-semibold text-white">
+                      {ticketUnread}
+                    </span>
+                  ) : ticketCount > 0 ? (
+                    <span className="ml-0.5 text-muted-foreground">
+                      {ticketCount}
+                    </span>
+                  ) : null}
+                </button>
+              ) : null}
+              <button
+                onClick={onClose}
+                className="-mt-0.5 p-1 rounded-lg hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
             </div>
             {job ? (
               <div className="space-y-3 px-5 pb-4">
-                <JobStepIndicator
-                  currentStep={getJobStep(job.status)}
-                  status={job.status}
-                  compact={isStepIndicatorCompact}
-                  className="border-0 bg-transparent px-0 py-0"
-                />
+                {awaitingHold ? (
+                  <AwaitingHoldConfirmation
+                    cycle={approvalPendingCycle}
+                    reauth={holdAwaitingReauth}
+                    newHoldCents={holdApproval.mechanicSetPriceCents}
+                    priorHoldCents={
+                      typeof job.totalCost === "number"
+                        ? Math.round(job.totalCost * 100)
+                        : null
+                    }
+                    sentLabel={holdApproval.relativeSentLabel}
+                    slaLabel={holdApproval.slaCountdownLabel}
+                    addedServiceNames={pendingAddedServiceNames}
+                    onWithdraw={holdApproval.onWithdraw}
+                  />
+                ) : null}
                 {actionBar}
               </div>
             ) : null}
@@ -2175,6 +2268,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           {formatDurationMinutes(job.estimatedLaborMinutes)}
                         </span>
                       ) : null}
+                      {job.combinedLaborSavedMinutes != null &&
+                      job.combinedLaborSavedMinutes > 0 ? (
+                        <span
+                          className="ml-2 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-semibold text-emerald-800"
+                          title={(job.combinedLaborNotes ?? []).join(" ")}
+                        >
+                          Combined labor · −{formatDurationMinutes(job.combinedLaborSavedMinutes)}
+                        </span>
+                      ) : null}
                       {job.diagnosticSystem ? (
                         <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-amber-900">
                           Diagnostic ·{" "}
@@ -2193,6 +2295,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     variant="orange"
                   />
                 )}
+
+                {/* Mid-job extra-work confirmation state — waiting on the
+                    customer, approved, or declined (kept for the record, not
+                    charged). Renders nothing when there's no extra work. */}
+                <ExtraWorkStatus bookingId={job._id as Id<"bookings">} />
 
                 <InvoiceNumberField
                   bookingId={job._id as Id<"bookings">}
@@ -2559,6 +2666,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               : ""
           }
           bookingServices={job?.serviceNames ?? []}
+          jobInProgress={job?.status === "in_progress"}
           tireReplacementPositions={job?.tireSpecs?.positions ?? []}
           passportData={vehiclePassport ?? null}
           prefillData={job?.jobActuals?.prejobReport ?? null}
@@ -2644,14 +2752,41 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           }
           passportData={vehiclePassport ?? null}
           estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          customLaborOverridesMinutes={
+            (job as any)?.customLaborOverridesMinutes ?? null
+          }
           prefillData={actualsPrefill ?? null}
           isSubmitting={isSubmittingPostjob}
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
+          layoverNotes={[
+            job?.jobActuals?.inProgressNotes ?? "",
+            // The "why the added scope / why this adjustment" reasons the
+            // mechanic already gave for agreed changes — folded in so they seed
+            // the findings and show in the "From the active job" context.
+            ...((job?.scopeReasons ?? []) as string[]),
+          ]
+            .filter((line) => line.trim())
+            .join("\n")}
+          layoverPhotos={[
+            ...(job?.jobActuals?.inProgressPhotos ?? []),
+            // Evidence attached to agreed mid/pre-job changes rides in on the
+            // same read-only stream so it's carried into (and sent with) the
+            // final report.
+            ...(job?.scopePhotos ?? []),
+          ].map((p) => ({
+            id: p.storageId,
+            storageId: p.storageId,
+            previewUrl: p.url ?? "",
+            caption: p.caption ?? "",
+            status: "ready" as const,
+            takenAt: p.takenAt ?? undefined,
+          }))}
           lockBilling={!isWalkIn}
           quotedParts={lockedQuoteParts}
           lockedQuote={lockedQuote}
           isFixedPrice={job?.isFixedPrice}
+          fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
         />
 
         {/* Pre-Job Approval — auto-chained from the inspection dialog. */}
@@ -2685,39 +2820,32 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           shopZip={(job as any)?.shopZip ?? null}
           quotedParts={scopedQuotedParts}
           isFixedPrice={job?.isFixedPrice}
+          fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
         />
 
-        {/* Mid-Job Approval — "Add unforeseen scope" while in_progress. */}
-        <PostJobSurveyDialog
+        {/* Mid-Job Approval — "Add unforeseen scope" while in_progress.
+            The seeding logic (approved quote over catalog prefill, preserving
+            `not_used`) lives inside MidJobScopeDialog so the mechanic overlay's
+            Flag Issue sheet opens the very same thing rather than a second copy
+            that could drift. */}
+        <MidJobScopeDialog
           open={showMidJobDialog}
-          bookingId={job ? String(job._id) : null}
-          bookingLabel={job?.vehicle ?? "Vehicle"}
-          bookingSubLabel={
-            job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
-                  job.scheduledDate,
-                  job.scheduledTime,
-                )}`
-              : ""
-          }
-          passportData={vehiclePassport ?? null}
-          estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
-          prefillData={actualsPrefill ?? null}
-          isSubmitting={false}
+          bookingId={job ? (job._id as Id<"bookings">) : null}
           onClose={() => setShowMidJobDialog(false)}
-          onSubmit={async () => {
-            /* cycle path handles submit internally */
+          onSubmitted={(msg) => {
+            setShowMidJobDialog(false);
+            onSuccess?.(msg);
           }}
-          cycle="mid_job"
-          onApprovalSubmitted={() =>
-            onSuccess?.("Added scope sent for confirmation")
-          }
-          laborRateCents={(job as any)?.shopLaborRateCents ?? null}
-          laborCostDollars={(job as any)?.laborCost ?? null}
-          shopState={(job as any)?.shopState ?? null}
-          shopZip={(job as any)?.shopZip ?? null}
-          isFixedPrice={job?.isFixedPrice}
         />
+
+        {/* Message Shop — customer support tickets for this booking. */}
+        {job ? (
+          <BookingMessagesDrawer
+            bookingId={job._id as Id<"bookings">}
+            open={showMessages}
+            onClose={() => setShowMessages(false)}
+          />
+        ) : null}
 
         <ConfirmationDialog
           open={showDeclineModal}

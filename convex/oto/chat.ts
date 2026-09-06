@@ -46,10 +46,21 @@ import {
   formatDisplayString,
   knowledgeLabel,
   pickActiveVehicleRow,
+  POLITE_EXIT_THRESHOLD,
   type DisplayInfo,
   type OwnedVehicleRow,
   type ResolvedVehicle,
 } from "./envelope";
+import { classifyTurnSafety, renderSafetyOverrideBlock } from "./safety";
+import {
+  classifyTrackedSymptoms,
+  directSlugMaintenanceType,
+  symptomMaintenanceType,
+  symptomServiceTarget,
+  targetAlreadyCovered,
+  trackedSuppressedByHazards,
+  userAskedForDirectService,
+} from "../../lib/symptomTracking";
 import { OTO_TOOL_CATEGORY, OTO_TOOLS, OTOPAIR_SERVICE_SLUGS } from "./tools";
 import {
   executeTool,
@@ -306,6 +317,8 @@ export const sendMessage = action({
   // render tools without churning the validator on every change.
   returns: v.object({
     text: v.string(),
+    // Persisted assistant ai_messages row id (D-13/D-15 supersession check).
+    assistantMessageId: v.optional(v.id("ai_messages")),
     // Render directives — any of these may be present depending on which
     // render tool fired. The mobile app and harness pick the renderer based
     // on which fields are set. All are loose v.any() since their shapes
@@ -355,6 +368,10 @@ export const sendMessage = action({
 // successful turns omit it.
 type SendMessageResult = {
   text: string;
+  // Persisted assistant ai_messages row id (absent on harness/skipPersist
+  // runs). The client threads it into the live ChatMessage so the
+  // vehicle-update card can run the D-13/D-15 supersession check.
+  assistantMessageId?: Id<"ai_messages">;
   quickReplies?: unknown[];
   showRecordConfirmation?: { vehicle_id: string; maintenance_type: string };
   // render_vehicle_update — vehicle-truth confirm card (mileage / service
@@ -713,12 +730,30 @@ export async function sendMessageHandlerCore(
   // ── 4. Build the uncached-zone envelope ──────────────────────────────
   // conversation state (mood, arc, established facts, intent) — read back so
   // Haiku has cross-turn memory without re-deriving from raw history.
+  // W3.2 — open-symptom ledger read. Only rows still `open` reach the
+  // envelope; addressed/dismissed history stays in the table for audit. The
+  // snapshot is also reused below by the W3.3 booking-notes bundler.
+  const openSymptomRows = (
+    ((conversation as any).open_symptoms ?? []) as {
+      text: string;
+      category: string;
+      safety_relevant: boolean;
+      status: "open" | "addressed" | "dismissed";
+      opened_at: number;
+    }[]
+  ).filter((s) => s.status === "open");
+
   const convoState = {
     mood: (conversation as any).mood ?? null,
     arc_summary: (conversation as any).arc_summary ?? null,
     established_facts: ((conversation as any).established_facts ?? []) as string[],
     last_user_intent: (conversation as any).last_user_intent ?? null,
     updated_at: (conversation as any).state_updated_at ?? null,
+    open_symptoms: openSymptomRows.map((s) => ({
+      text: s.text,
+      category: s.category,
+      safety_relevant: s.safety_relevant,
+    })),
   };
   // Polite-exit counter snapshot (Locked Principle #6). At >= the envelope's
   // POLITE_EXIT_THRESHOLD (4 — lowered from 6 on beta feedback; see
@@ -830,6 +865,97 @@ export async function sendMessageHandlerCore(
     api.onboarding_questions_answers.getCarKnowledgeLevelForUser,
     { user_id: user._id },
   );
+  // ── Wave 2.2: pre-routing safety classifier ──────────────────────────────
+  // Runs BEFORE the model call, on the raw user message, tone-blind. This is
+  // the gate the intent ladder never had — stable.ts routes on intent
+  // (wants-a-service / reports-a-light / mileage / vague-symptom), and anything
+  // that matched no branch previously met no safety check at all. See
+  // convex/oto/safety.ts for the defect inventory this closes.
+  const safetyFindings = classifyTurnSafety(message);
+  const safetyOverride = renderSafetyOverrideBlock(safetyFindings);
+  // Issue 2 (2026-08-15) — ledger rows appended THIS turn, safety and tracked
+  // alike. The `openSymptomRows` snapshot above is pre-turn, so without this
+  // a booking rendered on the SAME turn the symptoms arrived (the report's
+  // four-symptoms-in-one-message case) would bundle and pre-check nothing.
+  const symptomsAppendedThisTurn: {
+    text: string;
+    category: string;
+    safety_relevant: boolean;
+  }[] = [];
+  if (safetyFindings.length > 0) {
+    // Log the classification, never the user's message (PII). Category +
+    // severity is enough to audit false positives from telemetry.
+    console.warn(
+      "[oto/chat] safety override active: " +
+        safetyFindings
+          .map((f) => `${f.category}/${f.severity}`)
+          .join(" "),
+    );
+    // W3.2 — append to the open-symptom ledger DETERMINISTICALLY, at the
+    // same moment the classifier fires. The model never manages this list:
+    // D-43 is precisely the model forgetting a safety thread on a subject
+    // change, so the remedy cannot depend on the model remembering to write.
+    // Dedupe by category happens inside the mutation; failure-isolated so a
+    // ledger write can never break the turn.
+    for (const f of safetyFindings) {
+      // medical_injury is the PERSON being hurt, not the car — it must never
+      // enter the vehicle-symptom ledger (W3.3 folds open symptoms into
+      // booking customer_notes, and a burned hand does not belong there).
+      if (f.category === "medical_injury") continue;
+      try {
+        await ctx.runMutation(
+          internal.ai_conversations.appendOpenSymptomInternal,
+          {
+            id: conversationId,
+            text: message,
+            category: `${f.category}:${f.matched}`,
+            safety_relevant: true,
+          },
+        );
+        symptomsAppendedThisTurn.push({
+          text: message.slice(0, 140),
+          category: `${f.category}:${f.matched}`,
+          safety_relevant: true,
+        });
+      } catch (e: any) {
+        console.error(
+          "[oto/chat] open-symptom append failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
+  }
+  // Issue 2 — tracked-symptom appends. The safety ledger only ever carried
+  // hazard-tier findings, so a brake squeak, an AC smell, or a steady
+  // check-engine light was invisible state. Same deterministic posture:
+  // classifier, not model; dedupe by category inside the mutation; a hazard
+  // row appended above suppresses the tracked row for the same subsystem.
+  for (const t of classifyTrackedSymptoms(message)) {
+    if (trackedSuppressedByHazards(t.key, safetyFindings)) continue;
+    const category = `tracked:${t.key}`;
+    try {
+      await ctx.runMutation(
+        internal.ai_conversations.appendOpenSymptomInternal,
+        {
+          id: conversationId,
+          text: t.text,
+          category,
+          safety_relevant: false,
+        },
+      );
+      symptomsAppendedThisTurn.push({
+        text: t.text,
+        category,
+        safety_relevant: false,
+      });
+    } catch (e: any) {
+      console.error(
+        "[oto/chat] tracked-symptom append failed (swallowed):",
+        e?.message,
+      );
+    }
+  }
+
   const envelope = buildEnvelope({
     userFirstName: user.first_name ?? null,
     vehicle: activeVehicle,
@@ -839,6 +965,7 @@ export async function sendMessageHandlerCore(
     diagnosticTurnCount,
     priorConversationFacts: envelopePriorFacts,
     knowledgeLevel: knowledgeLabel(rawKnowledgeLevel),
+    safetyOverride,
   });
   // B-P4: the envelope carries raw user PII (vehicle, history, message,
   // established facts) — only log it on debug/harness runs, not every
@@ -911,6 +1038,8 @@ export async function sendMessageHandlerCore(
     // Wave 7.2 DEGRADED state: strip T3 web_search from the cascade for this
     // turn. Falls back to `false` (production default) on FULL.
     noWebSearchOverride,
+    // Raw user message — question_text for the retrieval-miss acquisition hook.
+    message,
   );
 
   // ── 6. Tool-use loop ─────────────────────────────────────────────────
@@ -1425,11 +1554,529 @@ export async function sendMessageHandlerCore(
     }
   }
 
+  // ── 6.9 State-contract retry (2026-08-14) ────────────────────────────
+  // The prompt demands update_conversation_state on every substantive turn;
+  // Haiku skips it on ~10% of turns (B-P2 telemetry class), which is the
+  // suite's single biggest flake source AND desynchronizes conversation
+  // memory in production. Server-side silent repair would fix persistence
+  // but lie to the trace; instead: ONE follow-up call with
+  // tool_choice FORCED to update_conversation_state, so the model itself
+  // emits the missing call (guaranteed by the API contract). The result is
+  // dispatched normally and merged into the final trace iteration
+  // (state_repaired: true) — an honest record of a real model call.
+  // Only fires on non-trivial turns (a data or terminal tool ran).
+  {
+    const loopToolNames = turnSamples.flatMap((s) => s.tool_names);
+    const anyStateCalled = loopToolNames.some(
+      (n) => OTO_TOOL_CATEGORY[n] === "state",
+    );
+    // Originally gated on a data/terminal tool having fired ("non-trivial
+    // turns"), but the contract is state-on-EVERY-response-turn and the skip
+    // shows up on prose-only turns too (no_canonical rep: zero tools fired,
+    // state included). A retry on a trivial turn costs one small forced call
+    // and keeps conversation memory continuous — cheaper than a desynced
+    // next turn.
+    if (!anyStateCalled) {
+      try {
+        console.warn(
+          "[oto/chat] state-contract retry: substantive turn ended without " +
+            "update_conversation_state — forcing the call",
+        );
+        const stateTool = TOOLS_FOR_HAIKU.find(
+          (t) => t.name === "update_conversation_state",
+        );
+        const retryResp = await fetchAnthropicWithRetry(
+          ANTHROPIC_URL,
+          {
+            method: "POST",
+            headers: {
+              "x-api-key": apiKey,
+              "anthropic-version": ANTHROPIC_VERSION,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              model: turnModel,
+              max_tokens: 1024,
+              system: SYSTEM_PROMPT,
+              tools: stateTool ? [stateTool] : [],
+              tool_choice: { type: "tool", name: "update_conversation_state" },
+              messages: [
+                ...messages,
+                {
+                  role: "user",
+                  content:
+                    "[contract check — not the user speaking] This turn ended without update_conversation_state. Call it now with the FULL current conversation state (repeat unchanged fields from the prior state). Output only the tool call.",
+                },
+              ],
+            }),
+          },
+          "state_retry",
+        );
+        if (retryResp.ok) {
+          const retry = (await retryResp.json()) as AnthropicResponse;
+          const tu = retry.content.find(
+            (b): b is ToolUseBlock =>
+              b.type === "tool_use" && b.name === "update_conversation_state",
+          );
+          if (tu) {
+            await executeTool(tu, callables);
+            turnSamples.push({
+              usage: retry.usage,
+              latency_ms: 0,
+              tool_names: ["update_conversation_state"],
+              branch: "state_repair",
+            });
+            if (trace && Array.isArray(trace.iterations) && trace.iterations.length) {
+              const last = trace.iterations[trace.iterations.length - 1];
+              last.state_tool_uses = [...(last.state_tool_uses ?? []), tu];
+              last.state_repaired = true;
+            }
+          }
+        }
+      } catch (e: any) {
+        // Repair is best-effort — a failed retry leaves the turn exactly as
+        // it was before this block existed.
+        console.error(
+          "[oto/chat] state-contract retry failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
+  }
+
   // ── 7. Merge render directives ───────────────────────────────────────
   const renderEnvelope = mergeRenderDirectives(accumulatedResults);
-  const quickReplies = Array.isArray(renderEnvelope.quickReplies)
+  let quickReplies = Array.isArray(renderEnvelope.quickReplies)
     ? (renderEnvelope.quickReplies as unknown[])
     : undefined;
+
+  // ── 7a0. Loyalty redirect-proxy suppression (2026-08-14) ─────────────
+  // Loyalty is an in-chat domain with no link_button destination, and both
+  // loyalty tool descriptions say so — but the full-suite N=3 sweep caught
+  // the model answering correctly (data call + prose pointer) and then
+  // rendering a "helpful" profile/settings button anyway, and the
+  // strengthened descriptions didn't hold at N=3. Conditions in code: when
+  // a loyalty data tool fired this turn AND the link button targets the
+  // profile/settings proxies AND the user's ask was rewards-shaped WITHOUT
+  // naming settings/profile/account (a genuine hybrid like "my balance,
+  // then open settings" keeps its button), drop the button. The prose
+  // pointer to the Loyalty screen carries the turn.
+  {
+    const LOYALTY_TOOLS = new Set([
+      "get_rewards_summary",
+      "get_available_redemptions",
+      "get_loyalty_points_history",
+      "get_loyalty_program_info",
+    ]);
+    const loyaltyToolFired = accumulatedToolCalls.some((t) =>
+      LOYALTY_TOOLS.has(t.name),
+    );
+    const dest = (renderEnvelope.linkButton as { destination?: string } | undefined)
+      ?.destination;
+    if (
+      loyaltyToolFired &&
+      (dest === "profile" || dest === "settings") &&
+      /\b(reward|loyalt\w*|points?|redeem\w*|credits?)\b/i.test(message) &&
+      !/\b(settings?|profile|account)\b/i.test(message)
+    ) {
+      console.warn(
+        "[oto/chat] loyalty proxy-redirect suppressed: dropping " +
+          dest +
+          " link button on a rewards-shaped turn",
+      );
+      delete renderEnvelope.linkButton;
+    }
+  }
+
+  // ── 7a. D-13 emergency card suppression (QA p.69) ────────────────────
+  // "One pending vehicle-update card per thread, and none while an
+  // emergency is active." The server half: a Confirm/Not-now logging card
+  // must never render on a stop_now/urgent turn — the user has nothing to
+  // gain from confirming a checkbox on the shoulder. The symptom itself is
+  // already captured in the open-symptom ledger and conversation state, so
+  // nothing is lost; the card can render on a later calm turn if the model
+  // re-offers. (The one-pending-card-per-thread client half is mobile's.)
+  if (renderEnvelope.showVehicleUpdate !== undefined) {
+    const emergencyActive = safetyFindings.some(
+      (f) => f.severity === "stop_now" || f.severity === "urgent",
+    );
+    if (emergencyActive) {
+      console.warn(
+        "[oto/chat] D-13: suppressing vehicle-update card on an emergency turn",
+      );
+      delete renderEnvelope.showVehicleUpdate;
+    }
+  }
+
+  // ── 7b. W3.1 deterministic chip fallback ─────────────────────────────
+  // Conditions belong in code, absolutes in prompts: the prompt (stable
+  // v0.43 "What terminal means" carve-out + tool descriptions + volatile
+  // v0.20 Example 14) ASKS Haiku to pair render_quick_replies with a
+  // vehicle-update card, but exemplar-following is probabilistic — this
+  // guarantees the pairing. Scoped to render_vehicle_update ONLY for now;
+  // extending it to the other card renders is a product call.
+  // Never fires on a stop_now safety turn: a stop-driving instruction must
+  // stand alone (stable.ts safety rule 5 already tells Haiku not to render
+  // the card at all on stop_now — if the card slips through anyway, this
+  // fallback must not compound the violation by resurrecting chips).
+  // The console.warn makes the fallback's fire rate observable in Convex
+  // logs; if it fires on most turns, the prompt pairing isn't landing.
+  {
+    const stopNowActive = safetyFindings.some(
+      (f) => f.severity === "stop_now",
+    );
+    if (
+      !quickReplies &&
+      renderEnvelope.showVehicleUpdate !== undefined &&
+      !stopNowActive
+    ) {
+      console.warn(
+        "[oto/chat] W3.1 fallback: render_vehicle_update fired without " +
+          "render_quick_replies — attaching default chip set",
+      );
+      // Shape matches render_quick_replies input (AIQuickReplies QuickReply:
+      // { id, text, value?, variant? }); tapping sends `text` as the user
+      // message, so the labels are written in the USER's voice.
+      quickReplies = [
+        { id: "w31_log_more", text: "Log another one" },
+        { id: "w31_whats_due", text: "What's due next?" },
+        { id: "w31_done", text: "That's everything" },
+      ];
+    }
+  }
+  // Issue 2 — the pre-turn ledger snapshot PLUS rows appended this turn.
+  // Shared by the §7b' trust-gate floor and the §7c bundler, so the report's
+  // four-symptoms-then-booking-in-one-turn case bundles and pre-checks
+  // everything instead of nothing.
+  const bundlerSymptomRows = [
+    ...openSymptomRows,
+    ...symptomsAppendedThisTurn.filter(
+      (a) => !openSymptomRows.some((s) => s.category === a.category),
+    ),
+  ];
+
+  // ── 7b'. Trust-gate hard floor (2026-08-15) ──────────────────────────
+  // Conditions in code, absolutes in prompts — same doctrine as §7b/§6.9.
+  // The v0.58 chips-default push made Haiku slip the trust gate ~2/6 reps
+  // (rationalizing "serviced 2 months ago, which lines up — Brake Pad
+  // Replacement is the right call" against an on_time self_reported record)
+  // after three prompt layers already carried the rule. This floor makes the
+  // gate deterministic on the turn it matters: mid-symptom-narrowing, the
+  // model just read the health record, an OPEN symptom contests a record
+  // that is on_time + self_reported and hasn't had a confirmation card this
+  // conversation — then the turn belongs to render_record_confirmation, no
+  // matter what the model rendered. The open-symptom ledger (Issue 2) is the
+  // symptom-driven discriminator: an explicit "book me an oil change" has no
+  // open symptom row, so routine bookings can never trip this. Never fires
+  // on an emergency turn (D-13: no cards compete with a stop instruction).
+  // Trigger deliberately does NOT read conversation_state.last_intent — the
+  // tag is model-authored free-form text ("symptom_narrowing_brakes" one rep,
+  // "brake_squeal_triage" the next), and gating a floor on it reintroduces
+  // the probabilism the floor exists to remove. The ledger is per-conversation,
+  // so an open contested symptom already proves this conversation raised it.
+  {
+    // accumulatedToolCalls EXCLUDES data reads by design (audit-row capture),
+    // so the health-read signal must come from turnSamples' tool_names.
+    const healthCalledThisTurn = turnSamples.some((s) =>
+      s.tool_names.includes("get_vehicle_health"),
+    );
+    const emergencyActive = safetyFindings.some(
+      (f) => f.severity === "stop_now" || f.severity === "urgent",
+    );
+    if (
+      renderEnvelope.showRecordConfirmation === undefined &&
+      healthCalledThisTurn &&
+      !emergencyActive &&
+      activeVehicle
+    ) {
+      const offered = ((conversation as any).record_confirmations_offered ??
+        []) as string[];
+      const contested = new Set<string>();
+      for (const s of bundlerSymptomRows) {
+        const t = symptomMaintenanceType(s.category);
+        if (t && !offered.includes(t)) contested.add(t);
+      }
+      if (contested.size > 0) {
+        try {
+          const health = await ctx.runQuery(
+            internal.oto.vehicleHealth.getVehicleHealthForUser,
+            { actingUserId: user._id, vehicle_id: activeVehicle.id },
+          );
+          const flagged = (health.items as {
+            type: string;
+            label: string;
+            detail?: string;
+            status: string;
+            record_provenance: string;
+          }[]).find(
+            (i) =>
+              contested.has(i.type) &&
+              i.status === "on_time" &&
+              i.record_provenance === "self_reported",
+          );
+          if (flagged) {
+            console.warn(
+              `[oto/chat] §7b' trust-gate floor: forcing record confirmation for "${flagged.type}" ` +
+                `(model rendered ${renderEnvelope.bookService !== undefined ? "book_service" : "no card"})`,
+            );
+            delete renderEnvelope.bookService;
+            delete renderEnvelope.quickReplies;
+            quickReplies = undefined;
+            renderEnvelope.showRecordConfirmation = {
+              vehicle_id: activeVehicle.id,
+              maintenance_type: flagged.type,
+            };
+            const detail =
+              typeof flagged.detail === "string" && flagged.detail !== "Not on file"
+                ? ` (${flagged.detail.toLowerCase()})`
+                : "";
+            finalText =
+              `Quick check before we go further: our records show your ${flagged.label.toLowerCase()} ` +
+              `service as up to date${detail}, and that doesn't quite line up with what you're describing. ` +
+              `The record itself might be off — is it still accurate?`;
+          }
+        } catch (e: any) {
+          console.error(
+            "[oto/chat] §7b' trust-gate floor failed (swallowed):",
+            e?.message,
+          );
+        }
+      }
+    }
+  }
+  // §7b' dedupe writeback — any record-confirmation card shown this turn
+  // (model-fired or floor-forced) marks its type offered for this
+  // conversation, so the floor never re-fires on the post-confirm turn.
+  if (renderEnvelope.showRecordConfirmation !== undefined) {
+    const mt = (renderEnvelope.showRecordConfirmation as { maintenance_type?: string })
+      .maintenance_type;
+    if (typeof mt === "string") {
+      try {
+        await ctx.runMutation(
+          internal.ai_conversations.markRecordConfirmationOfferedInternal,
+          { id: conversationId, maintenance_type: mt },
+        );
+      } catch (e: any) {
+        console.error(
+          "[oto/chat] record-confirmation-offered write failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
+  }
+
+  // ── 7b''. Direct-service → diagnostic rewrite (2026-08-15) ───────────
+  // The floor's post-confirm companion: booking a direct WEAR repair (pad
+  // replacement, new battery) for a subsystem whose record is on_time +
+  // self_reported contradicts that record — doubly so once the user has just
+  // CONFIRMED it (fresh pads don't need replacing). The correct route is a
+  // diagnostic scan; a mechanic decides what the noise actually is. Rewrites
+  // the booking's slugs deterministically UNLESS the user named that service
+  // in their own message this turn — an explicit ask always wins. Symptom-
+  // driven only (open-ledger discriminator), same as §7b'.
+  if (renderEnvelope.bookService !== undefined && activeVehicle) {
+    const bs = renderEnvelope.bookService as Record<string, unknown>;
+    const slugs = Array.isArray(bs.service_slugs)
+      ? (bs.service_slugs as string[])
+      : [];
+    const symptomTypes = new Set(
+      bundlerSymptomRows
+        .map((s) => symptomMaintenanceType(s.category))
+        .filter((t): t is string => !!t),
+    );
+    const suspect = slugs.filter((slug) => {
+      const t = directSlugMaintenanceType(slug);
+      return t !== null && symptomTypes.has(t) && !userAskedForDirectService(slug, message);
+    });
+    if (suspect.length > 0) {
+      try {
+        const health = await ctx.runQuery(
+          internal.oto.vehicleHealth.getVehicleHealthForUser,
+          { actingUserId: user._id, vehicle_id: activeVehicle.id },
+        );
+        const items = health.items as {
+          type: string;
+          status: string;
+          record_provenance: string;
+        }[];
+        const toRewrite = suspect.filter((slug) => {
+          const t = directSlugMaintenanceType(slug)!;
+          return items.some(
+            (i) =>
+              i.type === t &&
+              i.status === "on_time" &&
+              i.record_provenance === "self_reported",
+          );
+        });
+        if (toRewrite.length > 0) {
+          const kept = slugs.filter((s) => !toRewrite.includes(s));
+          if (!kept.includes("diagnostic_scan")) kept.push("diagnostic_scan");
+          bs.service_slugs = kept;
+          if (bs.diagnostic_system === undefined) {
+            const t = directSlugMaintenanceType(toRewrite[0]);
+            bs.diagnostic_system =
+              t === "brakes"
+                ? "brakes"
+                : t === "battery"
+                  ? "battery_electrical"
+                  : t === "tires"
+                    ? "tires_wheels"
+                    : "not_sure";
+          }
+          console.warn(
+            `[oto/chat] §7b'' rewrite: ${toRewrite.join(", ")} → diagnostic_scan ` +
+              `(on_time self_reported record contradicts a direct wear repair)`,
+          );
+          finalText =
+            "Since your record checked out, the honest next step is a Diagnostic Scan — " +
+            "a mechanic gets eyes on it and confirms what's actually causing the noise " +
+            "before anything gets replaced. Everything's set up — review and confirm when you're ready.";
+        }
+      } catch (e: any) {
+        console.error(
+          "[oto/chat] §7b'' rewrite failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
+  }
+
+  // ── 7c. W3.3 open-symptom booking bundler ────────────────────────────
+  // The report's D-43 bundling fix: when a booking fires while earlier
+  // safety-relevant symptoms are still open, fold them into the booking's
+  // customer notes DETERMINISTICALLY — the mechanic sees them even if the
+  // model's prose forgot them — and mark the ledger rows addressed. Notes
+  // that already mention a symptom (Haiku did its job) aren't duplicated:
+  // the check is a case-insensitive substring pass per symptom text.
+  if (renderEnvelope.bookService !== undefined && bundlerSymptomRows.length > 0) {
+    const bs = renderEnvelope.bookService as Record<string, unknown>;
+    const notes = typeof bs.customer_notes === "string" ? bs.customer_notes : "";
+    const notesLower = notes.toLowerCase();
+    const toBundle = bundlerSymptomRows.filter(
+      (s) => !notesLower.includes(s.text.toLowerCase().slice(0, 60)),
+    );
+    if (toBundle.length > 0) {
+      bs.customer_notes =
+        (notes ? notes.trimEnd() + " — " : "") +
+        "Customer also reported earlier in this conversation: " +
+        toBundle.map((s) => `"${s.text}"`).join("; ");
+      console.warn(
+        `[oto/chat] W3.3: bundled ${toBundle.length} open symptom(s) into booking notes`,
+      );
+    }
+    // Issue 2 — "pre-check every one of them in the service picker": map each
+    // open symptom to its bookable service and merge into service_slugs, so
+    // BookServiceComponent stage 1 renders them already checked. Skips slugs
+    // the booking already covers (a brake-pad job covers a brake-noise scan).
+    // diagnostic_system: the model's own choice wins; otherwise one mapped
+    // system is used as-is and mixed systems degrade to not_sure.
+    const existingSlugs = Array.isArray(bs.service_slugs)
+      ? (bs.service_slugs as string[])
+      : [];
+    const addedSlugs: string[] = [];
+    const addedSystems = new Set<string>();
+    for (const s of bundlerSymptomRows) {
+      const target = symptomServiceTarget(s.category);
+      if (!target) continue;
+      if (
+        targetAlreadyCovered(target, existingSlugs) ||
+        addedSlugs.includes(target.slug)
+      )
+        continue;
+      addedSlugs.push(target.slug);
+      if (target.system) addedSystems.add(target.system);
+    }
+    if (addedSlugs.length > 0) {
+      bs.service_slugs = [...existingSlugs, ...addedSlugs];
+      if (
+        addedSlugs.includes("diagnostic_scan") &&
+        bs.diagnostic_system === undefined
+      ) {
+        bs.diagnostic_system =
+          addedSystems.size === 1 ? [...addedSystems][0] : "not_sure";
+      }
+      console.warn(
+        `[oto/chat] Issue 2: pre-checked ${addedSlugs.length} symptom service(s) into booking: ${addedSlugs.join(", ")}`,
+      );
+    }
+    // The booking offer is the addressing event for EVERY open symptom this
+    // turn (bundled or already present in the notes) — fire-and-forget.
+    try {
+      await ctx.runMutation(
+        internal.ai_conversations.markSymptomsAddressedInternal,
+        {
+          id: conversationId,
+          categories: bundlerSymptomRows.map((s) => s.category),
+        },
+      );
+    } catch (e: any) {
+      console.error(
+        "[oto/chat] open-symptom resolve failed (swallowed):",
+        e?.message,
+      );
+    }
+  }
+
+  // ── Forced-exit backstop (2026-08-14) ──────────────────────────────────────
+  // The <polite_exit_required> block (POLITE_EXIT_THRESHOLD, envelope.ts) asks
+  // the model to conclude; N=5 verification showed it defying the block ~40%
+  // of the time — another round of chips, or prose with no terminal render.
+  // Conditions-in-code endpoint: when the threshold is reached and the model
+  // did not conclude the turn with a terminal render, the SERVER concludes it
+  // with the diagnostic-scan booking the block asked for. Deliberately NOT
+  // forced when: a record-confirmation / vehicle-update / booking / link /
+  // card render fired (the model concluded — including via the trust gate),
+  // or a stop_now safety finding is active (a booking card must not compete
+  // with a stop-driving instruction; the exit can happen next turn).
+  const modelConcludedTurn =
+    renderEnvelope.bookService !== undefined ||
+    renderEnvelope.showRecordConfirmation !== undefined ||
+    renderEnvelope.showVehicleUpdate !== undefined ||
+    renderEnvelope.linkButton !== undefined ||
+    renderEnvelope.bookingCard !== undefined ||
+    renderEnvelope.bookingsList !== undefined;
+  const stopNowActive = safetyFindings.some((f) => f.severity === "stop_now");
+  if (
+    diagnosticTurnCount >= POLITE_EXIT_THRESHOLD &&
+    !modelConcludedTurn &&
+    !stopNowActive
+  ) {
+    const recentUserTurns: string[] = [];
+    for (const h of Array.isArray(history) ? history.slice(-8) : []) {
+      const role = (h as { role?: string })?.role;
+      const content = (h as { content?: unknown })?.content;
+      if (role === "user" && typeof content === "string" && content.trim()) {
+        recentUserTurns.push(content.trim());
+      }
+    }
+    recentUserTurns.push(message);
+    const notes =
+      "Customer described (in their words): " +
+      recentUserTurns.slice(-3).join(" / ").slice(0, 500);
+    console.warn(
+      "[oto/chat] forced polite-exit: threshold reached, model did not " +
+        "conclude — server rendering the diagnostic-scan booking",
+    );
+    renderEnvelope.bookService = {
+      service_slugs: ["diagnostic_scan"],
+      diagnostic_system: "not_sure",
+      customer_notes: notes,
+    };
+    // The chips defiance case: a fresh question row above a forced booking
+    // card reads as contradiction — drop them (both the envelope field and
+    // the already-extracted local, which downstream persist/response use).
+    renderEnvelope.quickReplies = undefined;
+    quickReplies = undefined;
+    if (!finalText.trim()) {
+      finalText =
+        "Rather than keep guessing, let's get a mechanic's eyes on it — a diagnostic scan covers everything you've described. Everything's prefilled below.";
+    }
+    if (trace && Array.isArray(trace.iterations) && trace.iterations.length) {
+      trace.iterations[trace.iterations.length - 1].branch = "terminal";
+      trace.iterations[trace.iterations.length - 1].forced_exit = true;
+    }
+  }
+
   const showRecordConfirmation =
     renderEnvelope.showRecordConfirmation &&
     typeof renderEnvelope.showRecordConfirmation === "object"
@@ -1465,18 +2112,220 @@ export async function sendMessageHandlerCore(
       "I'm having trouble pulling that one together — can you rephrase or break it into a smaller question?";
   }
 
+  // ── Announcement-terminal retry (2026-08-15) ─────────────────────────
+  // stable's narration rules ban ending a turn on "let me search…", and
+  // lookup_vehicle_spec's description says a catalog miss is not a
+  // terminal — the model still ships the placeholder ~1/3 of the time on
+  // misses ("The M5 lookup came back empty, so let me search for the
+  // current spec:"). Conditions in code, same philosophy as the §6.9
+  // state-contract retry: when the final text is a short announcement of
+  // an action with no render carrying the turn, ONE follow-up call (no
+  // tools — general knowledge, hedged) replaces the placeholder with the
+  // answer. The nudge tells the model to restate its answer if the text
+  // actually contained one, so a false-positive detection costs one small
+  // call and returns an equivalent answer — never a worse one.
+  {
+    const trimmed = finalText.trim();
+    const sentences = trimmed.split(/(?<=[.!?:])\s+/).filter(Boolean);
+    const lastSentence = sentences[sentences.length - 1] ?? "";
+    const ANNOUNCE_RE =
+      /\b(let me|i'?ll|i will|i'?m going to|gonna)\s+(search|look\s*up|pull|grab|fetch|dig|run|check)\b/i;
+    if (
+      !hasAnyRender &&
+      trimmed.length > 0 &&
+      trimmed.length < 280 &&
+      ANNOUNCE_RE.test(lastSentence)
+    ) {
+      try {
+        console.warn(
+          "[oto/chat] announcement-terminal retry: turn ended on an action " +
+            "announcement with no answer — requesting the completion",
+        );
+        const retryResp = await fetchAnthropicWithRetry(
+          ANTHROPIC_URL,
+          {
+            method: "POST",
+            headers: {
+              "x-api-key": apiKey,
+              "anthropic-version": ANTHROPIC_VERSION,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({
+              model: turnModel,
+              max_tokens: 700,
+              system: SYSTEM_PROMPT,
+              messages: [
+                ...messages,
+                {
+                  role: "user",
+                  content:
+                    "[turn repair — not the user speaking] Your turn ended by announcing a search or lookup instead of delivering the answer. Deliver the complete answer NOW in plain prose: use general knowledge hedged as general info where catalog data was missing. Do not mention tools, lookups, or searching; do not announce anything. If your previous text already contained the full answer, restate that answer.",
+                },
+              ],
+            }),
+          },
+          "answer_repair",
+        );
+        if (retryResp.ok) {
+          const retry = (await retryResp.json()) as AnthropicResponse;
+          const text = retry.content
+            .filter((b): b is { type: "text"; text: string } => b.type === "text")
+            .map((b) => b.text)
+            .join("\n")
+            .trim();
+          if (text) {
+            finalText = text;
+            turnSamples.push({
+              usage: retry.usage,
+              latency_ms: 0,
+              tool_names: [],
+              branch: "answer_repair",
+            });
+            if (trace && Array.isArray(trace.iterations) && trace.iterations.length) {
+              trace.iterations[trace.iterations.length - 1].answer_repaired = true;
+            }
+          }
+        }
+      } catch (e: any) {
+        // Best-effort — a failed retry leaves the announcement text as-is.
+        console.error(
+          "[oto/chat] announcement-terminal retry failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
+  }
+
+  // W3.1 companion fallback — same conditions-in-code/absolutes-in-prompts
+  // rationale as the chip fallback above. The prompt asks for a brief framing
+  // sentence with every terminal render, but Haiku sometimes spends the whole
+  // turn on tool_use blocks and emits no text block at all (observed
+  // v0.42/v0.43 on-device: bare card, empty bubble; observed again in the
+  // 2026-08-14 v0.52 baseline: five link_button cases shipped an empty bubble
+  // above the button and a judge read it as "no response provided"). Was
+  // scoped to showVehicleUpdate with the other renders left as a product
+  // call — the baseline failures made the call: every terminal render
+  // guarantees one neutral framing sentence. Link buttons get a
+  // destination-aware line so the prose names what's opening.
+  const terminalRenderFraming = (): string | null => {
+    const LINK_FRAMING: Record<string, string> = {
+      customer_support: "Support can take it from here — this opens them directly.",
+      feedback: "Here's the feedback screen — it goes straight to the team.",
+      bug_report: "Here's the bug-report screen — describe what broke and the team will see it.",
+      tos: "This opens the Terms of Service screen for you.",
+      privacy_policy: "This opens the privacy policy screen for you.",
+      settings: "This opens your settings.",
+      profile: "This opens your profile.",
+      transaction_history: "Here's your transaction history — every payment in one place.",
+      vehicle_onboarding: "This opens the add-a-vehicle flow — you can register it right here.",
+    };
+    let framing: string | null = null;
+    if (renderEnvelope.showVehicleUpdate !== undefined) {
+      framing =
+        "Here's what I captured — give it a look and tap confirm to save it to your car's record.";
+    } else if (renderEnvelope.linkButton !== undefined) {
+      const dest = (renderEnvelope.linkButton as { destination?: string })
+        ?.destination;
+      framing =
+        (dest && LINK_FRAMING[dest]) ||
+        "Here you go — this button opens the right screen.";
+    } else if (renderEnvelope.bookService !== undefined) {
+      // Name the services — "review the details" flunked the multi-bundle
+      // judge because the prose never said WHAT was being booked.
+      const slugs = Array.isArray(
+        (renderEnvelope.bookService as { service_slugs?: unknown })
+          ?.service_slugs,
+      )
+        ? ((renderEnvelope.bookService as { service_slugs: unknown[] })
+            .service_slugs.filter((s): s is string => typeof s === "string"))
+        : [];
+      const names = slugs.map((s) => s.replace(/_/g, " "));
+      const list =
+        names.length > 1
+          ? names.slice(0, -1).join(", ") + " and " + names[names.length - 1]
+          : names[0];
+      framing = list
+        ? `Everything's set up for the ${list} — review and confirm when you're ready to book.`
+        : "Everything's set up — review and confirm when you're ready to book.";
+    } else if (renderEnvelope.bookingCard !== undefined) {
+      framing = "Here's that booking.";
+    } else if (renderEnvelope.bookingsList !== undefined) {
+      framing = "Here are your bookings.";
+    } else if (renderEnvelope.showRecordConfirmation !== undefined) {
+      framing =
+        "Quick check on what we have on file — is this still right?";
+    }
+    return framing;
+  };
+  if (!finalText.trim()) {
+    const framing = terminalRenderFraming();
+    if (framing) {
+      console.warn(
+        "[oto/chat] W3.1 fallback: empty assistant text on a terminal-render " +
+          "turn — injecting default framing sentence",
+      );
+      finalText = framing;
+    }
+  }
+
   // Voice-rail post-process: the prompt bans markdown bold for data points
   // and headers, but Haiku falls back to them under pressure (especially in
   // shorter responses or when emphasizing service names). Strip them
   // server-side as belt-and-suspenders. If real safety-critical emphasis is
   // ever needed in v0.8+, swap this for a directive that the chat UI
   // renders specially.
-  finalText = stripVoiceMarkup(finalText);
+  finalText = lowercaseUrgencyCaps(rewriteNarrationSlips(stripVoiceMarkup(finalText)));
+
+  // Wave 1 output guards: drop sentences carrying banned claims (fabricated
+  // prices, warranty promises, internal-architecture nouns). Currency is
+  // permitted only when get_rewards_summary actually fired this turn —
+  // tool-sourced credit values are the one legitimate dollar figure.
+  const guarded = stripBannedClaims(finalText, {
+    allowCurrency: accumulatedToolCalls.some(
+      (t) => t.name === "get_rewards_summary",
+    ),
+  });
+  if (guarded.dropped.length > 0) {
+    console.warn(
+      "[oto/chat] output guard dropped " +
+        guarded.dropped.length +
+        " sentence(s): " +
+        Array.from(new Set(guarded.dropped)).join(","),
+    );
+    finalText = guarded.text;
+    // Guard emptied the message but a terminal render still carries the turn
+    // (observed 2026-08-14: "book me an oil change" — the model's only
+    // sentence quoted a price, the currency guard dropped it, and the framing
+    // floor had already run — empty bubble above a live card). Re-apply the
+    // floor so the render always ships with prose.
+    if (!finalText && hasAnyRender) {
+      const framing = terminalRenderFraming();
+      if (framing) {
+        console.warn(
+          "[oto/chat] output guard emptied a terminal-render turn — " +
+            "re-applying framing floor",
+        );
+        finalText = framing;
+      }
+    }
+    // Guard emptied the whole message and no render carries the turn: give
+    // the price-shaped case its correct one-liner (the W1.5 target shape)
+    // rather than dead air; anything else gets the generic recovery line.
+    if (!finalText && !hasAnyRender) {
+      finalText = guarded.dropped.includes("currency")
+        ? "The exact number depends on which shop you pick — you'll see the real quote before you pay. Want to book it?"
+        : "Let me put that differently — what would you like to do next?";
+    }
+  }
 
   // ── 8. Persist both turns ────────────────────────────────────────────
   // Harness runs (debug + debug_skip_persist) skip persistence so iteration
   // doesn't pollute the user's real conversation history.
   const skipPersist = debug === true && debug_skip_persist === true;
+  // Persisted assistant-row id — returned to the client so the LIVE
+  // vehicle-update card can compare itself against the supersession pointer
+  // (history-loaded cards use their own row id). Null on harness runs.
+  let assistantMessageId: Id<"ai_messages"> | null = null;
   if (!skipPersist) {
     // B-P2: lock the conversation's vehicle anchor on first send. setVehicleId
     // had ZERO production call sites, so ai_conversations.vehicle_id stayed
@@ -1518,7 +2367,28 @@ export async function sendMessageHandlerCore(
       renderToPersist.reasoning = renderEnvelope.reasoning;
     if (renderEnvelope.sources !== undefined)
       renderToPersist.sources = renderEnvelope.sources;
-    await ctx.runMutation(internal.ai_messages.create, {
+    // W0.4 (2026-08-13, formerly mislabeled W3.3): showVehicleUpdate was the one live render missing from
+    // this list, so a vehicle-update card vanished on conversation reload while
+    // every other terminal render came back. Two deliberate choices here:
+    //   1. Stamp vehicle_id SERVER-side from activeVehicle rather than letting
+    //      the client re-derive it on rehydration. The client stamps from the
+    //      CURRENT picker selection; re-opening an old thread with a different
+    //      car selected would bind the card — and therefore applyVehicleTruth —
+    //      to the wrong vehicle. activeVehicle is the car this turn was about.
+    //   2. Mirror the client's two suppression guards (non-empty payload +
+    //      resolvable vehicle) so we never persist a dead, actionless card.
+    {
+      const vu = renderEnvelope.showVehicleUpdate as
+        | Record<string, unknown>
+        | undefined;
+      if (vu && Object.keys(vu).length > 0 && activeVehicle?.id) {
+        renderToPersist.showVehicleUpdate = {
+          ...vu,
+          vehicle_id: activeVehicle.id as string,
+        };
+      }
+    }
+    assistantMessageId = await ctx.runMutation(internal.ai_messages.create, {
       conversation_id: conversationId,
       role: "assistant",
       content: finalText,
@@ -1526,6 +2396,25 @@ export async function sendMessageHandlerCore(
         ? { render: renderToPersist }
         : {}),
     });
+
+    // D-13/D-15 supersession pointer: the just-persisted card becomes the
+    // ONLY active vehicle-update card for this vehicle, across every
+    // conversation — older cards render expired in place client-side.
+    // Failure-isolated: a missed pointer write leaves the old behavior.
+    if (renderToPersist.showVehicleUpdate && activeVehicle?.vin) {
+      try {
+        await ctx.runMutation(internal.vehicleTruth.setActiveUpdateCard, {
+          vin: activeVehicle.vin,
+          user_id: user._id,
+          message_id: assistantMessageId,
+        });
+      } catch (e: any) {
+        console.error(
+          "[oto/chat] setActiveUpdateCard failed (swallowed):",
+          e?.message,
+        );
+      }
+    }
 
     await ctx.runMutation(internal.ai_conversations.incrementMessageCount, {
       id: conversationId,
@@ -1728,6 +2617,10 @@ export async function sendMessageHandlerCore(
     trace.final_text = finalText;
     trace.quick_replies = quickReplies ?? null;
     trace.book_service = renderEnvelope.bookService ?? null;
+    trace.link_button = renderEnvelope.linkButton ?? null;
+    // §7b' — effect-level mirror: set whether the MODEL called the tool or
+    // the trust-gate floor forced the card server-side (no tool_use).
+    trace.record_confirmation = renderEnvelope.showRecordConfirmation ?? null;
     trace.persisted = !skipPersist;
     trace.usage_total = {
       input_tokens: telemetryRow.input_tokens,
@@ -1751,8 +2644,15 @@ export async function sendMessageHandlerCore(
   //     advancing) → increment. Once the arc starts, every further question-turn
   //     advances even if the model stops tagging.
   //   - else Oto answered without asking → the narrowing arc resolved → reset.
-  // Skip on harness debug runs.
-  if (!skipPersist) {
+  // NOT gated on skipPersist (2026-08-14): the counter update used to sit
+  // inside the persistence gate, which meant EVAL runs (persist:false) never
+  // incremented diagnostic_turn_count — the polite-exit block could never
+  // fire under the harness, the two polite_exit eval cases could never pass
+  // (both sat disabled), and the "turn-3 non-termination" failures were
+  // measured with the enforcement mechanism switched off. The counter writes
+  // to the conversation row, which exists for harness runs too; letting it
+  // run makes evals exercise the real termination machinery.
+  {
     try {
       const renderedBooking = renderEnvelope.bookService !== undefined;
       let nextCount: number | null = null;
@@ -1763,29 +2663,49 @@ export async function sendMessageHandlerCore(
           id: conversationId,
         });
         const latestIntent = (fresh as any)?.last_user_intent as string | undefined;
-        const askedQuestion = /\?/.test(finalText ?? "");
+        // Contains-test, not prefix (2026-08-14): Haiku tags freely —
+        // "diagnostic_booking_vague_symptom", "vague_symptom_intake" — and
+        // the startsWith test let prose-question turns slip uncounted, running
+        // the whole conversation one count behind the deadline.
         const modelTaggedNarrowing =
-          !!latestIntent &&
-          (latestIntent.startsWith("symptom_narrowing") ||
-            latestIntent.startsWith("diagnos"));
+          !!latestIntent && /symptom|diagnos|narrow/i.test(latestIntent);
         const alreadyNarrowing = diagnosticTurnCount > 0;
-        // A booking OFFER ("...want to book that service now?") ends in a "?"
-        // but is CONVERGENCE, not failed narrowing — the two-step
-        // offer→confirm→render pattern means render_book_service hasn't fired
-        // yet, so renderedBooking is still false this turn. Don't let the offer
-        // turn inflate the count (it would push a successful conversation into
-        // the forced not_sure exit one turn early). Hold the count on offer.
-        const offeringBooking =
-          /\b(book|booking|set (?:that|it) up|schedule)\b/i.test(finalText ?? "");
-        if (askedQuestion && !offeringBooking && (modelTaggedNarrowing || alreadyNarrowing)) {
+        // Chips ARE a clarifying question by construction — counting them
+        // directly closes a freeze: the narrowing signal used to come only
+        // from the model's own update_conversation_state intent tag, so on
+        // turns where Haiku skipped the state call (the known ~10% recurrence
+        // class) the counter never started and the polite exit never armed.
+        // "Pure" chips turn only: chips accompanying a card/booking/link render
+        // (Example 14's log-plus-safety-question shape) are convergence
+        // decoration, not a clarifying loop.
+        const renderedChips = !!quickReplies && !modelConcludedTurn;
+        // 2026-08-14 rewrite: EVERY unconverged narrowing turn counts —
+        // question, chips, or prose. The old rule gated the increment on
+        // askedQuestion||chips and the decay branch treated "didn't ask" as
+        // "arc resolved", RESETTING the count on statement turns. Observed
+        // (diagnostic_phrasing reps 1-2): chips t1 → count 1; prose analysis
+        // t2 (no "?") → reset to 0; t3 narrates "a Diagnostic Scan will let a
+        // mechanic confirm…" with NO render — and the backstop, reading
+        // count<2, can never convert it. Under the turn-3 contract the user
+        // is equally stuck in limbo on a statement turn as on a question
+        // turn; the intent tag (sticky across skipped state calls — it reads
+        // the persisted row) is the narrowing signal, chips the fallback.
+        // Decay now only fires on a genuine pivot: the arc WAS narrowing and
+        // the model's current intent no longer is (user changed topic — a
+        // rewards question mid-diagnosis must not tick toward a forced
+        // diagnostic card). The offer-hold is gone with the question-gate:
+        // under the turn-3 contract an offer on the deadline turn is not
+        // acceptable either (natural convergence renders → resets above; an
+        // offer answered "yes" renders next turn → resets; an offer answered
+        // with more symptoms is exactly the limbo the deadline exists for).
+        // A concluded-but-not-booking turn (trust gate's record confirmation,
+        // a pivot's link button) holds the count: sanctioned terminals don't
+        // advance the deadline, and the count survives for a resumed arc.
+        if (!modelConcludedTurn && (modelTaggedNarrowing || renderedChips)) {
           nextCount = diagnosticTurnCount + 1;
-        } else if (!askedQuestion && alreadyNarrowing) {
-          // Oto stopped asking — arc resolved or moved on. Decay so a later,
-          // unrelated clarifying question doesn't instantly re-trip the exit.
+        } else if (alreadyNarrowing && !modelTaggedNarrowing && !renderedChips) {
           nextCount = 0;
         }
-        // offeringBooking turn → leave count unchanged (convergence, not a
-        // failed-narrowing turn).
       }
       if (nextCount !== null) {
         await ctx.runMutation(internal.ai_conversations.setDiagnosticTurnCount, {
@@ -1793,6 +2713,10 @@ export async function sendMessageHandlerCore(
           count: nextCount,
         });
       }
+      console.log(
+        `[oto/chat] polite-exit counter: start=${diagnosticTurnCount} next=${nextCount === null ? "(hold)" : nextCount} ` +
+          `asked=${/\?/.test(finalText ?? "")} chips=${!!quickReplies} concluded=${modelConcludedTurn} booking=${renderEnvelope.bookService !== undefined}`,
+      );
     } catch (e: any) {
       console.error("[oto/chat] polite-exit counter update failed (swallowed):", e?.message);
     }
@@ -1884,6 +2808,7 @@ export async function sendMessageHandlerCore(
 
   return {
     text: finalText,
+    ...(assistantMessageId ? { assistantMessageId } : {}),
     ...(quickReplies ? { quickReplies } : {}),
     ...(showRecordConfirmation ? { showRecordConfirmation } : {}),
     ...(showVehicleUpdate !== undefined ? { showVehicleUpdate } : {}),
@@ -1914,8 +2839,220 @@ function stripVoiceMarkup(s: string): string {
     // Bold **text** and __text__ → text
     .replace(/\*\*([^*]+?)\*\*/g, "$1")
     .replace(/__([^_]+?)__/g, "$1")
+    // Italic *text* and _text_ → text. Wave 0.2 (2026-08-09): the bold pass
+    // above ran without this one, so single-asterisk emphasis survived to the
+    // client and rendered as literal asterisks ("What I *can* help with") —
+    // D-21 in the Aug-08 QA report. Runs AFTER the bold pass so `**x**` is
+    // already reduced and can't be mis-split here.
+    // The inner class excludes whitespace at both edges so arithmetic and
+    // globs ("2 * 3", "a * b") aren't swallowed; markdown emphasis never has
+    // a space just inside its delimiters.
+    .replace(/\*(?!\s)([^*\n]*[^*\s])?\*/g, "$1")
+    .replace(/(^|[^\w_])_(?!\s)([^_\n]*[^_\s])?_(?![\w_])/g, "$1$2")
     // ATX headers at line start: ## Title → Title
     .replace(/^#{1,6}\s+/gm, "");
+}
+
+// Narration-slip rewrite (2026-08-14): "The system shows…" is internal-
+// architecture narration surfacing in the user's face — the ~10% slip class
+// the output guards can't sentence-drop without deleting substantive content
+// (and a blanket "system" ban would hit "the cooling system"). The bare
+// collocation "the system <verb>" never occurs in legitimate automotive prose
+// — real subsystems always carry a qualifier ("the cooling system", "the ABS
+// system"), so "the" is never adjacent to "system" there. Targeted rewrite to
+// record-voice, case-preserving.
+const NARRATION_VERB: Record<string, string> = {
+  shows: "show",
+  says: "say",
+  indicates: "indicate",
+  reports: "report",
+  flags: "flag",
+  lists: "list",
+  found: "found",
+};
+// D-24/D-45 (QA pp.17, 69): one urgency signal per message, lowercase —
+// "caps make a true warning read like a sales tactic." The facts carry the
+// weight. Case-sensitive on purpose: only ALL-CAPS shouting matches; normal
+// sentence-case usage ("Immediately after…") passes through. None of these
+// words is a legitimate acronym in automotive prose.
+function lowercaseUrgencyCaps(s: string): string {
+  if (!s) return s;
+  return s
+    .replace(/\bRIGHT NOW\b/g, "right now")
+    .replace(/\bIMMEDIATELY\b/g, "immediately")
+    .replace(/\bURGENT(?:LY)?\b/g, (m) => m.toLowerCase())
+    .replace(/\bNOW\b/g, "now");
+}
+
+function rewriteNarrationSlips(s: string): string {
+  if (!s) return s;
+  return s
+    .replace(
+      /\b([Tt])he system (shows|says|indicates|reports|flags|lists|found)\b/g,
+      (_m, t: string, v: string) =>
+        `${t === "T" ? "Our" : "our"} records ${NARRATION_VERB[v] ?? v}`,
+    )
+    // Aux/negative and track-verb forms read best with the app as subject —
+    // matches the model's own good register ("something OtoPair doesn't
+    // track"). Observed slip: "…something else that the system doesn't
+    // currently track."
+    .replace(
+      /\b[Tt]he system (doesn't|does not|isn't|is not|won't|will not|can't|cannot|hasn't|has|tracks|tracked)\b/g,
+      (_m, v: string) => `OtoPair ${v}`,
+    )
+    // Preposition form: "…isn't in the system" / "logged in the system".
+    .replace(/\b([Ii])n the system\b/g, (_m, i: string) => `${i}n our records`);
+}
+
+// =============================================================================
+// Wave 1 output guards (2026-08-10) — banned-claim sentence stripping
+// =============================================================================
+//
+// Same belt-and-suspenders philosophy as stripVoiceMarkup, one level up: the
+// prompt bans these CLAIMS ("You do NOT quote full-service prices. Anywhere.",
+// the no-system-narration rule, no warranty promises) and the Aug-08 QA report
+// documents the model violating every one of them under pressure (D-25/D-26/
+// D-28/D-41/D-44 prices ×5, D-46 "the KB is empty", D-19/K5 warranty terms).
+// A rule that emphatic being violated anyway cannot be fixed with more prompt
+// language — it needs a deterministic output-side check.
+//
+// Granularity is the SENTENCE, not the token. Stripping just the figure leaves
+// mangled copy ("a diagnostic runs around  to  depending on the shop"); any
+// sentence containing a banned claim is itself a banned claim, so the whole
+// sentence goes. W1.5 (prompt) gives the model the correct replacement
+// behavior — decline in one line + render_book_service — so in the steady
+// state this guard should almost never fire; it exists for the pressure cases.
+//
+// The deny-list is deliberately conservative: only nouns that are unambiguous
+// in an automotive chat. "system"/"database"/"tool" stay prompt-enforced —
+// cars have cooling systems and charging systems, and sentence-dropping those
+// would eat legitimate answers. Case-sensitive entries (Convex, KB, Claude,
+// Haiku, Sonnet) rely on the capital letter to disambiguate from legitimate
+// lowercase uses ("convex mirror", poetry).
+
+type GuardCategory =
+  | "currency"
+  | "warranty"
+  | "internal_noun"
+  | "labor_time"
+  | "medical";
+
+const OUTPUT_GUARD_PATTERNS: { category: GuardCategory; re: RegExp }[] = [
+  // W1.2 — currency. $N in any form, or spelled-out "N dollars/bucks".
+  { category: "currency", re: /\$\s*\d|\b\d[\d,]*(?:\.\d+)?\s*(?:dollars|bucks)\b/i },
+  // D-44 "not even loosely" (2026-08-15): spelled-out loose pricing slips the
+  // digit-anchored row above. Money units required, so "a few hundred miles"
+  // survives.
+  { category: "currency", re: /\b(?:few|couple(?:\s+of)?|several|some)\s+(?:hundred|thousand)\s+(?:dollars|bucks)\b|\b(?:hundreds?|thousands?)\s+of\s+dollars\b|\b\d[\d,]*\s*grand\b/i },
+  // W1.4 — warranty-shaped durability promises: "N years ... N miles" either
+  // order within one clause (D-19, K5's "10 years / 100,000 miles"). Plain
+  // mileage-interval advice ("rotate every 5,000 miles") has no year pair and
+  // never matches.
+  { category: "warranty", re: /\b\d+\s*(?:-|–|to\s+)?\s*years?\b[^.!?\n]{0,40}?\b\d[\d,]*\s*miles\b/i },
+  { category: "warranty", re: /\b\d[\d,]*\s*miles\b[^.!?\n]{0,40}?\b\d+\s*(?:-|–|to\s+)?\s*years?\b/i },
+  // W1.3 — internal architecture nouns (D-46). Case-insensitive multiword
+  // terms first, then case-sensitive proper nouns.
+  { category: "internal_noun", re: /\bknowledge\s*base\b|\bsearch\s+index\b|\bsystem\s+prompt\b|\bfuzzy\s+match(?:er|ing)?\b|\bpipeline\b|\bFireCrawl\b|\bvPIC\b|\bAnthropic\b/i },
+  { category: "internal_noun", re: /\bKB\b|\bConvex\b|\bClaude\b|\bHaiku\b|\bSonnet\b/ },
+  // Underscore-form internal vocabulary. Two live leaks motivated this row:
+  // "the `self_reported` flag just means..." (device, 2026-08-13, W4.3 test)
+  // and "the conversation_state arc says..." (device, 2026-08-13, duplicate-
+  // message turn). The underscore forms are code identifiers that never occur
+  // in natural prose, so this can't false-positive on legitimate sentences
+  // like "that's self-reported" (hyphen/space forms stay allowed).
+  // on_time/due_soon/needs_attention added 2026-08-14: the battery gate probe
+  // caught "Your battery is showing on_time with a service record..." live —
+  // status-enum values are code identifiers like the rest of this row.
+  // self[- ]reported spellings added 2026-08-15: §7b'/§7b'' eval sweep caught
+  // "I want to double-check that record since it's self-reported from your
+  // onboarding" — the hyphenated form of the same provenance leak.
+  { category: "internal_noun", re: /\bself_reported\b|\bself[- ]reported\b|\bconversation_state\b|\brecord_provenance\b|\bestablished_facts\b|\bopen_symptoms\b|\bsafety_override\b|\bcustomer_notes\b|\bservice_claims\b|\bfault_lights\b|\bdiagnostic_scan\b|\bon_time\b|\bdue_soon\b|\bneeds_attention\b/ },
+  // Shareholder vocabulary — team language for features the customer just
+  // USES (Waleed, 2026-08-13: "booking flow ... is just internal language
+  // between shareholders"). A history scan of 340 assistant messages found
+  // "booking flow" x10 (every price decline parroted the prompt's own
+  // exemplar), "trust gate" x2, and a raw render_* tool name x1. Terms here
+  // must be ones with no legitimate customer-facing reading — "chip" is NOT
+  // guarded (windshield chip), "terminal" is NOT guarded (battery terminal),
+  // "dispatcher" is NOT guarded (tow dispatcher).
+  // "quick replies"/"quick-reply" only — singular unhyphenated "a quick reply
+  // to your question" is legitimate prose and stays allowed.
+  { category: "internal_noun", re: /\bbooking flow\b|\bquick replies\b|\bquick-repl(?:y|ies)\b|\btrust[- ]gat(?:e|ing)\b|\bintent ladder\b|\bstate tool\b|\bterminal render\b|\bdiagnostic domain\b|\brender_[a-z_]+\b|\bservice[- ]slugs?\b/i },
+  // D-41 — labor time is a price in disguise (shops bill by the hour, so
+  // "about 2 hours of labor" is a quote the user finishes with arithmetic).
+  // Guards only QUANTIFIED labor time so the legitimate shapes survive:
+  // "I can't estimate labor time" (no quantity), "labor rates vary by shop"
+  // (decline rationale), "it'll be at the shop a couple of hours" (wait-time
+  // logistics, no labor framing). (?!\s+day) keeps "Labor Day" out of the
+  // reverse-order clause match. Own category (NOT "currency") so the
+  // rewards-turn allowCurrency exemption can never disable these rows.
+  { category: "labor_time", re: /\b(?:\d+(?:\.\d+)?|an?|one|two|three|four|five|six|seven|eight|nine|ten|half|couple|few)\s+(?:or\s+\S+\s+)?(?:hours?|hrs?|minutes?|mins?)\s+(?:of\s+)?(?:labor|labour|book\s+time|shop\s+time)\b/i },
+  { category: "labor_time", re: /\blabou?r\b(?!\s+day)[^.!?\n]{0,25}\b\d+(?:\.\d+)?\s*(?:hours?|hrs?|minutes?|mins?)\b/i },
+  { category: "labor_time", re: /\bflat[- ]rate\s+(?:time|hours?)\b/i },
+  // D-41 escalation (2026-08-15): bare durations are labor time in disguise
+  // ("usually pretty quick — under an hour"); the service card owns the
+  // number. Both rows require a service noun in the same sentence so safety
+  // logistics survive ("let the engine cool for 30 minutes" has no service
+  // noun; "your brakes were serviced about 6 months ago" fails the
+  // minutes/hours unit match).
+  { category: "labor_time", re: /\b(?:scan|service|job|repair|appointment|visit|inspection|replacement|rotation|oil change|diagnostic|the work)\b[^.!?\n]{0,60}\b(?:about|around|roughly|under|less than|~)?\s*(?:an?\s+hour|half\s+an?\s+hour|\d+(?:\s*[-–]\s*\d+)?\s*(?:hours?|hrs?|minutes?|mins?))\b/i },
+  { category: "labor_time", re: /\b(?:takes?|taking|done|finished|in\s+and\s+out|turnaround|be\s+ready)\b[^.!?\n]{0,40}\b(?:about|around|roughly|under|less than|~)?\s*(?:an?\s+hour|half\s+an?\s+hour|\d+(?:\s*[-–]\s*\d+)?\s*(?:hours?|hrs?|minutes?|mins?))\b[^.!?\n]{0,60}\b(?:scan|service|job|repair|appointment|visit|inspection|replacement|rotation|oil change|diagnostic)\b/i },
+  // Medical treatment phrases (v0.48 hard rule; medical_redirect emitted burn
+  // first-aid 5/10 at N=10 even with the prompt rule + these back up the new
+  // medical_injury classifier). Deliberately narrow: unambiguous FIRST-AID
+  // instructions only. "Get first aid", "call 911", "see a doctor" are
+  // redirect language and never match. Mechanical rinse instructions
+  // ("rinse the connector under running water") can match the water row —
+  // acceptable: detailed hands-on procedures are refused content anyway.
+  { category: "medical", re: /\bunder\s+(?:cool|cold|lukewarm|running)\s+water\b|\b(?:cool|cold)\s+water\b[^.!?\n]{0,25}\b(?:burn|scald|skin|wound)\b/i },
+  { category: "medical", re: /\bapply\s+(?:ice|a\s+cold\s+compress|burn\s+(?:cream|gel|ointment)|aloe|antibiotic|pressure\s+to\s+the\s+wound)\b|\b(?:bandage|gauze|sterile\s+dressing)\b/i },
+  { category: "medical", re: /\b(?:ibuprofen|acetaminophen|paracetamol|tylenol|advil|aspirin|antihistamine)\b|\b(?:first|second|third)[- ]degree\s+burn\b/i },
+  // Envelope-tag echo (tag-smuggling N=10: the model EXPLAINED the injection
+  // back to the user, quoting the tag names). A literal envelope tag in
+  // user-facing prose is never legitimate.
+  { category: "internal_noun", re: /<\/?(?:untrusted_user_input|system|conversation_state|established_facts|safety_override|recent_context|polite_exit_required)>/i },
+];
+
+/**
+ * Drop any sentence containing a banned claim. Returns the cleaned text plus
+ * the categories that fired (for the console breadcrumb — this guard firing
+ * means the prompt lost, which ops should be able to see).
+ *
+ * `allowCurrency`: rewards-credit dollar values are legitimate when (and only
+ * when) `get_rewards_summary` actually returned them this turn (stable.ts
+ * rewards rule). The caller passes whether that tool fired — a deterministic
+ * condition, unlike asking the model to hold "quote only sourced figures"
+ * mid-sentence, which is exactly the conditional rule Q1 rejected.
+ */
+function stripBannedClaims(
+  s: string,
+  opts: { allowCurrency: boolean },
+): { text: string; dropped: GuardCategory[] } {
+  if (!s) return { text: s, dropped: [] };
+  const active = OUTPUT_GUARD_PATTERNS.filter(
+    (p) => !(p.category === "currency" && opts.allowCurrency),
+  );
+  // Fast path: nothing banned anywhere in the message.
+  if (!active.some((p) => p.re.test(s))) return { text: s, dropped: [] };
+
+  const dropped: GuardCategory[] = [];
+  const lines = s.split("\n").map((line) => {
+    // Sentence boundary: ., !, ? followed by whitespace. Keeps list bullets
+    // and short lines intact (no terminator → the whole line is one sentence).
+    const sentences = line.split(/(?<=[.!?])\s+/);
+    const kept = sentences.filter((sent) => {
+      const hit = active.find((p) => p.re.test(sent));
+      if (hit) dropped.push(hit.category);
+      return !hit;
+    });
+    return kept.join(" ");
+  });
+  const text = lines
+    .join("\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { text, dropped };
 }
 
 // =============================================================================
@@ -2176,6 +3313,12 @@ function buildCallables(
   // buildCallables; MINIMAL/DOWN short-circuit before the callable map is
   // built). See docs/SPRINT_2/WAVE_7_2_DEGRADATION_LADDER.md §4.2.
   noWebSearchOverride: boolean,
+  // The user's raw message for THIS turn. Needed by the retrieval-miss
+  // acquisition hook: `lookup_vehicle_spec` only receives a car name
+  // ("Audi RS5"), never the question that motivated it ("what's the oil
+  // capacity of an Audi RS5?"), and you cannot acquire a specific fact from
+  // the car name alone. Read-only — nothing mutates it.
+  userMessage: string,
 ): ToolCallables {
   // Wave 7.3 Option B: counter-bump helper for action-context moat reads.
   // Invoked AFTER each ctx.runQuery into a moat-reading query function
@@ -2402,6 +3545,43 @@ function buildCallables(
         "vehicle_configs+models+makes",
         cands + matched,
       );
+
+      // ── Retrieval-miss acquisition hook ───────────────────────────────
+      // A TOTAL miss (no match AND no candidates) is the one moment we know
+      // for certain the catalog cannot answer this. Before this hook that was
+      // a dead end: Oto answered from training knowledge and the answer was
+      // discarded, so the next user paid for the same unsourced guess and the
+      // KB never grew.
+      //
+      // The prompt's own acquisition path (retrieve -> catalog -> web_search
+      // -> record) does not run in practice: its web_search step is gated on
+      // "`retrieve_vehicle_facts` returned empty", but the model often skips
+      // that call entirely, so the precondition is never established. Rather
+      // than instruct harder, we trigger on the miss, which is deterministic.
+      //
+      // scheduler.runAfter(0) — fire-and-forget. THIS turn does not wait; the
+      // user still gets their answer at normal latency. The acquired fact
+      // serves the NEXT person, cited, from Tier 2. Scheduling failures are
+      // swallowed: a background nicety must never break a turn that already
+      // has an answer for the user.
+      if (!result?.matched && cands === 0) {
+        try {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.oto.factAcquisition.acquireFactViaWebSearch,
+            {
+              question_text: userMessage,
+              asked_by_user_id: userId,
+            },
+          );
+        } catch (e) {
+          console.warn(
+            "[oto/chat] fact-acquisition schedule failed (non-fatal):",
+            e instanceof Error ? e.message : String(e),
+          );
+        }
+      }
+
       return result;
     },
 
@@ -2678,6 +3858,36 @@ function buildCallables(
      * surface (the only path Haiku has to reach user_semantic_facts).
      */
     record_semantic_fact: async (input) => {
+      // Tag-smuggling TURN suppression (2026-08-13): when this turn's raw user
+      // message contains envelope-tag substrings, the message is injection-
+      // shaped and no semantic fact may be recorded from it — the model firing
+      // this tool on such turns is exactly the manipulation the eval catches
+      // (prompt_injection_tag_smuggling fired record_semantic_fact 3/10 at
+      // N=10). The layer-2 payload sanitizer (sanitizeSemanticPayload) still
+      // guards the CONTENT; this guards the TURN. Deterministic — no model
+      // judgment involved. List mirrors memoryEquivalence.FORBIDDEN_ENVELOPE_TAGS
+      // plus the two envelope blocks added since.
+      const SMUGGLE_TAGS = [
+        "<untrusted_user_input>",
+        "</untrusted_user_input>",
+        "<conversation_state>",
+        "</conversation_state>",
+        "<recent_context>",
+        "</recent_context>",
+        "<system>",
+        "</system>",
+        "<vehicle_facts>",
+        "</vehicle_facts>",
+        "<safety_override>",
+        "<established_facts>",
+      ];
+      const lowerTurnMsg = (userMessage ?? "").toLowerCase();
+      if (SMUGGLE_TAGS.some((t) => lowerTurnMsg.includes(t))) {
+        console.warn(
+          "[oto/chat] record_semantic_fact suppressed: envelope-tag substring in this turn's user message (tag-smuggling shape).",
+        );
+        return { ok: false, reason: "suppressed on tag-smuggling-shaped turn" };
+      }
       const text = typeof input.text === "string" ? input.text.trim() : "";
       const factTypeRaw =
         typeof input.fact_type === "string" ? input.fact_type : "";

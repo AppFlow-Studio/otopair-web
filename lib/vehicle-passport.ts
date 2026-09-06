@@ -54,6 +54,18 @@ export type VehiclePassportTires = {
   size_front?: string | null;
   size_rear?: string | null;
   run_flat?: boolean | null;
+  identities?: Partial<
+    Record<
+      "front_left" | "front_right" | "rear_left" | "rear_right",
+      {
+        brand?: string | null;
+        model?: string | null;
+        dot_code?: string | null;
+        run_flat?: boolean | null;
+        tire_type?: string | null;
+      }
+    >
+  > | null;
   overall_condition?: TireCondition | null;
   front_condition?: TireCondition | null;
   rear_condition?: TireCondition | null;
@@ -68,6 +80,7 @@ export type VehiclePassportFluids = {
   coolant_type?: string | null;
   brake_fluid_type?: string | null;
   transmission_fluid_type?: string | null;
+  power_steering_fluid_type?: string | null;
   confirmation_status?: string | null;
 };
 
@@ -137,6 +150,8 @@ export type VehiclePassportData = {
   // post-job dialog so multi-service jobs can attribute parts correctly.
   parts_required_services?: Array<{ _id: string; name: string }>;
   is_complete: boolean;
+  is_first_shop_visit?: boolean;
+  rotor_photo_evidence?: Partial<Record<"FL" | "FR" | "RL" | "RR", boolean>>;
   completion_percent: number;
   missing_fields: string[];
   passport: VehiclePassportSnapshot;
@@ -190,6 +205,11 @@ export type JobActualPartPayload = {
   // Which booking service this part belongs to. Optional for backward compat
   // with legacy rows; snapshot path falls back to booking.service_ids[0].
   service_id?: string | null;
+  // The CUSTOM line this part belongs to, when there's no catalog service to
+  // point at. Off-catalog work has no services row, so this is the only thing
+  // that survives the quote → survey → completion round trip and lets a part
+  // be recorded against the custom job it was actually fitted to.
+  custom_service_name?: string | null;
   // Provenance — "catalog" rows came from the Otopair prefill and their
   // identity (name/brand/oem) is locked in the UI. "manual" rows were
   // mechanic-added and stay fully editable. Absent on legacy rows.
@@ -204,6 +224,20 @@ export type JobActualPartPayload = {
   // Server-stamped provenance — which cascade layer surfaced this row.
   // Drives the small "Used last time on this car" / "Shop default" badge.
   learned_from?: "vin" | "shop" | "config" | "catalog";
+  // Mechanic-entered tire-replacement line (mid-job / walk-in). Tires have no
+  // OEM number, so identity lives in these structured fields while oem_number
+  // carries the `TIRE-{size}` sentinel. tire_position is a free string
+  // ("front" / "rear") so staggered / aftermarket fitments never reject.
+  is_tire?: boolean;
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+  tire_position?: string | null;
+  // True when this prefill line was seeded from the shop's accepted tire/rotor
+  // QUOTE response (getPrefillData) rather than the catalog cascade. The post-
+  // job parts step unions these in explicitly so a quote-originated booking's
+  // parts appear even alongside other snapshot parts (e.g. brakes).
+  from_quote?: boolean;
 };
 
 export type PreJobSurveyPayload = {
@@ -212,7 +246,13 @@ export type PreJobSurveyPayload = {
   tire_details?: Partial<
     Record<
       "front_left" | "front_right" | "rear_left" | "rear_right",
-      { brand?: string | null; model?: string | null }
+      {
+        brand?: string | null;
+        model?: string | null;
+        dot_code?: string | null;
+        run_flat?: boolean | null;
+        tire_type?: string | null;
+      }
     >
   > | null;
   // Legacy vehicle-passport fields. New multi-point inspections use
@@ -306,6 +346,8 @@ export type PostJobSurveyPayload = {
   parts_used: JobActualPartPayload[];
   vehicle_updates?: VehicleUpdateValues | null;
   technician_notes?: string | null;
+  /** Customer-facing "what did you find / do" summary (job_actuals.mechanic_findings). */
+  mechanic_findings?: string | null;
   flagged_vehicle_specs?: boolean;
   flagged_vehicle_specs_reason?: string | null;
   actual_labor_minutes?: number | null;
@@ -320,6 +362,32 @@ export type PostJobSurveyPayload = {
   time_variance_reason?: TimeVarianceReason | null;
   time_variance_note?: string | null;
   recommendations?: JobRecommendationInput[];
+  /** Canonical warning-light codes the mechanic confirmed are no longer on
+   *  the dashboard. See "Dashboard warning lights." */
+  cleared_warning_lights?: string[];
+};
+
+/**
+ * Outcome for one off-catalog line on a booking (Off-Catalog Work spec, §7).
+ *
+ * Travels as a SEPARATE argument to completeWithPostjob rather than a field on
+ * PostJobSurveyPayload: that payload maps 1:1 onto postjobReportValidator, which
+ * is shared with the draft-save path and the receipt builders, and Convex would
+ * reject an unexpected field there.
+ *
+ * Matched to its custom_jobs row by name (via the same normalisation the match
+ * gate uses), not by array index — the mechanic may have added or removed lines
+ * between booking and completion, and index-matching would write one job's
+ * outcome onto another.
+ */
+export type CustomJobOutcome = {
+  name: string;
+  actual_minutes?: number;
+  charged_price_cents?: number;
+  /** What was actually done. */
+  resolution?: string;
+  /** Did it fix the complaint? Closes the symptom → action → outcome triple. */
+  resolved_complaint?: boolean;
 };
 
 type VehicleUpdatePrompt = {
@@ -575,6 +643,36 @@ export function sumJobActualParts(parts: JobActualPartPayload[]) {
         : 1;
     return sum + cost * qty;
   }, 0);
+}
+
+/**
+ * Human-facing secondary identity line for a part row. Regular parts show
+ * `brand · OEM number`; tire lines (mechanic-entered mid-job / walk-in) show
+ * `brand · model · size` so the internal `TIRE-{size}` sentinel oem_number is
+ * never surfaced to a customer or mechanic. Segments are middot-joined; blanks
+ * are dropped.
+ */
+export function formatPartIdentity(part: {
+  is_tire?: boolean | null;
+  oem_number?: string | null;
+  brand?: string | null;
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+}): string {
+  const oem = typeof part.oem_number === "string" ? part.oem_number : "";
+  const isTire = part.is_tire === true || oem.toUpperCase().startsWith("TIRE-");
+  const segments = isTire
+    ? [
+        part.tire_brand ?? part.brand,
+        part.tire_model,
+        part.tire_size ?? (oem ? oem.replace(/^TIRE-/i, "") : null),
+      ]
+    : [part.brand, oem];
+  return segments
+    .map((v) => (v ?? "").toString().trim())
+    .filter(Boolean)
+    .join(" · ");
 }
 import type {
   RotorThicknessMeasurements,

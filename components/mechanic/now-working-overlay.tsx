@@ -14,16 +14,39 @@ import type { Id } from "@/convex/_generated/dataModel";
 import {
   Camera,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Flag,
   Loader2,
   MessageSquare,
   Pause,
   Phone,
   Play,
+  Plus,
   X,
 } from "lucide-react";
 import ElapsedTimer from "./elapsed-timer";
+import FlagIssueSheet from "./flag-issue-sheet";
+import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import OverrunExtendCard from "./overrun-extend-card";
+import ExtraWorkStatus from "@/components/booking/extra-work-status";
+import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
+import { BrakeAxleDialog } from "@/components/brake-axle-dialog";
+import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
+import type { AxlePosition } from "@/convex/lib/brakeScope";
+
+/** Brake-pad / rotor replacement needs an axle scope before it's added mid-job
+ *  — the same services deriveTierInspectionScope requires an axle for. Matched
+ *  on the resolved name so the axle prompt fires iff the work is axle-scoped. */
+function isBrakeAxleFinding(f: {
+  serviceName: string | null;
+  label: string;
+}): boolean {
+  const name = f.serviceName ?? f.label ?? "";
+  if (!name) return false;
+  const flags = getBookingServiceFlags([name]);
+  return flags.hasBrakePadReplacement || flags.hasRotorReplacement;
+}
 
 type DraftPhoto = {
   id: string;
@@ -70,17 +93,38 @@ function formatMoney(value: number | null | undefined) {
   }).format(value);
 }
 
+const normServiceName = (s: string) => s.trim().toLowerCase();
+
+type ServiceStatus = "confirmed" | "pending" | "declined" | "draft";
+
+/** A flagged inspection finding the "Flagged, not addressed" list can promote.
+ *  Mirrors getUnaddressedFindingsForBooking's return; systemTags / workType are
+ *  the catalog-derived taxonomy, null for a freeform finding. */
+type UnaddressedFinding = {
+  key: string;
+  label: string;
+  urgency: string;
+  reasons: string[];
+  serviceId: string | null;
+  serviceName: string | null;
+  systemTags: string[] | null;
+  workType: string | null;
+};
+
 const MAX_PHOTOS = 6;
 const NOTES_DEBOUNCE_MS = 800;
 
 export function NowWorkingPane({
   bookingId,
+  onBack,
   onClose,
   onMarkComplete,
   onToast,
   dense = false,
 }: {
   bookingId: Id<"bookings">;
+  /** When present, renders a "‹ All jobs" control that returns to the picker. */
+  onBack?: () => void;
   onClose: () => void;
   onMarkComplete: (bookingId: Id<"bookings">) => void;
   onToast?: (message: string) => void;
@@ -93,7 +137,181 @@ export function NowWorkingPane({
   const saveDraft = useMutation(api.bookings.saveInProgressDraft);
 
   const [paused, setPaused] = useState(false);
+  const [flagOpen, setFlagOpen] = useState(false);
+  const [scopeOpen, setScopeOpen] = useState(false);
+  const [addingFinding, setAddingFinding] = useState<string | null>(null);
+  // A freeform finding waiting on a taxonomy before it can be added — see the
+  // "Flagged, not addressed" block. Null for a finding that resolved to a
+  // catalog service, which carries its own taxonomy and adds in one tap.
+  const [pendingFinding, setPendingFinding] =
+    useState<UnaddressedFinding | null>(null);
+  // A brake/rotor finding waiting on its axle before it's added — brake work
+  // needs a front/rear/both scope so the inspection grades the right corners.
+  const [pendingBrakeAxle, setPendingBrakeAxle] = useState<{
+    finding: UnaddressedFinding;
+    taxonomy: { systemTags: string[]; workType: string };
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  /* The "Flag issue" flow — the sheet and the mid-job scope dialog it opens — is
+     the mechanic writing up extra scope, not turning a wrench. That admin time
+     shouldn't land on the customer's bill, so the clock stops while any of it is
+     open. (Waiting for the customer to then CONFIRM that scope no longer pauses
+     anything — that wait is open-ended and outside the shop's control; see
+     jobBlockers.clockStoppedSpans.) */
+  const flagFlowOpen = flagOpen || scopeOpen;
+  /* When the flag flow opened. On close we send the completed span to the server
+     (recordFlagAdminPause), which folds it into the same blocked-minutes figure
+     every surface reads — so the pause is durable, not just a number on this
+     screen. Nothing is persisted while it's open; an abandoned sheet is simply
+     never credited, which bills the customer rather than over-crediting them. */
+  const flagOpenedAtRef = useRef<number | null>(null);
+
+  /* Open blockers on this job (Flag Issue spec, §5). Rendered as a banner so a
+     stalled job is visibly stalled rather than looking like it's being worked. */
+  const blockers = useQuery(api.jobBlockers.listForBooking, { bookingId });
+  const resolveBlocker = useMutation(api.jobBlockers.resolveBlocker);
+  /* Optimistically bump this booking's blockedMinutes the instant the flag flow
+     closes, so the timer resumes where it paused instead of jumping up for the
+     round-trip. The real query result (with the recorded span merged in) then
+     replaces it seamlessly; if the write fails, Convex rolls the bump back and
+     the timer honestly reflects that the span wasn't credited. */
+  const recordFlagAdminPause = useMutation(
+    api.jobBlockers.recordFlagAdminPause,
+  ).withOptimisticUpdate((localStore, args) => {
+    const cur = localStore.getQuery(api.jobBlockers.listForBooking, {
+      bookingId: args.bookingId,
+    });
+    if (!cur) return;
+    const addMinutes = Math.round(
+      Math.max(0, args.closedAt - args.openedAt) / 60_000,
+    );
+    if (addMinutes <= 0) return;
+    localStore.setQuery(
+      api.jobBlockers.listForBooking,
+      { bookingId: args.bookingId },
+      { ...cur, blockedMinutes: (cur.blockedMinutes ?? 0) + addMinutes },
+    );
+  });
+  /* Server-derived and now the single source of truth for stopped time — clock-
+     stopping blockers AND recorded flag-issue admin pauses, folded together in
+     jobBlockers.clockStoppedSpans. Don't recompute from `blockers[]` here; that
+     predicate drifted between surfaces. */
+  const clockPaused = Boolean(blockers?.clockPaused);
+  const blockedMs = (blockers?.blockedMinutes ?? 0) * 60_000;
+
+  /* Inspection findings nothing has acted on yet — see the "Flagged, not
+     addressed" block below. The query owns the four exclusion paths, and derives
+     a taxonomy for findings that resolved to a catalog service (systemTags /
+     workType non-null); freeform findings leave those null and need the picker. */
+  const unaddressedFindings = useQuery(
+    api.inspections.getUnaddressedFindingsForBooking,
+    { bookingId },
+  ) as UnaddressedFinding[] | undefined;
+  const addToJob = useMutation(api.customJobs.addMidJobCustomService);
+
+  /* Send a flagged finding to the bill. A catalog service passes its derived
+     taxonomy straight through; a freeform one arrives here only after the picker
+     has supplied one. Either way it lands as a mid-job custom line and opens the
+     scope dialog — the customer still confirms it, no money has moved yet. */
+  const commitFinding = async (
+    f: UnaddressedFinding,
+    taxonomy: { systemTags: string[]; workType: string },
+    // Set for brake/rotor work — the axle its inspection scope needs. Server
+    // defaults it to "both" if absent so the add never dead-ends the inspection.
+    axle?: AxlePosition,
+  ) => {
+    setAddingFinding(f.key);
+    try {
+      await addToJob({
+        bookingId,
+        name: f.serviceName ?? f.label,
+        complaint: f.reasons.join("; ") || undefined,
+        systemTags: taxonomy.systemTags,
+        workType: taxonomy.workType,
+        axle,
+      });
+      setPendingFinding(null);
+      setPendingBrakeAxle(null);
+      setScopeOpen(true);
+    } catch (err: unknown) {
+      onToast?.(
+        err instanceof Error ? err.message : "Could not add that to the job",
+      );
+    } finally {
+      setAddingFinding(null);
+    }
+  };
+
+  /* Mid-job extra-work state — drives the per-service status dots in the work
+     order. Same query the EXTRA WORK card (top-right) uses; Convex shares the
+     subscription so this isn't a second network read. */
+  const scopeChanges = useQuery(api.booking_approvals.getMidJobScopeChanges, {
+    bookingId,
+  }) as
+    | Array<{
+        state: "pending" | "accepted" | "auto_confirmed" | "declined";
+        addedServiceNames: string[];
+      }>
+    | undefined;
+
+  // Off-catalog lines on this booking (drafts + agreed extras). A line the
+  // mechanic just added but hasn't sent for confirmation has no scope change
+  // yet — that's a draft, and it should read gray in the work order, not the
+  // green of agreed work.
+  const customJobsList = useQuery(api.customJobs.listForBooking, {
+    bookingId,
+  }) as Array<{ name: string; pending_confirmation?: boolean }> | undefined;
+
+  const serviceStatusList = useMemo(() => {
+    const changes = scopeChanges ?? [];
+    const pending = new Set<string>();
+    // Every name carried by a *submitted* scope change, whatever its state.
+    // A custom line absent from this set was never sent to the customer.
+    const submitted = new Set<string>();
+    for (const c of changes) {
+      for (const n of c.addedServiceNames ?? []) submitted.add(normServiceName(n));
+      if (c.state !== "pending") continue;
+      for (const n of c.addedServiceNames ?? []) pending.add(normServiceName(n));
+    }
+    // Draft = an off-catalog line that's STILL staged (awaiting the customer)
+    // and was never sent. `pending_confirmation` is the authoritative signal:
+    // it's cleared once an estimate carrying the line is approved, so a
+    // confirmed line is booked work and never a draft — even a pre-job-added
+    // line that isn't linked to a mid-job approval (its introduced_by_approval_id
+    // is null, so it's absent from addedServiceNames/`submitted`). Keying draft
+    // off `submitted` alone mislabeled such confirmed lines as DRAFT.
+    const draft = new Set<string>();
+    for (const cj of customJobsList ?? []) {
+      if (cj.pending_confirmation !== true) continue; // confirmed → not a draft
+      const n = normServiceName(cj.name);
+      if (!submitted.has(n)) draft.add(n);
+    }
+    const baseNames: string[] = job?.serviceNames ?? [];
+    const list: Array<{ name: string; status: ServiceStatus }> = baseNames.map(
+      (name) => {
+        const n = normServiceName(name);
+        const status: ServiceStatus = pending.has(n)
+          ? "pending"
+          : draft.has(n)
+            ? "draft"
+            : "confirmed";
+        return { name, status };
+      },
+    );
+    // Declined lines are stripped from the booking's services, so re-add them
+    // as red/struck entries — the work order should still show what was turned
+    // down, not silently drop it.
+    for (const c of changes) {
+      if (c.state !== "declined") continue;
+      for (const n of c.addedServiceNames ?? []) {
+        if (!list.some((x) => normServiceName(x.name) === normServiceName(n))) {
+          list.push({ name: n, status: "declined" });
+        }
+      }
+    }
+    return list;
+  }, [scopeChanges, customJobsList, job?.serviceNames]);
 
   const serverNotes = job?.jobActuals?.inProgressNotes ?? "";
   const serverPhotos = useMemo(
@@ -106,7 +324,7 @@ export function NowWorkingPane({
     [job?.jobActuals?.inProgressPhotos],
   );
 
-  const [notes, setNotes] = useState(serverNotes);
+  const [notes, setNotes] = useState<string>(serverNotes);
   const [transientPhotos, setTransientPhotos] = useState<TransientPhoto[]>([]);
 
   const seededForBookingRef = useRef<string | null>(null);
@@ -116,11 +334,80 @@ export function NowWorkingPane({
       seededForBookingRef.current = id;
       setNotes(serverNotes);
       setTransientPhotos([]);
+      // Any half-open flag span belongs to the car we're leaving; drop it so it
+      // can't be recorded against the next booking the pane is reused for.
+      flagOpenedAtRef.current = null;
     }
   }, [bookingId, serverNotes]);
 
+  /* Record flag-flow time. On open, mark the start — unless a blocker is already
+     stopping the clock (the server merges spans, so a window inside a blocker
+     wouldn't double-count, but there's no point writing a row that adds nothing).
+     On close, send the completed span to the server. */
+  useEffect(() => {
+    if (flagFlowOpen) {
+      if (flagOpenedAtRef.current == null && !clockPaused) {
+        flagOpenedAtRef.current = Date.now();
+      }
+      return;
+    }
+    if (flagOpenedAtRef.current != null) {
+      const openedAt = flagOpenedAtRef.current;
+      flagOpenedAtRef.current = null;
+      const closedAt = Date.now();
+      // Sub-second is a mis-fire; the server drops it too, but skip the round-trip.
+      if (closedAt - openedAt >= 1_000) {
+        void recordFlagAdminPause({ bookingId, openedAt, closedAt }).catch(
+          () => {
+            // A failed write just means this span isn't credited; the optimistic
+            // bump rolls back, so the timer stays honest. Nothing to surface.
+          },
+        );
+      }
+    }
+    // recordFlagAdminPause is recreated each render by withOptimisticUpdate; the
+    // open→close logic is idempotent (guarded by the ref), so it's safe to omit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flagFlowOpen, clockPaused, bookingId]);
+
   const notesRef = useRef(notes);
   notesRef.current = notes;
+
+  /* Notes are kept as one newline-joined string on the server (unchanged
+     contract — the post-job report reads it verbatim), but entered one at a
+     time: write a note, add it, write the next. Each non-empty line is one
+     entry, so the list survives a reload and any legacy free-text note just
+     shows up as its existing lines. */
+  const [draftNote, setDraftNote] = useState("");
+  const noteEntries = useMemo(
+    () =>
+      notes
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean),
+    [notes],
+  );
+
+  function addNote() {
+    const text = draftNote.trim();
+    if (!text) return;
+    setNotes((prev) => {
+      const base = prev.trim();
+      return base ? `${base}\n${text}` : text;
+    });
+    setDraftNote("");
+  }
+
+  function removeNoteAt(index: number) {
+    setNotes((prev) =>
+      prev
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .filter((_, i) => i !== index)
+        .join("\n"),
+    );
+  }
 
   const flushNotes = async () => {
     try {
@@ -277,13 +564,22 @@ export function NowWorkingPane({
     ? "font-mono text-5xl font-semibold tracking-tight text-white tabular-nums"
     : "font-mono text-6xl font-semibold tracking-tight text-white tabular-nums";
   const summarySectionClass = dense
-    ? "flex flex-col items-start gap-2 border-b border-white/10 py-5"
-    : "flex flex-col items-start gap-2 border-b border-white/10 py-8";
+    ? "flex flex-col items-start gap-4 border-b border-white/10 py-5"
+    : "flex items-start justify-between gap-6 border-b border-white/10 py-8";
 
   return (
     <div className={containerClass}>
       <header className="flex items-center justify-between border-b border-white/10 pb-5">
-        <div className="flex items-center gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          {onBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 py-2 pl-2 pr-3 text-sm font-medium text-slate-100 transition-colors hover:bg-white/10"
+            >
+              <ChevronLeft className="h-4 w-4" /> All jobs
+            </button>
+          ) : null}
           <span className="inline-flex h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400" />
           <p className="text-sm font-medium uppercase tracking-[0.2em] text-emerald-300/80">
             Now working
@@ -319,6 +615,108 @@ export function NowWorkingPane({
         </div>
       </header>
 
+      {/* An open blocker has to be visible on the job itself, or the pane keeps
+          saying "Now working" about a car nobody is touching. Resolving it here
+          is what closes the clock span (Flag Issue spec, §5). */}
+      {blockers && blockers.openCount > 0 ? (
+        <div className="mt-4 space-y-2">
+          {blockers.blockers
+            .filter((b) => b.resolved_at == null)
+            .map((b) => (
+              <div
+                key={String(b._id)}
+                className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-amber-400/30 bg-amber-400/10 px-4 py-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-amber-200">
+                    {b.label}
+                    {b.stops_clock ? (
+                      <span className="ml-2 rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-amber-100">
+                        clock paused
+                      </span>
+                    ) : null}
+                  </p>
+                  <p className="mt-0.5 text-[13px] leading-relaxed text-amber-100/80">
+                    {b.note}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await resolveBlocker({ blockerId: b._id });
+                      onToast?.("Unblocked — clock running again");
+                    } catch (err: unknown) {
+                      onToast?.(
+                        err instanceof Error ? err.message : "Could not resolve",
+                      );
+                    }
+                  }}
+                  className="shrink-0 rounded-lg border border-amber-300/40 bg-amber-300/10 px-3 py-1.5 text-[13px] font-semibold text-amber-100 transition-colors hover:bg-amber-300/20"
+                >
+                  Unblocked
+                </button>
+              </div>
+            ))}
+        </div>
+      ) : null}
+
+      {/* Findings the inspection flagged that nothing has acted on yet. Without
+          this, a mechanic who notices the wipers mid-job has to retype the
+          finding they already recorded — through Flag Issue → Extra work — to
+          get it onto the bill (Aug 20 session, decision D1). Tapping one seeds
+          the same scope dialog that button opens, so the customer still
+          confirms before any of it becomes billable. */}
+      {unaddressedFindings && unaddressedFindings.length > 0 ? (
+        <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+            Flagged, not addressed
+          </p>
+          <div className="mt-2 space-y-2">
+            {unaddressedFindings.map((f) => (
+              <div
+                key={f.key}
+                className="flex flex-wrap items-start justify-between gap-3"
+              >
+                <div className="min-w-0">
+                  <p className="text-[13px] font-medium text-slate-100">
+                    {f.serviceName ?? f.label}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-slate-400">
+                    {f.reasons.join(" · ")}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    // A catalog service carries its taxonomy — add it straight
+                    // away. A freeform finding has none, so collect one first.
+                    if (f.systemTags && f.workType) {
+                      const taxonomy = {
+                        systemTags: f.systemTags,
+                        workType: f.workType,
+                      };
+                      // Brake/rotor work needs an axle scope first.
+                      if (isBrakeAxleFinding(f)) {
+                        setPendingBrakeAxle({ finding: f, taxonomy });
+                      } else {
+                        void commitFinding(f, taxonomy);
+                      }
+                    } else {
+                      setPendingFinding(f);
+                    }
+                  }}
+                  disabled={addingFinding !== null}
+                  className="shrink-0 rounded-lg border border-emerald-400/40 bg-emerald-400/10 px-3 py-1.5 text-[12px] font-semibold text-emerald-200 transition-colors hover:bg-emerald-400/20 disabled:opacity-50"
+                >
+                  {addingFinding === f.key ? "Adding…" : "Add to this job"}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {job === undefined ? (
         <div className="flex flex-1 items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
@@ -330,25 +728,48 @@ export function NowWorkingPane({
       ) : (
         <>
           <section className={summarySectionClass}>
-            <p className="text-sm text-slate-400">Elapsed</p>
-            <ElapsedTimer
-              startedAtMs={startedAt}
-              paused={paused}
-              className={elapsedTimerClass}
-            />
-            <p className="text-sm text-slate-400">
-              {startedAt != null
-                ? `Started ${formatClockTime(startedAt)}`
-                : "Not started yet"}
-              {etaMs != null ? ` · ETA ${formatClockTime(etaMs)}` : ""}
-              {paused ? " · Paused" : ""}
-            </p>
-            <p className="mt-2 text-lg font-medium text-slate-100">
-              {job.vehicle}
-            </p>
-            <p className="text-sm text-slate-400">
-              {job.serviceNames.join(" · ")}
-            </p>
+            <div className="flex min-w-0 flex-col items-start gap-2">
+              <p className="text-sm text-slate-400">Elapsed</p>
+              <ElapsedTimer
+                startedAtMs={startedAt}
+                // Stopped time is excluded by blockedMs, not by `paused` —
+                // `paused` only freezes the tick. blockedMs is server-derived
+                // (blocker spans + recorded flag-issue admin pauses); freezing
+                // while the flag flow is open just holds the display until the
+                // close writes the span, so it resumes where it paused.
+                paused={paused || clockPaused || flagFlowOpen}
+                blockedMs={blockedMs}
+                className={elapsedTimerClass}
+              />
+              <p className="text-sm text-slate-400">
+                {startedAt != null
+                  ? `Started ${formatClockTime(startedAt)}`
+                  : "Not started yet"}
+                {etaMs != null ? ` · ETA ${formatClockTime(etaMs)}` : ""}
+                {clockPaused
+                  ? " · Paused (blocked)"
+                  : paused
+                    ? " · Paused"
+                    : ""}
+              </p>
+              <p className="mt-2 text-lg font-medium text-slate-100">
+                {job.vehicle}
+              </p>
+              <p className="text-sm text-slate-400">
+                {job.serviceNames.join(" · ")}
+              </p>
+            </div>
+
+            {/* Extra work sits across from the timer — full detail lives here:
+                waiting / approved / declined, the price delta, the SLA, and any
+                denied parts. Empty state keeps the space intentional. */}
+            <div className={dense ? "w-full" : "w-[360px] shrink-0"}>
+              <ExtraWorkStatus
+                bookingId={bookingId}
+                variant="dark"
+                showWhenEmpty
+              />
+            </div>
           </section>
 
           {job.status === "in_progress" && (
@@ -419,18 +840,66 @@ export function NowWorkingPane({
                 Work order
               </h3>
               <ul className="mt-3 space-y-2">
-                {job.serviceNames.length === 0 ? (
+                {serviceStatusList.length === 0 ? (
                   <li className="text-sm text-slate-500">No services listed.</li>
                 ) : (
-                  job.serviceNames.map((name: string, index: number) => (
-                    <li
-                      key={`${name}-${index}`}
-                      className="flex items-start gap-2 text-sm text-slate-100"
-                    >
-                      <span className="mt-1 inline-flex h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
-                      <span>{name}</span>
-                    </li>
-                  ))
+                  serviceStatusList.map((svc, index) => {
+                    // Dot mirrors the service's approval state: green when it's
+                    // agreed (base booking or approved extra), yellow while the
+                    // customer hasn't confirmed submitted work, gray for a draft
+                    // the mechanic hasn't sent yet, red when declined.
+                    const dotClass =
+                      svc.status === "pending"
+                        ? "bg-amber-400"
+                        : svc.status === "declined"
+                          ? "bg-red-400"
+                          : svc.status === "draft"
+                            ? "bg-slate-500"
+                            : "bg-emerald-400";
+                    return (
+                      <li
+                        key={`${svc.name}-${index}`}
+                        className="flex items-start gap-2 text-sm text-slate-100"
+                      >
+                        <span
+                          className={`mt-1.5 inline-flex h-1.5 w-1.5 shrink-0 rounded-full ${dotClass}`}
+                          title={
+                            svc.status === "pending"
+                              ? "Awaiting customer confirmation"
+                              : svc.status === "declined"
+                                ? "Declined by customer"
+                                : svc.status === "draft"
+                                  ? "Draft — not submitted yet"
+                                  : "Confirmed"
+                          }
+                        />
+                        <span
+                          className={
+                            svc.status === "declined"
+                              ? "text-slate-500 line-through"
+                              : svc.status === "draft"
+                                ? "text-slate-400"
+                                : ""
+                          }
+                        >
+                          {svc.name}
+                        </span>
+                        {svc.status === "pending" ? (
+                          <span className="ml-1 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-amber-200">
+                            Pending
+                          </span>
+                        ) : svc.status === "declined" ? (
+                          <span className="ml-1 rounded bg-red-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-red-200">
+                            Declined
+                          </span>
+                        ) : svc.status === "draft" ? (
+                          <span className="ml-1 rounded bg-slate-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-slate-300">
+                            Draft
+                          </span>
+                        ) : null}
+                      </li>
+                    );
+                  })
                 )}
               </ul>
               <div className="mt-5 flex items-center justify-between border-t border-white/10 pt-4">
@@ -463,13 +932,66 @@ export function NowWorkingPane({
                   Saved automatically · carried into post-job report
                 </p>
               </div>
-              <textarea
-                value={notes}
-                onChange={(event) => setNotes(event.target.value)}
-                placeholder="Jot down what you find as you work — torque values, surprises, what you replaced..."
-                rows={3}
-                className="mt-3 w-full rounded-xl border border-white/10 bg-slate-900/40 p-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-emerald-400/50 focus:outline-none"
-              />
+
+              {noteEntries.length > 0 ? (
+                <ul className="mt-3 space-y-2">
+                  {noteEntries.map((entry, index) => (
+                    <li
+                      key={`${index}-${entry}`}
+                      className="flex items-start gap-2 rounded-xl border border-white/10 bg-slate-900/40 px-3 py-2.5"
+                    >
+                      <span className="mt-1.5 inline-flex h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400/70" />
+                      <span className="flex-1 whitespace-pre-wrap break-words text-sm text-slate-100">
+                        {entry}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeNoteAt(index)}
+                        aria-label="Delete note"
+                        className="shrink-0 rounded-md p-1 text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+
+              <div className="mt-3">
+                <textarea
+                  value={draftNote}
+                  onChange={(event) => setDraftNote(event.target.value)}
+                  onKeyDown={(event) => {
+                    // Enter files the note; Shift+Enter keeps a line break for
+                    // the occasional longer one.
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      addNote();
+                    }
+                  }}
+                  placeholder={
+                    noteEntries.length > 0
+                      ? "Add another note…"
+                      : "Jot down what you find as you work — torque values, surprises, what you replaced…"
+                  }
+                  rows={2}
+                  className="w-full rounded-xl border border-white/10 bg-slate-900/40 p-3 text-sm text-slate-100 placeholder:text-slate-500 focus:border-emerald-400/50 focus:outline-none"
+                />
+                <div className="mt-2 flex items-center justify-between gap-3">
+                  <p className="text-[11px] text-slate-500">
+                    Enter to add · Shift+Enter for a line break
+                  </p>
+                  <button
+                    type="button"
+                    onClick={addNote}
+                    disabled={draftNote.trim().length === 0}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-3 py-1.5 text-xs font-semibold text-slate-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add note
+                  </button>
+                </div>
+              </div>
 
               <div className="mt-5 flex items-center justify-between gap-3">
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -549,7 +1071,7 @@ export function NowWorkingPane({
           <footer className="flex flex-wrap items-center justify-between gap-3 border-t border-white/10 py-5">
             <button
               type="button"
-              onClick={() => onToast?.("Flag issue — coming soon")}
+              onClick={() => setFlagOpen(true)}
               className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3.5 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-white/10"
             >
               <Flag className="h-4 w-4" /> Flag issue
@@ -564,60 +1086,271 @@ export function NowWorkingPane({
           </footer>
         </>
       )}
+
+      {flagOpen ? (
+        <FlagIssueSheet
+          bookingId={bookingId}
+          onClose={() => setFlagOpen(false)}
+          onAddScope={() => setScopeOpen(true)}
+          onToast={onToast}
+        />
+      ) : null}
+
+      {/* The same dialog the booking detail panel opens for "Add unforeseen
+          scope" — one component owns the quote seeding, so the two entry points
+          can't drift (MidJobScopeDialog). */}
+      <MidJobScopeDialog
+        open={scopeOpen}
+        bookingId={bookingId}
+        onClose={() => setScopeOpen(false)}
+        onSubmitted={(msg) => {
+          setScopeOpen(false);
+          onToast?.(msg);
+        }}
+      />
+
+      {/* Only for a freeform flagged finding — a catalog service never reaches
+          here, it adds in one tap with its derived taxonomy. */}
+      <FindingTaxonomyDialog
+        open={pendingFinding !== null}
+        findingName={pendingFinding?.serviceName ?? pendingFinding?.label ?? ""}
+        busy={addingFinding !== null}
+        onCancel={() => setPendingFinding(null)}
+        onConfirm={(taxonomy) => {
+          const finding = pendingFinding;
+          if (!finding) return;
+          setPendingFinding(null);
+          // A freeform finding that reads as brake/rotor work needs an axle
+          // before it lands — hand it to the axle prompt. Otherwise commit.
+          if (isBrakeAxleFinding(finding)) {
+            setPendingBrakeAxle({ finding, taxonomy });
+          } else {
+            void commitFinding(finding, taxonomy);
+          }
+        }}
+      />
+
+      {/* Brake/rotor work adds an axle step so the inspection scopes the right
+          corners. Defaults to Front and rear — see BrakeAxleDialog. */}
+      <BrakeAxleDialog
+        open={pendingBrakeAxle !== null}
+        serviceName={
+          pendingBrakeAxle?.finding.serviceName ??
+          pendingBrakeAxle?.finding.label ??
+          ""
+        }
+        busy={addingFinding !== null}
+        onCancel={() => setPendingBrakeAxle(null)}
+        onConfirm={(axle) => {
+          if (pendingBrakeAxle)
+            void commitFinding(
+              pendingBrakeAxle.finding,
+              pendingBrakeAxle.taxonomy,
+              axle,
+            );
+        }}
+      />
+    </div>
+  );
+}
+
+/** One active-in-the-bay job, as the picker needs to render it. */
+export type ActiveJobRow = {
+  bookingId: Id<"bookings">;
+  mechanicName: string;
+  vehicle: string;
+  serviceSummary: string;
+  startedAt: number | null;
+  /** YYYY-MM-DD the job was scheduled for; anything but today reads as overrun. */
+  scheduledDate: string | null;
+  /** Minutes the work clock was stopped — excluded from the row's timer. */
+  blockedMinutes?: number;
+  /** Whether the clock is stopped right now (blocker or unanswered re-quote). */
+  clockPaused?: boolean;
+};
+
+function localTodayString() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate(),
+  ).padStart(2, "0")}`;
+}
+
+/**
+ * The picker a busy front desk lands on: every car in the bay, one tap to focus.
+ * Timers keep ticking for all of them — you're choosing which one to drive, not
+ * pausing the rest.
+ */
+function ActiveJobsList({
+  jobs,
+  onSelect,
+  onClose,
+}: {
+  jobs: ActiveJobRow[];
+  onSelect: (bookingId: Id<"bookings">) => void;
+  onClose: () => void;
+}) {
+  const today = localTodayString();
+
+  return (
+    <div className="mx-auto flex h-full max-w-3xl flex-col px-6 py-6">
+      <header className="flex items-center justify-between border-b border-white/10 pb-5">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400" />
+          <p className="text-sm font-medium uppercase tracking-[0.2em] text-emerald-300/80">
+            Active jobs
+          </p>
+          <span className="rounded-md border border-white/15 bg-white/5 px-2 py-0.5 text-xs font-mono text-slate-300">
+            {jobs.length} in the bay
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="inline-flex items-center rounded-lg border border-white/15 bg-white/5 px-3 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-white/10"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </header>
+
+      <p className="mt-4 text-sm text-slate-400">
+        Pick a car to focus on — the clock keeps running for every job in the bay.
+      </p>
+
+      <div className="mt-4 flex-1 space-y-3 overflow-y-auto pb-6">
+        {jobs.length === 0 ? (
+          <div className="flex h-full items-center justify-center text-slate-400">
+            Nothing in the bay right now.
+          </div>
+        ) : (
+          jobs.map((job) => {
+            const overrun =
+              !!job.scheduledDate && job.scheduledDate !== today;
+            return (
+              <button
+                key={String(job.bookingId)}
+                type="button"
+                onClick={() => onSelect(job.bookingId)}
+                className="flex w-full items-center gap-4 rounded-2xl border border-white/10 bg-white/[0.03] px-5 py-4 text-left transition-colors hover:border-emerald-400/40 hover:bg-white/[0.06]"
+              >
+                <span className="inline-flex h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-emerald-400" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-base font-semibold text-slate-100">
+                    {[job.mechanicName, job.vehicle].filter(Boolean).join(" · ")}
+                  </p>
+                  <p className="mt-0.5 truncate text-sm text-slate-400">
+                    {job.serviceSummary || "No services listed"}
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-col items-end gap-1">
+                  <ElapsedTimer
+                    startedAtMs={job.startedAt}
+                    paused={job.clockPaused}
+                    blockedMs={(job.blockedMinutes ?? 0) * 60_000}
+                    className="font-mono text-lg font-semibold tabular-nums text-emerald-300"
+                  />
+                  {overrun ? (
+                    <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                      from {job.scheduledDate}
+                    </span>
+                  ) : job.clockPaused ? (
+                    <span className="text-[11px] text-amber-300">paused</span>
+                  ) : (
+                    <span className="text-[11px] text-slate-500">in progress</span>
+                  )}
+                </div>
+                <ChevronRight className="h-5 w-5 shrink-0 text-slate-500" />
+              </button>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
 
 export default function NowWorkingOverlay({
-  bookingIds,
+  open,
+  jobs,
   onClose,
-  onClosePane,
   onMarkComplete,
   onToast,
 }: {
-  bookingIds: Array<Id<"bookings">>;
+  open: boolean;
+  jobs: ActiveJobRow[];
   onClose: () => void;
-  onClosePane: (bookingId: Id<"bookings">) => void;
   onMarkComplete: (bookingId: Id<"bookings">) => void;
   onToast?: (message: string) => void;
 }) {
+  const [selectedId, setSelectedId] = useState<Id<"bookings"> | null>(null);
+  const multiple = jobs.length > 1;
+
+  // On open, land straight in the focus view when there's a single car in the
+  // bay; otherwise show the picker. On close, forget the selection so the next
+  // open re-decides.
+  const wasOpenRef = useRef(false);
   useEffect(() => {
-    if (bookingIds.length === 0) return;
+    if (open && !wasOpenRef.current) {
+      wasOpenRef.current = true;
+      setSelectedId(jobs.length === 1 ? jobs[0].bookingId : null);
+    } else if (!open && wasOpenRef.current) {
+      wasOpenRef.current = false;
+      setSelectedId(null);
+    }
+  }, [open, jobs]);
+
+  // If the focused job leaves the bay (completed elsewhere, reassigned), drop
+  // back to the picker instead of rendering a pane for a stale booking.
+  useEffect(() => {
+    if (
+      selectedId &&
+      !jobs.some((job) => String(job.bookingId) === String(selectedId))
+    ) {
+      setSelectedId(null);
+    }
+  }, [jobs, selectedId]);
+
+  useEffect(() => {
+    if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Let a focused input/textarea keep its own Escape (clearing a field).
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      // Step back one level: focus → picker → closed.
+      if (selectedId && multiple) {
+        setSelectedId(null);
+      } else {
+        onClose();
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [bookingIds.length, onClose]);
+  }, [open, selectedId, multiple, onClose]);
 
-  if (bookingIds.length === 0 || typeof document === "undefined") return null;
-
-  const dense = bookingIds.length === 2;
+  if (!open || typeof document === "undefined") return null;
 
   return createPortal(
     <div className="fixed inset-0 z-[60] bg-slate-950/95 text-slate-50">
-      <div className="flex h-full w-full flex-col md:flex-row">
-        {bookingIds.map((id, index) => (
-          <div
-            key={String(id)}
-            className={
-              dense
-                ? `h-1/2 w-full overflow-hidden md:h-full md:w-1/2 ${
-                    index === 0 ? "border-b border-white/10 md:border-b-0 md:border-r" : ""
-                  }`
-                : "h-full w-full overflow-hidden"
-            }
-          >
-            <NowWorkingPane
-              bookingId={id}
-              onClose={() => onClosePane(id)}
-              onMarkComplete={onMarkComplete}
-              onToast={onToast}
-              dense={dense}
-            />
-          </div>
-        ))}
-      </div>
+      {selectedId ? (
+        <div className="h-full w-full overflow-hidden">
+          <NowWorkingPane
+            bookingId={selectedId}
+            onBack={multiple ? () => setSelectedId(null) : undefined}
+            onClose={onClose}
+            onMarkComplete={onMarkComplete}
+            onToast={onToast}
+          />
+        </div>
+      ) : (
+        <ActiveJobsList
+          jobs={jobs}
+          onSelect={(id) => setSelectedId(id)}
+          onClose={onClose}
+        />
+      )}
     </div>,
     document.body,
   );

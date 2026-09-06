@@ -150,7 +150,7 @@ export default function WeekSwimLanes({
   }
 
   return (
-    <div className="overflow-auto" style={{ maxHeight: "calc(100vh - 240px)" }}>
+    <div className="overflow-auto flex-1 min-h-0">
       <table className="w-full border-collapse min-w-[700px] table-fixed">
         <thead>
           <tr>

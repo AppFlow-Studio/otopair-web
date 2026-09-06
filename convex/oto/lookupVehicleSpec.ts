@@ -95,9 +95,24 @@ export const lookupVehicleSpec = internalQuery({
     const escapeRegex = (s: string): string =>
       s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+    // Collapse a separator sitting between a letter-run and a digit-run, so
+    // the colloquial run-together spelling matches the catalog's spaced one:
+    //   catalog trim "AMG C 63 S" → "amg c63 s"   ← now \bc63\b hits
+    //   user types   "C63"        → "c63"
+    //   user types   "C 63"       → "c63"         (both sides normalized)
+    //
+    // Letter→digit ONLY. Collapsing digit→letter as well would turn
+    // "amg c 63 s" into "amg c63s", killing the word boundary after "63" and
+    // breaking the very match this exists to enable.
+    //
+    // This does NOT reopen the M5/M550i collision guarded below: "m550i" has
+    // no internal separator, so it is unchanged and \bm5\b still fails on it.
+    const collapseAlnum = (s: string): string =>
+      lower(s).replace(/([a-z])[\s._-]+(\d)/g, "$1$2");
+
     const matchesToken = (haystack: string, token: string): boolean => {
-      const h = lower(haystack);
-      const t = lower(token);
+      const h = collapseAlnum(haystack);
+      const t = collapseAlnum(token);
       if (!h || !t) return false;
       if (h === t) return true;
       // Word-boundary match avoids the M5 / M550i substring-collision bug:
@@ -150,41 +165,53 @@ export const lookupVehicleSpec = internalQuery({
       activeMakes.map((m) => lower((m as any).name)),
     );
     const nonMakeTokens = tokensLower.filter((tk: string) => !makeNamesLower.has(tk));
-    for (const make of activeMakes) {
-      const models = await ctx.db
-        .query("models")
-        .filter((q: any) => q.eq(q.field("make_id"), make._id))
-        .collect();
-      for (const mdl of models) {
-        const cfgs = await ctx.db
-          .query("vehicle_configs")
-          .filter((q: any) => q.eq(q.field("model_id"), mdl._id))
-          .collect();
-        for (const cfg of cfgs) {
-          if (year != null && cfg.year !== year) continue;
-          // Compute score from word-boundary matches against model name AND
-          // trim_name. Tokens that match the model count double.
-          let score = 0;
-          const trim = (cfg as any).trim_name as string | undefined;
-          if (nonMakeTokens.length === 0) {
-            // No discriminating tokens — every config matches with score 0.
-            // Will only be returned if no scored candidates exist.
-            score = 0;
-          } else {
-            for (const tk of nonMakeTokens) {
-              if (matchesToken((mdl as any).name, tk)) score += 2;
-              else if (trim && matchesToken(trim, tk)) score += 1;
-            }
-          }
-          if (score > 0 || nonMakeTokens.length === 0) {
-            candidateConfigs.push({
-              cfg,
-              makeName: (make as any).name,
-              modelName: (mdl as any).name,
-              score,
-            });
-          }
+    // Search space. When NO make token matched, the user gave a bare
+    // model/trim designation with no brand — "c63", "m5", "type r", "gti".
+    // The old shape iterated `activeMakes` directly, so an empty make match
+    // meant this loop never executed and the function returned matched:null
+    // BY CONSTRUCTION, no matter what the catalog actually held. People
+    // usually skip the brand, so fall back to the whole catalog instead.
+    const searchMakes = activeMakes.length > 0 ? activeMakes : allMakes;
+    const makeById = new Map(
+      searchMakes.map((m) => [m._id as unknown as string, m]),
+    );
+
+    // Two collects + in-memory joins, rather than a per-make/per-model query
+    // fan-out. The catalog is small (tens of makes/models/configs); the
+    // brandless fallback above would otherwise issue O(makes + models)
+    // sequential queries on the most common kind of lookup.
+    const allModels = await ctx.db.query("models").collect();
+    const modelById = new Map<string, (typeof allModels)[number]>();
+    for (const mdl of allModels) {
+      if (makeById.has((mdl as any).make_id as unknown as string)) {
+        modelById.set(mdl._id as unknown as string, mdl);
+      }
+    }
+    const allConfigs = await ctx.db.query("vehicle_configs").collect();
+
+    for (const cfg of allConfigs) {
+      const mdl = modelById.get((cfg as any).model_id as unknown as string);
+      if (!mdl) continue;
+      const make = makeById.get((mdl as any).make_id as unknown as string);
+      if (!make) continue;
+      if (year != null && cfg.year !== year) continue;
+      // Score word-boundary matches against model name AND trim_name.
+      // Tokens that match the model count double.
+      let score = 0;
+      const trim = (cfg as any).trim_name as string | undefined;
+      if (nonMakeTokens.length > 0) {
+        for (const tk of nonMakeTokens) {
+          if (matchesToken((mdl as any).name, tk)) score += 2;
+          else if (trim && matchesToken(trim, tk)) score += 1;
         }
+      }
+      if (score > 0 || nonMakeTokens.length === 0) {
+        candidateConfigs.push({
+          cfg,
+          makeName: (make as any).name,
+          modelName: (mdl as any).name,
+          score,
+        });
       }
     }
 

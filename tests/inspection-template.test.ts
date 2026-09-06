@@ -1,18 +1,28 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  canMarkFieldUnavailable,
   classify,
   createInspectionState,
+  deriveStateInspectionFailures,
+  deriveTierInspectionScope,
   derivePrejobFromInspection,
   deriveSuggestedRecommendations,
+  effectiveRotorRef,
+  isNysSafetyField,
+  SERVICE_SLUGS,
   formatZonesForPdf,
   gatherFindings,
   getDirtyIncompleteZones,
   INSPECTION_ZONES_BY_ID,
+  isFieldApplicableToZone,
   isFieldRequiredForZone,
   patchInspectionZone,
   patchSharedInspectionText,
   requiredZonesForBooking,
+  requiresRotorStampPhoto,
+  rotorEvidenceCornersFromSubmission,
+  specPrefillFromPassport,
   toggleInspectionTreadMode,
   validateZoneForCompletion,
   type InspectionState,
@@ -38,6 +48,165 @@ function completeCorner(
 }
 
 describe("multi-point inspection requirements", () => {
+  it("derives Tier 2 and Tier 3 scope from the booked service without consulting lift telemetry", () => {
+    expect(
+      deriveTierInspectionScope({
+        serviceNames: ["Tire Rotation"],
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        liftStatus: "no",
+      }),
+    ).toMatchObject({
+      tier2Corners: ["FL", "FR", "RL", "RR"],
+      tier3AChecksRequired: false,
+      tier3BCorners: ["FL", "FR", "RL", "RR"],
+      bookingScopeError: null,
+    });
+
+    expect(
+      deriveTierInspectionScope({
+        serviceNames: ["Wheel Alignment"],
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        liftStatus: "no",
+      }),
+    ).toMatchObject({
+      tier2Corners: [],
+      tier3AChecksRequired: true,
+      tier3BCorners: [],
+    });
+  });
+
+  it("maps replacement positions and brake axles without defaulting missing brake scope to all corners", () => {
+    expect(
+      deriveTierInspectionScope({
+        serviceNames: ["Tire Replacement"],
+        tireReplacementPositions: ["FR", "RL"],
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      }).tier2Corners,
+    ).toEqual(["FR", "RL"]);
+
+    expect(
+      deriveTierInspectionScope({
+        serviceNames: ["Brake Pad Replacement"],
+        brakeScope: { hasBrakeWork: true, front: true, rear: false },
+      }).tier2Corners,
+    ).toEqual(["FL", "FR"]);
+
+    expect(
+      deriveTierInspectionScope({
+        serviceNames: ["Rotor Replacement"],
+        brakeScope: { hasBrakeWork: true, front: false, rear: false },
+      }).bookingScopeError,
+    ).toContain("axle");
+  });
+
+  it("requires Tier 1 zones and fields on every visit while exempting only outgoing-tire checks", () => {
+    expect(requiredZonesForBooking(["Oil Change"])).toEqual([
+      "FL",
+      "FR",
+      "RL",
+      "RR",
+      "ENG",
+      "FRT",
+    ]);
+    const context = {
+      serviceNames: ["Tire Replacement"],
+      brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      tireReplacementPositions: ["FR"] as const,
+      isFirstShopVisit: false,
+      priorTreadReadings: { FL: 6, FR: 6, RL: 6, RR: 6 },
+    };
+    expect(isFieldRequiredForZone("FR", "tread", context)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "psi", context)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "wear", context)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "brake_visual", context)).toBe(true);
+    expect(isFieldRequiredForZone("FL", "tread", context)).toBe(true);
+    expect(isFieldRequiredForZone("FL", "psi", context)).toBe(true);
+    expect(isFieldRequiredForZone("FL", "wear", context)).toBe(true);
+  });
+
+  it("requires Tier 5 identity on a true first visit and later only when tread increased", () => {
+    const state = createInspectionState();
+    state.zones.FL!.measures.tread = "8";
+    const laterContext = {
+      serviceNames: ["Oil Change"],
+      brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      isFirstShopVisit: false,
+      priorTreadReadings: { FL: 6 },
+      inspectionState: state,
+    };
+    for (const field of ["tire_size", "run_flat"]) {
+      expect(isFieldRequiredForZone("FL", field, laterContext)).toBe(true);
+    }
+    expect(
+      isFieldRequiredForZone("FR", "tire_size", {
+        ...laterContext,
+        isFirstShopVisit: true,
+      }),
+    ).toBe(true);
+    expect(isFieldRequiredForZone("FR", "tire_size", laterContext)).toBe(false);
+
+    state.zones.FL!.statuses.tread = "not_visible";
+    expect(isFieldRequiredForZone("FL", "tire_size", laterContext)).toBe(false);
+  });
+
+  it("offers brand, model and type on a Tier 5 corner without requiring them", () => {
+    // Decision D3 — mechanics don't record brand/model unless the car is
+    // high-end, and many shops fit no-name stock. They stay visible so the data
+    // can be captured, but never block zone completion.
+    const state = createInspectionState();
+    state.zones.FL!.measures.tread = "8";
+    const tier5Context = {
+      serviceNames: ["Oil Change"],
+      brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      isFirstShopVisit: true,
+      inspectionState: state,
+    };
+    for (const field of ["tire_brand", "tire_model", "tire_type"]) {
+      expect(isFieldApplicableToZone("FL", field, tier5Context)).toBe(true);
+      expect(isFieldRequiredForZone("FL", field, tier5Context)).toBe(false);
+    }
+    // The fitment-defining half is still mandatory.
+    expect(isFieldRequiredForZone("FL", "tire_size", tier5Context)).toBe(true);
+
+    // And the optional fields disappear with the rest of the block when the
+    // Tier 5 gate is shut — "not required" must not mean "always rendered".
+    const noTier5 = { ...tier5Context, isFirstShopVisit: false };
+    expect(isFieldApplicableToZone("FL", "tire_brand", noTier5)).toBe(false);
+  });
+
+  it("requires a tagged rotor-stamp photo only until permanent corner evidence exists", () => {
+    const context = {
+      serviceNames: ["Tire Rotation"],
+      brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      rotorPhotoEvidence: { FL: false, FR: true },
+    };
+    const state = createInspectionState();
+    expect(requiresRotorStampPhoto(state, "FL", context)).toBe(true);
+    state.zones.FL!.photoIds.push("photo-1");
+    state.zones.FL!.photoTags["photo-1"] = "rotor_stamp";
+    expect(requiresRotorStampPhoto(state, "FL", context)).toBe(false);
+    expect(requiresRotorStampPhoto(state, "FR", context)).toBe(false);
+  });
+
+  it("grants rotor evidence only for completed wheel-off corners with an attached tag", () => {
+    const context = {
+      serviceNames: ["Tire Replacement"],
+      tireReplacementPositions: ["FL"] as const,
+      brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      rotorPhotoEvidence: { FL: false },
+    };
+    const state = createInspectionState();
+    state.zones.FL!.photoIds = ["photo-1"];
+    state.zones.FL!.photoTags["photo-1"] = "rotor_stamp";
+    expect(rotorEvidenceCornersFromSubmission(state, context)).toEqual([]);
+    state.zones.FL!.done = true;
+    expect(rotorEvidenceCornersFromSubmission(state, context)).toEqual(["FL"]);
+    state.zones.FL!.select.rotor_applicable = "no";
+    expect(rotorEvidenceCornersFromSubmission(state, context)).toEqual([]);
+    state.zones.FL!.select.rotor_applicable = "yes";
+    state.zones.FL!.photoIds = [];
+    expect(rotorEvidenceCornersFromSubmission(state, context)).toEqual([]);
+  });
   it("starts every inspection field blank with no implicit green ratings", () => {
     const state = createInspectionState();
 
@@ -59,7 +228,7 @@ describe("multi-point inspection requirements", () => {
   });
 
   it("keeps detailed tread readings in the local zone state when returning to shallowest-only mode", () => {
-    const zone = createInspectionState({ isFirstVisit: true }).zones.FL!;
+    const zone = createInspectionState().zones.FL!;
     zone.select.tread_mode = "detailed";
     zone.measures = {
       ...zone.measures,
@@ -80,7 +249,7 @@ describe("multi-point inspection requirements", () => {
   });
 
   it("restores the shallowest reading when returning to detailed tread mode", () => {
-    const zone = createInspectionState({ isFirstVisit: true }).zones.FL!;
+    const zone = createInspectionState().zones.FL!;
     zone.measures = {
       ...zone.measures,
       tread_inner: "6",
@@ -94,23 +263,16 @@ describe("multi-point inspection requirements", () => {
     expect(patch.measures?.tread).toBe("4");
   });
 
-  it("requires only service-relevant zones", () => {
+  it("requires the Tier 1 zones on every service and adds Underbody for alignment", () => {
     expect(requiredZonesForBooking(["Oil Change"])).toEqual([
-      "ENG",
+      "FL", "FR", "RL", "RR", "ENG", "FRT",
     ]);
     expect(requiredZonesForBooking(["Tire Rotation"])).toEqual([
-      "FL",
-      "FR",
-      "RL",
-      "RR",
+      "FL", "FR", "RL", "RR", "ENG", "FRT",
     ]);
-    expect(requiredZonesForBooking(["Brake Pad Replacement"])).toEqual([
-      "FL",
-      "FR",
-      "RL",
-      "RR",
+    expect(requiredZonesForBooking(["Wheel Alignment"])).toEqual([
+      "FL", "FR", "RL", "RR", "ENG", "UND", "FRT",
     ]);
-    expect(requiredZonesForBooking(["Battery Replacement"])).toEqual([]);
   });
 
   it("labels a rotor at the reference as in spec but near the minimum", () => {
@@ -145,8 +307,8 @@ describe("multi-point inspection requirements", () => {
     });
     expect(
       deriveSuggestedRecommendations(state, { onlyCompletedZones: true }).find(
-        (recommendation) => recommendation.key === "rotors",
-      )?.reason,
+        (recommendation) => recommendation.key === "rotor_replacement",
+      )?.reasons.join(" "),
     ).toContain("23.01mm");
   });
 
@@ -156,23 +318,25 @@ describe("multi-point inspection requirements", () => {
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
     };
     const frontBrakeContext = {
-      serviceNames: ["Front Brake Pad Replacement"],
+      serviceNames: ["Brake Pad Replacement"],
       brakeScope: { hasBrakeWork: true, front: true, rear: false },
     };
 
     const tireContext = {
       serviceNames: ["Tire Rotation"],
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      isFirstShopVisit: true,
     };
 
     expect(isFieldRequiredForZone("FR", "tire_brand", oilContext)).toBe(false);
     expect(isFieldRequiredForZone("FR", "tire_size", oilContext)).toBe(false);
-    expect(isFieldRequiredForZone("FR", "tire_brand", tireContext)).toBe(true);
+    // tire_size, not tire_brand — brand is optional identity since D3.
+    expect(isFieldRequiredForZone("FR", "tire_size", tireContext)).toBe(true);
     expect(isFieldRequiredForZone("FR", "psi", tireContext)).toBe(true);
-    expect(isFieldRequiredForZone("FR", "pad", oilContext)).toBe(false);
-    expect(isFieldRequiredForZone("FR", "pad", frontBrakeContext)).toBe(true);
-    expect(isFieldRequiredForZone("RR", "pad", frontBrakeContext)).toBe(false);
-    expect(isFieldRequiredForZone("FR", "psi", frontBrakeContext)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "pad_inner", oilContext)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "pad_inner", frontBrakeContext)).toBe(true);
+    expect(isFieldRequiredForZone("RR", "pad_inner", frontBrakeContext)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "psi", frontBrakeContext)).toBe(true);
     expect(isFieldRequiredForZone("ENG", "oil_viscosity", oilContext)).toBe(true);
     expect(isFieldRequiredForZone("ENG", "oil_type", oilContext)).toBe(true);
     expect(
@@ -197,7 +361,22 @@ describe("multi-point inspection requirements", () => {
 
     expect(isFieldRequiredForZone("ENG", "batt", context)).toBe(true);
     expect(isFieldRequiredForZone("ENG", "term", context)).toBe(true);
-    expect(validateZoneForCompletion(createInspectionState(), "ENG", context)).toEqual({
+    const state = createInspectionState();
+    for (const key of [
+      "oil_condition",
+      "oil_level",
+      "cool_condition",
+      "cool_level",
+      "bf_level",
+      "bf_leak",
+      "bf_condition",
+      "washer",
+      "warning_lights",
+      "term",
+    ]) {
+      state.zones.ENG!.statuses[key] = "not_inspected";
+    }
+    expect(validateZoneForCompletion(state, "ENG", context)).toEqual({
       valid: false,
       fieldKey: "batt",
       error: "Battery load test is required.",
@@ -214,13 +393,30 @@ describe("multi-point inspection requirements", () => {
     expect(isFieldRequiredForZone("FR", "tread", context)).toBe(false);
     expect(isFieldRequiredForZone("FR", "wear", context)).toBe(false);
     expect(isFieldRequiredForZone("FR", "tire_brand", context)).toBe(false);
-    expect(isFieldRequiredForZone("FR", "tire_size", context)).toBe(true);
+    expect(isFieldRequiredForZone("FR", "tire_size", context)).toBe(false);
     expect(isFieldRequiredForZone("FL", "tread", context)).toBe(true);
   });
 
-  it("completes a replacement corner with installed axle size and no outgoing-tire reading", () => {
+  it("completes a replacement corner without outgoing-tire readings after its wheel-off checks", () => {
     const state = createInspectionState();
-    state.zones.FR!.text.tire_size = "225/45R18";
+    const zone = state.zones.FR!;
+    zone.tri.brake_visual = "g";
+    zone.measures.pad_inner = "6";
+    zone.measures.pad_outer = "7";
+    zone.select.pad_method = "gauge";
+    zone.select.rotor_applicable = "yes";
+    zone.measures.rotor = "24";
+    zone.select.rotor_tool = "micrometer";
+    zone.text.rotor_stamp = "MIN TH 23 MM";
+    zone.descriptors.desc = ["none"];
+    zone.tri.caliper = "g";
+    zone.tri.brake_hose = "g";
+    zone.text.pad_brand = "Akebono";
+    zone.tri.steering_play = "g";
+    zone.tri.ball_joint_play = "g";
+    zone.tri.wheel_bearing_play = "g";
+    zone.photoIds.push("photo-1");
+    zone.photoTags["photo-1"] = "rotor_stamp";
 
     expect(
       validateZoneForCompletion(state, "FR", {
@@ -251,6 +447,64 @@ describe("multi-point inspection requirements", () => {
     });
   });
 
+  it("rejects conflicting installed tire sizes on the same axle", () => {
+    const state = createInspectionState();
+    state.zones.FL!.text.tire_size = "225/45R18";
+    state.zones.FR!.text.tire_size = "235/45R18";
+    for (const key of ["tread", "psi", "wear", "brake_visual"]) {
+      state.zones.FL!.statuses[key] = "not_inspected";
+    }
+
+    expect(
+      validateZoneForCompletion(state, "FL", {
+        serviceNames: ["Oil Change"],
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        isFirstShopVisit: false,
+        inspectionState: state,
+      }),
+    ).toEqual({
+      valid: false,
+      fieldKey: "tire_size",
+      error: "Installed tire sizes must match within the axle.",
+    });
+  });
+
+  it("rejects select, measurement-method, and descriptor values outside the template", () => {
+    const state = createInspectionState();
+    const zone = state.zones.FL!;
+    for (const key of ["tread", "psi", "wear", "brake_visual"]) {
+      zone.statuses[key] = "not_inspected";
+    }
+    zone.select.run_flat = "sometimes";
+    expect(
+      validateZoneForCompletion(state, "FL", {
+        serviceNames: ["Oil Change"],
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        isFirstShopVisit: false,
+      }),
+    ).toMatchObject({ valid: false, fieldKey: "run_flat" });
+
+    zone.select.run_flat = "";
+    zone.methods.pad_method = "guess";
+    expect(
+      validateZoneForCompletion(state, "FL", {
+        serviceNames: ["Oil Change"],
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        isFirstShopVisit: false,
+      }),
+    ).toMatchObject({ valid: false, fieldKey: "pad_method" });
+
+    zone.methods.pad_method = "";
+    zone.descriptors.desc = ["cracked-in-half"];
+    expect(
+      validateZoneForCompletion(state, "FL", {
+        serviceNames: ["Oil Change"],
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        isFirstShopVisit: false,
+      }),
+    ).toMatchObject({ valid: false, fieldKey: "desc" });
+  });
+
   it("rejects a partial detailed tread measurement when completing a zone", () => {
     const state = createInspectionState();
     const zone = state.zones.FL!;
@@ -276,20 +530,47 @@ describe("multi-point inspection requirements", () => {
     const state = createInspectionState();
     const zone = state.zones.FL!;
     zone.measures.tread = "7";
-    zone.measures.pad = "6";
+    zone.measures.psi = "32";
+    zone.measures.pad_inner = "6";
+    zone.measures.pad_outer = "7";
     zone.measures.rotor = "23";
-    zone.text.tire_brand = "michelin";
-    zone.text.tire_size = "225/45R18";
     zone.tri.wear = "g";
+    zone.tri.brake_visual = "g";
+    zone.select.pad_method = "gauge";
+    zone.select.rotor_applicable = "yes";
+    zone.select.rotor_tool = "micrometer";
+    zone.text.rotor_stamp = "MIN TH 23 MM";
+    zone.descriptors.desc = ["none"];
+    zone.tri.caliper = "g";
+    zone.tri.brake_hose = "g";
+    zone.text.pad_brand = "Akebono";
+    zone.tri.steering_play = "g";
+    zone.tri.ball_joint_play = "g";
+    zone.tri.wheel_bearing_play = "g";
     const context = {
-      serviceNames: ["Front Brake Pad Replacement"],
+      serviceNames: ["Brake Pad Replacement"],
       brakeScope: { hasBrakeWork: true, front: true, rear: false },
+      rotorPhotoEvidence: { FL: true },
     };
     expect(validateZoneForCompletion(state, "FL", context)).toEqual({
       valid: true,
     });
 
     state.zones.ENG!.measures.batt = "-1";
+    for (const key of [
+      "oil_condition",
+      "oil_level",
+      "cool_condition",
+      "cool_level",
+      "bf_level",
+      "bf_leak",
+      "bf_condition",
+      "washer",
+      "warning_lights",
+      "term",
+    ]) {
+      state.zones.ENG!.statuses[key] = "not_inspected";
+    }
     expect(validateZoneForCompletion(state, "ENG", context)).toEqual({
       valid: false,
       fieldKey: "batt",
@@ -361,16 +642,34 @@ describe("multi-point inspection requirements", () => {
         "tire_brand",
         "tire_model",
         "tire_size",
-        "pad",
+        "run_flat",
+        "tire_type",
+        "brake_visual",
+        "pad_inner",
+        "pad_outer",
+        "pad_method",
+        "rotor_applicable",
         "rotor",
+        "rotor_tool",
+        "rotor_stamp",
         "desc",
+        "caliper",
+        "brake_hose",
         "pad_brand",
+        "steering_play",
+        "ball_joint_play",
+        "wheel_bearing_play",
       ]);
       expect(
         fields
           .map((field) => field.section)
           .filter((section, index, sections) => section !== sections[index - 1]),
-      ).toEqual(["Tire", "Brakes"]);
+      ).toEqual([
+        "Tire",
+        "Brakes · visual",
+        "Brakes · wheel off",
+        "Lift · wheel off",
+      ]);
     }
   });
 });
@@ -387,6 +686,22 @@ describe("multi-point inspection payload derivation", () => {
         },
       ]),
     ).toEqual([]);
+  });
+
+  it("prints unavailable statuses distinctly instead of treating them as green", () => {
+    expect(
+      formatZonesForPdf([
+        {
+          zone_id: "FRT",
+          done: true,
+          statuses: { lamp: "not_visible", glass: "not_inspected", horn: "not_applicable" },
+        },
+      ])[0]?.rows,
+    ).toEqual([
+      { label: "Headlights / hazards / tail", value: "Not visible", grade: "none" },
+      { label: "Windshield — chips / cracks", value: "Not inspected", grade: "none" },
+      { label: "Horn", value: "N/A", grade: "none" },
+    ]);
   });
 
   it("emits all structured tread and rotor readings from completed corners", () => {
@@ -493,5 +808,240 @@ describe("multi-point inspection payload derivation", () => {
     expect(payload.tire_tread?.front_left).toBeUndefined();
     expect(payload.brakes).toBeNull();
     expect(payload.front_tire_condition).toBeNull();
+  });
+
+  it("does not derive stale values hidden by an unavailable status", () => {
+    const state = createInspectionState();
+    const zone = state.zones.FL!;
+    zone.done = true;
+    zone.measures.tread = "8";
+    zone.measures.rotor = "24";
+    zone.tri.wear = "r";
+    zone.statuses.tread = "not_visible";
+    zone.statuses.rotor = "not_visible";
+    zone.statuses.wear = "not_inspected";
+
+    const payload = derivePrejobFromInspection(state, { mileage: 45_000 });
+
+    expect(payload.tire_tread?.front_left).toBeUndefined();
+    expect(payload.brakes).toBeNull();
+    expect(payload.front_tire_condition).toBeNull();
+  });
+
+  it("does not derive tier-scoped values outside the booking trigger", () => {
+    const state = createInspectionState();
+    const zone = state.zones.FL!;
+    zone.done = true;
+    zone.text.tire_brand = "Michelin";
+    zone.measures.pad_inner = "8";
+    zone.measures.pad_outer = "7";
+    zone.measures.rotor = "24";
+
+    const payload = derivePrejobFromInspection(state, {
+      mileage: 45_000,
+      completionContext: {
+        serviceNames: ["Oil Change"],
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        isFirstShopVisit: false,
+        inspectionState: state,
+      },
+    });
+
+    expect(payload.tire_details).toBeNull();
+    expect(payload.brakes).toBeNull();
+  });
+
+  it("derives legacy axle pad thickness from the shallowest inner or outer reading", () => {
+    const state = createInspectionState();
+    state.zones.FL!.done = true;
+    state.zones.FL!.measures.pad_inner = "7";
+    state.zones.FL!.measures.pad_outer = "5";
+    state.zones.FR!.done = true;
+    state.zones.FR!.measures.pad_inner = "6";
+    state.zones.FR!.measures.pad_outer = "8";
+
+    expect(derivePrejobFromInspection(state, { mileage: 45_000 }).brakes?.front_pad_mm).toBe(5);
+  });
+
+  it("does not recommend a filter from a stale unavailable rating", () => {
+    const state = createInspectionState();
+    state.zones.ENG!.done = true;
+    state.zones.ENG!.tri.af = "r";
+    state.zones.ENG!.statuses.af = "not_visible";
+
+    expect(
+      deriveSuggestedRecommendations(state, { onlyCompletedZones: true }).find(
+        (recommendation) => recommendation.key === "filter",
+      ),
+    ).toBeUndefined();
+    expect(
+      derivePrejobFromInspection(state, { mileage: 45_000 }).filters,
+    ).toEqual({ engine_air_filter: "not_checked", cabin_air_filter: null });
+  });
+
+  it("never recommends courtesy fluid top-offs, but still flags oil and brake fluid", () => {
+    // Coolant + washer top-offs are shop protocol and free — recommending them
+    // manufactures a service suggestion we did not earn. Oil is not a courtesy
+    // fluid (low oil is a real finding), and brake fluid is explicitly excluded
+    // because low brake fluid means pads or a leak.
+    const state = createInspectionState();
+    state.zones.ENG!.done = true;
+    state.zones.ENG!.tri.cool_level = "r";
+    state.zones.ENG!.tri.washer = "r";
+    state.zones.ENG!.tri.oil_level = "r";
+    state.zones.ENG!.tri.bf_condition = "r";
+
+    const labels = deriveSuggestedRecommendations(state, {
+      onlyCompletedZones: true,
+    }).map((recommendation) => recommendation.label);
+
+    expect(labels).not.toContain("Coolant Top-Off");
+    expect(labels).not.toContain("Washer Fluid Top-Off");
+    expect(labels).toContain("Oil Top-Off");
+    expect(labels).toContain("Brake Fluid Flush");
+  });
+});
+
+describe("specPrefillFromPassport", () => {
+  it("seeds ENG fluid specs into the text bucket so the type:'text' fields render them", () => {
+    // Regression: these entries were bucketed "select" while the ENG fields
+    // render from zs.text, so every enriched fluid spec (oil viscosity,
+    // coolant, brake fluid, ATF) rendered blank on a first visit even though
+    // the passport carried the value.
+    const passport = {
+      tires: {},
+      brakes: {},
+      fluids: {
+        oil_viscosity: "0W-16",
+        coolant_type: "Toyota Super Long Life Coolant (SLLC) / Pink",
+        brake_fluid_type: "DOT 3",
+        transmission_fluid_type: "Toyota Genuine ATF WS",
+      },
+    } as never;
+
+    const eng = specPrefillFromPassport(passport, null).ENG ?? [];
+    const byKey = Object.fromEntries(eng.map((e) => [e.fieldKey, e]));
+
+    expect(byKey.coolant_type?.value).toBe(
+      "Toyota Super Long Life Coolant (SLLC) / Pink",
+    );
+    expect(byKey.oil_viscosity?.value).toBe("0W-16");
+    // A "select" bucket here silently blanks the field — every ENG spec must
+    // land in the text bucket the fields read from.
+    expect(eng.every((e) => e.bucket === "text")).toBe(true);
+  });
+});
+
+// Fresh state with the FRT horn tri set to the given value.
+function stateWithHorn(value: "g" | "y" | "r" | undefined): InspectionState {
+  const state = createInspectionState();
+  const frt = state.zones.FRT!;
+  if (value) frt.tri.horn = value;
+  frt.done = true;
+  return state;
+}
+
+describe("horn — NYS safety item (locked Aug 2026)", () => {
+  it("is a mandatory NYS safety field that can't be skipped", () => {
+    expect(isNysSafetyField("FRT", "horn")).toBe(true);
+    expect(canMarkFieldUnavailable("FRT", "horn")).toBe(false);
+  });
+
+  it("leaves the other FRT items skippable", () => {
+    expect(isNysSafetyField("FRT", "lamp")).toBe(false);
+    expect(canMarkFieldUnavailable("FRT", "lamp")).toBe(true);
+    expect(canMarkFieldUnavailable("FRT", "wipe")).toBe(true);
+  });
+
+  it("flags a red horn as an automatic state-inspection failure", () => {
+    expect(deriveStateInspectionFailures(stateWithHorn("r"))).toEqual([
+      { zoneId: "FRT", fieldKey: "horn", label: "Horn" },
+    ]);
+  });
+
+  it("does not flag a working (green) horn", () => {
+    expect(deriveStateInspectionFailures(stateWithHorn("g"))).toEqual([]);
+  });
+});
+
+describe("horn recommendation — two-stage diagnostic-first flow", () => {
+  it("recommends a Horn Diagnostic (not a repair) with soon urgency on failure", () => {
+    const recs = deriveSuggestedRecommendations(stateWithHorn("r"));
+    const horn = recs.find((r) => r.key === "horn");
+    expect(horn).toBeDefined();
+    expect(horn!.label).toBe("Horn Diagnostic");
+    expect(horn!.urgency).toBe("soon");
+    expect(horn!.reasons.join(" ")).toMatch(/NYS inspection failure/i);
+    expect(horn!.reasons.join(" ")).toMatch(/before a replacement/i);
+    // Never routes straight to a swap.
+    expect(recs.some((r) => /horn repair/i.test(r.label))).toBe(false);
+  });
+
+  it("recommends a lower-urgency diagnostic for an intermittent (yellow) horn", () => {
+    const recs = deriveSuggestedRecommendations(stateWithHorn("y"));
+    const horn = recs.find((r) => r.key === "horn");
+    expect(horn).toBeDefined();
+    expect(horn!.label).toBe("Horn Diagnostic");
+    expect(horn!.urgency).toBe("within_3_months");
+  });
+
+  it("makes no horn recommendation when the horn works", () => {
+    const recs = deriveSuggestedRecommendations(stateWithHorn("g"));
+    expect(recs.some((r) => r.key === "horn")).toBe(false);
+  });
+});
+
+describe("per-vehicle rotor minimum grading (enrichment nominal × 0.85)", () => {
+  it("effectiveRotorRef prefers the per-axle vehicle min, falls back to the field default", () => {
+    // Front corners read the front min, rear corners the rear.
+    expect(effectiveRotorRef("FL", 23, { front: 25, rear: 8 })).toBe(25);
+    expect(effectiveRotorRef("FR", 23, { front: 25, rear: 8 })).toBe(25);
+    expect(effectiveRotorRef("RR", 8, { front: 25, rear: 10 })).toBe(10);
+    // A null axle (no nominal sourced) falls back to the static field default.
+    expect(effectiveRotorRef("FL", 23, { front: null, rear: 10 })).toBe(23);
+    // No override at all → field default.
+    expect(effectiveRotorRef("FL", 23, null)).toBe(23);
+    expect(effectiveRotorRef("FL", 23, undefined)).toBe(23);
+  });
+
+  // A front rotor read at 24 mm: in spec against the 23 mm static default, but
+  // below a 25 mm per-vehicle minimum (a rotor whose OEM nominal is ~29.4 mm).
+  function stateWithFrontRotor(mm: string): InspectionState {
+    const state = createInspectionState();
+    const fl = state.zones.FL!;
+    fl.done = true;
+    fl.measures.rotor = mm;
+    fl.select.rotor_unit = "mm";
+    return state;
+  }
+
+  it("gatherFindings flags a rotor that passes the default but fails the per-vehicle min", () => {
+    const state = stateWithFrontRotor("24");
+    // Static fallback (23 mm): 24 mm is in spec → no rotor attention finding.
+    const baseline = gatherFindings(state);
+    expect(
+      baseline.attention.some((f) => /rotor/i.test(f.label)),
+    ).toBe(false);
+    // Per-vehicle min (25 mm): 24 mm is below → attention finding.
+    const graded = gatherFindings(state, { rotorMin: { front: 25, rear: null } });
+    expect(
+      graded.attention.some((f) => /brake rotor thickness · below min/i.test(f.label)),
+    ).toBe(true);
+  });
+
+  it("drives a Rotor Replacement recommendation off the per-vehicle min", () => {
+    const state = stateWithFrontRotor("24");
+    // No override → graded against 23 mm default → no recommendation.
+    expect(
+      deriveSuggestedRecommendations(state).some((r) => r.key === SERVICE_SLUGS.rotors),
+    ).toBe(false);
+    // Per-vehicle min 25 mm → below → "Rotor Replacement", soon.
+    const recs = deriveSuggestedRecommendations(state, {
+      rotorMin: { front: 25, rear: null },
+    });
+    const rotorRec = recs.find((r) => r.key === SERVICE_SLUGS.rotors);
+    expect(rotorRec).toBeDefined();
+    expect(rotorRec!.label).toBe("Rotor Replacement");
+    expect(rotorRec!.urgency).toBe("soon");
   });
 });

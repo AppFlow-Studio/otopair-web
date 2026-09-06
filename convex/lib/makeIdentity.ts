@@ -30,6 +30,27 @@ import {
   type I1GuardInput,
 } from "../partSelector";
 import { makeKeyOf } from "./makeKey";
+import { makesSameFamily } from "../vehicleEnrichment/contentSanitization";
+
+/** Cached make-name lookup for the named guards below. Module-level cache is
+ *  safe: make names are effectively immutable reference rows, and the guards
+ *  only compare them case-insensitively. One db.get per distinct make id per
+ *  isolate. Mirrors serviceParts.partMakeNameCached so read paths outside that
+ *  module (post-job prefill, add-catalog-service) can call the named guard the
+ *  same way the canonical resolver does. */
+const _makeNameCache = new Map<string, string | null>();
+export async function makeNameCached(
+  ctx: { db: { get: (id: any) => Promise<any> } },
+  id: unknown,
+): Promise<string | null> {
+  if (id == null) return null;
+  const k = String(id);
+  const hit = _makeNameCache.get(k);
+  if (hit !== undefined) return hit;
+  const name = ((await ctx.db.get(id as any)) as any)?.name ?? null;
+  _makeNameCache.set(k, name);
+  return name;
+}
 
 /** Case/hyphen/space-insensitive make-name identity ("MERCEDES-BENZ" ≡
  *  "Mercedes-Benz") — same makeKeyOf the write-side guard and the
@@ -42,7 +63,46 @@ export function sameMakeName(
   return makeKeyOf(a) === makeKeyOf(b);
 }
 
-/** partFitsConfigMake + the duplicate-makes-row escape. */
+/**
+ * CORPORATE-FAMILY READ ESCAPE (operator decision, Aug 11 2026).
+ *
+ * The strict same-make read guard was hiding parts we had correctly found,
+ * verified and priced. Measured on third-bird-914: the Buick Enclave read
+ * `complete · quotability 1.00 · 0 missing roles` while the booking-facing
+ * gaps query reported 3 missing parts — its coolant, ATF and battery were
+ * stamped with a SIBLING GM make because GM sells Chevrolet/GMC/Cadillac/
+ * Buick out of one storefront (`g.oempartsonline.com`). Same story in five
+ * more families: Mopar (Pacifica 7/26 fitments), Nissan (QX60 4/16, its
+ * engine oil among them), Ford (Nautilus 3/5), Honda (RDX 2/15).
+ *
+ * These are not contamination. A 5Q0-prefix MQB part genuinely fits a VW and
+ * an Audi; Mopar numbers genuinely span Jeep/Ram/Chrysler. The write-side
+ * guards and the quarantine backfill have ALWAYS treated same-family as
+ * compatible (`makesSameFamily`); only the read path disagreed, so the
+ * pipeline stored parts the booking flow then refused to show.
+ *
+ * What does NOT change: a genuinely foreign part stays blocked. The escape
+ * re-runs the full guard with the id mismatch neutralized, so the
+ * foreign-brand-signature backstop still fires — a Motorcraft `BXT-94RH7-730`
+ * on an Alfa Romeo is refused by family membership AND by signature.
+ *
+ * Reversible: PARTS_I1_FAMILY_READ=off restores strict same-make behaviour.
+ */
+function familyReadEnabled(): boolean {
+  return process.env.PARTS_I1_FAMILY_READ !== "off";
+}
+
+/** Same make, or the same corporate part-sharing family when the family read
+ *  escape is enabled. */
+function makeCompatibleByName(
+  partMakeName: string | null | undefined,
+  configMakeName: string | null | undefined,
+): boolean {
+  if (sameMakeName(partMakeName, configMakeName)) return true;
+  return familyReadEnabled() && makesSameFamily(partMakeName, configMakeName);
+}
+
+/** partFitsConfigMake + the duplicate-makes-row and corporate-family escapes. */
 export function partFitsConfigMakeNamed(
   partMakeId: Id<"makes"> | null | undefined,
   configMakeId: Id<"makes"> | null | undefined,
@@ -50,25 +110,26 @@ export function partFitsConfigMakeNamed(
   configMakeName: string | null | undefined,
 ): boolean {
   if (partFitsConfigMake(partMakeId, configMakeId)) return true;
-  return sameMakeName(partMakeName, configMakeName);
+  return makeCompatibleByName(partMakeName, configMakeName);
 }
 
-/** passesI1ReadGuard + the duplicate-makes-row escape. The brand-signature
- *  backstop still applies on the escape path — a same-make-named part with a
- *  foreign-format number stays dropped. */
+/** passesI1ReadGuard + the duplicate-makes-row and corporate-family escapes.
+ *  The brand-signature backstop still applies on BOTH escape paths — a
+ *  compatible-by-name part carrying a foreign-format number stays dropped. */
 export function passesI1ReadGuardNamed(
   input: I1GuardInput & { partMakeName?: string | null },
 ): boolean {
   if (passesI1ReadGuard(input)) return true;
   if (input.mechanicVerified === true) return true;
-  if (!sameMakeName(input.partMakeName, input.configMakeName)) return false;
+  if (!makeCompatibleByName(input.partMakeName, input.configMakeName)) return false;
   // Re-apply the signature backstop that passesI1ReadGuard would have run had
   // the id check passed — the escape must not be LOOSER than the main path.
   return (
     passesI1ReadGuard({
       ...input,
-      // Same-make by name: neutralize the id mismatch and let the rest of the
-      // guard (foreign brand signature) decide.
+      // Compatible by name (same make, or same corporate family): neutralize
+      // the id mismatch and let the rest of the guard (foreign brand
+      // signature) decide.
       partMakeId: input.configMakeId,
     })
   );

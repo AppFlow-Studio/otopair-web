@@ -20,6 +20,11 @@ import { mutation, internalMutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { resolveAvailableMechanicForWindow } from "./lib/timeSlotAvailability";
 import { addMinutesToHHMM } from "./lib/schedule_overlap";
+import {
+  quoteHoldContextValidator,
+  getAuthenticatedQuoteUser,
+  resolveOwnedQuoteHoldExclusion,
+} from "./lib/quoteHoldOwnership";
 
 const SLOT_HOLD_DEFAULTS = { enabled: true, ttlMs: 15 * 60 * 1000 };
 
@@ -65,6 +70,7 @@ export const holdSlot = mutation({
     duration_minutes: v.number(),
     session_id: v.string(),
     held_by: v.optional(v.id("users")),
+    quote_context: v.optional(quoteHoldContextValidator),
   },
   handler: async (ctx, args) => {
     const cfg = await getSlotHoldConfig(ctx);
@@ -74,6 +80,10 @@ export const holdSlot = mutation({
     }
 
     const duration = args.duration_minutes > 0 ? args.duration_minutes : 60;
+    const quoteExclusion = await resolveOwnedQuoteHoldExclusion(ctx, args.quote_context);
+    const quoteOwner = args.quote_context
+      ? await getAuthenticatedQuoteUser(ctx)
+      : null;
 
     // Assert the window is free against ALL four blocking sources (bookings,
     // blocked slots, tire holds, other sessions' slot holds) and PIN a concrete
@@ -87,6 +97,7 @@ export const holdSlot = mutation({
       durationMinutes: duration,
       preferredMechanicId: args.mechanic_id,
       excludeSessionId: args.session_id,
+      ...quoteExclusion,
     });
 
     const now = Date.now();
@@ -110,7 +121,21 @@ export const holdSlot = mutation({
         h.start_time === args.start_time &&
         h.duration_minutes === duration;
       if (sameSlot && reusedId === null) {
-        await ctx.db.patch(h._id, { expires_at: expiresAt, end_time: endTime });
+        await ctx.db.patch(h._id, {
+          expires_at: expiresAt,
+          end_time: endTime,
+          held_by: quoteOwner?._id ?? h.held_by ?? args.held_by,
+          quote_type: args.quote_context?.quote_type,
+          quote_revision: args.quote_context?.revision ?? (args.quote_context ? 1 : undefined),
+          tire_quote_response_id:
+            args.quote_context?.quote_type === "tire"
+              ? args.quote_context.response_id
+              : undefined,
+          rotor_quote_response_id:
+            args.quote_context?.quote_type === "rotor"
+              ? args.quote_context.response_id
+              : undefined,
+        });
         reusedId = h._id;
       } else {
         await ctx.db.delete(h._id);
@@ -128,11 +153,21 @@ export const holdSlot = mutation({
       start_time: args.start_time,
       end_time: endTime,
       duration_minutes: duration,
-      held_by: args.held_by,
+      held_by: quoteOwner?._id ?? args.held_by,
       session_id: args.session_id,
       expires_at: expiresAt,
       status: "active",
       created_at: now,
+      quote_type: args.quote_context?.quote_type,
+      quote_revision: args.quote_context?.revision ?? (args.quote_context ? 1 : undefined),
+      tire_quote_response_id:
+        args.quote_context?.quote_type === "tire"
+          ? args.quote_context.response_id
+          : undefined,
+      rotor_quote_response_id:
+        args.quote_context?.quote_type === "rotor"
+          ? args.quote_context.response_id
+          : undefined,
     });
     return { holdId, mechanicId, expiresAt };
   },
@@ -233,6 +268,10 @@ export async function resolveSlotHoldForConsume(
     shopId: any;
     date: string;
     startTime: string;
+    heldBy?: any;
+    quoteType?: "tire" | "rotor";
+    quoteResponseId?: any;
+    quoteRevision?: number;
   },
 ): Promise<{
   pinnedMechanicId: any | null;
@@ -242,11 +281,11 @@ export async function resolveSlotHoldForConsume(
   excludeSessionId: string | undefined;
 }> {
   if (!args.holdId) {
-    return { pinnedMechanicId: null, consumeHoldId: null, excludeSessionId: args.sessionId };
+    return { pinnedMechanicId: null, consumeHoldId: null, excludeSessionId: undefined };
   }
   const hold = await ctx.db.get(args.holdId);
   if (!hold) {
-    return { pinnedMechanicId: null, consumeHoldId: null, excludeSessionId: args.sessionId };
+    return { pinnedMechanicId: null, consumeHoldId: null, excludeSessionId: undefined };
   }
   const now = Date.now();
   const valid =
@@ -256,8 +295,18 @@ export async function resolveSlotHoldForConsume(
     String(hold.shop_id) === String(args.shopId) &&
     hold.date === args.date &&
     hold.start_time === args.startTime;
-  if (!valid) {
-    return { pinnedMechanicId: null, consumeHoldId: null, excludeSessionId: args.sessionId };
+  const owned = !args.heldBy || String(hold.held_by) === String(args.heldBy);
+  const quoteMatches =
+    !args.quoteType ||
+    (hold.quote_type === args.quoteType &&
+      hold.quote_revision === (args.quoteRevision ?? 1) &&
+      String(
+        args.quoteType === "tire"
+          ? hold.tire_quote_response_id
+          : hold.rotor_quote_response_id,
+      ) === String(args.quoteResponseId));
+  if (!valid || !owned || !quoteMatches) {
+    return { pinnedMechanicId: null, consumeHoldId: null, excludeSessionId: undefined };
   }
   return {
     pinnedMechanicId: hold.mechanic_id,

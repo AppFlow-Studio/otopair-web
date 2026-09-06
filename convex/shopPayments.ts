@@ -832,7 +832,7 @@ export const getPaymentDetail = query({
       : null;
 
     const serviceNames: string[] = booking?.service_ids
-      ? await resolveServiceNames(ctx, booking.service_ids)
+      ? await resolveServiceNames(ctx, booking.service_ids, booking.custom_services)
       : [];
 
     const vehicle: ShopPaymentDetail["vehicle"] = booking?.vin

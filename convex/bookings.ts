@@ -171,10 +171,12 @@ import {
   gatherFindings,
   INSPECTION_TEMPLATE_VERSION,
   INSPECTION_ZONES_BY_ID,
+  isZoneDoneForPhase,
   requiredZonesForBooking,
   rotorEvidenceCornersFromSubmission,
   validateZoneForCompletion,
   type CornerZoneId,
+  type InspectionPhase,
 } from "../lib/inspection-template";
 import {
   areTireReplacementPositionsValid,
@@ -6164,6 +6166,51 @@ import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
 import { customServiceNames } from "./lib/customServiceNames";
 export { hydrateTieredInspectionState };
 
+/**
+ * Whether the on-lift half actually asks this booking for anything.
+ *
+ * Most bookings never lift a wheel — an oil change has no required MPI item at
+ * all. Those must not be parked in an inspection window that nothing can close:
+ * Start Job stamps mpi_started_at and mpi_completed_at together, so the labor
+ * clock begins immediately and the job is completable (Spec v2 §2 step 3, which
+ * advances automatically "when the last required item is filled" — here there
+ * were none to fill).
+ */
+function hasRequiredMpiWork(args: {
+  serviceNames: string[];
+  brakeScope: any;
+  tireReplacementPositions: CornerZoneId[];
+}): boolean {
+  return (
+    requiredZonesForBooking({
+      phase: "mpi",
+      serviceNames: args.serviceNames,
+      brakeScope: args.brakeScope,
+      tireReplacementPositions: args.tireReplacementPositions,
+    }).length > 0
+  );
+}
+
+/**
+ * Which half of the split inspection this booking is currently filling.
+ *
+ * Derived from stored state, never from the request: a client that could name
+ * its own phase could submit a "pre" inspection and permanently skip every
+ * required wheel-off item. `mpi_started_at` is stamped at Start Job and never
+ * cleared, so anything from Start Job onward — including reopening the
+ * inspection mid-job for optional rows — is the MPI half.
+ */
+async function resolveInspectionPhase(
+  ctx: any,
+  bookingId: any,
+): Promise<InspectionPhase> {
+  const actual = await ctx.db
+    .query("job_actuals")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
+    .first();
+  return actual?.mpi_started_at != null ? "mpi" : "pre";
+}
+
 async function validateTieredInspectionInput({
   ctx,
   booking,
@@ -6240,7 +6287,9 @@ async function validateTieredInspectionInput({
 
   const state = hydrateTieredInspectionState(inspection);
   const prior = passportView.passport.tires.tread_depths ?? {};
+  const phase = await resolveInspectionPhase(ctx, booking._id);
   const context = {
+    phase,
     serviceNames,
     brakeScope,
     tireReplacementPositions,
@@ -6259,8 +6308,8 @@ async function validateTieredInspectionInput({
   if (scopeError) throw new Error(scopeError);
 
   if (requireFinal) {
-    for (const zoneId of requiredZonesForBooking(serviceNames)) {
-      if (!state.zones[zoneId]?.done) {
+    for (const zoneId of requiredZonesForBooking(context)) {
+      if (!isZoneDoneForPhase(state.zones[zoneId], phase)) {
         throw new Error(`${INSPECTION_ZONES_BY_ID[zoneId].label} must be marked complete.`);
       }
     }
@@ -6510,6 +6559,10 @@ async function grantRotorPhotoEvidence(
   const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
   const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
   const context = {
+    // Rotor-stamp evidence only exists on a corner whose wheel came off, so
+    // this path is MPI by definition. Neither deriveTierInspectionScope nor
+    // rotorEvidenceCornersFromSubmission reads phase; it's here for the type.
+    phase: "mpi" as const,
     serviceNames,
     brakeScope,
     tireReplacementPositions: getBookedTireReplacementPositions(
@@ -6574,6 +6627,8 @@ async function persistPrejobSurvey(
     inspection,
     now,
     startedAtMs,
+    mpiStartedAtMs,
+    mpiCompletedAtMs,
     finalizeInspection = false,
   }: {
     booking: any;
@@ -6582,6 +6637,8 @@ async function persistPrejobSurvey(
     inspection?: any;
     now: number;
     startedAtMs?: number;
+    mpiStartedAtMs?: number;
+    mpiCompletedAtMs?: number;
     finalizeInspection?: boolean;
   }
 ) {
@@ -6596,8 +6653,17 @@ async function persistPrejobSurvey(
     updated_at: now,
     logged_at_ms: now,
   };
+  // All three clocks are first-write-wins: reopening the inspection, or any
+  // later save, must not restamp a window that already opened.
   if (startedAtMs != null) {
     jobActualPatch.started_at = jobActual.started_at ?? startedAtMs;
+  }
+  if (mpiStartedAtMs != null) {
+    jobActualPatch.mpi_started_at = jobActual.mpi_started_at ?? mpiStartedAtMs;
+  }
+  if (mpiCompletedAtMs != null) {
+    jobActualPatch.mpi_completed_at =
+      jobActual.mpi_completed_at ?? mpiCompletedAtMs;
   }
 
   await ctx.db.patch(jobActual._id, jobActualPatch);
@@ -11005,6 +11071,11 @@ export const getJobDetail = query({
             _id: jobActual._id,
             status: jobActual.finalized_at_ms ? "finalized" : "draft",
             startedAt: jobActual.started_at ?? null,
+            // The inspection window. mpiStartedAt set => past Start Job, so the
+            // MPI half of the inspection is what's asked; mpiCompletedAt unset
+            // while that half is still gating.
+            mpiStartedAt: jobActual.mpi_started_at ?? null,
+            mpiCompletedAt: jobActual.mpi_completed_at ?? null,
             completedAtMs: jobActual.completed_at_ms ?? null,
             loggedAtMs: jobActual.logged_at_ms ?? null,
             finalizedAtMs: jobActual.finalized_at_ms ?? null,
@@ -11246,7 +11317,23 @@ export const startWithPrejob = mutation({
       prejob: canonical.prejob,
       inspection: canonical.inspection,
       now,
-      startedAtMs: now,
+      // Start Job opens the inspection window, NOT the labor clock. The
+      // measurements taken between here and the MPI gate closing are
+      // inspection time; folding them into started_at would inflate every
+      // labor standard derived from this data (Spec v2 §3).
+      mpiStartedAtMs: now,
+      // Nothing on the lift to ask for → the window opens and closes here and
+      // the labor clock starts now, rather than stranding the job behind a
+      // gate with no items in it.
+      ...(hasRequiredMpiWork({
+        serviceNames,
+        brakeScope,
+        tireReplacementPositions: getBookedTireReplacementPositions(
+          booking.tire_specs,
+        ) as CornerZoneId[],
+      })
+        ? {}
+        : { mpiCompletedAtMs: now, startedAtMs: now }),
       finalizeInspection: true,
     });
 
@@ -11364,7 +11451,23 @@ export const commitInspectionAndAwaitEstimate = mutation({
       prejob: canonical.prejob,
       inspection: canonical.inspection,
       now,
-      startedAtMs: now,
+      // Start Job opens the inspection window, NOT the labor clock. The
+      // measurements taken between here and the MPI gate closing are
+      // inspection time; folding them into started_at would inflate every
+      // labor standard derived from this data (Spec v2 §3).
+      mpiStartedAtMs: now,
+      // Nothing on the lift to ask for → the window opens and closes here and
+      // the labor clock starts now, rather than stranding the job behind a
+      // gate with no items in it.
+      ...(hasRequiredMpiWork({
+        serviceNames,
+        brakeScope,
+        tireReplacementPositions: getBookedTireReplacementPositions(
+          booking.tire_specs,
+        ) as CornerZoneId[],
+      })
+        ? {}
+        : { mpiCompletedAtMs: now, startedAtMs: now }),
       finalizeInspection: true,
     });
 
@@ -11445,6 +11548,80 @@ export const savePrejob = mutation({
       prejob: canonical.prejob,
       inspection: canonical.inspection,
       now,
+    });
+
+    return await buildVehiclePassportForBooking(ctx, booking);
+  },
+});
+
+/**
+ * Closes the MPI gate: the on-lift half of the inspection is complete, so the
+ * inspection window ends and the labor clock starts (Spec v2 §2 step 3, §3).
+ *
+ * Status is already `in_progress` — it flipped at Start Job so the customer
+ * sees one uninterrupted "In progress" — this only moves the internal clocks.
+ * The phase the input is validated against is derived from stored state inside
+ * validateTieredInspectionInput, so a client cannot claim to be in the pre
+ * half and skip every wheel-off item.
+ */
+export const completeMpiPhase = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    prejob: prejobReportValidator,
+    inspection: v.optional(inspectionInputValidator),
+  },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (booking.status !== "in_progress") {
+      throw new Error("Start the job before submitting the on-lift inspection.");
+    }
+
+    const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
+    if (jobActual?.mpi_started_at == null) {
+      throw new Error("Start the job before submitting the on-lift inspection.");
+    }
+
+    const passportView = await buildVehiclePassportForBooking(ctx, booking);
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
+    const serviceFlags = getBookingServiceFlags(serviceNames);
+    const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
+    const canonical = await validateTieredInspectionInput({
+      ctx,
+      booking,
+      inspection: args.inspection,
+      prejob: args.prejob,
+      serviceNames,
+      brakeScope,
+      tireReplacementPositions: getBookedTireReplacementPositions(
+        booking.tire_specs,
+      ) as CornerZoneId[],
+      passportView,
+    });
+    validatePrejobReport(
+      canonical.prejob,
+      passportView.passport.mileage ?? null,
+      serviceFlags,
+      brakeScope,
+      getTireReplacementPositions(booking),
+      true,
+    );
+
+    const now = Date.now();
+    await persistPrejobSurvey(ctx, {
+      booking,
+      passportView,
+      prejob: canonical.prejob,
+      inspection: canonical.inspection,
+      now,
+      // The inspection window closes and the labor clock opens, in that order,
+      // at the same instant. Both are first-write-wins inside the helper.
+      mpiCompletedAtMs: now,
+      startedAtMs: now,
+      finalizeInspection: true,
     });
 
     return await buildVehiclePassportForBooking(ctx, booking);

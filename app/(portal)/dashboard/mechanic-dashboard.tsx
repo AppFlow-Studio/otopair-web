@@ -11,6 +11,7 @@ import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actua
 import MultiPointInspectionDialog, {
   type InspectionInputPayload,
 } from "@/components/multi-point-inspection-dialog";
+import type { InspectionPhase } from "@/lib/inspection-template";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import { useLockedQuote } from "@/lib/use-locked-quote";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
@@ -122,6 +123,7 @@ export default function MechanicDashboard() {
   const commitInspectionAndAwaitEstimate = useMutation(
     api.bookings.commitInspectionAndAwaitEstimate,
   );
+  const completeMpiPhase = useMutation(api.bookings.completeMpiPhase);
   const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
 
   const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
@@ -147,6 +149,10 @@ export default function MechanicDashboard() {
     api.bookings.getVehiclePassportForBooking,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"
   );
+  // Start Job stamps mpiStartedAt and never clears it, so its presence is what
+  // says the on-lift half of the inspection is the one being filled.
+  const workflowInspectionPhase: InspectionPhase =
+    selectedWorkflowBooking?.jobActuals?.mpiStartedAt != null ? "mpi" : "pre";
   const workflowPrefill = useQuery(
     api.job_actuals.getPrefillData,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"
@@ -276,7 +282,17 @@ export default function MechanicDashboard() {
           prejob: payload,
           inspection,
         });
-        setToast("Pre-job inspection saved");
+        setToast("Inspection saved");
+        closeWorkflowDialog();
+      } else if (workflowInspectionPhase === "mpi") {
+        // Job is already running: this closes the on-lift half, ending the
+        // inspection window and starting the labor clock.
+        await completeMpiPhase({
+          bookingId: workflowBookingId,
+          prejob: payload,
+          inspection,
+        });
+        setToast("Inspection complete — job clock started");
         closeWorkflowDialog();
       } else if (isNewCycle) {
         await commitInspectionAndAwaitEstimate({
@@ -713,7 +729,7 @@ export default function MechanicDashboard() {
             : ""
         }
         bookingServices={selectedWorkflowBooking?.serviceNames ?? []}
-        jobInProgress={selectedWorkflowBooking?.status === "in_progress"}
+        phase={workflowInspectionPhase}
         tireReplacementPositions={
           selectedWorkflowBooking?.tireSpecs?.positions ?? []
         }

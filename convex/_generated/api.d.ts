@@ -373,6 +373,7 @@ import type * as rewards from "../rewards.js";
 import type * as rotor_quote_responses from "../rotor_quote_responses.js";
 import type * as schedule from "../schedule.js";
 import type * as seed from "../seed.js";
+import type * as seedCatalog from "../seedCatalog.js";
 import type * as seed_inspection_health from "../seed_inspection_health.js";
 import type * as seed_modifier_weights from "../seed_modifier_weights.js";
 import type * as seed_services from "../seed_services.js";
@@ -1006,6 +1007,7 @@ declare const fullApi: ApiFromModules<{
   rotor_quote_responses: typeof rotor_quote_responses;
   schedule: typeof schedule;
   seed: typeof seed;
+  seedCatalog: typeof seedCatalog;
   seed_inspection_health: typeof seed_inspection_health;
   seed_modifier_weights: typeof seed_modifier_weights;
   seed_services: typeof seed_services;

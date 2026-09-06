@@ -9,6 +9,7 @@ import { internal } from "../_generated/api";
 import { internalAction } from "../_generated/server";
 import {
   sendBookingUpdateEmail,
+  sendEnrichUpdateEmail,
   sendWalkinClaimEmail,
 } from "../../email/send";
 
@@ -62,6 +63,23 @@ export const sendWalkinUpdate = internalAction({
         const result = await sendBookingUpdateEmail({
           to: args.to,
           category: args.category as any,
+          payload: args.payload ?? {},
+        });
+        return result.success
+          ? { status: "sent" as const }
+          : {
+              status: "failed" as const,
+              error: String((result as any).error ?? "send failed"),
+            };
+      }
+      if (
+        args.category === "enrich_queued" ||
+        args.category === "enrich_complete" ||
+        args.category === "enrich_failed"
+      ) {
+        const result = await sendEnrichUpdateEmail({
+          to: args.to,
+          category: args.category,
           payload: args.payload ?? {},
         });
         return result.success

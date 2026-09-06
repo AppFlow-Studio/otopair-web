@@ -88,6 +88,22 @@ function toSlug(str: string): string {
   return str.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "");
 }
 
+/**
+ * wheel-size.com make slugs that differ from toSlug(make). Keyed by toSlug of
+ * the decode make. Only mismatches our decode sources actually emit are mapped
+ * — verified against GET /v2/makes/ (Aug 2026). Without this, the query silently
+ * returns an empty (HTTP 200) result set and no tire data is stored.
+ */
+const MAKE_SLUG_ALIASES: Record<string, string> = {
+  "mercedes-benz": "mercedes", // decode reports "Mercedes-Benz"; catalog slug is "mercedes"
+};
+
+/** Make slug for the wheel-size.com catalog (applies known aliases). */
+function toMakeSlug(make: string): string {
+  const base = toSlug(make);
+  return MAKE_SLUG_ALIASES[base] ?? base;
+}
+
 /** Normalize "245/40ZR19" or "P245/40R19" → "245/40R19" */
 function normalizeSize(raw: string): string {
   return raw.replace(/^P/, "").replace(/(\d{3}\/\d{2})ZR(\d{2})/, "$1R$2").trim();
@@ -235,14 +251,16 @@ export async function scrapeWheelSizeOptions(
   if (haloRule && haloRule.promotedModel.toLowerCase() !== model.toLowerCase()) {
     console.log(`[wheel-size-api] Halo variant promoted: "${model}" → "${effectiveModel}" (rule=${haloRule.ruleId})`);
   }
-  const makeSlug  = toSlug(make);
+  const makeSlug  = toMakeSlug(make);
   let modelSlug = toSlug(effectiveModel);
 
-  // USDM first → no region filter fallback
+  // region=usdm is required by the API — omitting it returns HTTP 400
+  // "Invalid input", so there is no valid "no region" fallback. An empty USDM
+  // result means the make/model slug is off; the Haiku fallback below handles
+  // that by inferring the catalog model name.
   let response = await fetchByModel(makeSlug, modelSlug, year, apiKey, "usdm");
   if (!response?.data?.length) {
-    console.log(`[wheel-size-api] No USDM results for ${year} ${make} ${effectiveModel} — retrying without region filter`);
-    response = await fetchByModel(makeSlug, modelSlug, year, apiKey);
+    console.log(`[wheel-size-api] No USDM results for ${year} ${make} ${effectiveModel}`);
   }
 
   // Long-tail fallback: if curated rule didn't promote AND the query returned
@@ -257,9 +275,6 @@ export async function scrapeWheelSizeOptions(
       effectiveModel = inferred.promotedModel;
       modelSlug = toSlug(effectiveModel);
       response = await fetchByModel(makeSlug, modelSlug, year, apiKey, "usdm");
-      if (!response?.data?.length) {
-        response = await fetchByModel(makeSlug, modelSlug, year, apiKey);
-      }
     }
   }
 

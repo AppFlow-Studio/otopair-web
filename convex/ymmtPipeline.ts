@@ -47,12 +47,14 @@ import { internal, api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 import {
+  carApiPowertrainCandidates,
   fetchNhtsaModels,
   normalizeModelName,
   pickPowertrainCandidate,
   researchYmmtPowertrain,
   type PowertrainCandidate,
 } from "./vehicleEnrichment/ymmtIdentity";
+import { decodeProvider } from "./lib/decodeProvider";
 import { findHaloVariant } from "./lib/haloVariantRules";
 import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { isRealVin } from "./lib/vinIdentity";
@@ -124,27 +126,48 @@ async function resolveIdentity(
   }
 
   // ── 2. Enumerate every powertrain this model year was sold with ─────────
+  // When the decode provider is CarAPI, use its OEM catalog (deterministic, no
+  // LLM) first; fall back to the Claude web-search research on empty/miss (e.g.
+  // variant-named makes carApiResolveModel can't map, or pre-catalog years).
   let candidates: PowertrainCandidate[] = [];
   let researchRaw = "";
-  try {
-    const research = await researchYmmtPowertrain(anthropicKey, {
-      year: args.year,
-      make,
-      model,
-      trim: typedTrim || null,
-    });
-    candidates = research.candidates;
-    researchRaw = research.raw || `[no text emitted] ${research.diagnostics}`;
-    console.log(
-      `[ymmt] ${args.year} ${make} ${model}: ${candidates.length} powertrain(s) — ` +
-        candidates
-          .map((c) => `${c.engine_code || "(no code)"}(${c.displacement_l ?? "?"}L)`)
-          .join(", ") +
-        ` | ${research.diagnostics}`,
-    );
-  } catch (err) {
-    console.error("[ymmt] powertrain research failed:", err);
-    return { ok: false, reason: "powertrain_research_failed", detail: String(err) };
+  if (decodeProvider() === "carapi") {
+    try {
+      const caCandidates = await carApiPowertrainCandidates({ year: args.year, make, model });
+      if (caCandidates.length > 0) {
+        candidates = caCandidates;
+        console.log(
+          `[ymmt] ${args.year} ${make} ${model}: ${candidates.length} powertrain(s) from CarAPI catalog — ` +
+            candidates
+              .map((c) => `${c.displacement_l ?? "?"}L ${c.cylinders ?? "?"}cyl ${c.fuel_type}`)
+              .join(", "),
+        );
+      }
+    } catch (err) {
+      console.warn("[ymmt] CarAPI powertrain enumeration failed — falling back to Claude:", err);
+    }
+  }
+  if (candidates.length === 0) {
+    try {
+      const research = await researchYmmtPowertrain(anthropicKey, {
+        year: args.year,
+        make,
+        model,
+        trim: typedTrim || null,
+      });
+      candidates = research.candidates;
+      researchRaw = research.raw || `[no text emitted] ${research.diagnostics}`;
+      console.log(
+        `[ymmt] ${args.year} ${make} ${model}: ${candidates.length} powertrain(s) — ` +
+          candidates
+            .map((c) => `${c.engine_code || "(no code)"}(${c.displacement_l ?? "?"}L)`)
+            .join(", ") +
+          ` | ${research.diagnostics}`,
+      );
+    } catch (err) {
+      console.error("[ymmt] powertrain research failed:", err);
+      return { ok: false, reason: "powertrain_research_failed", detail: String(err) };
+    }
   }
 
   // ── 3. Commit only when exactly one powertrain survives ─────────────────

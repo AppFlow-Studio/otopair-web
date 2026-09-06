@@ -83,6 +83,9 @@ import {
   buildVDBMappingPrompt,
   parseVDBMappingResponse,
 } from "../lib/vehicleDatabases";
+import { decodeProvider } from "../lib/decodeProvider";
+import { carApiVinDecode, extractCarApiFields } from "../lib/carApi";
+import { marketCheckFetchAll } from "../lib/marketCheck";
 import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { validateChassisCodeYear, validateEngineCodeYear } from "./generationGate";
@@ -560,13 +563,13 @@ function mergeBatch1(
  *  grew timing-belt parts, and FWD diff fields could come back the same way).
  *  Jun-9 review medium finding; exported for tests. */
 /**
- * Rotor DISCARD minimums are deliberately excluded from Batch-2 / gap-fill
- * re-asks. Those paths carry a flat {value, source_url} shape with no room for
- * the verbatim label, and an unlabelled minimum is indistinguishable from a
- * nominal — the one failure that condemns healthy rotors. They are filled only
- * by paths that can quote a label: Batch 1, the rotor-spec resource tiers, a
- * mechanic reading the casting, or a director with a source link.
- * Nominals stay gap-fillable; they are never graded against.
+ * Rotor DISCARD minimums are no longer extraction targets AT ALL (removed
+ * from V4_FIELD_KEYS, Aug 2026): the minimum is derived as a 15% wear
+ * threshold off the sourced NOMINAL (rotorSpecResource.deriveRotorMinMm).
+ * This set is kept as a belt-and-suspenders guard so no re-ask path can ever
+ * resurrect them — an unlabelled minimum is indistinguishable from a nominal,
+ * the one failure that condemns healthy rotors.
+ * Nominals stay gap-fillable; the minimum is arithmetic, not extraction.
  */
 export const GAP_FILL_EXCLUDED_FIELDS: ReadonlySet<string> = new Set([
   "rotor_front_min_thickness_mm",
@@ -1831,60 +1834,12 @@ async function writeNormalizedData(
       psType && psType !== "electric"
         ? asNumber(fields.ps_fluid_capacity_oz?.value)
         : undefined,
-    // Rotor thickness. A minimum that is still non-null here passed the label
-    // cross-check in sanityChecks — anything unlabelled or backed by a nominal
-    // label was nulled there — so surviving to this point IS what "sourced"
-    // means. Nominal is written to its own column and never promoted.
-    // A value that survived only WITH a sanity flag (delta-implausible,
-    // front-below-rear) is stamped "oem_spec_flagged": classify() grades it
-    // like an estimate (warn-capped), never as a clean spec.
-    rotor_front_min_thickness_mm: asNumber(fields.rotor_front_min_thickness_mm?.value),
-    rotor_rear_min_thickness_mm: asNumber(fields.rotor_rear_min_thickness_mm?.value),
+    // Rotor NOMINAL (new/original) thickness — the only rotor dimension
+    // extraction supplies now. The replace-at minimum is DERIVED from it at
+    // finalize (resolveRotorMinimums, 15% wear policy Aug 2026); minimums are
+    // no longer extraction fields, so nothing here writes or clears them.
     rotor_front_nominal_thickness_mm: asNumber(fields.rotor_front_nominal_thickness_mm?.value),
     rotor_rear_nominal_thickness_mm: asNumber(fields.rotor_rear_nominal_thickness_mm?.value),
-    rotor_front_min_quality:
-      fields.rotor_front_min_thickness_mm?.value != null
-        ? (fields.rotor_front_min_thickness_mm?.flagged ? "oem_spec_flagged" : "oem_spec")
-        : undefined,
-    rotor_rear_min_quality:
-      fields.rotor_rear_min_thickness_mm?.value != null
-        ? (fields.rotor_rear_min_thickness_mm?.flagged ? "oem_spec_flagged" : "oem_spec")
-        : undefined,
-    rotor_min_source_url:
-      fields.rotor_front_min_thickness_mm?.source_url ??
-      fields.rotor_rear_min_thickness_mm?.source_url ??
-      undefined,
-    // Per-axle labels (the shared column let a front label vouch for a rear
-    // value); the legacy column still receives front-first for old readers.
-    rotor_front_min_observed_label:
-      asString(fields.rotor_front_min_observed_label?.value) ?? undefined,
-    rotor_rear_min_observed_label:
-      asString(fields.rotor_rear_min_observed_label?.value) ?? undefined,
-    rotor_min_observed_label:
-      asString(fields.rotor_front_min_observed_label?.value) ??
-      asString(fields.rotor_rear_min_observed_label?.value) ??
-      undefined,
-    // A sanity REJECT this run invalidates the stored value too — without the
-    // explicit clear, a pre-gate-era diameter-as-thickness survives every
-    // re-run (nulled value → undefined → undefined-skip).
-    clear_fields: (() => {
-      const clears: string[] = [];
-      if (fields.rotor_front_min_thickness_mm?.rejected) {
-        clears.push(
-          "rotor_front_min_thickness_mm",
-          "rotor_front_min_quality",
-          "rotor_front_min_observed_label",
-        );
-      }
-      if (fields.rotor_rear_min_thickness_mm?.rejected) {
-        clears.push(
-          "rotor_rear_min_thickness_mm",
-          "rotor_rear_min_quality",
-          "rotor_rear_min_observed_label",
-        );
-      }
-      return clears.length ? clears : undefined;
-    })(),
   });
 
   // E2. chassis_specs — dual-write platform-level fields.
@@ -2571,10 +2526,30 @@ export const enrichVehicleBatchV3 = internalAction({
       }
     }
 
-    // VDB advanced decode — runs once, cached by VIN. Fields used in Step 6b/6e.
+    // Structured decode — VDB (default) or CarAPI (PARTS_DECODE_PROVIDER=carapi).
+    // Both map to the extractVDBFields shape; CarAPI returns null for brake tier /
+    // steering / CCA so the `if (vdbFields?.x)` seeds in Step 6b/6c/6e skip and
+    // Claude Batch 1B fills them. Installed options/packages: the VDB path uses
+    // the decode raw; the CarAPI path uses MarketCheck NeoVIN (per-VIN, higher
+    // signal) fed into the same assessAvailablePackages detector.
+    const enrichProvider = decodeProvider();
     const decodeStartedAt = Date.now();
-    const vdbRaw = vehicleDoc.vin ? await advancedVinDecode(vehicleDoc.vin) : null;
-    const vdbFields = vdbRaw ? extractVDBFields(vdbRaw) : null;
+    let vdbFields: ReturnType<typeof extractVDBFields> | null = null;
+    let packagesRaw: any = null;
+    let packagesSource: "vdb_optional_options" | "marketcheck_neovin" = "vdb_optional_options";
+    if (vehicleDoc.vin) {
+      if (enrichProvider === "carapi") {
+        const carApiRaw = await carApiVinDecode(vehicleDoc.vin);
+        vdbFields = carApiRaw ? extractCarApiFields(carApiRaw) : null;
+        const mc = await marketCheckFetchAll(vehicleDoc.vin);
+        packagesRaw = mc.ok ? { neovin: mc.neovin, basic: mc.basic } : null;
+        packagesSource = "marketcheck_neovin";
+      } else {
+        const vdbRaw = await advancedVinDecode(vehicleDoc.vin);
+        vdbFields = vdbRaw ? extractVDBFields(vdbRaw) : null;
+        packagesRaw = vdbRaw;
+      }
+    }
     const decodeEndedAt = Date.now();
 
     // Identity gap-fill: the applicability rules fail OPEN when drivetrain /
@@ -2593,13 +2568,14 @@ export const enrichVehicleBatchV3 = internalAction({
     // the 23 services. Stored on vehicle_configs.packages_available (after the upsert
     // below) and passed into Batch 1 so Claude can return package-specific part numbers.
     // See docs/PACKAGE_AWARE_PARTS.md.
-    const detectedPackages = vdbRaw
+    const detectedPackages = packagesRaw
       ? assessAvailablePackages({
-          vdbRaw,
+          vdbRaw: packagesRaw,
           make: args.make,
           model: args.model,
           trim: args.trim,
           year: args.year,
+          source: packagesSource,
         })
       : [];
     if (detectedPackages.length > 0) {
@@ -2818,7 +2794,12 @@ export const enrichVehicleBatchV3 = internalAction({
     // STEP 8). Mapping result + raw blocks → intervals/labor in _pollBatch1V3.
     let vdbRepairRaw: { blocks: any[]; actions: string[] } | null = null;
     try {
-      vdbRepairRaw = vehicleDoc.vin ? await fetchVDBRepairRaw(vehicleDoc.vin) : null;
+      // Repair estimates are VDB-only; the CarAPI stack sources intervals/labor
+      // from Claude + manual library + OLP instead. Null → downstream 1C no-ops.
+      vdbRepairRaw =
+        enrichProvider === "vdb" && vehicleDoc.vin
+          ? await fetchVDBRepairRaw(vehicleDoc.vin)
+          : null;
       if (vdbRepairRaw) {
         console.log(`[v8] VDB repair: fetched ${vdbRepairRaw.blocks.length} blocks, ${vdbRepairRaw.actions.length} unique actions`);
       }
@@ -3899,6 +3880,92 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       }
     }
 
+    // Rescue-rung error tags (fields + services rungs below both push here;
+    // merged into the run's errors[] at finalize).
+    const batch2RescueErrors: string[] = [];
+
+    // ── Fields rescue rung (Aug 2026) ────────────────────────────────────
+    // The empty-payload quit loses BOTH halves of batch-2, and until now only
+    // services had a rescue — the 60-103-field gap list simply stayed null,
+    // which is why every empty-payload run lands 10-20 fill points under its
+    // peers (LaCrosse 59 / Hummer 64 / Civic Si 67 on Aug 27, all beneath the
+    // 70 gate). Ground truth on the failure: the model runs its 13 searches,
+    // then emits ONE ~30-char grammar-minimal `{"fields":[],"services":[]}`
+    // and stops (end_turn) — the paid mega-ask quits at the write-out. The
+    // services rescue proved the cure is ask size (5/5 recoveries): a small
+    // focused re-ask completes where the mega-ask quits. So on a failed
+    // batch-2 the gap list is re-asked in chunks of ≤25 fields, each its own
+    // synchronous turn, merged under the same only-fill-nulls rule.
+    // Runs BEFORE the services rescue so its recoveries feed knownParts.
+    // Disable: PARTS_FIELDS_RESCUE=off.
+    if (
+      r2 &&
+      r2.error &&
+      args.nullFields.length > 0 &&
+      process.env.PARTS_FIELDS_RESCUE !== "off"
+    ) {
+      const CHUNK = 25;
+      const MAX_CHUNKS = 3;
+      const chunks: string[][] = [];
+      for (let i = 0; i < args.nullFields.length && chunks.length < MAX_CHUNKS; i += CHUNK) {
+        chunks.push(args.nullFields.slice(i, i + CHUNK));
+      }
+      const dropped = args.nullFields.length - chunks.reduce((n, c) => n + c.length, 0);
+      if (dropped > 0) {
+        console.warn(`[v8/fields-rescue] gap list exceeds rescue budget — ${dropped} field(s) not re-asked`);
+      }
+      const rescueVehicle: VehicleInput = {
+        vehicleId: args.vehicleId,
+        year: args.year, make: args.make, model: args.model,
+        trim: args.trim, engineCode: args.engineCode, displacement: args.displacement,
+      };
+      const knownPartsForFields: Record<string, string> = {};
+      for (const k of Object.keys(PART_FIELD_MAP)) {
+        const v = allFields[k]?.value;
+        if (typeof v === "string" && v.trim()) knownPartsForFields[k] = v.trim();
+        if (Object.keys(knownPartsForFields).length >= 20) break;
+      }
+      let rescueFilled = 0;
+      let rescueChunksOk = 0;
+      for (const chunk of chunks) {
+        try {
+          const res = await callClaudeWithWebSearch({
+            system: BATCH_2_SYSTEM,
+            userPrompt: buildBatch2Prompt(rescueVehicle, chunk, knownPartsForFields),
+            maxSearchUses: Math.min(6 + Math.ceil(chunk.length / 8), 10),
+            maxTokens: 8000,
+            temperature: 0,
+          });
+          callLog.push({
+            call: "fields_rescue",
+            tokensIn: res.usage.tokensIn,
+            tokensOut: res.usage.tokensOut,
+            webSearches: res.usage.webSearches,
+            durationMs: 0,
+          });
+          const parsed = parseBatch2(normalizeBatchShape(res.data, "2"), chunk);
+          for (const [k, fv] of Object.entries(parsed.gapFields)) {
+            if (allFields[k]?.value == null && fv?.value != null) {
+              allFields[k] = fv;
+              rescueFilled++;
+            }
+          }
+          rescueChunksOk++;
+        } catch (e) {
+          console.warn(`[v8/fields-rescue] chunk failed (non-fatal):`, e);
+        }
+      }
+      if (rescueChunksOk > 0) {
+        batch2RescueErrors.push(`batch2_fields_rescue_used:${rescueFilled}`);
+        console.log(
+          `[v8/fields-rescue] batch-2 lost its fields (${r2.error.slice(0, 60)}…) — ` +
+            `${rescueChunksOk}/${chunks.length} chunk(s) re-asked, ${rescueFilled} field(s) recovered`,
+        );
+      } else {
+        batch2RescueErrors.push("batch2_fields_rescue_failed");
+      }
+    }
+
     // ── Services rescue rung (fresh-5 round 2, Aug 2026) ─────────────────
     // On first-contact makes the paid batch-2 turn keeps ending with
     // `services: []` — the raw payloads (CX-30/Sierra/Jeep/Palisade) all show
@@ -3918,7 +3985,6 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // would discard the real fields it returned). Not run on timeout
     // (r2 undefined): the late collector applies the paid batch's result.
     // Disable: PARTS_SERVICES_RESCUE=off.
-    const batch2RescueErrors: string[] = [];
     if (r2 && process.env.PARTS_SERVICES_RESCUE !== "off") {
       const applicableCount = services.filter((s) => s.is_applicable).length;
       if (applicableCount === 0) {
@@ -6492,8 +6558,16 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         const byAxle: Partial<Record<RotorAxle, RotorAxleResolution>> =
           Object.fromEntries(rotorResolutions.map((r) => [r.axle, r]));
         const verdict = validateRotorResolution({
-          front: { minMm: byAxle.front?.minMm, nominalMm: byAxle.front?.nominalMm },
-          rear: { minMm: byAxle.rear?.minMm, nominalMm: byAxle.rear?.nominalMm },
+          front: {
+            minMm: byAxle.front?.minMm,
+            nominalMm: byAxle.front?.nominalMm,
+            derived: byAxle.front?.outcome === "derived_15pct",
+          },
+          rear: {
+            minMm: byAxle.rear?.minMm,
+            nominalMm: byAxle.rear?.nominalMm,
+            derived: byAxle.rear?.outcome === "derived_15pct",
+          },
         });
         const rotorPatch: {
           rotor_front_min_thickness_mm?: number;
@@ -7195,52 +7269,14 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       console.warn("[v8] EPA economy refresh trigger failed (non-fatal):", e);
     }
 
-    // ── Agent research: rotor minimums (round 19) ───────────────────────────
+    // ── Agent research: rotor minimums — RETIRED (Aug 2026) ────────────────
     //
-    // LAST RESORT, and only on positive evidence that the deterministic path
-    // produced nothing: fires solely when BOTH axles are still null after the
-    // rotor resolver, its adapters, and the whole run have had their turn.
-    //
-    // Round 19 measured the need — 0 of 12 axles populated, and 0 across ~30
-    // vehicles over five rounds, with `brembo` absent from adapters_seen on
-    // every one. This is the tool filter's criterion: data we cannot get today.
-    //
-    // Scheduled and never awaited: one agent task runs ~226s (measured), far
-    // beyond what this action's remaining budget can absorb. It writes CLAIMS
-    // only — the rotor resolver's existing double validation still decides
-    // whether any of it becomes a stored minimum, which is what stops an
-    // aftermarket retailer's product dimension being promoted to a
-    // manufacturer discard spec.
-    //
-    // Off unless ENRICHMENT_AGENT=on, so this costs nothing until switched on.
-    try {
-      const cfgForRotor: any = await ctx.runQuery(
-        internal.vehicleEnrichment.v3queries.getVehicleConfigById,
-        { vehicleConfigId: args.vehicleConfigId },
-      );
-      const rotorStillMissing =
-        cfgForRotor?.rotor_front_min_thickness_mm == null &&
-        cfgForRotor?.rotor_rear_min_thickness_mm == null;
-      if (rotorStillMissing && process.env.ENRICHMENT_AGENT === "on") {
-        await ctx.scheduler.runAfter(
-          30_000,
-          internal.vehicleEnrichment.agentResearch.researchRotorMinimums,
-          {
-            vehicleConfigId: args.vehicleConfigId,
-            runId: args.runId,
-            year: args.year,
-            make: args.make,
-            model: args.model,
-            trim: args.trim ?? null,
-            engineCode: vehicle.engineCode ?? null,
-            displacement: args.displacement ?? null,
-          },
-        );
-        console.log("[v8] agent rotor research scheduled (both axles still null)");
-      }
-    } catch (e) {
-      console.warn("[v8] agent rotor research trigger failed (non-fatal):", e);
-    }
+    // The dedicated rotor-minimum research rung is gone: across five rounds it
+    // found 0 published minimums on ~30 vehicles, because the web publishes
+    // nominals, not discard limits. The minimum is now DERIVED as a 15% wear
+    // threshold off the sourced nominal inside resolveRotorMinimums (operator
+    // policy, validated in mechanic interviews) — no search can beat
+    // arithmetic on a number we already have.
 
     // ── Agent research: roles the deterministic path EXHAUSTED ─────────────
     //

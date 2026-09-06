@@ -9,6 +9,7 @@ import { isLaborOnlyService } from "../lib/servicePartsReference";
 import { partFitsConfigMake } from "../partSelector";
 import {
   makesSameFamily,
+  matchesForeignBrandSignature,
   salvageForMakeFormat,
   sanitizePartNumber,
 } from "./contentSanitization";
@@ -20,6 +21,7 @@ import { UNVERIFIED_PRICE_TYPE } from "../lib/priceTypes";
 import type { ExistenceVerdict } from "./partIndex";
 import { isRunStale, RUN_IN_PROGRESS_STATUSES, stripVerifiedFields } from "./runFence";
 import { WEAR_ITEM_SERVICE_SLUGS, parseFrontWiperSizes } from "./types";
+import { resolveTierForVehicle } from "../lib/tierResolver";
 
 /**
  * Family-aware make compatibility for WRITE paths. The strict id-equality
@@ -205,6 +207,27 @@ export const upsertVehicleConfig = internalMutation({
     enrichment_version: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const now = Date.now();
+
+    // Resolve pricing tier at the config-creation chokepoint so every onboarded
+    // car is tiered immediately (or left null → surfaced as "Needs review"),
+    // not only lazily at first quote. Director rules win over the hardcoded
+    // engine (lib/tierResolver). Never clears a set tier with a null result,
+    // and never touches a director's manual pin (pricing_tier_source==="manual").
+    const [makeRow, modelRow] = await Promise.all([
+      ctx.db.get(args.make_id),
+      ctx.db.get(args.model_id),
+    ]);
+    const tierRes =
+      makeRow && modelRow
+        ? await resolveTierForVehicle(ctx.db, {
+            make: (makeRow as { name?: string }).name ?? "",
+            model: (modelRow as { name?: string }).name ?? "",
+            trim: args.trim_name ?? "",
+            year: args.year,
+          })
+        : { tier: null, source: null };
+
     const existing = await ctx.db
       .query("vehicle_configs")
       .withIndex("by_config_key", (q) => q.eq("config_key", args.config_key))
@@ -224,8 +247,13 @@ export const upsertVehicleConfig = internalMutation({
         enrichment_status: args.enrichment_status,
         fill_rate: args.fill_rate,
         enrichment_version: args.enrichment_version,
-        last_enriched_at: Date.now(),
+        last_enriched_at: now,
       };
+      if (existing.pricing_tier_source !== "manual" && tierRes.tier) {
+        patch.pricing_tier = tierRes.tier;
+        patch.pricing_tier_source = tierRes.source ?? undefined;
+        patch.pricing_tier_set_at = now;
+      }
       // Only set nhtsa_vin_key if not already populated — first writer wins so
       // the original NHTSA fingerprint stays stable even if a later enrichment
       // run computes a slightly different one (shouldn't happen, but safe).
@@ -258,8 +286,15 @@ export const upsertVehicleConfig = internalMutation({
       enrichment_status: args.enrichment_status,
       fill_rate: args.fill_rate,
       enrichment_version: args.enrichment_version,
+      ...(tierRes.tier
+        ? {
+            pricing_tier: tierRes.tier,
+            pricing_tier_source: tierRes.source ?? undefined,
+            pricing_tier_set_at: now,
+          }
+        : {}),
       verification_count: 0,
-      created_at: Date.now(),
+      created_at: now,
     });
   },
 });
@@ -881,6 +916,16 @@ export const upsertPartAndFitment = internalMutation({
      *  Component-identity evidence for the role-identity gate below; persisted
      *  as oem_parts.scraped_name. `name` stays the generic role label. */
     observed_title: v.optional(v.string()),
+    /** Aug 2026 (mechanic feedback — aftermarket enabled system-wide for
+     *  fluids): "oem" (default) | "aftermarket". An aftermarket number is a
+     *  SUPPLIER's SKU (ZF, Fuchs), so the two OEM-catalog gates — make-format
+     *  sanitization and the catalog-existence index — are the wrong questions
+     *  for it and are bypassed; every other guard (refute blocklist,
+     *  role-identity, labor-only, diff, I1 make compat) still applies, and the
+     *  fitment verifier adjudicated it upstream like any other candidate. */
+    part_tier: v.optional(v.string()),
+    /** Supplier brand for aftermarket rows ("ZF", "Fuchs"). */
+    brand: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -905,6 +950,11 @@ export const upsertPartAndFitment = internalMutation({
     // equivalent. Reject diff-service consumables when the config positively
     // has no differential (has_differential === false; unknown fails open).
     const DIFF_ONLY_SUBCATEGORIES = new Set(["gear_oil", "diff_fluid", "friction_modifier"]);
+    // Chemical-product roles for the fluid-SKU format allowance below.
+    const FLUID_SUBCATEGORIES = new Set([
+      "engine_oil", "coolant", "atf_fluid", "brake_fluid", "gear_oil",
+      "diff_fluid", "ps_fluid", "transfer_case_fluid", "friction_modifier",
+    ]);
     // Round 11 (batch-11 SRX, 4th recurrence): the gate required an explicit
     // has_differential === false, which nothing sets — undefined sailed
     // through and a fresh wrong gear-oil/friction-modifier number appeared
@@ -971,10 +1021,16 @@ export const upsertPartAndFitment = internalMutation({
     // guarantee that no NEW path can ever skip it.
     const configMakeDoc = config?.make_id ? await ctx.db.get(config.make_id) : null;
     const badgeMake = configMakeDoc?.name;
+    const isAftermarket = args.part_tier === "aftermarket";
     // Accept a part matching EITHER the config make OR the builder brand (P2.5:
     // badge-engineered cars carry the builder's OEM numbers — a Mazda part on a
     // Toyota Yaris must not be rejected as "foreign").
-    let cleanNumber = sanitizePartNumber(args.oem_part_number, badgeMake);
+    // Aftermarket numbers are a SUPPLIER's format (ZF S-numbers, Fuchs digits)
+    // — validating them against the vehicle make's OEM pattern would reject
+    // every legitimate one, so they take the generic (make-less) cleanup.
+    let cleanNumber = isAftermarket
+      ? sanitizePartNumber(args.oem_part_number)
+      : sanitizePartNumber(args.oem_part_number, badgeMake);
     if (
       !cleanNumber &&
       args.build_source_make &&
@@ -1008,6 +1064,23 @@ export const upsertPartAndFitment = internalMutation({
           cleanNumber = salvaged;
           break;
         }
+      }
+    }
+    if (!cleanNumber && FLUID_SUBCATEGORIES.has(args.subcategory)) {
+      // Fluid-SKU allowance (Aug 28 2026): genuine fluids are CHEMICAL
+      // products whose SKUs routinely live outside the make's part-number
+      // format — VAG chemical G-numbers (G12E050M2 died here after the
+      // verifier confirmed it), MB's BASF-numbered antifreeze. The make
+      // format gate is the wrong question for a jug; the foreign-brand
+      // signature check still applies (a Motorcraft jug extracted for a
+      // Honda is still contamination), and the generic sanitize keeps its
+      // plausibility floor.
+      const generic = sanitizePartNumber(args.oem_part_number);
+      if (generic && !matchesForeignBrandSignature(generic, badgeMake ?? null)) {
+        console.log(
+          `[v8-parts] format gate passed via fluid-SKU allowance: "${args.oem_part_number}" (${args.subcategory}) for make=${badgeMake ?? "?"}`,
+        );
+        cleanNumber = generic;
       }
     }
     if (!cleanNumber) {
@@ -1057,8 +1130,10 @@ export const upsertPartAndFitment = internalMutation({
         ? args.build_source_make
         : null,
     ].filter((m): m is string => !!m && m.trim().length > 0);
+    // Aftermarket numbers are definitionally absent from the OEM catalog
+    // index — asking it would fail-closed every legitimate supplier SKU.
     const existenceVerdict: ExistenceVerdict =
-      existenceMode === "off"
+      existenceMode === "off" || isAftermarket
         ? "no_index"
         : await lookupExistenceVerdict(ctx, existenceMakes, cleanNumber);
 
@@ -1156,6 +1231,11 @@ export const upsertPartAndFitment = internalMutation({
         ...(args.observed_title && !roleIdentityContested
           ? { scraped_name: args.observed_title }
           : {}),
+        // Tier/brand backfill only when UNSET — an existing row's tier is
+        // identity (an OEM row must never be demoted to aftermarket by a
+        // colliding caller, or vice versa).
+        ...(args.part_tier && part.part_tier == null ? { part_tier: args.part_tier } : {}),
+        ...(args.brand && part.brand == null ? { brand: args.brand } : {}),
       });
     } else {
       partId = await ctx.db.insert("oem_parts", {
@@ -1164,7 +1244,12 @@ export const upsertPartAndFitment = internalMutation({
         name: args.name,
         category: args.category,
         subcategory: args.subcategory,
-        make_id: args.make_id,
+        // Aftermarket supplier SKUs are make-AGNOSTIC (one ZF bottle serves
+        // BMW, Jeep, and Jaguar 8HP boxes alike) — stamping the first
+        // caller's make would make the I1 guard reject every later family's
+        // reuse as cross-make. make_id null is the universal-part contract
+        // partFitsConfigMake already honors.
+        ...(isAftermarket ? {} : { make_id: args.make_id }),
         is_current: true,
         first_seen_at: now,
         last_confirmed_at: now,
@@ -1172,6 +1257,10 @@ export const upsertPartAndFitment = internalMutation({
         data_quality: "scraped",
         created_at: now,
         ...(args.observed_title ? { scraped_name: args.observed_title } : {}),
+        // Tier is identity-adjacent: the fluid price-sanity resolver keys on
+        // it, so it is stamped at creation. Legacy rows stay implicitly OEM.
+        ...(args.part_tier ? { part_tier: args.part_tier } : {}),
+        ...(args.brand ? { brand: args.brand } : {}),
       });
     }
 

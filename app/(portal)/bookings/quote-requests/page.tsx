@@ -23,6 +23,12 @@ import { TireQuoteRequestsContent } from "@/app/(portal)/bookings/tire-quote-req
 import { RotorQuoteRequestsContent } from "@/app/(portal)/bookings/rotor-quote-requests/page";
 
 type QuoteType = "tire" | "rotor";
+type LifecycleRequest = {
+  quote_status: string;
+  quote_response: { created_at: number; expires_at?: number } | null;
+  checkout_held: boolean;
+  checkout_hold_expires_at: number | null;
+};
 
 export default function QuoteRequestsPage() {
   const searchParams = useSearchParams();
@@ -30,6 +36,7 @@ export default function QuoteRequestsPage() {
   const initialType: QuoteType = initialTypeParam === "rotor" ? "rotor" : "tire";
 
   const [active, setActive] = useState<QuoteType>(initialType);
+  const [quoteClock, setQuoteClock] = useState(() => Date.now());
 
   // Pull both open-quote lists at the parent so we can badge each tab
   // with the unresolved count. Convex dedupes by (query, args), so the
@@ -45,8 +52,34 @@ export default function QuoteRequestsPage() {
     api.bookings.listOpenRotorQuoteRequestsForShop,
     shopId ? { shopId } : "skip",
   );
-  const tireCount = tireRequests?.length ?? 0;
-  const rotorCount = rotorRequests?.length ?? 0;
+  const isUnresolved = (request: LifecycleRequest) => {
+    if (request.quote_status === "open") return true;
+    if (request.quote_status !== "pending" || !request.quote_response) return false;
+    const checkoutHeld =
+      request.checkout_held &&
+      request.checkout_hold_expires_at != null &&
+      request.checkout_hold_expires_at > quoteClock;
+    const expiresAt =
+      request.quote_response.expires_at ?? request.quote_response.created_at + 10 * 60_000;
+    return checkoutHeld || expiresAt > quoteClock;
+  };
+  const tireCount = tireRequests?.filter(isUnresolved).length ?? 0;
+  const rotorCount = rotorRequests?.filter(isUnresolved).length ?? 0;
+
+  useEffect(() => {
+    const requests = [...(tireRequests ?? []), ...(rotorRequests ?? [])];
+    const nextBoundary = requests
+      .flatMap((request) => [
+        request.quote_response?.expires_at ??
+          (request.quote_response ? request.quote_response.created_at + 10 * 60_000 : null),
+        request.checkout_hold_expires_at,
+      ])
+      .filter((value): value is number => value != null && value > quoteClock)
+      .sort((a, b) => a - b)[0];
+    if (nextBoundary == null) return;
+    const timer = window.setTimeout(() => setQuoteClock(Date.now()), nextBoundary - Date.now() + 50);
+    return () => window.clearTimeout(timer);
+  }, [quoteClock, rotorRequests, tireRequests]);
 
   // Keep the active tab in sync with the URL `?type=` param when the user
   // navigates between deep-links without remounting the page.
@@ -64,8 +97,7 @@ export default function QuoteRequestsPage() {
       <div>
         <h1 className="text-2xl font-bold text-foreground">Quotes</h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Open quote requests from customers — submit a price + ready-by
-          slot, and the row leaves once the customer accepts.
+          Review new requests and track each submitted quote through its lifecycle.
         </p>
       </div>
 

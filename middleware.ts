@@ -58,6 +58,9 @@ const isPublicRoute = createRouteMatcher([
   // the page without a Clerk session.
   "/t/(.*)",
   "/claim/(.*)",
+  // Umbrella car-data product landing (marketing) — forks the consumer teaser
+  // and the developer API; fully static, no auth.
+  "/data(.*)",
   // Public car-data teaser (marketing) — anonymous lookup, layer-gated
   // teaser subset served by convex/dataPublic.teaserLookup.
   "/car-data(.*)",

@@ -57,4 +57,19 @@ export interface MaintenanceItem {
    *  the normal status lookup, unchanged. Mirror in the mobile repo's
    *  MaintenanceTracker.tsx to keep this stub in sync. */
   rawScore?: number;
+  /** Set on rows derived purely from an OEM interval and an odometer with no
+   *  underlying record — a catalog inference. Excluded from the health-score
+   *  computation via isScorableMaintenanceItem so pure inferences don't
+   *  drift the score (only real records + the five core tiles should).
+   *  No-op on web today (no catalog-inference path exists here yet), tracked
+   *  for parity with mobile so the shape can't silently drift. */
+  excludeFromScore?: boolean;
+  /** The four-way interval band (Quick Check v2 §7). `status` stays the
+   *  three-value display tier; this separates OVERDUE from SEVERELY OVERDUE
+   *  so the latter can lead the NOW tier without a fourth heading. */
+  bandStatus?: "on_time" | "due_soon" | "overdue" | "severely_overdue";
+  /** Where the interval came from — drives the confidence hold. */
+  intervalSource?: "oem" | "class_default" | "legacy_default" | "none";
+  /** The factor the score used, after the hold. */
+  factorApplied?: number;
 }

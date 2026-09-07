@@ -6236,8 +6236,13 @@ async function validateTieredInspectionInput({
   if (inspection.template_version !== INSPECTION_TEMPLATE_VERSION) {
     throw new Error("This inspection form is out of date. Reload it before continuing.");
   }
+  // Resolved early: the lift question only exists in the MPI half (the
+  // pre-check answer is "no" by definition), so the client never collects it
+  // during the pre-check submit and this guard must not demand it either.
+  const phase = await resolveInspectionPhase(ctx, booking._id);
   if (
     requireFinal &&
+    phase === "mpi" &&
     inspection.lift_status !== "yes" &&
     inspection.lift_status !== "no"
   ) {
@@ -6287,7 +6292,6 @@ async function validateTieredInspectionInput({
 
   const state = hydrateTieredInspectionState(inspection);
   const prior = passportView.passport.tires.tread_depths ?? {};
-  const phase = await resolveInspectionPhase(ctx, booking._id);
   const context = {
     phase,
     serviceNames,

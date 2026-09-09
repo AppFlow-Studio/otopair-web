@@ -248,8 +248,12 @@ crons.daily(
 // per-config heals, so configs enriched before a lane shipped never met it
 // (ATF cohort 89→81 in the week after the fluid catalog landed). Dark unless
 // PARTS_COHORT_DISPATCH_BUDGET (configs/night) is set > 0. 08:00 UTC —
-// BEFORE role repair (08:15) and the price refresh (09:00), so fluid parts
-// written here get priced the same night.
+// BEFORE role repair (08:15), whose target selection skips configs this
+// dispatched within ~20h (lifetime research attempts are capped at 3/role;
+// a same-night double-run burns them on an unchanged world). Fluid parts
+// written here get priced by the TARGETED backfill the dispatcher schedules
+// per write — not by the 09:00 refresh, whose backfill leg needs its own
+// env and walks oem_parts blind.
 crons.daily(
   "cohort-dispatch-known-gaps",
   { hourUTC: 8, minuteUTC: 0 },

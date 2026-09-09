@@ -9,8 +9,19 @@
  */
 import { v } from "convex/values";
 import { internalQuery } from "../_generated/server";
+import { computeRoadTo10Census } from "../directorRoadTo10";
 
 const SYNTHETIC_KEY_RE = /_(unknownl_unknowncyl|unknownl_[0-9]+cyl|[0-9_]+l_(unknown|[0-9]+)cyl)$/;
+
+/** Read-limit + shape probe for the director Road-to-1.0 census — runs the
+ *  EXACT shared handler the director tab calls, minus auth, so the query's
+ *  document-read budget can be verified from the CLI after changes. */
+export const directorCensusProbe = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    return await computeRoadTo10Census(ctx);
+  },
+});
 
 /** Cohort-3 repair inventory: every synthetic-suffix config with its attached
  *  VINs (real vs SHOP synthetic), fitment/run counts, and any proper-key

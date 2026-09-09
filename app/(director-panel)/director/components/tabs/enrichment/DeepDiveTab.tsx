@@ -16,6 +16,7 @@ import {
   fmtPct, fmtCost, fmtDuration, fmtNum, timeAgo, fmtWhen, type OpenTrigger,
 } from './helpers'
 import { RunTrace } from './RunTrace'
+import { DecisionsPanel } from './DecisionsPanel'
 
 export type PickedConfig = { id: string; config_key: string }
 
@@ -221,6 +222,8 @@ export function DeepDiveTab({ token, selected, onSelect, openTrigger, focusRunId
           </Panel>
 
           <RunTrace token={token} runId={activeTraceRunId} />
+
+          <DecisionsPanel token={token} runId={activeTraceRunId} />
 
           <Panel title="Parts & fitments" sub={parts ? String(parts.length) : undefined}>
             {parts === undefined ? <TableSkeleton /> : parts.length === 0 ? <Empty>No parts attached to this config.</Empty> : (

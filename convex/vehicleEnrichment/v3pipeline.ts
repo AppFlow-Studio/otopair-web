@@ -40,6 +40,7 @@ import { mergeBlockedDomains } from "./utils/enrichmentFlags";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt, SERVICES_RESCUE_SYSTEM, buildServicesRescuePrompt } from "./prompts/batch2Prompt";
+import { recordDecisions, type DecisionEvent } from "./utils/decisionLog";
 import { GAP_FILL_SYSTEM, buildGapFillPrompt } from "./prompts/gapFillPrompt";
 import { callClaudeWithWebSearch } from "./utils/claudeClient";
 import { deriveEngineFamily } from "./laborSibling";
@@ -2270,6 +2271,14 @@ export const enrichVehicleBatchV3 = internalAction({
             Date.now() - lastActivity < LIVE_WINDOW_MS;
           if (!isLive) {
             console.log(`[v8] Force-unstick: no live run for ${configKey} (status=${status}) — taking over`);
+            await recordDecisions(ctx, [{
+              vehicleConfigId: String(existingConfig._id),
+              stage: "admission",
+              decisionKey: "run_admission",
+              chosen: "force_unstick_takeover",
+              reason: `director force with no live run (status=${status}, heartbeat dead) — prior run marked failed`,
+              outcome: "ok",
+            }]);
             if (latestRun && LIVE_RUN_STATUSES.has(latestRun.status)) {
               await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
                 run_id: latestRun._id,
@@ -2307,9 +2316,25 @@ export const enrichVehicleBatchV3 = internalAction({
             internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
             { vehicle_id: args.vehicleId, vehicle_config_id: existingConfig._id },
           );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(existingConfig._id),
+            stage: "admission",
+            decisionKey: "run_admission",
+            chosen: "already_enriching",
+            reason: `a live run owns this config (status=${status}, age ${Math.round(runAge / 60000)}min) — second run refused`,
+            outcome: "skipped",
+          }]);
           return { status: "already_enriching" as const, configId: existingConfig._id };
         }
         console.log(`[v8] Stale/dead in-progress run for ${configKey} (${Math.round(runAge / 60000)}min old), re-enriching`);
+        await recordDecisions(ctx, [{
+          vehicleConfigId: String(existingConfig._id),
+          stage: "admission",
+          decisionKey: "run_admission",
+          chosen: "stuck_bypass",
+          reason: `in-progress status ${status} is ${Math.round(runAge / 60000)}min old (>4h safety valve) — prior chain superseded, re-enriching`,
+          outcome: "ok",
+        }]);
       }
 
       // Complete/verified — use cache unless stale.
@@ -2329,6 +2354,14 @@ export const enrichVehicleBatchV3 = internalAction({
             internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
             { vehicle_id: args.vehicleId, vehicle_config_id: existingConfig._id },
           );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(existingConfig._id),
+            stage: "admission",
+            decisionKey: "run_admission",
+            chosen: "cache_hit_validating",
+            reason: `cache older than 180d — served stored config, background validation scheduled`,
+            outcome: "ok",
+          }]);
           return { status: "cache_hit_validating" as const, configId: existingConfig._id };
         } else {
           console.log(`[v8] Cache hit for ${configKey} (status=${status})`);
@@ -2336,6 +2369,14 @@ export const enrichVehicleBatchV3 = internalAction({
             internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
             { vehicle_id: args.vehicleId, vehicle_config_id: existingConfig._id },
           );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(existingConfig._id),
+            stage: "admission",
+            decisionKey: "run_admission",
+            chosen: "cache_hit",
+            reason: `config ${status} and fresh (<180d) — no run created, stored enrichment served`,
+            outcome: "ok",
+          }]);
           return { status: "cache_hit" as const, configId: existingConfig._id };
         }
       }
@@ -2360,6 +2401,22 @@ export const enrichVehicleBatchV3 = internalAction({
     // (isNhtsaDescriptor catches all three.) Persist the resolved code back to
     // the engines table after STEP 3 below, so sibling-matching uses it.
     let resolvedEngineCodeForPersist: string | null = null;
+    // Decision stream: the engine-code identity chain runs BEFORE the run row
+    // exists (created STEP 5), so its choices are buffered here and flushed
+    // with the runId once there is one — the survey's "visible in logs only"
+    // hole, closed. Chains that exit early (resolved-key cache adoption) emit
+    // config-scoped events immediately inside adoptVerifiedEngineCode.
+    const identityDecisions: DecisionEvent[] = [];
+    const noteIdentity = (chosen: string, reason: string, outcome: string) => {
+      identityDecisions.push({
+        stage: "identity",
+        decisionKey: "engine_code_resolution",
+        chosen,
+        reason,
+        outcome,
+        flags: `from=${args.engineCode ?? "?"}`,
+      });
+    };
     // Adopt a verified replacement code: rebuild the key, thread it through
     // the scheduler chain (poll bodies rebuild `vehicle` from args.engineCode
     // — batch-2 audit: Soul verified "U" yet completed as "2l_4cyl"), and
@@ -2375,6 +2432,17 @@ export const enrichVehicleBatchV3 = internalAction({
       );
       if (resolvedConfig && (resolvedConfig.enrichment_status === "complete" || resolvedConfig.enrichment_status === "verified")) {
         console.log(`[v8] Resolved config already complete (status=${resolvedConfig.enrichment_status}) — attaching`);
+        await recordDecisions(ctx, [
+          ...identityDecisions.map((e) => ({ ...e, vehicleConfigId: String(resolvedConfig._id) })),
+          {
+            vehicleConfigId: String(resolvedConfig._id),
+            stage: "identity",
+            decisionKey: "engine_code_resolution",
+            chosen: `adopted:${code}`,
+            reason: `verified code rebuilt the config key and a ${resolvedConfig.enrichment_status} config already owns it — attached instead of re-enriching`,
+            outcome: "ok",
+          },
+        ]);
         await ctx.runMutation(
           internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
           { vehicle_id: args.vehicleId, vehicle_config_id: resolvedConfig._id },
@@ -2410,6 +2478,7 @@ export const enrichVehicleBatchV3 = internalAction({
           );
       if (replacement.source === "verified" && !isNhtsaDescriptor(replacement.engineCode)) {
         console.log(`[v8] Engine code corrected: "${args.engineCode}" → "${replacement.engineCode}"`);
+        noteIdentity(`corrected:${replacement.engineCode}`, `spec gate: ${specGate.reason ?? "displacement/cylinder contradiction"} — replaced via ${known ? "year-pinned table" : "re-resolution"}`, "ok");
         const cacheHitId = await adoptVerifiedEngineCode(replacement.engineCode);
         if (cacheHitId) return { status: "cache_hit" as const, configId: cacheHitId };
       } else {
@@ -2418,6 +2487,7 @@ export const enrichVehicleBatchV3 = internalAction({
         // treat as "unresolved" rather than trusting as an engine identity.
         const placeholder = `${args.displacement}l_${vPicData?.cylinders ?? "unknown"}cyl`.toLowerCase();
         console.warn(`[v8] No verified replacement for "${args.engineCode}" — falling back to "${placeholder}"`);
+        noteIdentity(`placeholder:${placeholder}`, `spec gate contradiction but no verified replacement — honest displacement descriptor keeps identity unresolved rather than wrong`, "rejected");
         await adoptVerifiedEngineCode(placeholder);
       }
     } else if (isNhtsaDescriptor(args.engineCode)) {
@@ -2429,6 +2499,7 @@ export const enrichVehicleBatchV3 = internalAction({
       );
       if (resolved.source === "verified" && !isNhtsaDescriptor(resolved.engineCode)) {
         console.log(`[v8] Engine code resolved+verified: "${args.engineCode}" → "${resolved.engineCode}"`);
+        noteIdentity(`resolved:${resolved.engineCode}`, `NHTSA/VDB placeholder resolved to a verified OEM code`, "ok");
         const cacheHitId = await adoptVerifiedEngineCode(resolved.engineCode);
         if (cacheHitId) return { status: "cache_hit" as const, configId: cacheHitId };
       } else if (resolved.source === "unverified") {
@@ -2436,8 +2507,10 @@ export const enrichVehicleBatchV3 = internalAction({
         // poisoned config keys and extraction prompts. Keep the displacement
         // placeholder — it is honest and still unique enough to key on.
         console.warn(`[v8] Engine code candidate "${resolved.engineCode}" failed verification — keeping placeholder "${args.engineCode}"`);
+        noteIdentity(`kept_placeholder:${args.engineCode}`, `candidate ${resolved.engineCode} failed adversarial verification — unverified codes poison config keys (CZDA/ERG/G4FJ class)`, "held");
       } else if (resolved.source === "unknown") {
         console.log(`[v8] Engine code resolution returned unknown — keeping placeholder "${args.engineCode}"`);
+        noteIdentity(`kept_placeholder:${args.engineCode}`, `resolution returned unknown — placeholder is honest and unique enough to key on`, "noop");
       }
     } else if (args.engineCode && args.engineCode.replace(/[^a-zA-Z0-9]/g, "").length <= 4) {
       // Round 10 (batch-11 Equinox): a SHORT decoder code (GM RPO shape —
@@ -2464,6 +2537,7 @@ export const enrichVehicleBatchV3 = internalAction({
       }
       if (verdict === "refuted") {
         console.warn(`[v8] Short engine code "${args.engineCode}" REFUTED for MY${args.year} — re-resolving`);
+        noteIdentity(`refuted:${args.engineCode}`, `short RPO-shape code refuted for MY${args.year} (${codeYear.known ? "year-pinned table" : "adversarial check"}) — re-resolving`, "rejected");
         const resolved = await resolveEngineCode(
           args.year, args.make, args.model, args.trim,
           args.displacement, vPicData?.cylinders ?? 4,
@@ -2472,10 +2546,12 @@ export const enrichVehicleBatchV3 = internalAction({
         );
         if (resolved.source === "verified" && !isNhtsaDescriptor(resolved.engineCode)) {
           console.log(`[v8] Engine code corrected: "${args.engineCode}" → "${resolved.engineCode}"`);
+          noteIdentity(`corrected:${resolved.engineCode}`, `refuted RPO replaced by verified re-resolution`, "ok");
           const cacheHitId = await adoptVerifiedEngineCode(resolved.engineCode);
           if (cacheHitId) return { status: "cache_hit" as const, configId: cacheHitId };
         } else {
           console.warn(`[v8] Refuted code "${args.engineCode}" could not be replaced with a verified one — keeping (visible in logs only)`);
+          noteIdentity(`kept_refuted:${args.engineCode}`, `refuted code had no verified replacement — kept under protest`, "held");
         }
       }
     }
@@ -2772,6 +2848,18 @@ export const enrichVehicleBatchV3 = internalAction({
       summary: `drivetrain=${vPicData?.drivetrain ?? "?"} · transmission=${vPicData?.transmission_type ?? "?"} · body=${vPicData?.body_class ?? "?"}`,
       response_text: JSON.stringify({ nhtsa_merged_identity: vPicData, vdb_fields: vdbFields }, null, 2),
     });
+
+    // Flush the buffered identity decisions now that run + config ids exist.
+    if (identityDecisions.length > 0) {
+      await recordDecisions(
+        ctx,
+        identityDecisions.map((e) => ({
+          ...e,
+          vehicleConfigId: String(vehicleConfigId),
+          runId: String(runId),
+        })),
+      );
+    }
 
     // STEP 6: Upsert drivetrain_config — only if we have a REAL value from NHTSA.
     // If drivetrain is unknown, skip this. _pollBatch1V3 will create it after
@@ -3849,6 +3937,16 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // Fix #3: Detect errored/expired batch2 request
     if (r2?.error) {
       console.error(`[v8/_pollBatch2] batch2 ${r2.error} — continuing with batch1 data only`);
+      await recordDecisions(ctx, [{
+        vehicleConfigId: String(args.vehicleConfigId),
+        runId: String(args.runId),
+        stage: "batch2",
+        decisionKey: "batch2_result",
+        chosen: String(r2.error).split(":")[0].slice(0, 60),
+        reason: String(r2.error),
+        outcome: "error",
+        cost: { tokens_in: r2.usage?.tokensIn, tokens_out: r2.usage?.tokensOut, web_searches: r2.usage?.webSearches },
+      }]);
       // Don't abort — we still have batch1 data, just skip gap fill
     }
 
@@ -3957,6 +4055,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       }
       if (rescueChunksOk > 0) {
         batch2RescueErrors.push(`batch2_fields_rescue_used:${rescueFilled}`);
+        await recordDecisions(ctx, [{
+          vehicleConfigId: String(args.vehicleConfigId),
+          runId: String(args.runId),
+          stage: "batch2",
+          decisionKey: "fields_rescue",
+          chosen: "re_asked_in_chunks",
+          reason: `batch-2 lost its fields (${String(r2!.error).slice(0, 120)}) — ${rescueChunksOk}/${chunks.length} chunk(s) re-asked, ${rescueFilled} field(s) recovered`,
+          outcome: rescueFilled > 0 ? "ok" : "noop",
+        }]);
         console.log(
           `[v8/fields-rescue] batch-2 lost its fields (${r2.error.slice(0, 60)}…) — ` +
             `${rescueChunksOk}/${chunks.length} chunk(s) re-asked, ${rescueFilled} field(s) recovered`,
@@ -4027,6 +4134,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               }
             }
             batch2RescueErrors.push("applicable_services_rescue_used");
+            await recordDecisions(ctx, [{
+              vehicleConfigId: String(args.vehicleConfigId),
+              runId: String(args.runId),
+              stage: "batch2",
+              decisionKey: "services_rescue",
+              chosen: "re_asked",
+              reason: `batch-2 returned zero applicable services — synchronous services-only re-ask restored ${rescuedApplicable} applicable row(s)`,
+              outcome: "ok",
+            }]);
             console.log(
               `[v8/services-rescue] batch-2 services empty — rescue returned ` +
                 `${services.length} rows (${rescuedApplicable} applicable), filled ${rescueFilled} price/labor fields`,
@@ -5249,6 +5365,16 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               `${refuted.length} refuted, ` +
               `${verdicts.filter((vd) => vd.verdict === "uncertain").length} uncertain`,
           );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(args.vehicleConfigId),
+            runId: String(args.runId),
+            stage: "verify",
+            decisionKey: "fitment_verify_pass1",
+            chosen: `${verdicts.filter((vd) => vd.verdict === "confirmed").length} confirmed / ${refuted.length} refuted / ${verdicts.filter((vd) => vd.verdict === "uncertain").length} uncertain`,
+            reason: `finalize-time adversarial verify over ${toVerify.length} core part(s) under the ${VERIFY_MAX_PARTS}-part cap`,
+            evidence: verdicts.map((vd) => `${vd.roleKey}:${vd.oem}:${vd.verdict}`),
+            outcome: refuted.length > 0 ? "rejected" : "ok",
+          }]);
           // Proportional skepticism (batch-5 fix): deletion is destructive, so
           // the evidence bar to delete scales with the part's independent
           // support. A single Haiku verdict may delete a WEAKLY-supported part
@@ -5873,6 +5999,16 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           // indistinguishable in the audit — the same ambiguity that hid the
           // batch-2 keystone bug. This tag makes the sweep queryable.
           fitmentRefutedErrors.push(`fitment_verify_pass2:checked:${sweep.length}`);
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(args.vehicleConfigId),
+            runId: String(args.runId),
+            stage: "verify",
+            decisionKey: "fitment_verify_pass2",
+            chosen: `${verdicts2.filter((v) => v.verdict === "confirmed").length} confirmed / ${refuted2.length} refuted / ${verdicts2.filter((v) => v.verdict === "uncertain").length} uncertain`,
+            reason: `adversarial verify over ${sweep.length} role-resource part(s) — confirmed survivals were previously unrecorded (only refutes persisted)`,
+            evidence: verdicts2.map((vd) => `${vd.roleKey}:${vd.oem}:${vd.verdict}`),
+            outcome: refuted2.length > 0 ? "rejected" : "ok",
+          }]);
           const byOem = new Map(sweep.map((c) => [c.oem.toUpperCase(), c]));
           const hard2 = refuted2.filter((r) => {
             const c = byOem.get(r.oem.toUpperCase());
@@ -6770,6 +6906,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     const completionGateStatus = computeEnrichmentStatus(completionGateInput);
     const completionGateExplain = explainGateDecision(completionGateInput);
     console.log(`[v8] Completion gate → ${completionGateStatus}: ${completionGateExplain}`);
+    await recordDecisions(ctx, [{
+      vehicleConfigId: String(args.vehicleConfigId),
+      runId: String(args.runId),
+      stage: "gate",
+      decisionKey: "gate_decision",
+      chosen: completionGateStatus,
+      reason: completionGateExplain,
+      evidence: [...missingCoreRoleStrings, ...axlePairGapStrings].slice(0, 10),
+      outcome: completionGateStatus === "complete" ? "ok" : "held",
+      flags: `trigger=finalize;fill=${Math.round(fillRate)};q=${quotability?.pct ?? "?"}`,
+    }]);
     lateSanityFlags.push(
       buildLateSanityFlag(
         "completion_gate",

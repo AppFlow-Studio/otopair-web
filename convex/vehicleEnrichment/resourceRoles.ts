@@ -23,6 +23,7 @@ import { internal } from "../_generated/api";
 import { axlePairGaps, computeQuotability, missingCoreRoles } from "./quotability";
 import { resourceMissingRoles, soleFlaggedWinnerRoles } from "./utils/roleResource";
 import { extractReplacementCandidates, normalizeCandidate } from "./utils/refuteHarvest";
+import { recordDecisions, type DecisionEvent } from "./utils/decisionLog";
 import { verifyPartFitments } from "./utils/partFitmentVerifier";
 import { PART_FIELD_MAP, calculateV3FillRate } from "./v3pipeline";
 
@@ -581,7 +582,7 @@ export const healAfterRun = internalAction({
     try {
       gate = await ctx.runAction(
         internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
-        { vehicleConfigId: args.vehicleConfigId },
+        { vehicleConfigId: args.vehicleConfigId, trigger: "heal_after_run" },
       );
     } catch (e) {
       console.error("[heal-after-run] completion-gate re-evaluation failed (non-fatal):", e);
@@ -610,6 +611,53 @@ export const healAfterRun = internalAction({
       gatePromoted: gate?.promoted ?? false,
     };
     console.log("[heal-after-run]", JSON.stringify(summary));
+
+    // Decision stream (Sep 2026): this summary used to die right here in the
+    // console — "which rung actually healed this config" was unanswerable.
+    // One event per rung, plus the repair-outcome strings as evidence.
+    {
+      const cfgId = String(args.vehicleConfigId);
+      const outcomeOf = (status: string, written: unknown[]): string =>
+        written.length > 0
+          ? "ok"
+          : status === "disabled"
+            ? "skipped"
+            : status === "error"
+              ? "error"
+              : "noop";
+      const rung = (
+        key: string,
+        status: string,
+        written: unknown[],
+        extraEvidence: string[] = [],
+      ): DecisionEvent => ({
+        vehicleConfigId: cfgId,
+        stage: "heal",
+        decisionKey: `heal_rung:${key}`,
+        chosen: status,
+        reason:
+          written.length > 0
+            ? `wrote ${written.length} part(s)`
+            : `rung ended ${status} with no writes`,
+        evidence: [...written.map(String), ...extraEvidence],
+        outcome: outcomeOf(status, written),
+      });
+      await recordDecisions(ctx, [
+        rung("rejection_resurrect", summary.resurrect, summary.resurrectWritten),
+        rung("refute_harvest", summary.harvest, summary.harvestWritten),
+        rung("genuine_fluids", summary.fluids, summary.fluidsWritten),
+        rung("category_harvest", summary.categories, summary.categoriesWritten),
+        rung("interchange_backtrack", summary.interchange, summary.interchangeWritten),
+        rung("rockauto_vehicle", summary.rockautoVehicle, summary.rockautoVehicleWritten),
+        rung("oil_product", summary.oil, summary.oilWritten ? [summary.oilWritten] : []),
+        rung(
+          "role_repair",
+          summary.roleRepair,
+          [],
+          (summary.outcomes as string[]).slice(0, 10),
+        ),
+      ]);
+    }
     return summary;
   },
 });
@@ -650,7 +698,12 @@ export const fleetRoleGapPage = internalQuery({
     const page = await ctx.db
       .query("vehicle_configs")
       .paginate({ cursor: args.cursor, numItems: args.pageSize });
-    const gapConfigs: Array<{ id: string; missing: number; status: string }> = [];
+    const gapConfigs: Array<{
+      id: string;
+      missing: number;
+      status: string;
+      cohort_dispatched_at: number | null;
+    }> = [];
     for (const config of page.page) {
       const status = (config as any).enrichment_status ?? "";
       if (status !== "complete" && status !== "partial" && status !== "verified") continue;
@@ -664,7 +717,19 @@ export const fleetRoleGapPage = internalQuery({
         (n, s) => n + Math.max(0, (s.core_total ?? 0) - (s.core_with_fitment ?? 0)),
         0,
       );
-      if (missing > 0) gapConfigs.push({ id: String(config._id), missing, status });
+      if (missing > 0)
+        gapConfigs.push({
+          id: String(config._id),
+          missing,
+          status,
+          // Same-night dedupe with the 08:00 cohort dispatcher (review
+          // finding, Sep 2026): carried so repairFleetSweep can skip configs
+          // the dispatcher already repaired an hour ago — each unfixable
+          // role has only 3 lifetime research attempts, and a double-run on
+          // an unchanged world burns 2 of them. Census rows keep counting
+          // these (fleetResidual must not lie); only TARGETING skips them.
+          cohort_dispatched_at: (config as any).cohort_dispatched_at ?? null,
+        });
     }
     return { continueCursor: page.isDone ? null : page.continueCursor, gapConfigs };
   },
@@ -706,7 +771,19 @@ export const repairFleetSweep = internalAction({
     // Worst-first: most missing binding roles. `complete` configs outrank
     // `partial` at equal severity — they are LIVE-bookable with holes.
     gaps.sort((a, b) => b.missing - a.missing || (a.status === "complete" ? -1 : 1));
-    const targets = budget > 0 ? gaps.slice(0, budget) : [];
+    // Same-night dedupe with the 08:00 cohort dispatcher: a config it
+    // dispatched within the last ~20h already got this exact repair — a
+    // second pass an hour later re-asks an unchanged world and burns
+    // lifetime research attempts (cap 3 per role). Tomorrow it's eligible
+    // again. Census/residual above deliberately still counts these.
+    const DISPATCH_DEDUPE_MS = 20 * 60 * 60 * 1000;
+    const now = Date.now();
+    const eligible = gaps.filter(
+      (g: any) =>
+        g.cohort_dispatched_at == null ||
+        now - g.cohort_dispatched_at > DISPATCH_DEDUPE_MS,
+    );
+    const targets = budget > 0 ? eligible.slice(0, budget) : [];
     if (targets.length > 0) {
       await ctx.scheduler.runAfter(
         0,

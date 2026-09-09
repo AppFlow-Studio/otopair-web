@@ -571,7 +571,7 @@ export const refreshStalePrices = internalAction({
       try {
         const gate: any = await ctx.runAction(
           internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
-          { vehicleConfigId: args.vehicleConfigId },
+          { vehicleConfigId: args.vehicleConfigId, trigger: "price_epilogue" },
         );
         console.log(
           `[price-refresh] reconciled run health: ${gate?.status}` +

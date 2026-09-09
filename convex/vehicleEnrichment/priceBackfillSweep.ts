@@ -217,7 +217,12 @@ export const nightly = internalAction({
 
     // Per-config cap: the SAME env the heal epilogue passes as its targeted
     // backfillBudget, so one sweep dispatch can never out-spend a heal.
-    const perConfigCap = Number(process.env.PARTS_PRICE_IMMEDIATE_BACKFILL_CAP ?? "12");
+    // NaN/0 guard (review nit): a garbage env here would make backfillBudget
+    // NaN, which disables both the per-config dispatch AND the nightly
+    // budget stop (`NaN <= 0` and `NaN >= budget` are both false).
+    const rawPerConfigCap = Number(process.env.PARTS_PRICE_IMMEDIATE_BACKFILL_CAP ?? "12");
+    const perConfigCap =
+      Number.isFinite(rawPerConfigCap) && rawPerConfigCap > 0 ? rawPerConfigCap : 12;
     const seenParts = new Set<string>();
     let examined = 0;
     let qualified = 0;
@@ -241,7 +246,13 @@ export const nightly = internalAction({
         console.error(`[price-sweep] census failed for ${String(cand.id)}:`, e);
       }
       if (!dryRun) {
-        await ctx.runMutation(selfApi()._stampSwept, { vehicleConfigId: cand.id });
+        // Non-fatal: a config deleted mid-action (the merge/delete incident
+        // class) must cost one stamp, not the whole night (review finding).
+        try {
+          await ctx.runMutation(selfApi()._stampSwept, { vehicleConfigId: cand.id });
+        } catch (e) {
+          console.error(`[price-sweep] stamp failed for ${String(cand.id)} (non-fatal):`, e);
+        }
       }
       if (!census?.qualifies) continue;
       qualified++;
@@ -260,7 +271,7 @@ export const nightly = internalAction({
             await ctx.scheduler.runAfter(
               0,
               internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
-              { vehicleConfigId: cand.id },
+              { vehicleConfigId: cand.id, trigger: "price_sweep" },
             );
           }
         }

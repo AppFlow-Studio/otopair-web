@@ -289,7 +289,7 @@ export const backfill = internalAction({
           // the heal ladder and gateResweep use.
           gate = await ctx.runAction(
             internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
-            { vehicleConfigId: t.vehicleConfigId },
+            { vehicleConfigId: t.vehicleConfigId, trigger: "services_snapshot_backfill" },
           );
         }
         rows.push({

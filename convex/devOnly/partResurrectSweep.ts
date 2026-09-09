@@ -94,7 +94,7 @@ export const sweep = internalAction({
         if ((r?.written ?? []).length > 0) {
           gate = await ctx.runAction(
             internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
-            { vehicleConfigId: t.vehicleConfigId },
+            { vehicleConfigId: t.vehicleConfigId, trigger: "part_resurrect_sweep" },
           );
         }
         results.push({

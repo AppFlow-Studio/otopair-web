@@ -33,12 +33,18 @@ import { internal } from "../_generated/api";
 import { calculateV3FillRate, PART_FIELD_MAP } from "./v3pipeline";
 import { computeQuotability, missingCoreRoles, axlePairGaps } from "./quotability";
 import { computeEnrichmentStatus, explainGateDecision } from "./completionGate";
+import { recordDecisions } from "./utils/decisionLog";
 
 export const reevaluateGate = internalAction({
   args: {
     vehicleConfigId: v.id("vehicle_configs"),
     /** Compute + report only — no run reconcile, no status/fill writes. */
     dryRun: v.optional(v.boolean()),
+    /** WHO asked — "heal_after_run" | "price_epilogue" | "cohort_dispatch" |
+     *  "price_sweep" | "gate_resweep" | … Stamped on the decision-stream
+     *  event so promotion history is attributable (Sep 2026 survey: gate
+     *  promotions and near-misses were unqueryable). */
+    trigger: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<any> => {
     const config: any = await ctx.runQuery(
@@ -167,6 +173,28 @@ export const reevaluateGate = internalAction({
     };
     if (args.dryRun) return report;
 
+    // Decision stream: every real gate ask becomes a queryable event — the
+    // promotion outcome is patched in after the transactional write below.
+    const emitGateDecision = async (promoted: boolean, statusAfter: string | null) => {
+      await recordDecisions(ctx, [
+        {
+          vehicleConfigId: String(args.vehicleConfigId),
+          runId: latestRun?._id ? String(latestRun._id) : null,
+          stage: "gate",
+          decisionKey: "gate_decision",
+          chosen: decision,
+          reason: explain,
+          evidence: [...missingStrings, ...axleStrings],
+          outcome: promoted ? "promoted" : decision === before ? "unchanged" : "held",
+          cost: undefined,
+          flags:
+            `trigger=${args.trigger ?? "unknown"};before=${before ?? "?"}` +
+            (statusAfter && statusAfter !== before ? `;after=${statusAfter}` : "") +
+            `;fill=${Math.round(fillRate)};q=${quotability.pct}`,
+        },
+      ]);
+    };
+
     // Reconcile the run row + take the promotion in ONE mutation —
     // patchRunPriceHealth re-checks status inside the transaction, so a run
     // that started between our read and this write can't be clobbered.
@@ -195,6 +223,7 @@ export const reevaluateGate = internalAction({
         interval_provenance_gaps: intervalProvenanceGaps,
       },
     );
+    await emitGateDecision(!!res?.promoted, res?.status_after ?? before);
     return { ...report, promoted: !!res?.promoted, status_after: res?.status_after ?? before };
   },
 });

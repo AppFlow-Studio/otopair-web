@@ -77,12 +77,23 @@ const FLUID_LANE_ROLES = new Set(["atf_fluid", "coolant"]);
  *  already gets the full heal ladder. Same filter as fleetRoleGapPage. */
 const DISPATCHABLE_STATUSES = new Set(["complete", "partial", "verified"]);
 
-/** repairMissingRolesBatch refuses more than 10 ids per invocation. */
-const ROLE_BATCH_SIZE = 10;
-/** Envelope for one sequential batch of 10 repairs (research + verify each). */
+/** Chunk size for repairMissingRolesBatch (its own hard cap is 10; review
+ *  finding Sep 2026: the batch is a sequential AWAITED loop inside one
+ *  action, so a chunk must finish inside the ~600s action budget or the
+ *  tail configs are silently unrepaired — 5 × ~1-2min repairs fits, 10 × 6min
+ *  never did). */
+const ROLE_BATCH_SIZE = 5;
+/** Spacing between chunk starts — generous so chunks never overlap even when
+ *  a repair runs long (the sequential-batch design exists to prevent
+ *  parallel Firecrawl/Anthropic spend spikes). */
 const ROLE_BATCH_WINDOW_MS = 30 * 60_000;
-/** Per-position envelope inside a batch, for the delayed gate re-ask. */
-const ROLE_REPAIR_EST_MS = 6 * 60_000;
+/** Per-position envelope inside a batch for the delayed gate re-ask. The
+ *  estimate being wrong is harmless — the gate is promote-only and the
+ *  repair's own patchRunRoleHealth reconciles regardless — so this only
+ *  needs to be LATE enough more often than not. */
+const ROLE_REPAIR_EST_MS = 2 * 60_000;
+/** Slack added after the last estimated repair before its gate re-ask. */
+const ROLE_GATE_SLACK_MS = 5 * 60_000;
 
 /** One page of (config id, dispatch stamp, status) — minimal rows so the
  *  action can sort the whole fleet stalest-first without any query ever
@@ -166,13 +177,18 @@ export const nightly = internalAction({
     dryRun: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<any> => {
-    const budget = args.budget ?? Number(process.env.PARTS_COHORT_DISPATCH_BUDGET ?? "0");
-    if (!Number.isFinite(budget) || budget <= 0) {
+    const rawBudget = args.budget ?? Number(process.env.PARTS_COHORT_DISPATCH_BUDGET ?? "0");
+    if (!Number.isFinite(rawBudget) || rawBudget <= 0) {
       console.log(
         "[cohort-dispatch] PARTS_COHORT_DISPATCH_BUDGET unset/0 — nightly dispatcher dark",
       );
       return { skipped: true };
     }
+    // Hard clamp (review finding): the fluid lane AWAITS an LLM verify per
+    // config, so past ~15 configs this action outruns its own ~600s budget
+    // and dies mid-loop with the role lane never scheduled. Same shape as
+    // repairFleetSweep's Math.min(budget, 10).
+    const budget = Math.min(15, Math.trunc(rawBudget));
     const dryRun = args.dryRun === true;
     const examineCap = Math.max(1, Math.trunc(args.examineCap ?? Math.max(40, budget * 8)));
 
@@ -202,6 +218,12 @@ export const nightly = internalAction({
       unnamedDeficit: boolean;
     };
     const dispatchable: Classified[] = [];
+    // Stamping is DEFERRED to after the budget slice (review finding): a
+    // gap-bearing config examined but cut by the budget must NOT be stamped,
+    // or it rotates behind the whole fleet undispatched — it should lead
+    // tomorrow instead. Gapless/unclassifiable configs stamp immediately;
+    // dispatchable ones stamp only when actually dispatched.
+    const stampQueue: any[] = [];
     let examined = 0;
     let skippedNoGaps = 0;
     for (const cand of candidates.slice(0, examineCap)) {
@@ -214,14 +236,15 @@ export const nightly = internalAction({
       } catch (e) {
         console.error(`[cohort-dispatch] classify failed for ${String(cand.id)}:`, e);
       }
-      if (!dryRun) {
-        await ctx.runMutation(selfApi()._stampDispatched, { vehicleConfigId: cand.id });
+      if (!klass) {
+        stampQueue.push(cand.id);
+        continue;
       }
-      if (!klass) continue;
       const fluidGaps = (klass.missingRoles as string[]).filter((r) => FLUID_LANE_ROLES.has(r));
       const roleGaps = (klass.missingRoles as string[]).filter((r) => !FLUID_LANE_ROLES.has(r));
       if (fluidGaps.length === 0 && roleGaps.length === 0 && !klass.unnamedDeficit) {
         skippedNoGaps++;
+        stampQueue.push(cand.id);
         continue;
       }
       dispatchable.push({
@@ -247,6 +270,20 @@ export const nightly = internalAction({
       .map((x) => x.c)
       .slice(0, budget);
     const skippedBudget = dispatchable.length - targets.length;
+    // Stamp the gapless/unclassifiable examined configs + tonight's targets.
+    // Budget-cut dispatchable configs stay UNSTAMPED so they lead tomorrow.
+    // One dead config must not kill the night (review finding — the merge/
+    // delete incident is real): stamp failures are non-fatal.
+    for (const t of targets) stampQueue.push(t.id);
+    if (!dryRun) {
+      for (const id of stampQueue) {
+        try {
+          await ctx.runMutation(selfApi()._stampDispatched, { vehicleConfigId: id });
+        } catch (e) {
+          console.error(`[cohort-dispatch] stamp failed for ${String(id)} (non-fatal):`, e);
+        }
+      }
+    }
 
     // ── Dispatch ─────────────────────────────────────────────────────────
     let dispatched = 0;
@@ -270,6 +307,7 @@ export const nightly = internalAction({
       else byLane.roles++;
       if (dryRun) continue;
 
+      let fluidWrote = false;
       if (t.fluidGaps.length > 0) {
         // healAfterRun's invocation style: awaited, failure non-fatal.
         try {
@@ -277,24 +315,52 @@ export const nightly = internalAction({
             internal.vehicleEnrichment.genuineFluids.seedFluidsRung,
             { vehicleConfigId: t.id },
           );
+          fluidWrote = (fluids?.written?.length ?? 0) > 0;
           console.log(
             `[cohort-dispatch] ${t.configKey}: fluid rung ${fluids?.status ?? "error"}` +
-              ((fluids?.written?.length ?? 0) > 0 ? ` wrote ${fluids.written.join(", ")}` : ""),
+              (fluidWrote ? ` wrote ${fluids.written.join(", ")}` : ""),
           );
         } catch (e) {
           console.error(`[cohort-dispatch] fluid rung failed for ${t.configKey} (non-fatal):`, e);
+        }
+      }
+      if (fluidWrote) {
+        // seedFluidsRung writes UNPRICED parts by contract ("pricing rides
+        // the targeted price backfill") — without this step the inline gate
+        // below can never promote and the new part waits DAYS for the
+        // zero-price sweep's rotation (review finding). Exact healAfterRun
+        // epilogue shape; its tail also re-asks the gate once prices land.
+        try {
+          await ctx.scheduler.runAfter(
+            0,
+            internal.vehicleEnrichment.priceRefresh.refreshStalePrices,
+            {
+              budget: 0, // fleet-wide stale leg stays off — targeted dispatch
+              backfillBudget: Number(process.env.PARTS_PRICE_IMMEDIATE_BACKFILL_CAP ?? "12"),
+              vehicleConfigId: t.id,
+              maxChainDepth: Number(process.env.PARTS_PRICE_BACKFILL_CHAIN_DEPTH ?? "2"),
+            },
+          );
+        } catch (e) {
+          console.error(
+            `[cohort-dispatch] fluid price backfill scheduling failed for ${t.configKey}:`,
+            e,
+          );
         }
       }
 
       if (hasRoleLane) {
         roleLaneIds.push(t.id);
         roleLaneKeys.push(t.configKey);
-      } else {
-        // Fluids-only config: lanes are complete right now — re-ask the gate
-        // inline, exactly as healAfterRun does after its awaited rungs.
+      } else if (!fluidWrote) {
+        // Fluids-only config with nothing newly written: no price backfill is
+        // coming to re-ask the gate, so ask it inline (healAfterRun style).
+        // When the rung DID write, the scheduled backfill's tail gates after
+        // prices land — an inline ask now would just read price_unknown.
         try {
           await ctx.runAction(internal.vehicleEnrichment.completionReevaluate.reevaluateGate, {
             vehicleConfigId: t.id,
+            trigger: "cohort_dispatch",
           });
         } catch (e) {
           console.error(
@@ -323,9 +389,9 @@ export const nightly = internalAction({
         roleBatchesScheduled++;
         for (let j = 0; j < chunk.length; j++) {
           await ctx.scheduler.runAfter(
-            k * ROLE_BATCH_WINDOW_MS + (j + 1) * ROLE_REPAIR_EST_MS,
+            k * ROLE_BATCH_WINDOW_MS + (j + 1) * ROLE_REPAIR_EST_MS + ROLE_GATE_SLACK_MS,
             internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
-            { vehicleConfigId: chunk[j] },
+            { vehicleConfigId: chunk[j], trigger: "cohort_dispatch" },
           );
         }
       }

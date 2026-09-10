@@ -278,11 +278,14 @@ export default function WalkInNewPage() {
       // catch keeps submit + redirect working — the banner just falls
       // back to the "not yet available" hint.
       let token: string | null = null;
+      let tokenErr: string | null = null;
       try {
         const minted = await mintClaimTokenForBooking({ bookingId });
         token = (minted as { token: string | null })?.token ?? null;
-      } catch {
+        if (!token) tokenErr = "already_claimed";
+      } catch (e) {
         token = null;
+        tokenErr = e instanceof Error ? e.message : "mint-failed";
       }
 
       // If a 17-char VIN was entered, decode via NHTSA and attach the
@@ -331,6 +334,7 @@ export default function WalkInNewPage() {
         time,
       });
       if (token) params.set("token", token);
+      if (!token && tokenErr) params.set("tokenErr", tokenErr);
       router.push(`/bookings?${params.toString()}`);
     } catch (err: unknown) {
       setError(

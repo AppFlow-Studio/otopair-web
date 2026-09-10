@@ -58,6 +58,7 @@ export default function BookingsPage() {
     assigned: string;
     time: string;
     token: string;
+    tokenErr: string;
   } | null>(null);
   const [copiedTrackerLink, setCopiedTrackerLink] = useState(false);
   useEffect(() => {
@@ -69,9 +70,10 @@ export default function BookingsPage() {
       assigned: searchParams.get("assigned") ?? searchParams.get("bay") ?? "",
       time: searchParams.get("time") ?? "",
       token: searchParams.get("token") ?? "",
+      tokenErr: searchParams.get("tokenErr") ?? "",
     });
     const params = new URLSearchParams(searchParams.toString());
-    ["walkinSuccess", "phone", "assigned", "bay", "time", "token"].forEach((k) =>
+    ["walkinSuccess", "phone", "assigned", "bay", "time", "token", "tokenErr"].forEach((k) =>
       params.delete(k),
     );
     const qs = params.toString();
@@ -474,10 +476,29 @@ export default function BookingsPage() {
               })()
             ) : (
               <div className="rounded-lg border border-dashed border-emerald-200 bg-white/60 px-3 py-2 text-[12px] leading-relaxed text-emerald-800">
-                Tracker link isn&apos;t available yet — deploy Convex to
-                activate it. Once live, this banner will show a copyable
-                <code className="ml-1 text-emerald-900">/t/&lt;token&gt;</code>{" "}
-                URL to hand to the customer.
+                {walkinBanner.tokenErr === "already_claimed" ? (
+                  <>
+                    No tracker link — this customer has already claimed their
+                    Otopair account. They&apos;ll see this booking the next
+                    time they open the app.
+                  </>
+                ) : walkinBanner.tokenErr ? (
+                  <>
+                    Tracker link couldn&apos;t be minted:{" "}
+                    <code className="text-emerald-900">
+                      {walkinBanner.tokenErr}
+                    </code>
+                  </>
+                ) : (
+                  <>
+                    Tracker link isn&apos;t available yet — deploy Convex to
+                    activate it. Once live, this banner will show a copyable
+                    <code className="ml-1 text-emerald-900">
+                      /t/&lt;token&gt;
+                    </code>{" "}
+                    URL to hand to the customer.
+                  </>
+                )}
               </div>
             )}
           </div>

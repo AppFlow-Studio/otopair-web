@@ -2370,7 +2370,7 @@ function MultiPointInspectionDialogBody({
                   specConfirmed={confirmedSpecZones.has(activeZone)}
                   onConfirmSpecs={() => markSpecReviewed(activeZone)}
                   extraHeader={
-                    activeZone === "FRT" ? (
+                    activeZone === "FRT" && phase === "pre" ? (
                       <InspectionStickerFields
                         status={inspectionStatus}
                         expires={inspectionExpires}

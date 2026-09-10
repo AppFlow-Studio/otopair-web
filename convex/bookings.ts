@@ -6196,19 +6196,19 @@ function hasRequiredMpiWork(args: {
  *
  * Derived from stored state, never from the request: a client that could name
  * its own phase could submit a "pre" inspection and permanently skip every
- * required wheel-off item. `mpi_started_at` is stamped at Start Job and never
- * cleared, so anything from Start Job onward — including reopening the
- * inspection mid-job for optional rows — is the MPI half.
+ * required wheel-off item.
+ *
+ * Keyed on `booking.status`, not on `mpi_started_at`. It used to be the
+ * timestamp — but that field gets written by more than one mutation
+ * (startWithPrejob, commitInspectionAndAwaitEstimate for new-cycle bookings),
+ * and a bug in one of them stamped it before the job had actually started,
+ * which made this function report "mpi" for a booking still sitting at
+ * vehicle_at_shop. `status` has exactly one writer — the guarded
+ * applyBookingStatusTransition — so there's nowhere for it to drift out of
+ * sync with reality the way a duplicated timestamp can.
  */
-async function resolveInspectionPhase(
-  ctx: any,
-  bookingId: any,
-): Promise<InspectionPhase> {
-  const actual = await ctx.db
-    .query("job_actuals")
-    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
-    .first();
-  return actual?.mpi_started_at != null ? "mpi" : "pre";
+function resolveInspectionPhase(booking: any): InspectionPhase {
+  return booking.status === "in_progress" ? "mpi" : "pre";
 }
 
 async function validateTieredInspectionInput({
@@ -6239,7 +6239,7 @@ async function validateTieredInspectionInput({
   // Resolved early: the lift question only exists in the MPI half (the
   // pre-check answer is "no" by definition), so the client never collects it
   // during the pre-check submit and this guard must not demand it either.
-  const phase = await resolveInspectionPhase(ctx, booking._id);
+  const phase = resolveInspectionPhase(booking);
   if (
     requireFinal &&
     phase === "mpi" &&
@@ -9491,6 +9491,38 @@ export async function applyBookingStatusTransition(
 
   await ctx.db.patch(booking._id, patch);
 
+  // The on-lift inspection window opens exactly when a booking genuinely
+  // becomes in_progress — every path that gets here (startWithPrejob, the
+  // legacy `start`, and whatever eventually approves a new-cycle booking's
+  // estimate) funnels through this one guarded transition, so this is the
+  // single place to stamp it. First-write-wins, so a caller that already
+  // stamped it earlier in the same request is a harmless no-op.
+  if (newStatus === "in_progress" && booking.status !== "in_progress") {
+    const now = Date.now();
+    const jobActual = await ensureJobActualRecord(ctx, { booking, now });
+    const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
+    const brakeScope = await resolveBrakeScopeForBooking(ctx, booking);
+    const mpiPatch: Record<string, number> = {
+      mpi_started_at: jobActual.mpi_started_at ?? now,
+    };
+    // Nothing on the lift to ask for → the window opens and closes in the same
+    // instant, and the labor clock starts immediately, rather than stranding
+    // the job behind a gate with no items in it.
+    if (
+      !hasRequiredMpiWork({
+        serviceNames,
+        brakeScope,
+        tireReplacementPositions: getBookedTireReplacementPositions(
+          booking.tire_specs,
+        ) as CornerZoneId[],
+      })
+    ) {
+      mpiPatch.mpi_completed_at = jobActual.mpi_completed_at ?? now;
+      mpiPatch.started_at = jobActual.started_at ?? now;
+    }
+    await ctx.db.patch(jobActual._id, mpiPatch);
+  }
+
   /*
    * Clear any outstanding "customer hasn't checked in" alerts.
    *
@@ -11321,23 +11353,13 @@ export const startWithPrejob = mutation({
       prejob: canonical.prejob,
       inspection: canonical.inspection,
       now,
-      // Start Job opens the inspection window, NOT the labor clock. The
-      // measurements taken between here and the MPI gate closing are
-      // inspection time; folding them into started_at would inflate every
-      // labor standard derived from this data (Spec v2 §3).
-      mpiStartedAtMs: now,
-      // Nothing on the lift to ask for → the window opens and closes here and
-      // the labor clock starts now, rather than stranding the job behind a
-      // gate with no items in it.
-      ...(hasRequiredMpiWork({
-        serviceNames,
-        brakeScope,
-        tireReplacementPositions: getBookedTireReplacementPositions(
-          booking.tire_specs,
-        ) as CornerZoneId[],
-      })
-        ? {}
-        : { mpiCompletedAtMs: now, startedAtMs: now }),
+      // The inspection window opens when the booking's status genuinely
+      // becomes in_progress, not when this mutation runs — a new-cycle
+      // booking calling commitInspectionAndAwaitEstimate hasn't started yet,
+      // it's still waiting on the customer's approval. That stamp now lives
+      // in applyBookingStatusTransition, the one place every path to
+      // in_progress funnels through, so it can't be duplicated (or missed)
+      // per caller again.
       finalizeInspection: true,
     });
 
@@ -11455,23 +11477,13 @@ export const commitInspectionAndAwaitEstimate = mutation({
       prejob: canonical.prejob,
       inspection: canonical.inspection,
       now,
-      // Start Job opens the inspection window, NOT the labor clock. The
-      // measurements taken between here and the MPI gate closing are
-      // inspection time; folding them into started_at would inflate every
-      // labor standard derived from this data (Spec v2 §3).
-      mpiStartedAtMs: now,
-      // Nothing on the lift to ask for → the window opens and closes here and
-      // the labor clock starts now, rather than stranding the job behind a
-      // gate with no items in it.
-      ...(hasRequiredMpiWork({
-        serviceNames,
-        brakeScope,
-        tireReplacementPositions: getBookedTireReplacementPositions(
-          booking.tire_specs,
-        ) as CornerZoneId[],
-      })
-        ? {}
-        : { mpiCompletedAtMs: now, startedAtMs: now }),
+      // The inspection window opens when the booking's status genuinely
+      // becomes in_progress, not when this mutation runs — a new-cycle
+      // booking calling commitInspectionAndAwaitEstimate hasn't started yet,
+      // it's still waiting on the customer's approval. That stamp now lives
+      // in applyBookingStatusTransition, the one place every path to
+      // in_progress funnels through, so it can't be duplicated (or missed)
+      // per caller again.
       finalizeInspection: true,
     });
 

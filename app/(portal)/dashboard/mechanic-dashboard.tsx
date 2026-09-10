@@ -149,10 +149,12 @@ export default function MechanicDashboard() {
     api.bookings.getVehiclePassportForBooking,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"
   );
-  // Start Job stamps mpiStartedAt and never clears it, so its presence is what
-  // says the on-lift half of the inspection is the one being filled.
+  // Keyed on status, not on mpiStartedAt — a booking still waiting on a
+  // customer's pre-job estimate approval must never read as "mpi" just
+  // because a timestamp was written early. status has one guarded writer;
+  // mpiStartedAt has several.
   const workflowInspectionPhase: InspectionPhase =
-    selectedWorkflowBooking?.jobActuals?.mpiStartedAt != null ? "mpi" : "pre";
+    selectedWorkflowBooking?.status === "in_progress" ? "mpi" : "pre";
   const workflowPrefill = useQuery(
     api.job_actuals.getPrefillData,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"

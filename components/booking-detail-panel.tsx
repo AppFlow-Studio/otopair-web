@@ -839,15 +839,21 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
     const [declineOtherText, setDeclineOtherText] = useState("");
     const [showPrejobDialog, setShowPrejobDialog] = useState(false);
-    // Which half of the split inspection this booking is on. mpiStartedAt is
-    // stamped at Start Job and never cleared, so everything from that tap on —
-    // including reopening the inspection mid-job for optional rows — is MPI.
+    // Which half of the split inspection this booking is on. Keyed on status,
+    // not on mpiStartedAt — that timestamp used to be the signal, but it gets
+    // written by more than one server mutation, and a booking still waiting on
+    // a customer's pre-job estimate approval (status still vehicle_at_shop)
+    // must never read as "mpi", no matter what any timestamp says. status is
+    // the one field with a single, guarded writer.
     const inspectionPhase: InspectionPhase =
-      job?.jobActuals?.mpiStartedAt != null ? "mpi" : "pre";
-    // True while the on-lift half is still gating: Start Job has happened but
-    // the last required MPI item hasn't landed. The job can't be completed and
-    // the labor clock hasn't started.
+      job?.status === "in_progress" ? "mpi" : "pre";
+    // True while the on-lift half is still gating: the job has genuinely
+    // started but the last required MPI item hasn't landed. The job can't be
+    // completed and the labor clock hasn't started. Requires status ===
+    // in_progress on top of the timestamps as defense in depth — this is
+    // exactly the pair of fields a past bug let drift out of sync.
     const mpiGateOpen =
+      job?.status === "in_progress" &&
       job?.jobActuals?.mpiStartedAt != null &&
       job?.jobActuals?.mpiCompletedAt == null;
     const [showPostjobDialog, setShowPostjobDialog] = useState(false);
@@ -1485,7 +1491,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             prejob: payload,
             inspection,
           });
-          setShowPrejobDialog(false);
+          // Deliberately not closing here: the job just started, so the
+          // on-lift half is the very next thing to fill in. Once the
+          // reactive job query catches up, status flips to in_progress and
+          // this same dialog re-renders straight into the mpi phase — no
+          // visible close-then-reopen flash, no separate tap required.
           onSuccess?.("Booking started");
         }
       } catch (err: unknown) {
@@ -1953,7 +1963,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             } py-2.5`}
                           >
                             {mpiGateOpen
-                              ? "Continue inspection — on lift"
+                              ? "Continue inspection"
                               : "Open inspection"}
                           </button>
                         )}

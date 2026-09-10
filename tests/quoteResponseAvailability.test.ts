@@ -102,6 +102,29 @@ test("quote owner sees an available earliest slot for tire and rotor responses",
   expect(rotor[0]?.earliest_slot_available).toBe(true);
 });
 
+test("customer quote reads preserve custom tire, rotor, and pad brand names", async () => {
+  const { t, seed } = await seedQuoteAvailability();
+  await t.run(async (ctx) => {
+    await ctx.db.patch(seed.tireResponseId, { tire_brand: "RoadX" });
+    await ctx.db.patch(seed.rotorResponseId, {
+      rotor_brand: "PowerStop",
+      pad_brand: "Akebono",
+    });
+  });
+  const customer = t.withIdentity(identityFor(seed.customerClerkId));
+
+  const [tire] = await customer.query(api.tire_quote_responses.listForBookingWithShops, {
+    booking_id: seed.bookingId,
+  });
+  const [rotor] = await customer.query(api.rotor_quote_responses.listForBookingWithShops, {
+    booking_id: seed.bookingId,
+  });
+
+  expect(tire?.tire_brand).toBe("RoadX");
+  expect(rotor?.rotor_brand).toBe("PowerStop");
+  expect(rotor?.pad_brand).toBe("Akebono");
+});
+
 test("a confirmed booking makes the quoted earliest slot unavailable", async () => {
   const { t, seed } = await seedQuoteAvailability();
   await t.run(async (ctx) => {

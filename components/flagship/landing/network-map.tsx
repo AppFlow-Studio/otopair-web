@@ -36,7 +36,7 @@ function MapImageFallback() {
   );
 }
 
-export default function NetworkMap({ className }: { className?: string }) {
+export default function NetworkMap({ className, frame = true }: { className?: string; frame?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   // Boot a touch ahead of arrival so tiles/WebGL warm up before it's on screen.
   const near = useInView(ref, { once: true, margin: "800px 0px" });
@@ -44,7 +44,9 @@ export default function NetworkMap({ className }: { className?: string }) {
   return (
     <div
       ref={ref}
-      className={`relative overflow-hidden rounded-[20px] border border-[#1a1a1a]/8 ${
+      // `frame={false}` drops the panel's own radius and hairline for callers
+      // that seat the map inside a Bezel plate, which clips and frames it.
+      className={`relative overflow-hidden ${frame ? "rounded-[20px] border border-[#1a1a1a]/8" : ""} ${
         className ?? "aspect-[5/4]"
       }`}
     >

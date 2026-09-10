@@ -30,13 +30,22 @@ type ScopePart = {
   line_total_cents: number | null;
 };
 
+type ScopePhoto = { storageId: string; url: string };
+
 type ScopeChange = {
   approvalId: string;
   state: "pending" | "accepted" | "auto_confirmed" | "declined";
+  /** Which cycle raised the change. Optional so a pre-deploy backend (mid-job
+   *  only) still type-checks; treated as "mid_job" when absent. */
+  cycle?: "pre_job" | "mid_job";
   addedServiceNames: string[];
   totalCents: number;
   deltaPriceCents: number;
   notes: string | null;
+  /** Evidence photos attached on the "Why this adjustment?" screen. Present for
+   *  every state — declined included — so a turned-down change still shows what
+   *  the mechanic found. Optional for the same pre-deploy back-compat reason. */
+  photos?: ScopePhoto[];
   sla_expires_at_ms: number | null;
   submitted_at_ms: number | null;
   decided_at_ms: number | null;
@@ -161,13 +170,17 @@ function ExtraWorkRow({
   strongText: string;
   mutedText: string;
 }) {
+  const isPreJob = change.cycle === "pre_job";
   const title =
     change.addedServiceNames.length > 0
       ? change.addedServiceNames.join(", ")
-      : "Added work";
+      : isPreJob
+        ? "Pre-job adjustment"
+        : "Added work";
   const delta =
     change.deltaPriceCents > 0 ? `+${money(change.deltaPriceCents)}` : null;
   const declined = change.state === "declined";
+  const photos = change.photos ?? [];
   // Defensive against an older backend that predates the parts payload — falls
   // back to the legacy declined-only `deniedParts` so nothing throws mid-deploy.
   const parts = change.parts ?? change.deniedParts ?? [];
@@ -215,9 +228,22 @@ function ExtraWorkRow({
         <div className="flex min-w-0 items-start gap-2">
           <Wrench className={`mt-0.5 h-4 w-4 shrink-0 ${mutedText}`} />
           <div className="min-w-0">
-            <p className={`truncate text-sm font-semibold ${strongText}`}>
-              {title}
-            </p>
+            <div className="flex items-center gap-2">
+              <p className={`truncate text-sm font-semibold ${strongText}`}>
+                {title}
+              </p>
+              {isPreJob ? (
+                <span
+                  className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] ${
+                    dark
+                      ? "bg-white/10 text-slate-300"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  Before the job
+                </span>
+              ) : null}
+            </div>
             <p className={`mt-0.5 inline-flex items-center gap-1.5 text-[13px] font-medium ${chrome.label}`}>
               <Icon className="h-3.5 w-3.5" />
               {chrome.text}
@@ -240,6 +266,43 @@ function ExtraWorkRow({
         <p className={`mt-2 text-[13px] leading-relaxed ${mutedText}`}>
           “{change.notes}”
         </p>
+      ) : null}
+
+      {photos.length > 0 ? (
+        <div className="mt-2.5">
+          <p
+            className={`text-[11px] font-semibold uppercase tracking-wider ${mutedText}`}
+          >
+            {declined ? "Photos — change declined" : "Photos the mechanic attached"}
+          </p>
+          <div className="mt-1.5 flex flex-wrap gap-2">
+            {photos.map((p) => (
+              <a
+                key={p.storageId}
+                href={p.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={
+                  declined
+                    ? "Declined by the customer — kept for the record"
+                    : "Open photo"
+                }
+                className={`relative block h-16 w-16 overflow-hidden rounded-lg border transition-opacity hover:opacity-100 ${
+                  dark ? "border-white/10 bg-black/40" : "border-border bg-muted"
+                } ${declined ? "opacity-60" : ""}`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={p.url}
+                  alt=""
+                  className={`h-full w-full object-cover ${
+                    declined ? "grayscale" : ""
+                  }`}
+                />
+              </a>
+            ))}
+          </div>
+        </div>
       ) : null}
 
       {hasBreakdown ? (

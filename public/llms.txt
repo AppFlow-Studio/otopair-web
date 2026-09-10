@@ -1,0 +1,52 @@
+# Otopair
+
+> Otopair is a trust-first automotive service marketplace that connects
+> drivers with verified independent mechanic shops in Staten Island, NYC.
+> Shops set their own prices; drivers see the full total before they
+> confirm, a $20 hold reserves the slot, and the shop confirms the final
+> price after inspection — it cannot exceed what the driver approved
+> without in-app approval.
+
+## Key facts
+
+- Operator: AppFlow Creations Inc.
+- Market: Staten Island, New York City (live). Brooklyn (Q4 2026), Queens (Q1 2027), The Bronx (Q2 2027) and Manhattan (Q3 2027) follow on the coverage timeline.
+- Platforms: iOS and Android app for drivers (store listings on the way); web dashboard for shops.
+- How it works: the driver describes the problem to Oto (the in-app assistant), picks a shop the Otopair team has approved, and sees the full total the shop set before confirming. A $20 hold reserves the slot; extra work needs the driver's approval in the app; funds are captured when the shop marks the job complete.
+- Cost to shops: no subscription, no setup fee.
+- Payments: Stripe Connect. Shops are paid through Stripe on Stripe's payout schedule.
+- Services: 22 bookable services across 4 categories (Routine, Tires & Brakes, Scheduled Service, Inspections). Prices are built per vehicle in the app; no averages are published.
+- Verification: a shop is listed after a manual review and approval by the Otopair team, a connected Stripe account, published hours, at least one mechanic and one service. Otopair does not certify licences or insurance.
+- Reviews: one-way, from drivers with a completed booking only.
+- Support: support@otopair.com
+
+## Pages
+
+- https://otopair.com/: What Otopair is, how booking works, where it is available
+- https://otopair.com/how-it-works: The booking path, step by step
+- https://otopair.com/pricing: How the locked price works
+- https://otopair.com/oto: What Oto can and cannot do
+- https://otopair.com/about: Who operates Otopair and where
+- https://otopair.com/coverage: Boroughs served and the expansion timeline
+- https://otopair.com/staten-island: The live market: shops, neighborhoods, local service pages
+- https://otopair.com/brooklyn, /queens, /bronx, /manhattan: Upcoming boroughs with waitlists
+- https://otopair.com/shops: Directory of verified shops (one page per shop under /shops/)
+- https://otopair.com/services: The 22 bookable services (one page per service under /services/)
+- https://otopair.com/for-shops: How repair shops join the network and get paid
+- https://otopair.com/partner-with-us: Shop partnership overview
+- https://otopair.com/apply: Shop application form
+- https://otopair.com/trust-and-safety: How the price, the money and the reviews are protected
+- https://otopair.com/how-shops-are-verified: The verification standard, including what is not checked
+- https://otopair.com/vehicle-health-score: The 0–100 score, what it tracks and what it does not
+- https://otopair.com/cancellation-policy: Cancellation, reschedule and no-show rules
+- https://otopair.com/warranty: What Otopair does and does not warrant
+- https://otopair.com/security: What is in place, and what is not claimed yet
+- https://otopair.com/help: Answer-first help articles (one question per page under /help/)
+- https://otopair.com/download: Get the app
+- https://otopair.com/car-data: Public vehicle-data lookup
+- https://otopair.com/press: Press kit and brand assets
+- https://otopair.com/careers: Working at Otopair
+- https://otopair.com/accessibility: Accessibility statement
+- https://otopair.com/contact: How to reach Otopair
+- https://otopair.com/privacy: Privacy policy
+- https://otopair.com/terms: Terms of service

@@ -1607,12 +1607,27 @@ export const getMidJobScopeChanges = query({
       (ownedShop && String(ownedShop._id) === String((booking as any).shop_id));
     if (!isStaff) return [];
 
-    const rows = await ctx.db
-      .query("booking_approvals")
-      .withIndex("by_booking_and_cycle", (q: any) =>
-        q.eq("booking_id", args.bookingId).eq("cycle", "mid_job"),
-      )
-      .collect();
+    // Both pre-job and mid-job adjustments carry a "Why this adjustment?"
+    // reason and the evidence photos the mechanic attached on that screen.
+    // Surface both cycles so the active-job overlay tells the whole story, not
+    // just work added mid-job. (A pre_job row only exists when a mechanic
+    // actually submitted a pre-job estimate — never the customer's original
+    // booking — so including it can't leak the baseline quote here.)
+    const [preJobRows, midJobRows] = await Promise.all([
+      ctx.db
+        .query("booking_approvals")
+        .withIndex("by_booking_and_cycle", (q: any) =>
+          q.eq("booking_id", args.bookingId).eq("cycle", "pre_job"),
+        )
+        .collect(),
+      ctx.db
+        .query("booking_approvals")
+        .withIndex("by_booking_and_cycle", (q: any) =>
+          q.eq("booking_id", args.bookingId).eq("cycle", "mid_job"),
+        )
+        .collect(),
+    ]);
+    const rows = [...preJobRows, ...midJobRows];
 
     const customJobs = await ctx.db
       .query("custom_jobs")
@@ -1630,19 +1645,23 @@ export const getMidJobScopeChanges = query({
       return "other" as const; // withdrawn / fixed_price_informational
     };
 
-    return rows
-      .filter((r: any) => stateFor(r.decision) !== "other")
-      .sort(
-        (a: any, b: any) =>
-          (b.submitted_at_ms ?? b._creationTime ?? 0) -
-          (a.submitted_at_ms ?? a._creationTime ?? 0),
-      )
-      .map((r: any) => {
+    const enriched = await Promise.all(
+      rows
+        .filter((r: any) => stateFor(r.decision) !== "other")
+        .sort(
+          (a: any, b: any) =>
+            (b.submitted_at_ms ?? b._creationTime ?? 0) -
+            (a.submitted_at_ms ?? a._creationTime ?? 0),
+        )
+        .map(async (r: any) => {
         const introduced = customJobs.filter(
           (c: any) =>
             String(c.introduced_by_approval_id ?? "") === String(r._id),
         );
         const state = stateFor(r.decision);
+        const cycle = (r.cycle === "pre_job" ? "pre_job" : "mid_job") as
+          | "pre_job"
+          | "mid_job";
 
         // The parts these added lines carry — surfaced for EVERY state now, not
         // just declines. A *pending* request previously showed only a service
@@ -1690,14 +1709,37 @@ export const getMidJobScopeChanges = query({
           0,
         );
 
+        // Evidence photos the mechanic attached on the "Why this adjustment?"
+        // screen. Resolved for EVERY state — including declined — so a change
+        // the customer turned down still shows what the mechanic found (the UI
+        // marks those declined/ignored rather than dropping them).
+        const photos = (
+          await Promise.all(
+            (((r.scope_photo_ids ?? []) as Id<"_storage">[]) || []).map(
+              async (sid: Id<"_storage">) => ({
+                storageId: String(sid),
+                url: await ctx.storage.getUrl(sid),
+              }),
+            ),
+          )
+        ).filter((p) => p.url !== null) as {
+          storageId: string;
+          url: string;
+        }[];
+
         const prior = (r.prior_ceiling_cents ?? 0) as number;
         return {
           approvalId: r._id as Id<"booking_approvals">,
           state,
+          // Which cycle produced this adjustment — the overlay badges a
+          // pre-job change as "Before the job" so it reads differently from
+          // work added mid-job.
+          cycle,
           addedServiceNames: introduced.map((c: any) => c.name as string),
           totalCents: r.mechanic_set_price_cents as number,
           deltaPriceCents: (r.mechanic_set_price_cents as number) - prior,
           notes: (r.notes ?? null) as string | null,
+          photos,
           sla_expires_at_ms: (r.sla_expires_at_ms ?? null) as number | null,
           submitted_at_ms: (r.submitted_at_ms ?? null) as number | null,
           decided_at_ms: (r.decided_at_ms ?? null) as number | null,
@@ -1709,7 +1751,21 @@ export const getMidJobScopeChanges = query({
           // `parts` when declined, empty otherwise.
           deniedParts: state === "declined" ? parts : [],
         };
-      });
+      }),
+    );
+
+    // A pre-job cycle with no reason, no photo, no added scope, and no price
+    // delta is a bare in-range confirmation — there's no "why" to surface, so
+    // drop it to keep the panel about genuine adjustments. Mid-job rows are
+    // always kept (unchanged behavior).
+    return enriched.filter(
+      (e) =>
+        e.cycle === "mid_job" ||
+        (e.notes != null && e.notes.trim().length > 0) ||
+        e.photos.length > 0 ||
+        e.deltaPriceCents > 0 ||
+        e.parts.length > 0,
+    );
   },
 });
 

@@ -18,7 +18,9 @@ export type PortalId = "ops" | "shops" | "data";
 
 export const PORTALS: { id: PortalId; label: string; base: string }[] = [
   { id: "ops", label: "Ops", base: "/ops" },
-  { id: "shops", label: "Shops", base: "/shops" },
+  // The Shops portal was merged into the director panel; /shops is now the
+  // PUBLIC verified-shop directory (app/(marketing)/shops).
+  { id: "shops", label: "Shops", base: "/director#shops" },
   { id: "data", label: "Data", base: "/director/data" },
 ];
 
@@ -63,31 +65,12 @@ export const NAV: Record<PortalId, NavGroup[]> = {
     },
     { label: "Governance", items: [{ label: "Audit Log", href: "/ops/audit" }] },
   ],
+  // Every former /shops/* pane lives in the director's Shops tab (sub-tabs
+  // Map / Directory / Pipeline / Capacity / Offerings / Performance) and the
+  // Stripe tab. One entry: the tree is never rendered on its own any more.
   shops: [
-    { items: [{ label: "Network Overview", href: "/shops" }] },
-    {
-      label: "Partners",
-      items: [
-        { label: "Directory", href: "/shops/all" },
-        { label: "Onboarding Pipeline", href: "/shops/pipeline" },
-      ],
-    },
-    { label: "People", items: [{ label: "Mechanics", href: "/shops/mechanics" }] },
-    {
-      label: "Supply",
-      items: [
-        { label: "Capacity & Scheduling", href: "/shops/capacity" },
-        { label: "Offerings Matrix", href: "/shops/offerings" },
-      ],
-    },
-    { label: "Money", items: [{ label: "Stripe Connect Health", href: "/shops/stripe-health" }] },
-    {
-      label: "Quality",
-      items: [
-        { label: "Network Reviews", href: "/shops/reviews" },
-        { label: "Performance", href: "/shops/performance" },
-      ],
-    },
+    { items: [{ label: "Shops (Director)", href: "/director#shops" }] },
+    { label: "Money", items: [{ label: "Stripe Connect Health", href: "/director#stripe" }] },
   ],
   data: [
     {

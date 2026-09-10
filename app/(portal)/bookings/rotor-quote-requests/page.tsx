@@ -15,6 +15,13 @@ import { getBookingEndTime } from "@/lib/schedule-overlap";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { formatHoursValue } from "@/lib/labor-units";
 import { shouldShowShopQuoteRequest } from "@/lib/quoteRequestVisibility";
+import {
+  OTHER_QUOTE_BRAND,
+  customQuoteBrandInputValue,
+  isCustomQuoteBrand,
+  isQuoteBrandReady,
+  nextQuoteBrandValue,
+} from "@/lib/quote-brand-selection";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import {
   Select,
@@ -66,8 +73,6 @@ const PAD_BRANDS = [
   { value: "textar", label: "Textar" },
 ];
 
-const OTHER_BRAND = "__other__";
-
 function brandFormValue(
   brands: Array<{ value: string; label: string }>,
   stored: string | undefined,
@@ -88,8 +93,8 @@ function BrandSelect({
   placeholder?: string;
 }) {
   const matched = brands.find((b) => b.value === value);
-  const isOther = !!value && !matched;
-  const selectedKey = matched ? matched.value : isOther ? OTHER_BRAND : "none";
+  const isOther = isCustomQuoteBrand(value, brands.map((brand) => brand.value));
+  const selectedKey = matched ? matched.value : isOther ? OTHER_QUOTE_BRAND : "none";
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
   const filtered = normalizedQuery
@@ -101,10 +106,7 @@ function BrandSelect({
       <Select
         selectedKey={selectedKey}
         onSelectionChange={(key) => {
-          const k = String(key);
-          if (k === "none") onChange("");
-          else if (k === OTHER_BRAND) { if (matched) onChange(""); }
-          else onChange(k);
+          onChange(nextQuoteBrandValue(String(key)));
           setQuery("");
         }}
       >
@@ -140,7 +142,7 @@ function BrandSelect({
               </SelectItem>
             ))}
             {"other".includes(normalizedQuery) || !normalizedQuery ? (
-              <SelectItem id={OTHER_BRAND} textValue="Other…" className="min-h-0 rounded-sm px-2.5 py-1.5 text-xs">
+              <SelectItem id={OTHER_QUOTE_BRAND} textValue="Other…" className="min-h-0 rounded-sm px-2.5 py-1.5 text-xs">
                 Other…
               </SelectItem>
             ) : null}
@@ -150,7 +152,7 @@ function BrandSelect({
       {isOther && (
         <input
           type="text"
-          value={value}
+          value={customQuoteBrandInputValue(value)}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Brand name"
           autoFocus
@@ -794,7 +796,7 @@ export function RotorQuoteSubmissionDialog({
   }, [perRotorPrice, laborCost, rotorQuantity, includePads, padsSubtotal]);
 
   const padsValid = !includePads || (
-    padBrand.trim().length > 0 &&
+    isQuoteBrandReady(padBrand) &&
     padType !== "" &&
     padPrice !== "" &&
     Number(padPrice) >= 0 &&
@@ -803,7 +805,7 @@ export function RotorQuoteSubmissionDialog({
   );
 
   const canSubmit =
-    rotorBrand.trim().length > 0 &&
+    isQuoteBrandReady(rotorBrand) &&
     perRotorPrice !== "" &&
     Number(perRotorPrice) > 0 &&
     laborCost !== "" &&

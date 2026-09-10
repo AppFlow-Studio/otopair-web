@@ -48,7 +48,7 @@ const INFO_SAMPLES: Record<string, unknown> = {
     rows: [
       { label: "Parts", value: "Exact part, exact price" },
       { label: "Labor", value: "Shop's posted rate" },
-      { label: "Otopair fee", value: "7%, always visible" },
+      { label: "Locked total", value: "shown before you confirm" },
       { label: "Taxes", value: "Itemized at checkout" },
     ],
   },
@@ -59,7 +59,7 @@ const INFO_SAMPLES: Record<string, unknown> = {
       { value: "4", label: "NYC boroughs" },
       { value: "120+", label: "Vetted shops" },
       { value: "90s", label: "To book" },
-      { value: "7%", label: "Flat fee" },
+      { value: "$20", label: "Hold at booking" },
     ],
     footnote: "Staten Island and more cities are next.",
   },
@@ -90,7 +90,9 @@ export default function DebugTriggers({ oto }: { oto: OtoAgent }) {
   const [open, setOpen] = useState(true);
 
   return (
-    <div className="fixed right-2 top-1/2 z-[70] -translate-y-1/2">
+    // max-lg:hidden — on a phone-sized preview the panel covered half the
+    // page and swallowed wheel scrolling (2026-09-03).
+    <div className="fixed right-2 top-1/2 z-[70] -translate-y-1/2 max-lg:hidden">
       {open ? (
         <div className="max-h-[86vh] w-[148px] space-y-3 overflow-y-auto rounded-xl border border-[#1a1a1a]/10 bg-[#eceae6]/95 p-2 shadow-[0_10px_30px_rgba(0,0,0,0.12)] backdrop-blur [scrollbar-width:thin]">
         <button type="button" onClick={() => setOpen(false)} className={`${BTN} text-center font-semibold`}>

@@ -57,3 +57,11 @@ node_modules/
 # Agent browser-driving harness (local only — never committed)
 /.agent/
 .claude
+# Local agent tooling: installed skills (npx skills add), their lockfile, and
+# the design-detector / playwright-cli caches. Not part of the site.
+.agents/
+agent/
+data/skills/
+skills-lock.json
+.impeccable/
+.playwright-cli/

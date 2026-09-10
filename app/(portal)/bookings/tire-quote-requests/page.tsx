@@ -16,6 +16,13 @@ import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { formatHoursValue } from "@/lib/labor-units";
 import { shouldShowShopQuoteRequest } from "@/lib/quoteRequestVisibility";
 import {
+  OTHER_QUOTE_BRAND,
+  customQuoteBrandInputValue,
+  isCustomQuoteBrand,
+  isQuoteBrandReady,
+  nextQuoteBrandValue,
+} from "@/lib/quote-brand-selection";
+import {
   Select,
   SelectItem,
   SelectListBox,
@@ -51,8 +58,6 @@ function toCatalogTier(tier: string | null | undefined): CatalogTier | null {
 
 type BrandOption = { value: string; label: string };
 
-const OTHER_BRAND = "__other__";
-
 function TireBrandSelect({
   value,
   onChange,
@@ -65,8 +70,8 @@ function TireBrandSelect({
   loading?: boolean;
 }) {
   const matched = options.find((b) => b.value === value);
-  const isOther = !!value && !matched;
-  const selectedKey = matched ? matched.value : isOther ? OTHER_BRAND : "none";
+  const isOther = isCustomQuoteBrand(value, options.map((option) => option.value));
+  const selectedKey = matched ? matched.value : isOther ? OTHER_QUOTE_BRAND : "none";
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
   const filtered = normalizedQuery
@@ -78,10 +83,7 @@ function TireBrandSelect({
       <Select
         selectedKey={selectedKey}
         onSelectionChange={(key) => {
-          const k = String(key);
-          if (k === "none") onChange("");
-          else if (k === OTHER_BRAND) { if (matched) onChange(""); }
-          else onChange(k);
+          onChange(nextQuoteBrandValue(String(key)));
           setQuery("");
         }}
       >
@@ -123,7 +125,7 @@ function TireBrandSelect({
               </SelectItem>
             ))}
             {"other".includes(normalizedQuery) || !normalizedQuery ? (
-              <SelectItem id={OTHER_BRAND} textValue="Other…" className="min-h-0 rounded-sm px-2.5 py-1.5 text-xs">
+              <SelectItem id={OTHER_QUOTE_BRAND} textValue="Other…" className="min-h-0 rounded-sm px-2.5 py-1.5 text-xs">
                 Other…
               </SelectItem>
             ) : null}
@@ -133,7 +135,7 @@ function TireBrandSelect({
       {isOther && (
         <input
           type="text"
-          value={value}
+          value={customQuoteBrandInputValue(value)}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Brand name"
           autoFocus
@@ -707,7 +709,7 @@ export function TireQuoteSubmissionDialog({
   }, [perTirePrice, laborCost, quantity]);
 
   const canSubmit =
-    tireBrand.trim().length > 0 &&
+    isQuoteBrandReady(tireBrand) &&
     perTirePrice !== "" &&
     Number(perTirePrice) > 0 &&
     laborCost !== "" &&

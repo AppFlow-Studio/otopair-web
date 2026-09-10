@@ -518,6 +518,15 @@ export function nextInspectionZoneAfterCompletion(zoneId: ZoneId) {
     : INSPECTION_NAV_ZONE_IDS[currentIndex + 1] ?? null;
 }
 
+/** Briefly show copy confirmation before opening the copied-to wheel. */
+export function scheduleCopyDestinationNavigation(
+  destination: CornerZoneId,
+  openZone: (zoneId: CornerZoneId) => void,
+) {
+  const timer = window.setTimeout(() => openZone(destination), 1_000);
+  return () => window.clearTimeout(timer);
+}
+
 export const INSPECTION_ZONES: InspectionZone[] = [
   {
     id: "FL",

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import {
   Inter,
   Lora,
@@ -8,10 +8,13 @@ import {
   Fraunces,
   Literata,
   Petrona,
+  Urbanist,
 } from "next/font/google";
 import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 import ConvexClientProvider from "@/components/providers/convex-client-provider";
+import { SiteJsonLd } from "@/components/seo/json-ld";
+import { SITE_NAME, SITE_URL } from "@/lib/site";
 import Okta from "next/font/local";
 
 const OktaRegular = Okta({
@@ -101,6 +104,17 @@ const Petronas = Petrona({
   display: "swap",
 });
 
+// Urbanist is the driver app's face (otopair-1 constants/theme.ts FontFamily).
+// Loaded for the product pages' phone screens only, so the app UI drawn on
+// the site is set in the app's own type.
+const Urbanists = Urbanist({
+  variable: "--font-Urbanist",
+  weight: ["400", "500", "600", "700"],
+  style: "normal",
+  subsets: ["latin"],
+  display: "swap",
+});
+
 const Jersey20s = Jersey_20({
   variable: "--font-Jersey_20",
   weight: ["400"],
@@ -109,9 +123,29 @@ const Jersey20s = Jersey_20({
   display: "swap",
 });
 
+// theme-color matches the page ground so the browser chrome does not flash a
+// foreign colour on mobile (Vercel Web Interface Guidelines, dark mode & theming).
+export const viewport: Viewport = {
+  themeColor: "#ffffff",
+  width: "device-width",
+  initialScale: 1,
+};
+
 export const metadata: Metadata = {
-  title: "Otopair",
-  description: "",
+  // Resolves every relative og:url / canonical / og:image to the production
+  // origin, on preview deploys too — a preview must never advertise its own
+  // host as canonical (site audit 2026-08-31, Phase 1).
+  metadataBase: new URL(SITE_URL),
+  title: {
+    // Page-level titles win via the template; this default only covers routes
+    // that set none. Carries the two keywords the audit found missing from
+    // the homepage: the service ("car repair") and the market ("Staten Island").
+    default: "Otopair — Car repair at a locked price, Staten Island NY",
+    template: "%s — Otopair",
+  },
+  description:
+    "Tell Oto what your car is doing and book a verified shop nearby at a locked price — no negotiating, no surprises at pickup. Live in Staten Island, NYC.",
+  applicationName: SITE_NAME,
   // Emits <meta name="apple-mobile-web-app-capable" content="yes" /> so that,
   // when launched from an iOS home-screen shortcut, the site opens full-screen
   // (no Safari address/tool bars) like a standalone app.
@@ -121,12 +155,16 @@ export const metadata: Metadata = {
   icons: {
     icon: "/logo.png",
   },
+  // og/twitter images come from app/opengraph-image.tsx — never point this at
+  // a static asset again without checking the brand: the old hand-set image
+  // was the pre-rename repairconnectglasslogo.png (site audit 2026-08-31).
   openGraph: {
-    images: [
-      {
-        url: "/repairconnectglasslogo.png",
-      },
-    ],
+    siteName: SITE_NAME,
+    type: "website",
+    locale: "en_US",
+  },
+  twitter: {
+    card: "summary_large_image",
   },
 };
 
@@ -139,8 +177,17 @@ export default function RootLayout({
     <ClerkProvider afterSignOutUrl="/">
       <html lang="en" suppressHydrationWarning>
         <body
-          className={`${Inters.variable} ${Loras.variable} ${Robotoslab.variable} ${Balthazars.variable} ${OktaRegular.variable} ${Jersey20s.variable} ${Fraunceses.variable} ${Literatas.variable} ${Petronas.variable} antialiased overscroll-none`}
+          className={`${Inters.variable} ${Loras.variable} ${Robotoslab.variable} ${Balthazars.variable} ${OktaRegular.variable} ${Jersey20s.variable} ${Fraunceses.variable} ${Literatas.variable} ${Petronas.variable} ${Urbanists.variable} antialiased overscroll-none`}
         >
+          {/* Entrance animations write their `initial` state (opacity: 0)
+              into the server markup, so a visitor whose JS never runs would
+              see an empty page below the fold. This un-hides every one of
+              them; `!important` beats motion's inline style. */}
+          <noscript>
+            <style>{"[data-reveal]{opacity:1!important;transform:none!important}"}</style>
+          </noscript>
+          {/* Organization + WebSite + LocalBusiness graph, sitewide. */}
+          <SiteJsonLd />
           <ConvexClientProvider>{children}</ConvexClientProvider>
         </body>
       </html>

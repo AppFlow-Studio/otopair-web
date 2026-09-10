@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useRef } from "react";
+import { Children, createContext, useContext, useRef } from "react";
 import { motion, useInView } from "motion/react";
 import { useReducedMotionSafe } from "../shared";
 
@@ -44,6 +44,7 @@ export function Reveal({
   const reduce = useReducedMotionSafe();
   return (
     <motion.div
+      data-reveal
       className={className}
       initial={reduce ? { opacity: 0 } : { opacity: 0, y }}
       whileInView={{ opacity: 1, y: 0 }}
@@ -76,6 +77,7 @@ export function PopIn({
   const reduce = useReducedMotionSafe();
   return (
     <motion.div
+      data-reveal
       className={className}
       initial={reduce ? { opacity: 0 } : { opacity: 0, x, y, scale }}
       whileInView={reduce ? { opacity: 1 } : { opacity: 1, x: 0, y: 0, scale: 1 }}
@@ -151,6 +153,7 @@ export function Seq({
   const reduce = useReducedMotionSafe();
   return (
     <motion.div
+      data-reveal
       className={className}
       variants={{
         out: reduce ? { opacity: 0 } : { opacity: 0, x, y },
@@ -185,6 +188,7 @@ export function SeqPop({
   const reduce = useReducedMotionSafe();
   return (
     <motion.div
+      data-reveal
       className={className}
       variants={{
         out: reduce ? { opacity: 0 } : { opacity: 0, x, y, scale },
@@ -209,6 +213,7 @@ export function SeqRule({ at = 0, className }: { at?: number; className?: string
   const reduce = useReducedMotionSafe();
   return (
     <motion.div
+      data-reveal
       className={className}
       style={{ transformOrigin: "left" }}
       variants={{
@@ -219,5 +224,67 @@ export function SeqRule({ at = 0, className }: { at?: number; className?: string
       animate={active ? "in" : "out"}
       transition={{ delay: reduce ? 0 : base + at, duration: reduce ? 0.4 : 0.7, ease: EASE }}
     />
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Stagger — a container whose own children are the animated items    */
+/* ------------------------------------------------------------------ */
+
+/** One observer, N items, in order. `className` goes on the CONTAINER, so a
+ *  grid's direct children stay the motion elements and column spans keep
+ *  working; pass per-item classes with `itemClassName`. `step` is the gap
+ *  between items and `cap` bounds how far the cascade runs, so a 20-tile
+ *  directory finishes in the same beat as a 4-card row instead of trickling
+ *  in for two seconds. Reach for the explicit Sequence/Seq pair instead when
+ *  items need different offsets or spans. */
+export function Stagger({
+  children,
+  delay = 0,
+  step = 0.06,
+  cap = 8,
+  y = 18,
+  duration = 0.6,
+  className,
+  itemClassName,
+}: {
+  children: React.ReactNode;
+  delay?: number;
+  step?: number;
+  cap?: number;
+  y?: number;
+  duration?: number;
+  className?: string;
+  itemClassName?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const active = useInView(ref, { once: true, margin: "0px 0px -12% 0px" });
+  const reduce = useReducedMotionSafe();
+  return (
+    <div ref={ref} className={className}>
+      {Children.map(children, (child, i) =>
+        child == null || child === false ? (
+          child
+        ) : (
+          <motion.div
+            data-reveal
+            className={itemClassName}
+            variants={{
+              out: reduce ? { opacity: 0 } : { opacity: 0, y },
+              in: reduce ? { opacity: 1 } : { opacity: 1, y: 0 },
+            }}
+            initial="out"
+            animate={active ? "in" : "out"}
+            transition={{
+              delay: reduce ? 0 : delay + Math.min(i, cap) * step,
+              duration,
+              ease: EASE,
+            }}
+          >
+            {child}
+          </motion.div>
+        ),
+      )}
+    </div>
   );
 }

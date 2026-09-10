@@ -14,6 +14,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { partFitsConfigMake } from "./partSelector";
 import { normalizeMakeKey } from "./vehicleEnrichment/manualLibrary";
+import { resolveTierWithRules, type TierRule } from "./lib/tierResolver";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -71,6 +72,14 @@ export const carsList = query({
       .order("desc")
       .take(take);
 
+    // Director tier rules fetched once (not per-car) — the effective tier a car
+    // WOULD get even if its config's pricing_tier was never persisted (configs
+    // only persist lazily at first quote / at creation). Lets the Cars page
+    // show a tier for every car and flag the untiered as "Needs review".
+    const tierRules = (await ctx.db
+      .query("pricing_tier_rules")
+      .collect()) as TierRule[];
+
     return Promise.all(
       vehicles.map(async (vehicle) => {
         const ymm = await resolveMakeModelTrim(ctx, vehicle);
@@ -118,6 +127,25 @@ export const carsList = query({
           ? await ctx.db.get(vehicle.vehicle_config_id)
           : null;
 
+        // Effective tier: the persisted tier if present, otherwise what the
+        // resolver (director rules → hardcoded engine) would assign. Null =
+        // "Needs review" (surfaced, never auto-priced).
+        const persistedTier = (cfg?.pricing_tier as string | undefined) ?? null;
+        let tierEffective = persistedTier;
+        let tierSource: string | null = persistedTier
+          ? cfg?.pricing_tier_source ?? "stored"
+          : null;
+        if (!persistedTier && ymm.make !== "—") {
+          const res = resolveTierWithRules(tierRules, {
+            make: ymm.make,
+            model: ymm.model === "—" ? "" : ymm.model,
+            trim: ymm.trim === "—" ? "" : ymm.trim,
+            year: vehicle.year ?? 0,
+          });
+          tierEffective = res.tier;
+          tierSource = res.tier ? `${res.source}_detected` : null;
+        }
+
         // Passport mileage if present.
         const passport = await ctx.db
           .query("vehicle_passports")
@@ -140,6 +168,9 @@ export const carsList = query({
           mileage:      passport?.mileage ?? primaryOwnerRow?.mileage,
           bookingCount,
           enrichment:   enrichmentLabel(cfg),
+          pricing_tier:   persistedTier,
+          tier_effective: tierEffective,
+          tier_source:    tierSource,
           createdAt:    vehicle.created_at,
           updatedAt:    vehicle.updated_at,
         };
@@ -381,6 +412,8 @@ export const carDetail = query({
             enrichment_version:  vehicleConfig.enrichment_version,
             verification_count:  vehicleConfig.verification_count,
             packages_available:  vehicleConfig.packages_available,
+            pricing_tier:        (vehicleConfig.pricing_tier as string | undefined) ?? null,
+            pricing_tier_source: vehicleConfig.pricing_tier_source ?? null,
           }
         : null,
 

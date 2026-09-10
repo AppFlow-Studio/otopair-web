@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "@/app/(portals)/portal-session";
+import { stashGoto } from "@/app/(director-panel)/director/components/directorNav";
 
 export type EntityChipType = "user" | "shop" | "booking" | "payment";
 
@@ -27,7 +28,12 @@ const META: Record<
   shop: {
     letter: "S",
     iconClass: "bg-emerald-100 text-emerald-700",
-    route: (id) => `/shops/all/${id}`,
+    // The Shops portal merged into /director#shops (and /shops is the public
+    // directory now). Stash the id so the director's Shops tab opens it.
+    route: (id) => {
+      stashGoto("shops", id);
+      return "/director#shops";
+    },
     noun: "Shop",
   },
   booking: {

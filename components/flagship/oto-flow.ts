@@ -239,7 +239,9 @@ export const DEMO_FEATURES: DemoFeature[] = [
 ];
 
 // Service catalog — the four categories locked Jul 13 (7→4 consolidation;
-// names match the app's tabs). Same 23 services, regrouped.
+// names match the app's tabs). 22 bookable services (Pre-Purchase Inspection
+// was retired — convex/migrations/dropPrePurchaseInspection.ts). Names are the
+// canonical catalog names; Oto's prompt only ever uses these exact strings.
 export const SERVICE_CATALOG: { category: string; services: string[] }[] = [
   {
     category: "Routine",
@@ -253,7 +255,7 @@ export const SERVICE_CATALOG: { category: string; services: string[] }[] = [
       "Wheel Alignment",
       "Tire Replacement",
       "Brake Pad Replacement",
-      "Rotor Resurfacing",
+      "Rotor Replacement",
       "Brake Fluid Flush",
     ],
   },
@@ -273,8 +275,7 @@ export const SERVICE_CATALOG: { category: string; services: string[] }[] = [
     category: "Inspections",
     services: [
       "Diagnostic Scan",
-      "Check Engine Light",
-      "Pre-Purchase Inspection",
+      "Check Engine Light Diagnosis",
       "State Inspection",
       "Emissions Test",
       "Battery Test",
@@ -283,7 +284,9 @@ export const SERVICE_CATALOG: { category: string; services: string[] }[] = [
 ];
 
 // Sample line-item receipt (RAG doc 06). Illustrative only — real prices are
-// built per-vehicle in the app. The 7% platform fee is the star.
+// built per-vehicle in the app. No fee line: the service-fee rate is a
+// locked-decision secret (Aug 2026) and the landing shows it folded into the
+// locked total everywhere else (oto-panel Review & Pay, path-section quotes).
 export interface PricingLine {
   label: string;
   amount: number;
@@ -296,9 +299,8 @@ export const PRICING_DEMO = {
     { label: "Labor", amount: 150 },
     { label: "Parts", amount: 95, note: "OEM-equivalent" },
     { label: "NY Sales Tax", amount: 21.74 },
-    { label: "Otopair platform fee", amount: 17.15, note: "7%", emphasize: true },
   ] as PricingLine[],
-  total: 283.89,
+  total: 266.74,
 };
 
 // Vehicle Health Score (RAG doc 10). Calm, predictive, paired with next steps.
@@ -318,7 +320,7 @@ export const TIRE_TIERS = [
   { tier: "Standard", blurb: "Solid everyday tires at the most cost-friendly end." },
 ];
 
-// Ratings (RAG doc 12). Two-way; mechanics are vetted in person.
+// Ratings (RAG doc 12). One-way (driver → shop/mechanic, completed bookings only).
 export const RATINGS_DEMO = {
   mechanic: "Jay M.",
   shop: "Eltingville Auto Care",
@@ -339,7 +341,6 @@ export const REWARDS_DEMO = {
   balance: 24,
   bonuses: [
     { action: "Verified review", amount: 5 },
-    { action: "Upload service records", amount: 10 },
     { action: "Referral after first booking", amount: 15 },
   ],
 };
@@ -349,19 +350,19 @@ export const OVERVIEW_DEMO = {
   tagline: "A trust-first car repair marketplace for NYC.",
   facts: [
     "Book a specific mechanic by name — or just book a bay",
-    "Independent shops only, each vetted in person",
-    "Transparent line-item pricing, 7% fee shown openly",
-    "Two-way ratings: drivers and mechanics",
-    "Launches June 1, 2026 · iOS & Android",
+    "Independent shops only, each reviewed and approved before going live",
+    "Every line shown before you confirm — the total you see is the total you pay",
+    "Reviews only from drivers who completed a job",
+    "Live in Staten Island · iOS & Android",
   ],
 };
 
 // Where it works (RAG doc 02).
 export const COVERAGE_DEMO = {
   launch: "Staten Island",
-  date: "June 1, 2026",
+  date: "Live now",
   expansion: ["Brooklyn", "Queens", "The Bronx", "Manhattan"],
-  note: "Starting in Staten Island, then expanding across NYC after launch.",
+  note: "Live in Staten Island, then expanding across NYC borough by borough.",
 };
 
 // Payments (RAG doc 07).
@@ -382,7 +383,7 @@ export const SERVICE_HISTORY_DEMO = {
     "Sharpens time-based reminders (brake fluid, coolant)",
     "Improves diagnostics when symptoms come up",
   ],
-  reward: "Earn $10 credit per upload",
+  reward: "Every record makes your quotes more accurate",
 };
 
 // Quarterly check-in (RAG doc 11).
@@ -416,7 +417,7 @@ export const BOOKINGS_DEMO = {
 export const NOTIFICATIONS_DEMO = {
   sends: [
     "Booking confirmation",
-    "Reminder 1 hour before",
+    "Appointment reminders, when your shop sets them",
     "Live job status updates",
     "Tire quote responses",
   ],

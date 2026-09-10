@@ -20,9 +20,11 @@ import { CostsTab } from './enrichment/CostsTab'
 import { FlagsTab } from './enrichment/FlagsTab'
 import { DeepDiveTab, type PickedConfig } from './enrichment/DeepDiveTab'
 import { PipelineTab } from './enrichment/PipelineTab'
+import { RoadTo10Tab } from './enrichment/RoadTo10Tab'
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
+  { id: 'roadTo10', label: 'Road to 1.0' },
   { id: 'attention', label: 'Needs Attention' },
   { id: 'runs', label: 'Live Runs' },
   { id: 'costs', label: 'Costs' },
@@ -112,6 +114,7 @@ export function TabEnrichment() {
         )}
 
         {tab === 'overview' && <Zone label="Overview"><OverviewTab token={token} goTab={t => setTab(t as TabId)} goDeepDive={goDeepDive} openTrigger={openTrigger} activeReviewId={sidebarItem?.id ?? null} onOpenReview={openReviewSidebar} /></Zone>}
+        {tab === 'roadTo10' && <Zone label="Road to 1.0"><RoadTo10Tab token={token} goDeepDive={goDeepDive} /></Zone>}
         {tab === 'attention' && <Zone label="Needs Attention"><NeedsAttentionTab token={token} goDeepDive={goDeepDive} openTrigger={openTrigger} canWrite={canWrite} canTrigger={canTrigger} claimReview={claim} activeReviewId={sidebarItem?.id ?? null} onOpenReview={openReviewSidebar} /></Zone>}
         {tab === 'runs' && <Zone label="Live Runs"><LiveRunsTab token={token} openTrigger={openTrigger} goDeepDive={goDeepDive} canTrigger={canTrigger} /></Zone>}
         {tab === 'costs' && <Zone label="Costs"><CostsTab token={token} /></Zone>}

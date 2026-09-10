@@ -10,6 +10,7 @@ import { useQuery } from "convex/react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession } from "@/app/(portals)/portal-session";
+import { stashGoto } from "@/app/(director-panel)/director/components/directorNav";
 
 export function CommandK({
   open,
@@ -99,7 +100,11 @@ export function CommandK({
                         <Command.Item
                           key={s.id}
                           value={`shop-${s.id}`}
-                          onSelect={() => go(`/shops/all/${s.id}`)}
+                          onSelect={() => {
+                            // Shops portal merged into /director#shops.
+                            stashGoto("shops", s.id);
+                            go("/director#shops");
+                          }}
                           className="flex cursor-pointer items-baseline justify-between rounded-md px-3 py-2 text-[13px] text-slate-800 data-[selected=true]:bg-blue-50"
                         >
                           <span className="font-medium">{s.label}</span>

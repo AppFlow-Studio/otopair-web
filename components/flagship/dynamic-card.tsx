@@ -119,7 +119,7 @@ export function DynamicCard({ payload }: { payload: InfoCardPayload }) {
       <Step delay={0.05}>
         <div className="flex items-center gap-2">
           <Sparkles className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Lora)" }}>
+          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
             {title}
           </h3>
         </div>

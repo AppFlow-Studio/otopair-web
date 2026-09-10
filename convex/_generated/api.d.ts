@@ -141,6 +141,7 @@ import type * as directorIntegrations from "../directorIntegrations.js";
 import type * as directorOverview from "../directorOverview.js";
 import type * as directorPartQuality from "../directorPartQuality.js";
 import type * as directorPricing from "../directorPricing.js";
+import type * as directorRoadTo10 from "../directorRoadTo10.js";
 import type * as directorSettings from "../directorSettings.js";
 import type * as directorShopActions from "../directorShopActions.js";
 import type * as directorStripe from "../directorStripe.js";
@@ -325,10 +326,10 @@ import type * as oto_migrations_vehicleFactsReconciliation from "../oto/migratio
 import type * as oto_migrations_verifiedFactsSeed from "../oto/migrations/verifiedFactsSeed.js";
 import type * as oto_migrations_wave3Backfill from "../oto/migrations/wave3Backfill.js";
 import type * as oto_moodMap from "../oto/moodMap.js";
-import type * as oto_promptChangelog from "../oto/promptChangelog.js";
 import type * as oto_prompt_index from "../oto/prompt/index.js";
 import type * as oto_prompt_stable from "../oto/prompt/stable.js";
 import type * as oto_prompt_volatile from "../oto/prompt/volatile.js";
+import type * as oto_promptChangelog from "../oto/promptChangelog.js";
 import type * as oto_queryMoat from "../oto/queryMoat.js";
 import type * as oto_recordConfirmation from "../oto/recordConfirmation.js";
 import type * as oto_reliability from "../oto/reliability.js";
@@ -373,6 +374,7 @@ import type * as rewards from "../rewards.js";
 import type * as rotor_quote_responses from "../rotor_quote_responses.js";
 import type * as schedule from "../schedule.js";
 import type * as seed from "../seed.js";
+import type * as seedCatalog from "../seedCatalog.js";
 import type * as seed_inspection_health from "../seed_inspection_health.js";
 import type * as seed_modifier_weights from "../seed_modifier_weights.js";
 import type * as seed_services from "../seed_services.js";
@@ -486,6 +488,7 @@ import type * as vehicleEnrichment_cacheValidation from "../vehicleEnrichment/ca
 import type * as vehicleEnrichment_capacityResolver from "../vehicleEnrichment/capacityResolver.js";
 import type * as vehicleEnrichment_categoryHarvest from "../vehicleEnrichment/categoryHarvest.js";
 import type * as vehicleEnrichment_claimGathering from "../vehicleEnrichment/claimGathering.js";
+import type * as vehicleEnrichment_cohortDispatch from "../vehicleEnrichment/cohortDispatch.js";
 import type * as vehicleEnrichment_completionGate from "../vehicleEnrichment/completionGate.js";
 import type * as vehicleEnrichment_completionReevaluate from "../vehicleEnrichment/completionReevaluate.js";
 import type * as vehicleEnrichment_contentSanitization from "../vehicleEnrichment/contentSanitization.js";
@@ -540,6 +543,7 @@ import type * as vehicleEnrichment_olpRelabor from "../vehicleEnrichment/olpRela
 import type * as vehicleEnrichment_partIndex from "../vehicleEnrichment/partIndex.js";
 import type * as vehicleEnrichment_partialEnrichment from "../vehicleEnrichment/partialEnrichment.js";
 import type * as vehicleEnrichment_pipelineTest from "../vehicleEnrichment/pipelineTest.js";
+import type * as vehicleEnrichment_priceBackfillSweep from "../vehicleEnrichment/priceBackfillSweep.js";
 import type * as vehicleEnrichment_priceDiscovery from "../vehicleEnrichment/priceDiscovery.js";
 import type * as vehicleEnrichment_priceParser from "../vehicleEnrichment/priceParser.js";
 import type * as vehicleEnrichment_pricePilot from "../vehicleEnrichment/pricePilot.js";
@@ -600,6 +604,7 @@ import type * as vehicleEnrichment_utils_batchClient from "../vehicleEnrichment/
 import type * as vehicleEnrichment_utils_batchSchemas from "../vehicleEnrichment/utils/batchSchemas.js";
 import type * as vehicleEnrichment_utils_chassisLookup from "../vehicleEnrichment/utils/chassisLookup.js";
 import type * as vehicleEnrichment_utils_claudeClient from "../vehicleEnrichment/utils/claudeClient.js";
+import type * as vehicleEnrichment_utils_decisionLog from "../vehicleEnrichment/utils/decisionLog.js";
 import type * as vehicleEnrichment_utils_engineCodeLookup from "../vehicleEnrichment/utils/engineCodeLookup.js";
 import type * as vehicleEnrichment_utils_engineLookup from "../vehicleEnrichment/utils/engineLookup.js";
 import type * as vehicleEnrichment_utils_enrichmentFlags from "../vehicleEnrichment/utils/enrichmentFlags.js";
@@ -774,6 +779,7 @@ declare const fullApi: ApiFromModules<{
   directorOverview: typeof directorOverview;
   directorPartQuality: typeof directorPartQuality;
   directorPricing: typeof directorPricing;
+  directorRoadTo10: typeof directorRoadTo10;
   directorSettings: typeof directorSettings;
   directorShopActions: typeof directorShopActions;
   directorStripe: typeof directorStripe;
@@ -958,10 +964,10 @@ declare const fullApi: ApiFromModules<{
   "oto/migrations/verifiedFactsSeed": typeof oto_migrations_verifiedFactsSeed;
   "oto/migrations/wave3Backfill": typeof oto_migrations_wave3Backfill;
   "oto/moodMap": typeof oto_moodMap;
-  "oto/promptChangelog": typeof oto_promptChangelog;
   "oto/prompt/index": typeof oto_prompt_index;
   "oto/prompt/stable": typeof oto_prompt_stable;
   "oto/prompt/volatile": typeof oto_prompt_volatile;
+  "oto/promptChangelog": typeof oto_promptChangelog;
   "oto/queryMoat": typeof oto_queryMoat;
   "oto/recordConfirmation": typeof oto_recordConfirmation;
   "oto/reliability": typeof oto_reliability;
@@ -1006,6 +1012,7 @@ declare const fullApi: ApiFromModules<{
   rotor_quote_responses: typeof rotor_quote_responses;
   schedule: typeof schedule;
   seed: typeof seed;
+  seedCatalog: typeof seedCatalog;
   seed_inspection_health: typeof seed_inspection_health;
   seed_modifier_weights: typeof seed_modifier_weights;
   seed_services: typeof seed_services;
@@ -1119,6 +1126,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/capacityResolver": typeof vehicleEnrichment_capacityResolver;
   "vehicleEnrichment/categoryHarvest": typeof vehicleEnrichment_categoryHarvest;
   "vehicleEnrichment/claimGathering": typeof vehicleEnrichment_claimGathering;
+  "vehicleEnrichment/cohortDispatch": typeof vehicleEnrichment_cohortDispatch;
   "vehicleEnrichment/completionGate": typeof vehicleEnrichment_completionGate;
   "vehicleEnrichment/completionReevaluate": typeof vehicleEnrichment_completionReevaluate;
   "vehicleEnrichment/contentSanitization": typeof vehicleEnrichment_contentSanitization;
@@ -1173,6 +1181,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/partIndex": typeof vehicleEnrichment_partIndex;
   "vehicleEnrichment/partialEnrichment": typeof vehicleEnrichment_partialEnrichment;
   "vehicleEnrichment/pipelineTest": typeof vehicleEnrichment_pipelineTest;
+  "vehicleEnrichment/priceBackfillSweep": typeof vehicleEnrichment_priceBackfillSweep;
   "vehicleEnrichment/priceDiscovery": typeof vehicleEnrichment_priceDiscovery;
   "vehicleEnrichment/priceParser": typeof vehicleEnrichment_priceParser;
   "vehicleEnrichment/pricePilot": typeof vehicleEnrichment_pricePilot;
@@ -1233,6 +1242,7 @@ declare const fullApi: ApiFromModules<{
   "vehicleEnrichment/utils/batchSchemas": typeof vehicleEnrichment_utils_batchSchemas;
   "vehicleEnrichment/utils/chassisLookup": typeof vehicleEnrichment_utils_chassisLookup;
   "vehicleEnrichment/utils/claudeClient": typeof vehicleEnrichment_utils_claudeClient;
+  "vehicleEnrichment/utils/decisionLog": typeof vehicleEnrichment_utils_decisionLog;
   "vehicleEnrichment/utils/engineCodeLookup": typeof vehicleEnrichment_utils_engineCodeLookup;
   "vehicleEnrichment/utils/engineLookup": typeof vehicleEnrichment_utils_engineLookup;
   "vehicleEnrichment/utils/enrichmentFlags": typeof vehicleEnrichment_utils_enrichmentFlags;

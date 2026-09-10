@@ -38,7 +38,11 @@ export function CountUp({
   const ref = useRef<HTMLSpanElement>(null);
   const inView = useInView(ref, { once: true, margin: "0px 0px -10% 0px" });
   const reduce = useReducedMotionSafe();
-  const [val, setVal] = useState(0);
+  // The FINAL value is the initial render: the server markup (and any visitor
+  // whose JS/observer never fires) must show the real stat, never a shipped 0
+  // (site audit 2026-08-31). The count-up replaces it only once it actually
+  // starts.
+  const [val, setVal] = useState(to);
 
   useEffect(() => {
     if (!inView) return;
@@ -193,7 +197,10 @@ export function UnderlineLink({
 }) {
   const cls = `group relative inline-block ${className}`;
   const underline = (
-    <span className="absolute -bottom-0.5 left-0 h-px w-full origin-left scale-x-0 bg-current transition-transform duration-300 ease-out group-hover:scale-x-100" />
+    // Width, not scale-x: a transform transition on a child of the glass nav
+    // makes it a composited layer over the rounded backdrop-blur, which
+    // Chromium renders with the corner mask dropped (band artifact, 2026-09-03).
+    <span className="absolute -bottom-0.5 left-0 h-px w-0 bg-current transition-[width] duration-300 ease-out group-hover:w-full" />
   );
   // In-page anchors stay plain <a> so Lenis's anchor handler owns the scroll
   // (next/link's own hash handling fights it).

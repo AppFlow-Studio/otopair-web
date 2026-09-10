@@ -386,6 +386,14 @@ export default defineSchema({
      *  never/oldest-audited first, so the whole fleet rotates through the
      *  auditor without any cursor state to lose. */
     fitment_audited_at: v.optional(v.number()),
+    /** When the nightly zero-price sweep (priceBackfillSweep) last EXAMINED
+     *  this config — examined, not necessarily dispatched: no-op configs are
+     *  stamped too, so they rotate to the back instead of eating the budget
+     *  every night. Same never/oldest-first contract as fitment_audited_at. */
+    price_sweep_at: v.optional(v.number()),
+    /** When the nightly cohort dispatcher (cohortDispatch) last examined this
+     *  config's stored missing_roles. Same rotation contract as above. */
+    cohort_dispatched_at: v.optional(v.number()),
     created_at: v.optional(v.number()),
   })
     .index("by_config_key", ["config_key"])
@@ -1059,6 +1067,55 @@ export default defineSchema({
   // the poll pass patches response_text/ended_at/tokens. Text fields are capped
   // (see runSteps.ts CAP) to stay under Convex's document-size limit; `truncated`
   // flags when a cap was hit. Only NEW runs (post-instrumentation) have rows.
+  // Structured DECISION stream (Sep 2026) — the pipeline's "thought process"
+  // as queryable rows. The run/step tables record STATE (what was produced);
+  // this records CHOICES: which branch fired, what it considered, why, at
+  // what cost. Insert-only sibling of enrichment_run_steps rather than an
+  // array on the run doc: heal/gate events land POST-terminal from several
+  // concurrent scheduled actions (array patches would OCC-fight — the exact
+  // contention patchRunPriceHealth exists to serialize), some decisions have
+  // no run at all (STEP-0 cache hits, nightly-leg dispatches), and
+  // fleet-level questions ("every config where rung X dead-ended") need a
+  // decision_key index, not a scan of run docs. Written best-effort via
+  // vehicleEnrichment/utils/decisionLog.recordDecisions — a failed insert
+  // must never fail a run.
+  enrichment_decisions: defineTable({
+    vehicle_config_id: v.optional(v.id("vehicle_configs")),
+    enrichment_run_id: v.optional(v.id("enrichment_runs")),
+    // "admission" | "identity" | "scrape" | "batch2" | "verify" | "gate" |
+    // "heal" | "leg" — coarse grouping for the Deep-Dive timeline.
+    stage: v.string(),
+    // Stable machine name: "gate_decision", "heal_rung:rockauto_vehicle",
+    // "engine_code_resolution", "batch2_result", …
+    decision_key: v.string(),
+    // The branch taken ("promote", "cache_hit", "confirmed", "no_seed_match").
+    chosen: v.string(),
+    // Considered-but-not-taken, when enumerable (≤10, capped strings).
+    alternatives: v.optional(v.array(v.string())),
+    // Human-readable why — the explain string, capped ~600 chars.
+    reason: v.string(),
+    // OEM numbers / URLs / role keys backing the choice (≤10, capped).
+    evidence: v.optional(v.array(v.string())),
+    // "ok" | "noop" | "skipped" | "rejected" | "error" | "promoted" — cheap
+    // funnels for the by_key index.
+    outcome: v.optional(v.string()),
+    cost: v.optional(
+      v.object({
+        tokens_in: v.optional(v.number()),
+        tokens_out: v.optional(v.number()),
+        web_searches: v.optional(v.number()),
+        ms: v.optional(v.number()),
+      }),
+    ),
+    // Env-flag snapshot relevant to this decision ("TRIGGER=heal_after_run;
+    // AXLE_GATE=enforce") — resolves the "dark leg vs no-op" ambiguity.
+    flags: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_run", ["enrichment_run_id"])
+    .index("by_config", ["vehicle_config_id", "created_at"])
+    .index("by_key", ["decision_key", "created_at"]),
+
   enrichment_run_steps: defineTable({
     enrichment_run_id: v.id("enrichment_runs"),
     vehicle_config_id: v.optional(v.id("vehicle_configs")),

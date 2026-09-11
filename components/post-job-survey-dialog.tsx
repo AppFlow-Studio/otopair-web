@@ -375,7 +375,7 @@ const FASTER_REASON_CHOICES: { value: TimeVarianceReason; label: string }[] = [
 
 type FluidOption = { value: string; label: string; aliases?: string[] };
 
-// Mirrors pre-job-survey-dialog.tsx OIL_VISCOSITY_OPTIONS / OIL_TYPE_OPTIONS / COOLANT_TYPE_OPTIONS / BRAKE_FLUID_OPTIONS / TRANSMISSION_FLUID_OPTIONS exactly.
+// Stable fluid-option slugs used by the post-job report.
 const OIL_VISCOSITY_DROPDOWN: FluidOption[] = [
   { value: "0w_8", label: "0W-8", aliases: ["0w8", "0w-8"] },
   { value: "0w_16", label: "0W-16", aliases: ["0w16", "0w-16"] },

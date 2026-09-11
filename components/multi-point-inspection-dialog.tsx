@@ -266,7 +266,7 @@ const TRI_DOT: Record<TriValue, string> = {
   r: "bg-red-500 border-red-500",
 };
 
-// Matches the green/blue/red answer-choice palette in pre-job-survey-dialog.tsx
+// Shared green/blue/red answer-choice palette for inspection responses.
 // (ConditionButtons' conditionPalette), used for tri fields rendered as pills.
 const TRI_PILL_ACTIVE_CLASS: Record<TriValue, string> = {
   g: "border-emerald-300 bg-emerald-50 text-emerald-700",

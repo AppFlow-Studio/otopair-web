@@ -72,6 +72,7 @@ import {
   deriveTierInspectionScope,
   isBrakeDetailFieldRelevant,
   canMarkFieldUnavailable,
+  completeInspectionPhaseForDevelopment,
   isNysSafetyField,
   isFieldApplicableToZone,
   isZoneDoneForPhase,
@@ -1033,6 +1034,22 @@ function MultiPointInspectionDialogBody({
     [requiredZones, state, phase],
   );
 
+  const completeCurrentPhaseForDevelopment = useCallback(() => {
+    setState((prev) =>
+      completeInspectionPhaseForDevelopment(prev, {
+        ...completionContext,
+        inspectionState: prev,
+      }),
+    );
+    if (typeof baselineMileage === "number") setMileage(String(baselineMileage));
+    if (phase === "mpi") setLiftStatus("yes");
+    setConfirmedSpecZones((prev) => new Set([...prev, ...requiredZones]));
+    setFieldErrors({});
+    setError("");
+    setCopyPromptFor(null);
+    setActiveZone(null);
+  }, [baselineMileage, completionContext, phase, requiredZones]);
+
   // Findings + suggestions are evaluated from COMPLETED zones only, so a finding
   // surfaces the moment its zone is marked complete (not after the whole
   // inspection) and never counts un-confirmed scratch input.
@@ -1952,11 +1969,20 @@ function MultiPointInspectionDialogBody({
   const ringDash = 138.2;
 
   const footer = (
-    <div className="flex items-center justify-between gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <span className="hidden text-[11px] text-primary sm:inline-flex sm:items-center sm:gap-1.5">
         <Camera className="h-3.5 w-3.5" /> Verify a measurement with a photo →
         rating boost
       </span>
+      {process.env.NODE_ENV === "development" ? (
+        <button
+          type="button"
+          onClick={completeCurrentPhaseForDevelopment}
+          className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-800 hover:bg-amber-100"
+        >
+          Dev: complete {phase}
+        </button>
+      ) : null}
       <div className="flex flex-1 items-center justify-end gap-2">
         <button
           type="button"

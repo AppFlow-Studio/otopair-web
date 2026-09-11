@@ -7,18 +7,11 @@
  * 0.35 / 0.10 — so this introduces no new scoring maths and the calculator is
  * not touched.
  *
- * The band is kept SEPARATE from `MaintenanceStatus` on purpose. The spec has
- * four bands; the tracker has three tiers (NOW / SOON / HEALTHY), which is
- * Ahmad's simplification and stays. Mapping the four onto the five existing
- * statuses would mean overloading `needs_attention` — which today means "a
- * human graded this yellow" and is written by 19 seeded inspection rows, the
- * mechanic-grade path, tire PSI and brake symptoms. Worse, it would soften a
- * genuinely overdue car from red OVERDUE to yellow NEEDS ATTENTION, which is
- * the opposite of the spec's intent.
- *
- * So: `status` keeps its meaning for display, `bandStatus` carries the spec's
- * four-way split for scoring and ordering, and severely-overdue items simply
- * lead the NOW tier.
+ * `bandStatus` is still carried separately from `status`, because the two
+ * answer different questions: the band is what the ratio says, `status` is
+ * what the driver is shown. They map one-to-one as of 2026-09-04 (see
+ * BAND_TO_STATUS), but a mechanic grade can push `status` past its band, so
+ * the band remains the honest record of the interval alone.
  */
 import type { MaintenanceStatus } from "@/components/cars/MaintenanceTracker";
 
@@ -51,16 +44,31 @@ export const BAND_FACTOR: Record<IntervalBand, number> = {
 };
 
 /**
- * Band → the display status the tracker already renders.
+ * Band → the display status the tracker renders.
  *
- * Both overdue bands collapse to `overdue`, so the driver sees three tiers.
- * The distinction survives in `bandStatus` for the factor and for ordering
- * within NOW.
+ * Ahmad, 2026-09-04: the four bands each get their own status, so Yassin's
+ * vocabulary and ours line up one-to-one —
+ *
+ *   ON TIME → on_time · DUE SOON → due_soon
+ *   OVERDUE → needs_attention · SEVERELY OVERDUE → overdue
+ *
+ * Two consequences, both deliberate.
+ *
+ * `needs_attention` no longer means only "a mechanic graded this yellow". It
+ * now also carries interval-overdue, and the two share a tier — a
+ * mechanic-flagged item still renders its shop badge, so they stay tellable
+ * apart on the card even though the section is shared.
+ *
+ * And it makes STATUS_SCORE and BAND_FACTOR agree at every band, which they
+ * did not before: `overdue` scores 0.10, so collapsing both overdue bands onto
+ * it meant a service 1% past its interval was scored as harshly as one at
+ * 200%, and the spec's 0.35 tier was unreachable. That softening reaches the
+ * anchored core five as well, which Ahmad accepted when making this call.
  */
 export const BAND_TO_STATUS: Record<IntervalBand, MaintenanceStatus> = {
   on_time: "on_time",
   due_soon: "due_soon",
-  overdue: "overdue",
+  overdue: "needs_attention",
   severely_overdue: "overdue",
 };
 

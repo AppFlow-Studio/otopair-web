@@ -374,6 +374,35 @@ export function extractCarApiFields(vinRaw: any): ReturnType<typeof extractVDBFi
  * by variant (BMW "328i" not "3 Series"); returns null when no clean match so
  * the caller falls back to Claude (researchYmmtPowertrain).
  */
+/**
+ * Does catalog model `candidate` name the same model as `wanted`?
+ *
+ * Exact match first, then a token-boundary containment — NOT a raw substring
+ * one. Stripping separators and asking `target.includes(n)` made every
+ * Mercedes SUV resolve to a sedan: "GLE-Class" and "E-Class" both flatten to
+ * `gleclass` / `eclass`, and `"gleclass".includes("eclass")` is true. The same
+ * collapse hit GLC→C, GLS→S, GLA→A and GLB→B; only G-Class survived, because
+ * it matched exactly. Yassin, 2026-09-03: a GLE VIN offered E 450 trims and
+ * the car saved as an E-Class.
+ *
+ * Comparing token runs keeps what the loose match was FOR — "3 Series Sedan"
+ * still finds "3 Series" — while refusing to match across a word boundary.
+ */
+export function modelNamesMatch(candidate: string, wanted: string): boolean {
+  const tokens = (s: string) =>
+    String(s).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const a = tokens(candidate);
+  const b = tokens(wanted);
+  if (!a.length || !b.length) return false;
+  if (a.join(" ") === b.join(" ")) return true;
+  // Is the shorter token list a contiguous run inside the longer one?
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  for (let i = 0; i + short.length <= long.length; i++) {
+    if (short.every((t, j) => long[i + j] === t)) return true;
+  }
+  return false;
+}
+
 export async function carApiResolveModel(
   make: string,
   year: number,
@@ -386,10 +415,7 @@ export async function carApiResolveModel(
   const target = norm(model);
   const exact = list.find((m) => norm(m.name) === target);
   if (exact) return exact.name as string;
-  const sub = list.find((m) => {
-    const n = norm(m.name);
-    return n.includes(target) || target.includes(n);
-  });
+  const sub = list.find((m) => modelNamesMatch(String(m.name ?? ""), model));
   return sub ? (sub.name as string) : null;
 }
 

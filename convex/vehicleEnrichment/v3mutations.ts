@@ -2440,6 +2440,59 @@ export const failEnrichmentRun = internalMutation({
 });
 
 // ============================================================================
+// 12b. _alertEnrichmentErrorOut — ops alert on a batch-2 error-out
+// ============================================================================
+
+/**
+ * A batch-2 error-out (an ended `errored`/`expired` result, or the 3h timeout)
+ * used to surface only in the Deep-Dive console — the CR-V mellow-cat incident
+ * (147m in the Anthropic batch queue, then a 0-token `errored`, pricing silently
+ * dropped) was found by chance. This writes ONE deduped `notification_outbox`
+ * row per run, mirroring portalStats.evaluateSlo's `channel:"slack"` convention.
+ *
+ * DELIVERY CAVEAT: there is no Slack dispatcher in this codebase yet (see
+ * notifications.ts) — like the SLO-breach rows, this sits `pending` until one
+ * exists. It is the established ops-alert idiom + the audit trail, and goes live
+ * the moment a dispatcher drains `channel:"slack"`. Idempotent on dedupe_key.
+ */
+export const _alertEnrichmentErrorOut = internalMutation({
+  args: {
+    runId: v.id("enrichment_runs"),
+    vehicleConfigId: v.id("vehicle_configs"),
+    label: v.string(),
+    batchId: v.optional(v.string()),
+    error: v.string(),
+    quotabilityPct: v.optional(v.number()),
+    unpricedCoreRoles: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const dedupe_key = `enrich_errorout:${args.runId}`;
+    const dup = await ctx.db
+      .query("notification_outbox")
+      .withIndex("by_dedupe_key", (q) => q.eq("dedupe_key", dedupe_key))
+      .first();
+    if (dup) return { inserted: false };
+    await ctx.db.insert("notification_outbox", {
+      channel: "slack",
+      category: "enrich_errorout",
+      status: "pending",
+      dedupe_key,
+      payload: {
+        runId: String(args.runId),
+        vehicleConfigId: String(args.vehicleConfigId),
+        label: args.label,
+        batchId: args.batchId,
+        error: args.error,
+        quotabilityPct: args.quotabilityPct,
+        unpricedCoreRoles: args.unpricedCoreRoles,
+      },
+      created_at: Date.now(),
+    });
+    return { inserted: true };
+  },
+});
+
+// ============================================================================
 // 12c. reapStaleRuns — zombie-run reaper (15-min cron)
 // ============================================================================
 

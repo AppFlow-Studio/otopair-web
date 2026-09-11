@@ -74,6 +74,7 @@ import {
   canMarkFieldUnavailable,
   isNysSafetyField,
   isFieldApplicableToZone,
+  isZoneDoneForPhase,
   isFieldRequiredForZone,
   isSpecPrefillField,
   normalizeTireSize,
@@ -96,6 +97,7 @@ import {
   type CornerZoneId,
   type FieldUnavailableStatus,
   type InspectionField,
+  type InspectionPhase,
   type InspectionState,
   type RotorMinByAxle,
   type SpecPrefillEntry,
@@ -163,6 +165,7 @@ export type InspectionInputPayload = {
   zones: Array<{
     zone_id: string;
     done: boolean;
+    done_phase?: InspectionPhase;
     measures?: Record<string, string>;
     tri?: Record<string, TriValue>;
     descriptors?: Record<string, string[]>;
@@ -412,9 +415,13 @@ export default function MultiPointInspectionDialog(props: {
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
-  /** True once the booking is in_progress. Gates "Add to this job" —
-   *  addMidJobCustomService refuses work on a job that isn't running. */
-  jobInProgress?: boolean;
+  /**
+   * Which half of the split inspection to show (Spec v2 §1.1). "pre" is the
+   * ground-level walkaround before Start Job; "mpi" is the on-lift half after
+   * it. Also gates "Add to this job" — addMidJobCustomService refuses work on
+   * a job that isn't running, and the job is only running in the MPI phase.
+   */
+  phase: InspectionPhase;
   tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
@@ -445,7 +452,7 @@ function MultiPointInspectionDialogBody({
   bookingLabel,
   bookingSubLabel,
   bookingServices = [],
-  jobInProgress = false,
+  phase,
   tireReplacementPositions = [],
   passportData,
   prefillData,
@@ -459,9 +466,13 @@ function MultiPointInspectionDialogBody({
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
-  /** True once the booking is in_progress. Gates "Add to this job" —
-   *  addMidJobCustomService refuses work on a job that isn't running. */
-  jobInProgress?: boolean;
+  /**
+   * Which half of the split inspection to show (Spec v2 §1.1). "pre" is the
+   * ground-level walkaround before Start Job; "mpi" is the on-lift half after
+   * it. Also gates "Add to this job" — addMidJobCustomService refuses work on
+   * a job that isn't running, and the job is only running in the MPI phase.
+   */
+  phase: InspectionPhase;
   tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
@@ -519,6 +530,11 @@ function MultiPointInspectionDialogBody({
   const undoInspectionRec = useMutation(
     api.jobRecommendations.confirmFromPreJob,
   );
+  // The job clock starts at Start Job, which is also what opens the MPI phase,
+  // so "the job is running" and "we are in the MPI half" are the same instant.
+  // Kept as a named const because the mid-job mutations read as a job-state
+  // question, not a phase one.
+  const jobInProgress = phase === "mpi";
   const addToJob = useMutation(api.customJobs.addMidJobCustomService);
   // Pre-start sibling of addToJob: appends the same line to a booking that
   // hasn't been started, to be sent as a PRE-job estimate the customer confirms
@@ -714,11 +730,6 @@ function MultiPointInspectionDialogBody({
     });
   }, []);
 
-  const requiredZones = useMemo(
-    () => requiredZonesForBooking(bookingServices),
-    [bookingServices],
-  );
-  const requiredSet = useMemo(() => new Set(requiredZones), [requiredZones]);
   const baselineMileage =
     prefillData?.mileage ?? passportData?.passport.mileage ?? null;
   // An odometer physically can't run backwards, so a new reading below the
@@ -749,6 +760,7 @@ function MultiPointInspectionDialogBody({
   );
   const completionContext = useMemo(
     () => ({
+      phase,
       serviceNames: bookingServices,
       brakeScope,
       tireReplacementPositions,
@@ -768,6 +780,7 @@ function MultiPointInspectionDialogBody({
       liftStatus,
     }),
     [
+      phase,
       bookingServices,
       brakeScope,
       tireReplacementPositions,
@@ -777,6 +790,15 @@ function MultiPointInspectionDialogBody({
       liftStatus,
     ],
   );
+
+  // Which zones gate THIS phase. Derived from the context so it tracks both the
+  // booked services and the phase — the pre-check never demands the underbody,
+  // and the MPI half only demands the corners whose wheel actually comes off.
+  const requiredZones = useMemo(
+    () => requiredZonesForBooking(completionContext),
+    [completionContext],
+  );
+  const requiredSet = useMemo(() => new Set(requiredZones), [requiredZones]);
 
   useEffect(() => {
     photoPreviewsRef.current = photoPreviews;
@@ -811,6 +833,7 @@ function MultiPointInspectionDialogBody({
         const base = defaultZoneState(INSPECTION_ZONES_BY_ID[id]);
         next.zones[id] = {
           done: !!z.done,
+          donePhase: z.done_phase === "mpi" ? "mpi" : "pre",
           dirty: false,
           measures: { ...base.measures, ...(z.measures ?? {}) },
           tri: { ...base.tri, ...(z.tri ?? {}) },
@@ -919,9 +942,9 @@ function MultiPointInspectionDialogBody({
   const zoneNeedsSpecReview = useCallback(
     (zoneId: ZoneId) =>
       (specPrefill[zoneId]?.length ?? 0) > 0 &&
-      !state.zones[zoneId]?.done &&
+      !isZoneDoneForPhase(state.zones[zoneId], phase) &&
       !confirmedSpecZones.has(zoneId),
-    [specPrefill, state, confirmedSpecZones],
+    [specPrefill, state, confirmedSpecZones, phase],
   );
 
   // ---- helpers -----------------------------------------------------------
@@ -954,9 +977,11 @@ function MultiPointInspectionDialogBody({
     [],
   );
 
-  // Mirror a corner's readings onto its same-axle sibling (FL↔FR, RL↔RR). The
-  // two corners share an identical field set, so this is a straight overwrite;
-  // the mechanic then only fixes the few values that differ. No-op if the source
+  // Mirror a corner onto its same-axle sibling (FL↔FR, RL↔RR). Only identity
+  // fields travel, and which ones depends on the phase — sidewall data during
+  // the pre-check, pad brand and rotor presence during the MPI half. Every
+  // measured value stays put: mirroring tread or pressure is how a staggered
+  // setup gets recorded as the same psi on both axles. No-op if the source
   // corner is still blank (guards against wiping the sibling with empties).
   const copyCornerToOpposite = useCallback(
     (sourceId: ZoneId) => {
@@ -964,12 +989,12 @@ function MultiPointInspectionDialogBody({
       if (!opposite) return;
       const source = zoneState(sourceId);
       if (!zoneHasInput(sourceId, source)) return;
-      patchZone(opposite, cornerCopyPatch(source));
+      patchZone(opposite, cornerCopyPatch(source, zoneState(opposite), phase));
       // The copied values equal the already-reviewed source, so don't force a
       // redundant "Specs match" re-confirm on the sibling.
       markSpecReviewed(opposite);
     },
-    [zoneState, patchZone, markSpecReviewed],
+    [zoneState, patchZone, markSpecReviewed, phase],
   );
 
   const photoUrl = useCallback(
@@ -988,8 +1013,10 @@ function MultiPointInspectionDialogBody({
   );
 
   const doneCount = useMemo(
-    () => requiredZones.filter((id) => state.zones[id]?.done).length,
-    [requiredZones, state],
+    () =>
+      requiredZones.filter((id) => isZoneDoneForPhase(state.zones[id], phase))
+        .length,
+    [requiredZones, state, phase],
   );
 
   // Every required zone graded, with no zone left holding un-saved readings.
@@ -1001,9 +1028,9 @@ function MultiPointInspectionDialogBody({
   const inspectionComplete = useMemo(
     () =>
       requiredZones.length > 0 &&
-      requiredZones.every((id) => state.zones[id]?.done) &&
+      requiredZones.every((id) => isZoneDoneForPhase(state.zones[id], phase)) &&
       getDirtyIncompleteZones(state).length === 0,
-    [requiredZones, state],
+    [requiredZones, state, phase],
   );
 
   // Findings + suggestions are evaluated from COMPLETED zones only, so a finding
@@ -1120,6 +1147,7 @@ function MultiPointInspectionDialogBody({
       zones: Object.entries(state.zones).map(([zone_id, zs]) => ({
         zone_id,
         done: zs!.done,
+        done_phase: zs!.donePhase ?? "pre",
         measures: zs!.measures,
         tri: zs!.tri,
         descriptors: zs!.descriptors,
@@ -1385,7 +1413,7 @@ function MultiPointInspectionDialogBody({
 
   function handleToggleZone(zoneId: ZoneId) {
     const current = zoneState(zoneId);
-    if (current.done) {
+    if (isZoneDoneForPhase(current, phase)) {
       patchZone(zoneId, { done: false });
       setCopyPromptFor(null);
       return;
@@ -1406,12 +1434,14 @@ function MultiPointInspectionDialogBody({
       return;
     }
     setError("");
-    patchZone(zoneId, { done: true });
+    // Record which half completed it: a corner signed off during the
+    // pre-check must re-open when the wheel comes off.
+    patchZone(zoneId, { done: true, donePhase: phase });
     // Locked rule: offer the same-axle copy only now that this corner is fully
     // complete, and only when the sibling isn't already done (nothing to mirror
     // onto a finished corner). Non-corner zones have no opposite → no prompt.
     const opposite = OPPOSITE_CORNER[zoneId as CornerZoneId];
-    if (opposite && !zoneState(opposite).done) {
+    if (opposite && !isZoneDoneForPhase(zoneState(opposite), phase)) {
       setCopyPromptCopied(false);
       setCopyPromptFor(zoneId as CornerZoneId);
     } else {
@@ -1453,7 +1483,9 @@ function MultiPointInspectionDialogBody({
       return false;
     }
     if (action === "start") {
-      const incomplete = requiredZones.find((id) => !state.zones[id]?.done);
+      const incomplete = requiredZones.find(
+        (id) => !isZoneDoneForPhase(state.zones[id], phase),
+      );
       if (incomplete) {
         setError(
           `Mark ${INSPECTION_ZONES_BY_ID[incomplete].label} complete before submitting.`,
@@ -1464,7 +1496,8 @@ function MultiPointInspectionDialogBody({
       }
     }
     for (const zone of INSPECTION_ZONES) {
-      if (zone.dynamic || !state.zones[zone.id]?.done) continue;
+      if (zone.dynamic || !isZoneDoneForPhase(state.zones[zone.id], phase))
+        continue;
       const result = validateZoneForCompletion(
         state,
         zone.id,
@@ -1484,7 +1517,11 @@ function MultiPointInspectionDialogBody({
       );
       return false;
     }
-    if (action === "start" && !liftStatus) {
+    // Only asked in the MPI half. During the ground-level pre-check the answer
+    // is "no" by definition, so requiring it there is a question with one
+    // possible answer (Spec v2 §4.1 wanted it deleted outright; kept because
+    // the mechanic can put the car up early and we want that recorded).
+    if (action === "start" && phase === "mpi" && !liftStatus) {
       setError("Select whether the vehicle is on a lift before submitting.");
       requestAnimationFrame(() =>
         document.getElementById("inspection-lift-yes")?.focus(),
@@ -2067,7 +2104,7 @@ function MultiPointInspectionDialogBody({
                   </span>
                 ) : null}
               </label>
-              <fieldset>
+              <fieldset className={phase === "mpi" ? undefined : "hidden"}>
                 <legend className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   Is the vehicle on a lift?{" "}
                   <span className="text-red-500">*</span>
@@ -2175,7 +2212,7 @@ function MultiPointInspectionDialogBody({
             <div id="inspection-car-diagram" className="flex justify-center scroll-mt-4">
               <CarDiagram
                 activeZone={activeZone === "PARTS" ? null : activeZone}
-                isDone={(id) => !!state.zones[id]?.done}
+                isDone={(id) => isZoneDoneForPhase(state.zones[id], phase)}
                 isRequired={(id) => requiredSet.has(id)}
                 onSelect={selectZone}
               />
@@ -2333,7 +2370,7 @@ function MultiPointInspectionDialogBody({
                   specConfirmed={confirmedSpecZones.has(activeZone)}
                   onConfirmSpecs={() => markSpecReviewed(activeZone)}
                   extraHeader={
-                    activeZone === "FRT" ? (
+                    activeZone === "FRT" && phase === "pre" ? (
                       <InspectionStickerFields
                         status={inspectionStatus}
                         expires={inspectionExpires}
@@ -3017,12 +3054,47 @@ function ZonePanel({
       zoneId === "RR") &&
     completionContext.tireReplacementPositions?.includes(zoneId);
   const applicableFields = zone.fields.filter((field) => {
+    // Phase first, ahead of both override sets below. Those exist to show
+    // wheel-off rows regardless of the booked axle scope, and between them they
+    // cover every wheel-off key — which is exactly why pad and rotor rows used
+    // to appear during the pre-check. A field from the other half of the
+    // inspection is not "always visible"; it is not visible at all yet.
+    if (field.phase !== completionContext.phase) return false;
     if (ALWAYS_VISIBLE_FIELDS.has(field.key)) return true;
     if (SCOPE_INDEPENDENT_BRAKE_DETAIL_FIELDS.has(field.key)) {
       return isBrakeDetailFieldRelevant(field.key, zs);
     }
     return isFieldApplicableToZone(zoneId, field.key, completionContext);
   });
+  // Spec v2 §5: at MPI the corner reopens showing its wheel-off rows, with what
+  // was recorded on the ground carried above them read-only. The mechanic under
+  // the car can see the tread they measured without being able to restate it —
+  // pre-check readings are settled once the clock starts.
+  const carriedPreRows =
+    completionContext.phase === "mpi"
+      ? zone.fields
+          .filter((field) => field.phase === "pre")
+          .map((field) => {
+            const status = zs.statuses[field.key];
+            if (status) return { key: field.key, label: field.label, value: "—" };
+            const raw =
+              field.type === "measure"
+                ? zs.measures[field.key]
+                : field.type === "tri"
+                  ? TRI_LABELS[zs.tri[field.key] as TriValue]
+                  : field.type === "descriptors"
+                    ? (zs.descriptors[field.key] ?? []).join(", ")
+                    : field.type === "select"
+                      ? zs.select[field.key]
+                      : zs.text[field.key];
+            const value = String(raw ?? "").trim();
+            return value ? { key: field.key, label: field.label, value } : null;
+          })
+          .filter((row): row is { key: string; label: string; value: string } =>
+            row !== null,
+          )
+      : [];
+
   const rotorPhotoRequired =
     (zoneId === "FL" ||
       zoneId === "FR" ||
@@ -3037,7 +3109,10 @@ function ZonePanel({
   // Per-field lookup of the seeded value/provenance for this zone.
   const specByKey = new Map(specPrefill.map((s) => [s.fieldKey, s]));
   const hasSpecPrefill = specPrefill.length > 0;
-  const needsSpecReview = hasSpecPrefill && !zs.done && !specConfirmed;
+  // Completion is per phase: a corner signed off during the pre-check reads as
+  // incomplete again once the MPI half opens its wheel-off rows.
+  const doneForPhase = isZoneDoneForPhase(zs, completionContext.phase);
+  const needsSpecReview = hasSpecPrefill && !doneForPhase && !specConfirmed;
   // Seeded specs that actually render here — the set the mechanic must check.
   const seededKeys = applicableFields
     .map((field) => field.key)
@@ -3095,7 +3170,7 @@ function ZonePanel({
           )}
         </h4>
         <div className="flex items-center gap-1">
-          {zs.done ? (
+          {doneForPhase ? (
             <span className="mr-1 inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-600">
               <Check className="h-3.5 w-3.5" /> confirmed
             </span>
@@ -3176,6 +3251,24 @@ function ZonePanel({
             railTarget,
           )
         : null}
+
+      {carriedPreRows.length > 0 ? (
+        <details className="mt-3 rounded-xl border border-primary/15 bg-primary/[0.03] px-3 py-2">
+          <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            From the pre-check · {carriedPreRows.length} recorded
+          </summary>
+          <dl className="mt-2 space-y-1">
+            {carriedPreRows.map((row) => (
+              <div key={row.key} className="flex justify-between gap-3">
+                <dt className="text-[12px] text-muted-foreground">{row.label}</dt>
+                <dd className="text-[12px] font-medium tabular-nums text-foreground">
+                  {row.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      ) : null}
 
       {applicableFields.map((field, i) => {
         const prevSection = i > 0 ? applicableFields[i - 1].section : undefined;
@@ -3312,7 +3405,7 @@ function ZonePanel({
         <InlineFieldError message={fieldError.message} />
       ) : null}
 
-      {!zs.done && zs.dirty ? (
+      {!doneForPhase && zs.dirty ? (
         <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
           You&apos;ve entered readings here — tap{" "}
           <span className="font-semibold">Mark zone complete</span> so they
@@ -3359,12 +3452,12 @@ function ZonePanel({
           onClick={onToggleDone}
           className={cn(
             "ml-auto rounded-xl px-4 py-2 text-[13px] font-semibold transition-colors",
-            zs.done
+            doneForPhase
               ? "border border-primary/20 bg-card text-muted-foreground hover:bg-primary/5"
               : "bg-primary text-primary-foreground hover:bg-primary/90",
           )}
         >
-          {zs.done ? "Mark incomplete" : "Mark zone complete"}
+          {doneForPhase ? "Mark incomplete" : "Mark zone complete"}
         </button>
       </div>
     </div>
@@ -3495,9 +3588,20 @@ function FieldRow({
       active={unavailable}
       onToggle={() => {
         const statuses = { ...zs.statuses };
-        if (unavailable) delete statuses[field.key];
-        else statuses[field.key] = "not_applicable";
-        onPatch({ statuses });
+        if (unavailable) {
+          delete statuses[field.key];
+          onPatch({ statuses });
+          return;
+        }
+        statuses[field.key] = "not_applicable";
+        // Marking a field unavailable has to clear whatever was typed into it.
+        // Leaving both behind reads as "the pad measures 5mm AND could not be
+        // seen" — the reading then counts as answered while claiming it was
+        // never taken (Aug 24 bug, Spec v2 §10).
+        onPatch({
+          statuses,
+          measures: { ...zs.measures, [field.key]: "" },
+        });
       }}
     />
   ) : null;

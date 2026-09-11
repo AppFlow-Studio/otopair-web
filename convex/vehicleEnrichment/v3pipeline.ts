@@ -3736,6 +3736,10 @@ async function runPollBatch1Body(
         makeId: args.makeId,
         runId: args.runId,
         attempt: 1,
+        // Resubmit payload for the transient-error auto-retry (see _pollBatch2V3).
+        batch2UserPrompt,
+        batch2SearchUses,
+        batch2BlockedDomains,
       },
     );
 
@@ -3798,6 +3802,16 @@ export const _pollBatch2V3 = internalAction({
     // Anthropic — this flag keeps slow-polling it and applies the gap-fill
     // when it ends instead of orphaning the results (Challenger case).
     lateCollect: v.optional(v.boolean()),
+    // Auto-retry (Sep 2026): a batch that ENDS `errored`/`expired` (a transient
+    // Anthropic-side failure, NOT a parse verdict) is resubmitted once. These
+    // carry the exact resubmit payload so the retry rebuilds an identical
+    // request; the output schema is reconstructable from `nullFields`. Optional
+    // so in-flight scheduled rows (mid-deploy) and the lateCollect path — which
+    // never retries — don't need them. `batch2Retry` is the attempt counter.
+    batch2UserPrompt: v.optional(v.string()),
+    batch2SearchUses: v.optional(v.number()),
+    batch2BlockedDomains: v.optional(v.array(v.string())),
+    batch2Retry: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<void> => {
     // Catch-all failure handler (Jun-9 review item 3): batch-1 data is always
@@ -3933,6 +3947,92 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         ? "(batch 2 timed out — no response collected)"
         : JSON.stringify(results, null, 2),
     });
+
+    // ── Transient-error auto-retry (Sep 2026) ────────────────────────────────
+    // An ended batch whose request came back `errored`/`expired` is an
+    // Anthropic-side transient (the async queue overloaded / api_error'd /
+    // expired the request), NOT a problem with our prompt — resubmitting the
+    // identical request usually succeeds (the CR-V mellow-cat case: 147m in
+    // queue, then 0-token `errored`, pricing silently dropped). This is
+    // distinct from the 3h TIMEOUT path above (which arms the late collector
+    // for a batch that never ENDED) and from a PARSE verdict (`json_extraction_*`),
+    // which the fields/services rescue rungs below already handle and which a
+    // resubmit would not fix. Bounded by PARTS_BATCH2_MAX_RETRY (default 1),
+    // live-path only (never lateCollect). Kill switch: PARTS_BATCH2_RETRY=off.
+    {
+      const retryCount = args.batch2Retry ?? 0;
+      const maxBatch2Retry = Number(process.env.PARTS_BATCH2_MAX_RETRY ?? "1");
+      const isTransientBatchError =
+        !!r2?.error && /^(errored|expired)\b/.test(String(r2.error));
+      if (
+        !timedOut &&
+        !args.lateCollect &&
+        isTransientBatchError &&
+        process.env.PARTS_BATCH2_RETRY !== "off" &&
+        args.batch2UserPrompt != null &&
+        retryCount < maxBatch2Retry
+      ) {
+        try {
+          const newBatchId = await submitBatch([
+            {
+              customId: "batch2",
+              system: BATCH_2_SYSTEM,
+              userPrompt: args.batch2UserPrompt,
+              maxTokens: 16384,
+              temperature: 0,
+              maxSearchUses: args.batch2SearchUses ?? 6,
+              blockedDomains: args.batch2BlockedDomains,
+              outputSchema: buildBatch2ArraySchema(args.nullFields),
+            },
+          ]);
+          // Re-open the batch2 step row against the fresh batch (the prior
+          // errored response_text stays — it is not overwritten here).
+          await traceStep(ctx, {
+            run_id: args.runId,
+            vehicle_config_id: args.vehicleConfigId,
+            step: "batch2",
+            seq: 4,
+            status: "submitted",
+            started_at: Date.now(),
+            summary: `RETRY ${retryCount + 1}/${maxBatch2Retry} · batchId=${newBatchId} · prev ${String(r2?.error).slice(0, 40)}`,
+          });
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(args.vehicleConfigId),
+            runId: String(args.runId),
+            stage: "batch2",
+            decisionKey: "batch2_retry",
+            chosen: `resubmit_${retryCount + 1}`,
+            reason: `transient batch2 error (${String(r2?.error).slice(0, 80)}) — resubmitted as ${newBatchId}`,
+            outcome: "ok",
+          }]);
+          await ctx.scheduler.runAfter(
+            POLL_INTERVAL_MS,
+            internal.vehicleEnrichment.v3pipeline._pollBatch2V3,
+            { ...args, batchId: newBatchId, attempt: 1, batch2Retry: retryCount + 1 },
+          );
+          console.log(
+            `[v8/_pollBatch2] transient batch2 error — resubmitted (retry ${retryCount + 1}/${maxBatch2Retry}) batchId=${newBatchId}`,
+          );
+          return; // do NOT finalize — the fresh batch's poll chain will
+        } catch (e) {
+          // The resubmit itself failed — fall through to the batch-1-only
+          // finalize so the run is never lost, and record why.
+          console.error(
+            `[v8/_pollBatch2] batch2 resubmit FAILED (retry ${retryCount + 1}) — finalizing with batch1 data:`,
+            e,
+          );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(args.vehicleConfigId),
+            runId: String(args.runId),
+            stage: "batch2",
+            decisionKey: "batch2_retry",
+            chosen: "resubmit_failed",
+            reason: `resubmit threw: ${String(e).slice(0, 120)}`,
+            outcome: "error",
+          }]);
+        }
+      }
+    }
 
     // Fix #3: Detect errored/expired batch2 request
     if (r2?.error) {
@@ -7013,6 +7113,36 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       field_gaps: finalGaps,
       quotability,
     });
+
+    // Ops alert (Sep 2026): a batch-2 error-out (an ended `errored`/`expired`
+    // result, or the 3h timeout) used to be visible only in the console — the
+    // CR-V mellow-cat case was found by chance. Emit one deduped
+    // notification_outbox row per run, mirroring portalStats.evaluateSlo's
+    // channel:"slack" convention (see _alertEnrichmentErrorOut for the
+    // no-dispatcher-yet caveat). Kill switch: ENRICH_ERROROUT_ALERT=off.
+    if ((r2?.error || timedOut) && process.env.ENRICH_ERROROUT_ALERT !== "off") {
+      try {
+        const unpricedCoreRoles = (quotability?.services ?? []).reduce(
+          (n: number, s: any) =>
+            n + Math.max(0, (s.core_with_fitment ?? 0) - (s.core_with_price ?? 0)),
+          0,
+        );
+        await ctx.runMutation(
+          internal.vehicleEnrichment.v3mutations._alertEnrichmentErrorOut,
+          {
+            runId: args.runId,
+            vehicleConfigId: args.vehicleConfigId,
+            label: `${args.year} ${args.make} ${args.model} ${args.trim}`.trim(),
+            batchId: args.batchId,
+            error: timedOut ? "batch2_timeout" : String(r2?.error ?? "unknown"),
+            quotabilityPct: quotability?.pct,
+            unpricedCoreRoles,
+          },
+        );
+      } catch (e) {
+        console.warn("[v8] error-out alert enqueue failed (non-fatal):", e);
+      }
+    }
 
     // Trace: finalize stage — the run's terminal snapshot.
     await traceStep(ctx, {

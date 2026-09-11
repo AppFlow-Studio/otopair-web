@@ -732,13 +732,37 @@ function computeHybridStatus(
     }
   }
 
+  // Neither axis measurable → unknown (Ahmad, 2026-09-09). Both `mileageRatio`
+  // and `timeRatio` initialise to 0 and only get assigned inside their guarded
+  // blocks. On a miles-only interval (brake pads at 35,000 / —) with a record
+  // that carries a date but no `lastServiceMileage`, both stay 0, `ratio` is
+  // 0, and the item would return ON TIME on no evidence. Refuse to answer
+  // instead — `unknown` drops the item from the weighted average, so it can
+  // neither reassure nor penalise. Applies to any maintenance_records row
+  // with a date and no mileage on a miles-only type, not just Quick Check.
+  const measuredMileage =
+    interval.miles != null &&
+    record.lastServiceMileage != null &&
+    currentOdometer != null;
+  const measuredTime = interval.months != null && record.lastServiceDate != null;
+  if (!measuredMileage && !measuredTime) {
+    return {
+      status: "unknown",
+      percentUsed: 0,
+      description: "Add the mileage from that service, or a scan can confirm",
+      detail: "Mileage unknown",
+    };
+  }
+
   // Hybrid: whichever comes first
   const ratio = Math.max(mileageRatio, timeRatio);
   const percentUsed = Math.min(Math.round(ratio * 100), 100);
 
-  // Quick Check v2 §7 step 4. The band carries the spec's four-way split;
-  // `status` stays the three-value display value the tracker renders, so
-  // needs_attention keeps meaning "a human graded this yellow".
+  // Quick Check v2 §7 step 4. Each of the four bands now has its own status
+  // (Ahmad, 2026-09-04): OVERDUE → needs_attention, SEVERELY OVERDUE →
+  // overdue. `needs_attention` therefore also carries interval-overdue —
+  // mechanic-flagged items keep their shop badge on the card so the two
+  // stay tellable apart.
   const band = ratioToBand(ratio);
   const status = BAND_TO_STATUS[band];
 

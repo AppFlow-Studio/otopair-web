@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canMarkFieldUnavailable,
+  cornerCopyPatch,
   classify,
   createInspectionState,
   deriveStateInspectionFailures,
@@ -14,9 +15,11 @@ import {
   formatZonesForPdf,
   gatherFindings,
   getDirtyIncompleteZones,
+  INSPECTION_ZONES,
   INSPECTION_ZONES_BY_ID,
   isFieldApplicableToZone,
   isFieldRequiredForZone,
+  isZoneDoneForPhase,
   patchInspectionZone,
   patchSharedInspectionText,
   requiredZonesForBooking,
@@ -53,6 +56,7 @@ describe("multi-point inspection requirements", () => {
       deriveTierInspectionScope({
         serviceNames: ["Tire Rotation"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "mpi" as const,
         liftStatus: "no",
       }),
     ).toMatchObject({
@@ -66,6 +70,7 @@ describe("multi-point inspection requirements", () => {
       deriveTierInspectionScope({
         serviceNames: ["Wheel Alignment"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "mpi" as const,
         liftStatus: "no",
       }),
     ).toMatchObject({
@@ -81,6 +86,7 @@ describe("multi-point inspection requirements", () => {
         serviceNames: ["Tire Replacement"],
         tireReplacementPositions: ["FR", "RL"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "mpi" as const,
       }).tier2Corners,
     ).toEqual(["FR", "RL"]);
 
@@ -88,6 +94,7 @@ describe("multi-point inspection requirements", () => {
       deriveTierInspectionScope({
         serviceNames: ["Brake Pad Replacement"],
         brakeScope: { hasBrakeWork: true, front: true, rear: false },
+        phase: "mpi" as const,
       }).tier2Corners,
     ).toEqual(["FL", "FR"]);
 
@@ -95,22 +102,23 @@ describe("multi-point inspection requirements", () => {
       deriveTierInspectionScope({
         serviceNames: ["Rotor Replacement"],
         brakeScope: { hasBrakeWork: true, front: false, rear: false },
+        phase: "mpi" as const,
       }).bookingScopeError,
     ).toContain("axle");
   });
 
   it("requires Tier 1 zones and fields on every visit while exempting only outgoing-tire checks", () => {
-    expect(requiredZonesForBooking(["Oil Change"])).toEqual([
-      "FL",
-      "FR",
-      "RL",
-      "RR",
-      "ENG",
-      "FRT",
-    ]);
+    expect(
+      requiredZonesForBooking({
+        serviceNames: ["Oil Change"],
+        phase: "pre",
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      }),
+    ).toEqual(["FL", "FR", "RL", "RR", "ENG", "FRT"]);
     const context = {
       serviceNames: ["Tire Replacement"],
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      phase: "pre" as const,
       tireReplacementPositions: ["FR"] as const,
       isFirstShopVisit: false,
       priorTreadReadings: { FL: 6, FR: 6, RL: 6, RR: 6 },
@@ -130,6 +138,7 @@ describe("multi-point inspection requirements", () => {
     const laterContext = {
       serviceNames: ["Oil Change"],
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      phase: "pre" as const,
       isFirstShopVisit: false,
       priorTreadReadings: { FL: 6 },
       inspectionState: state,
@@ -158,6 +167,7 @@ describe("multi-point inspection requirements", () => {
     const tier5Context = {
       serviceNames: ["Oil Change"],
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      phase: "pre" as const,
       isFirstShopVisit: true,
       inspectionState: state,
     };
@@ -178,6 +188,7 @@ describe("multi-point inspection requirements", () => {
     const context = {
       serviceNames: ["Tire Rotation"],
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      phase: "mpi" as const,
       rotorPhotoEvidence: { FL: false, FR: true },
     };
     const state = createInspectionState();
@@ -193,6 +204,7 @@ describe("multi-point inspection requirements", () => {
       serviceNames: ["Tire Replacement"],
       tireReplacementPositions: ["FL"] as const,
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      phase: "mpi" as const,
       rotorPhotoEvidence: { FL: false },
     };
     const state = createInspectionState();
@@ -264,15 +276,34 @@ describe("multi-point inspection requirements", () => {
   });
 
   it("requires the Tier 1 zones on every service and adds Underbody for alignment", () => {
-    expect(requiredZonesForBooking(["Oil Change"])).toEqual([
+    const zones = (serviceNames: string[], phase: "pre" | "mpi") =>
+      requiredZonesForBooking({
+        serviceNames,
+        phase,
+        brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      });
+
+    // The pre-check is the same walkaround for every booking: four corners for
+    // tread and pressure, the engine bay, the front lights/glass/wipers.
+    expect(zones(["Oil Change"], "pre")).toEqual([
       "FL", "FR", "RL", "RR", "ENG", "FRT",
     ]);
-    expect(requiredZonesForBooking(["Tire Rotation"])).toEqual([
+    expect(zones(["Tire Rotation"], "pre")).toEqual([
       "FL", "FR", "RL", "RR", "ENG", "FRT",
     ]);
-    expect(requiredZonesForBooking(["Wheel Alignment"])).toEqual([
-      "FL", "FR", "RL", "RR", "ENG", "UND", "FRT",
+    // Underbody is wholly on-lift, so it never gates the pre-check — not even
+    // for the alignment that makes it required.
+    expect(zones(["Wheel Alignment"], "pre")).toEqual([
+      "FL", "FR", "RL", "RR", "ENG", "FRT",
     ]);
+
+    // The MPI half demands only what actually needs the car in the air. An oil
+    // change never lifts a wheel, so it adds no second gate at all.
+    expect(zones(["Oil Change"], "mpi")).toEqual([]);
+    // A rotation takes all four wheels off, so all four corners come back.
+    expect(zones(["Tire Rotation"], "mpi")).toEqual(["FL", "FR", "RL", "RR"]);
+    // An alignment doesn't pull wheels, but it does put the car up.
+    expect(zones(["Wheel Alignment"], "mpi")).toEqual(["UND"]);
   });
 
   it("labels a rotor at the reference as in spec but near the minimum", () => {
@@ -315,16 +346,22 @@ describe("multi-point inspection requirements", () => {
   it("matches field requirements to the server's booking scope", () => {
     const oilContext = {
       serviceNames: ["Oil Change"],
+      phase: "pre" as const,
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
     };
-    const frontBrakeContext = {
+    // Same booking seen from both halves — the tire rows are asked on the
+    // ground, the pad rows only once the wheel is off.
+    const frontBrakePre = {
       serviceNames: ["Brake Pad Replacement"],
+      phase: "pre" as const,
       brakeScope: { hasBrakeWork: true, front: true, rear: false },
     };
+    const frontBrakeContext = { ...frontBrakePre, phase: "mpi" as const };
 
     const tireContext = {
       serviceNames: ["Tire Rotation"],
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      phase: "pre" as const,
       isFirstShopVisit: true,
     };
 
@@ -336,31 +373,40 @@ describe("multi-point inspection requirements", () => {
     expect(isFieldRequiredForZone("FR", "pad_inner", oilContext)).toBe(false);
     expect(isFieldRequiredForZone("FR", "pad_inner", frontBrakeContext)).toBe(true);
     expect(isFieldRequiredForZone("RR", "pad_inner", frontBrakeContext)).toBe(false);
-    expect(isFieldRequiredForZone("FR", "psi", frontBrakeContext)).toBe(true);
+    // ...and never before the job starts, however the booking is scoped.
+    expect(isFieldRequiredForZone("FR", "pad_inner", frontBrakePre)).toBe(false);
+    expect(isFieldRequiredForZone("FR", "psi", frontBrakePre)).toBe(true);
     expect(isFieldRequiredForZone("ENG", "oil_viscosity", oilContext)).toBe(true);
     expect(isFieldRequiredForZone("ENG", "oil_type", oilContext)).toBe(true);
     expect(
       isFieldRequiredForZone("ENG", "coolant_type", {
         serviceNames: ["Coolant Flush"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "pre" as const,
       }),
     ).toBe(true);
     expect(
       isFieldRequiredForZone("ENG", "af", {
         serviceNames: ["Engine Air Filter"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "pre" as const,
       }),
     ).toBe(false);
   });
 
   it("requires Battery & electrical readings before completing a Battery Test", () => {
-    const context = {
+    // Split across both halves: corrosion on the terminals is visible with the
+    // hood up, but a load test needs a tester, so it waits for the MPI half.
+    const preContext = {
       serviceNames: ["Battery Test"],
+      phase: "pre" as const,
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
     };
+    const context = { ...preContext, phase: "mpi" as const };
 
     expect(isFieldRequiredForZone("ENG", "batt", context)).toBe(true);
-    expect(isFieldRequiredForZone("ENG", "term", context)).toBe(true);
+    expect(isFieldRequiredForZone("ENG", "batt", preContext)).toBe(false);
+    expect(isFieldRequiredForZone("ENG", "term", preContext)).toBe(true);
     const state = createInspectionState();
     for (const key of [
       "oil_condition",
@@ -387,6 +433,7 @@ describe("multi-point inspection requirements", () => {
     const context = {
       serviceNames: ["Tire Replacement"],
       brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      phase: "pre" as const,
       tireReplacementPositions: ["FR"] as const,
     };
 
@@ -422,6 +469,7 @@ describe("multi-point inspection requirements", () => {
       validateZoneForCompletion(state, "FR", {
         serviceNames: ["Tire Replacement"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "mpi" as const,
         tireReplacementPositions: ["FR"],
       }),
     ).toEqual({ valid: true });
@@ -438,6 +486,7 @@ describe("multi-point inspection requirements", () => {
       validateZoneForCompletion(state, "FL", {
         serviceNames: ["Tire Replacement"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "pre" as const,
         tireReplacementPositions: ["FR"],
       }),
     ).toEqual({
@@ -459,6 +508,7 @@ describe("multi-point inspection requirements", () => {
       validateZoneForCompletion(state, "FL", {
         serviceNames: ["Oil Change"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "pre" as const,
         isFirstShopVisit: false,
         inspectionState: state,
       }),
@@ -480,6 +530,7 @@ describe("multi-point inspection requirements", () => {
       validateZoneForCompletion(state, "FL", {
         serviceNames: ["Oil Change"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "pre" as const,
         isFirstShopVisit: false,
       }),
     ).toMatchObject({ valid: false, fieldKey: "run_flat" });
@@ -490,6 +541,7 @@ describe("multi-point inspection requirements", () => {
       validateZoneForCompletion(state, "FL", {
         serviceNames: ["Oil Change"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "mpi" as const,
         isFirstShopVisit: false,
       }),
     ).toMatchObject({ valid: false, fieldKey: "pad_method" });
@@ -500,6 +552,7 @@ describe("multi-point inspection requirements", () => {
       validateZoneForCompletion(state, "FL", {
         serviceNames: ["Oil Change"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "mpi" as const,
         isFirstShopVisit: false,
       }),
     ).toMatchObject({ valid: false, fieldKey: "desc" });
@@ -518,6 +571,7 @@ describe("multi-point inspection requirements", () => {
       validateZoneForCompletion(state, "FL", {
         serviceNames: ["Oil Change"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "pre" as const,
       }),
     ).toEqual({
       valid: false,
@@ -550,6 +604,7 @@ describe("multi-point inspection requirements", () => {
     const context = {
       serviceNames: ["Brake Pad Replacement"],
       brakeScope: { hasBrakeWork: true, front: true, rear: false },
+      phase: "mpi" as const,
       rotorPhotoEvidence: { FL: true },
     };
     expect(validateZoneForCompletion(state, "FL", context)).toEqual({
@@ -842,6 +897,7 @@ describe("multi-point inspection payload derivation", () => {
       completionContext: {
         serviceNames: ["Oil Change"],
         brakeScope: { hasBrakeWork: false, front: false, rear: false },
+        phase: "mpi" as const,
         isFirstShopVisit: false,
         inspectionState: state,
       },
@@ -1043,5 +1099,131 @@ describe("per-vehicle rotor minimum grading (enrichment nominal × 0.85)", () =>
     expect(rotorRec).toBeDefined();
     expect(rotorRec!.label).toBe("Rotor Replacement");
     expect(rotorRec!.urgency).toBe("soon");
+  });
+});
+
+describe("pre-check / MPI phase split (Spec v2 §1.1)", () => {
+  const brakeJob = (phase: "pre" | "mpi") => ({
+    serviceNames: ["Brake Pad Replacement"],
+    phase,
+    brakeScope: { hasBrakeWork: true, front: true, rear: false },
+  });
+
+  it("assigns every template field to exactly one phase", () => {
+    for (const zone of INSPECTION_ZONES) {
+      for (const field of zone.fields) {
+        expect(
+          ["pre", "mpi"],
+          `${zone.id}.${field.key} has no phase`,
+        ).toContain(field.phase);
+      }
+    }
+  });
+
+  it("keeps every lift- or wheel-off item out of the pre-check", () => {
+    // The whole point of the split: if it needs the car in the air or a wheel
+    // off, the mechanic must be on the clock before being asked for it.
+    const deferred = [
+      ["FL", "pad_inner"], ["FL", "pad_outer"], ["FL", "rotor"],
+      ["FL", "desc"], ["FL", "caliper"], ["FL", "brake_hose"],
+      ["FL", "pad_brand"], ["FL", "steering_play"], ["FL", "ball_joint_play"],
+      ["FL", "wheel_bearing_play"], ["ENG", "batt"],
+      ["UND", "leaks"], ["UND", "cv"], ["UND", "strut"], ["UND", "exh"],
+      ["UND", "damage"],
+    ] as const;
+    for (const [zoneId, fieldKey] of deferred) {
+      expect(
+        INSPECTION_ZONES_BY_ID[zoneId].fields.find((f) => f.key === fieldKey)
+          ?.phase,
+        `${zoneId}.${fieldKey} must be MPI`,
+      ).toBe("mpi");
+    }
+  });
+
+  it("defers a booked axle's pad reading out of the pre-check", () => {
+    // Same booking, same corner — only the phase differs.
+    expect(isFieldRequiredForZone("FL", "pad_inner", brakeJob("pre"))).toBe(false);
+    expect(isFieldRequiredForZone("FL", "pad_inner", brakeJob("mpi"))).toBe(true);
+    // ...and it isn't merely optional in the pre-check, it isn't shown at all.
+    expect(isFieldApplicableToZone("FL", "pad_inner", brakeJob("pre"))).toBe(false);
+    expect(isFieldApplicableToZone("FL", "pad_inner", brakeJob("mpi"))).toBe(true);
+  });
+
+  it("still asks for the ground-level rows during the pre-check", () => {
+    for (const key of ["tread", "psi", "wear", "brake_visual"]) {
+      expect(isFieldRequiredForZone("FL", key, brakeJob("pre"))).toBe(true);
+      // And stops asking once they're behind us — they're read-only by then.
+      expect(isFieldRequiredForZone("FL", key, brakeJob("mpi"))).toBe(false);
+    }
+    expect(isFieldRequiredForZone("FRT", "horn", brakeJob("pre"))).toBe(true);
+  });
+
+  it("re-opens a corner completed in the pre-check once the MPI half starts", () => {
+    const zone = createInspectionState().zones.FL!;
+    zone.done = true;
+    zone.donePhase = "pre";
+    expect(isZoneDoneForPhase(zone, "pre")).toBe(true);
+    expect(isZoneDoneForPhase(zone, "mpi")).toBe(false);
+
+    zone.donePhase = "mpi";
+    expect(isZoneDoneForPhase(zone, "mpi")).toBe(true);
+  });
+
+  it("reads a row saved before the split as a pre-check completion", () => {
+    const zone = createInspectionState().zones.FL!;
+    zone.done = true;
+    delete zone.donePhase;
+    expect(isZoneDoneForPhase(zone, "pre")).toBe(true);
+    expect(isZoneDoneForPhase(zone, "mpi")).toBe(false);
+    expect(isZoneDoneForPhase(undefined, "pre")).toBe(false);
+  });
+
+  it("never mirrors a measured reading between corners", () => {
+    const state = createInspectionState();
+    const source = state.zones.FL!;
+    source.measures.tread = "7";
+    source.measures.psi = "40";
+    source.tri.wear = "y";
+    source.text.tire_brand = "Michelin";
+    source.text.tire_size = "225/45R18";
+    source.text.pad_brand = "Akebono";
+
+    const destination = state.zones.FR!;
+    destination.measures.psi = "43"; // staggered setup, Aug 20
+
+    const pre = cornerCopyPatch(source, destination, "pre");
+    expect(pre.text?.tire_brand).toBe("Michelin");
+    expect(pre.text?.tire_size).toBe("225/45R18");
+    // The bug this closes: pressure and tread used to travel with the copy.
+    expect(pre.measures?.psi).toBe("43");
+    expect(pre.measures?.tread ?? "").toBe("");
+    expect(pre.tri?.wear ?? "").not.toBe("y");
+    // Pad brand belongs to the other half — not copied during the pre-check.
+    expect(pre.text?.pad_brand ?? "").toBe("");
+
+    const mpi = cornerCopyPatch(source, destination, "mpi");
+    expect(mpi.text?.pad_brand).toBe("Akebono");
+    expect(mpi.text?.tire_brand ?? "").toBe("");
+  });
+
+  it("does not block zone completion on a field from the other half", () => {
+    const state = createInspectionState();
+    const zone = state.zones.FL!;
+    zone.measures.tread = "7";
+    zone.measures.psi = "35";
+    zone.tri.wear = "g";
+    zone.tri.brake_visual = "g";
+    zone.text.tire_size = "225/45R18";
+    zone.select.run_flat = "no";
+
+    // A front-axle brake job: every wheel-off row is still blank, and that must
+    // not stop the mechanic finishing the pre-check and starting the clock.
+    expect(validateZoneForCompletion(state, "FL", brakeJob("pre"))).toEqual({
+      valid: true,
+    });
+    // The same corner, once the wheel is off, does demand them.
+    expect(validateZoneForCompletion(state, "FL", brakeJob("mpi"))).toMatchObject({
+      valid: false,
+    });
   });
 });

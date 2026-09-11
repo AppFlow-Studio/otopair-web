@@ -637,10 +637,8 @@ export async function resolveAvailableMechanicForWindow(
   const fewestBookings = candidates.filter((candidate) => candidate.count === lowestCount);
   const lowestMinutes = Math.min(...fewestBookings.map((candidate) => candidate.minutes));
   const tiedCandidates = fewestBookings.filter((candidate) => candidate.minutes === lowestMinutes);
-  tiedCandidates.sort((a, b) =>
-    String(a.mechanicId).localeCompare(String(b.mechanicId)),
-  );
-  return tiedCandidates[0].mechanicId;
+  const randomIndex = Math.floor(Math.random() * tiedCandidates.length);
+  return tiedCandidates[randomIndex].mechanicId;
 }
 
 export async function getMechanicDayWorkload(

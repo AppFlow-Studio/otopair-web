@@ -35,6 +35,7 @@ import JobStepRing from "@/components/job-step-ring";
 import MultiPointInspectionDialog, {
   type InspectionInputPayload,
 } from "@/components/multi-point-inspection-dialog";
+import type { InspectionPhase } from "@/lib/inspection-template";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import RecommendServiceDrawer from "@/components/recommend-service-drawer";
@@ -703,6 +704,8 @@ export interface JobDetailData {
     _id: Id<"job_actuals">;
     status: "draft" | "finalized";
     startedAt?: number | null;
+    mpiStartedAt?: number | null;
+    mpiCompletedAt?: number | null;
     completedAtMs?: number | null;
     loggedAtMs?: number | null;
     finalizedAtMs?: number | null;
@@ -836,6 +839,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
     const [declineOtherText, setDeclineOtherText] = useState("");
     const [showPrejobDialog, setShowPrejobDialog] = useState(false);
+    // Which half of the split inspection this booking is on. Keyed on status,
+    // not on mpiStartedAt — that timestamp used to be the signal, but it gets
+    // written by more than one server mutation, and a booking still waiting on
+    // a customer's pre-job estimate approval (status still vehicle_at_shop)
+    // must never read as "mpi", no matter what any timestamp says. status is
+    // the one field with a single, guarded writer.
+    const inspectionPhase: InspectionPhase =
+      job?.status === "in_progress" ? "mpi" : "pre";
+    // True while the on-lift half is still gating: the job has genuinely
+    // started but the last required MPI item hasn't landed. The job can't be
+    // completed and the labor clock hasn't started. Requires status ===
+    // in_progress on top of the timestamps as defense in depth — this is
+    // exactly the pair of fields a past bug let drift out of sync.
+    const mpiGateOpen =
+      job?.status === "in_progress" &&
+      job?.jobActuals?.mpiStartedAt != null &&
+      job?.jobActuals?.mpiCompletedAt == null;
     const [showPostjobDialog, setShowPostjobDialog] = useState(false);
     const [showPrejobEstimateDialog, setShowPrejobEstimateDialog] = useState(false);
     const [showMidJobDialog, setShowMidJobDialog] = useState(false);
@@ -924,6 +944,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const commitInspectionAndAwaitEstimate = useMutation(
       api.bookings.commitInspectionAndAwaitEstimate,
     );
+    const completeMpiPhase = useMutation(api.bookings.completeMpiPhase);
     const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
     const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
     const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
@@ -1082,6 +1103,19 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         copyEmailTimeoutRef.current = null;
       }
     }, [jobId, currentAssignmentKey]);
+
+    // Spec v2 §2 step 3: once the job is running, the on-lift half opens by
+    // itself rather than waiting to be found. Dismissible — §2.1 is explicit
+    // that the modal never gates, the job state does — but it comes back on
+    // the next visit to this booking while the gate is still open. Keyed by
+    // booking so dismissing it doesn't re-trigger on every render.
+    const autoOpenedMpiFor = useRef<string | null>(null);
+    useEffect(() => {
+      if (!jobId || !mpiGateOpen) return;
+      if (autoOpenedMpiFor.current === String(jobId)) return;
+      autoOpenedMpiFor.current = String(jobId);
+      setShowPrejobDialog(true);
+    }, [jobId, mpiGateOpen]);
 
     // Reset decline modal state when it closes
     useEffect(() => {
@@ -1432,7 +1466,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             inspection,
           });
           setShowPrejobDialog(false);
-          onSuccess?.("Pre-job inspection saved");
+          onSuccess?.("Inspection saved");
+        } else if (inspectionPhase === "mpi") {
+          // The job is already running — submitting here closes the on-lift
+          // half, which ends the inspection window and starts the labor clock.
+          await completeMpiPhase({
+            bookingId: job._id,
+            prejob: payload,
+            inspection,
+          });
+          setShowPrejobDialog(false);
+          onSuccess?.("Inspection complete — job clock started");
         } else if (isNewCycle) {
           await commitInspectionAndAwaitEstimate({
             bookingId: job._id,
@@ -1447,7 +1491,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             prejob: payload,
             inspection,
           });
-          setShowPrejobDialog(false);
+          // Deliberately not closing here: the job just started, so the
+          // on-lift half is the very next thing to fill in. Once the
+          // reactive job query catches up, status flips to in_progress and
+          // this same dialog re-renders straight into the mpi phase — no
+          // visible close-then-reopen flash, no separate tap required.
           onSuccess?.("Booking started");
         }
       } catch (err: unknown) {
@@ -1467,8 +1515,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           setActionError(
             message ||
               (action === "close"
-                ? "Could not save the pre-job vehicle check."
-                : "Could not start booking."),
+                ? "Could not save the vehicle check."
+                : inspectionPhase === "mpi"
+                  ? "Could not submit the on-lift inspection."
+                  : "Could not start booking."),
           );
           throw err;
         }
@@ -1800,7 +1850,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     s === "pending" || s === "pending_shop_acceptance";
                   const canAccept = isPendingIncoming && !quoteAwaitingCustomer;
                   const canAdjustQuote = isPendingIncoming && !quoteAwaitingCustomer;
-                  const canComplete = s === "in_progress" && !quoteAwaitingCustomer;
+                  // The on-lift half has to land before the job can close —
+                  // Vehicle Health computes off the union of both phases, and
+                  // half the brake inputs are missing until then (Spec v2 §7.3).
+                  const canComplete =
+                    s === "in_progress" && !quoteAwaitingCustomer && !mpiGateOpen;
+                  const canOpenMpi = s === "in_progress" && !quoteAwaitingCustomer;
                   const canMarkVehicleHere = s === "confirmed" && !quoteAwaitingCustomer;
                   const canStartJob = s === "vehicle_at_shop" && !quoteAwaitingCustomer;
                   const canMarkNoShow = s === "confirmed" && !quoteAwaitingCustomer;
@@ -1887,6 +1942,29 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
                           >
                             Open vehicle check
+                          </button>
+                        )}
+                        {canOpenMpi && (
+                          <button
+                            onClick={() => {
+                              setActionError("");
+                              setShowPrejobDialog(true);
+                            }}
+                            disabled={isActioning}
+                            title={
+                              mpiGateOpen
+                                ? "Measurements that need the car on the lift. The job can't be completed until these are in."
+                                : "Reopen the inspection to record anything noticed mid-job."
+                            }
+                            className={`${
+                              mpiGateOpen
+                                ? `${drawerPrimaryButtonClassName} flex-1`
+                                : drawerSecondaryButtonClassName
+                            } py-2.5`}
+                          >
+                            {mpiGateOpen
+                              ? "Continue inspection"
+                              : "Open inspection"}
                           </button>
                         )}
                         {canMarkVehicleHere && (
@@ -2666,7 +2744,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               : ""
           }
           bookingServices={job?.serviceNames ?? []}
-          jobInProgress={job?.status === "in_progress"}
+          phase={inspectionPhase}
           tireReplacementPositions={job?.tireSpecs?.positions ?? []}
           passportData={vehiclePassport ?? null}
           prefillData={job?.jobActuals?.prejobReport ?? null}

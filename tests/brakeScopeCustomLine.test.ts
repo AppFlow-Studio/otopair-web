@@ -48,6 +48,7 @@ describe("off-catalog brake work carries an axle scope", () => {
     // The whole point: that scope no longer trips the inspection's axle gate.
     const result = deriveTierInspectionScope({
       serviceNames: ["Brake Pad Replacement"],
+      phase: "mpi" as const,
       brakeScope: scope,
     });
     expect(result.bookingScopeError).toBeNull();
@@ -78,6 +79,7 @@ describe("off-catalog brake work carries an axle scope", () => {
 
     const result = deriveTierInspectionScope({
       serviceNames: ["Rotor Replacement"],
+      phase: "mpi" as const,
       brakeScope: scope,
     });
     expect(result.bookingScopeError).toBeNull();

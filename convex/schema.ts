@@ -1821,6 +1821,12 @@ export default defineSchema({
       v.object({
         zone_id: v.string(),
         done: v.boolean(),
+        // Which phase the zone was marked complete in. A corner finished
+        // during the ground-level pre-check has not been seen with the wheel
+        // off, so it must re-open and re-gate once the MPI half starts.
+        // Absent on rows written before the phase split — those were
+        // pre-check completions (see isZoneDoneForPhase).
+        done_phase: v.optional(v.union(v.literal("pre"), v.literal("mpi"))),
         // When this zone was first marked complete. Abdul, Aug 20: "I wish you
         // did checkpoints — how quick I'm spending on each section." Successive
         // values give per-section durations, which feed labor calibration.
@@ -3738,7 +3744,16 @@ export default defineSchema({
     mechanic_id: v.id("mechanics"),
     actual_labor_minutes: v.optional(v.number()),
     actual_parts_cost: v.optional(v.number()),
+    // Labor clock. Set when the MPI gate closes, NOT at Start Job — the
+    // measurement window between them is inspection, not labor, and folding it
+    // in would inflate every labor-time standard we derive (Spec v2 §3).
     started_at: v.optional(v.number()),
+    // The inspection window. mpi_started_at is stamped at Start Job;
+    // mpi_completed_at when the last required MPI item lands. The pair is the
+    // MPI-duration dataset, and mpi_started_at doubles as the phase discriminant
+    // (set => the mechanic is past Start Job, so the MPI half is what's asked).
+    mpi_started_at: v.optional(v.number()),
+    mpi_completed_at: v.optional(v.number()),
     completed_at_ms: v.optional(v.number()),
     logged_at_ms: v.optional(v.number()),
     created_at: v.optional(v.number()),

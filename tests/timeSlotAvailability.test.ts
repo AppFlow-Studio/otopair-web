@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import {
   isMechanicAvailableForWindow,
@@ -332,7 +332,7 @@ test("any-mechanic assignment chooses the lowest same-day workload", async () =>
   expect(mechanicId).toBe("mech-2");
 });
 
-test("any-mechanic tie-breaks by scheduled minutes and stable mechanic id", async () => {
+test("any-mechanic tie-breaks by scheduled minutes, then randomly", async () => {
   const sameCountCtx = makeCtx(
     baseSeed({
       bookings: [
@@ -367,15 +367,20 @@ test("any-mechanic tie-breaks by scheduled minutes and stable mechanic id", asyn
     }),
   ).toBe("mech-1");
 
-  const noWorkloadCtx = makeCtx(baseSeed());
-  expect(
-    await resolveAvailableMechanicForWindow(noWorkloadCtx, {
-      shopId: "shop-1",
-      date: "2026-06-01",
-      startTime: "15:00",
-      durationMinutes: 60,
-    }),
-  ).toBe("mech-1");
+  const random = vi.spyOn(Math, "random").mockReturnValue(0.99);
+  try {
+    const noWorkloadCtx = makeCtx(baseSeed());
+    expect(
+      await resolveAvailableMechanicForWindow(noWorkloadCtx, {
+        shopId: "shop-1",
+        date: "2026-06-01",
+        startTime: "15:00",
+        durationMinutes: 60,
+      }),
+    ).toBe("mech-2");
+  } finally {
+    random.mockRestore();
+  }
 });
 
 test("any-mechanic workload includes live tire quote holds", async () => {

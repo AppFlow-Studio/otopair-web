@@ -41,10 +41,20 @@ import { canonicalWarningLights } from "@/lib/warningLightVocab";
 export const CATEGORY_WEIGHTS = {
   brakes: 25,
   warning: 25,
+  timing_belt: 22,          // catastrophic if it snaps
+  brake_fluid_flush: 18,    // touches the braking system
+  transmission_service: 18, // wrong or skipped fluid → kills the box
   tires: 20,
   oil: 20,
+  spark_plugs: 15,
+  coolant_flush: 15,        // overheating chain-reaction on the engine
+  serpentine_belt: 15,      // fails → immediate stranded breakdown
+  differential_service: 12,
   battery: 13,
   inspection: 12,
+  filter_replacement: 8,
+  power_steering_flush: 8,
+  fuel_system_cleaning: 8,
   other: 10,
 } as const;
 
@@ -73,10 +83,23 @@ export const URGENCY_WEIGHTS = { severity: 0.50, proximity: 0.35 } as const;
 export const URGENCY_TIEBREAKER_WINDOW = 5;
 export const URGENCY_TIER_CUTOFFS = { now: 75, soon: 55, soonish: 25 } as const;
 
+/** A catalog row's id is `catalog-<taxonomy slug>`. `extractMaintenanceType`
+ *  strips the suffix and returns the literal `"catalog"`, which then collapses
+ *  to CATEGORY_WEIGHTS.other (10). CATEGORY_WEIGHTS was written to price the
+ *  slug (transmission_service: 18, spark_plugs: 15, etc.), so we recover the
+ *  slug first and look it up directly. */
+function catalogSlugFromId(id?: string): string | undefined {
+  return id?.startsWith("catalog-") ? id.slice("catalog-".length) : undefined;
+}
+
 /** Resolve a maintenance item's id to the CATEGORY_WEIGHTS bucket. Items
  *  whose type isn't a recognized safety/reliability category fall into
  *  "other" (10% weight). */
 function categoryWeightForItem(item: MaintenanceItem): number {
+  const slug = catalogSlugFromId(item.id);
+  if (slug && slug in CATEGORY_WEIGHTS) {
+    return CATEGORY_WEIGHTS[slug as keyof typeof CATEGORY_WEIGHTS];
+  }
   const type = extractMaintenanceType(item.id);
   if (type in CATEGORY_WEIGHTS) {
     return CATEGORY_WEIGHTS[type as keyof typeof CATEGORY_WEIGHTS];
@@ -204,6 +227,13 @@ export function isScorableMaintenanceItem(item: {
   // deduction — that is the whole point of the model, and the `minor_` prefix
   // only exists on records a mechanic graded yellow or red.
   if (type.startsWith("minor_")) return true;
+  // Catalog rows admitted (Yassin, 2026-09-02): a driver's answer on a bigger
+  // service — spark plugs, transmission, coolant, differential — moves the
+  // score the way a mechanic's grade does. Full weight, no group cap. The
+  // answered-vs-unanswered question is already settled by excludeFromScore
+  // (checked above); this just stops being a second, blunter guard on the
+  // same thing.
+  if (type === "catalog") return true;
   return SCORING_TYPES.has(type);
 }
 

@@ -165,6 +165,7 @@ import {
   vehiclePassportUpdateValidator,
 } from "./lib/vehicle_passports";
 import { getBookingServiceFlags } from "../lib/vehicle-service-relevance";
+import { classifyBookingLifecycleActor } from "../lib/booking-workflow-state";
 import {
   derivePrejobFromInspection,
   deriveTierInspectionScope,
@@ -10880,6 +10881,35 @@ export const getJobDetail = query({
       .collect();
     history.sort((a: any, b: any) => b.changed_at - a.changed_at);
 
+    const latestHistoryEvent = history[0] ?? null;
+    let latestLifecycleEvent: {
+      status: string;
+      reason: string | null;
+      actor: "customer" | "shop_member" | "unknown";
+      actorName: string | null;
+    } | null = null;
+    if (latestHistoryEvent) {
+      const changedBy = latestHistoryEvent.changed_by ?? null;
+      const changedByUserId = changedBy
+        ? ctx.db.normalizeId("users", changedBy)
+        : null;
+      const changedByUser = changedByUserId
+        ? await ctx.db.get(changedByUserId)
+        : null;
+      const changedByName = changedByUser
+        ? formatCustomerName(changedByUser)
+        : null;
+      latestLifecycleEvent = {
+        status: latestHistoryEvent.new_status,
+        reason: latestHistoryEvent.reason ?? null,
+        ...classifyBookingLifecycleActor({
+          bookingUserId: String(booking.user_id),
+          changedBy: changedBy ? String(changedBy) : null,
+          changedByName,
+        }),
+      };
+    }
+
     let previousMechanicName: string | null = null;
     if (booking.previous_mechanic_id) {
       const previousMechanic = await ctx.db.get(booking.previous_mechanic_id);
@@ -11134,6 +11164,7 @@ export const getJobDetail = query({
       // doesn't re-explain what they already justified to the customer.
       scopeReasons: agreedScopeReasons,
       history,
+      latestLifecycleEvent,
       previousScheduledDate: booking.previous_scheduled_date ?? null,
       previousScheduledTime: booking.previous_scheduled_time ?? null,
       previousMechanicId: booking.previous_mechanic_id ?? null,

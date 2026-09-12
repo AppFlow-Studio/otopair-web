@@ -2371,7 +2371,8 @@ function PostJobSurveyDialogBody({
       }
     }
 
-    await onSubmit({
+    try {
+      await onSubmit({
       completion_mileage: parsedMileage,
       parts_used: normalizedParts,
       vehicle_updates: Object.fromEntries(
@@ -2456,7 +2457,12 @@ function PostJobSurveyDialogBody({
       }),
       // Prior recs the mechanic marked done this visit — server closes them out.
       Object.keys(resolvedPriorRecIds).filter((id) => resolvedPriorRecIds[id]),
-    );
+      );
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error ? err.message : "Could not submit report. Try again.",
+      );
+    }
   }
 
   async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {

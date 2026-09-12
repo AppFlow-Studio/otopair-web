@@ -13,6 +13,7 @@ import MultiPointInspectionDialog, {
 } from "@/components/multi-point-inspection-dialog";
 import type { InspectionPhase } from "@/lib/inspection-template";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
 import { useLockedQuote } from "@/lib/use-locked-quote";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import ConfirmationDialog from "@/components/confirmation-dialog";
@@ -719,8 +720,14 @@ export default function MechanicDashboard() {
         ) : null}
       </ConfirmationDialog>
 
-      <MultiPointInspectionDialog
+      <BookingWorkflowGuard
         open={workflowBookingId !== null && workflowMode === "prejob"}
+        booking={selectedWorkflowBooking}
+        allowedStatuses={[workflowInspectionPhase === "mpi" ? "in_progress" : "vehicle_at_shop"]}
+        onAcknowledge={closeWorkflowDialog}
+      >
+        <MultiPointInspectionDialog
+          open={workflowBookingId !== null && workflowMode === "prejob"}
         bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
@@ -750,15 +757,26 @@ export default function MechanicDashboard() {
             prejob: payload,
             inspection,
           });
-        }}
-      />
+          }}
+        />
+      </BookingWorkflowGuard>
 
-      <DiagnosticChecklistDialog
+      <BookingWorkflowGuard
         open={
           workflowBookingId !== null &&
           workflowMode === "postjob" &&
           !!selectedWorkflowBooking?.diagnosticSystem
         }
+        booking={selectedWorkflowBooking}
+        allowedStatuses={["in_progress"]}
+        onAcknowledge={closeWorkflowDialog}
+      >
+        <DiagnosticChecklistDialog
+          open={
+            workflowBookingId !== null &&
+            workflowMode === "postjob" &&
+            !!selectedWorkflowBooking?.diagnosticSystem
+          }
         bookingId={workflowBookingId}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
@@ -789,15 +807,26 @@ export default function MechanicDashboard() {
           setToast("Diagnostic completed");
           closeWorkflowDialog();
         }}
-        onError={(msg) => setToast(msg)}
-      />
+          onError={(msg) => setToast(msg)}
+        />
+      </BookingWorkflowGuard>
 
-      <PostJobSurveyDialog
+      <BookingWorkflowGuard
         open={
           workflowBookingId !== null &&
           workflowMode === "postjob" &&
           !selectedWorkflowBooking?.diagnosticSystem
         }
+        booking={selectedWorkflowBooking}
+        allowedStatuses={["in_progress"]}
+        onAcknowledge={closeWorkflowDialog}
+      >
+        <PostJobSurveyDialog
+          open={
+            workflowBookingId !== null &&
+            workflowMode === "postjob" &&
+            !selectedWorkflowBooking?.diagnosticSystem
+          }
         bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
@@ -849,15 +878,22 @@ export default function MechanicDashboard() {
         quotedParts={workflowLockedQuote.lockedQuoteParts}
         lockedQuote={workflowLockedQuote.lockedQuote}
         isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
-        fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
-      />
+          fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
+        />
+      </BookingWorkflowGuard>
 
       {/* Pre-Job Approval — auto-chained from the inspection dialog. Same
           PostJobSurveyDialog component, this time with cycle="pre_job" so it
           routes submit through booking_approvals.submitPreJobEstimate and
           renders the live ApprovalStatusPanel after send. */}
-      <PostJobSurveyDialog
+      <BookingWorkflowGuard
         open={workflowBookingId !== null && workflowMode === "prejob_estimate"}
+        booking={selectedWorkflowBooking}
+        allowedStatuses={["vehicle_at_shop", "pending_customer_acceptance"]}
+        onAcknowledge={closeWorkflowDialog}
+      >
+        <PostJobSurveyDialog
+          open={workflowBookingId !== null && workflowMode === "prejob_estimate"}
         bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
@@ -885,19 +921,27 @@ export default function MechanicDashboard() {
         shopState={(selectedWorkflowBooking as any)?.shopState ?? null}
         shopZip={(selectedWorkflowBooking as any)?.shopZip ?? null}
         isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
-        fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
-      />
+          fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
+        />
+      </BookingWorkflowGuard>
 
-      <JobActualsDialog
+      <BookingWorkflowGuard
         open={actualsBookingId !== null}
+        booking={selectedBooking}
+        allowedStatuses={[actualsDialogMode === "edit" ? "completed" : "in_progress"]}
+        onAcknowledge={closeActualsDialog}
+      >
+        <JobActualsDialog
+          open={actualsBookingId !== null}
         mode={actualsDialogMode}
         estimatedLaborMinutes={selectedBooking?.estimatedLaborMinutes ?? null}
         jobActuals={selectedBooking?.jobActuals ?? null}
         prefillData={actualsPrefill ?? null}
         onClose={closeActualsDialog}
         onSaveDraft={handleSaveActualsDraft}
-        onFinalize={handleFinalizeActuals}
-      />
+          onFinalize={handleFinalizeActuals}
+        />
+      </BookingWorkflowGuard>
 
       {toast ? (
         <div className="fixed bottom-6 right-6 z-[70] rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground shadow-lg">

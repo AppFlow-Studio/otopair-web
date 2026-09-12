@@ -10,6 +10,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSidebar } from "../portal-context";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
+import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
 import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
 } from "@/components/reschedule-confirmation-dialog";
@@ -887,16 +888,23 @@ function OwnerDashboardPage({
           {context?.userRole !== "front_desk" ? <RevenueSection /> : null}
         </div>
 
-        <JobActualsDialog
+        <BookingWorkflowGuard
           open={actualsBookingId !== null}
+          booking={actualsJob}
+          allowedStatuses={["completed"]}
+          onAcknowledge={handleCloseActualsDialog}
+        >
+          <JobActualsDialog
+            open={actualsBookingId !== null}
           mode="edit"
           estimatedLaborMinutes={actualsJob?.estimatedLaborMinutes ?? null}
           jobActuals={actualsJob?.jobActuals ?? null}
           prefillData={actualsPrefill ?? null}
           onClose={handleCloseActualsDialog}
           onSaveDraft={handleSaveActualsDraft}
-          onFinalize={handleFinalizeActuals}
-        />
+            onFinalize={handleFinalizeActuals}
+          />
+        </BookingWorkflowGuard>
 
         <div
           className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${

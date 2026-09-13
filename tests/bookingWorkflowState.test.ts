@@ -86,6 +86,23 @@ describe("getBookingWorkflowUnavailableNotice", () => {
     ).toBe("This booking is no longer available. It has been rescheduled.");
   });
 
+  test("keeps the reschedule notice after the customer accepts", () => {
+    expect(
+      getBookingWorkflowUnavailableNotice(
+        {
+          status: "confirmed",
+          latestLifecycleEvent: {
+            status: "confirmed",
+            reason: "customer_approved_reschedule",
+            actor: "customer",
+            actorName: null,
+          },
+        },
+        ["in_progress"],
+      ),
+    ).toBe("This booking is no longer available. It has been rescheduled.");
+  });
+
   test("explains completion by another session", () => {
     expect(
       getBookingWorkflowUnavailableNotice(

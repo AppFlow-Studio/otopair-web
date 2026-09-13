@@ -34,7 +34,7 @@
 import { query, mutation, internalMutation, action } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { internal, api } from "./_generated/api";
 import { getStripe } from "../lib/stripe";
 import { isTerminal, validateTransition } from "./booking_status_history";
@@ -4950,6 +4950,42 @@ function getScheduleChangeMode(booking: any): ScheduleChangeMode {
   return booking.schedule_change_mode === "forced_delay"
     ? "forced_delay"
     : "manual_reschedule";
+}
+
+async function resetVisitForAcceptedManualReschedule(
+  ctx: MutationCtx,
+  booking: Doc<"bookings">,
+  now: number,
+) {
+  const inspection = await ctx.db
+    .query("vehicle_inspections")
+    .withIndex("by_booking", (q) => q.eq("booking_id", booking._id))
+    .first();
+  if (inspection) {
+    const artifactIds = new Set<Id<"_storage">>([
+      ...inspection.zones.flatMap((zone) => zone.photo_ids ?? []),
+      ...(inspection.pdf_storage_id ? [inspection.pdf_storage_id] : []),
+    ]);
+    for (const artifactId of artifactIds) {
+      if (await ctx.db.system.get("_storage", artifactId)) {
+        await ctx.storage.delete(artifactId);
+      }
+    }
+    await ctx.db.delete(inspection._id);
+  }
+
+  const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
+  if (jobActual) {
+    await ctx.db.patch(jobActual._id, {
+      prejob_report: undefined,
+      started_at: undefined,
+      mpi_started_at: undefined,
+      mpi_completed_at: undefined,
+      odometer_in: undefined,
+      logged_at_ms: undefined,
+      updated_at: now,
+    });
+  }
 }
 
 function compareBookingsBySchedule(a: any, b: any) {
@@ -14370,10 +14406,37 @@ export const customerApproveReschedule = mutation({
     const originalDate = booking.previous_scheduled_date ?? booking.scheduled_date;
     const originalTime = booking.previous_scheduled_time ?? booking.scheduled_time;
     const originalMechanicId = booking.previous_mechanic_id ?? currentMechanicId;
+    const isManualReschedule = getScheduleChangeMode(booking) === "manual_reschedule";
+    const now = Date.now();
+
+    if (isManualReschedule) {
+      await resetVisitForAcceptedManualReschedule(ctx, booking, now);
+    }
 
     await ctx.db.patch(booking._id, {
       status: "confirmed",
       live_stage: "booking_confirmed",
+      ...(isManualReschedule
+        ? {
+            vehicle_arrived_at_ms: undefined,
+            vehicle_arrived_by_user_id: undefined,
+            diagnostic_checklist: undefined,
+            diagnostic_checklist_completed_at_ms: undefined,
+            diagnostic_findings_note: undefined,
+            recommended_service_id: undefined,
+            recommended_service_note: undefined,
+            recommendation_state: undefined,
+            recommendation_sent_at_ms: undefined,
+            recommendation_decided_at_ms: undefined,
+            recommended_scheduled_date: undefined,
+            recommended_scheduled_time: undefined,
+            diagnostic_followup_state: undefined,
+            awaiting_info_note: undefined,
+            awaiting_info_at_ms: undefined,
+            out_of_scope_note: undefined,
+            out_of_scope_category: undefined,
+          }
+        : {}),
       previous_scheduled_date: undefined,
       previous_scheduled_time: undefined,
       previous_mechanic_id: undefined,
@@ -14382,7 +14445,7 @@ export const customerApproveReschedule = mutation({
       schedule_change_mode: undefined,
       schedule_change_source_booking_id: undefined,
       customer_can_restore_original: undefined,
-      updated_at: Date.now(),
+      updated_at: now,
     });
 
     const reservedOriginalSlot = await findExactSlot(

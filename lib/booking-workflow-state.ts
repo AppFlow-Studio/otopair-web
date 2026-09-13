@@ -30,6 +30,7 @@ export function classifyBookingLifecycleActor({
 
 const RESCHEDULE_REASONS = new Set([
   "reschedule_proposed_by_shop",
+  "customer_approved_reschedule",
   "forced_delay_proposed_by_shop",
   "forced_delay_proposed_by_system",
   "forced_delay_updated_by_shop",

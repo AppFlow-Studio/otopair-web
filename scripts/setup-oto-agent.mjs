@@ -1,16 +1,25 @@
 /**
- * One-shot setup: registers the four Oto client tools on your ElevenLabs
- * Conversational AI agent and wires the system-prompt guidance so the agent
- * knows when to call them. Idempotent — safe to re-run.
+ * Configures the live Oto ElevenLabs agent from the repo: registers the client
+ * tools the site handles and sets the WHOLE system prompt — the base prompt in
+ * scripts/oto/base-prompt.md plus the tool guidance block below. Idempotent —
+ * safe to re-run.
  *
- *   node scripts/setup-oto-agent.mjs
+ *   node scripts/setup-oto-agent.mjs --dry-run   # show what would change
+ *   node scripts/setup-oto-agent.mjs             # apply
+ *
+ * The repo is the source of truth for the prompt. Edits made in the ElevenLabs
+ * dashboard are overwritten on the next run — --dry-run reports that drift
+ * first. (The base prompt used to live only in the dashboard, which is how the
+ * live agent ended up telling visitors it was "never a marketer" while the
+ * site needed it to be one.)
  *
  * Reads credentials from .env.local (kept local; never printed):
  *   ELEVENLABS_API_KEY=sk_...
  *   ELEVENLABS_AGENT_ID=agent_...        (or NEXT_PUBLIC_ELEVENLABS_AGENT_ID)
  */
 
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -113,7 +122,7 @@ const TOOLS = [
     type: "client",
     name: "show_shops",
     description:
-      "Display the list of nearby shops with fixed prices. Call when presenting shop options to the user.",
+      "Display the sample shop list in the booking walkthrough (a demo of how picking a shop works in the app). Call when walking the visitor through booking.",
     parameters: {
       type: "object",
       properties: { service: strProp("Service the shops are quoting, e.g. 'Brake Pad Replacement'.") },
@@ -139,14 +148,14 @@ const TOOLS = [
     type: "client",
     name: "confirm_booking",
     description:
-      "Show the booking-confirmed receipt. Call once the user confirms an appointment time.",
+      "Show the SAMPLE booking receipt at the end of the booking walkthrough. Call once the user confirms a time in the walkthrough. It is a demo of the app — no real appointment is made.",
     parameters: {
       type: "object",
       properties: {
         service: strProp("Service booked."),
         shop: strProp("Shop name."),
         mechanic: strProp("Assigned mechanic."),
-        date: strProp("Appointment date, e.g. 'May 29, 2026'."),
+        date: strProp("Weekday of the sample appointment, e.g. 'Wednesday'. Never a calendar date."),
         time: strProp("Appointment time, e.g. '10:30 AM'."),
         total: { type: "number", description: "Total price in dollars." },
       },
@@ -347,7 +356,7 @@ Show things on screen by calling client tools — this is core to the experience
 - show_symptom(symptom) — call this AS SOON AS the visitor describes something their car is doing: a noise, a warning light, a vibration, a smell. This is the commonest reason anyone talks to you, and the card carries the possibilities, the urgency and what a mechanic checks — so keep your own reply to a sentence or two. It is framed as possibilities, never a diagnosis; do not overrule that by sounding certain.
 - show_service(service) — call whenever a named service comes up: what it is, whether they really need it, what they'd be paying for. Use the exact catalog name. The card explains what happens at the shop, which is the part nobody explains. Never attach a price to it.
 - show_info_card(...) — the FALLBACK for topics that don't have a show_demo card above. If the question fits a show_demo feature, use show_demo; otherwise build a quick show_info_card from the knowledge base: set a short title, pick a layout (list / steps / rows / stats / compare), and fill the matching field with a few short entries. Use it for the long-tail questions so the screen still backs up your answer — don't leave outlier topics with no visual.
-- save_presignup(email) — once you naturally have their email, so their car is waiting when they sign up.
+- save_presignup(email) — when a visitor wants in and gives you their email. It puts them on the launch list (one email the day the app is live) and keeps their car waiting for when they sign up. Ask for the email only once they're interested, never as a condition for helping.
 
 How to behave:
 - Default to SHOWING. If a topic has a card, calling the tool is the expected behavior every time — a visual should accompany almost every substantive answer. Your spoken reply is the short human version; the card carries the detail.
@@ -356,6 +365,147 @@ How to behave:
 - One card at a time. If they jump topics, just call the next matching tool.
 - This is a demo: NO real booking is created (confirm_booking only shows a sample receipt) and never invent specific prices.
 - Keep replies brief and let the visuals carry the weight.`.trim();
+
+// The base prompt (Personality / Environment / Tone / Goal / Guardrails) lives
+// in git next to this script, so it is reviewed like code instead of edited
+// live in a dashboard.
+const BASE_PROMPT = readFileSync(join(ROOT, "scripts", "oto", "base-prompt.md"), "utf8").trim();
+// The agent's opening line. It used to greet visitors as "your friendly car
+// assistant … what's going on with your car today?" — the in-app persona, not
+// the site's guide.
+const FIRST_MESSAGE = readFileSync(join(ROOT, "scripts", "oto", "first-message.txt"), "utf8").trim();
+
+// Otopair's fee rate is a locked secret (Aug 2026 truthfulness pass): the site
+// shows one locked price with fees folded in. A prompt that states the rate
+// makes the agent say it out loud, so the script refuses to push one.
+const FEE_RATE = /\b\d{1,2}(\.\d+)?\s?%\s*(platform|service|booking)?\s*fee|seven percent|platform fee of \d/i;
+
+function composePrompt() {
+  for (const [label, text] of [
+    ["scripts/oto/base-prompt.md", BASE_PROMPT],
+    ["scripts/oto/first-message.txt", FIRST_MESSAGE],
+    ["PROMPT_GUIDANCE", PROMPT_GUIDANCE],
+  ]) {
+    const hit = text.match(FEE_RATE);
+    if (hit) {
+      throw new Error(`${label} states a fee rate ("${hit[0]}") — remove it before pushing to the agent.`);
+    }
+  }
+  return `${BASE_PROMPT}\n\n<<<OTOPAIR_GUIDANCE>>>\n${PROMPT_GUIDANCE}\n<<<END_OTOPAIR_GUIDANCE>>>`;
+}
+
+// ---- knowledge base ---------------------------------------------------------
+// docs/oto/knowledge-base/*.md is the source of truth. manifest.json records
+// the ElevenLabs document id and content hash each file was last uploaded as,
+// so a re-run uploads only what changed. Replaced documents are detached from
+// the agent, not deleted, so a rollback is one PATCH away.
+const KB_DIR = join(ROOT, "docs", "oto", "knowledge-base");
+const KB_MANIFEST = join(KB_DIR, "manifest.json");
+
+function planKnowledgeBase(live) {
+  const manifest = existsSync(KB_MANIFEST) ? JSON.parse(readFileSync(KB_MANIFEST, "utf8")) : { docs: {} };
+  const docs = readdirSync(KB_DIR)
+    .filter((f) => f.endsWith(".md"))
+    .sort()
+    .map((file) => {
+      const text = readFileSync(join(KB_DIR, file), "utf8");
+      const hit = text.match(FEE_RATE);
+      if (hit) {
+        throw new Error(`docs/oto/knowledge-base/${file} states a fee rate ("${hit[0]}") — remove it before pushing.`);
+      }
+      const name = (text.match(/^#\s+(.+)$/m)?.[1] ?? file.replace(/\.md$/, "")).trim();
+      return { file, name, text, sha256: createHash("sha256").update(text).digest("hex") };
+    });
+
+  const liveIds = new Set(live.map((d) => d.id));
+  const keep = [];
+  const upload = [];
+  for (const doc of docs) {
+    const entry = manifest.docs[doc.file];
+    if (entry && entry.sha256 === doc.sha256 && liveIds.has(entry.id)) {
+      keep.push({ file: doc.file, ref: { type: "text", name: doc.name, id: entry.id, usage_mode: "auto" } });
+    } else {
+      upload.push(doc);
+    }
+  }
+  const keepIds = new Set(keep.map((k) => k.ref.id));
+  const detach = live.filter((d) => !keepIds.has(d.id));
+  return { manifest, keep, upload, detach };
+}
+
+// ---- platform settings the repo owns ----------------------------------------
+// Oto is a public marketing chat about cars. Guardrails keep it on topic and
+// resistant to prompt injection. Content moderation blocks sexual content,
+// harassment and self-harm; violence (crash talk), profanity (frustrated
+// drivers), religion/politics (focus already covers off-topic) and
+// medical/legal (safety and insurance questions are on-topic) stay off, because
+// a trigger ends the visitor's conversation.
+const CONTENT_CATEGORIES = [
+  "sexual",
+  "violence",
+  "harassment",
+  "self_harm",
+  "profanity",
+  "religion_or_politics",
+  "medical_and_legal_information",
+];
+const CONTENT_ON = new Set(["sexual", "harassment", "self_harm"]);
+// A ceiling on what anyone can spend through the site before launch.
+const CALL_LIMITS = { agent_concurrency_limit: 25, daily_limit: 2000, bursting_enabled: false };
+
+function planPlatformSettings(live) {
+  const g = live.guardrails ?? {};
+  const liveContentOn = CONTENT_CATEGORIES.filter((c) => g.content?.config?.[c]?.is_enabled === true);
+  const wantContentOn = CONTENT_CATEGORIES.filter((c) => CONTENT_ON.has(c));
+  const guardrailsOk =
+    g.focus?.is_enabled === true &&
+    g.prompt_injection?.is_enabled === true &&
+    liveContentOn.join() === wantContentOn.join();
+
+  const limits = live.call_limits ?? {};
+  const limitsOk = Object.entries(CALL_LIMITS).every(([k, v]) => limits[k] === v);
+  const authOk = live.auth?.enable_auth === true;
+
+  const patch = {};
+  if (!guardrailsOk) {
+    patch.guardrails = {
+      version: "1",
+      focus: { is_enabled: true },
+      prompt_injection: { is_enabled: true },
+      content: {
+        execution_mode: "streaming",
+        config: Object.fromEntries(
+          CONTENT_CATEGORIES.map((c) => [
+            c,
+            { is_enabled: CONTENT_ON.has(c), threshold: g.content?.config?.[c]?.threshold ?? "medium" },
+          ])
+        ),
+        trigger_action: { type: "end_call" },
+      },
+    };
+  }
+  if (!limitsOk) patch.call_limits = CALL_LIMITS;
+  if (!authOk) patch.auth = { enable_auth: true };
+
+  const lines = [
+    `Guardrails: focus ${g.focus?.is_enabled ? "on" : "off"}, prompt injection ${g.prompt_injection?.is_enabled ? "on" : "off"}, content [${liveContentOn.join(", ") || "none"}] — ${guardrailsOk ? "as configured" : `would set focus on, prompt injection on, content [${wantContentOn.join(", ")}]`}`,
+    `Call limits: concurrency ${limits.agent_concurrency_limit}, daily ${limits.daily_limit}, bursting ${limits.bursting_enabled} — ${limitsOk ? "as configured" : `would set concurrency ${CALL_LIMITS.agent_concurrency_limit}, daily ${CALL_LIMITS.daily_limit}, bursting ${CALL_LIMITS.bursting_enabled}`}`,
+    `Agent auth: ${authOk ? "on" : "off"} — ${authOk ? "as configured" : "would turn on (sessions then need a credential from /api/elevenlabs/signed-url)"}`,
+  ];
+
+  const verify = (ps) => {
+    const vg = ps.guardrails ?? {};
+    const vOn = CONTENT_CATEGORIES.filter((c) => vg.content?.config?.[c]?.is_enabled === true);
+    return [
+      ["guardrails: focus + prompt injection on", vg.focus?.is_enabled === true && vg.prompt_injection?.is_enabled === true],
+      [`content moderation = [${wantContentOn.join(", ")}]`, vOn.join() === wantContentOn.join()],
+      ["call limits set", Object.entries(CALL_LIMITS).every(([k, v]) => ps.call_limits?.[k] === v)],
+      ["agent auth on", ps.auth?.enable_auth === true],
+    ];
+  };
+
+  return { lines, patch: Object.keys(patch).length ? patch : null, verify };
+}
 
 async function main() {
   console.log(`→ Agent: ${AGENT_ID}${DRY ? "   (dry run — nothing will be written)" : ""}`);
@@ -401,67 +551,114 @@ async function main() {
     toolIds.push(id);
   }
 
-  // 2. Fetch agent, merge tool_ids + REPLACE our guidance block (don't stack).
+  // 2. Fetch agent, merge tool_ids, and set the whole prompt from the repo.
   const agent = await api(`/v1/convai/agents/${AGENT_ID}`);
   const promptCfg = agent?.conversation_config?.agent?.prompt ?? {};
   const prevPrompt = promptCfg.prompt ?? "";
   const prevIds = Array.isArray(promptCfg.tool_ids) ? promptCfg.tool_ids : [];
   const mergedIds = Array.from(new Set([...prevIds, ...toolIds]));
 
-  // Strip any prior guidance — current markers OR legacy unmarked headers —
-  // so re-runs always replace it with the latest instead of freezing/stacking.
-  let base = prevPrompt.replace(/<<<OTOPAIR_GUIDANCE>>>[\s\S]*?<<<END_OTOPAIR_GUIDANCE>>>/g, "");
-  for (const legacy of ["[Otopair UI control]", "[Otopair website — visual aids]"]) {
-    const idx = base.indexOf(legacy);
-    if (idx !== -1) base = base.slice(0, idx);
-  }
-  base = base.trim();
-  const newPrompt = `${base ? base + "\n\n" : ""}<<<OTOPAIR_GUIDANCE>>>\n${PROMPT_GUIDANCE}\n<<<END_OTOPAIR_GUIDANCE>>>`;
+  const newPrompt = composePrompt();
+  const liveBase = prevPrompt.replace(/<<<OTOPAIR_GUIDANCE>>>[\s\S]*?<<<END_OTOPAIR_GUIDANCE>>>/g, "").trim();
+  const liveBlock =
+    (prevPrompt.match(/<<<OTOPAIR_GUIDANCE>>>\n([\s\S]*?)\n<<<END_OTOPAIR_GUIDANCE>>>/) || [])[1] || "";
+  const baseSame = liveBase === BASE_PROMPT;
+  const blockSame = liveBlock.trim() === PROMPT_GUIDANCE.trim();
 
-  // Copy-lock check on the part of the prompt this script does NOT own. The
-  // Personality/Goal/Guardrails blocks were written in the ElevenLabs
-  // dashboard and live outside our markers, which is how a scrubbed repo still
-  // shipped an agent that said the platform-fee rate out loud in 7 real
-  // conversations. We cannot rewrite that text safely from here, but we can
-  // refuse to be quiet about it.
-  const feeHit = base.match(/\b\d{1,2}\s?%\s*(platform|service)?\s*fee|seven percent/i);
-  if (feeHit) {
-    console.log("\n  ⚠ THE BASE PROMPT STATES A FEE RATE — outside this script's markers:");
-    console.log(`      "${feeHit[0]}"`);
-    console.log("      That text was written in the ElevenLabs dashboard and must be edited there.");
-    console.log("      It is a locked number; the site copy was scrubbed of it in Aug 2026.\n");
+  console.log(`  · Base prompt (scripts/oto/base-prompt.md): ${BASE_PROMPT.length} chars — live ${liveBase.length} chars, ${baseSame ? "identical" : "DIFFERENT, would be replaced"}`);
+  console.log(`  · Guidance block: ${PROMPT_GUIDANCE.length} chars — live ${liveBlock.length} chars, ${blockSame ? "identical" : "DIFFERENT, would be replaced"}`);
+  const liveFirst = (agent?.conversation_config?.agent?.first_message ?? "").trim();
+  console.log(`  · First message (scripts/oto/first-message.txt): ${liveFirst === FIRST_MESSAGE ? "identical" : `DIFFERENT, would be replaced — live: "${liveFirst}"`}`);
+  if (!baseSame && liveBase && FEE_RATE.test(liveBase)) {
+    console.log("  · The live base prompt states a fee rate; applying replaces it.");
   }
+
+  // 3. Knowledge base from docs/oto/knowledge-base.
+  const kb = planKnowledgeBase(promptCfg.knowledge_base ?? []);
+  console.log(`  · Knowledge base: ${kb.keep.length} unchanged, ${kb.upload.length} to upload, ${kb.detach.length} to detach`);
+  for (const doc of kb.upload) console.log(`      + ${doc.name}  (${doc.file})`);
+  for (const doc of kb.detach) console.log(`      − ${doc.name}  (${doc.type}, ${doc.id})`);
+
+  // 4. Guardrails, call limits, agent auth.
+  const settings = planPlatformSettings(agent?.platform_settings ?? {});
+  for (const line of settings.lines) console.log(`  · ${line}`);
 
   if (DRY) {
-    console.log(`  · Would attach ${mergedIds.length} tool(s) and replace the guidance block.`);
-    console.log(`  · Guidance block: ${PROMPT_GUIDANCE.length} chars`);
-    const liveBlock =
-      (prevPrompt.match(/<<<OTOPAIR_GUIDANCE>>>\n([\s\S]*?)\n<<<END_OTOPAIR_GUIDANCE>>>/) || [])[1] || "";
-    const same = liveBlock.trim() === PROMPT_GUIDANCE.trim();
-    console.log(`  · Live block:     ${liveBlock.length} chars — ${same ? "identical" : "DIFFERENT, would be replaced"}`);
+    console.log(`  · Would attach ${mergedIds.length} tool(s).`);
     console.log("\nDry run complete. Nothing was written. Re-run without --dry-run to apply.");
     return;
   }
+
+  const byFile = new Map(kb.keep.map((k) => [k.file, k.ref]));
+  const uploadedIds = [];
+  for (const doc of kb.upload) {
+    const created = await api("/v1/convai/knowledge-base/text", {
+      method: "POST",
+      body: JSON.stringify({ text: doc.text, name: doc.name }),
+    });
+    kb.manifest.docs[doc.file] = {
+      id: created.id,
+      name: doc.name,
+      sha256: doc.sha256,
+      uploaded_at: new Date().toISOString(),
+    };
+    byFile.set(doc.file, { type: "text", name: doc.name, id: created.id, usage_mode: "auto" });
+    uploadedIds.push(created.id);
+    console.log(`  ✓ uploaded ${doc.name} (${created.id})`);
+  }
+  writeFileSync(KB_MANIFEST, JSON.stringify(kb.manifest, null, 2) + "\n");
+  const knowledgeBase = [...byFile.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, ref]) => ref);
 
   await api(`/v1/convai/agents/${AGENT_ID}`, {
     method: "PATCH",
     body: JSON.stringify({
       conversation_config: {
-        agent: { prompt: { tool_ids: mergedIds, prompt: newPrompt } },
+        agent: {
+          first_message: FIRST_MESSAGE,
+          prompt: { tool_ids: mergedIds, prompt: newPrompt, knowledge_base: knowledgeBase },
+        },
       },
     }),
   });
-  console.log(`  ✓ Agent updated — ${mergedIds.length} tool(s) attached, prompt guidance set.`);
+  console.log(`  ✓ Prompt, ${mergedIds.length} tool(s) and ${knowledgeBase.length} knowledge-base docs set.`);
 
-  // 3. Verify.
-  const verify = await api(`/v1/convai/agents/${AGENT_ID}`);
-  const verifyIds = verify?.conversation_config?.agent?.prompt?.tool_ids ?? [];
-  console.log(`\n✅ Done. Agent now has ${verifyIds.length} tool(s):`);
-  for (const tool of TOOLS) {
-    const ok = byName.has(tool.name) || toolIds.length;
-    console.log(`   ${ok ? "✓" : "?"} ${tool.name}`);
+  if (settings.patch) {
+    await api(`/v1/convai/agents/${AGENT_ID}`, {
+      method: "PATCH",
+      body: JSON.stringify({ platform_settings: settings.patch }),
+    });
+    console.log(`  ✓ Platform settings set: ${Object.keys(settings.patch).join(", ")}.`);
   }
-  console.log("\nRestart the dev server so NEXT_PUBLIC_ELEVENLABS_AGENT_ID is picked up.");
+
+  // 5. Verify against a fresh read — never trust the PATCH alone.
+  const verify = await api(`/v1/convai/agents/${AGENT_ID}`);
+  const vp = verify?.conversation_config?.agent?.prompt ?? {};
+  const vKb = new Set((vp.knowledge_base ?? []).map((d) => d.id));
+  const checks = [
+    ["prompt matches the repo", (vp.prompt ?? "").trim() === newPrompt.trim()],
+    ["first message matches the repo", (verify?.conversation_config?.agent?.first_message ?? "").trim() === FIRST_MESSAGE],
+    [`all ${mergedIds.length} tools attached`, mergedIds.every((id) => (vp.tool_ids ?? []).includes(id))],
+    [
+      `knowledge base is exactly the ${knowledgeBase.length} repo docs`,
+      vKb.size === knowledgeBase.length && knowledgeBase.every((d) => vKb.has(d.id)),
+    ],
+    ...settings.verify(verify?.platform_settings ?? {}),
+  ];
+  console.log("\nVerification:");
+  for (const [label, ok] of checks) console.log(`   ${ok ? "✓" : "✖"} ${label}`);
+
+  for (const id of uploadedIds) {
+    const idx = await api(`/v1/convai/knowledge-base/${id}/rag-index`).catch((e) => ({ error: e.message }));
+    const statuses = (idx.indexes ?? []).map((i) => i.status).join(", ") || idx.error || "no index yet";
+    console.log(`   · RAG index ${id}: ${statuses}`);
+  }
+
+  if (checks.some(([, ok]) => !ok)) {
+    console.error("\n✖ The live agent does not match the repo — see the checks above.");
+    process.exitCode = 1;
+    return;
+  }
+  console.log("\n✅ Live agent matches the repo.");
 }
 
 main().catch((e) => {

@@ -19,7 +19,13 @@
 - Sample receipt labelled "Sample booking · how it looks in the Otopair app"; its store buttons open the launch-list modal instead of a dead `#get-oto` link; stale "May 29, 2026" → "Wednesday"; overview card says the app is coming soon.
 - `npm run oto:ui`: 30/30 cards hold the contract (warm server).
 
-**Waiting on approval (production writes):** `node scripts/setup-oto-agent.mjs` — see §3 for what it changes.
+**Pushed to the live agent and verified** (fresh GET after each push): prompt, first message, 12 tools, 21 knowledge-base docs (RAG-indexed), guardrails, call limits, agent auth. Rollback: re-run `setup-oto-agent.mjs` from an earlier commit; replaced docs are detached, not deleted.
+
+**Site-wide audit + live Q&A (later on 2026-09-14):**
+- 84 pages rendered and checked by four parallel audits: 16 KB docs corrected, 5 added (17–21), prompt and cards aligned (`9060fab`).
+- 47 questions written from those pages, asked through the localhost site chat (`scripts/oto/qa.mjs`). Oto's replies were swapping the card the agent had chosen, and bubbles repeated; both fixed in `39a61f8`. Three wording slips fixed in the prompt and KB docs 04/18 (`e969361`).
+- Final run of all 47: 0 answers contradicting the site, 0 exact duplicate bubbles, 2 answers re-worded twice, 1 must-not flag cleared on review (a correct "no separate rotor resurfacing service").
+- Open decisions from the audit, for Waleed: self_harm moderation ends the chat before the 988 line can be given; whether Oto may say how Otopair makes money (a service fee inside the total, as /about says); the "Tax + service fee $32" sample line; typical job times vs the /trust-and-safety sentence. Plus 25 site-copy bugs, worst first: "bookable today" before launch, and one warning light mapped to one repair. None of these block the PR.
 **Waleed's actions:** rotate the ElevenLabs key; set Vercel production env (§5).
 **Left for the nav workstream:** `nav-menu.ts`, `pill-nav.tsx`, `page-shell.tsx`, `contact-client.tsx` stay uncommitted (session "App navigation for new pages/routes").
 

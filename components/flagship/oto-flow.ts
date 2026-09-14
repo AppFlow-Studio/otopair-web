@@ -187,7 +187,10 @@ export const DEFAULT_BOOKING: Booking = {
   service: "Brake Pad Replacement",
   shop: "Eltingville Auto Care",
   mechanic: "Jay M.",
-  date: "May 29, 2026",
+  // A weekday, not a calendar date: the sample receipt must never go stale
+  // (it read "May 29, 2026" for months after that day passed). Matches the
+  // week strip's selected Wednesday.
+  date: "Wednesday",
   time: "10:30 AM",
   total: 295,
 };
@@ -353,7 +356,7 @@ export const OVERVIEW_DEMO = {
     "Independent shops only, each reviewed and approved before going live",
     "Every line shown before you confirm — the total you see is the total you pay",
     "Reviews only from drivers who completed a job",
-    "Live in Staten Island · iOS & Android",
+    "Live in Staten Island · app coming soon to iOS & Android",
   ],
 };
 

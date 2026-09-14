@@ -7,6 +7,7 @@ import {
   useConversationClientTool,
 } from "@elevenlabs/react";
 import { api } from "@/convex/_generated/api";
+import { isValidEmail } from "@/lib/email";
 import { sanitizeInfoCard, type InfoCardPayload } from "./info-card";
 import {
   findService,
@@ -133,6 +134,13 @@ export function useOtoAgent() {
   const convex = useConvex();
   const stepRef = useRef<OtoStep>("intro");
   const connectedRef = useRef(false);
+  // When the hero mounted — sent as the waitlist route's `elapsedMs` bot check,
+  // which drops sign-ups that arrive faster than a person could type. Stamped
+  // in an effect, not during render (Date.now() is impure).
+  const mountedAtRef = useRef(0);
+  useEffect(() => {
+    mountedAtRef.current = Date.now();
+  }, []);
   // Reliability plumbing: driveSeqRef bumps on every UI change (tool OR local),
   // so the live-mode safety net only fires when the agent didn't drive the UI.
   const driveSeqRef = useRef(0);
@@ -257,13 +265,19 @@ export function useOtoAgent() {
     [convex, pushMessage]
   );
 
-  /** Persist a pre-signup lead (email + decoded car) so signup is seamless. */
+  /**
+   * Turn an interested visitor into a lead: put them on the app launch list
+   * (the same list the site's store buttons open — one email the day the app
+   * is live) and keep a pre-signup stub so their car is waiting at signup.
+   * Oto is the site's marketing agent; before this, the email it collected
+   * reached only the stub and never the launch email.
+   */
   const savePreSignup = useCallback(
     async (rawEmail: string): Promise<string> => {
       const email = rawEmail.trim();
-      if (!email || !email.includes("@")) return "A valid email is required.";
-      try {
-        await createStub({
+      if (!isValidEmail(email)) return "That doesn't look like a valid email — ask them to check it.";
+      const [stub, launchList] = await Promise.allSettled([
+        createStub({
           email,
           vin: vehicle?.vin,
           year: vehicle?.year,
@@ -273,13 +287,27 @@ export function useOtoAgent() {
           displacementL: vehicle?.displacementL,
           cylinders: vehicle?.cylinders,
           fuelType: vehicle?.fuelType,
-        });
+        }),
+        fetch("/api/waitlist", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, list: "app", elapsedMs: Date.now() - mountedAtRef.current }),
+        }).then((res) => {
+          if (!res.ok) throw new Error(`waitlist responded ${res.status}`);
+        }),
+      ]);
+      if (stub.status === "rejected") console.warn("[oto] pre-signup save failed:", stub.reason);
+      if (launchList.status === "rejected") console.warn("[oto] launch-list signup failed:", launchList.reason);
+
+      if (launchList.status === "fulfilled") {
         setPresignupSaved(true);
-        return "Saved — their car will be waiting when they sign up.";
-      } catch (err) {
-        console.warn("[oto] pre-signup save failed:", err);
-        return "Could not save pre-signup.";
+        return "Saved — they're on the launch list (one email the day the app is live), and their car will be waiting when they sign up.";
       }
+      if (stub.status === "fulfilled") {
+        setPresignupSaved(true);
+        return "Their car is saved for signup, but the launch-list signup didn't go through — suggest they tap Get Oto to get the launch email.";
+      }
+      return "Couldn't save their email just now — suggest they tap Get Oto on the site instead.";
     },
     [createStub, vehicle]
   );
@@ -556,20 +584,19 @@ export function useOtoAgent() {
   );
 
   // ---- Live connection (shared by voice + text) ----------------------------
-  /** Start a live session: public agent id → server token → fail (false). */
+  /**
+   * Start a live session, or return false so the scripted demo runs.
+   *
+   * Private agent first: the server route mints a signed URL for typed chat
+   * (WebSocket) or a conversation token for voice (WebRTC) — the SDK only
+   * accepts a signed URL over WebSocket and a token over WebRTC, so the mode
+   * decides which credential to ask for. A 501 from the route means no private
+   * agent is configured; only then try the public agent id.
+   */
   const connect = useCallback(
     async (textOnly: boolean): Promise<boolean> => {
-      const connectionType = textOnly ? "websocket" : "webrtc";
-      if (AGENT_ID) {
-        try {
-          await conversation.startSession({ agentId: AGENT_ID, connectionType, textOnly });
-          return true;
-        } catch {
-          // private agent — fall through to the server token route
-        }
-      }
       try {
-        const res = await fetch("/api/elevenlabs/signed-url");
+        const res = await fetch(`/api/elevenlabs/signed-url?mode=${textOnly ? "text" : "voice"}`);
         if (res.ok) {
           const data = (await res.json()) as {
             signedUrl?: string;
@@ -589,7 +616,19 @@ export function useOtoAgent() {
           }
         }
       } catch {
-        // ignore
+        // fall through to the public agent id
+      }
+      if (AGENT_ID) {
+        try {
+          await conversation.startSession({
+            agentId: AGENT_ID,
+            connectionType: textOnly ? "websocket" : "webrtc",
+            textOnly,
+          });
+          return true;
+        } catch {
+          // not reachable — scripted demo
+        }
       }
       return false;
     },

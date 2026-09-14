@@ -3,7 +3,9 @@
 import { useState } from "react";
 import { Calendar, Car, Check, MapPin, Sparkles, Star } from "lucide-react";
 import { motion } from "motion/react";
+import { APP_STORE_URL, PLAY_STORE_URL, storeIsLive } from "./download-app";
 import { OtoCard } from "./oto-card";
+import { useWaitlist } from "./waitlist-modal";
 import {
   SCHEDULING_PREVIEW,
   WEEK_DAYS,
@@ -446,15 +448,38 @@ export function DateTimeCard({
 /* ------------------------------------------------------------------ */
 /* 4. Booking Confirmed                                                */
 /* ------------------------------------------------------------------ */
+const STORE_BUTTON_CLASS =
+  "flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#1a1a1a] px-3 py-2.5 text-white";
+const STORE_BUTTON_MOTION = {
+  whileHover: { y: -2, scale: 1.03 },
+  whileTap: { scale: 0.97 },
+  transition: { type: "spring", stiffness: 400, damping: 20 },
+} as const;
+
 function StoreButton({ store }: { store: "apple" | "google" }) {
+  const { open } = useWaitlist();
+  const url = store === "apple" ? APP_STORE_URL : PLAY_STORE_URL;
+  const label = <StoreButtonLabel store={store} />;
+  // Same launch flag as every other store control on the site: a real store
+  // link once the listing exists, and until then a button that opens the
+  // launch-list modal — never a dead "#" link (site audit 2026-08-31).
+  if (storeIsLive(url)) {
+    return (
+      <motion.a href={url} target="_blank" rel="noopener noreferrer" className={STORE_BUTTON_CLASS} {...STORE_BUTTON_MOTION}>
+        {label}
+      </motion.a>
+    );
+  }
   return (
-    <motion.a
-      href="#get-oto"
-      whileHover={{ y: -2, scale: 1.03 }}
-      whileTap={{ scale: 0.97 }}
-      transition={{ type: "spring", stiffness: 400, damping: 20 }}
-      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#1a1a1a] px-3 py-2.5 text-white"
-    >
+    <motion.button type="button" onClick={() => open()} className={STORE_BUTTON_CLASS} {...STORE_BUTTON_MOTION}>
+      {label}
+    </motion.button>
+  );
+}
+
+function StoreButtonLabel({ store }: { store: "apple" | "google" }) {
+  return (
+    <>
       {store === "apple" ? (
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
           <path d="M16.365 1.43c0 1.14-.42 2.21-1.18 3.02-.81.86-2.13 1.52-3.21 1.43-.13-1.1.42-2.27 1.13-3.01.79-.84 2.18-1.46 3.26-1.44zM20.5 17.2c-.55 1.27-.82 1.83-1.53 2.95-.99 1.57-2.39 3.53-4.12 3.54-1.54.02-1.93-.99-4.02-.98-2.09.01-2.52.99-4.06.98-1.73-.02-3.05-1.78-4.04-3.35C-.07 16.1-.34 11.36 1.4 8.95c1.06-1.46 2.74-2.32 4.32-2.32 1.6 0 2.61 1 3.93 1 1.28 0 2.06-1 3.91-1 1.4 0 2.89.76 3.94 2.08-3.46 1.9-2.9 6.85.99 8.49z" />
@@ -472,7 +497,7 @@ function StoreButton({ store }: { store: "apple" | "google" }) {
           {store === "apple" ? "App Store" : "Google Play"}
         </span>
       </span>
-    </motion.a>
+    </>
   );
 }
 
@@ -517,6 +542,11 @@ export function BookingConfirmedCard({
             >
               Booking confirmed
             </h3>
+            {/* Oto is the site's marketing agent: this receipt demonstrates the
+                app's booking flow and must never read as a real appointment. */}
+            <p className="mt-1 text-center text-[11px] text-[#1a1a1a]/45">
+              Sample booking · how it looks in the Otopair app
+            </p>
           </Step>
         </div>
       }
@@ -558,7 +588,7 @@ export function BookingConfirmedCard({
         (saved ? (
           <Step delay={0.7} className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-[#1a1a1a]/[0.05] px-4 py-3 text-[13px] text-[#1a1a1a]">
             <Check className="h-4 w-4" strokeWidth={2.5} />
-            Saved — your car will be waiting when you download the app.
+            You&rsquo;re on the launch list — your car will be waiting in the app.
           </Step>
         ) : (
           <Step delay={0.7} className="mt-5">
@@ -569,7 +599,7 @@ export function BookingConfirmedCard({
             }}
           >
             <p className="mb-2 text-[12px] text-[#1a1a1a]/55">
-              Email it to yourself & save your car for the app:
+              Get the launch email & save your car for the app:
             </p>
             <div className="flex gap-2">
               <input
